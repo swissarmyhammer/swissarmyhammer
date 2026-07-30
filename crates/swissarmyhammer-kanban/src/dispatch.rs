@@ -174,30 +174,66 @@ async fn resolve_opt_placement_ref(
     }
 }
 
-/// Normalize a forgiving `depends_on` param to canonical full ULIDs.
+/// Normalize a forgiving list-of-refs param value to a flat list of ref strings.
 ///
-/// Mirrors the single-value-or-array tolerance of [`resolve_assignees`] so
-/// clients that serialize `depends_on` as a scalar — common because the slim
-/// wire schema gives no array type-hint — are not silently dropped. Accepts:
-/// - a JSON array of refs;
+/// Every collection param on the task ops (`depends_on`, `tags`, `assignees`,
+/// `attachments`) shares this shape tolerance, because the slim wire schema
+/// gives clients no array type-hint and they routinely send a scalar. Accepts:
+/// - a JSON array of strings;
 /// - a single JSON string holding one ref;
 /// - a stringified JSON array (`"[\"01K…\"]"`), which is parsed back into its
-///   elements; a string that does not parse as a JSON array is treated as one
-///   ref.
+///   elements; a string that does not parse as a JSON array of strings is
+///   treated as one ref.
 ///
-/// Every element routes through [`resolve_task_ref`], so a short id,
-/// `^<short>`, unique prefix, lowercase, or full ULID all resolve to the
-/// canonical 26-char ULID. An unresolvable ref is an error (consistent with
-/// `resolve_task_ref`), never a silent drop. Returns `Ok(None)` when the param
-/// is absent.
+/// Anything else — a number, a bool, an object, or an array holding a
+/// non-string — is malformed and errors. It is never silently dropped, because
+/// on an update a dropped param reads as "no change" and the caller has no way
+/// to tell its input was thrown away. `field` names the param in the error.
+fn ref_list(field: &str, value: &Value) -> Result<Vec<String>, KanbanError> {
+    let malformed = || {
+        KanbanError::parse(format!(
+            "{field} must be a ref string or an array of ref strings, got: {value}"
+        ))
+    };
+    if let Some(arr) = value.as_array() {
+        return arr
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(malformed))
+            .collect();
+    }
+    if let Some(s) = value.as_str() {
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(s) {
+            return Ok(parsed);
+        }
+        return Ok(vec![s.to_string()]);
+    }
+    Err(malformed())
+}
+
+/// Read a forgiving list-of-refs param, returning `Ok(None)` when it is absent.
+///
+/// An explicit empty array yields `Some(vec![])` — the difference between
+/// "leave alone" and "clear" that replace-style params depend on.
+fn list_param(op: &KanbanOperation, key: &str) -> Result<Option<Vec<String>>, KanbanError> {
+    match op.get_param(key) {
+        Some(value) => Ok(Some(ref_list(key, value)?)),
+        None => Ok(None),
+    }
+}
+
+/// Normalize a forgiving `depends_on` param to canonical full ULIDs.
+///
+/// Shape tolerance comes from [`ref_list`]. Every element then routes through
+/// [`resolve_task_ref`], so a short id, `^<short>`, unique prefix, lowercase, or
+/// full ULID all resolve to the canonical 26-char ULID. An unresolvable ref is
+/// an error, never a silent drop. Returns `Ok(None)` when the param is absent.
 async fn resolve_depends_on(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Option<Vec<TaskId>>, KanbanError> {
-    let Some(value) = op.get_param("depends_on") else {
+    let Some(refs) = list_param(op, "depends_on")? else {
         return Ok(None);
     };
-    let refs = depends_on_refs(value)?;
     let mut resolved = Vec::with_capacity(refs.len());
     for raw in refs {
         let full = resolve_task_ref(ctx, &raw).await?;
@@ -206,30 +242,67 @@ async fn resolve_depends_on(
     Ok(Some(resolved))
 }
 
-/// Extract the list of raw task refs from a forgiving `depends_on` value.
+/// Read the forgiving `tags` param as a list of raw tag refs.
 ///
-/// See [`resolve_depends_on`] for the accepted shapes. Resolution to canonical
-/// ULIDs is the caller's job; this only normalizes the wire shape to a flat
-/// list of ref strings. A value that is neither a JSON array nor a string is
-/// malformed and errors — never silently dropped (which on update would clear
-/// existing deps, the exact silent-drop bug this helper exists to prevent).
-fn depends_on_refs(value: &Value) -> Result<Vec<String>, KanbanError> {
-    if let Some(arr) = value.as_array() {
-        return Ok(arr
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect());
+/// Resolution (name, full ULID, `^<short>`, short id) happens inside the
+/// commands, in the one shared path `tag task` also uses — the dispatch layer
+/// only normalizes the wire shape. The singular `tag` is accepted as a
+/// one-element alias, because that is the key `tag task` teaches; this arm is
+/// only reached for `add`/`update`, so `tag task`'s own `tag` param is
+/// untouched. Returns `Ok(None)` when neither key is present.
+fn tag_refs(op: &KanbanOperation) -> Result<Option<Vec<String>>, KanbanError> {
+    if let Some(refs) = list_param(op, "tags")? {
+        return Ok(Some(refs));
     }
-    if let Some(s) = value.as_str() {
-        // A stringified JSON array (`"[\"01K…\"]"`) parses into its elements;
-        // anything else is a single ref.
-        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(s) {
-            return Ok(parsed);
+    list_param(op, "tag")
+}
+
+/// Read the forgiving `attachments` param.
+///
+/// The entity layer accepts two element shapes for an attachment field: a
+/// source path string to copy in, and the enriched `{id, name, …}` object that
+/// `get task` hands back. Both are accepted here, and they may be mixed, so a
+/// client can read a task, add one new file path, and send the whole list back.
+/// A scalar string and a stringified array follow [`ref_list`].
+///
+/// An object the entity layer could not resolve is rejected rather than passed
+/// on: it would resolve to nothing and vanish from the stored list, wiping the
+/// task's attachments while the caller is told the update succeeded. Returns
+/// `Ok(None)` when the param is absent.
+fn attachment_param(op: &KanbanOperation) -> Result<Option<Value>, KanbanError> {
+    let Some(value) = op.get_param("attachments") else {
+        return Ok(None);
+    };
+    if let Some(arr) = value.as_array() {
+        if arr.iter().any(Value::is_object) {
+            let elements = arr
+                .iter()
+                .map(attachment_element)
+                .collect::<Result<Vec<Value>, KanbanError>>()?;
+            return Ok(Some(Value::Array(elements)));
         }
-        return Ok(vec![s.to_string()]);
+    }
+    Ok(Some(serde_json::json!(ref_list("attachments", value)?)))
+}
+
+/// Validate one element of an `attachments` array.
+///
+/// A string is a source path, taken as-is. An object must carry string `id` and
+/// `name` — the pair the entity layer rebuilds the stored filename from. Any
+/// other shape errors, naming what was expected.
+fn attachment_element(value: &Value) -> Result<Value, KanbanError> {
+    let resolvable = value.is_string()
+        || value.as_object().is_some_and(|obj| {
+            ["id", "name"]
+                .iter()
+                .all(|key| obj.get(*key).and_then(Value::as_str).is_some())
+        });
+    if resolvable {
+        return Ok(value.clone());
     }
     Err(KanbanError::parse(format!(
-        "depends_on must be a task ref string or an array of refs, got: {value}"
+        "attachments entries must be a source path string or an attachment object \
+         carrying string `id` and `name`, got: {value}"
     )))
 }
 
@@ -317,29 +390,32 @@ async fn execute_column_operation(
 
 /// Build and execute an `AddTask` command from operation parameters.
 ///
-/// Parses title (required), description, column, ordinal, assignees, and
-/// depends_on from the operation. Assignees fall back to the operation's actor
-/// when no explicit assignee list is provided.
-/// Resolve assignees from explicit list, single value, or operation actor fallback.
-fn resolve_assignees(op: &KanbanOperation) -> Vec<ActorId> {
-    let explicit: Vec<ActorId> = op
-        .get_param("assignees")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ActorId::from_string))
-                .collect()
-        })
-        .or_else(|| {
-            op.get_string("assignee")
-                .map(|a| vec![ActorId::from_string(a)])
-        })
-        .unwrap_or_default();
+/// Parses title (required), description, column, ordinal, assignees,
+/// depends_on, and tags from the operation. Assignees fall back to the
+/// operation's actor when no explicit assignee list is provided.
+/// Read the explicit assignee list from an operation.
+///
+/// `assignees` takes the same forgiving shapes as every other ref-list param
+/// (see [`ref_list`]); the singular `assignee` is accepted as a one-element
+/// alias. Returns `Ok(None)` only when neither key is present — an explicit
+/// empty array is `Some(vec![])`, which `update task` uses to unassign.
+fn explicit_assignees(op: &KanbanOperation) -> Result<Option<Vec<ActorId>>, KanbanError> {
+    if let Some(refs) = list_param(op, "assignees")? {
+        return Ok(Some(refs.into_iter().map(ActorId::from_string).collect()));
+    }
+    Ok(op
+        .get_string("assignee")
+        .map(|a| vec![ActorId::from_string(a)]))
+}
 
+/// Assignees for a new task: the explicit list, falling back to the operation's
+/// actor when no assignee was named.
+fn resolve_assignees(op: &KanbanOperation) -> Result<Vec<ActorId>, KanbanError> {
+    let explicit = explicit_assignees(op)?.unwrap_or_default();
     if explicit.is_empty() {
-        op.actor.iter().cloned().collect()
+        Ok(op.actor.iter().cloned().collect())
     } else {
-        explicit
+        Ok(explicit)
     }
 }
 
@@ -360,7 +436,7 @@ async fn dispatch_add_task(
         cmd.ordinal = Some(ordinal.to_string());
     }
 
-    let assignees = resolve_assignees(op);
+    let assignees = resolve_assignees(op)?;
     if !assignees.is_empty() {
         cmd = cmd.with_assignees(assignees);
     }
@@ -369,6 +445,10 @@ async fn dispatch_add_task(
         if !dep_ids.is_empty() {
             cmd = cmd.with_depends_on(dep_ids);
         }
+    }
+
+    if let Some(refs) = tag_refs(op)? {
+        cmd = cmd.with_tags(refs);
     }
 
     if let Some(project) = op.get_string("project") {
@@ -395,8 +475,8 @@ async fn dispatch_add_task(
 
 /// Build and execute an `UpdateTask` command from operation parameters.
 ///
-/// Parses id (required), title, description, assignees, depends_on, and
-/// project from the operation.
+/// Parses id (required), title, description, assignees, depends_on, tags,
+/// attachments, and project from the operation.
 async fn dispatch_update_task(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -410,17 +490,19 @@ async fn dispatch_update_task(
     if let Some(desc) = op.get_string("description") {
         cmd = cmd.with_description(desc);
     }
-    if let Some(assignees) = op.get_param("assignees").and_then(|v| v.as_array()) {
-        let ids: Vec<ActorId> = assignees
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.into()))
-            .collect();
-        if !ids.is_empty() {
-            cmd = cmd.with_assignees(ids);
-        }
+    // A present-but-empty list is a clear, not a no-op — the caller asked for
+    // "no assignees" and must get it.
+    if let Some(ids) = explicit_assignees(op)? {
+        cmd = cmd.with_assignees(ids);
     }
     if let Some(dep_ids) = resolve_depends_on(ctx, op).await? {
         cmd = cmd.with_depends_on(dep_ids);
+    }
+    if let Some(refs) = tag_refs(op)? {
+        cmd = cmd.with_tags(refs);
+    }
+    if let Some(attachments) = attachment_param(op)? {
+        cmd = cmd.with_attachments(attachments);
     }
     if let Some(project) = op.get_string("project") {
         cmd = cmd.with_project(project);
@@ -3546,5 +3628,673 @@ mod tests {
         let ops = parse_input(json!({"op": "list comments", "task_id": task_id})).unwrap();
         let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(listed["comments"].as_array().unwrap().len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // `tags` on add task / update task
+    // -----------------------------------------------------------------------
+
+    /// The stored tag set for a task, sorted — `get task` derives it from the
+    /// body, so this asserts effect, never response echo.
+    async fn stored_tags(ctx: &KanbanContext, id: &str) -> Vec<String> {
+        get_task(ctx, id).await["tags"]
+            .as_array()
+            .expect("tags should be an array")
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// Create a tag entity and return its full ULID.
+    async fn add_one_tag(ctx: &KanbanContext, name: &str) -> String {
+        let ops = parse_input(json!({"op": "add tag", "name": name})).unwrap();
+        let r = execute_operation(ctx, &ops[0]).await.unwrap();
+        r["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_task_tags_array_applies() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Tagged at birth",
+            "tags": ["bug", "kanban"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(stored_tags(&ctx, id).await, vec!["bug", "kanban"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_tags_array_replaces_the_set() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Retag me",
+            "description": "body carries #stale",
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["stale"]);
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "tags": ["bug", "init", "mirdan"],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            stored_tags(&ctx, &id).await,
+            vec!["bug", "init", "mirdan"],
+            "`tags` on update replaces the whole set"
+        );
+    }
+
+    /// The equivalence contract: one `add task {tags:[a,b,c]}` and one
+    /// `add task` followed by three `tag task` calls must land on the same
+    /// stored tag set. This is what makes the plural form a real alias for
+    /// the singular op instead of a second, drifting implementation.
+    #[tokio::test]
+    async fn dispatch_add_task_tags_equivalent_to_three_tag_task_calls() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Plural",
+            "tags": ["bug", "init", "mirdan"],
+        }))
+        .unwrap();
+        let plural = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let plural_id = plural["id"].as_str().unwrap().to_string();
+
+        let singular_id = add_one_task(&ctx, "Singular").await;
+        for tag in ["bug", "init", "mirdan"] {
+            let ops =
+                parse_input(json!({"op": "tag task", "id": singular_id, "tag": tag})).unwrap();
+            execute_operation(&ctx, &ops[0]).await.unwrap();
+        }
+
+        assert_eq!(
+            stored_tags(&ctx, &plural_id).await,
+            stored_tags(&ctx, &singular_id).await,
+            "a tags array must equal one `tag task` per tag"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_task_tags_single_string_applies() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add task", "title": "Scalar tag", "tags": "bug"})).unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(stored_tags(&ctx, id).await, vec!["bug"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_tags_stringified_array_applies() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Stringified").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "tags": "[\"bug\",\"kanban\"]",
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug", "kanban"]);
+    }
+
+    /// A tag ref given as the tag entity's full ULID resolves to that tag's
+    /// name — the exact form that was silently dropped.
+    #[tokio::test]
+    async fn dispatch_add_task_tags_full_ulid_resolves_to_tag_name() {
+        let (_temp, ctx) = setup().await;
+        let bug_id = add_one_tag(&ctx, "bug").await;
+        let kanban_id = add_one_tag(&ctx, "kanban").await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "By ulid",
+            "tags": [bug_id, kanban_id],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(stored_tags(&ctx, id).await, vec!["bug", "kanban"]);
+    }
+
+    /// Short id and `^<short>` both resolve, mirroring every other id-taking
+    /// param on the board.
+    #[tokio::test]
+    async fn dispatch_update_task_tags_short_id_and_caret_resolve() {
+        let (_temp, ctx) = setup().await;
+        let bug_id = add_one_tag(&ctx, "bug").await;
+        let kanban_id = add_one_tag(&ctx, "kanban").await;
+        let id = add_one_task(&ctx, "By short id").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "tags": [
+                crate::types::short_id(&bug_id),
+                format!("^{}", crate::types::short_id(&kanban_id)),
+            ],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug", "kanban"]);
+    }
+
+    /// An unresolvable tag id ref is an error and creates nothing — the same
+    /// rule `depends_on` already states.
+    #[tokio::test]
+    async fn dispatch_add_task_tags_unresolvable_ulid_errors_and_creates_nothing() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Doomed",
+            "tags": ["01KJZEPKJ35S76KF7E9HS5742J"],
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+
+        assert!(
+            result.is_err(),
+            "an unresolvable tag ref must error, not silently drop"
+        );
+
+        let ops = parse_input(json!({"op": "list tasks"})).unwrap();
+        let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            listed["tasks"].as_array().unwrap().len(),
+            0,
+            "the failed add must not leave a task behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_tags_unresolvable_ulid_errors_without_changing_tags() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Keep my tags",
+            "tags": ["keep"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "tags": ["01KJZEPKJ35S76KF7E9HS5742J"],
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+
+        assert!(result.is_err(), "an unresolvable tag ref must error");
+        assert_eq!(
+            stored_tags(&ctx, &id).await,
+            vec!["keep"],
+            "a rejected update must leave the tag set untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_tags_empty_array_clears_the_set() {
+        let (_temp, ctx) = setup().await;
+
+        // Seed through the singular op so the pre-state holds regardless of
+        // whether the plural form works — the clear is what's under test.
+        let id = add_one_task(&ctx, "Clear me").await;
+        for tag in ["bug", "kanban"] {
+            let ops = parse_input(json!({"op": "tag task", "id": id, "tag": tag})).unwrap();
+            execute_operation(&ctx, &ops[0]).await.unwrap();
+        }
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug", "kanban"]);
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "tags": []})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert!(
+            stored_tags(&ctx, &id).await.is_empty(),
+            "an explicit empty tags array replaces the set with nothing"
+        );
+    }
+
+    /// A malformed `tags` value (neither string nor array) errors instead of
+    /// being dropped — on update a silent drop would look like "no change".
+    #[tokio::test]
+    async fn dispatch_update_task_tags_malformed_scalar_errors() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Malformed tags").await;
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "tags": 42})).unwrap();
+        assert!(
+            execute_operation(&ctx, &ops[0]).await.is_err(),
+            "a non-string, non-array tags value must error"
+        );
+    }
+
+    /// Auto-created tag entities must exist after a plural apply, exactly as
+    /// `tag task` guarantees — otherwise `list tags` and the UI disagree with
+    /// the task's own tag list.
+    #[tokio::test]
+    async fn dispatch_add_task_tags_auto_creates_tag_entities() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Auto create",
+            "tags": ["brand-new"],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tags"})).unwrap();
+        let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let names: Vec<&str> = listed["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"brand-new"),
+            "plural tags must auto-create the Tag entity, got: {names:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Sibling collection params audited alongside `tags`
+    // -----------------------------------------------------------------------
+
+    /// `attachments` is declared on `UpdateTask` (so the schema advertises it)
+    /// but dispatch never read it — the same silent-drop defect as `tags`.
+    #[tokio::test]
+    async fn dispatch_update_task_attachments_persists() {
+        let (temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Attach me").await;
+
+        // The entity layer verifies each attachment source exists, so point at
+        // real files.
+        let one = temp.path().join("one.png");
+        let two = temp.path().join("two.png");
+        std::fs::write(&one, b"one").unwrap();
+        std::fs::write(&two, b"two").unwrap();
+        let paths = vec![
+            one.to_string_lossy().to_string(),
+            two.to_string_lossy().to_string(),
+        ];
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "attachments": paths,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // The entity layer copies each source into `.attachments/` and reads the
+        // field back as attachment metadata objects.
+        let ectx = ctx.entity_context().await.unwrap();
+        let stored = ectx.read("task", &id).await.unwrap();
+        let attached = stored
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let names: Vec<&str> = attached.iter().filter_map(|a| a["name"].as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["one.png", "two.png"],
+            "`attachments` on update must persist, not be dropped"
+        );
+    }
+
+    /// Register an actor so a `reference` assignee survives the entity write.
+    async fn add_one_actor(ctx: &KanbanContext, id: &str) {
+        let ops =
+            parse_input(json!({"op": "add actor", "id": id, "name": id, "type": "human"})).unwrap();
+        execute_operation(ctx, &ops[0]).await.unwrap();
+    }
+
+    /// The stored assignee list for a task.
+    async fn stored_assignees(ctx: &KanbanContext, id: &str) -> Vec<String> {
+        get_task(ctx, id).await["assignees"]
+            .as_array()
+            .expect("assignees should be an array")
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// `get task` hands attachments back as enriched metadata objects. A client
+    /// that reads a task, edits a field, and sends the object back must not be
+    /// rejected for a shape this API itself produced.
+    #[tokio::test]
+    async fn dispatch_update_task_attachments_accepts_enriched_objects() {
+        let (temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Round trip").await;
+
+        let one = temp.path().join("one.png");
+        std::fs::write(&one, b"one").unwrap();
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "attachments": [one.to_string_lossy()],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Feed the enriched form straight back.
+        let enriched = get_task(&ctx, &id).await["attachments"].clone();
+        assert!(
+            enriched[0].is_object(),
+            "expected enriched attachment objects, got: {enriched}"
+        );
+        let ops =
+            parse_input(json!({"op": "update task", "id": id, "attachments": enriched})).unwrap();
+        execute_operation(&ctx, &ops[0])
+            .await
+            .expect("the enriched attachment shape must round-trip");
+
+        let after = get_task(&ctx, &id).await["attachments"].clone();
+        let names: Vec<&str> = after
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["one.png"], "the attachment must survive");
+    }
+
+    /// The singular `tag` alias must be as forgiving as `tags`, including its
+    /// loudness: a shape it cannot read is an error, not a quiet skip.
+    #[tokio::test]
+    async fn dispatch_update_task_singular_tag_accepts_an_array_and_rejects_junk() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Alias shapes").await;
+
+        let ops =
+            parse_input(json!({"op": "update task", "id": id, "tag": ["bug", "kanban"]})).unwrap();
+        execute_operation(&ctx, &ops[0])
+            .await
+            .expect("the singular alias must take an array too");
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug", "kanban"]);
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "tag": 42})).unwrap();
+        assert!(
+            execute_operation(&ctx, &ops[0]).await.is_err(),
+            "a malformed singular `tag` must error, not vanish"
+        );
+    }
+
+    /// An attachment object the entity layer cannot resolve must be rejected at
+    /// the door. Passing it through wipes the attachment list and still reports
+    /// success — the silent drop this whole card exists to kill.
+    #[tokio::test]
+    async fn dispatch_update_task_attachments_rejects_unresolvable_objects() {
+        let (temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Attachment junk").await;
+
+        let one = temp.path().join("one.png");
+        std::fs::write(&one, b"one").unwrap();
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "attachments": [one.to_string_lossy()],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // An object with neither `id` nor `name` resolves to nothing.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "attachments": [{"path": "/tmp/one.png"}],
+        }))
+        .unwrap();
+        assert!(
+            execute_operation(&ctx, &ops[0]).await.is_err(),
+            "an unresolvable attachment object must error"
+        );
+
+        let after = get_task(&ctx, &id).await["attachments"].clone();
+        let names: Vec<&str> = after
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["one.png"],
+            "the rejected update must leave the attachments alone"
+        );
+    }
+
+    /// A read-edit-write client that adds one new file path to the enriched
+    /// list it just read must not be rejected for mixing the two shapes.
+    #[tokio::test]
+    async fn dispatch_update_task_attachments_accepts_a_mixed_list() {
+        let (temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Mixed shapes").await;
+
+        let one = temp.path().join("one.png");
+        let two = temp.path().join("two.png");
+        std::fs::write(&one, b"one").unwrap();
+        std::fs::write(&two, b"two").unwrap();
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "attachments": [one.to_string_lossy()],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let mut mixed = get_task(&ctx, &id).await["attachments"]
+            .as_array()
+            .unwrap()
+            .clone();
+        mixed.push(json!(two.to_string_lossy()));
+
+        let ops =
+            parse_input(json!({"op": "update task", "id": id, "attachments": mixed})).unwrap();
+        execute_operation(&ctx, &ops[0])
+            .await
+            .expect("an enriched object plus a new path must round-trip");
+
+        let after = get_task(&ctx, &id).await["attachments"].clone();
+        let names: Vec<&str> = after
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["one.png", "two.png"]);
+    }
+
+    /// A name and that tag's ULID in one list name one tag. That is not an
+    /// error — the tag applies once.
+    #[tokio::test]
+    async fn dispatch_update_task_tags_tolerates_duplicate_refs() {
+        let (_temp, ctx) = setup().await;
+        let bug_id = add_one_tag(&ctx, "bug").await;
+        let id = add_one_task(&ctx, "Duplicate refs").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": id,
+            "tags": ["bug", bug_id, "bug"],
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0])
+            .await
+            .expect("refs naming one tag must not error");
+
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug"]);
+    }
+
+    /// The singular `tag` is the key an agent learns from `tag task`. On
+    /// add/update it must apply, not vanish.
+    #[tokio::test]
+    async fn dispatch_add_task_singular_tag_applies() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add task", "title": "Singular key", "tag": "bug"})).unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(stored_tags(&ctx, id).await, vec!["bug"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_singular_tag_replaces_the_set() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Singular update").await;
+        let ops = parse_input(json!({"op": "tag task", "id": id, "tag": "stale"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "tag": "fresh"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["fresh"]);
+    }
+
+    /// A tag marker sitting next to punctuation is a tag, so `tags` must be
+    /// able to replace and clear it.
+    #[tokio::test]
+    async fn dispatch_update_task_tags_replaces_markers_next_to_punctuation() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Punctuated",
+            "description": "Fix #bug, then ship #login.",
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(stored_tags(&ctx, &id).await, vec!["bug", "login"]);
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "tags": []})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert!(
+            stored_tags(&ctx, &id).await.is_empty(),
+            "punctuated markers must clear too"
+        );
+    }
+
+    /// A description ending in a code fence swallows an inline marker. The tag
+    /// must still land where `get task` can read it.
+    #[tokio::test]
+    async fn dispatch_add_task_tags_apply_to_a_description_ending_in_a_code_fence() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Fenced",
+            "description": "Repro:\n```\ncargo test\n```",
+            "tags": ["bug"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(stored_tags(&ctx, id).await, vec!["bug"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_assignees_single_string_persists() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "zara").await;
+        let id = add_one_task(&ctx, "Scalar assignee").await;
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "assignees": "zara"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            stored_assignees(&ctx, &id).await,
+            vec!["zara"],
+            "a scalar `assignees` must apply, not be dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_task_assignees_stringified_array_persists() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+        add_one_actor(&ctx, "bob").await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Stringified assignees",
+            "assignees": "[\"alice\",\"bob\"]",
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        assert_eq!(stored_assignees(&ctx, &id).await, vec!["alice", "bob"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_assignees_empty_array_clears() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Unassign via update",
+            "assignees": ["alice"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            get_task(&ctx, &id).await["assignees"],
+            json!(["alice"]),
+            "pre-state: the task starts with one assignee"
+        );
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "assignees": []})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert!(
+            stored_assignees(&ctx, &id).await.is_empty(),
+            "an explicit empty assignees array must clear the list"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_assignees_malformed_scalar_errors() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Malformed assignees").await;
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "assignees": 42})).unwrap();
+        assert!(
+            execute_operation(&ctx, &ops[0]).await.is_err(),
+            "a non-string, non-array assignees value must error"
+        );
     }
 }

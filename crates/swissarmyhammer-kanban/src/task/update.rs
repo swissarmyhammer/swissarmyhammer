@@ -3,6 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
+use crate::task::tags::{apply_tag_refs, TagApply};
 use crate::task_helpers::task_mutation_ack;
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,9 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 
 /// Update an existing task.
 ///
-/// Tags are derived from `#tag` patterns in the description — edit the
-/// description to change tags.
+/// Tags live as `#tag` patterns in the description. Edit the description to
+/// change them freehand, or set `tags` to replace the whole set — both write
+/// the same `#tag` markers, so the two can never disagree.
 ///
 /// The date fields use tri-state semantics so callers can distinguish
 /// "leave unchanged" from "clear":
@@ -39,7 +41,21 @@ pub struct UpdateTask {
     /// `blocked_by` field (the unsatisfied subset of `depends_on`) is computed,
     /// not directly settable.
     pub depends_on: Option<Vec<TaskId>>,
-    /// Replace all attachment IDs (array of entity ID strings)
+    /// Replace the task's whole tag set.
+    ///
+    /// `None` leaves the tags untouched; `Some(list)` makes the tag set exactly
+    /// `list` (an empty list clears every tag). Each entry is a forgiving tag
+    /// reference: a tag name (created on demand), a full tag ULID, `^<short>`,
+    /// or a 7-char short id. An id reference that names no tag is an error and
+    /// leaves the task unchanged — never a silent drop. Resolution is shared
+    /// with `tag task` via [`crate::task::tags::apply_tag_refs`].
+    pub tags: Option<Vec<String>>,
+    /// Replace the task's whole attachment list.
+    ///
+    /// Entries are source file paths to attach (copied into the board's
+    /// `.attachments/` store on write) or filenames already stored there.
+    /// Anything present before and absent here is trashed, so this is a
+    /// replace, not an append.
     pub attachments: Option<Value>,
     /// Set the project this task belongs to
     pub project: Option<String>,
@@ -64,6 +80,7 @@ impl UpdateTask {
             description: None,
             assignees: None,
             depends_on: None,
+            tags: None,
             attachments: None,
             project: None,
             due: None,
@@ -92,6 +109,12 @@ impl UpdateTask {
     /// Set the dependencies (replaces all existing dependencies)
     pub fn with_depends_on(mut self, deps: Vec<TaskId>) -> Self {
         self.depends_on = Some(deps);
+        self
+    }
+
+    /// Replace the task's whole tag set (an empty list clears every tag).
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = Some(tags);
         self
     }
 
@@ -204,6 +227,11 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
                 .map_err(KanbanError::from_entity_error)?;
 
             self.apply_to(&mut entity)?;
+            // Tags are body markers, so they apply after `description` has
+            // landed and need the async resolver — hence outside `apply_to`.
+            if let Some(refs) = &self.tags {
+                apply_tag_refs(&ectx, &mut entity, refs, TagApply::Replace).await?;
+            }
             ectx.write(&entity).await?;
             auto_create_body_tags(&ectx, &entity).await?;
             // Thin ack — the caller already has every field it sent; the full
@@ -431,6 +459,95 @@ mod tests {
         let dep_strs: Vec<&str> = deps.iter().filter_map(|v| v.as_str()).collect();
         assert!(dep_strs.contains(&id_a), "should contain task A");
         assert!(dep_strs.contains(&id_b), "should contain task B");
+    }
+
+    // -----------------------------------------------------------------------
+    // `tags` replacement tests
+    // -----------------------------------------------------------------------
+
+    /// `tags` is a replace: the old markers go, the new ones land, and the rest
+    /// of the description survives.
+    #[tokio::test]
+    async fn test_update_task_with_tags_replaces_the_set_and_keeps_prose() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Retag")
+            .with_description("keep this prose #stale")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        UpdateTask::new(id)
+            .with_tags(vec!["fresh".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let task = fetch(&ctx, id).await;
+        assert_eq!(task["tags"], serde_json::json!(["fresh"]));
+        assert!(
+            task["description"]
+                .as_str()
+                .unwrap()
+                .contains("keep this prose"),
+            "replacing tags must not eat the prose, got: {}",
+            task["description"]
+        );
+    }
+
+    /// An omitted `tags` leaves the existing tag set alone.
+    #[tokio::test]
+    async fn test_update_task_absent_tags_preserves_the_set() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Keep tags")
+            .with_tags(vec!["keep".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        UpdateTask::new(id)
+            .with_title("Renamed")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(fetch(&ctx, id).await["tags"], serde_json::json!(["keep"]));
+    }
+
+    /// The description and `tags` can change in one call: the description lands
+    /// first, then `tags` replaces whatever markers it carried.
+    #[tokio::test]
+    async fn test_update_task_description_and_tags_together() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Both at once")
+            .with_tags(vec!["old".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        UpdateTask::new(id)
+            .with_description("new body with #ignored marker")
+            .with_tags(vec!["winner".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            fetch(&ctx, id).await["tags"],
+            serde_json::json!(["winner"]),
+            "`tags` is the authority when both are set in one call"
+        );
     }
 
     // -----------------------------------------------------------------------

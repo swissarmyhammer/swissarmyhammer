@@ -16,3 +16,38 @@ An unresolvable ref is an error, not a silent no-op.
 `blocked_by` is **derived** — it is the unsatisfied subset of `depends_on`
 (reported by `get task`/`list tasks`) and is **not** directly settable. To
 change what a task is blocked by, set `depends_on`.
+
+## Task tags
+
+On `add task` and `update task`, `tags` applies tags. It is as forgiving as
+`depends_on`:
+
+- Shape: a single tag, a JSON array, or a stringified JSON array all work. The
+  singular `tag` is accepted as a one-element alias.
+- Ref format: each entry may be a tag name, a full tag ULID, `^<short>`, or a
+  7-char short id. A name that names no tag yet creates it; an **id** reference
+  that names no tag is an error, not a silent no-op.
+
+`tags` on `add task` adds to whatever `#tag` markers the description carries.
+`tags` on `update task` **replaces** the whole set — an empty array clears every
+tag. One `add task { tags: [a, b, c] }` gives the same result as one `add task`
+plus three `tag task` calls; both run the same code.
+
+Tags are stored as `#tag` markers in the description, so editing the description
+is the other way to change them. Because of that, replacing the tag set rewrites
+the description: the old markers are removed from wherever they sat and the new
+ones are added at the end. The prose is kept.
+
+## Assignees and attachments
+
+`assignees` (both ops) and `attachments` (`update task`) take the same forgiving
+input **shapes** as `tags`. Both **replace** the whole list on `update task`, so
+an empty array unassigns / detaches everything. The singular `assignee` is
+accepted as a one-element alias.
+
+`assignees` differs from `tags` and `depends_on` on unknown refs: an actor id
+that does not exist is dropped on write, not rejected. Register the actor with
+`add actor` first, or read the task back to confirm.
+
+`attachments` entries are source file paths to attach; the metadata objects
+`get task` returns are also accepted, so a task read can be sent straight back.

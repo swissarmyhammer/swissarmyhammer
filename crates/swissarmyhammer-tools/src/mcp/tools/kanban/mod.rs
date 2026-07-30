@@ -730,6 +730,114 @@ mod tests {
         }
     }
 
+    /// Real-path e2e for the reported defect: `tags` must apply through the
+    /// served MCP tool, in every wire shape and every ref format, on both
+    /// `add task` and `update task`. The bug was filed at this boundary, so the
+    /// coverage lives here and not only at dispatch.
+    #[tokio::test]
+    async fn test_tags_persist_across_input_shapes_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // A real tag entity, so the id-shaped refs have something to resolve.
+        let mut tag_args = serde_json::Map::new();
+        tag_args.insert("op".to_string(), json!("add tag"));
+        tag_args.insert("name".to_string(), json!("bug"));
+        let tag_result = tool.execute(tag_args, &context).await.unwrap();
+        let tag_id = parse_json(&tag_result)["id"].as_str().unwrap().to_string();
+        let short: String = tag_id[tag_id.len() - 7..].to_lowercase();
+
+        for ref_form in [
+            "bug".to_string(),
+            tag_id.clone(),
+            tag_id.to_lowercase(),
+            short.clone(),
+            format!("^{short}"),
+        ] {
+            let shapes = [
+                ("single string", json!(ref_form)),
+                ("json array", json!([ref_form])),
+                (
+                    "stringified array",
+                    json!(serde_json::to_string(&vec![ref_form.clone()]).unwrap()),
+                ),
+            ];
+
+            for (shape_name, tags_value) in shapes {
+                // add task carrying the tags
+                let mut add_args = serde_json::Map::new();
+                add_args.insert("op".to_string(), json!("add task"));
+                add_args.insert("title".to_string(), json!("Tagged"));
+                add_args.insert("tags".to_string(), tags_value.clone());
+                let add_result = tool.execute(add_args, &context).await.unwrap();
+                let task_id = extract_task_id(&add_result);
+                assert_eq!(
+                    get_task(&tool, &context, &task_id).await["tags"],
+                    json!(["bug"]),
+                    "add task dropped tags for ref_form={ref_form} shape={shape_name}"
+                );
+
+                // update task replacing the tags on a differently-tagged card
+                let mut add_args = serde_json::Map::new();
+                add_args.insert("op".to_string(), json!("add task"));
+                add_args.insert("title".to_string(), json!("Retag"));
+                add_args.insert("description".to_string(), json!("carries #stale"));
+                let add_result = tool.execute(add_args, &context).await.unwrap();
+                let task_id = extract_task_id(&add_result);
+
+                let mut update_args = serde_json::Map::new();
+                update_args.insert("op".to_string(), json!("update task"));
+                update_args.insert("id".to_string(), json!(task_id));
+                update_args.insert("tags".to_string(), tags_value.clone());
+                tool.execute(update_args, &context).await.unwrap();
+                assert_eq!(
+                    get_task(&tool, &context, &task_id).await["tags"],
+                    json!(["bug"]),
+                    "update task dropped tags for ref_form={ref_form} shape={shape_name}"
+                );
+            }
+        }
+    }
+
+    /// An unresolvable tag id ref must fail loudly through the served tool, and
+    /// leave the task's tags untouched.
+    #[tokio::test]
+    async fn test_unresolvable_tag_ref_errors_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Keep my tags"));
+        add_args.insert("tags".to_string(), json!(["keep"]));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update task"));
+        update_args.insert("id".to_string(), json!(task_id));
+        update_args.insert("tags".to_string(), json!(["01KJZEPKJ35S76KF7E9HS5742J"]));
+        let result = tool.execute(update_args, &context).await;
+
+        assert!(
+            result.is_err(),
+            "an unresolvable tag ref must surface as a tool error"
+        );
+        assert_eq!(
+            get_task(&tool, &context, &task_id).await["tags"],
+            json!(["keep"]),
+            "a rejected update must leave the tag set alone"
+        );
+    }
+
     /// Real-path e2e: `add task` must also honor `depends_on` as a single
     /// string through the served tool — the create path shares the same
     /// `resolve_depends_on` helper as update.

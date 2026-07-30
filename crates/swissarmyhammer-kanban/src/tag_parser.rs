@@ -83,24 +83,66 @@ pub fn parse_tags(text: &str) -> Vec<String> {
     tags.into_iter().collect()
 }
 
+/// Whether a `#slug` match that ends at byte `after` really ends there.
+///
+/// [`parse_tags`] runs a slug over `[A-Za-z0-9-]` and stops at the first
+/// character outside that set, so `#bug,` is the tag `bug`. Every writer
+/// ([`remove_tag`], [`rename_tag`]) must end its match by the same rule, or a
+/// marker sitting next to punctuation reads as a tag but cannot be edited.
+fn slug_ends_at(bytes: &[u8], after: usize) -> bool {
+    after >= bytes.len() || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-')
+}
+
+/// Whether a `#slug` match starting at byte `i` is preceded by a slug
+/// character, which would make it part of a longer word rather than a marker.
+fn slug_starts_at(bytes: &[u8], i: usize) -> bool {
+    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_')
+}
+
+/// Whether a line is a markdown heading, which [`parse_tags`] skips whole.
+///
+/// A `#word` inside a heading is title text, never a tag, so the writers must
+/// leave heading lines untouched.
+fn is_heading_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('#') && trimmed.chars().nth(1).is_none_or(|c| c == '#' || c == ' ')
+}
+
 /// Append `#tag` to the end of description text.
 ///
 /// If the text already contains the tag, this is a no-op.
-/// Adds a space before the tag if the text doesn't end with whitespace.
+///
+/// The marker goes inline at the end of the text, separated by a space, which
+/// keeps short descriptions reading naturally. When the last line would swallow
+/// it — a fence line, a heading, or a line inside a fenced block, all of which
+/// [`parse_tags`] skips — the marker goes on its own line instead, so what is
+/// written is always read back as a tag.
+///
+/// A body with an unbalanced fence can swallow the marker either way. The
+/// caller is responsible for checking the round trip (see
+/// `task::tags::rewrite_body`) rather than reporting a success that did nothing.
 pub fn append_tag(text: &str, slug: &str) -> String {
-    // Check if tag already present
-    let existing = parse_tags(text);
-    if existing.iter().any(|t| t.as_str() == slug) {
+    if parse_tags(text).iter().any(|t| t.as_str() == slug) {
         return text.to_string();
     }
 
-    let mut result = text.to_string();
-    if !result.is_empty() && !result.ends_with(char::is_whitespace) {
-        result.push(' ');
+    let mut inline = text.to_string();
+    if !inline.is_empty() && !inline.ends_with(char::is_whitespace) {
+        inline.push(' ');
     }
-    result.push('#');
-    result.push_str(slug);
-    result
+    inline.push('#');
+    inline.push_str(slug);
+    if parse_tags(&inline).iter().any(|t| t.as_str() == slug) {
+        return inline;
+    }
+
+    let mut own_line = text.to_string();
+    if !own_line.is_empty() && !own_line.ends_with('\n') {
+        own_line.push('\n');
+    }
+    own_line.push('#');
+    own_line.push_str(slug);
+    own_line
 }
 
 /// Remove all occurrences of `#tag` from description text.
@@ -126,7 +168,7 @@ pub fn remove_tag(text: &str, slug: &str) -> String {
             result.push_str(line);
             continue;
         }
-        if in_fenced_block {
+        if in_fenced_block || is_heading_line(line) {
             result.push_str(line);
             continue;
         }
@@ -154,22 +196,20 @@ pub fn remove_tag(text: &str, slug: &str) -> String {
             }
 
             // Check for #tag pattern
-            if bytes[i] == b'#' {
-                let preceded_ok =
-                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
-                if preceded_ok && line[i..].starts_with(&pattern) {
-                    let after = i + pattern.len();
-                    // Ensure the match ends at a boundary (whitespace, #, or end)
-                    let at_boundary =
-                        after >= len || bytes[after] == b'#' || bytes[after].is_ascii_whitespace();
-                    if at_boundary {
-                        // Skip the tag and any trailing space
-                        i = after;
-                        if i < len && bytes[i] == b' ' {
-                            i += 1;
-                        }
-                        continue;
+            if bytes[i] == b'#' && slug_starts_at(bytes, i) && line[i..].starts_with(&pattern) {
+                let after = i + pattern.len();
+                if slug_ends_at(bytes, after) {
+                    // Absorb one space so the prose does not keep a hole. The
+                    // space after the marker goes when there is one; a marker
+                    // touching punctuation ("#bug,") has none, so the space in
+                    // front of it goes instead.
+                    i = after;
+                    if i < len && bytes[i] == b' ' {
+                        i += 1;
+                    } else if result.ends_with(' ') {
+                        result.pop();
                     }
+                    continue;
                 }
             }
 
@@ -209,7 +249,7 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
             result.push_str(line);
             continue;
         }
-        if in_fenced_block {
+        if in_fenced_block || is_heading_line(line) {
             result.push_str(line);
             continue;
         }
@@ -237,19 +277,12 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
             }
 
             // Check for #old pattern
-            if bytes[i] == b'#' {
-                let preceded_ok =
-                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
-                if preceded_ok && line[i..].starts_with(&old_pattern) {
-                    let after = i + old_pattern.len();
-                    // Boundary: whitespace, #, or end of line
-                    let at_boundary =
-                        after >= len || bytes[after] == b'#' || bytes[after].is_ascii_whitespace();
-                    if at_boundary {
-                        result.push_str(&new_pattern);
-                        i = after;
-                        continue;
-                    }
+            if bytes[i] == b'#' && slug_starts_at(bytes, i) && line[i..].starts_with(&old_pattern) {
+                let after = i + old_pattern.len();
+                if slug_ends_at(bytes, after) {
+                    result.push_str(&new_pattern);
+                    i = after;
+                    continue;
                 }
             }
 
@@ -484,6 +517,76 @@ mod tests {
     fn test_remove_tag_multibyte_chars() {
         let input = "text — with #bug em dash";
         assert_eq!(remove_tag(input, "bug"), "text — with em dash");
+    }
+
+    /// `parse_tags` ends a slug at the first character outside `[A-Za-z0-9-]`,
+    /// so `#bug,` IS the tag `bug`. `remove_tag` must end its match the same
+    /// way, or a tag next to punctuation is unremovable — and "replace the tag
+    /// set" silently keeps it.
+    #[test]
+    fn test_remove_tag_next_to_punctuation() {
+        // A marker touching punctuation has no trailing space to absorb, so the
+        // space in front of it goes instead — otherwise the prose keeps an
+        // orphan space ("Fix , then ship").
+        for (text, expected) in [
+            ("fix #bug, then ship", "fix, then ship"),
+            ("done #bug.", "done."),
+            ("a #bug! b", "a! b"),
+            ("see (#bug) here", "see () here"),
+        ] {
+            let result = remove_tag(text, "bug");
+            assert_eq!(result, expected, "remove_tag({text:?})");
+            assert!(
+                !parse_tags(&result).contains(&"bug".to_string()),
+                "remove_tag left {text:?} still tagged: {result:?}"
+            );
+        }
+    }
+
+    /// `parse_tags` skips heading lines, so a `#word` in a heading was never a
+    /// tag. `remove_tag` must leave it alone or it eats title text.
+    #[test]
+    fn test_remove_tag_skips_heading_lines() {
+        let input = "# Fix #login\n\nsee also #login";
+        assert_eq!(remove_tag(input, "login"), "# Fix #login\n\nsee also");
+    }
+
+    /// Same boundary rule as removal: a marker next to punctuation is a tag, so
+    /// renaming must reach it.
+    #[test]
+    fn test_rename_tag_next_to_punctuation() {
+        let result = rename_tag("fix #bug, then ship", "bug", "defect");
+        assert_eq!(parse_tags(&result), vec!["defect".to_string()]);
+    }
+
+    /// Heading text is not a tag, so renaming must not rewrite it.
+    #[test]
+    fn test_rename_tag_skips_heading_lines() {
+        let input = "# Fix #login\n\nsee also #login";
+        assert_eq!(
+            rename_tag(input, "login", "auth"),
+            "# Fix #login\n\nsee also #auth"
+        );
+    }
+
+    /// Appending must round-trip: whatever `append_tag` writes, `parse_tags`
+    /// must read back. A body ending in a fence line or a heading swallows an
+    /// inline marker, so those cases need the marker on its own line.
+    #[test]
+    fn test_append_tag_round_trips_on_bodies_that_swallow_inline_markers() {
+        for text in [
+            "Repro:\n```\ncargo test\n```",
+            "Intro\n\n## Acceptance",
+            "# Just a heading",
+            "plain body",
+            "",
+        ] {
+            let result = append_tag(text, "bug");
+            assert!(
+                parse_tags(&result).contains(&"bug".to_string()),
+                "append_tag did not round-trip for {text:?}, got: {result:?}"
+            );
+        }
     }
 
     #[test]

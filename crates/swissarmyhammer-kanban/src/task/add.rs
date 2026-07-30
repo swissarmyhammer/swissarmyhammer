@@ -4,6 +4,7 @@ use crate::context::KanbanContext;
 use crate::entity::position;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
+use crate::task::tags::{apply_tag_refs, TagApply};
 use crate::task_helpers::{slim_task_json, task_entity_to_json};
 use crate::types::{mint_unique_short_id, ActorId, TaskId};
 use serde::{Deserialize, Serialize};
@@ -14,8 +15,9 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 
 /// Add a new task to the board.
 ///
-/// Tags are derived from `#tag` patterns in the description — no explicit
-/// tags parameter needed.
+/// Tags come from two equivalent places: `#tag` patterns anywhere in the
+/// description, and the explicit `tags` list. Both end up as `#tag` markers in
+/// the stored body, so the two can never disagree.
 #[operation(
     verb = "add",
     noun = "task",
@@ -41,6 +43,15 @@ pub struct AddTask {
     /// not directly settable.
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
+    /// Tags to apply to the new task, appended as `#tag` markers to the body.
+    ///
+    /// Each entry is a forgiving tag reference: a tag name (created on demand),
+    /// a full tag ULID, `^<short>`, or a 7-char short id. An id reference that
+    /// names no tag is an error, never a silent drop. Equivalent to one `tag
+    /// task` call per entry — both route through
+    /// [`crate::task::tags::apply_tag_refs`].
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Project this task belongs to
     pub project: Option<String>,
     /// Hard deadline date (ISO 8601 date string, e.g. "2026-04-30").
@@ -65,6 +76,7 @@ impl AddTask {
             ordinal: None,
             assignees: Vec::new(),
             depends_on: Vec::new(),
+            tags: Vec::new(),
             project: None,
             due: None,
             scheduled: None,
@@ -93,6 +105,12 @@ impl AddTask {
     /// Set the dependencies
     pub fn with_depends_on(mut self, deps: Vec<TaskId>) -> Self {
         self.depends_on = deps;
+        self
+    }
+
+    /// Set the tags to apply, as forgiving tag references.
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
         self
     }
 
@@ -178,6 +196,12 @@ impl AddTask {
                 json!(parse_iso8601_date(scheduled, "scheduled")?),
             );
         }
+
+        // Explicit tags append to whatever the description already carries, so
+        // `tags: [a, b]` equals one `tag task` call per entry. Resolution can
+        // fail (an id ref naming no tag), which aborts the create before any
+        // write.
+        apply_tag_refs(ectx, &mut entity, &self.tags, TagApply::Append).await?;
 
         Ok(entity)
     }
@@ -414,6 +438,52 @@ mod tests {
             result["project"].as_str().unwrap(),
             project_id,
             "task should have the project set"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Explicit `tags` tests
+    // -----------------------------------------------------------------------
+
+    /// Explicit tags and `#tag` markers already in the description both land in
+    /// the stored tag set — the list adds to the body, it does not replace it.
+    #[tokio::test]
+    async fn test_add_task_tags_add_to_description_markers() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Both sources")
+            .with_description("body carries #inline")
+            .with_tags(vec!["explicit".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let fetched = crate::task::GetTask::new(result["id"].as_str().unwrap())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["tags"], json!(["explicit", "inline"]));
+    }
+
+    /// A tag ref that names no tag aborts the create — no half-tagged task is
+    /// left on the board.
+    #[tokio::test]
+    async fn test_add_task_unresolvable_tag_ulid_creates_no_task() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Doomed")
+            .with_tags(vec!["01KJZEPKJ35S76KF7E9HS5742J".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(result.is_err(), "unresolvable tag ref must error");
+        let ectx = ctx.entity_context().await.unwrap();
+        assert!(
+            ectx.list("task").await.unwrap().is_empty(),
+            "the failed create must not persist a task"
         );
     }
 

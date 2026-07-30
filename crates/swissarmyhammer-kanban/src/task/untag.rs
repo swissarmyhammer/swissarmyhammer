@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::tag_parser;
+use crate::task::tags::{apply_tag_refs, TagApply};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,7 +10,10 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 
 /// Remove a tag from a task by removing `#tag` from its description.
 ///
-/// The `tag` field is the tag name/slug (e.g. "bug").
+/// The `tag` field is a forgiving tag reference resolved exactly as `tag task`
+/// resolves it — a tag name/slug (e.g. "bug"), a full tag ULID, `^<short>`, or
+/// a 7-char short id. Removing a tag the task does not carry is a no-op; an id
+/// reference that names no tag is an error.
 #[operation(
     verb = "untag",
     noun = "task",
@@ -38,28 +41,12 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-
-            // Resolve tag: may be a slug ("bug") or an entity ID (ULID).
-            // If it looks like a ULID and we can read the tag entity, use its tag_name.
-            let slug =
-                if self.tag.len() == 26 && self.tag.chars().all(|c| c.is_ascii_alphanumeric()) {
-                    // Looks like a ULID — try to resolve to tag_name
-                    match ectx.read("tag", &self.tag).await {
-                        Ok(tag_entity) => tag_parser::normalize_slug(
-                            tag_entity.get_str("tag_name").unwrap_or(&self.tag),
-                        ),
-                        Err(_) => tag_parser::normalize_slug(&self.tag),
-                    }
-                } else {
-                    tag_parser::normalize_slug(&self.tag)
-                };
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Remove #tag from body
-            let body = entity.get_str("body").unwrap_or("").to_string();
-            let new_body = tag_parser::remove_tag(&body, &slug);
-            if new_body != body {
-                entity.set("body", serde_json::json!(new_body));
+            // Same resolver as `tag task`, inverse application: strip `#slug`
+            // from the body.
+            let refs = std::slice::from_ref(&self.tag);
+            if apply_tag_refs(&ectx, &mut entity, refs, TagApply::Remove).await? {
                 ectx.write(&entity).await?;
             }
 
@@ -134,6 +121,57 @@ mod tests {
         assert!(
             !task["tags"].as_array().unwrap().contains(&json!("bug")),
             "tag must be removed from the stored task, got: {}",
+            task["tags"]
+        );
+    }
+
+    /// Untagging by the tag's ULID resolves to that tag's name and removes it —
+    /// the same resolver `tag task` uses.
+    #[tokio::test]
+    async fn test_untag_task_by_tag_ulid_removes_the_named_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Untag by id")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        TagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let tag_id = crate::tag::ListTags::default()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap()["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == json!("bug"))
+            .expect("the tag entity was auto-created")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        UntagTask::new(task_id, &tag_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(
+            task["tags"].as_array().unwrap().is_empty(),
+            "untag by ULID must remove the resolved tag, got: {}",
             task["tags"]
         );
     }

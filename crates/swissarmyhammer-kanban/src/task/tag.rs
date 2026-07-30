@@ -1,20 +1,22 @@
 //! TagTask command — appends `#tag` to task description
 
-use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::tag::tag_name_exists_entity;
-use crate::tag_parser;
+use crate::task::shared::auto_create_body_tags;
+use crate::task::tags::{apply_tag_refs, TagApply};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use swissarmyhammer_entity::Entity;
+use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Add a tag to a task by appending `#tag` to its description.
 ///
-/// The `tag` field is the tag name/slug (e.g. "bug").
-/// If the Tag object doesn't exist yet, it is auto-created with an auto-color.
+/// The `tag` field is a forgiving tag reference — a tag name/slug (e.g.
+/// "bug"), a full tag ULID, `^<short>`, or a 7-char short id. See
+/// [`crate::task::tags::apply_tag_refs`] for the resolution rules shared with
+/// the `tags` parameter on `add task` / `update task`. If the Tag object
+/// doesn't exist yet, it is auto-created with an auto-color; an id reference
+/// that names no tag is an error.
 #[operation(verb = "tag", noun = "task", description = "Add a tag to a task")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TagTask {
@@ -38,39 +40,16 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         let result: std::result::Result<Value, KanbanError> = async {
             let ectx = ctx.entity_context().await?;
-
-            // Resolve tag: may be a slug ("bug") or an entity ID (ULID).
-            // If it looks like a ULID and we can read the tag entity, use its tag_name.
-            let slug =
-                if self.tag.len() == 26 && self.tag.chars().all(|c| c.is_ascii_alphanumeric()) {
-                    match ectx.read("tag", &self.tag).await {
-                        Ok(tag_entity) => tag_parser::normalize_slug(
-                            tag_entity.get_str("tag_name").unwrap_or(&self.tag),
-                        ),
-                        Err(_) => tag_parser::normalize_slug(&self.tag),
-                    }
-                } else {
-                    tag_parser::normalize_slug(&self.tag)
-                };
-
-            // Auto-create Tag entity if it doesn't exist
-            if !tag_name_exists_entity(&ectx, &slug).await {
-                let color = auto_color::auto_color(&slug).to_string();
-                let tag_id = ulid::Ulid::new().to_string();
-                let mut tag_entity = Entity::new("tag", tag_id.as_str());
-                tag_entity.set("tag_name", json!(slug));
-                tag_entity.set("color", json!(color));
-                ectx.write(&tag_entity).await?;
-            }
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Append #tag to body if not already present
-            let body = entity.get_str("body").unwrap_or("").to_string();
-            let new_body = tag_parser::append_tag(&body, &slug);
-            if new_body != body {
-                entity.set("body", serde_json::json!(new_body));
+            // One shared path with `add task`/`update task`: resolve the ref,
+            // append `#slug` to the body, then let the auto-create pass mint
+            // the Tag entity if this name is new.
+            let refs = std::slice::from_ref(&self.tag);
+            if apply_tag_refs(&ectx, &mut entity, refs, TagApply::Append).await? {
                 ectx.write(&entity).await?;
             }
+            auto_create_body_tags(&ectx, &entity).await?;
 
             // Thin ack — success implies the tag took effect; `get task` is
             // the escape hatch for the post-op tag list.
@@ -91,6 +70,7 @@ mod tests {
     use crate::board::InitBoard;
     use crate::task::{AddTask, GetTask};
     use crate::task_helpers::assert_task_mutation_ack;
+    use serde_json::json;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -138,6 +118,71 @@ mod tests {
             "tag must be applied to the stored task, got: {}",
             task["tags"]
         );
+    }
+
+    /// A tag ref shaped like a ULID must name a real tag. Before the shared
+    /// resolver landed this silently created a tag literally called
+    /// `01KJZEPKJ35S76KF7E9HS5742J`.
+    #[tokio::test]
+    async fn test_tag_task_unknown_tag_ulid_errors() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Bad tag ref")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        let result = TagTask::new(task_id, "01KJZEPKJ35S76KF7E9HS5742J")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(result.is_err(), "an unresolvable tag ULID must error");
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(
+            task["tags"].as_array().unwrap().is_empty(),
+            "the rejected tag must not land, got: {}",
+            task["tags"]
+        );
+    }
+
+    /// Tagging by an existing tag's ULID applies that tag's name.
+    #[tokio::test]
+    async fn test_tag_task_by_tag_ulid_applies_the_name() {
+        let (_temp, ctx) = setup().await;
+
+        let tag = crate::tag::AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = tag["id"].as_str().unwrap();
+
+        let add_result = AddTask::new("Tag by id")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        TagTask::new(task_id, tag_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(task["tags"], json!(["bug"]));
     }
 
     /// Re-tagging with the same tag is idempotent and still returns the ack.

@@ -16,6 +16,7 @@ mod paste;
 mod search;
 mod shared;
 mod tag;
+mod tags;
 mod unassign;
 mod untag;
 mod update;
