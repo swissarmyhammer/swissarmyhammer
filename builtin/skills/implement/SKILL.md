@@ -26,6 +26,14 @@ $ARGUMENTS
 
 {% include "_partials/coding-standards" %}
 {% include "_partials/architecture-awareness" %}
+- One task at a time.
+- Do the work. No "too complex". Find a way.
+- Follow the coding standards — correct, robust, prevailing patterns.
+- No unrelated refactors while implementing.
+- All tests pass before reporting success. Zero failures, zero warnings.
+- New work discovered? Add as a new kanban task.
+- Stuck? Report what you tried and where you're blocked — don't silently give up.
+- Do not create a worktree, just work in the current branch
 
 ## Invocation
 
@@ -57,7 +65,7 @@ Parallel orchestrators (`finish`) always pass an explicit `<task-id>` to avoid r
 
 ## Process
 
-### 1. Select the task
+### Select the task
 
 - **Task-id**: use directly. Don't call `next task`. Verify with `{"op": "get task", "id": "<id>"}`; missing → report and stop.
 - **Default / `<next>`**: `op: "next task"`. Null → "board is clear", stop.
@@ -71,13 +79,15 @@ Parallel orchestrators (`finish`) always pass an explicit `<task-id>` to avoid r
   {"op": "next task", "filter": "#READY && !#docs"}
   ```
 
-### 2. Move to doing
+### Move to doing
+
+Using the `id` of the selected task
 
 ```json
 {"op": "move task", "id": "<id>", "column": "doing"}
 ```
 
-### 3. Read the task
+### Read the task
 
 ```json
 {"op": "get task", "id": "<id>"}
@@ -85,11 +95,8 @@ Parallel orchestrators (`finish`) always pass an explicit `<task-id>` to avoid r
 
 Full description + subtasks. Understand before writing code.
 
-### Record progress
 
-{% include "_partials/record-progress" %}
-
-### 4. Research before writing
+### Research before writing
 
 **Don't guess.** Run the Code-Context Checkpoints (above) before changing any code:
 
@@ -106,11 +113,13 @@ When using a library API, framework feature, or CLI flag — **look it up.** Web
 
 Never modify code you haven't read. Never assume what a function does — read it. Never assume a pattern exists — search. Never assume an API signature — look it up.
 
-### 5. Implement
+### Implement
 
 Do the work in the task and subtasks. After changing any symbol's signature or behavior, re-run `get callgraph` (inbound) and confirm every blast-radius caller still holds.
 
-### 6. Leave the task in `doing` for review
+When you think you are done `/double-check` your work and implement the feedback.
+
+### Leave the task in `doing` for review
 
 **Do not** move it to `review` yourself. 
 
@@ -120,13 +129,7 @@ Cannot finish the work? Do NOT pretend it's done. Record what happened on the ta
 
 Summarize what was done and what tests pass, and tell the user it's ready for `/review` (which moves it into `review`). User decides next — no auto-continue.
 
-## Rules
 
-- One task at a time.
-- Do the work. No "too complex". Find a way.
-- Follow the coding standards — correct, robust, prevailing patterns.
-- No unrelated refactors while implementing.
-- All tests pass before reporting success. Zero failures, zero warnings.
-- New work discovered? Add as a new kanban task.
-- Stuck? Report what you tried and where you're blocked — don't silently give up.
-- Do not create a worktree, just work in the current branch
+### Record progress
+
+{% include "_partials/record-progress" %}

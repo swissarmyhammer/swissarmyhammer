@@ -33,7 +33,7 @@ Can't state all three? Not done. Guessing at any? Back to the tool — don't fil
 
 ## Process
 
-### 1. Orient — check layers
+### Orient — check layers
 
 ```json
 {"op": "get status"}
@@ -43,7 +43,7 @@ Note which layers are active. Live LSP ops (`get definition`, `get hover`, `sear
 
 If `ARCHITECTURE.md` exists at the project root, read it now (per the Architecture Awareness guidance) — it gives the system map before tracing individual symbols.
 
-### 2. Survey — find the territory
+### Survey — find the territory
 
 Broad first. Use domain keywords:
 
@@ -60,7 +60,7 @@ If the index is building and `search symbol` is sparse, use the live alternative
 
 **Looking for**: the nouns and verbs of the problem — structs, traits, functions that participate.
 
-### 3. Trace — follow execution
+### Trace — follow execution
 
 ```json
 {"op": "get symbol", "query": "<specific symbol>"}
@@ -88,7 +88,7 @@ All usages:
 
 **Looking for**: the path data takes through the system. `get inbound_calls` is live LSP precision for "who calls this"; `get callgraph` uses indexed edges for broader traversal.
 
-### 4. Scope — measure the blast radius
+### Scope — measure the blast radius
 
 ```json
 {"op": "get blastradius", "file_path": "<target>", "max_hops": 3}
@@ -98,13 +98,9 @@ Supplement with `get references` — blast radius follows call edges, but refere
 
 **Looking for**: how far a change propagates. If the radius surprises you, you don't understand the code yet — back to step 3.
 
-### 5. Check tests
+### Check tests
 
 Tests are the clearest executable spec — they confirm understanding and show project patterns.
-
-```json
-{"op": "grep code", "pattern": "<symbol or behavior>", "file_pattern": "test"}
-```
 
 Also use Glob/Grep for test files near the code:
 - Same dir with `_test` suffix
@@ -113,7 +109,7 @@ Also use Glob/Grep for test files near the code:
 
 **Looking for**: intended behavior, the project's test patterns, behavior with no coverage.
 
-### 6. Conclude — explain
+### Conclude — explain
 
 Exit gate. State concretely:
 

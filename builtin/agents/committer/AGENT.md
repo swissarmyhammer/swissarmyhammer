@@ -1,6 +1,7 @@
 ---
 name: committer
 description: Git commit specialist for clean, well-organized commits
+model: sonnet
 skills:
   - thoughtful
   - commit

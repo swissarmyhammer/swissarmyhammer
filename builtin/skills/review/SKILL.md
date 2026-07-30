@@ -24,6 +24,16 @@ $ARGUMENTS
 
 {% include "_partials/review-column" %}
 
+- **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
+- **Findings are obeyed, never declined.** A finding is an instruction: satisfy it by fixing the code. You may not dismiss a finding, and you may not edit a validator to make one disappear — both are disobedience. The one exception is findings that genuinely cannot all be satisfied (two rules that can't both hold, or one demanding code that won't compile/type-check, or fighting a deliberate documented contract like `snake_case` mirroring a backend payload or `null` required by a type): you can't obey contradictory orders, so **report it** — record it on the task and leave it in `review` (stuck) for a human to fix the rule. You do not pick a winner, edit validators, or force a verdict. Column movement remains the only verdict.
+- **Fix at the root, not the cited line.** A finding names one instance of a cause; satisfy it by eliminating that cause across the whole file, so a re-review of that file finds zero recurrences — never by patching only the line cited. Review is binary, like a test suite: any open finding means not done, regardless of how minor it looks. There is no severity tier that makes a finding optional or advisory — every finding is mandatory.
+- **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
+- **Never ask to refactor existing tests — blanket exception, overrides every other rule.** Do NOT raise, record, or relay any finding whose subject is *changing test code that already existed* — refactoring, deduplicating, restructuring, renaming, re-docstringing, or otherwise restyling it — even when a validator (duplication, complexity, missing-docs, reuse, naming, function-length, …) flags it. **Drop the finding.** Adding a *new* regression test for the change under review is fine and expected; rewriting the tests that were already in the repo is out of scope. Why: test refactoring is not the task, it burns the implement loop on churn, and — critically — rewriting an existing test file collides with the upstream/maintainer test suite the change is graded against, turning a correct fix into a broken merge. The only thing that lifts this exception is the user *explicitly* asking for test refactoring.
+- **One concern per checklist item.** The engine already formats this way — preserve it.
+- **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.
+- **Preserve history on re-run.** Always append new dated sections. Never edit or delete prior ones; never flip checkboxes yourself — the user (or the implementer picking up the task) owns the marks.
+- **Column movement is the verdict.** Clean task → terminal column. Findings → stays in `review`.
+
 ## The `review` tool
 
 The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
@@ -53,11 +63,11 @@ There are no "dimensions" — that concept is gone. Scope is the op (`working`/`
 
 ## Process
 
-### 1. Ensure the review column
+### Ensure the review column
 
 Idempotent — use the partial above. Run every time.
 
-### 2. Determine the mode
+### Determine the mode
 
 | Invocation | Mode |
 |------------|------|
@@ -77,7 +87,7 @@ If any exist, pick the oldest (lowest ordinal / earliest created) for task-mode.
 
 **Note:** `/implement` leaves a finished task in `doing`, not `review` — it never parks tasks in `review`. So bare `/review` won't auto-target a task that was just implemented; pass `/review <id>` to target it explicitly. Orchestrators like `/finish` always pass the id (and usually a sha), so they're unaffected.
 
-### 3. Run the engine
+### Run the engine
 
 The chosen op decides the scope. Pass through `validators` / `backend` when the user asked to narrow or to run locally.
 
@@ -110,9 +120,10 @@ An explicit `<sha-or-range>` argument wins over everything else — this is how 
 
 Take the report's `markdown` (the dated `## Review Findings (...)` section) and `counts`. You do not read files or run layers yourself — the engine fleet did, including any language-specific checks (now validators).
 
-### 4. Apply findings
+### Apply findings
 
-Never create one kanban task per finding. Findings = checklist items on a host task — the task being reviewed (task-mode) or a single tracking task (range-mode). The engine's `markdown` is already the dated section; write it in per the contract below.
+Never create new kanban tasks for findings. 
+Findings = checklist items on a host task — the task being reviewed (task-mode) or a single tracking task (range-mode). The engine's `markdown` is already the dated section; write it in per the contract below.
 
 #### Task-mode
 
@@ -167,7 +178,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
    A subsequent `/review <tracking-id>` follows task-mode and moves it to terminal when all items are checked and a fresh review is clean.
 
-### 5. Summarize
+### Summarize
 
 - **Mode**: task-mode (with id) or range-mode (with scope)
 - **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
@@ -204,15 +215,3 @@ The column move is the verdict — no findings appended, history preserved.
 Subsequent `/review <new-id>` follows task-mode — moves to `done` once items are checked and a re-review is clean.
 
 **Narrowed / local:** `/review just duplication` → `{"op": "review working", "validators": ["duplication"]}`. `/review locally` → `{"op": "review working", "backend": "local"}`.
-
-## Rules
-
-- **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
-- **Findings are obeyed, never declined.** A finding is an instruction: satisfy it by fixing the code. You may not dismiss a finding, and you may not edit a validator to make one disappear — both are disobedience. The one exception is findings that genuinely cannot all be satisfied (two rules that can't both hold, or one demanding code that won't compile/type-check, or fighting a deliberate documented contract like `snake_case` mirroring a backend payload or `null` required by a type): you can't obey contradictory orders, so **report it** — record it on the task and leave it in `review` (stuck) for a human to fix the rule. You do not pick a winner, edit validators, or force a verdict. Column movement remains the only verdict.
-- **Fix at the root, not the cited line.** A finding names one instance of a cause; satisfy it by eliminating that cause across the whole file, so a re-review of that file finds zero recurrences — never by patching only the line cited. Review is binary, like a test suite: any open finding means not done, regardless of how minor it looks. There is no severity tier that makes a finding optional or advisory — every finding is mandatory.
-- **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
-- **Never ask to refactor existing tests — blanket exception, overrides every other rule.** Do NOT raise, record, or relay any finding whose subject is *changing test code that already existed* — refactoring, deduplicating, restructuring, renaming, re-docstringing, or otherwise restyling it — even when a validator (duplication, complexity, missing-docs, reuse, naming, function-length, …) flags it. **Drop the finding.** Adding a *new* regression test for the change under review is fine and expected; rewriting the tests that were already in the repo is out of scope. Why: test refactoring is not the task, it burns the implement loop on churn, and — critically — rewriting an existing test file collides with the upstream/maintainer test suite the change is graded against, turning a correct fix into a broken merge. The only thing that lifts this exception is the user *explicitly* asking for test refactoring.
-- **One concern per checklist item.** The engine already formats this way — preserve it.
-- **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.
-- **Preserve history on re-run.** Always append new dated sections. Never edit or delete prior ones; never flip checkboxes yourself — the user (or the implementer picking up the task) owns the marks.
-- **Column movement is the verdict.** Clean task → terminal column. Findings → stays in `review`.
