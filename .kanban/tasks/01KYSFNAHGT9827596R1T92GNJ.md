@@ -370,6 +370,70 @@ comments:
     - `cargo doc --no-deps`: zero warnings attributable to either file.
     - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` and `apps/kanban-cli/src/commands/serve.rs`. Nothing else. `git status --porcelain | grep builtin` gives zero hits. No new stray `.kanban` directory; the one under `crates/swissarmyhammer-mcp-proxy/` predates this session, as round 6 recorded.
   timestamp: 2026-07-30T19:37:09.273802+00:00
+- actor: claude-code
+  id: 01kytcr086qc5k52ypgqercxnk
+  text: |-
+    Review round 9: the single remaining finding is satisfied. 57/57 boxes are `- [x]`. Task stays in `doing`.
+
+    ## Answer to the finding: all 12 operations DO carry a correct affected_task_id
+
+    No operation was broken. All 8 that lacked a read-back test pass one now. The write side was already right; only the proof was missing.
+
+    The reason is structural, and worth recording: every one of the 12 returns `task_helpers::task_mutation_ack(&entity)`, which emits `{ok, id, short_id}` where `id` is the TASK entity id. `add task` returns `slim_task_json`, which also carries `id`. `execute` copies `result["id"]` into `_plan._meta.affected_task_id`. One ack helper, one extraction, so the 12 cannot disagree.
+
+    The two comment ops were the ones worth doubting: `update comment` and `delete comment` both ack the OWNING task, never the comment member, and their tests assert exactly that with an `assert_ne!(comment_id, task_id)` guard so the assertion cannot pass by the two ids coinciding.
+
+    ## Shape of the change
+
+    Rather than 8 more copies of a 25-line skeleton — which is the debt class rounds 5 to 8 kept filing — the 4 existing tests and the 8 new ones now share one section and one set of helpers:
+
+    - `run_op(tool, context, json!({...}))` — build args, execute, parse. The old `get_task` helper now delegates to it.
+    - `plan_probe_board(temp, title)` — board plus one seeded task; returns the whole `add task` response, because `add task` is itself under test.
+    - `assert_plan_affects(data, task_id, op)` — the one assertion, naming the op in its failure message.
+    - `add_probe_actor`, `add_probe_comment` — the two non-trivial setups.
+
+    Each test is now 8 to 15 lines and nextest still reports one result per operation. No assertion from the 4 pre-existing tests was dropped; the adversarial pass verified that against `git show HEAD:` independently.
+
+    ## RED proofs
+
+    **Neuter 1 — drop the id extraction in `execute`.** All 12 failed. The failure output matters: `_plan` was still attached, only `affected_task_id` was `Null`. That is the exact proof the finding asked for — these are read-backs of the id, not "a `_plan` key exists" checks.
+
+    **Neuter 2 — remove the 8 newly-covered pairs from `TASK_MODIFYING_OPERATIONS`.** Exactly those 8 failed; the 4 pre-existing tests passed. This proves each new test is pinned to its OWN operation and is not riding on a sibling's plan — the real risk for `untag` (which tags first), `unassign` (which assigns first) and the two comment ops (which add a comment first).
+
+    **Neuter 3 — substitute one pair, keeping the length at 12.** The coverage guard failed. See below.
+
+    ## A real bug found, filed as ^qc0jkf8, NOT fixed here
+
+    `_plan.entries` is ALWAYS empty. `build_plan_data` calls `ListTasks::new().execute(ctx)` and then `tasks.as_array()`, but `ListTasks::execute` returns an OBJECT `{"tasks": [...], "count": N}`. `as_array()` gives `None`, `unwrap_or(&Vec::new())` supplies an empty list, and the entry-building `.map()` never runs. Silent — no error, no warning.
+
+    Live evidence, from the `move task` that started this session on a board holding hundreds of cards: `"_plan":{"_meta":{"affected_task_id":"01KYSF...","trigger":"move task"},"entries":[]}`. The card filed for it demonstrates the same thing in its own `add task` response.
+
+    So the module header quotes the ACP rule "Complete plan lists must be resent with each update" while the tool resends an empty list every time. `task_to_plan_entry` and the status/priority mapping beside it are dead code today.
+
+    Deliberately not fixed on this card: it is a production behavior change reaching every `_plan` consumer, on a test-only card at its final review round. Same precedent as ^n36mc1q, ^tnr56gg and ^p4mp9n6.
+
+    ## Adversarial pass: REVISE with 6 findings, 5 accepted, 1 rejected on evidence
+
+    1. **`_plan.entries` always empty** — accepted, filed as above. Also deleted the doc clause I had written that said the affected id "cannot come from the task list `_plan` enumerates". `_plan` enumerates nothing, ever, so the clause was false.
+    2. **The coverage guard overclaimed** — accepted. My first version pinned only `len() == 12`, while its doc claimed the list and its proof "cannot drift apart". Substituting one pair keeps the length at 12 and the guard stayed green. It now pins the 12 PAIRS. Proven by substituting `(Complete, Task)` for `(Archive, Task)`: the guard fails and prints both lists. The duplicated pair list is the mechanism of a drift guard, not accidental duplication, and the doc now says so.
+    3. **`test_add_task_plan_carries_affected_task_id` was circular** — accepted, and the sharpest catch. It read `task_id` from `added["id"]` and compared it to `_plan._meta.affected_task_id`, which production fills FROM that same field. It could never disagree. Now it takes the id OUT of the plan, calls `get task` with it, and asserts the stored title. Re-proved RED.
+    4. **`run_op` doc said "the real wire response"** — accepted. The served path in `mcp/server.rs` runs `fold_in_diagnostics` after `execute`, so `run_op` stops one layer short. Doc corrected and the difference stated.
+    5. **`add comment` doc overgeneralized** — accepted. Dropping the `(Add, Comment)` arm skips only `add comment`; the other two comment ops have their own arms. My own neuter 2 had already shown this.
+    6. **"14 spaces baked into the guard's panic message"** — I first REJECTED this with a standalone `rustc` program proving Rust's `\`-newline continuation strips leading whitespace. I was wrong, and the way I was wrong is the lesson: `cargo fmt` had already COLLAPSED the continuation into a single-line literal on disk, materialising the 14 spaces. I had verified the source form I wrote, not the form on disk. Confirmed by reading the file, then fixed with a short one-line message.
+
+    ## For the next agent
+
+    **Verify against the file on disk, not against what you wrote.** A formatter runs between the two. My rustc experiment was correct about Rust and still gave the wrong answer, because it tested a string literal that no longer existed in that form. `grep` the actual line before concluding.
+
+    The traps from rounds 5 to 8 all held: `cp` plus `touch` on every restore, never `mv` a `.bak`; the `files` MCP edit op echoes the whole 3400-line file and overflows the tool budget while the edit still lands, so patch large files with `python3` through `shell` and verify with `grep`; `kanban` CLI is noun-first (`kanban task update`).
+
+    ## Verification
+
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'`: 7943 tests, **7943 passed**, 2 skipped, 0 failed. The `review_progress_notifications_test` flake (^t681xdv, ^yh4m6ed, ^pxhzk1s) failed on an earlier run this round and passed alone in 13 s, then passed in the final full run.
+    - `cargo nextest run -p swissarmyhammer-tools -E 'test(mcp::tools::kanban)'`: 86/86, up from 74.
+    - `cargo fmt --all -- --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo doc --no-deps`: zero warnings attributable to the file.
+    - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` only. Nothing under `builtin/` — `git status --porcelain | grep builtin` gives zero hits, and the `builtin/` edits present at session start belong to a parallel session. No new stray `.kanban` directory.
+  timestamp: 2026-07-30T20:51:36.326749+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -488,3 +552,7 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:410` — Public trait method `fn operations()` lacks documentation. It is not immediately clear what operations are returned or their purpose. Add doc comment explaining this method returns the list of kanban operations supported by the MCP tool.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:414` — Public trait method `async fn execute()` lacks documentation. This is a large, complex method implementing the tool execution logic with multiple steps. Add comprehensive doc comment explaining the method's purpose, input/output format, and key behaviors (e.g., plan data attachment for task-modifying operations).
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:415` — Batch operation response format changed without test coverage. When a batch contains task-modifying operations and plan data is included, responses that previously returned `[{...}, {...}]` are now wrapped as `{"result": [...], "_plan": {...}}`. This breaks the response shape contract for clients expecting array responses from batch operations. Either (1) add test coverage for batch operations with task-modifying operations to document the new format as intentional, or (2) modify the wrapping logic to append `_plan` to array responses while preserving the array format (e.g., `response = json!({"entries": response, "_plan": plan})` or similar), maintaining backward compatibility.
+
+## Review Findings (2026-07-30 15:08)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:194` — The TASK_MODIFYING_OPERATIONS list specifies 12 operations that attach plan data in the execute function (lines 390, 411). Plan-data write-back is tested (executed) for all 12, but read-back (verification that plan contains affected_task_id) is verified for only 4 of 12 operations. The write-side is comprehensive; the read-side (proving 'round-trip') is incomplete. Operations add task, delete task, move task, complete task, unassign task, untag task, update comment, and delete comment attach plan data but are never tested to read it back. Add read-back tests for all 8 missing operations following the pattern of test_update_task_plan_carries_affected_task_id: each test should execute the operation and assert data["_plan"]["_meta"]["affected_task_id"] equals the affected task or comment's ID, proving the plan round-trip for all 12 task-modifying operations.

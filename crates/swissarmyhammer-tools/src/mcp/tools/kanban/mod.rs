@@ -637,14 +637,26 @@ mod tests {
         data["id"].as_str().expect("Expected id field").to_string()
     }
 
+    /// Run one operation through the served tool and return its parsed response.
+    ///
+    /// `args` is the MCP arguments object, `op` key included. Going through
+    /// `KanbanTool::execute` keeps the assertion on what the tool itself
+    /// returns, including whatever `execute` attaches — `_plan` above all.
+    /// The served wire response folds in inline diagnostics one layer further
+    /// out, in `McpServer`; kanban emits none, so nothing is lost here.
+    async fn run_op(tool: &KanbanTool, context: &ToolContext, args: Value) -> Value {
+        let args = args
+            .as_object()
+            .expect("operation arguments must be a JSON object")
+            .clone();
+        let result = tool.execute(args, context).await.unwrap();
+        parse_json(&result)
+    }
+
     /// Fetch the full task via `get task` — mutation responses are thin acks
     /// / slim projections, so effect assertions go through the stored state.
     async fn get_task(tool: &KanbanTool, context: &ToolContext, task_id: &str) -> Value {
-        let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get task"));
-        get_args.insert("id".to_string(), json!(task_id));
-        let result = tool.execute(get_args, context).await.unwrap();
-        parse_json(&result)
+        run_op(tool, context, json!({"op": "get task", "id": task_id})).await
     }
 
     #[tokio::test]
@@ -1112,34 +1124,334 @@ mod tests {
         );
     }
 
-    /// Mutation responses still drive the `_plan` attachment: the thin ack's
-    /// top-level `id` is what populates `_plan._meta.affected_task_id`.
-    #[tokio::test]
-    async fn test_update_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
+    // =========================================================================
+    // `_plan` attachment — one read-back test per TASK_MODIFYING_OPERATIONS entry
+    // =========================================================================
+
+    /// Seed a fresh board carrying one task, ready for a `_plan` probe.
+    ///
+    /// Returns the tool, its context and the whole `add task` response. Whole,
+    /// because `add task` is itself one of the operations under test here.
+    async fn plan_probe_board(temp: &TempDir, title: &str) -> (KanbanTool, ToolContext, Value) {
         let context = create_test_context()
             .await
             .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
+        let added = run_op(&tool, &context, json!({"op": "add task", "title": title})).await;
+        (tool, context, added)
+    }
 
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Plan target"));
-        let add_result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&add_result);
-
-        let mut update_args = serde_json::Map::new();
-        update_args.insert("op".to_string(), json!("update task"));
-        update_args.insert("id".to_string(), json!(task_id));
-        update_args.insert("title".to_string(), json!("Plan target renamed"));
-
-        let result = tool.execute(update_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
+    /// Assert `data` carries a `_plan` attachment naming `task_id` as affected.
+    ///
+    /// This is the read-back half of the plan round trip. `execute` copies the
+    /// mutation ack's top-level `id` into `_plan._meta.affected_task_id`, and
+    /// an ACP agent reads it back from there to learn which card moved. Every
+    /// entry in [`TASK_MODIFYING_OPERATIONS`] owes this assertion: attaching a
+    /// `_plan` that names the wrong card, or no card, is a silent loss.
+    fn assert_plan_affects(data: &Value, task_id: &str, op: &str) {
         assert_eq!(
             data["_plan"]["_meta"]["affected_task_id"], task_id,
-            "the _plan attachment must carry the mutated task id, got: {data}"
+            "`{op}` must name the affected task in its `_plan` attachment, got: {data}"
+        );
+    }
+
+    /// Register the actor the assign / unassign probes point at.
+    async fn add_probe_actor(tool: &KanbanTool, context: &ToolContext) {
+        run_op(
+            tool,
+            context,
+            json!({"op": "add actor", "id": "assistant", "name": "Assistant", "type": "agent"}),
+        )
+        .await;
+    }
+
+    /// Add one comment to `task_id` and return its member id.
+    async fn add_probe_comment(tool: &KanbanTool, context: &ToolContext, task_id: &str) -> String {
+        let added = run_op(
+            tool,
+            context,
+            json!({"op": "add comment", "task_id": task_id, "text": "plan-worthy remark"}),
+        )
+        .await;
+        added["comment"]["id"]
+            .as_str()
+            .expect("add comment echoes the new member")
+            .to_string()
+    }
+
+    /// `add task` — the plan names the card that was just created.
+    ///
+    /// Anchored on stored state, not on the ack: `_plan._meta.affected_task_id`
+    /// is filled FROM that ack's `id`, so comparing the two to each other would
+    /// only prove a field equals itself. Every other probe here has an
+    /// independent anchor — it feeds the mutation an id obtained earlier.
+    #[tokio::test]
+    async fn test_add_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan add target").await;
+
+        let planned = added["_plan"]["_meta"]["affected_task_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("`add task` named no affected task, got: {added}"));
+        let stored = get_task(&tool, &context, planned).await;
+
+        assert_eq!(
+            stored["title"], "Plan add target",
+            "the plan must name the card `add task` actually stored, got: {stored}"
+        );
+    }
+
+    /// `update task` — the response is a thin ack, so its top-level `id` is
+    /// the only source `_plan` has for the affected card.
+    #[tokio::test]
+    async fn test_update_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan update target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "update task", "id": task_id, "title": "Plan target renamed"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "update task");
+    }
+
+    /// `delete task` — the card is off the board by the time the plan is
+    /// built, so the affected id has to survive in the ack itself.
+    #[tokio::test]
+    async fn test_delete_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan delete target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(&tool, &context, json!({"op": "delete task", "id": task_id})).await;
+
+        assert_plan_affects(&data, &task_id, "delete task");
+    }
+
+    /// `move task` — the column change is the whole point of the plan update,
+    /// so the plan must say which card changed column.
+    #[tokio::test]
+    async fn test_move_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan move target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "move task", "id": task_id, "column": "doing"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "move task");
+    }
+
+    /// `complete task` — a move to the terminal column, acked the same way.
+    #[tokio::test]
+    async fn test_complete_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan complete target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "complete task", "id": task_id}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "complete task");
+    }
+
+    /// `assign task` — the thin ack's top-level `id` must reach `_plan`.
+    #[tokio::test]
+    async fn test_assign_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan assign target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+        add_probe_actor(&tool, &context).await;
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "assign task", "id": task_id, "assignee": "assistant"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "assign task");
+    }
+
+    /// `unassign task` — the inverse of `assign task`, and equally a task
+    /// mutation, so it owes the same `_plan` attachment.
+    #[tokio::test]
+    async fn test_unassign_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan unassign target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+        add_probe_actor(&tool, &context).await;
+        run_op(
+            &tool,
+            &context,
+            json!({"op": "assign task", "id": task_id, "assignee": "assistant"}),
+        )
+        .await;
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "unassign task", "id": task_id, "assignee": "assistant"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "unassign task");
+    }
+
+    /// `tag task` — regression for the previously-missed extraction: the old
+    /// `task_id` key was never picked up by the `_plan` wrapper.
+    #[tokio::test]
+    async fn test_tag_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan tag target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "tag task", "id": task_id, "tag": "bug"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "tag task");
+    }
+
+    /// `untag task` — the inverse of `tag task`, same ack, same obligation.
+    #[tokio::test]
+    async fn test_untag_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan untag target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+        run_op(
+            &tool,
+            &context,
+            json!({"op": "tag task", "id": task_id, "tag": "bug"}),
+        )
+        .await;
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "untag task", "id": task_id, "tag": "bug"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "untag task");
+    }
+
+    /// `add comment` — a comment ack's top-level `id` is the OWNING task id,
+    /// which is what `_plan` must name. Without the `(Add, Comment)` arm in
+    /// [`TASK_MODIFYING_OPERATIONS`] the wrapper skips `add comment`
+    /// silently, exactly like tag and assign used to be skipped.
+    #[tokio::test]
+    async fn test_add_comment_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan comment target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "add comment", "task_id": task_id, "text": "plan-worthy remark"}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "add comment");
+    }
+
+    /// `update comment` — the plan must name the owning TASK, not the comment
+    /// member that changed. An agent plans cards, not comments.
+    #[tokio::test]
+    async fn test_update_comment_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan comment update target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+        let comment_id = add_probe_comment(&tool, &context, &task_id).await;
+        assert_ne!(
+            comment_id, task_id,
+            "the probe must distinguish the two ids"
+        );
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({
+                "op": "update comment",
+                "task_id": task_id,
+                "id": comment_id,
+                "text": "revised remark",
+            }),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "update comment");
+    }
+
+    /// `delete comment` — same rule as `update comment`: the owning task id,
+    /// never the removed member's id.
+    #[tokio::test]
+    async fn test_delete_comment_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let (tool, context, added) = plan_probe_board(&temp, "Plan comment delete target").await;
+        let task_id = added["id"].as_str().unwrap().to_string();
+        let comment_id = add_probe_comment(&tool, &context, &task_id).await;
+        assert_ne!(
+            comment_id, task_id,
+            "the probe must distinguish the two ids"
+        );
+
+        let data = run_op(
+            &tool,
+            &context,
+            json!({"op": "delete comment", "task_id": task_id, "id": comment_id}),
+        )
+        .await;
+
+        assert_plan_affects(&data, &task_id, "delete comment");
+    }
+
+    /// Coverage guard: the roster of plan-attaching operations matches the
+    /// read-back tests above one for one, so the two cannot drift apart.
+    ///
+    /// The pair list below is deliberately a SECOND, independently maintained
+    /// copy of [`TASK_MODIFYING_OPERATIONS`] — that is the mechanism of a drift
+    /// guard, not accidental duplication. Pinning the pairs rather than the
+    /// count also catches a substitution, which leaves the length at twelve
+    /// while handing an untested operation a plan.
+    #[test]
+    fn test_every_task_modifying_operation_has_a_plan_read_back_test() {
+        // One entry per test in this section, in the order they appear.
+        let proven_by_a_read_back_test = [
+            (Verb::Add, Noun::Task),
+            (Verb::Update, Noun::Task),
+            (Verb::Delete, Noun::Task),
+            (Verb::Move, Noun::Task),
+            (Verb::Complete, Noun::Task),
+            (Verb::Assign, Noun::Task),
+            (Verb::Unassign, Noun::Task),
+            (Verb::Tag, Noun::Task),
+            (Verb::Untag, Noun::Task),
+            (Verb::Add, Noun::Comment),
+            (Verb::Update, Noun::Comment),
+            (Verb::Delete, Noun::Comment),
+        ];
+
+        assert_eq!(
+            TASK_MODIFYING_OPERATIONS, proven_by_a_read_back_test,
+            "roster changed; add or drop the matching read-back test and restate the pair"
         );
     }
 
@@ -1740,111 +2052,6 @@ mod tests {
         assert!(task_data["tags"].is_array());
         let tags = task_data["tags"].as_array().unwrap();
         assert!(!tags.is_empty(), "Task should have at least one tag");
-    }
-
-    /// `tag task` is a task mutation: its thin ack carries a top-level `id`,
-    /// which must populate `_plan._meta.affected_task_id` (regression for the
-    /// previously-missed extraction — the old `task_id` key was never picked
-    /// up by the `_plan` wrapper).
-    #[tokio::test]
-    async fn test_tag_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Plan tag target"));
-        let result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        let mut tag_args = serde_json::Map::new();
-        tag_args.insert("op".to_string(), json!("tag task"));
-        tag_args.insert("id".to_string(), json!(task_id));
-        tag_args.insert("tag".to_string(), json!("bug"));
-
-        let result = tool.execute(tag_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(
-            data["_plan"]["_meta"]["affected_task_id"], task_id,
-            "the _plan attachment must carry the tagged task id, got: {data}"
-        );
-    }
-
-    /// Same regression for `assign task`: the thin ack's top-level `id`
-    /// must populate `_plan._meta.affected_task_id`.
-    #[tokio::test]
-    async fn test_assign_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        let mut actor_args = serde_json::Map::new();
-        actor_args.insert("op".to_string(), json!("add actor"));
-        actor_args.insert("id".to_string(), json!("assistant"));
-        actor_args.insert("name".to_string(), json!("Assistant"));
-        actor_args.insert("type".to_string(), json!("agent"));
-        tool.execute(actor_args, &context).await.unwrap();
-
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Plan assign target"));
-        let result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        let mut assign_args = serde_json::Map::new();
-        assign_args.insert("op".to_string(), json!("assign task"));
-        assign_args.insert("id".to_string(), json!(task_id));
-        assign_args.insert("assignee".to_string(), json!("assistant"));
-
-        let result = tool.execute(assign_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(
-            data["_plan"]["_meta"]["affected_task_id"], task_id,
-            "the _plan attachment must carry the assigned task id, got: {data}"
-        );
-    }
-
-    /// Same regression for `add comment`: the comment mutation ack's
-    /// top-level `id` is the TASK id and must populate
-    /// `_plan._meta.affected_task_id` — without the `(Add, Comment)` arm in
-    /// `is_task_modifying_operation` the `_plan` wrapper silently skips
-    /// comment mutations, exactly like tag/assign used to be skipped.
-    #[tokio::test]
-    async fn test_add_comment_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Plan comment target"));
-        let result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        let mut comment_args = serde_json::Map::new();
-        comment_args.insert("op".to_string(), json!("add comment"));
-        comment_args.insert("task_id".to_string(), json!(task_id));
-        comment_args.insert("text".to_string(), json!("plan-worthy remark"));
-
-        let result = tool.execute(comment_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        assert_eq!(
-            data["_plan"]["_meta"]["affected_task_id"], task_id,
-            "the _plan attachment must carry the commented task id, got: {data}"
-        );
     }
 
     #[tokio::test]
