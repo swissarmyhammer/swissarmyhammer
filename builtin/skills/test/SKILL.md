@@ -3,7 +3,6 @@ name: test
 description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality.
 agent: tester
 license: MIT OR Apache-2.0
-compatibility: Requires the `kanban` MCP tool  for recording test failures as tasks.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -22,22 +21,10 @@ metadata:
 ## Process
 
 1. **Run the full test suite** using project detection to pick the right command.
-2. **Type-check + lint** with warnings as errors (`cargo clippy -- -D warnings`).
+2. **Type-check + lint** treating warnings as errors.
 3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
 4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.
-5. **Track remaining failures on kanban.** Ensure tag exists:
-
-   ```json
-   {"op": "add tag", "id": "test-failure", "name": "Test Failure", "color": "ff0000", "description": "Failing test or type check"}
-   ```
-
-   Create one task per failure:
-
-   ```json
-   {"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error>\n\n<what you tried>", "tags": ["test-failure"]}
-   ```
-
-6. **Report**: pass/fail, what was fixed, what's left. If stuck, say what you tried and where you're blocked.
+5. **Report**: pass/fail, what was fixed, what's left. If stuck, say what you tried and where you're blocked.
 
 ## Rules
 
