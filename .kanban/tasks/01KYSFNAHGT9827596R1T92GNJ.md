@@ -494,8 +494,30 @@ comments:
 
     Task stays in `doing`. Not committed.
   timestamp: 2026-07-30T21:56:50.340430+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyth6n3mtbewtygpy0rehs6d
+  text: |-
+    Closing. The three findings in the 2026-07-30 16:57 section are SPLIT OUT to ^a3bdyy7, not dropped.
+
+    Justification, on the same precedent this card already set four times (^n36mc1q, ^tnr56gg, ^p4mp9n6, ^qc0jkf8):
+
+    All three are in `shell/mod.rs`, a file this card touched with exactly one line — `use crate::mcp::lifecycle_utils::applier_error;` — plus the deletion of a duplicate helper. `git blame` puts every cited site two months older than this card: `40834ce585` and `a7c1f58ed5` (2026-05-29), `4321207aea` (2026-06-03). They concern the `Bash` tool-name literal and an error string in the shell tool. They have no relation to the tags array on `add task` / `update task`.
+
+    Loop record: 8 review iterations, findings 19 → 9 → 10 → 18 → 1 → 1 → 1 → 3. The card's own scope was met in iteration 1. Every round after it closed its finding and surfaced one more pre-existing defect in whatever code the previous round made prominent — the reviewer said so itself at iteration 7 ("the refactor did not create applier_error; it made the function more prominent"), and at iteration 8 the count rose because obeying iteration 7 pulled a new file into review scope for the first time.
+
+    That is scope growth, not non-convergence of this card's work. The reviewer's own iteration-8 recommendation was to split and close.
+
+    Shipped across 6 checkpoint commits, 74d0cacc4..b5b1d6e2a:
+    - `tags` array now applies on `add task` and `update task`, routed through one shared path with `tag task`/`untag task`
+    - unresolvable tag ref is an error, matching `depends_on`
+    - sibling-field audit: `attachments` on update and `assignees` on both had the same silent-drop defect, both fixed
+    - two `tag_parser` boundary bugs, one of which made `update task {tags: []}` a silent no-op — the exact defect class this card exists to kill
+    - one latent bug older than the card: a tag stored as "Bug Fix" could never have its markers renamed or stripped
+    - `tag_parser` collapsed onto one walker and one writer; one shared walker for tag body edits; one lifecycle skeleton; `applier_error` shared with the shell tool
+    - read-backs proving `_plan._meta.affected_task_id` for all 12 plan-attaching operations
+  timestamp: 2026-07-30T22:09:30.740840+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffd80
 title: add task / update task silently discard the tags array
 ---
 `add task` and `update task` both accept a `tags` array, return `ok: true`, and apply nothing. The array is discarded without an error or a warning.
@@ -624,3 +646,9 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 ## Review Findings (2026-07-30 16:33)
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:467` — Function `applier_error` reimplements a helper that already exists elsewhere, as explicitly acknowledged in its own comment: 'Mirrors the helper of the same name in the shell tool.' The capability should be reused from the shared source rather than duplicated. Move `applier_error` to a shared lifecycle utilities module (or a common submodule both kanban and shell tools can import from), and call the shared version here instead of maintaining a duplicate.
+
+## Review Findings (2026-07-30 16:57)
+
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:327` — The tool name 'Bash' appears as a hardcoded string in the allow_tool call in deinit, duplicating the same string used in init and category. Define a named constant like `const NATIVE_BASH_TOOL: &str = "Bash";` at module level and use it in all three locations (init, deinit, category).
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:359` — Operation names are hardcoded in the error message string, but they are already defined as data in SHELL_OPERATIONS. If a new operation is added to SHELL_OPERATIONS, this hardcoded list must be manually kept in sync or the error message becomes stale and misleading. Generate the error message dynamically from SHELL_OPERATIONS by iterating over the operations and calling op_string() on each, e.g., `let ops = SHELL_OPERATIONS.iter().map(|o| o.op_string()).collect::<Vec<_>>().join(', '); format!("Unknown operation '{}'. Valid operations: {}", other, ops)`.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:374` — The tool name 'Bash' appears as a hardcoded string in the ToolCategory::Replacement field, duplicating the same string used in init and deinit methods. Define a named constant like `const NATIVE_BASH_TOOL: &str = "Bash";` at module level and use it in all three locations (init, deinit, category).
