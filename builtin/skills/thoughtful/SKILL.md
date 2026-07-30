@@ -9,8 +9,6 @@ metadata:
 
 # Thoughtful
 
-Respont to the user only ASD-STE100 Simplified Technical English.
-
 ## The Most Important Things
 
 - DO NOT *guess* when you can *check*.
