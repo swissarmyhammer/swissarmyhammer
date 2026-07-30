@@ -160,6 +160,43 @@ comments:
     - `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
     - Nothing under `builtin/` was touched — those edits in the tree belong to a parallel session.
   timestamp: 2026-07-30T16:06:46.405738+00:00
+- actor: claude-code
+  id: 01kyt0775hk4ktpz9frq5qz486
+  text: |-
+    Review round 6: all 9 findings satisfied, every box flipped to `- [x]`. Task stays in `doing`.
+
+    The 9 findings were 4 distinct defects — the engine reported three of them twice from different lines.
+
+    ## What changed
+
+    **One shared walker (2 findings, the important one).** New `crates/swissarmyhammer-kanban/src/tag/shared.rs` holds `apply_tag_edit_to_all_tasks(ectx, edit_fn)`. `delete.rs` and `update.rs` each carried their own copy of the "list every task, rewrite its body through `tag_parser`, write back on change" loop, differing only in the parser call. Both are now one-line calls: `remove_tag` and `rename_tag` respectively. The iteration-2 collapse inside `tag_parser.rs` gave one reader and one writer; this removes the second duplicated walker that was sitting above it.
+
+    `tag/shared.rs` mirrors the existing `task/shared.rs`: private `mod shared;`, `pub(crate)` items. No new dependency edge — `tag` already used `tag_parser` and `EntityContext`. The walk stays in the same position in both ops (after the duplicate-name check and before `entity.set("tag_name", ...)` in update; after the read and before `ectx.delete` in delete), so the entity layer sees the identical read/write sequence.
+
+    I swept the crate for a third copy. There is none. `tag/cut.rs` and `tag/paste.rs` edit ONE task. `task/tags.rs::strip_all_tags` folds over one body. `actor/delete.rs` has the same shape but edits `assignees`, not tag markers — a different job, not this card.
+
+    **Missing doc comments (5 findings, 3 real).** `DeleteTag::new`, `UpdateTag::with_color`, `UpdateTag::with_description`. I also documented `UpdateTag::new` and `with_name` — same class, same file, and the validator would have filed them next round.
+
+    **Test scope (1 finding).** The `test_tags_persist_across_input_shapes_via_served_tool` docstring claimed "every ref format" but the `ref_form` loop had no uppercase entries. Took the preferred option: made the docstring true. The loop now spells out both letter cases of both ID forms — `tag_id.to_uppercase()`/`to_lowercase()`, `short.to_uppercase()`/`short`, `^SHORT`/`^short`. The id-as-issued form was dropped in favor of the explicit case pair so the coverage does not depend on which case the ULID generator emits.
+
+    ## RED proofs, one of which I had to redo
+
+    - **Uppercase short id at the MCP boundary.** My FIRST proof was unsound and the `double-check` agent caught it. I had neutered both `tag_by_id` and `tag_by_short_id`, so the loop aborted at index 1 on the full uppercase ULID — an entry that is byte-identical to the `tag_id.clone()` it replaced, because `ulid::Ulid::new().to_string()` already emits uppercase. The run never reached the genuinely new cases. Redone with the neutering aimed ONLY at `tag_by_short_id`'s `needle.to_lowercase()`: the failure now lands where it should, `add task dropped tags for ref_form=FS0FWF4`, and shows the exact silent-loss mode this card exists to kill — a tag literally named `FS0FWF4` gets created instead of resolving.
+    - **The shared walker's blast radius.** New test `edit_rewrites_only_the_tasks_carrying_the_marker` in `tag/shared.rs`: a bystander task must come out byte-identical while the marked one is rewritten. Proven RED by swapping `remove_tag` for an over-matching `edit_fn` — the bystander came back mangled (`No MANGLED here`).
+
+    ## What did not work, for the next agent
+
+    1. **The write-skip guard is not testable, and my first test for it was worthless.** The `double-check` agent asked for a test on `if new_body != body`, reasoning that each `ectx.write` appends a changelog line. I wrote it — and it PASSED with the guard deleted. Probed further: with the guard gone, an unchanged write leaves the task's `.md` and `.jsonl` byte-identical AND its mtime untouched. **The entity layer already discards a write that changes no field.** The guard is a call-avoidance optimization with zero observable effect. I reworded the doc to say exactly that instead of asserting a persistence contract no test can hold, and replaced the test with the bystander test above, which holds something real.
+    2. **`kanban-cli` is noun-first, and the wrong order fails SILENTLY.** `kanban update task --id ... --description ...` printed nothing, exited 0, and wrote nothing. The correct form is `kanban task update --id ...`. I burned a cycle believing a caching problem before checking `--help`. (Note the irony: a silent no-op on a card about silent no-ops.)
+    3. The `mv file.bak file.rs` trap from round 5 held. I used `cp` + `touch` on every restore.
+
+    ## Verification
+
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'`: 7930 tests, **7930 passed**, 2 skipped, 0 failed. The `review_progress_notifications_test` flake (^t681xdv, ^yh4m6ed, ^pxhzk1s) passed this round.
+    - `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - Files changed: `tag/shared.rs` (new), `tag/delete.rs`, `tag/update.rs`, `tag/mod.rs`, `tools/src/mcp/tools/kanban/mod.rs`.
+    - Nothing under `builtin/` was touched. The stray `.kanban` under `crates/swissarmyhammer-mcp-proxy/` dates from Jul 5 and is not from this session.
+  timestamp: 2026-07-30T17:12:43.441805+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -232,3 +269,15 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:1186` — Manual short ID extraction instead of calling shared utility. The test manually slices and lowercases the tag ID to extract a 7-character short form, duplicating logic that already exists in `swissarmyhammer_kanban::types::short_id()` used in the parallel `test_depends_on_persists_across_input_shapes_via_served_tool()` test above. Replace `let short: String = tag_id[tag_id.len() - 7..].to_lowercase();` with `let short = swissarmyhammer_kanban::types::short_id(&tag_id);` to reuse the existing utility function and keep short ID extraction logic in one place.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:1289` — The diff implements shape-tolerance handling (single string, JSON array, stringified array) for tags, depends_on, assignees, and attachments via a shared dispatch function. The test `test_tags_persist_across_input_shapes_via_served_tool` comprehensively proves tags work with all three shapes in both add and update operations. However, no corresponding shape-tolerance test is added for assignees, even though the prompt states the fix applies the same treatment: 'assignees on both ops — scalar strings, stringified arrays and malformed values were dropped.' If assignees inherit the same dispatch handling as tags, the same test coverage should exist. Add a test `test_add_task_assignees_persist_across_input_shapes_via_served_tool` that mirrors the tags test, verifying that assignees work with single-string, JSON-array, and stringified-array shapes in both add and update operations.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:1314` — The test `test_unresolvable_tag_ref_errors_via_served_tool` verifies that update task errors on an unresolvable tag ID (line 1322: `json!("01KJZEPKJ35S76KF7E9HS5742J")`), but does not test add task with an unresolvable tag ID. Per the docstring ('An id reference that names no tag is an error'), both operations should enforce the same error behavior. If the fix unifies error handling across add and update, both should have equivalent test coverage. Add an assertion that verifies add task also errors when given an unresolvable tag ID, mirroring the update task behavior tested at line 1322.
+
+## Review Findings (2026-07-30 11:23)
+
+- [x] `crates/swissarmyhammer-kanban/src/tag/delete.rs:24` — Public constructor `new` lacks documentation comment. Builder methods must document their purpose. Add a doc comment above the function, e.g., `/// Create a new DeleteTag command for the given tag ID.`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/delete.rs:25` — Public method `new()` lacks a doc comment. All public items must be documented to explain their purpose and usage. Add a doc comment above the method explaining what it does, e.g.: `/// Create a new DeleteTag command for the given tag ID.`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/delete.rs:36` — The pattern of iterating over all tasks and applying a tag_parser operation to their bodies is duplicated between delete.rs and update.rs. The identical loop structure differs only in the tag_parser function called (remove_tag vs rename_tag). Extract a shared helper function `apply_tag_edit_to_all_tasks(ectx: &EntityContext, edit_fn: impl Fn(&str) -> String) -> Result<()>` in task/shared.rs or a new tag/shared.rs. Call it from both delete.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::remove_tag(body, &slug))` and from update.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::rename_tag(body, &old_slug, &normalized))`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:49` — Public builder method `with_color` lacks documentation. Builder methods must document what they set. Add a doc comment, e.g., `/// Set the tag color (6-character hex without #).`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:54` — Public builder method `with_description` lacks documentation. Builder methods must document what they set. Add a doc comment, e.g., `/// Set the tag description.`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:60` — Public builder method `with_color()` lacks a doc comment. Add a doc comment: `/// Set the tag's color (6-character hex without #).`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:64` — Public builder method `with_description()` lacks a doc comment. Add a doc comment: `/// Set the tag's description.`.
+- [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:82` — The pattern of iterating over all tasks and applying a tag_parser operation to their bodies is reimplemented here instead of reusing the identical pattern from delete.rs. Both iterate, read body, transform via tag_parser, check for changes, and write back. Extract a shared helper function `apply_tag_edit_to_all_tasks(ectx: &EntityContext, edit_fn: impl Fn(&str) -> String) -> Result<()>` in tag/shared.rs or task/shared.rs. Call it from both delete.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::remove_tag(body, &slug))` and from update.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::rename_tag(body, &old_slug, &normalized))`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:2242` — Test docstring claims 'in every wire shape and every ref format', but the ref_form iteration omits uppercase forms (tag_id.to_uppercase() and short.to_uppercase()). The resolver unit tests in task/tags.rs prove uppercase ULIDs and short IDs resolve correctly; this integration test should exercise the same forms through the MCP boundary to match its stated scope. Add tag_id.to_uppercase() and short.to_uppercase() (and optionally format!("^{}", short.to_uppercase())) to the ref_form iteration, or revise the docstring to clarify the test scope.

@@ -755,11 +755,19 @@ mod tests {
         let tag_id = parse_json(&tag_result)["id"].as_str().unwrap().to_string();
         let short = swissarmyhammer_kanban::types::short_id(&tag_id);
 
+        // Both letter cases of both ID forms. Only the id forms fold case —
+        // `tag_by_id` and `tag_by_short_id` lowercase before comparing, while a
+        // tag NAME is compared verbatim (`normalize_slug` keeps letter case),
+        // so `"BUG"` would create a second tag rather than resolve this one.
+        // The case pair is spelled out instead of reusing the id as issued, so
+        // the coverage does not depend on which case the ULID generator emits.
         for ref_form in [
             "bug".to_string(),
-            tag_id.clone(),
+            tag_id.to_uppercase(),
             tag_id.to_lowercase(),
+            short.to_uppercase(),
             short.clone(),
+            format!("^{}", short.to_uppercase()),
             format!("^{short}"),
         ] {
             let shapes = [

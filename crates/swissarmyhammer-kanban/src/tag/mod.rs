@@ -7,6 +7,7 @@ mod delete;
 mod get;
 mod list;
 mod paste;
+mod shared;
 mod update;
 
 pub use add::AddTag;

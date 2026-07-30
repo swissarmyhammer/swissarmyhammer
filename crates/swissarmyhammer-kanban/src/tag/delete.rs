@@ -2,10 +2,11 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag::shared::apply_tag_edit_to_all_tasks;
 use crate::tag_parser;
 use crate::types::TagId;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Delete a tag (removes `#name` from all task descriptions and deletes the tag entity)
@@ -21,6 +22,7 @@ pub struct DeleteTag {
 }
 
 impl DeleteTag {
+    /// Create a new DeleteTag command for the given tag ID.
     pub fn new(id: impl Into<TagId>) -> Self {
         Self { id: id.into() }
     }
@@ -46,15 +48,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
             let slug = tag_parser::normalize_slug(&tag_name);
 
             // Remove #slug text from all task bodies
-            let all_tasks = ectx.list("task").await?;
-            for mut task in all_tasks {
-                let body = task.get_str("body").unwrap_or("").to_string();
-                let new_body = tag_parser::remove_tag(&body, &slug);
-                if new_body != body {
-                    task.set("body", json!(new_body));
-                    ectx.write(&task).await?;
-                }
-            }
+            apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::remove_tag(body, &slug)).await?;
 
             // Delete tag entity
             ectx.delete("tag", self.id.as_str()).await?;

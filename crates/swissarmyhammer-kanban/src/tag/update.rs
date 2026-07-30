@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::tag::shared::apply_tag_edit_to_all_tasks;
 use crate::tag::{find_tag_entity_by_name, tag_entity_to_json};
 use crate::tag_parser;
 use crate::types::TagId;
@@ -31,6 +32,7 @@ pub struct UpdateTag {
 }
 
 impl UpdateTag {
+    /// Create a new UpdateTag command for the given tag ID.
     pub fn new(id: impl Into<TagId>) -> Self {
         Self {
             id: id.into(),
@@ -40,16 +42,20 @@ impl UpdateTag {
         }
     }
 
+    /// Set the tag's new name. A changed name renames the markers in every
+    /// task body.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    /// Set the tag's color (6-character hex without `#`).
     pub fn with_color(mut self, color: impl Into<String>) -> Self {
         self.color = Some(color.into());
         self
     }
 
+    /// Set the tag's description.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -83,15 +89,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                     // same normalization the new one already gets — otherwise a
                     // tag stored as `"Bug Fix"` renames nothing.
                     let old_slug = tag_parser::normalize_slug(&old_name);
-                    let all_tasks = ectx.list("task").await?;
-                    for mut task in all_tasks {
-                        let body = task.get_str("body").unwrap_or("").to_string();
-                        let new_body = tag_parser::rename_tag(&body, &old_slug, &normalized);
-                        if new_body != body {
-                            task.set("body", json!(new_body));
-                            ectx.write(&task).await?;
-                        }
-                    }
+                    apply_tag_edit_to_all_tasks(&ectx, |body| {
+                        tag_parser::rename_tag(body, &old_slug, &normalized)
+                    })
+                    .await?;
 
                     entity.set("tag_name", json!(normalized));
                 }
