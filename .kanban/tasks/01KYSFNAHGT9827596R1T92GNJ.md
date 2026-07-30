@@ -451,6 +451,49 @@ comments:
 
     Verification: `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'` 7943 passed, 0 failed, 2 skipped. `cargo fmt` clean (no diff). `cargo clippy --workspace --all-targets -- -D warnings` clean. Card is 58/58. Left in doing, not committed.
   timestamp: 2026-07-30T21:28:42.260217+00:00
+- actor: claude-code
+  id: 01kytg2azaqv969xgemnfsj52c
+  text: |-
+    Review finding 8 (2026-07-30 16:33) fixed — `applier_error` duplication removed.
+
+    **Where the shared function went**: new module `crates/swissarmyhammer-tools/src/mcp/lifecycle_utils.rs`, declared in `crates/swissarmyhammer-tools/src/mcp/mod.rs`. Both tools are already in this crate, so there is no new dependency edge.
+
+    **Were the two copies identical?** Yes — the bodies were byte-identical:
+    ```
+    results.iter().find(|r| r.status == InitStatus::Error).map(|r| r.message.clone())
+    ```
+    Same return type (`Option<String>`), same slice parameter, same single match arm, same `InitStatus::Error` predicate, same first-match semantics. The only differences were cosmetic and had no behavioral effect:
+    - kanban wrote `&[InitResult]` (module-level import), shell wrote the fully qualified `&[swissarmyhammer_common::lifecycle::InitResult]`. Same type.
+    - The last sentence of the doc comment differed ("like the merge-driver step does" vs "like it did before"). The shared version drops both tool-specific clauses.
+
+    No reconciliation was needed. Nothing was silently picked.
+
+    **Change**: deleted both private copies, added `use crate::mcp::lifecycle_utils::applier_error;` to each tool. Four shell call sites and two kanban call sites are unchanged apart from the resolved import.
+
+    **Tests covering both call sites** — 12/12 pass:
+    - kanban: `test_mcp_applier_error_aborts_init_but_not_deinit`, `test_tool_lifecycle_{user,local,project}_scope`, `test_tool_lifecycle_no_board_skips_merge_drivers`, `test_tool_lifecycle_no_mcp_entry_merge_drivers_only`
+    - shell: `test_tool_lifecycle_{user,local,project}_scope`
+    - new module: `applier_error_is_none_when_no_result_failed`, `applier_error_returns_the_first_error_message` (pins the first-error-wins rule the merge relied on)
+
+    **Status**: `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'` → 7945 passed, 0 failed, 2 skipped. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` exit 0. Left in `doing`, not committed.
+  timestamp: 2026-07-30T21:49:40.714217+00:00
+- actor: claude-code
+  id: 01kytgfeh4nwrzd3q711p5h5t4
+  text: |-
+    Adversarial double-check ran on the extraction. Verdict REVISE with one low-severity finding, now fixed.
+
+    **Finding**: the extracted function was `pub fn`, but it was private in both tools before. `mcp` is `pub mod` in `lib.rs`, so `pub fn` made `swissarmyhammer_tools::mcp::lifecycle_utils::applier_error` crate public API with no external consumer. The sibling module `crates/swissarmyhammer-tools/src/mcp/op_tool_helpers.rs` solves the identical problem — its own doc says it exists so "each tool imports them rather than carrying a byte-identical private copy" — and uses `pub mod` + `pub(crate) fn` throughout.
+
+    **Fix**: changed to `pub(crate) fn applier_error`. This matches the prevailing pattern and preserves the pre-extraction visibility. No call site changed.
+
+    Everything else passed the critic: the deleted bodies and the shared body are character-identical (`find`, not `rfind`/`filter().last()`, so first-error-wins is preserved); the diff is 3 insertions / 25 deletions and contains nothing but the extraction; exactly one definition of `applier_error` now exists and all 6 call sites (shell 394/401/440/446, kanban 393/426) resolve to it with no shadowing; the new module imports only `swissarmyhammer_common::lifecycle`, which the crate already depends on, and both tools are children of `crate::mcp`, so there is no new dependency edge and no module cycle.
+
+    **Re-verified after the visibility change**: `cargo fmt --all --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` exit 0, `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'` 7944/7945.
+
+    The one failure is the known live flake `review_working_emits_progress_notifications_per_pair_when_token_supplied` (^pxhzk1s, ^t681xdv, ^yh4m6ed), not this change. On this exact tree it went pass (full run), fail, fail, pass — non-deterministic. It exercises the review tool's progress notifications and never reaches lifecycle `init`/`deinit`, which is the only code `applier_error` participates in.
+
+    Task stays in `doing`. Not committed.
+  timestamp: 2026-07-30T21:56:50.340430+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -577,3 +620,7 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 ## Review Findings (2026-07-30 16:06)
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:410` — The `run_lifecycle` function has 4-level nesting depth, exceeding the 3-level threshold. The if statement checking `spec.abort_on_mcp_error` sits inside the `Some(err) =>` arm of a match statement, which sits inside an `if let` pattern, creating a chain: if let → match → Some arm → if. Flatten the nesting by extracting the MCP error handling into a separate helper method, or replace the match with an if let: `if let Some(err) = applier_error(&mcp) { results.push(...); if spec.abort_on_mcp_error { return results; } } else { results.extend(mcp); }`. This reduces the if statement to 3-level depth.
+
+## Review Findings (2026-07-30 16:33)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:467` — Function `applier_error` reimplements a helper that already exists elsewhere, as explicitly acknowledged in its own comment: 'Mirrors the helper of the same name in the shell tool.' The capability should be reused from the shared source rather than duplicated. Move `applier_error` to a shared lifecycle utilities module (or a common submodule both kanban and shell tools can import from), and call the shared version here instead of maintaining a duplicate.

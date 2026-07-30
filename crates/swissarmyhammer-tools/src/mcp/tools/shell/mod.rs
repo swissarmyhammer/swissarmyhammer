@@ -56,6 +56,7 @@ pub use infrastructure::{
     ShellExecutionResult,
 };
 
+use crate::mcp::lifecycle_utils::applier_error;
 use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -342,18 +343,6 @@ impl Doctorable for ShellExecuteTool {
     fn is_applicable(&self) -> bool {
         true
     }
-}
-
-/// Collect the first error message from an applier's results, if any.
-///
-/// The mirdan appliers return one `InitResult` per aggregate; surface an
-/// error so the tool's `init`/`deinit` can abort like it did before.
-fn applier_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> Option<String> {
-    use swissarmyhammer_common::lifecycle::InitStatus;
-    results
-        .iter()
-        .find(|r| r.status == InitStatus::Error)
-        .map(|r| r.message.clone())
 }
 
 impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {

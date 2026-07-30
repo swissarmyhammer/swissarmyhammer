@@ -13,6 +13,7 @@
 //! Per ACP spec: "Complete plan lists must be resent with each update; clients
 //! will replace prior plans entirely."
 
+use crate::mcp::lifecycle_utils::applier_error;
 use crate::mcp::plan_notifications::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
@@ -456,19 +457,6 @@ fn merge_driver_result(
         message: spec.merge_driver_action.to_string(),
     });
     InitResult::ok(name, spec.merge_driver_ok)
-}
-
-/// Collect the first error message from an applier's results, if any.
-///
-/// The mirdan appliers return one [`InitResult`] per aggregate; surface an
-/// error so the tool's `init`/`deinit` can abort like the merge-driver step
-/// does. Mirrors the helper of the same name in the shell tool.
-fn applier_error(results: &[InitResult]) -> Option<String> {
-    use swissarmyhammer_common::lifecycle::InitStatus;
-    results
-        .iter()
-        .find(|r| r.status == InitStatus::Error)
-        .map(|r| r.message.clone())
 }
 
 #[async_trait]
