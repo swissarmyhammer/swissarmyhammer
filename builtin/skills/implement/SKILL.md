@@ -110,31 +110,15 @@ Never modify code you haven't read. Never assume what a function does — read i
 
 Do the work in the task and subtasks. After changing any symbol's signature or behavior, re-run `get callgraph` (inbound) and confirm every blast-radius caller still holds.
 
-### 5.5 Verify with really-done
-
-When the work is done, invoke the `really-done` skill to verify it.
-
-- The verification-command pass is really-done's **hard requirement** — verification commands must be green before you hand the task off. This gates handoff.
-- really-done now runs the advisory adversarial double-check internally, so its sign-off is reached **transitively** through really-done. **Do NOT spawn the double-check agent directly from implement** — reach it through really-done.
-- Double-check findings are advisory: fix them, or proceed with a logged justification per really-done's contract.
-
-Not green? Do NOT hand off — fix the work, re-run really-done, or record what blocked you on the task and report back.
-
 ### 6. Leave the task in `doing` for review
 
-When the work is done, really-done is green, and every subtask checkbox is `- [x]`, **leave the task in `doing`**. Do **not** move it to `review` yourself.
+**Do not** move it to `review` yourself. 
 
-Moving a task into `review` is the review step's job, not implement's. `/review` pulls the task from `doing` into `review` when it runs — and under `/finish`, only after the green state has been committed as a checkpoint. Implement establishes "the work is done and green"; it does not declare "ready to review" by moving columns. Keeping a single owner for the `doing → review` transition is the whole point — implement no longer touches the `review` column.
-
-**Do NOT use `complete task`** — it jumps to the terminal column, skipping the review gate entirely.
+**Do not** use `complete task` — it jumps to the terminal column, skipping the review gate entirely.
 
 Cannot finish the work? Do NOT pretend it's done. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
 
-### 7. Stop for review
-
-**Always stop once the work is done and green.** The task stays in `doing`. Summarize what was done and what tests pass, and tell the user it's ready for `/review` (which moves it into `review`). User decides next — no auto-continue.
-
-Exception: if the task description explicitly says **auto-continue** or **chain to next**, proceed.
+Summarize what was done and what tests pass, and tell the user it's ready for `/review` (which moves it into `review`). User decides next — no auto-continue.
 
 ## Rules
 
@@ -142,11 +126,7 @@ Exception: if the task description explicitly says **auto-continue** or **chain 
 - Do the work. No "too complex". Find a way.
 - Follow the coding standards — correct, robust, prevailing patterns.
 - No unrelated refactors while implementing.
-- Stay focused. Validator feedback IS part of the task — fixing validator issues is never a deviation.
 - All tests pass before reporting success. Zero failures, zero warnings.
-- Kanban is the single source of truth — no TodoWrite/TaskCreate.
 - New work discovered? Add as a new kanban task.
-- Do not hand a task off as done until really-done has been run (verification commands green).
-- Implement never moves a task into `review` — it leaves the green task in `doing` for `/review` to pick up. (It may still pull a returning task from `review` back to `doing` when re-working findings.)
 - Stuck? Report what you tried and where you're blocked — don't silently give up.
-- **No worktrees.** `isolation: "worktree"` loses changes — agents write to isolated copies never merged back. Work directly in the current tree.
+- Do not create a worktree, just work in the current branch

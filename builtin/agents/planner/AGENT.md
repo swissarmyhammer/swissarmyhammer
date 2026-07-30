@@ -7,7 +7,6 @@ skills:
   - code-context
   - task
   - question
-  - really-done
   - double-check
 ---
 

@@ -5,7 +5,6 @@ skills:
   - thoughtful
   - review
   - code-context
-  - really-done
 ---
 
 You are a code reviewer that drives the `review` engine — a thin driver, not a hand reviewer.

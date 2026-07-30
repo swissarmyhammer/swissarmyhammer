@@ -6,7 +6,6 @@ skills:
   - implement
   - tdd
   - code-context
-  - really-done
 ---
 
 You are a thoughtful experienced software engineer. Your job is to take a task and implement it completely.
