@@ -826,16 +826,31 @@ async fn handle_dynamic_tool_command(
     .await
 }
 
-async fn tool_has_operations(
+/// Read one property off a registered tool, by name.
+///
+/// The three callers below differ only in which `McpTool` method they call, so
+/// the registry lookup and the not-found error live here once.
+async fn tool_property<T>(
     cli_tool_context: &CliToolContext,
     full_tool_name: &str,
-) -> Result<bool, String> {
+    read: impl FnOnce(&dyn swissarmyhammer_tools::mcp::tool_registry::McpTool) -> T,
+) -> Result<T, String> {
     let registry_arc = cli_tool_context.get_tool_registry_arc();
     let registry = registry_arc.read().await;
     let tool = registry
         .get_tool(full_tool_name)
         .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
-    Ok(!tool.operations().is_empty())
+    Ok(read(tool))
+}
+
+async fn tool_has_operations(
+    cli_tool_context: &CliToolContext,
+    full_tool_name: &str,
+) -> Result<bool, String> {
+    tool_property(cli_tool_context, full_tool_name, |tool| {
+        !tool.operations().is_empty()
+    })
+    .await
 }
 
 /// Whether this tool's CLI output is JSON rather than YAML.
@@ -847,26 +862,19 @@ async fn tool_output_is_json(
     cli_tool_context: &CliToolContext,
     full_tool_name: &str,
 ) -> Result<bool, String> {
-    let registry_arc = cli_tool_context.get_tool_registry_arc();
-    let registry = registry_arc.read().await;
-    let tool = registry
-        .get_tool(full_tool_name)
-        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
-    Ok(tool.cli_output_is_json())
+    tool_property(cli_tool_context, full_tool_name, |tool| {
+        tool.cli_output_is_json()
+    })
+    .await
 }
 
 async fn tool_schema(
     cli_tool_context: &CliToolContext,
     full_tool_name: &str,
 ) -> Result<serde_json::Value, String> {
-    let registry_arc = cli_tool_context.get_tool_registry_arc();
-    let registry = registry_arc.read().await;
-    let tool = registry
-        .get_tool(full_tool_name)
-        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
     // CLI argument extraction reads the schema's flat per-op `properties`, so
     // the FULL schema is required, not the slim wire form from `schema()`.
-    Ok(tool.schema_full())
+    tool_property(cli_tool_context, full_tool_name, |tool| tool.schema_full()).await
 }
 
 async fn build_tool_arguments(
