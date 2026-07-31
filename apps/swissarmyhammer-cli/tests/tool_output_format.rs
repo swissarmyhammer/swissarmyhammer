@@ -138,7 +138,10 @@ fn ralph_check_emits_json_when_no_instruction_is_active() {
     );
 
     let parsed = parse_strict_json("ralph check", &stdout);
-    assert_eq!(parsed["decision"], serde_json::json!("allow"));
+    assert!(
+        parsed.get("decision").is_none(),
+        "allow is expressed by omitting `decision`, got: {parsed}"
+    );
 }
 
 /// Only the machine-read tools switch to JSON. A person running a `sah tool`

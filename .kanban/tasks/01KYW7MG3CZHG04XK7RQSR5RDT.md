@@ -1,8 +1,25 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ca80
+comments:
+- actor: claude-code
+  id: 01kywek7d4ew3myfv0eawdwxhp
+  text: |-
+    Picked up by /finish ^qsr5rdt. No prior attempts.
+
+    State at pickup, HEAD aecbd1216:
+    - All 8 `profiles:` keys still present — code-context, explore, finish, implement, issue, kanban, plan, review.
+    - `task` already lost its key in the user's commit b6cfd88cb, which is what surfaced this whole thread: two kanban-app deploy tests went red because they hardcode `task` in the expected kanban-profile roster.
+    - Four `builtin/_partials/*.md` deletions are UNCOMMITTED in the working tree (coding-standards, short-ids, skills, validators) — the user's parallel dedup work. Leave them alone; do not stage them, do not restore them.
+
+    Design decision came from the user directly: "everything deploys everywhere". `Selector::All` for every consumer, curation removed. Kanban.app and kanban-cli will ship all 23 skills including /ci, /coverage, /make-readme, /deduplicate. That is the accepted outcome, not an oversight — do not reintroduce filtering under another name.
+
+    Worth knowing before starting: deleting `Skill::profiles` also deletes `SAH_INTERNAL_FRONTMATTER_KEYS`, which I added two hours ago on ^t7ebyn8 for the sole purpose of keeping `profiles` out of deployed SKILL.md files. With `profiles` gone there is no internal key left, so the constant, its filter in `format_skill_md`, the `extra.retain` in the loader, and the three tests that loop over it all go. Verify no other key is genuinely internal before deleting rather than assuming — the loader/deploy set difference was exactly `{profiles}` when I checked.
+
+    The lossless round-trip for the 12 unmodeled Claude Code keys (hooks, model, paths, etc.) must keep working after that removal. That is the point of ^t7ebyn8 and the reason the ralph Stop hook now survives deployment.
+  timestamp: 2026-07-31T16:02:25.828863+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'Remove profile-based skill selection: every consumer deploys all builtin skills'
 ---
 Delete the init-profile mechanism for skills. Every consumer deploys all 23 builtin skills via `Selector::All`. Curation by profile goes away entirely — this is a deliberate product decision, not a simplification of an existing behavior.

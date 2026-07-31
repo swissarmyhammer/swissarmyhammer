@@ -343,8 +343,10 @@ impl McpTool for RalphTool {
                                     None,
                                 )
                             })?;
+                            // Auto-stop: no `decision`, so the turn may end. The
+                            // reason stays for the operator reading the output;
+                            // the harness ignores it when nothing blocks.
                             let response = serde_json::json!({
-                                "decision": "allow",
                                 "reason": format!(
                                     "Max iterations reached ({}/{}). Ralph auto-cleared.",
                                     state.iteration, state.max_iterations
@@ -375,10 +377,13 @@ impl McpTool for RalphTool {
                         Ok(BaseToolImpl::create_success_response(response.to_string()))
                     }
                     None => {
-                        let response = serde_json::json!({
-                            "decision": "allow"
-                        });
-                        Ok(BaseToolImpl::create_success_response(response.to_string()))
+                        // No instruction, so nothing blocks the stop. A Stop hook
+                        // signals "let the turn end" by OMITTING `decision` — the
+                        // only valid value is "block". Emitting "allow" would be
+                        // relying on the harness ignoring an unknown value.
+                        Ok(BaseToolImpl::create_success_response(
+                            serde_json::json!({}).to_string(),
+                        ))
                     }
                 }
             }
@@ -604,7 +609,10 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
-        assert_eq!(json["decision"], "allow");
+        assert!(
+            json.get("decision").is_none(),
+            "allow is expressed by omitting `decision`; only \"block\" is valid, got: {json}"
+        );
     }
 
     #[tokio::test]
@@ -673,7 +681,10 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         let json: serde_json::Value = serde_json::from_str(content).unwrap();
-        assert_eq!(json["decision"], "allow");
+        assert!(
+            json.get("decision").is_none(),
+            "allow is expressed by omitting `decision`; only \"block\" is valid, got: {json}"
+        );
     }
 
     #[tokio::test]
@@ -997,7 +1008,10 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(j3["decision"], "allow");
+        assert!(
+            j3.get("decision").is_none(),
+            "allow is expressed by omitting `decision`, got: {j3}"
+        );
         assert!(j3["reason"]
             .as_str()
             .unwrap()
@@ -1059,7 +1073,10 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap();
         let json2: serde_json::Value = serde_json::from_str(content2).unwrap();
-        assert_eq!(json2["decision"], "allow");
+        assert!(
+            json2.get("decision").is_none(),
+            "allow is expressed by omitting `decision`, got: {json2}"
+        );
     }
 
     // --- Session ID defaulting tests ---
