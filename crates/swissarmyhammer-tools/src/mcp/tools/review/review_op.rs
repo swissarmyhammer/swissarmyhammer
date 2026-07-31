@@ -1224,6 +1224,111 @@ mod tests {
         assert_eq!(last.progress, 2.0);
     }
 
+    /// The bridge is the run's single sequencer: MANY concurrent producers hand
+    /// it `PairDone` events at once — the review pool's fan-out shape — and the
+    /// emitted params still carry a dense, non-decreasing counter.
+    ///
+    /// This is the load property that matters. No pool worker ever computes a
+    /// pair count: every event crosses one mpsc into one
+    /// [`run_review_progress_mapping`] task owning the one
+    /// [`ReviewProgressState`], and `PairDone` only ever does `completed += 1`.
+    /// So arrival interleaving reorders the MESSAGES (which pair finished when)
+    /// but can never reorder the counter. A future change that moved the
+    /// counter into the workers — or added a second emitter — would surface
+    /// here as a duplicate, a hole, or a regression.
+    ///
+    /// Deliberately `multi_thread`: the producers must genuinely race.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_producers_still_emit_a_dense_monotonic_counter() {
+        /// Concurrent producer tasks, standing in for the review pool's workers.
+        const PRODUCERS: usize = 8;
+        /// Pairs each producer completes.
+        const PAIRS_PER_PRODUCER: usize = 25;
+        const TOTAL_PAIRS: usize = PRODUCERS * PAIRS_PER_PRODUCER;
+
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapping = tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            None,
+            Some(token("concurrent")),
+            // Far longer than the test can run, so no keep-alive re-send can
+            // add a duplicate param to the sequence asserted below.
+            std::time::Duration::from_secs(3600),
+        ));
+
+        event_tx
+            .send(ReviewProgressEvent::Planned {
+                total_pairs: TOTAL_PAIRS,
+            })
+            .expect("the mapping task is receiving");
+
+        let producers: Vec<_> = (0..PRODUCERS)
+            .map(|worker| {
+                let tx = event_tx.clone();
+                tokio::spawn(async move {
+                    for pair in 0..PAIRS_PER_PRODUCER {
+                        tx.send(ReviewProgressEvent::PairDone {
+                            validator: format!("validator-{worker}"),
+                            file: format!("src/worker_{worker}/pair_{pair}.rs"),
+                        })
+                        .expect("the mapping task is still receiving");
+                        // Interleave the producers rather than letting each run
+                        // its whole burst in one poll.
+                        tokio::task::yield_now().await;
+                    }
+                })
+            })
+            .collect();
+        for producer in producers {
+            producer.await.expect("producer task joins");
+        }
+
+        // Dropping every sender ends the mapping loop, so the params below are
+        // the complete emission — no timing window to race.
+        drop(event_tx);
+        mapping
+            .await
+            .expect("the mapping task ends with its senders");
+        let params = take_buffered(&mut param_rx);
+
+        // The plan announcement, then exactly one param per completed pair.
+        assert_eq!(
+            params.len(),
+            TOTAL_PAIRS + 1,
+            "expected the plan param plus one per pair"
+        );
+        for w in params.windows(2) {
+            assert!(
+                w[1].progress >= w[0].progress,
+                "progress regressed under concurrent producers: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
+        }
+        // Stronger than non-decreasing: the counter is dense, so a lost or
+        // double-counted increment fails even though it stays monotonic.
+        let emitted: Vec<u64> = params.iter().map(|p| p.progress as u64).collect();
+        assert_eq!(
+            emitted,
+            (0..=TOTAL_PAIRS as u64).collect::<Vec<_>>(),
+            "the emitted counter must be the dense sequence 0..={TOTAL_PAIRS}"
+        );
+        assert!(
+            params
+                .iter()
+                .all(|p| p.total == Some(TOTAL_PAIRS as f64) && p.progress <= TOTAL_PAIRS as f64),
+            "every param carries the single announced total"
+        );
+        let last = params.last().unwrap();
+        assert_eq!(
+            Some(last.progress),
+            last.total,
+            "the run closes the bar at progress == total"
+        );
+    }
+
     /// `DownloadingModel` events map to zero-progress params that name the full
     /// file and both byte counts, and never regress the wire progress when the
     /// plan/pair events that follow move the counters.
