@@ -1,8 +1,20 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: be80
+comments:
+- actor: claude-code
+  id: 01kyvvjzeb4sztq6p1nx3whggp
+  text: |-
+    Resolved the other way: the user confirmed the include was removed from `finish` on purpose, so the test was wrong, not the skill.
+
+    `finish` is an orchestrator — it drives `/implement` and `/review` and never works a card itself, so the comment trail belongs to the skills it delegates to. Narrowed the roster in `crates/swissarmyhammer-skills/tests/skill_comment_guidance.rs` to `implement` and `kanban`, both of which still carry `{% include "_partials/record-progress" %}`, and recorded the exclusion reason in the module doc so nobody "restores" it later.
+
+    The roster stays non-empty, so the assertions still run — the test did not go vacuous.
+
+    126/126 in swissarmyhammer-skills, up from 125/126. Committed as 302edf4fe.
+  timestamp: 2026-07-31T10:30:14.731292+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffe80
 title: 'Test failure: work_the_card_skills_render_record_progress_guidance — finish skill lost its record-progress include'
 ---
 Pre-existing failure, unrelated to ^t7ebyn8. Reproduced at HEAD 216a53e69 with the ^t7ebyn8 diff removed (`git stash push -- crates/`) — the failure is identical.
