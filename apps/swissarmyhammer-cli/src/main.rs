@@ -799,6 +799,10 @@ async fn handle_dynamic_tool_command(
         Ok(v) => v,
         Err(e) => return report_error_and_exit(e),
     };
+    let output_is_json = match tool_output_is_json(&cli_tool_context, &full_tool_name).await {
+        Ok(v) => v,
+        Err(e) => return report_error_and_exit(e),
+    };
 
     let arguments = match build_tool_arguments(
         matches,
@@ -813,7 +817,13 @@ async fn handle_dynamic_tool_command(
         Err(e) => return report_error_and_exit(e),
     };
 
-    execute_tool_and_format(&cli_tool_context, &full_tool_name, arguments).await
+    execute_tool_and_format(
+        &cli_tool_context,
+        &full_tool_name,
+        arguments,
+        output_is_json,
+    )
+    .await
 }
 
 async fn tool_has_operations(
@@ -826,6 +836,23 @@ async fn tool_has_operations(
         .get_tool(full_tool_name)
         .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
     Ok(!tool.operations().is_empty())
+}
+
+/// Whether this tool's CLI output is JSON rather than YAML.
+///
+/// The tool answers, via `McpTool::cli_output_is_json`. A tool read by a
+/// program (the ralph Stop hook responder) needs a document that strict-parses;
+/// everything else renders YAML for a person.
+async fn tool_output_is_json(
+    cli_tool_context: &CliToolContext,
+    full_tool_name: &str,
+) -> Result<bool, String> {
+    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry = registry_arc.read().await;
+    let tool = registry
+        .get_tool(full_tool_name)
+        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
+    Ok(tool.cli_output_is_json())
 }
 
 async fn tool_schema(
@@ -866,10 +893,17 @@ async fn build_tool_arguments(
         .map_err(|e| format!("Error processing arguments: {:#}", e))
 }
 
+/// Run a tool and print its result to stdout.
+///
+/// `output_is_json` comes from the tool itself (`McpTool::cli_output_is_json`).
+/// When set, stdout is exactly one JSON document so a program can strict-parse
+/// it; otherwise it is YAML for a person. Failures go to stderr as raw text,
+/// because a machine consumer reads the exit code and stdout, not stderr.
 async fn execute_tool_and_format(
     cli_tool_context: &CliToolContext,
     full_tool_name: &str,
     arguments: serde_json::Map<String, serde_json::Value>,
+    output_is_json: bool,
 ) -> i32 {
     match cli_tool_context
         .execute_tool(full_tool_name, arguments)
@@ -883,10 +917,12 @@ async fn execute_tool_and_format(
                 );
                 EXIT_ERROR
             } else {
-                println!(
-                    "{}",
+                let rendered = if output_is_json {
+                    mcp_integration::response_formatting::format_success_response_json(&result)
+                } else {
                     mcp_integration::response_formatting::format_success_response(&result)
-                );
+                };
+                println!("{}", rendered);
                 EXIT_SUCCESS
             }
         }

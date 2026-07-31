@@ -1043,6 +1043,23 @@ pub trait McpTool:
         false
     }
 
+    /// Whether `sah tool <name> ...` must print JSON instead of YAML.
+    ///
+    /// `sah tool` output is written for a person, and YAML reads better, so
+    /// that is the default. A tool whose CLI output is consumed by a program
+    /// rather than read overrides this: the program does a strict parse and a
+    /// YAML rendering is not a document it can load.
+    ///
+    /// The tool owns this answer because the tool knows its consumer. A list
+    /// kept in the CLI would drift the moment a tool moved or was renamed.
+    ///
+    /// # Default
+    ///
+    /// `false` — render YAML for a human reader.
+    fn cli_output_is_json(&self) -> bool {
+        false
+    }
+
     /// Get the operations this tool supports (for operation-based CLI generation)
     ///
     /// Tools that use the operation pattern return their operations here,

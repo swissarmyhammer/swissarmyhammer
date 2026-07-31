@@ -1157,6 +1157,24 @@ fn interpret_exit_code(
     }
 }
 
+/// Parse a hook command's stdout into a [`HookOutput`].
+///
+/// JSON is the documented protocol, so it is tried first and its error is the
+/// one reported. YAML is tried second because a hook command is any program the
+/// user names, and several of ours print YAML for a human; JSON is a subset of
+/// YAML, so accepting both costs nothing and loses no strictness. The same
+/// try-JSON-then-YAML shape is used when the CLI reads piped tool arguments
+/// (`merge_parsed_stdin` in the `sah` binary).
+///
+/// Before the fallback existed, YAML stdout failed the JSON parse and the hook's
+/// decision was discarded as `Allow` with only a warning — the hook appeared to
+/// run and did nothing.
+fn parse_hook_stdout(stdout: &str) -> Result<HookOutput, serde_json::Error> {
+    serde_json::from_str::<HookOutput>(stdout).or_else(|json_error| {
+        serde_yaml_ng::from_str::<HookOutput>(stdout).map_err(|_yaml_error| json_error)
+    })
+}
+
 fn interpret_exit_0_stdout(
     output: &std::process::Output,
     command: &str,
@@ -1167,14 +1185,14 @@ fn interpret_exit_0_stdout(
     if stdout.is_empty() {
         return HookDecision::Allow;
     }
-    match serde_json::from_str::<HookOutput>(stdout) {
+    match parse_hook_stdout(stdout) {
         Ok(hook_output) => interpret_output(&hook_output, event_kind),
         Err(e) => {
             tracing::warn!(
                 command = %command,
                 error = %e,
                 stdout = %stdout,
-                "Failed to parse hook command JSON output, treating as Allow"
+                "Failed to parse hook command output as JSON or YAML, treating as Allow"
             );
             HookDecision::Allow
         }
@@ -2600,5 +2618,49 @@ hooks:
             HookEventKind::try_from(HookEventKindConfig::WorktreeRemove),
             Ok(HookEventKind::WorktreeRemove)
         ));
+    }
+
+    // -- Hook command stdout parsing --
+
+    /// JSON is the documented hook protocol and must keep working unchanged.
+    #[test]
+    fn hook_stdout_parses_json() {
+        let parsed = parse_hook_stdout(r#"{"decision":"block","reason":"keep going"}"#)
+            .expect("JSON hook output must parse");
+
+        assert_eq!(parsed.decision, Some(HookDecisionValue::Block));
+        assert_eq!(parsed.reason.as_deref(), Some("keep going"));
+    }
+
+    /// A hook command that answers in YAML must be understood too. Before this
+    /// fallback, YAML stdout failed the JSON parse and the decision was thrown
+    /// away as `Allow` with only a warning — the hook silently did nothing.
+    #[test]
+    fn hook_stdout_falls_back_to_yaml() {
+        let parsed = parse_hook_stdout("decision: block\nreason: keep going\n")
+            .expect("YAML hook output must parse");
+
+        assert_eq!(parsed.decision, Some(HookDecisionValue::Block));
+        assert_eq!(parsed.reason.as_deref(), Some("keep going"));
+    }
+
+    /// On a Stop event `block` inverts to "do not stop", and that has to survive
+    /// the YAML path exactly as it does the JSON one.
+    #[test]
+    fn yaml_hook_stdout_still_blocks_the_stop() {
+        let parsed =
+            parse_hook_stdout("decision: block\nreason: keep going\n").expect("YAML parses");
+
+        assert!(matches!(
+            interpret_output(&parsed, HookEventKind::Stop),
+            HookDecision::ShouldContinue { .. }
+        ));
+    }
+
+    /// Output that is neither JSON nor YAML is still reported as an error, so
+    /// the caller can warn instead of inventing a decision.
+    #[test]
+    fn hook_stdout_that_is_neither_json_nor_yaml_is_an_error() {
+        assert!(parse_hook_stdout("this is: not: valid: anything").is_err());
     }
 }

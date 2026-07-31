@@ -549,6 +549,7 @@ Tools are automatically discovered by the CLI via `ToolRegistry`. The dynamic CL
 - `cli_category()` — groups tool under `sah tool {category}`
 - `operations()` — generates noun/verb subcommands: `sah tool {category} {noun} {verb}`
 - `schema()` — generates CLI flags from parameter metadata
+- `cli_output_is_json()` — prints JSON instead of YAML
 
 **Operation-based CLI structure:**
 ```
@@ -559,6 +560,8 @@ sah tool ralph ralph check --
 ```
 
 **The `--` convention** (stdin piping): When `--` appears with no trailing args, the CLI executor reads stdin as JSON or YAML and merges fields into the tool's arguments. CLI flags override stdin on conflict. This enables piping data into any tool.
+
+**Output format**: `sah tool` prints YAML, because a person reads it. Override `cli_output_is_json()` to `true` when a program reads the output instead. `ralph` does: it answers Claude Code Stop hooks, which strict-parse stdout as JSON. JSON output is exactly one document with nothing before or after it.
 
 ## Advanced Patterns
 

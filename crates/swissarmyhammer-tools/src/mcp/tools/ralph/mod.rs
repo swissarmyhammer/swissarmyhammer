@@ -52,6 +52,21 @@ mod tests {
         assert_eq!(registry.len(), 1);
     }
 
+    /// The ralph responder's only CLI consumer is a Claude Code Stop hook,
+    /// which strict-parses stdout as JSON. The tool has to say so, or the CLI
+    /// prints YAML and the hook reads nothing.
+    #[tokio::test]
+    async fn ralph_tool_declares_json_cli_output() {
+        let mut registry = ToolRegistry::new();
+        register_ralph_tools(&mut registry);
+
+        let ralph = registry.get_tool("ralph").expect("ralph tool");
+        assert!(
+            ralph.cli_output_is_json(),
+            "ralph must report JSON CLI output for the Stop hook"
+        );
+    }
+
     #[tokio::test]
     async fn test_ralph_tool_registered_with_properties() {
         let mut registry = ToolRegistry::new();

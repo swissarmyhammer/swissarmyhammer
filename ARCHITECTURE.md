@@ -512,6 +512,8 @@ Ralph prevents an autonomous agent from stopping while work remains. Used by ski
 
 The iteration counter persists across `set ralph` calls so a skill cannot reset the safety cap.
 
+The hook runs `sah tool ralph ralph check --` and strict-parses its stdout, so the ralph tool reports `McpTool::cli_output_is_json` and the CLI prints exactly one JSON document for it. Every other `sah tool` family still prints YAML for a human reader. The hook reader we own (`agent-client-protocol-extras::hook_config`) accepts JSON or YAML from any hook command.
+
 ### Patterns
 
 - **Dual-Backend, Single Protocol**: Cloud and local LLM agents are interchangeable because both speak ACP. Consumers go through `swissarmyhammer-agent::create_agent` and never know which backend runs.

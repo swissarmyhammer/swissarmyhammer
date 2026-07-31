@@ -134,6 +134,7 @@ impl CliExecutor {
             None => return ExecutionResult::error(format!("Tool not found: {}", tool_name)),
         };
 
+        let output_is_json = tool.cli_output_is_json();
         let operations = tool.operations();
         // CLI args are mapped back to JSON from the schema's flat per-op
         // `properties`, so the executor needs the FULL schema, not the slim
@@ -170,7 +171,11 @@ impl CliExecutor {
                 if result.is_error.unwrap_or(false) {
                     ExecutionResult::error(response_formatting::format_error_response(&result))
                 } else {
-                    ExecutionResult::success(response_formatting::format_success_response(&result))
+                    ExecutionResult::success(if output_is_json {
+                        response_formatting::format_success_response_json(&result)
+                    } else {
+                        response_formatting::format_success_response(&result)
+                    })
                 }
             }
             Err(e) => ExecutionResult::error(format!("Tool execution error: {}", e)),

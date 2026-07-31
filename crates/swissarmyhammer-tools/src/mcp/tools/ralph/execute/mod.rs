@@ -237,6 +237,17 @@ impl McpTool for RalphTool {
         "ralph"
     }
 
+    /// The ralph responder answers Claude Code Stop hooks, not people.
+    ///
+    /// The hook runner strict-parses the hook command's stdout as JSON to read
+    /// the `decision`. YAML — which is what `sah tool` prints by default, and
+    /// which begins with a blank line — is not a document it can load, so the
+    /// hook saw nothing. JSON is a subset of YAML, so the same output still
+    /// reads fine anywhere YAML was expected.
+    fn cli_output_is_json(&self) -> bool {
+        true
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

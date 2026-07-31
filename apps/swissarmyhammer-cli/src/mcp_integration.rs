@@ -263,6 +263,35 @@ pub mod response_formatting {
         extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string())
     }
 
+    /// Format a successful tool result as exactly one JSON document.
+    ///
+    /// Used for tools that report `McpTool::cli_output_is_json`, whose output
+    /// is strict-parsed by a program. Every branch returns valid JSON — even
+    /// the one where the tool answered with plain text, which becomes a JSON
+    /// string — so a consumer can always load stdout. Nothing is prepended:
+    /// the leading newline the YAML rendering carries would break the parse.
+    pub fn format_success_response_json(result: &CallToolResult) -> String {
+        if let Some(ref data) = result.structured_content {
+            return to_pretty_json(data);
+        }
+
+        if let Ok(json_value) = extract_json_data(result) {
+            return to_pretty_json(&json_value);
+        }
+
+        let text =
+            extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string());
+        to_pretty_json(&Value::String(text))
+    }
+
+    /// Serialize a [`Value`] as pretty JSON.
+    ///
+    /// A `Value` holds no type that can fail to serialize, so the fallback is
+    /// unreachable; `null` keeps the output parseable if it ever is reached.
+    fn to_pretty_json(value: &Value) -> String {
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string())
+    }
+
     /// Format error tool result for display
     pub fn format_error_response(result: &CallToolResult) -> String {
         extract_text_content(result).unwrap_or_else(|| "Operation failed".to_string())
