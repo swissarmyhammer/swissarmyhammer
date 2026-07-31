@@ -32,6 +32,8 @@ $ARGUMENTS
 - Stuck? Report what you tried and where you're blocked — don't silently give up.
 - Do not create a worktree, just work in the current branch
 
+{% include "_partials/findings-are-requirements" %}
+
 ## Invocation
 
 `/implement` takes a required task id.
