@@ -62,8 +62,24 @@ comments:
 
     Also green: 95/95 on the `swissarmyhammer-tools` kanban+tag filter, same as the previous iteration.
   timestamp: 2026-07-31T20:34:57.511487+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kywyx2xmnckerm58218y9d00
+  text: |-
+    Round 2, prompted by the adversarial check. It returned PASS on everything — equivalence, the invariants, the docstrings, byte-exact `mod tests` (md5 of the old test range equals md5 of the new one) — but it reported that the `complexity` validator is NONDETERMINISTIC on this file. One of its runs flagged `collect_line_tags` and `edit_line_markers` with "match arms contain code at depth 4".
+
+    Those two are false positives against the documented rule. `builtin/validators/complexity/rules/cognitive-complexity.md` counts nested **conditions**, and both functions sat at 2. But a finding that a future review round can re-raise is a sibling left behind, so I removed the ambiguity instead of arguing with it: both functions were two-arm `Option` matches whose `Some` arm held statements, so both became `if let ... else`. A `match` with statement-bearing arms is now gone from the file. Nothing left for an arm-counting scanner to see, and under the documented condition-counting rule the file is unchanged at 2.
+
+    Re-verified after round 2:
+    - Differential harness re-run against HEAD: 69,905 bodies, 0 mismatches. Still byte-for-byte identical.
+    - `cargo nextest run -p swissarmyhammer-kanban`: 1605/1605.
+    - clippy `--all-targets -D warnings` clean, `cargo fmt --check` clean.
+    - Every diff hunk still lands above `mod tests`; no test touched in either round.
+    - Validator re-run twice more: zero nesting findings both times.
+
+    Also seen, NOT carded, because the source is unstable: the validator's later runs raised two stylistic items on untouched lines — the module doc has no `# Examples` section, and the `b'` backtick literal appears in three functions and could be a named constant. Different run, different set. Leaving these for the real `/review` gate rather than guessing which ones are stable enough to be cards.
+  timestamp: 2026-07-31T20:47:26.132075+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8680
 title: remove_tag rewrites every task body, not just the ones carrying the marker
 ---
 `tag_parser::remove_tag` ends with a trailing-whitespace normalization applied to **every** task body the walker visits, whether or not that body carries the marker:
