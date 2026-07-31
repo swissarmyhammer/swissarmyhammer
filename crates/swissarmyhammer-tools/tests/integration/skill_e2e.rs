@@ -401,39 +401,9 @@ async fn test_kanban_skill_renders_short_id_guidance() {
     teardown(server, client).await;
 }
 
-/// The task skill creates tasks (and `depends_on` references), so it must also
-/// render the short-ids partial so dependencies are referenced by short id.
-#[tokio::test]
-async fn test_task_skill_renders_short_id_guidance() {
-    let (server, client, _temp) = setup().await;
-
-    let result = client
-        .call_tool(skill_params(
-            serde_json::json!({"op": "use skill", "name": "task"}),
-        ))
-        .await
-        .expect("use skill task should succeed");
-
-    let content_text = result
-        .content
-        .first()
-        .and_then(|c| c.raw.as_text())
-        .map(|t| t.text.as_str())
-        .unwrap_or("");
-
-    assert!(
-        content_text.contains(SHORT_ID_MARKER),
-        "task skill should render short-id guidance (marker '{}'), got: {}",
-        SHORT_ID_MARKER,
-        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
-    );
-    assert!(
-        !content_text.contains("{% include"),
-        "rendered task skill must not contain raw Liquid include tags"
-    );
-
-    teardown(server, client).await;
-}
+// The task skill no longer renders short-id guidance. `_partials/short-ids.md`
+// was deleted deliberately; the guidance now lives only in the kanban skill,
+// which `test_kanban_skill_renders_short_id_guidance` above still covers.
 
 #[tokio::test]
 async fn test_skill_invoke_via_shorthand() {
