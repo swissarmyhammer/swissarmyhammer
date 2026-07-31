@@ -437,6 +437,17 @@ body
                 "frontmatter key `{key:?}` must survive the deploy round-trip, got:\n{md}"
             );
         }
+
+        // Textual survival is not enough: a deployed file is the loader's input
+        // on the next init, so it must parse back into the same `extra`. Without
+        // this, `format_skill_md` could emit keys the loader cannot read again
+        // and the loss would reappear one deploy later.
+        let reparsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+            .expect("deployed SKILL.md must parse back through the loader");
+        assert_eq!(
+            reparsed.extra, skill.extra,
+            "reparsing the deployed file must yield the same unmodeled keys, got:\n{md}"
+        );
     }
 
     /// `profiles` is SAH-internal — it selects which skills an init profile
