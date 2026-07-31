@@ -2,16 +2,15 @@
 //! board open.
 //!
 //! A board's workspace is a *set of tools*; opening a board folder installs the
-//! board's `kanban` install profile rooted at the board folder. That deploys the
-//! `kanban`-profile builtin skills through mirdan's one store + symlink
-//! mechanism — the canonical copy of each skill lands in `<board>/.skills/`.
+//! board's `kanban` install profile rooted at the board folder. That deploys
+//! every builtin skill through mirdan's one store + symlink mechanism — the
+//! canonical copy of each skill lands in `<board>/.skills/`.
 //! This must happen without ever shelling out to `sah init` and without mutating
 //! the process working directory. Running it again must be idempotent.
 //!
-//! These tests exercise [`mirdan::install::init_profile`] with the same
-//! `kanban`-profile selector and explicit board root the kanban app uses on
-//! board open (`ensure_workspace_tools` → `deploy_workspace_tools` →
-//! `init_profile`).
+//! These tests exercise [`mirdan::install::init_profile`] with the same selector
+//! and explicit board root the kanban app uses on board open
+//! (`ensure_workspace_tools` → `deploy_workspace_tools` → `init_profile`).
 
 use std::path::Path;
 
@@ -19,20 +18,29 @@ use mirdan::install::{init_profile, Profile, Selector};
 use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
 use swissarmyhammer_common::reporter::NullReporter;
 
-/// The six skills the kanban tool's init deploys (its profile cluster).
-const KANBAN_PROFILE_SKILLS: [&str; 6] =
-    ["kanban", "plan", "task", "finish", "implement", "review"];
+/// Every builtin skill name, read from the same resolver the installer uses.
+///
+/// The board deploys all of them — there is no per-tool curation — so the
+/// expectation is derived rather than transcribed, and cannot drift as builtins
+/// are added or removed.
+fn all_builtin_skills() -> Vec<String> {
+    swissarmyhammer_skills::SkillResolver::new()
+        .resolve_builtins()
+        .into_keys()
+        .collect()
+}
 
-/// Skills that must NOT be deployed by the kanban tool: `explore` and
-/// `code-context` belong to the `code-context` profile; `commit` is untagged.
-const NON_KANBAN_SKILLS: [&str; 3] = ["explore", "code-context", "commit"];
+/// Skills the board used to withhold, back when it deployed only the `kanban`
+/// profile cluster. They must be deployed now — this is what "everything
+/// deploys everywhere" means concretely.
+const FORMERLY_WITHHELD_SKILLS: [&str; 4] = ["explore", "code-context", "commit", "ci"];
 
-/// The board's install profile — the `kanban`-tagged builtin skills only,
-/// mirroring `state::kanban_profile`. Kept as a test-local copy because the
-/// production helper is private to the `kanban-app` binary.
+/// The board's install profile — every builtin skill, mirroring
+/// `state::kanban_profile`. Kept as a test-local copy because the production
+/// helper is private to the `kanban-app` binary.
 fn kanban_profile() -> Profile {
     Profile {
-        skills: Some(Selector::Profile("kanban".to_string())),
+        skills: Some(Selector::All),
         ..Default::default()
     }
 }
@@ -50,9 +58,9 @@ fn create_board_at(root: &Path) {
 }
 
 /// Opening a fresh board folder installs the board's `kanban` profile, which
-/// deploys exactly the `kanban`-profile skills into the `<board>/.skills/`
-/// store. No generic SAH workspace step runs, so `.prompts/` is never created:
-/// the workspace is just its tools.
+/// deploys every builtin skill into the `<board>/.skills/` store. No generic SAH
+/// workspace step runs, so `.prompts/` is never created: the workspace is just
+/// its tools.
 #[test]
 fn opening_a_board_deploys_the_kanban_tool_skills() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -76,24 +84,28 @@ fn opening_a_board_deploys_the_kanban_tool_skills() {
             .collect::<Vec<_>>()
     );
 
-    // The kanban tool's skills land in the `<board>/.skills/` store, beside
+    // Every builtin skill lands in the `<board>/.skills/` store, beside
     // `.kanban/`.
     let store_dir = tmp.path().join(".skills");
     assert!(store_dir.is_dir(), ".skills/ store must exist");
-    for skill in KANBAN_PROFILE_SKILLS {
+    let builtins = all_builtin_skills();
+    assert!(
+        !builtins.is_empty(),
+        "the builtin resolver must report at least one skill"
+    );
+    for skill in &builtins {
         assert!(
             store_dir.join(skill).join("SKILL.md").is_file(),
-            "kanban-tool skill `{skill}` must be deployed at {}",
+            "builtin skill `{skill}` must be deployed at {}",
             store_dir.join(skill).join("SKILL.md").display()
         );
     }
 
-    // Skills in other profiles (`explore`, `code-context`) and untagged
-    // builtins (`commit`) are not part of the kanban tool.
-    for skill in NON_KANBAN_SKILLS {
+    // The skills the old `kanban`-profile selector withheld are deployed now.
+    for skill in FORMERLY_WITHHELD_SKILLS {
         assert!(
-            !store_dir.join(skill).exists(),
-            "skill `{skill}` is not in the kanban tool and must not be deployed"
+            store_dir.join(skill).join("SKILL.md").is_file(),
+            "skill `{skill}` must be deployed — the board deploys every builtin skill"
         );
     }
 

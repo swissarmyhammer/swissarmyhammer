@@ -1,0 +1,1 @@
+{"id":"01KYWJ37FKGZNYDGXN99A7MB1E","timestamp":"2026-07-31T17:03:35.923277Z","op":"create","item_id":"01KYWJ37FGM9XD37DNRZRBYSR9","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '5319e7'\n+tag_name: cleanup-dead-code\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '5319e7'\n-tag_name: cleanup-dead-code\n","transaction_id":null}

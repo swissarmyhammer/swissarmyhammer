@@ -2,9 +2,8 @@
 //!
 //! `kanban init` / `kanban deinit` install two kinds of thing:
 //!
-//! 1. **Profile artifacts** — the `kanban` MCP server registration and the
-//!    `kanban`-profile builtin skills (the workflow cluster: `kanban`, `plan`,
-//!    `task`, `finish`, `implement`, `review`). These are declared once as a
+//! 1. **Profile artifacts** — the `kanban` MCP server registration and every
+//!    builtin skill. These are declared once as a
 //!    [`mirdan::install::Profile`] and applied by
 //!    [`mirdan::install::init_profile`] / `deinit_profile`, the single
 //!    data-driven installer shared across the tool CLIs and sah.
@@ -21,25 +20,20 @@ use swissarmyhammer_tools::mcp::tools::kanban::KanbanTool;
 /// and the server identity advertised by `commands/serve.rs`.
 const SERVER_NAME: &str = "kanban";
 
-/// The init profile whose tagged builtin skills kanban deploys.
-const KANBAN_PROFILE: &str = "kanban";
-
 /// The declarative manifest of what `kanban init`/`deinit` install through
 /// mirdan's profile installer: the `kanban serve` MCP server and every builtin
-/// skill tagged with the `kanban` profile. No agents.
+/// skill. No agents.
 ///
 /// Skills deploy at every scope, including `User` — a global install lands the
-/// `kanban`-profile skill cluster in the global store (`~/.skills` + the agent's
-/// global skill dir), so `init user` is a full configuration. This matches sah's
-/// `Selector::All`, which already deploys at every scope. The `scope` parameter
-/// is retained for signature parity with the other consumers (and forwarded to
-/// the installer by the caller), but no longer gates skill selection.
+/// full builtin skill set in the global store (`~/.skills` + the agent's global
+/// skill dir), so `init user` is a full configuration. Skill selection is not
+/// curated per consumer: every consumer deploys `Selector::All`. The `scope`
+/// parameter is retained for signature parity with the other consumers (and
+/// forwarded to the installer by the caller), but does not gate skill selection.
 pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
     mirdan::install::Profile {
         mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
-        skills: Some(mirdan::install::Selector::Profile(
-            KANBAN_PROFILE.to_string(),
-        )),
+        skills: Some(mirdan::install::Selector::All),
         agents: None,
         validators: None,
         statusline: false,
@@ -68,34 +62,32 @@ mod tests {
     use swissarmyhammer_common::reporter::NullReporter;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
-    /// A representative slice of the `kanban`-profile skill cluster; the deploy
-    /// mechanism is identical regardless of which member we probe.
-    const KANBAN_SKILLS: &[&str] = &["kanban", "implement"];
+    /// A representative slice of the builtin skill set; the deploy mechanism is
+    /// identical regardless of which member we probe. `ci` is included because
+    /// the old `kanban`-profile selector withheld it.
+    const KANBAN_SKILLS: &[&str] = &["kanban", "implement", "ci"];
 
     #[test]
-    fn test_profile_declares_mcp_and_kanban_profile_skills_in_project_scope() {
+    fn test_profile_declares_mcp_and_all_builtin_skills_in_project_scope() {
         let profile = profile(InitScope::Project);
         let server = profile.mcp_server.expect("profile declares an MCP server");
         assert_eq!(server.name, "kanban");
         assert_eq!(server.command, "kanban");
         assert_eq!(server.args, vec!["serve".to_string()]);
-        assert_eq!(
-            profile.skills,
-            Some(mirdan::install::Selector::Profile("kanban".to_string()))
-        );
+        assert_eq!(profile.skills, Some(mirdan::install::Selector::All));
         assert!(profile.agents.is_none());
         assert!(!profile.statusline);
     }
 
     #[test]
     fn test_user_scope_selects_skills() {
-        // Regression: `init user` must deploy the kanban-profile skills too.
+        // Regression: `init user` must deploy the builtin skills too.
         let profile = profile(InitScope::User);
         assert!(profile.mcp_server.is_some());
         assert_eq!(
             profile.skills,
-            Some(mirdan::install::Selector::Profile("kanban".to_string())),
-            "user scope must select the kanban-profile skills"
+            Some(mirdan::install::Selector::All),
+            "user scope must select every builtin skill"
         );
     }
 
@@ -113,7 +105,7 @@ mod tests {
         assert_eq!(registry.len(), 1);
     }
 
-    /// Regression for Bug 1 — `init user` deploys the kanban-profile skills
+    /// Regression for Bug 1 — `init user` deploys the builtin skills
     /// (store + symlink) and registers the MCP server in the agent's global
     /// config. Drives the REAL `profile(InitScope::User)`.
     #[test]

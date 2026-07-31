@@ -1141,19 +1141,17 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
-/// The kanban board's install [`Profile`](mirdan::install::Profile): the
-/// `kanban`-tagged builtin skills (the workflow cluster: `kanban`, `plan`,
-/// `task`, `finish`, `implement`, `review`), deployed through the one shared
-/// store + symlink mechanism.
+/// The kanban board's install [`Profile`](mirdan::install::Profile): every
+/// builtin skill, deployed through the one shared store + symlink mechanism.
 ///
 /// A board's workspace is exactly its tools — currently just the kanban tool —
 /// so the profile declares no MCP server, no agents, and none of the sah-only
-/// statusline/preamble flags: just the `kanban` skill subset. This is the same
-/// data-driven `Profile` sah uses, restricted to one profile's cluster instead
-/// of [`Selector::All`](mirdan::install::Selector::All).
+/// statusline/preamble flags: just the skills. Skill selection is not curated
+/// per consumer; every consumer deploys the full builtin set with
+/// [`Selector::All`](mirdan::install::Selector::All).
 fn kanban_profile() -> mirdan::install::Profile {
     mirdan::install::Profile {
-        skills: Some(mirdan::install::Selector::Profile("kanban".to_string())),
+        skills: Some(mirdan::install::Selector::All),
         ..Default::default()
     }
 }
@@ -1163,9 +1161,8 @@ fn kanban_profile() -> mirdan::install::Profile {
 ///
 /// A board's workspace is a *set of tools*; ensuring it means installing the
 /// board's [`kanban_profile`] rooted at the board folder (the parent of the
-/// `.kanban` directory), at project scope. That deploys the kanban tool's
-/// builtin skills (the workflow cluster: `kanban`, `plan`, `task`, `finish`,
-/// `implement`, `review`) through mirdan's store + symlink mechanism — the one
+/// `.kanban` directory), at project scope. That deploys every builtin skill
+/// through mirdan's store + symlink mechanism — the one
 /// deploy mechanism shared with `sah init`. There is no separate generic "SAH
 /// workspace" step (no `.prompts/` / `workflows/`); the workspace is just its
 /// tools.
@@ -1175,18 +1172,12 @@ fn kanban_profile() -> mirdan::install::Profile {
 /// board path (`Some(board_dir)`), which is essential in a multi-board desktop
 /// process.
 ///
-/// Two correctness/perf properties matter here:
-///
-/// 1. **Tool-scoped.** Only the kanban tool's profile skills are deployed, not
-///    every builtin skill. This is what the previous deploy-everything path
-///    cost (~19s × number of restored boards on cold start). Deploying just the
-///    6 idempotent profile skills is fast enough to run inline.
-/// 2. **Blocks before the server.** This runs to completion before
-///    [`start_board_mcp_server`] is called. The board MCP server's `skill` tool
-///    serves the builtin skills embedded in the binary, so it is never blocked
-///    on this deploy; the deploy materializes the same skills on disk for any
-///    external coding agent (Claude Code, …) that opens the board folder. There
-///    is intentionally NO `spawn_blocking` / fire-and-forget here.
+/// **Blocks before the server.** This runs to completion before
+/// [`start_board_mcp_server`] is called. The board MCP server's `skill` tool
+/// serves the builtin skills embedded in the binary, so it is never blocked on
+/// this deploy; the deploy materializes the same skills on disk for any external
+/// coding agent (Claude Code, …) that opens the board folder. There is
+/// intentionally NO `spawn_blocking` / fire-and-forget here.
 ///
 /// The operation is idempotent (skills already current in the store are not
 /// rewritten), so it is safe to call on every board open. Failures are logged
@@ -1634,22 +1625,30 @@ mod tests {
             ".skills/ store must be created at the board folder by BoardHandle::open"
         );
 
-        // Exactly the 6 `kanban`-profile skills must be deployed by the
-        // production open_board path — no more, no fewer.
-        for skill in ["kanban", "plan", "task", "finish", "implement", "review"] {
+        // Every builtin skill must be deployed by the production open_board
+        // path. The expectation comes from the same resolver the installer
+        // reads, so it cannot drift as builtins are added or removed.
+        let builtins: Vec<String> = swissarmyhammer_skills::SkillResolver::new()
+            .resolve_builtins()
+            .into_keys()
+            .collect();
+        assert!(
+            !builtins.is_empty(),
+            "the builtin resolver must report at least one skill"
+        );
+        for skill in &builtins {
             assert!(
                 store_dir.join(skill).join("SKILL.md").is_file(),
-                "kanban-profile skill `{skill}` must be deployed via the open_board production path"
+                "builtin skill `{skill}` must be deployed via the open_board production path"
             );
         }
 
-        // Skills in OTHER profiles (`code-context`: `explore`, `code-context`)
-        // and untagged builtins (`commit`) must NOT be deployed by the kanban
-        // app — it deploys only the `kanban` profile subset, not all ~22 skills.
-        for skill in ["explore", "code-context", "commit"] {
+        // The skills the old `kanban`-profile selector withheld are deployed
+        // now — the board ships every builtin skill, not a curated subset.
+        for skill in ["explore", "code-context", "commit", "ci"] {
             assert!(
-                !store_dir.join(skill).exists(),
-                "skill `{skill}` is not in the kanban profile and must not be deployed by the kanban app"
+                store_dir.join(skill).join("SKILL.md").is_file(),
+                "skill `{skill}` must be deployed — the kanban app deploys every builtin skill"
             );
         }
 

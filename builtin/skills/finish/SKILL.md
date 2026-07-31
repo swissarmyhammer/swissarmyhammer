@@ -1,7 +1,5 @@
 ---
 name: finish
-profiles:
-  - kanban
 description: Drive kanban tasks from ready to done by looping implement → test → commit → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter).
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` and `ralph` MCP tools plus a Stop-hook-capable harness.

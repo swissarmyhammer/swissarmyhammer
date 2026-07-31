@@ -68,6 +68,8 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 tempfile = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+# The board-open deploy tests assert against the real builtin skill roster.
+swissarmyhammer-skills = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

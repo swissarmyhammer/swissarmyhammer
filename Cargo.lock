@@ -4067,6 +4067,7 @@ dependencies = [
  "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
+ "swissarmyhammer-skills",
  "swissarmyhammer-store",
  "swissarmyhammer-tools",
  "swissarmyhammer-views",

@@ -851,18 +851,14 @@ use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
-/// Selects which builtin items (skills or agents) a profile installs.
+/// Selects which builtin items (skills, agents, or validator sets) a profile
+/// installs.
 ///
-/// The same shape serves both skills and agents. `Profile` matches against an
-/// item's profile-membership tags; builtin agents carry no profile tags, so
-/// `Profile` selects nothing for them — use `Named`/`Single`/`All` there.
+/// The same shape serves all three.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selector {
     /// Every builtin item.
     All,
-    /// Items tagged with the given init profile (skills only — agents have no
-    /// profile tags).
-    Profile(String),
     /// The named items, in the given order. Unknown names are skipped.
     Named(Vec<String>),
     /// A single named item.
@@ -870,35 +866,23 @@ pub enum Selector {
 }
 
 impl Selector {
-    /// Resolve this selector against a `name → membership-tags` view of the
-    /// available builtins, returning the selected names (deduplicated, sorted
-    /// for `All`/`Profile`, source-ordered for `Named`/`Single`).
-    ///
-    /// `membership(name)` returns the item's profile tags so `Profile` can match
-    /// them; for items without profile tags (agents) it returns an empty slice.
-    fn select(&self, available: &std::collections::HashMap<String, Vec<String>>) -> Vec<String> {
+    /// Resolve this selector against the set of `available` builtin names,
+    /// returning the selected names (sorted for `All`, source-ordered for
+    /// `Named`/`Single`).
+    fn select(&self, available: &std::collections::HashSet<String>) -> Vec<String> {
         match self {
             Selector::All => {
-                let mut names: Vec<String> = available.keys().cloned().collect();
-                names.sort();
-                names
-            }
-            Selector::Profile(profile) => {
-                let mut names: Vec<String> = available
-                    .iter()
-                    .filter(|(_, tags)| tags.iter().any(|t| t == profile))
-                    .map(|(name, _)| name.clone())
-                    .collect();
+                let mut names: Vec<String> = available.iter().cloned().collect();
                 names.sort();
                 names
             }
             Selector::Named(names) => names
                 .iter()
-                .filter(|n| available.contains_key(*n))
+                .filter(|n| available.contains(*n))
                 .cloned()
                 .collect(),
             Selector::Single(name) => {
-                if available.contains_key(name) {
+                if available.contains(name) {
                     vec![name.clone()]
                 } else {
                     Vec::new()
@@ -1035,18 +1019,6 @@ fn render_profile_skill(
     (instructions, metadata)
 }
 
-/// The known set of init profiles a builtin skill may declare in its `profiles`
-/// frontmatter list. This is the single profile registry [`Selector::Profile`]
-/// matches against.
-///
-/// Profile matching is an exact `==` comparison with no normalization, so a typo
-/// or case-mismatch (`Kanban`, a trailing space) would silently exclude a skill
-/// from every profile rather than fail. [`install_profile_skills`] validates each
-/// builtin's `profiles` against this set with a `debug_assert!`, turning that
-/// silent drop into a loud development-time failure. Update this set whenever a
-/// new profile is introduced.
-pub const KNOWN_PROFILES: &[&str] = &["kanban", "code-context"];
-
 /// Write a builtin `README.md` at a store root to aid discovery, logging a
 /// warning on failure rather than failing the install.
 ///
@@ -1100,31 +1072,7 @@ fn install_profile_skills(
     let resolver = SkillResolver::new();
     let builtins = resolver.resolve_builtins();
 
-    // Catch a mistagged builtin (`Kanban`, trailing space, unknown profile name)
-    // loudly during development rather than letting it silently fall out of every
-    // `Selector::Profile` filter. Matching is exact `==`, so an out-of-set entry
-    // would otherwise just be dropped.
-    debug_assert!(
-        builtins.values().all(|skill| skill
-            .profiles
-            .iter()
-            .all(|p| KNOWN_PROFILES.contains(&p.as_str()))),
-        "a builtin skill declares an unknown profile; known profiles are \
-         {KNOWN_PROFILES:?} (exact match, no normalization). Offenders: {:?}",
-        builtins
-            .values()
-            .filter(|skill| skill
-                .profiles
-                .iter()
-                .any(|p| !KNOWN_PROFILES.contains(&p.as_str())))
-            .map(|skill| (skill.name.as_str(), &skill.profiles))
-            .collect::<Vec<_>>()
-    );
-
-    let available: std::collections::HashMap<String, Vec<String>> = builtins
-        .iter()
-        .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
-        .collect();
+    let available: std::collections::HashSet<String> = builtins.keys().cloned().collect();
 
     let library = TemplateLibrary::default();
     let ctx = profile_template_context();
@@ -1183,11 +1131,7 @@ fn install_profile_agents(
 ) -> Result<Vec<String>, RegistryError> {
     let resolver = AgentResolver::new();
     let builtins = resolver.resolve_builtins();
-    // Agents carry no profile tags; expose an empty tag list for each.
-    let available: std::collections::HashMap<String, Vec<String>> = builtins
-        .keys()
-        .map(|name| (name.clone(), Vec::new()))
-        .collect();
+    let available: std::collections::HashSet<String> = builtins.keys().cloned().collect();
 
     let library = TemplateLibrary::default();
     let ctx = profile_template_context();
@@ -1281,12 +1225,8 @@ fn install_profile_validators(
 ) -> Result<Vec<String>, RegistryError> {
     let sets = crate::builtin_validators::builtin_validators_by_set();
 
-    // Validators carry no profile-membership tags, so expose an empty tag list
-    // for each set — the same shape `install_profile_agents` uses.
-    let available: std::collections::HashMap<String, Vec<String>> = sets
-        .keys()
-        .map(|name| (name.to_string(), Vec::new()))
-        .collect();
+    let available: std::collections::HashSet<String> =
+        sets.keys().map(|name| name.to_string()).collect();
 
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
@@ -1378,10 +1318,8 @@ fn deinit_profile_validators(
     root: Option<&Path>,
 ) -> Vec<String> {
     let sets = crate::builtin_validators::builtin_validators_by_set();
-    let available: std::collections::HashMap<String, Vec<String>> = sets
-        .keys()
-        .map(|name| (name.to_string(), Vec::new()))
-        .collect();
+    let available: std::collections::HashSet<String> =
+        sets.keys().map(|name| name.to_string()).collect();
 
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
@@ -2213,22 +2151,16 @@ pub fn deinit_profile_with_registry(
 /// Resolve the builtin skill names a selector picks (for deinit).
 fn resolved_skill_names(selector: &Selector) -> Vec<String> {
     let resolver = SkillResolver::new();
-    let available: std::collections::HashMap<String, Vec<String>> = resolver
-        .resolve_builtins()
-        .iter()
-        .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
-        .collect();
+    let available: std::collections::HashSet<String> =
+        resolver.resolve_builtins().into_keys().collect();
     selector.select(&available)
 }
 
 /// Resolve the builtin agent names a selector picks (for deinit).
 fn resolved_agent_names(selector: &Selector) -> Vec<String> {
     let resolver = AgentResolver::new();
-    let available: std::collections::HashMap<String, Vec<String>> = resolver
-        .resolve_builtins()
-        .keys()
-        .map(|name| (name.clone(), Vec::new()))
-        .collect();
+    let available: std::collections::HashSet<String> =
+        resolver.resolve_builtins().into_keys().collect();
     selector.select(&available)
 }
 
@@ -3547,8 +3479,7 @@ mod applier_tests {
     /// Stop hook and the ralph loop died between iterations.
     ///
     /// Every source key must reach the deployed file with an equal value, except
-    /// `metadata` (whose values are Liquid-rendered here) and the SAH-internal
-    /// `profiles`, which must not reach the deployed file at all.
+    /// `metadata`, whose values are Liquid-rendered here.
     #[test]
     #[serial]
     fn init_profile_preserves_unmodeled_skill_frontmatter() {
@@ -3584,21 +3515,11 @@ mod applier_tests {
             let deployed_md = project.join(".skills").join(&name).join("SKILL.md");
             let deployed_fm = frontmatter_map(&std::fs::read_to_string(&deployed_md).unwrap());
 
-            for internal in swissarmyhammer_skills::SAH_INTERNAL_FRONTMATTER_KEYS {
-                assert!(
-                    !deployed_fm.contains_key(*internal),
-                    "SAH-internal `{internal}` must not reach {deployed_md:?}"
-                );
-            }
-
             for (key, value) in &source_fm {
                 let key = key.as_str().expect("frontmatter keys must be strings");
                 // `metadata` values are Liquid-rendered on the way out, so the
-                // deployed values differ from the source by design. The internal
-                // keys are asserted absent above.
-                if key == "metadata"
-                    || swissarmyhammer_skills::SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key)
-                {
+                // deployed values differ from the source by design.
+                if key == "metadata" {
                     continue;
                 }
                 assert_eq!(
@@ -5824,28 +5745,11 @@ mod profile_tests {
         );
     }
 
-    /// The skill `Selector::Profile` variant matches the builtin profile tags.
-    #[test]
-    fn selector_profile_matches_tagged_skills() {
-        let names = resolved_skill_names(&Selector::Profile("kanban".to_string()));
-        assert!(
-            names.contains(&"kanban".to_string()) && names.contains(&"implement".to_string()),
-            "kanban-profile selector should pick the tagged skills, got {names:?}"
-        );
-        assert!(
-            !names.contains(&"commit".to_string()),
-            "untagged 'commit' must not be selected by the kanban profile"
-        );
-    }
-
     /// `Selector::Named` resolves in source order, skipping unknown names.
     #[test]
     fn selector_named_resolves_known_and_skips_unknown() {
-        let available: std::collections::HashMap<String, Vec<String>> =
-            [("a", vec![]), ("b", vec![]), ("c", vec![])]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect();
+        let available: std::collections::HashSet<String> =
+            ["a", "b", "c"].into_iter().map(str::to_string).collect();
         let got = Selector::Named(vec![
             "b".to_string(),
             "missing".to_string(),
@@ -5858,8 +5762,7 @@ mod profile_tests {
     /// `Selector::Single` for an unknown name selects nothing.
     #[test]
     fn selector_single_unknown_is_empty() {
-        let available: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
+        let available: std::collections::HashSet<String> = std::collections::HashSet::new();
         assert!(Selector::Single("nope".to_string())
             .select(&available)
             .is_empty());
@@ -6053,12 +5956,12 @@ mod profile_consistency_tests {
         }
     }
 
-    /// kanban-cli's profile — `kanban serve` + the `kanban`-profile skill
-    /// cluster, deployed at every scope (`apps/kanban-cli/.../registry.rs`).
+    /// kanban-cli's profile — `kanban serve` + every builtin skill, deployed at
+    /// every scope (`apps/kanban-cli/.../registry.rs`).
     fn kanban_profile(_scope: InitScope) -> Profile {
         Profile {
             mcp_server: Some(ProfileMcpServer::serve("kanban")),
-            skills: Some(Selector::Profile("kanban".to_string())),
+            skills: Some(Selector::All),
             ..Default::default()
         }
     }
@@ -6069,12 +5972,7 @@ mod profile_consistency_tests {
     fn code_context_profile(_scope: InitScope) -> Profile {
         Profile {
             mcp_server: Some(ProfileMcpServer::serve("code-context")),
-            skills: Some(Selector::Named(vec![
-                "code-context".to_string(),
-                "explore".to_string(),
-                "lsp".to_string(),
-                "detected-projects".to_string(),
-            ])),
+            skills: Some(Selector::All),
             ..Default::default()
         }
     }

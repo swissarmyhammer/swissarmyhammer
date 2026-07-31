@@ -8,7 +8,8 @@
 //!
 //! This is a thin wrapper over mirdan's profile installer: it builds a
 //! skills-only [`mirdan::install::Profile`] (the same [`registry::skills_selector`]
-//! the full `init` profile uses, with no MCP server) and applies it through
+//! the full `init` profile uses — every builtin skill, no MCP server) and
+//! applies it through
 //! [`mirdan::install::init_profile`]. All rendering (Liquid templating of the
 //! builtin SKILL.md) and store+symlink deployment live in mirdan, so there is no
 //! per-CLI render/deploy pipeline here.

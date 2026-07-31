@@ -33,7 +33,7 @@ pub use error::SkillError;
 pub use operations::{ListSkills, SearchSkill, UseSkill};
 pub use parse::{parse_input, SkillOperation};
 pub use schema::{generate_skill_mcp_schema, generate_skill_mcp_schema_full};
-pub use skill::{Skill, SkillName, SkillResources, SkillSource, SAH_INTERNAL_FRONTMATTER_KEYS};
+pub use skill::{Skill, SkillName, SkillResources, SkillSource};
 pub use skill_library::SkillLibrary;
 pub use skill_resolver::SkillResolver;
 pub use validation::{validate_description, MAX_DESCRIPTION_CHARS};

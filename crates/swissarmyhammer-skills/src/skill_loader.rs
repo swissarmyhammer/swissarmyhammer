@@ -1,6 +1,6 @@
 //! Parses SKILL.md files from directories or embedded content
 
-use crate::skill::{Skill, SkillName, SkillResources, SkillSource, SAH_INTERNAL_FRONTMATTER_KEYS};
+use crate::skill::{Skill, SkillName, SkillResources, SkillSource};
 use crate::validation::validate_frontmatter;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -19,12 +19,6 @@ struct SkillFrontmatter {
     metadata: HashMap<String, String>,
     #[serde(default, rename = "allowed-tools")]
     allowed_tools_str: Option<String>,
-    /// Init profiles this skill belongs to, as a proper YAML list.
-    ///
-    /// `#[serde(default)]` ⇒ skills with no `profiles:` key parse to an empty
-    /// vec, so existing skills are unaffected.
-    #[serde(default)]
-    profiles: Vec<String>,
     /// Every frontmatter key the fields above do not name, captured verbatim.
     ///
     /// A `SKILL.md` may carry keys SAH does not interpret but the harness does
@@ -67,13 +61,6 @@ pub fn parse_skill_md_with_path(
         .map(|s| s.split_whitespace().map(String::from).collect())
         .unwrap_or_default();
 
-    // Establish the `Skill::extra` invariant at construction: the catch-all
-    // never holds a SAH-internal key, so nothing downstream has to remember
-    // which keys are ours. Today serde already routes `profiles` to its named
-    // field; this keeps the invariant true if that field is ever reworked.
-    let mut extra = fm.extra;
-    extra.retain(|key, _| !SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key.as_str()));
-
     Ok(Skill {
         name,
         description: fm.description.unwrap_or_default(),
@@ -83,8 +70,7 @@ pub fn parse_skill_md_with_path(
         agent: fm.agent,
         metadata: fm.metadata,
         allowed_tools,
-        profiles: fm.profiles,
-        extra,
+        extra: fm.extra,
         instructions: body.trim().to_string(),
         source_path: source_path.map(|p| p.to_path_buf()),
         source,
@@ -243,44 +229,6 @@ Use the flow tool.
         assert_eq!(skill.allowed_tools[0], "mcp__sah__flow");
         assert!(skill.instructions.contains("# Plan"));
         assert_eq!(skill.metadata.get("author").unwrap(), "swissarmyhammer");
-    }
-
-    #[test]
-    fn test_parse_skill_md_parses_profiles_list() {
-        let content = r#"---
-name: kanban
-description: Kanban workflow skill
-profiles:
-  - kanban
-  - workflow
----
-
-# Kanban
-
-Body.
-"#;
-
-        let skill = parse_skill_md(content, SkillSource::Builtin).unwrap();
-        assert_eq!(skill.profiles, vec!["kanban", "workflow"]);
-    }
-
-    #[test]
-    fn test_parse_skill_md_profiles_default_empty_when_absent() {
-        let content = r#"---
-name: plain
-description: A skill with no profiles key
----
-
-# Plain
-
-Body.
-"#;
-
-        let skill = parse_skill_md(content, SkillSource::Builtin).unwrap();
-        assert!(
-            skill.profiles.is_empty(),
-            "skills without a `profiles:` key should default to an empty vec"
-        );
     }
 
     #[test]

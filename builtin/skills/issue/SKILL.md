@@ -1,7 +1,5 @@
 ---
 name: issue
-profiles:
-  - kanban
 description: Turn an issue into finished work. Use when a GitHub issue URL (e.g. github.com/owner/repo/issues/123) is pasted, or when the pasted text is clearly the body of an issue (title + description, "Steps to reproduce", "Expected/Actual behavior", labels). Also fires on "/issue", "make a task from this issue", "implement this issue", "do this issue". Converts the issue into one or more kanban tasks and then drives them to done.
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool to persist tasks and delegates to the `task`, `plan`, and `finish` skills. Fetching an issue from a bare URL uses the `gh` CLI (`gh issue view`) when available, falling back to `WebFetch`; pasted issue content needs neither. Will not function on a harness that does not expose `kanban`.

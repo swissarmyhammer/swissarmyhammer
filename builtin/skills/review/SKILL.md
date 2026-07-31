@@ -1,7 +1,5 @@
 ---
 name: review
-profiles:
-  - kanban
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review.
 agent: reviewer
 license: MIT OR Apache-2.0

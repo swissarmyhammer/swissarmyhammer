@@ -4,25 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-/// Frontmatter keys SAH consumes for its own machinery and never writes back
-/// out to a deployed `SKILL.md`.
-///
-/// `profiles` drives init-profile selection (see `mirdan::install::KNOWN_PROFILES`).
-/// It is meaningless to the harness that reads the deployed skill, so it must
-/// stay out of that file.
-///
-/// This is the single source of truth for the internal set. Both sides of the
-/// deploy round-trip read it:
-///
-/// - the loader strips these keys from [`Skill::extra`] after deserializing, so
-///   "`extra` never holds an internal key" is an invariant of every parsed
-///   `Skill`, independent of how the frontmatter struct's named fields evolve;
-/// - the deploy formatter strips them again before flattening `extra` back out,
-///   so a `Skill` built by hand or restored from a cache cannot leak one either.
-///
-/// Every other frontmatter key — modeled or not — round-trips verbatim.
-pub const SAH_INTERNAL_FRONTMATTER_KEYS: &[&str] = &["profiles"];
-
 /// A validated skill name (lowercase, alphanumeric with hyphens)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SkillName(String);
@@ -108,11 +89,6 @@ pub struct Skill {
     pub metadata: HashMap<String, String>,
     /// Allowed MCP tools for this skill
     pub allowed_tools: Vec<String>,
-    /// Init profiles this skill belongs to (e.g. `kanban`).
-    ///
-    /// A tool's init deploys only the skills tagged with its profile. Empty
-    /// means the skill belongs to no specific profile (full-workspace only).
-    pub profiles: Vec<String>,
     /// Frontmatter keys SAH does not model, preserved verbatim.
     ///
     /// A `SKILL.md` may carry any key its harness understands — Claude Code
@@ -123,8 +99,7 @@ pub struct Skill {
     /// lossless.
     ///
     /// Keys the struct models with a named field never appear here — serde
-    /// gives those fields priority — and neither do
-    /// [`SAH_INTERNAL_FRONTMATTER_KEYS`], which the loader strips.
+    /// gives those fields priority.
     ///
     /// These values are copied verbatim and are **not** Liquid-rendered. Only
     /// the skill body and `metadata` values go through template rendering (see

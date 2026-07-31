@@ -14,7 +14,6 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::skill::SAH_INTERNAL_FRONTMATTER_KEYS;
 use crate::{Skill, SkillResolver};
 
 /// YAML frontmatter fields for a SKILL.md file.
@@ -66,20 +65,6 @@ pub fn resolve_skill(name: &str) -> Result<Skill, String> {
         .ok_or_else(|| format!("builtin '{name}' skill not found"))
 }
 
-/// Resolve all builtin skills tagged with the given init `profile`.
-///
-/// A skill belongs to a profile when its `profiles` frontmatter list contains
-/// `profile`. Returns the matching skills in arbitrary order. Skills without a
-/// `profiles` key (the default empty list) never match any profile.
-pub fn resolve_profile_skills(profile: &str) -> Vec<Skill> {
-    let resolver = SkillResolver::new();
-    resolver
-        .resolve_builtins()
-        .into_values()
-        .filter(|skill| skill.profiles.iter().any(|p| p == profile))
-        .collect()
-}
-
 /// Format a skill as a complete SKILL.md file with YAML frontmatter.
 ///
 /// Combines the skill's frontmatter fields (`name`, `description`,
@@ -91,8 +76,6 @@ pub fn resolve_profile_skills(profile: &str) -> Vec<Skill> {
 /// Frontmatter keys SAH does not model — `hooks`, `model`, `paths` and the rest
 /// of the harness's own set — are carried on [`Skill::extra`] and written back
 /// out verbatim after the modeled ones, so the deploy round-trip is lossless.
-/// The one exception is [`SAH_INTERNAL_FRONTMATTER_KEYS`], which drive SAH's own
-/// machinery and are dropped here.
 ///
 /// Uses `serde_yaml_ng` to serialize the frontmatter, ensuring that values
 /// containing YAML special characters (colons, quotes, newlines) are properly
@@ -125,16 +108,7 @@ pub fn format_skill_md(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-        // Strip the internal keys again on the way out. The loader already
-        // keeps them out of `Skill::extra`, but a `Skill` can also be built by
-        // hand, so enforcing it here too means no internal key can reach a
-        // deployed file by any route.
-        extra: skill
-            .extra
-            .iter()
-            .filter(|(key, _)| !SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
+        extra: skill.extra.clone(),
     };
 
     let yaml = serde_yaml_ng::to_string(&frontmatter)
@@ -166,7 +140,6 @@ mod tests {
             agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec!["tool-a".to_string(), "tool-b".to_string()],
-            profiles: vec![],
             extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
@@ -202,7 +175,6 @@ mod tests {
             agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
-            profiles: vec![],
             extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
@@ -238,7 +210,6 @@ mod tests {
             agent: None,
             metadata: metadata.clone(),
             allowed_tools: vec![],
-            profiles: vec![],
             extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
@@ -284,7 +255,6 @@ mod tests {
             agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
-            profiles: vec![],
             extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
@@ -324,7 +294,6 @@ mod tests {
             agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
-            profiles: vec![],
             extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
@@ -450,105 +419,6 @@ body
         );
     }
 
-    /// `profiles` is SAH-internal — it selects which skills an init profile
-    /// deploys. It must be readable from the builtin source and absent from the
-    /// deployed copy, so a leak into `extra` never reaches a file the harness
-    /// reads.
-    #[test]
-    fn test_format_skill_md_omits_sah_internal_profiles() {
-        let src = r#"---
-name: finish
-description: Drive kanban tasks from ready to done
-profiles:
-  - kanban
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "sah tool ralph ralph check --"
----
-
-body
-"#;
-
-        let skill = crate::skill_loader::parse_skill_md(src, SkillSource::Builtin)
-            .expect("source SKILL.md should parse");
-        assert_eq!(
-            skill.profiles,
-            vec!["kanban"],
-            "`profiles` must be readable after parse"
-        );
-
-        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
-        let deployed = frontmatter_map(&md);
-        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
-            assert!(
-                !deployed.contains_key(*internal),
-                "SAH-internal `{internal}` must not reach the deployed SKILL.md, got:\n{md}"
-            );
-        }
-        assert!(
-            deployed.contains_key("hooks"),
-            "dropping the internal keys must not also drop unmodeled keys, got:\n{md}"
-        );
-    }
-
-    /// The deploy-side internal-key filter, exercised directly.
-    ///
-    /// Every other test builds its `Skill` through `parse_skill_md`, where serde
-    /// routes `profiles` to its named field — so `extra` is already clean and the
-    /// filter in `format_skill_md` never fires. Only a hand-built `Skill` can put
-    /// an internal key into `extra`, which is exactly the case that filter guards:
-    /// without it the key would flatten straight back into the deployed file.
-    #[test]
-    fn test_format_skill_md_drops_internal_keys_planted_in_extra() {
-        let mut extra = BTreeMap::new();
-        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
-            extra.insert(
-                (*internal).to_string(),
-                serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String(
-                    "kanban".to_string(),
-                )]),
-            );
-        }
-        extra.insert(
-            "model".to_string(),
-            serde_yaml_ng::Value::String("opus".to_string()),
-        );
-
-        let skill = Skill {
-            name: SkillName::new("planted").unwrap(),
-            description: "a skill whose extra map carries an internal key".to_string(),
-            license: None,
-            compatibility: None,
-            context: None,
-            agent: None,
-            metadata: HashMap::new(),
-            allowed_tools: vec![],
-            profiles: vec![],
-            extra,
-            instructions: "body".to_string(),
-            source_path: None,
-            source: SkillSource::Builtin,
-            resources: SkillResources::default(),
-        };
-
-        let md = format_skill_md(&skill, "body", &skill.metadata);
-        let deployed = frontmatter_map(&md);
-
-        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
-            assert!(
-                !deployed.contains_key(*internal),
-                "`{internal}` planted in `extra` must still be dropped on deploy, got:\n{md}"
-            );
-        }
-        assert_eq!(
-            deployed.get("model"),
-            Some(&serde_yaml_ng::Value::String("opus".to_string())),
-            "filtering internal keys must not disturb the other unmodeled keys, got:\n{md}"
-        );
-    }
-
     /// Guard for the `#[serde(flatten)]` hazard: a key the frontmatter struct
     /// names — including the renamed `allowed-tools` — must be consumed by its
     /// typed field and never also land in the unmodeled catch-all. A key in both
@@ -574,8 +444,6 @@ compatibility: Requires the `kanban` MCP tool.
 context: fork
 agent: explorer
 allowed-tools: tool-a tool-b
-profiles:
-  - kanban
 metadata:
   author: swissarmyhammer
   version: "1.0"

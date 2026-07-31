@@ -26,7 +26,7 @@
 //! launcher-based strategies would only change how this one `command` field is
 //! computed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -124,16 +124,15 @@ pub fn plugin_catalog() -> Vec<PluginSpec> {
                 edit_redirect: false,
             },
         },
-        // kanban — the `kanban` MCP server + the kanban-profile skill cluster
-        // (kanban, plan, task, finish, implement, review).
+        // kanban — the `kanban` MCP server + every builtin skill.
         PluginSpec {
             meta: meta(
                 "kanban",
-                "Kanban board MCP server plus the kanban workflow skill cluster.",
+                "Kanban board MCP server plus every builtin workflow skill.",
             ),
             profile: Profile {
                 mcp_server: Some(ProfileMcpServer::serve("kanban")),
-                skills: Some(Selector::Profile("kanban".to_string())),
+                skills: Some(Selector::All),
                 ..Profile::default()
             },
         },
@@ -266,10 +265,7 @@ fn render_skills(
 
     let resolver = SkillResolver::new();
     let builtins = resolver.resolve_builtins();
-    let available: HashMap<String, Vec<String>> = builtins
-        .iter()
-        .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
-        .collect();
+    let available: HashSet<String> = builtins.keys().cloned().collect();
 
     let library = TemplateLibrary::default();
     let ctx = profile_template_context();
@@ -290,8 +286,7 @@ fn render_skills(
 
 /// Render the profile's selected builtin agents into `plugin_dir/agents/`.
 ///
-/// Claude Code discovers plugin agents as `agents/<name>.md`. Agents carry no
-/// profile tags, so only `All`/`Named`/`Single` selectors match.
+/// Claude Code discovers plugin agents as `agents/<name>.md`.
 fn render_agents(
     selector: Option<&Selector>,
     plugin_dir: &Path,
@@ -302,8 +297,7 @@ fn render_agents(
 
     let resolver = AgentResolver::new();
     let builtins = resolver.resolve_builtins();
-    let available: HashMap<String, Vec<String>> =
-        builtins.keys().map(|name| (name.clone(), Vec::new())).collect();
+    let available: HashSet<String> = builtins.keys().cloned().collect();
 
     let library = TemplateLibrary::default();
     let ctx = profile_template_context();

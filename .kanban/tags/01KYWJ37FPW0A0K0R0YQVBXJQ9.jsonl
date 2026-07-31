@@ -1,0 +1,1 @@
+{"id":"01KYWJ37FPP0EBY5DMHTHXTEF6","timestamp":"2026-07-31T17:03:35.926728Z","op":"create","item_id":"01KYWJ37FPW0A0K0R0YQVBXJQ9","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: dead-code\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: dead-code\n","transaction_id":null}

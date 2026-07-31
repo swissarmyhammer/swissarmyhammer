@@ -1,7 +1,5 @@
 ---
 name: code-context
-profiles:
-  - code-context
 description: >-
   Code context operations for symbol lookup, search, grep, call graph, and blast
   radius analysis. Use when the user says "blast radius", "who calls this",
