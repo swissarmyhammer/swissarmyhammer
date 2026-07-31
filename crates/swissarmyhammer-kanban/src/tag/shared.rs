@@ -12,12 +12,33 @@ use swissarmyhammer_entity::EntityContext;
 /// `update tag` differ only in the [`crate::tag_parser`] call they pass in, so
 /// they share this writer and cannot drift apart.
 ///
+/// # Untouched bodies
+///
+/// **A task the edit does not change comes out byte-identical.** The walk visits
+/// every task on the board, so this is the whole safety property: `delete tag`
+/// and `update tag` name one tag, and no card that does not carry that tag may
+/// be rewritten — not its prose, not its trailing whitespace, not its line
+/// endings.
+///
+/// It holds because `edit_fn` returns untouched text byte for byte. Both
+/// [`crate::tag_parser`] writers guarantee that, and state it (see
+/// [`crate::tag_parser::remove_tag`]); `remove_tag` once broke it by trimming
+/// trailing whitespace off every line of every body it was handed, marker or
+/// not. `edit_rewrites_only_the_tasks_carrying_the_marker` holds the contract
+/// here, against the stored markdown of a bystander whose body carries trailing
+/// whitespace.
+///
 /// The `new_body != body` guard skips the [`EntityContext::write`] CALL for a
-/// task the edit did not change. It is an efficiency guard only, not a
-/// correctness one: the entity layer already discards a write that changes no
-/// field, leaving the task's `.md` and `.jsonl` byte-identical and its mtime
-/// untouched. Nothing observable distinguishes the guarded walk from an
-/// unguarded one, so no test holds it.
+/// task the edit did not change. It is an efficiency guard, not a correctness
+/// one: the store handle behind the entity layer already returns early when the
+/// serialized text is identical, before the changelog append, the atomic write,
+/// and the pending change event, so dropping the guard would still leave every
+/// bystander's `.md`, `.jsonl`, mtime, and event stream alone.
+///
+/// It is not a pure no-op, though — the entity cache invalidates its memoized
+/// computes on every `write` call, hash-unchanged or not, so an unguarded walk
+/// would evict the compute cache for every task on the board. That is a cost, not
+/// a correctness difference, and no test holds it.
 ///
 /// # Parameters
 ///
@@ -65,9 +86,20 @@ mod tests {
 
     /// The walk visits EVERY task, so a bystander — a task carrying no marker
     /// for the edited tag — must come out byte-identical while the task that
-    /// does carry the marker is rewritten. This is the blast radius of the one
-    /// shared walker: an `edit_fn` or a boundary rule that over-matches would
-    /// corrupt unrelated cards board-wide, and this is what catches it.
+    /// does carry the marker is rewritten.
+    ///
+    /// The bystander's body carries trailing whitespace on purpose, and the
+    /// assertion compares the whole stored `.md`. That is what makes the fixture
+    /// bite: an `edit_fn` that normalizes the WHOLE body rather than only the
+    /// lines it edited rewrites this card even though the deleted tag never
+    /// appears in it. `remove_tag` did exactly that until card `^tnr56gg`.
+    ///
+    /// That is all this fixture holds. Its bystander contains no `#` at all, so
+    /// it says nothing about where a marker's boundary falls; the boundary rule
+    /// is held by the `tag_parser` tests
+    /// (`test_remove_tag_next_to_punctuation`,
+    /// `test_remove_tag_skips_heading_lines`), and the byte-for-byte identity of
+    /// untouched text by `test_writers_leave_text_without_the_slug_byte_identical`.
     #[tokio::test]
     async fn edit_rewrites_only_the_tasks_carrying_the_marker() {
         let temp = TempDir::new().unwrap();
@@ -95,7 +127,7 @@ mod tests {
         let tagged_id = tagged["id"].as_str().unwrap().to_string();
 
         let untouched = AddTask::new("Untouched")
-            .with_description("No marker here")
+            .with_description("No marker here   \nsecond line")
             .execute(&ctx)
             .await
             .into_result()

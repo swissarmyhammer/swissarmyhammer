@@ -1,8 +1,42 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b980
+comments:
+- actor: claude-code
+  id: 01kywrpksm7tx6akpgpaxa83x4
+  text: |-
+    Picked up. Took option 1 (scope the trim), not the "deliberate normalization" option.
+
+    RED first, exactly as the card predicted. Made the bystander body `"No marker here   \nsecond line"`, `edit_rewrites_only_the_tasks_carrying_the_marker` failed with `left: "...No marker here\nsecond line"` / `right: "...No marker here   \nsecond line"`.
+
+    Research: the whole-body normalization was two defects, not one. `remove_tag` trimmed every line, AND `edit_tag_markers` reassembled with `text.lines()` + `join("\n")`, which also drops a final newline and turns `\r\n` into `\n`. The second half hits bystanders too: `swissarmyhammer-entity/src/io.rs` round-trips a task body verbatim (`parse_frontmatter_body` takes everything after the opening delimiter line, `format_frontmatter_body` writes it back), so a body CAN carry a trailing newline or CRLF. So "byte-identical" was not honestly claimable without fixing the reassembly as well.
+
+    Fix: `markdown_lines` now yields a `MarkdownLine { content, terminator, tag_bearing }` and keeps each line's terminator verbatim; `edit_line_markers` returns whether it rewrote anything; `edit_tag_markers` trims only the lines removal actually edited. Untouched text is now a true identity. The reader (`parse_tags`) is unchanged — `split_line_terminator` strips the terminator exactly as `str::lines` did.
+
+    Confirmed the card's note about the write-skip guard: `StoreHandle::write` (swissarmyhammer-store/src/handle.rs) returns `Ok(None)` when the serialized text is identical, before the changelog append, the atomic write, and the pending event. The fix does not rest on the `new_body != body` guard; the guard's docstring now says what actually short-circuits.
+
+    Blast radius: `tag_parser` is `pub mod` but has NO consumers outside swissarmyhammer-kanban (grepped the workspace). In-crate callers are `tag/delete.rs`, `tag/update.rs`, `tag/cut.rs`, `task/tags.rs`, `derive_handlers.rs` — all fold the writers over slugs the body carries, so scoping the trim only helps them.
+  timestamp: 2026-07-31T18:59:02.580990+00:00
+- actor: claude-code
+  id: 01kywsnes12c1wxxa846nge9gt
+  text: |-
+    Adversarial double-check came back REVISE with 6 findings. All 6 fixed, all verified.
+
+    1. `test_remove_tag_undoes_append_tag` claimed a universal round trip that does not hold: a body already ending in a newline loses it, because `append_tag("prose\n")` and the own-line append onto `"prose"` produce the identical string, so removal cannot tell them apart. The tie is forced, not chosen. Narrowed the docstring and added the 5 newline-terminated cases with their real expectations, so both halves are pinned.
+    2. `drop_last_line_terminator`'s docstring claimed a body ending in a blank line keeps the blank line. False: `remove_tag("a\n\n#bug")` is `"a\n"`. Restated as "exactly one terminator, never a run" and pinned it plus the 3-newline case.
+    3. The identity fixture only reached the "no `#` at all" path — never a real marker for a DIFFERENT tag, which is the everyday bystander and the load-bearing false path of the new `edited` flag. Added `"fix #other   \nsecond   \n"`, `"#other   \n"`, `"#other and #another   "`.
+    4. `out.pop()` (space absorb) reached backwards into a shared buffer on an unwritten invariant, and a break would PANIC at `result[content_start..]` rather than misbehave. Made it structurally line-local: `edit_line_markers` captures `line_start = out.len()` and guards `out.len() > line_start`. No behavior change; the panic class is gone.
+    5. `tag/shared.rs` claimed "nothing observable distinguishes the guarded walk from an unguarded one". Too strong — `EntityCache::write` invalidates memoized computes unconditionally, even hash-unchanged, so an unguarded walk would evict the compute cache board-wide. Narrowed to what holds: no changelog entry, no file write, no event, no mtime change.
+    6. Two paraphrases understated the trim rule ("whitespace the hole left behind"). The rule trims the edited line's whole end. Reworded both.
+
+    Proved every fixture live, not vacuous: temporarily reintroduced the pre-fix whole-body normalization and confirmed all four guards fail, including the new `#other` bystander (`left: "fix #othersecond"` vs `right: "fix #other   \nsecond   \n"`). Scaffolding removed; grep confirms none left.
+
+    Discovery worth knowing: my earlier comment on this card quoted a bare triple-dash inside backticks, which corrupted the card's own read via the substring split in `parse_frontmatter_body`. Card 01KYWS1BRH1N3MFFHJYFPCBETH now tracks that separately. Avoid literal triple-dashes in kanban comments until it lands.
+
+    Green: 1605/1605 in swissarmyhammer-kanban, 95/95 on the tools kanban+tag filter, clippy `-D warnings` clean.
+  timestamp: 2026-07-31T19:15:53.249185+00:00
+position_column: doing
+position_ordinal: '8480'
 title: remove_tag rewrites every task body, not just the ones carrying the marker
 ---
 `tag_parser::remove_tag` ends with a trailing-whitespace normalization applied to **every** task body the walker visits, whether or not that body carries the marker:
