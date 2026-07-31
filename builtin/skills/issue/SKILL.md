@@ -65,5 +65,3 @@ Report back: which issue was ingested, the card(s) created (by `short_id`), and 
 - **Kanban is the single source of truth** — no TodoWrite/TaskCreate. Cards come only from `/task` or `/plan`.
 - **Reuse, don't reimplement.** This skill adds recognition + normalization + chaining; all research, task-writing, and the implement loop live in the delegated skills.
 - **One issue per invocation.** If several issues are pasted at once, take the most important and tell the user to re-run for the rest.
-
-{% include "_partials/short-ids" %}

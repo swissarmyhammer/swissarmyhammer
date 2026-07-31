@@ -19,10 +19,10 @@ Perform a structured code review. You are a **thin driver**: detect the mode, ca
 Here is what the user provided: 
 $ARGUMENTS
 
+{% include "_partials/review-column" %}
 
 ## Guidelines
 
-{% include "_partials/review-column" %}
 
 - **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
 - **Findings are obeyed, never declined.** A finding is an instruction: satisfy it by fixing the code. You may not dismiss a finding, and you may not edit a validator to make one disappear — both are disobedience. The one exception is findings that genuinely cannot all be satisfied (two rules that can't both hold, or one demanding code that won't compile/type-check, or fighting a deliberate documented contract like `snake_case` mirroring a backend payload or `null` required by a type): you can't obey contradictory orders, so **report it** — record it on the task and leave it in `review` (stuck) for a human to fix the rule. You do not pick a winner, edit validators, or force a verdict. Column movement remains the only verdict.
@@ -62,10 +62,6 @@ Every `review` op accepts two optional modifiers:
 There are no "dimensions" — that concept is gone. Scope is the op (`working`/`sha`/`file`); narrowing is `validators` (whole validators, not individual rules); the backend is `backend`.
 
 ## Process
-
-### Ensure the review column
-
-Idempotent — use the partial above. Run every time.
 
 ### Determine the mode
 

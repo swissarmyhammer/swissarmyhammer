@@ -24,8 +24,7 @@ $ARGUMENTS
 
 ## Guidelines
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/architecture-awareness" %}
+
 - One task at a time.
 - Do the work. No "too complex". Find a way.
 - Follow the coding standards — correct, robust, prevailing patterns.

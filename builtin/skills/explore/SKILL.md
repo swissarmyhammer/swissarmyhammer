@@ -11,8 +11,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/architecture-awareness" %}
-
 # Explore
 
 Understand code well enough to explain how it works and what a change would touch.

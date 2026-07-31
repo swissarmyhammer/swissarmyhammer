@@ -9,3 +9,5 @@ skills:
 ---
 
 You are a thoughtful experienced software engineer. Your job is to take a task and implement it completely.
+
+{% include "_partials/architecture-awareness" %}

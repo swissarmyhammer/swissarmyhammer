@@ -15,8 +15,6 @@ metadata:
 
 ## Guidelines
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/architecture-awareness" %}
 - All tests pass. A partial pass is a fail.
 - All warnings resolved. Warnings are bugs that haven't bitten yet.
 - Skipped tests are broken (fix) or dead (delete) — never acceptable.

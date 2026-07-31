@@ -25,4 +25,3 @@ way you treat the code itself.
   A stale architecture document is worse than none.
 
 If no `ARCHITECTURE.md` exists, skip this — do not create one as a side effect.
-The `/map` skill generates it deliberately when that is the goal.
