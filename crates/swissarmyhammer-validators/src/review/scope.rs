@@ -455,6 +455,20 @@ fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> Mat
     }
 }
 
+/// The validator names the engine pairs with `file`, in name order.
+///
+/// A thin wrapper over `match_validators_and_files` — the pairing every review
+/// run performs — so a test (in this crate or downstream, behind the
+/// `test-support` feature) can assert against the engine itself instead of a
+/// re-implementation that could drift from it.
+#[cfg(any(test, feature = "test-support"))]
+pub fn engine_matched_validator_names(file: &str, loader: &ValidatorLoader) -> Vec<String> {
+    match_validators_and_files(&[file.to_string()], loader)
+        .validators
+        .into_keys()
+        .collect()
+}
+
 /// Pre-compute the [`FileFacts`] (full inlined source, changed symbols, semantic
 /// diff) once per matched file — shared by every validator that reviews that file.
 fn compute_per_file_facts(

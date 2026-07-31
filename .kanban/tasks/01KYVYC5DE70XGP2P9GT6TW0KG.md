@@ -17,6 +17,27 @@ comments:
 
     Also confirmed: builtin validators load inside `IsolatedTestEnvironment` (embedded, not from the real ~/.validators), so the engine-equality assertion covers the whole loaded stack, not just fixtures.
   timestamp: 2026-07-31T18:01:06.529758+00:00
+- actor: claude-code
+  id: 01kywt24zgvfxvd08sbws0k4h6
+  text: |
+    Verification done, ready for review.
+
+    Second gap found and fixed by TDD: an empty `match` string. The old substring filter matched every glob (`g.contains("")`), so `match: ""` listed everything; the engine path treats "" as a path and matched almost nothing. RED proved it (left `[]`, right the full 21-validator list). The dispatch site now treats an empty `match` as absent, the same way an empty `op` falls back to DEFAULT_OP. Test: `list_validators_treats_an_empty_match_as_no_filter`.
+
+    Tests added (all through the registered tool, real loader, real engine):
+    - `list_validators_with_rules_pairs_like_the_engine_and_carries_bodies` — name list equals `engine_matched_validator_names(path, loader)`; every row's `rules` is byte-identical to that name's `get validator` rules; the fixture body is the real markdown.
+    - `list_validators_omits_rule_bodies_by_default`
+    - `list_validators_matches_a_glob_fragment_leniently` (guard for the preserved lenient path)
+    - `list_validators_treats_an_empty_match_as_no_filter`
+    - `bool_arg_*` / `is_glob_pattern_*` unit tests in `op_tool_helpers`
+
+    Commands run:
+    - `cargo fmt --all` + `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+    - `cargo nextest run -p swissarmyhammer-tools -E '<review/validator tests>'` — 59 passed.
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'` — 5012 tests, 5011 passed, 2 skipped, 1 failed: `review_progress_notifications_test::review_working_emits_progress_notifications_per_pair_when_token_supplied` ("notifications/progress regressed ... 55 -> 53").
+
+    That failure is a pre-existing load-dependent flake, not this change: it passes 3/3 in isolation, and an earlier full run of the same command passed it while three llama/GPU tests timed out instead (those three also pass in isolation — model-singleton contention). Nothing in this change touches the progress bridge. Filed as ^aekpq0b: fix the monotonic sequencing in the emitter, never relax the assertion.
+  timestamp: 2026-07-31T19:22:49.200404+00:00
 position_column: doing
 position_ordinal: '8380'
 title: 'Review tool: `list validators` returns rule bodies on request (`rules: true`)'

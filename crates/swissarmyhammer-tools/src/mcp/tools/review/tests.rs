@@ -23,8 +23,8 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 // harness, the throwaway git repo, the on-disk index builder + row seeders, and
 // the shared embedding dimension.
 use swissarmyhammer_validators::review::test_support::{
-    body as dup_body, dup_emb, on_disk_index_conn, seed_chunk, ScriptedAdapter, ScriptedAgent,
-    ScriptedReply, TestRepo, DIM,
+    body as dup_body, dup_emb, engine_matched_validator_names, on_disk_index_conn, seed_chunk,
+    ScriptedAdapter, ScriptedAgent, ScriptedReply, TestRepo, DIM,
 };
 use tokio::sync::broadcast;
 
@@ -230,6 +230,28 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     .unwrap();
 }
 
+/// Write a RuleSet whose match criteria pin it to a TOOL as well as a file glob.
+///
+/// The review engine matches by changed file with no tool name in context, so it
+/// never pairs such a validator with a file — the fixture that proves the tool's
+/// `match` filter uses the engine matcher rather than a glob test of its own.
+fn write_tool_scoped_ruleset(base: &Path, name: &str, glob: &str, tool: &str) {
+    let dir = base.join(name);
+    std::fs::create_dir_all(dir.join("rules")).unwrap();
+    std::fs::write(
+        dir.join("VALIDATOR.md"),
+        format!(
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n  tools:\n    - {tool}\n---\n\n# {name}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rules/check.md"),
+        "---\nname: check\ndescription: Check\n---\n\nCheck the code.\n",
+    )
+    .unwrap();
+}
+
 /// Write a malformed RuleSet under `base/<name>/`: a VALIDATOR.md whose
 /// frontmatter does not parse (unterminated YAML), so the loader drops it.
 fn write_malformed_ruleset(base: &Path, name: &str) {
@@ -297,6 +319,240 @@ async fn list_validators_surfaces_user_and_project_layers_with_probes() {
     let project_row = find("project-dead").expect("project validator listed");
     assert_eq!(project_row["source_layer"], json!("project"));
     assert_eq!(project_row["probes"], json!(["callers"]));
+}
+
+/// The Rust source path the `match` filter targets in the pairing tests. Nothing
+/// reads it from disk — validator matching is a pure glob test over the path.
+const RUST_MATCH_TARGET: &str = "src/lib.rs";
+
+/// One call answers "what rules will a review enforce on this file?": `match: <a
+/// .rs path>` + `rules: true` must return EXACTLY the validators the engine pairs
+/// with that path (via its own `match_validators_and_files`), each carrying its
+/// rule bodies verbatim — byte-identical to what `get validator` returns.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_with_rules_pairs_like_the_engine_and_carries_bodies() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    // Matches the .rs glob but is pinned to a tool, so the engine never pairs it
+    // with a file: listing it would mean the tool matched by its own glob test.
+    write_tool_scoped_ruleset(&project_validators, "edit-hook-rules", "**/*.rs", "Edit");
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    args.insert("match".to_string(), json!(RUST_MATCH_TARGET));
+    args.insert("rules".to_string(), json!(true));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let rows = parsed.as_array().expect("list returns an array");
+
+    // The tool's answer IS the engine's pairing for that path — same code path,
+    // so the two can never disagree about what a review run will enforce.
+    let loader = swissarmyhammer_validators::load_rules().expect("load rules");
+    let listed: Vec<String> = rows
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        listed,
+        engine_matched_validator_names(RUST_MATCH_TARGET, &loader),
+        "`list validators` must pair with the file exactly as the engine does: {body}"
+    );
+    assert!(
+        listed.contains(&"rust-rules".to_string()),
+        "the Rust-matching validator must be paired: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"ts-rules".to_string()),
+        "a TypeScript-only validator must not be paired with a .rs path: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"edit-hook-rules".to_string()),
+        "a tool-scoped validator the engine never pairs with a file must not be listed: {listed:?}"
+    );
+
+    // Every row carries the ruleset's rules verbatim — the same shape and the
+    // same bytes `get validator` returns for that name.
+    for row in rows {
+        let name = row["name"].as_str().unwrap();
+        let mut detail_args = serde_json::Map::new();
+        detail_args.insert("op".to_string(), json!("get validator"));
+        detail_args.insert("name".to_string(), json!(name));
+        let detail = tool
+            .execute(detail_args, &context)
+            .await
+            .expect("get validator");
+        let detail: serde_json::Value = serde_json::from_str(&extract_text(&detail)).unwrap();
+        assert_eq!(
+            row["rules"], detail["rules"],
+            "`{name}` rules must be the verbatim `get validator` bodies"
+        );
+    }
+
+    // And those bodies are the real rule text, not empty placeholders.
+    let fixture = rows
+        .iter()
+        .find(|r| r["name"] == json!("rust-rules"))
+        .expect("the fixture validator is listed");
+    assert_eq!(fixture["rules"][0]["name"], json!("check"));
+    assert!(
+        fixture["rules"][0]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Check the code"),
+        "rule bodies must be the verbatim markdown: {fixture}"
+    );
+}
+
+/// A glob-fragment `match` (not a concrete path) keeps its documented lenient
+/// behavior: it answers "which validators declare this glob?", so a caller can
+/// still discover a ruleset by the pattern it matches on.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_matches_a_glob_fragment_leniently() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    args.insert("match".to_string(), json!("**/*.ts"));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let listed: Vec<String> = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+
+    assert!(
+        listed.contains(&"ts-rules".to_string()),
+        "a glob fragment must find the validator declaring it: {body}"
+    );
+    assert!(
+        !listed.contains(&"rust-rules".to_string()),
+        "a glob fragment must not drag in unrelated validators: {listed:?}"
+    );
+}
+
+/// An empty `match` is no filter at all, not a path that matches nothing: the
+/// listing is the same one a call with no `match` returns.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_treats_an_empty_match_as_no_filter() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let listed = |match_value: Option<&str>| {
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("list validators"));
+        if let Some(value) = match_value {
+            args.insert("match".to_string(), json!(value));
+        }
+        async {
+            let result = tool.execute(args, &context).await.expect("list validators");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&extract_text(&result)).expect("json array");
+            parsed
+                .as_array()
+                .expect("list returns an array")
+                .iter()
+                .map(|r| r["name"].as_str().unwrap().to_string())
+                .collect::<Vec<String>>()
+        }
+    };
+
+    let unfiltered = listed(None).await;
+    assert_eq!(
+        listed(Some("")).await,
+        unfiltered,
+        "an empty `match` must not filter anything out"
+    );
+    assert!(
+        unfiltered.contains(&"rust-rules".to_string())
+            && unfiltered.contains(&"ts-rules".to_string()),
+        "the unfiltered listing carries every validator: {unfiltered:?}"
+    );
+}
+
+/// `rules` defaults to false: a plain `list validators` row stays a summary and
+/// carries no rule bodies.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_omits_rule_bodies_by_default() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    write_ruleset(
+        &project.path().join(".validators"),
+        "rust-rules",
+        "*.rs",
+        &[],
+    );
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    let row = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .find(|r| r["name"] == json!("rust-rules"))
+        .expect("the fixture validator is listed");
+    assert_eq!(
+        row["rule_count"],
+        json!(1),
+        "the summary still counts rules"
+    );
+    assert!(
+        row.get("rules").is_none(),
+        "rule bodies must be omitted unless `rules: true`: {body}"
+    );
 }
 
 #[tokio::test]

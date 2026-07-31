@@ -29,6 +29,11 @@ use swissarmyhammer_code_context::serialize_embedding;
 use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
 use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
+/// The engine's own validator↔file pairing, re-exported through the shared seam
+/// so a test asserts against `match_validators_and_files` itself rather than a
+/// copy of its matching logic.
+pub use crate::review::scope::engine_matched_validator_names;
+
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
 

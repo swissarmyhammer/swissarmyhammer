@@ -40,7 +40,9 @@ use swissarmyhammer_operations::{
 };
 use swissarmyhammer_validators::review::Scope;
 
-use crate::mcp::op_tool_helpers::{json_result, string_arg, string_array_arg, usize_arg};
+use crate::mcp::op_tool_helpers::{
+    bool_arg, is_glob_pattern, json_result, string_arg, string_array_arg, usize_arg,
+};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use review_op::{AgentFactory, EmbedderFactory, ReviewRequest, ReviewResponse};
 
@@ -160,6 +162,11 @@ static LIST_VALIDATORS_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("match")
         .description("Filter to validators whose globs match this path/glob.")
         .param_type(ParamType::String),
+    ParamMeta::new("rules")
+        .description(
+            "Also return each validator's rules — name plus verbatim body (default false). With `match: <file>` this returns, in one call, the full rule text a review will enforce on that file.",
+        )
+        .param_type(ParamType::Boolean),
 ];
 
 impl Operation for ListValidators {
@@ -543,9 +550,14 @@ impl McpTool for ReviewTool {
                 self.execute_review(Scope::Sha(sha), &args, context).await
             }
             "list validators" => {
+                // An empty `match` is no filter, not a path that matches nothing
+                // — the same treatment an empty `op` gets above.
                 let summaries = validators::list_validators(
                     string_arg(&args, "source").as_deref(),
-                    string_arg(&args, "match").as_deref(),
+                    string_arg(&args, "match")
+                        .as_deref()
+                        .filter(|value| !value.is_empty()),
+                    bool_arg(&args, "rules", false),
                 )
                 .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
                 json_result(&summaries)
@@ -584,7 +596,7 @@ impl McpTool for ReviewTool {
 /// Build the [`Scope`] for a `review file` target: a glob when it has glob
 /// metacharacters, else a single file path.
 fn scope_for_path(target: &str) -> Scope {
-    if target.contains(['*', '?', '[']) {
+    if is_glob_pattern(target) {
         Scope::Glob(target.to_string())
     } else {
         Scope::File(target.to_string())

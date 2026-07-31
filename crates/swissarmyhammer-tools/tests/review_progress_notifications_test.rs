@@ -98,7 +98,7 @@ fn parse_pair<'m>(message: &'m str, verb_prefix: &str) -> Option<(&'m str, &'m s
     Some((file, validator))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn review_working_emits_progress_notifications_per_pair_when_token_supplied() {
     // Keep the server-side code_context bootstrap hermetic: this test asserts
     // review progress wiring, not semantic embeddings, so skip the multi-GB
