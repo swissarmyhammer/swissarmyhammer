@@ -66,10 +66,34 @@ comments:
 
     Final: `cargo nextest run -E 'rdeps(swissarmyhammer-skills) or rdeps(swissarmyhammer-agents)'` -> 10205 passed, 2 skipped. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
   timestamp: 2026-07-31T22:34:59.152716+00:00
+- actor: claude-code
+  id: 01kyx68fn44c0305hk4ck8an60
+  text: |-
+    Review finding closed: the mirdan coverage guard now pins BOTH stance sentences.
+
+    `crates/mirdan/tests/findings_are_requirements_coverage.rs` — `CANONICAL_STANCE` is now a two-element `&[&str]` ("Do not decide you know better than the rule." and "There is no severity tier. Every finding is mandatory."), the same shape as `CANONICAL_STANCE` in `crates/swissarmyhammer-skills/tests/findings_are_requirements_guidance.rs`. `assert_renders_stance` loops the list, so all four agents and all three skills must render both sentences. The doc comment says the two lists must stay identical and why.
+
+    RED -> GREEN proof. Deleted only the second sentence from `builtin/_partials/findings-are-requirements.md`:
+    - Before the fix: `cargo nextest run -p mirdan --test findings_are_requirements_coverage` -> 2 tests, 2 passed. That is the gap the finding names.
+    - After the fix, same mutation: 2 failed. "builtin agent 'implementer' must render the stance sentence: There is no severity tier. Every finding is mandatory." and the same message for skill 'implement'.
+    - Partial restored (diff-clean against HEAD): 4 tests pass across both guard files.
+
+    Whole-file sweep of the guard, each pin compared with the partial:
+    - BANNED_LABELS — the 6 labels are exactly the quoted labels in the partial. Complete.
+    - "mark the task stuck" — matches the sibling guard word for word. No drift.
+    - COVERED_AGENTS + COVERED_SKILLS = 7 files, and exactly 7 builtin files include the partial (4 agents, 3 skills). Complete.
+    - PARTIAL_TAG — present in the raw body, absent after render. Complete.
+    - `profile_template_context()` matches the installer helper in `crates/mirdan/src/install.rs` (version only). No covered file or partial uses `{{ agent }}`, so the extra var `render_profile_skill` sets changes nothing here.
+
+    Rejected a shared cross-crate constant (a `test-support` feature on swissarmyhammer-skills): it would put test assertion data in a production API to remove one duplicated literal. The parallel two-element arrays plus the cross-reference comment keep the two guards recognisably paired.
+
+    Verification: `cargo nextest run -E 'rdeps(swissarmyhammer-skills) or rdeps(swissarmyhammer-agents) or rdeps(mirdan)'` -> 10205 passed, 2 skipped, 0 failed. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  timestamp: 2026-07-31T22:55:59.652515+00:00
 position_column: doing
 position_ordinal: '8280'
 title: '_partials/findings-are-requirements: one rule-obedience stance, included by every coding agent and skill'
 ---
+
 # Problem
 
 Across sessions and models, agents editorialize about rules: findings get labeled "nits", rules get weighed against their cost, and agents propose to weaken the review loop instead of obeying it. The finish skill carries strong anti-dismissal language, but only finish has it. The implementer, reviewer, tester, and the other skills do not — so the stance does not reach the agents that write the code.
@@ -107,3 +131,7 @@ A test that asserts each of the agents and skills above renders the partial's te
 - `cargo nextest run -E 'rdeps(swissarmyhammer-skills) or rdeps(swissarmyhammer-agents)'` passes.
 - Each listed agent and skill includes `_partials/findings-are-requirements`.
 - The coverage-guard test fails when an included file removes the partial. #review
+
+## Review Findings (2026-07-31 17:38)
+
+- [x] `crates/mirdan/tests/findings_are_requirements_coverage.rs:30` — The canonical stance consists of two sentences that must both be verified, but this file only verifies one. The change purpose explicitly states both sentences ('Do not decide you know better than the rule.' and 'There is no severity tier. Every finding is mandatory.') were duplicated separately and must both be pinned. File 1's CANONICAL_STANCE contains only the first sentence, while crates/swissarmyhammer-skills/tests/findings_are_requirements_guidance.rs:26-29 verifies both. This creates incomplete coverage for agents: they pass File 1's test even if the second sentence is missing from their rendered output. Update CANONICAL_STANCE at line 30 to include both sentences (either as a two-element array matching the skill test file, or as a single concatenated string), and update the assertion logic at line 56 to verify both sentences are rendered. This ensures agents receive the same complete verification as skills.

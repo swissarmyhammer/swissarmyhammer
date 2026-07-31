@@ -36,9 +36,24 @@ const COVERED_SKILLS: &[&str] = &["implement", "finish", "review"];
 /// The Liquid tag each covered file must carry in its raw body.
 const PARTIAL_TAG: &str = "{% include \"_partials/findings-are-requirements\" %}";
 
-/// A sentence that exists ONLY in `builtin/_partials/findings-are-requirements.md`.
-/// Finding it in a rendered body proves the include resolved and expanded.
-const CANONICAL_STANCE: &str = "Do not decide you know better than the rule.";
+/// Sentences that exist ONLY in `builtin/_partials/findings-are-requirements.md`.
+/// Finding one in a rendered body proves the include resolved and expanded.
+///
+/// Two sentences, not one: the first is the anti-editorializing rule and the
+/// second is the no-severity-tier rule. Both were previously duplicated in prose,
+/// so both are pinned. A rendered body that carries only one of them is a partial
+/// stance and fails.
+///
+/// This list must stay identical to `CANONICAL_STANCE` in
+/// `crates/swissarmyhammer-skills/tests/findings_are_requirements_guidance.rs`,
+/// which pins the same sentences to exactly one `builtin/` source file. The two
+/// guards cover different things — that one owns single-source-of-truth, this one
+/// owns the production render of all four agents and all three skills — so both
+/// must pin the whole stance or an agent can drop a sentence and still pass.
+const CANONICAL_STANCE: &[&str] = &[
+    "Do not decide you know better than the rule.",
+    "There is no severity tier. Every finding is mandatory.",
+];
 
 /// Labels the stance forbids. The partial must name each one, so nothing can
 /// invent a severity tier the rules do not have.
@@ -77,10 +92,12 @@ fn assert_renders_stance(
         !body.contains(PARTIAL_TAG),
         "builtin {subject} must expand the findings-are-requirements include"
     );
-    assert!(
-        body.contains(CANONICAL_STANCE),
-        "builtin {subject} must render the findings-are-requirements stance"
-    );
+    for stance in CANONICAL_STANCE {
+        assert!(
+            body.contains(stance),
+            "builtin {subject} must render the stance sentence: {stance}"
+        );
+    }
     for label in BANNED_LABELS {
         assert!(
             body.contains(&format!("\"{label}\"")),

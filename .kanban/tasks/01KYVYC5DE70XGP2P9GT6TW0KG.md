@@ -159,8 +159,8 @@ comments:
     - `cargo clippy --workspace --all-targets -- -D warnings` — **exit 0**, zero warning/error lines.
     - Re-checked the invariants mechanically: `HEAD_REF` gone everywhere including doc links, `"HEAD"` exactly once in production, zero duplicated literals in production, both guard assertions in place.
   timestamp: 2026-07-31T21:49:49.345263+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8680
 title: 'Review tool: `list validators` returns rule bodies on request (`rules: true`)'
 ---
 # Goal
