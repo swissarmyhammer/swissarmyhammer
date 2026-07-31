@@ -788,6 +788,16 @@ impl ToolContext {
     }
 }
 
+/// True when `line` is nothing but an XML-style tag, such as
+/// `<skills_instructions>` or `</skills_instructions>`.
+///
+/// Some tools fence their description in a wrapper tag so a host agent can find
+/// the block. The tag is markup, not prose, so it must never become a CLI
+/// command summary.
+fn is_wrapper_tag(line: &str) -> bool {
+    line.starts_with('<') && line.ends_with('>') && !line.contains(' ')
+}
+
 /// Trait defining the interface for all MCP tools
 ///
 /// The `McpTool` trait provides a standardized interface for implementing MCP tools
@@ -1011,8 +1021,9 @@ pub trait McpTool:
         let desc = self.description();
         for line in desc.lines() {
             let trimmed = line.trim();
-            // Skip empty lines and markdown headers
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            // Skip empty lines, markdown headers, and a lone wrapper tag such
+            // as `<skills_instructions>` — none of them is a summary.
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !is_wrapper_tag(trimmed) {
                 return Some(line);
             }
         }
@@ -1441,10 +1452,23 @@ impl ToolRegistry {
         &self.disabled_tools
     }
 
+    /// True when `tool` may appear on the command line at all.
+    ///
+    /// A tool reaches the CLI only when it is neither hidden nor disabled.
+    /// `tools.yaml` disabling is the same gate [`Self::get_tool`] applies, so
+    /// honoring it here keeps the generated command tree from advertising a
+    /// tool the registry would then refuse to hand back.
+    ///
+    /// Every CLI-facing accessor funnels through this one predicate, so the
+    /// listing and the lookup can never disagree.
+    fn is_cli_visible(&self, tool: &dyn McpTool) -> bool {
+        !tool.hidden_from_cli() && !self.disabled_tools.contains(McpTool::name(tool))
+    }
+
     /// Get unique CLI categories from all registered tools
     ///
     /// Returns a sorted list of unique category names for tools that should
-    /// appear in the CLI (not hidden and have a valid category).
+    /// appear in the CLI (not hidden, not disabled, and have a valid category).
     ///
     /// # Returns
     ///
@@ -1455,7 +1479,7 @@ impl ToolRegistry {
         let mut categories = BTreeSet::new();
 
         for tool in self.tools.values() {
-            if !tool.hidden_from_cli() {
+            if self.is_cli_visible(tool.as_ref()) {
                 if let Some(category) = tool.cli_category() {
                     categories.insert(category.to_string());
                 }
@@ -1468,7 +1492,7 @@ impl ToolRegistry {
     /// Filter CLI tools using a custom predicate
     ///
     /// Internal helper method that applies common CLI filtering logic
-    /// (excluding hidden tools) along with a custom predicate.
+    /// (excluding hidden and disabled tools) along with a custom predicate.
     ///
     /// # Arguments
     ///
@@ -1483,7 +1507,7 @@ impl ToolRegistry {
     {
         self.tools
             .values()
-            .filter(|tool| !tool.hidden_from_cli() && predicate(tool.as_ref()))
+            .filter(|tool| self.is_cli_visible(tool.as_ref()) && predicate(tool.as_ref()))
             .map(|tool| tool.as_ref())
             .collect()
     }
@@ -2645,6 +2669,43 @@ mod tests {
         }
     }
 
+    /// A tool whose description opens with an XML-style wrapper tag, the shape
+    /// the `agent` and `skill` tools use to fence their instructions.
+    struct TagWrappedDescriptionTool;
+
+    impl_default_doctorable!(TagWrappedDescriptionTool);
+    impl_empty_initializable!(TagWrappedDescriptionTool);
+
+    #[async_trait::async_trait]
+    impl McpTool for TagWrappedDescriptionTool {
+        fn name(&self) -> &'static str {
+            "tag_wrapped"
+        }
+        fn description(&self) -> &'static str {
+            "<skills_instructions>\nYou have access to skills.\n</skills_instructions>"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    /// `cli_about` feeds clap's one-line command summary. A wrapper tag is not a
+    /// summary, so `sah tool --help` must show the first line of prose instead.
+    #[test]
+    fn test_cli_about_skips_wrapper_tag_lines() {
+        assert_eq!(
+            TagWrappedDescriptionTool.cli_about(),
+            Some("You have access to skills.")
+        );
+    }
+
     #[async_trait::async_trait]
     impl McpTool for InvalidSchemaTool {
         fn name(&self) -> &'static str {
@@ -2926,6 +2987,48 @@ mod tests {
         assert!(registry.list_tools().is_empty());
         assert!(registry.list_tool_names().is_empty());
         assert_eq!(registry.iter_tools().count(), 0);
+    }
+
+    /// `tools.yaml` disabling must also remove the tool from the generated
+    /// `sah tool ...` command tree, not just from lookup.
+    ///
+    /// The CLI builds its subcommands from `get_cli_categories` and
+    /// `get_tools_for_category`. When those ignored `disabled_tools`, a
+    /// disabled tool stayed in `sah tool --help` while `get_tool` refused it,
+    /// so the CLI advertised a command whose only possible outcome was
+    /// "Tool 'x' not found" — with `x` listed among the available tools.
+    #[test]
+    fn test_disabled_tool_excluded_from_cli_command_tree() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "shell",
+            description: "shell tool",
+        });
+
+        // Enabled: it is a CLI command.
+        assert!(registry.get_cli_categories().contains(&"shell".to_string()));
+        assert_eq!(registry.get_tools_for_category("shell").len(), 1);
+        assert_eq!(registry.get_cli_tools().len(), 1);
+
+        registry.set_tool_enabled("shell", false);
+
+        // Disabled: the command must be gone, matching `get_tool`.
+        assert!(
+            registry.get_cli_categories().is_empty(),
+            "a disabled tool must not contribute a `sah tool` category"
+        );
+        assert!(
+            registry.get_tools_for_category("shell").is_empty(),
+            "a disabled tool must not appear under its category"
+        );
+        assert!(
+            registry.get_cli_tools().is_empty(),
+            "a disabled tool must not be listed as a CLI tool"
+        );
+        assert!(
+            registry.get_tool("shell").is_none(),
+            "guards the premise: lookup already refuses a disabled tool"
+        );
     }
 
     #[test]

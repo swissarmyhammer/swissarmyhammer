@@ -10,12 +10,18 @@ use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
+use swissarmyhammer_agents::AgentLibrary;
+use swissarmyhammer_skills::SkillLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::server::McpServer;
+use swissarmyhammer_tools::mcp::tool_config::{apply_tool_config, load_merged_tool_config};
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
-    register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_review_tools, register_shell_tools, register_web_tools,
+    register_agent_tools, register_code_context_tools, register_diagnostics_tools,
+    register_file_tools, register_git_tools, register_kanban_tools, register_questions_tools,
+    register_ralph_tools, register_review_tools, register_shell_tools, register_skill_tools,
+    register_web_tools,
 };
 use tokio::sync::RwLock;
 
@@ -55,8 +61,6 @@ impl CliToolContext {
     pub async fn new_isolated(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        use swissarmyhammer_templating::TemplateLibrary;
-
         let mcp_server = McpServer::new_with_work_dir(
             TemplateLibrary::default(),
             working_dir.to_path_buf(),
@@ -137,19 +141,53 @@ impl CliToolContext {
         Ok(mcp_server_handle)
     }
 
-    /// Create and populate tool registry
+    /// Create and populate the tool registry that generates the `sah tool ...`
+    /// subcommands.
     ///
-    /// This should mirror the registration in `swissarmyhammer_tools::mcp::server::register_all_tools`
+    /// Mirrors `swissarmyhammer_tools::mcp::server::McpServer::register_all_tools`
+    /// end to end: the same tool families, then the same `tools.yaml` enable and
+    /// disable pass. A tool absent here has no CLI command at all, and a tool
+    /// the config disables must not get one either — the server refuses to
+    /// execute it. `test_cli_tool_registry_matches_server_registry` holds the
+    /// two sets equal.
+    ///
+    /// The skill and agent tools read from libraries. This registry is built
+    /// before the `McpServer` exists, so it loads its own libraries from the
+    /// builtins rather than sharing the server's.
+    ///
+    /// `SkillLibrary::load_defaults` and `AgentLibrary::load_defaults` resolve
+    /// project skills and agents from the process working directory, not from
+    /// any `working_dir` argument.
     async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_code_context_tools(&mut tool_registry);
+        register_diagnostics_tools(&mut tool_registry);
         register_file_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);
         register_kanban_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);
+        register_ralph_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_web_tools(&mut tool_registry);
         register_review_tools(&mut tool_registry);
+
+        let prompt_library = Arc::new(RwLock::new(TemplateLibrary::default()));
+
+        let agent_library = Arc::new(RwLock::new(AgentLibrary::new()));
+        agent_library.write().await.load_defaults();
+        register_agent_tools(&mut tool_registry, agent_library, prompt_library.clone());
+
+        let skill_library = Arc::new(RwLock::new(SkillLibrary::new()));
+        skill_library.write().await.load_defaults();
+        register_skill_tools(&mut tool_registry, skill_library, prompt_library);
+
+        // Same enable/disable pass the server runs. Without it the CLI offers a
+        // command for a tool the server then refuses to execute.
+        let tool_config = load_merged_tool_config();
+        if !tool_config.disabled_tools().is_empty() {
+            apply_tool_config(&mut tool_registry, &tool_config);
+        }
+
         tool_registry
     }
 
@@ -384,6 +422,89 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Tools the CLI registry deliberately omits, each paired with the reason.
+    ///
+    /// The list is empty on purpose: every MCP tool is reachable as
+    /// `sah tool <tool_name> ...`. An entry here must carry a reason, so that a
+    /// tool can never drop out of the CLI silently again.
+    const CLI_REGISTRY_EXCLUSIONS: &[(&str, &str)] = &[];
+
+    /// The CLI builds its own tool registry to generate the `sah tool ...`
+    /// subcommands. It must hold the same tools the MCP server registers, and
+    /// every one of them must reach the command line.
+    ///
+    /// The two lists drifted once: the server registered `ralph`, `agent`,
+    /// `diagnostics` and `skill` and the CLI did not, so
+    /// `sah tool ralph ralph check --` failed with `unrecognized subcommand`
+    /// and the ralph Stop hook broke. A doc comment that said the two "should
+    /// mirror" did not hold; this test does.
+    ///
+    /// Joins the crate-wide `cwd` group: it builds an `McpServer`, which reads
+    /// process-global CWD (see `test_cli_tool_context_creation`).
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_cli_tool_registry_matches_server_registry() {
+        use std::collections::BTreeSet;
+        use swissarmyhammer_tools::mcp::tool_registry::McpTool;
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let cli_registry = CliToolContext::create_tool_registry().await;
+        let cli_names: BTreeSet<String> = cli_registry.list_tool_names().into_iter().collect();
+        // A registered tool without a CLI category never becomes a
+        // subcommand, so registration alone does not put it on the CLI.
+        let commanded: BTreeSet<String> = cli_registry
+            .get_cli_tools()
+            .iter()
+            .map(|tool| McpTool::name(*tool).to_string())
+            .collect();
+
+        // The server registry is the reference set. Build it the way the
+        // server does, through `register_all_tools`.
+        let server = McpServer::new_with_work_dir(TemplateLibrary::default(), env.temp_dir(), None)
+            .await
+            .expect("mcp server");
+        let server_names: BTreeSet<String> = server
+            .get_tool_registry()
+            .read()
+            .await
+            .list_tool_names()
+            .into_iter()
+            .collect();
+
+        let excluded: BTreeSet<&str> = CLI_REGISTRY_EXCLUSIONS
+            .iter()
+            .map(|(name, _reason)| *name)
+            .collect();
+
+        let missing: Vec<&str> = server_names
+            .difference(&cli_names)
+            .map(String::as_str)
+            .filter(|name| !excluded.contains(name))
+            .collect();
+        let extra: Vec<&str> = cli_names
+            .difference(&server_names)
+            .map(String::as_str)
+            .collect();
+        let uncommanded: Vec<&str> = cli_names
+            .difference(&commanded)
+            .map(String::as_str)
+            .filter(|name| !excluded.contains(name))
+            .collect();
+
+        assert!(
+            missing.is_empty() && extra.is_empty() && uncommanded.is_empty(),
+            "CLI tool registry drifted from the MCP server registry.\n\
+             Registered by the server, missing from the CLI: {missing:?}\n\
+             Registered by the CLI only: {extra:?}\n\
+             Registered by the CLI but with no `sah tool` command \
+             (needs `cli_category`): {uncommanded:?}\n\
+             Fix `CliToolContext::create_tool_registry`, or name the tool in \
+             CLI_REGISTRY_EXCLUSIONS with a reason."
+        );
     }
 
     /// Validates that all registered tools pass CLI validation.

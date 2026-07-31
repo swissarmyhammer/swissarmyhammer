@@ -96,6 +96,11 @@ pub use tool_registry::{
     register_git_tools, register_kanban_tools, register_questions_tools, register_ralph_tools,
     register_review_tools, register_shell_tools, register_web_tools, ToolContext, ToolRegistry,
 };
+// The library-backed tool families live under `tools`, not `tool_registry`;
+// re-exported here so every `register_*_tools` entry point is reachable from
+// one place.
+pub use tools::agent::register_agent_tools;
+pub use tools::skill::register_skill_tools;
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{
     start_mcp_server, start_mcp_server_with_options, McpServerHandle as UnifiedMcpServerHandle,

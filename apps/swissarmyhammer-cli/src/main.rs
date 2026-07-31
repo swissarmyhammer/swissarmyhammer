@@ -342,15 +342,59 @@ fn handle_cli_parse_error(error: clap::Error) -> ! {
     }
 }
 
+/// Name of the subcommand tree whose arguments may arrive on stdin.
+const STDIN_ARGS_SUBCOMMAND: &str = "tool";
+
+/// Clear `required` on every argument of `cmd` and, recursively, of its
+/// subcommands.
+fn clear_required_args(cmd: clap::Command) -> clap::Command {
+    cmd.mut_args(|arg| arg.required(false))
+        .mut_subcommands(clear_required_args)
+}
+
+/// Relax the `sah tool ...` tree so clap accepts arguments that arrive on stdin.
+///
+/// [`handle_dynamic_tool_command`] merges piped JSON or YAML into the tool
+/// arguments (see [`merge_stdin_arguments`]), but clap cannot see stdin and
+/// rejects the parse first — the ralph Stop hook's
+/// `sah tool ralph ralph check --` is exactly that shape.
+///
+/// Only the `tool` tree is relaxed, because it is the only path that reads
+/// stdin; the static commands keep their clap-level checks.
+///
+/// The cost is narrow but real: the caller loses clap's named-argument
+/// diagnostic for the `tool` tree whenever stdin is not a terminal, which
+/// includes `< /dev/null`, CI and hook harnesses. A field absent from both the
+/// flags and stdin then surfaces as that tool's own `execute` error instead.
+fn relax_required_tool_args(cmd: clap::Command) -> clap::Command {
+    cmd.mut_subcommands(|sub| {
+        if sub.get_name() == STDIN_ARGS_SUBCOMMAND {
+            clear_required_args(sub)
+        } else {
+            sub
+        }
+    })
+}
+
 /// Build and parse CLI with dynamic tool registration
 ///
 /// This function builds the CLI with dynamic tools and parses command-line arguments.
 fn build_and_parse_cli(cli_builder: CliBuilder) -> clap::ArgMatches {
+    use std::io::IsTerminal;
+
     // Check for validation issues and report them
     report_validation_issues(&cli_builder, false, 5);
 
     // Build CLI with warnings for validation issues (graceful degradation)
     let dynamic_cli = cli_builder.build_cli_with_warnings();
+
+    // An interactive terminal sends no arguments on stdin, so relax only when
+    // stdin is piped.
+    let dynamic_cli = if std::io::stdin().is_terminal() {
+        dynamic_cli
+    } else {
+        relax_required_tool_args(dynamic_cli)
+    };
 
     // Parse arguments with dynamic CLI
     match dynamic_cli.try_get_matches() {
@@ -1400,5 +1444,105 @@ mod tests_stdin_merge {
         let result = merge_parsed_stdin(args, stdin);
         assert_eq!(result["config"]["timeout"], 30);
         assert_eq!(result["config"]["retries"], 3);
+    }
+}
+
+#[cfg(test)]
+mod tests_relax_required_tool_args {
+    use super::relax_required_tool_args;
+    use clap::{Arg, Command};
+
+    /// `sah tool ralph ralph check --session_id <required>` beside a static
+    /// `model use --name <required>` command: the required argument sits three
+    /// levels below `tool`, and the static command must keep its own check.
+    fn cli() -> Command {
+        Command::new("sah")
+            .subcommand(
+                Command::new("tool").subcommand(
+                    Command::new("ralph").subcommand(
+                        Command::new("ralph").subcommand(
+                            Command::new("check")
+                                .arg(Arg::new("session_id").long("session_id").required(true)),
+                        ),
+                    ),
+                ),
+            )
+            .subcommand(
+                Command::new("model").subcommand(
+                    Command::new("use").arg(Arg::new("name").long("name").required(true)),
+                ),
+            )
+    }
+
+    const HOOK_ARGV: [&str; 5] = ["sah", "tool", "ralph", "ralph", "check"];
+
+    /// Guards the premise: clap rejects the Stop hook's argv on its own.
+    #[test]
+    fn required_tool_arg_is_enforced_without_relaxing() {
+        let err = cli()
+            .try_get_matches_from(HOOK_ARGV)
+            .expect_err("session_id is required");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    /// The value arrives on stdin, which clap cannot see, so relaxing must
+    /// reach arguments nested deep inside the `tool` tree.
+    #[test]
+    fn relaxing_reaches_nested_tool_args() {
+        relax_required_tool_args(cli())
+            .try_get_matches_from(HOOK_ARGV)
+            .expect("relaxed parse accepts the absent --session_id");
+    }
+
+    /// `STDIN_ARGS_SUBCOMMAND` must name a real subcommand of the CLI the
+    /// binary builds. Rename the dynamic command and the relaxation becomes a
+    /// silent no-op that the synthetic trees above would never catch.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn stdin_args_subcommand_names_a_real_command() {
+        use crate::dynamic_cli::CliBuilder;
+        use crate::mcp_integration::CliToolContext;
+        use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let context = CliToolContext::new_isolated(temp.path())
+            .await
+            .expect("cli tool context");
+        let real_cli = CliBuilder::new(context.get_tool_registry_arc()).build_cli_with_warnings();
+
+        assert!(
+            real_cli
+                .get_subcommands()
+                .any(|sub| sub.get_name() == super::STDIN_ARGS_SUBCOMMAND),
+            "the built CLI has no `{}` subcommand, so relax_required_tool_args does nothing",
+            super::STDIN_ARGS_SUBCOMMAND
+        );
+
+        // The ralph Stop hook's exact argv, on the real command tree.
+        let hook_argv = ["sah", "tool", "ralph", "ralph", "check", "--"];
+        let strict = real_cli
+            .clone()
+            .try_get_matches_from(hook_argv)
+            .expect_err("--session_id is required before relaxing");
+        assert_eq!(
+            strict.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        relax_required_tool_args(real_cli)
+            .try_get_matches_from(hook_argv)
+            .expect("relaxed parse accepts the absent --session_id");
+    }
+
+    /// Only the `tool` tree reads stdin, so a static command must still report
+    /// its own missing argument.
+    #[test]
+    fn relaxing_leaves_static_commands_strict() {
+        let err = relax_required_tool_args(cli())
+            .try_get_matches_from(["sah", "model", "use"])
+            .expect_err("model use --name stays required");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 }

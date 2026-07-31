@@ -163,6 +163,12 @@ impl McpTool for AgentMcpTool {
         *AGENT_OPERATIONS
     }
 
+    /// The default derives the CLI category from the tool-name prefix, which
+    /// does not know `agent`. Name it, so `sah tool agent` exists.
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("agent")
+    }
+
     fn category(&self) -> ToolCategory {
         // Subagent delegation is a base agent capability.
         ToolCategory::Agent
