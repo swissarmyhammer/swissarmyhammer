@@ -3520,6 +3520,103 @@ mod applier_tests {
             include_str!("../../../builtin/skills/coverage/references/SWIFT_COVERAGE.md"),
         );
     }
+
+    /// Parse a SKILL.md's YAML frontmatter into a raw key → value map, so a test
+    /// can compare a deployed file against its builtin source key by key.
+    /// A [`serde_yaml_ng::Mapping`] rather than a `BTreeMap` so that a key
+    /// emitted twice is rejected here instead of silently collapsing to its
+    /// last value — the `#[serde(flatten)]` failure this test guards against.
+    fn frontmatter_map(md: &str) -> serde_yaml_ng::Mapping {
+        let after_open = md
+            .trim()
+            .strip_prefix("---")
+            .expect("SKILL.md must open with frontmatter");
+        let end = after_open
+            .find("\n---")
+            .expect("SKILL.md frontmatter must be terminated");
+        serde_yaml_ng::from_str(&after_open[..end])
+            .expect("frontmatter must be a YAML mapping with no duplicate keys")
+    }
+
+    /// Real deploy path: `init_profile` re-renders every builtin skill through
+    /// `format_skill_md`, so a frontmatter key that formatter does not know is
+    /// dropped on the way to `.skills/<name>/SKILL.md`.
+    ///
+    /// That is how the skill-scoped `hooks:` block in `builtin/skills/finish`
+    /// was lost: Claude Code reads the deployed copy, so `/finish` ran with no
+    /// Stop hook and the ralph loop died between iterations.
+    ///
+    /// Every source key must reach the deployed file with an equal value, except
+    /// `metadata` (whose values are Liquid-rendered here) and the SAH-internal
+    /// `profiles`, which must not reach the deployed file at all.
+    #[test]
+    #[serial]
+    fn init_profile_preserves_unmodeled_skill_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_generic_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = Profile {
+            skills: Some(Selector::All),
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&project), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "init_profile must not error: {results:?}"
+        );
+
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../builtin/skills");
+        let mut compared_keys = 0usize;
+        for entry in std::fs::read_dir(&source_root).unwrap().flatten() {
+            let source_md = entry.path().join("SKILL.md");
+            if !source_md.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let source_fm = frontmatter_map(&std::fs::read_to_string(&source_md).unwrap());
+
+            let deployed_md = project.join(".skills").join(&name).join("SKILL.md");
+            let deployed_fm = frontmatter_map(&std::fs::read_to_string(&deployed_md).unwrap());
+
+            for internal in swissarmyhammer_skills::SAH_INTERNAL_FRONTMATTER_KEYS {
+                assert!(
+                    !deployed_fm.contains_key(*internal),
+                    "SAH-internal `{internal}` must not reach {deployed_md:?}"
+                );
+            }
+
+            for (key, value) in &source_fm {
+                let key = key.as_str().expect("frontmatter keys must be strings");
+                // `metadata` values are Liquid-rendered on the way out, so the
+                // deployed values differ from the source by design. The internal
+                // keys are asserted absent above.
+                if key == "metadata"
+                    || swissarmyhammer_skills::SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key)
+                {
+                    continue;
+                }
+                assert_eq!(
+                    deployed_fm.get(key),
+                    Some(value),
+                    "frontmatter key `{key}` of builtin skill `{name}` must survive deploy \
+                     into {deployed_md:?}"
+                );
+                compared_keys += 1;
+            }
+        }
+
+        assert!(
+            compared_keys > 0,
+            "no builtin skill frontmatter was compared; the source root {source_root:?} \
+             is probably wrong"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 //! Parses SKILL.md files from directories or embedded content
 
-use crate::skill::{Skill, SkillName, SkillResources, SkillSource};
+use crate::skill::{Skill, SkillName, SkillResources, SkillSource, SAH_INTERNAL_FRONTMATTER_KEYS};
 use crate::validation::validate_frontmatter;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// YAML frontmatter structure for SKILL.md
@@ -25,6 +25,17 @@ struct SkillFrontmatter {
     /// vec, so existing skills are unaffected.
     #[serde(default)]
     profiles: Vec<String>,
+    /// Every frontmatter key the fields above do not name, captured verbatim.
+    ///
+    /// A `SKILL.md` may carry keys SAH does not interpret but the harness does
+    /// — `hooks`, `model`, `paths`, `background` and the rest of the Claude Code
+    /// set. Without this catch-all serde discards them silently, and deploy,
+    /// which rebuilds the file from this struct, cannot put them back.
+    ///
+    /// The named fields above take priority, so none of them — including the
+    /// renamed `allowed-tools` — is ever also captured here.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
 /// Parse a SKILL.md file content into a Skill
@@ -56,6 +67,13 @@ pub fn parse_skill_md_with_path(
         .map(|s| s.split_whitespace().map(String::from).collect())
         .unwrap_or_default();
 
+    // Establish the `Skill::extra` invariant at construction: the catch-all
+    // never holds a SAH-internal key, so nothing downstream has to remember
+    // which keys are ours. Today serde already routes `profiles` to its named
+    // field; this keeps the invariant true if that field is ever reworked.
+    let mut extra = fm.extra;
+    extra.retain(|key, _| !SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key.as_str()));
+
     Ok(Skill {
         name,
         description: fm.description.unwrap_or_default(),
@@ -66,6 +84,7 @@ pub fn parse_skill_md_with_path(
         metadata: fm.metadata,
         allowed_tools,
         profiles: fm.profiles,
+        extra,
         instructions: body.trim().to_string(),
         source_path: source_path.map(|p| p.to_path_buf()),
         source,

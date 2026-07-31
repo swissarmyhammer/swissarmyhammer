@@ -14,6 +14,7 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
+use crate::skill::SAH_INTERNAL_FRONTMATTER_KEYS;
 use crate::{Skill, SkillResolver};
 
 /// YAML frontmatter fields for a SKILL.md file.
@@ -40,6 +41,13 @@ struct SkillFrontmatter<'a> {
     // deterministic across runs (HashMap iteration order is not).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     metadata: BTreeMap<String, String>,
+    /// Frontmatter keys SAH does not model, written back out verbatim.
+    ///
+    /// Declared last so these keys follow the modeled ones in the generated
+    /// YAML. Filled from [`Skill::extra`], which never overlaps the fields
+    /// above, so no key is written twice.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
 /// Resolve a builtin skill by name from the skill registry.
@@ -80,6 +88,12 @@ pub fn resolve_profile_skills(profile: &str) -> Vec<Skill> {
 /// the already-rendered `instructions` as the body. The `metadata` parameter
 /// is passed separately because it may have had template variables rendered.
 ///
+/// Frontmatter keys SAH does not model — `hooks`, `model`, `paths` and the rest
+/// of the harness's own set — are carried on [`Skill::extra`] and written back
+/// out verbatim after the modeled ones, so the deploy round-trip is lossless.
+/// The one exception is [`SAH_INTERNAL_FRONTMATTER_KEYS`], which drive SAH's own
+/// machinery and are dropped here.
+///
 /// Uses `serde_yaml_ng` to serialize the frontmatter, ensuring that values
 /// containing YAML special characters (colons, quotes, newlines) are properly
 /// escaped. The output is compatible with [`crate::skill_loader::parse_skill_md`].
@@ -110,6 +124,16 @@ pub fn format_skill_md(
         metadata: metadata
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        // Strip the internal keys again on the way out. The loader already
+        // keeps them out of `Skill::extra`, but a `Skill` can also be built by
+        // hand, so enforcing it here too means no internal key can reach a
+        // deployed file by any route.
+        extra: skill
+            .extra
+            .iter()
+            .filter(|(key, _)| !SAH_INTERNAL_FRONTMATTER_KEYS.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     };
 
@@ -143,6 +167,7 @@ mod tests {
             metadata: HashMap::new(),
             allowed_tools: vec!["tool-a".to_string(), "tool-b".to_string()],
             profiles: vec![],
+            extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -178,6 +203,7 @@ mod tests {
             metadata: HashMap::new(),
             allowed_tools: vec![],
             profiles: vec![],
+            extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -213,6 +239,7 @@ mod tests {
             metadata: metadata.clone(),
             allowed_tools: vec![],
             profiles: vec![],
+            extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -258,6 +285,7 @@ mod tests {
             metadata: HashMap::new(),
             allowed_tools: vec![],
             profiles: vec![],
+            extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -297,6 +325,7 @@ mod tests {
             metadata: HashMap::new(),
             allowed_tools: vec![],
             profiles: vec![],
+            extra: BTreeMap::new(),
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -347,5 +376,219 @@ mod tests {
             .expect("formatted output should parse as valid SKILL.md");
         assert_eq!(reparsed.context.as_deref(), Some("fork"));
         assert_eq!(reparsed.agent.as_deref(), Some("explorer"));
+    }
+
+    /// Parse a SKILL.md's YAML frontmatter into a raw key → value mapping so a
+    /// test can compare the whole key set at once instead of one field at a time.
+    ///
+    /// Deliberately a [`serde_yaml_ng::Mapping`] and not a `BTreeMap`: only the
+    /// `Mapping` deserializer rejects a duplicate YAML key. A `BTreeMap` keeps
+    /// the last value silently, which would make every caller here blind to a
+    /// key emitted twice — exactly the `#[serde(flatten)]` failure these tests
+    /// exist to catch.
+    fn frontmatter_map(md: &str) -> serde_yaml_ng::Mapping {
+        let after_open = md
+            .trim()
+            .strip_prefix("---")
+            .expect("SKILL.md must open with frontmatter");
+        let end = after_open
+            .find("\n---")
+            .expect("SKILL.md frontmatter must be terminated");
+        serde_yaml_ng::from_str(&after_open[..end])
+            .expect("frontmatter must be a YAML mapping with no duplicate keys")
+    }
+
+    /// A SKILL.md carrying official Claude Code frontmatter fields that SAH does
+    /// not model — `hooks`, `model`, `paths`, `disable-model-invocation`.
+    const UNMODELED_KEYS_SRC: &str = r#"---
+name: finish
+description: Drive kanban tasks from ready to done
+license: MIT OR Apache-2.0
+model: opus
+paths: src/**/*.rs
+disable-model-invocation: true
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "sah tool ralph ralph check --"
+---
+
+body
+"#;
+
+    /// Regression: frontmatter keys SAH does not model must survive the deploy
+    /// round-trip. `format_skill_md` rebuilds the frontmatter from a closed
+    /// struct, so any key the loader does not name is silently dropped — which
+    /// is how the skill-scoped `hooks:` block in `builtin/skills/finish` was
+    /// lost, leaving `/finish` with no Stop hook to keep the ralph loop alive.
+    #[test]
+    fn test_format_skill_md_round_trips_unmodeled_frontmatter_keys() {
+        let skill = crate::skill_loader::parse_skill_md(UNMODELED_KEYS_SRC, SkillSource::Builtin)
+            .expect("source SKILL.md should parse");
+
+        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
+        let deployed = frontmatter_map(&md);
+
+        for (key, value) in frontmatter_map(UNMODELED_KEYS_SRC) {
+            assert_eq!(
+                deployed.get(&key),
+                Some(&value),
+                "frontmatter key `{key:?}` must survive the deploy round-trip, got:\n{md}"
+            );
+        }
+    }
+
+    /// `profiles` is SAH-internal — it selects which skills an init profile
+    /// deploys. It must be readable from the builtin source and absent from the
+    /// deployed copy, so a leak into `extra` never reaches a file the harness
+    /// reads.
+    #[test]
+    fn test_format_skill_md_omits_sah_internal_profiles() {
+        let src = r#"---
+name: finish
+description: Drive kanban tasks from ready to done
+profiles:
+  - kanban
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "sah tool ralph ralph check --"
+---
+
+body
+"#;
+
+        let skill = crate::skill_loader::parse_skill_md(src, SkillSource::Builtin)
+            .expect("source SKILL.md should parse");
+        assert_eq!(
+            skill.profiles,
+            vec!["kanban"],
+            "`profiles` must be readable after parse"
+        );
+
+        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
+        let deployed = frontmatter_map(&md);
+        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
+            assert!(
+                !deployed.contains_key(*internal),
+                "SAH-internal `{internal}` must not reach the deployed SKILL.md, got:\n{md}"
+            );
+        }
+        assert!(
+            deployed.contains_key("hooks"),
+            "dropping the internal keys must not also drop unmodeled keys, got:\n{md}"
+        );
+    }
+
+    /// The deploy-side internal-key filter, exercised directly.
+    ///
+    /// Every other test builds its `Skill` through `parse_skill_md`, where serde
+    /// routes `profiles` to its named field — so `extra` is already clean and the
+    /// filter in `format_skill_md` never fires. Only a hand-built `Skill` can put
+    /// an internal key into `extra`, which is exactly the case that filter guards:
+    /// without it the key would flatten straight back into the deployed file.
+    #[test]
+    fn test_format_skill_md_drops_internal_keys_planted_in_extra() {
+        let mut extra = BTreeMap::new();
+        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
+            extra.insert(
+                (*internal).to_string(),
+                serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String(
+                    "kanban".to_string(),
+                )]),
+            );
+        }
+        extra.insert(
+            "model".to_string(),
+            serde_yaml_ng::Value::String("opus".to_string()),
+        );
+
+        let skill = Skill {
+            name: SkillName::new("planted").unwrap(),
+            description: "a skill whose extra map carries an internal key".to_string(),
+            license: None,
+            compatibility: None,
+            context: None,
+            agent: None,
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            profiles: vec![],
+            extra,
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources: SkillResources::default(),
+        };
+
+        let md = format_skill_md(&skill, "body", &skill.metadata);
+        let deployed = frontmatter_map(&md);
+
+        for internal in SAH_INTERNAL_FRONTMATTER_KEYS {
+            assert!(
+                !deployed.contains_key(*internal),
+                "`{internal}` planted in `extra` must still be dropped on deploy, got:\n{md}"
+            );
+        }
+        assert_eq!(
+            deployed.get("model"),
+            Some(&serde_yaml_ng::Value::String("opus".to_string())),
+            "filtering internal keys must not disturb the other unmodeled keys, got:\n{md}"
+        );
+    }
+
+    /// Guard for the `#[serde(flatten)]` hazard: a key the frontmatter struct
+    /// names — including the renamed `allowed-tools` — must be consumed by its
+    /// typed field and never also land in the unmodeled catch-all. A key in both
+    /// places would be written twice, producing frontmatter with a duplicate
+    /// YAML key.
+    ///
+    /// Both checks below are needed, because they catch different duplicates:
+    ///
+    /// - re-parsing into `Skill` catches a duplicated *modeled* key, via the
+    ///   `duplicate field` error `serde_derive` emits for named fields (it emits
+    ///   this on the flatten path too). Note this is a serde-derive guarantee,
+    ///   not a serde_yaml_ng one — the YAML layer only rejects duplicates when
+    ///   the target is a `Mapping`, as in `frontmatter_map`;
+    /// - the occurrence count catches the key being written twice at the text
+    ///   level, independent of how any deserializer treats it.
+    #[test]
+    fn test_format_skill_md_writes_each_modeled_key_once() {
+        let src = r#"---
+name: every-field
+description: A skill that sets every modeled frontmatter key
+license: MIT OR Apache-2.0
+compatibility: Requires the `kanban` MCP tool.
+context: fork
+agent: explorer
+allowed-tools: tool-a tool-b
+profiles:
+  - kanban
+metadata:
+  author: swissarmyhammer
+  version: "1.0"
+---
+
+body
+"#;
+
+        let skill = crate::skill_loader::parse_skill_md(src, SkillSource::Builtin)
+            .expect("source SKILL.md should parse");
+
+        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
+
+        crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+            .expect("formatted output must not contain a duplicated modeled key");
+        // Reject a duplicate of any key, modeled or not, at the YAML layer.
+        frontmatter_map(&md);
+
+        for key in ["name", "description", "license", "allowed-tools", "agent"] {
+            assert_eq!(
+                md.matches(&format!("\n{key}:")).count(),
+                1,
+                "`{key}` must be written exactly once, got:\n{md}"
+            );
+        }
     }
 }
