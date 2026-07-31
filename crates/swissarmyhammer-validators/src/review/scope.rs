@@ -59,6 +59,14 @@ use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 /// to this fixed name rather than any user RuleSet.
 const SCOPE_VALIDATOR: &str = "scope";
 
+/// The shared prefix of [`ScopeSpec::resolve`]'s exactly-one-selector errors.
+///
+/// Both the zero-selector and the many-selector message are built from this one
+/// constant, so adding or renaming a selector edits the list in a single place
+/// instead of requiring synchronized edits to two literals that must agree.
+const SCOPE_SELECTOR_ERROR_PREFIX: &str =
+    "a review scope must set exactly one of file/glob/working/sha";
+
 /// The review scope — exactly one of these resolves to a file set.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
@@ -118,15 +126,11 @@ impl ScopeSpec {
             1 => Ok(chosen.into_iter().next().expect("len checked")),
             0 => Err(AvpError::Validator {
                 validator: SCOPE_VALIDATOR.to_string(),
-                message:
-                    "a review scope must set exactly one of file/glob/working/sha; none were set"
-                        .to_string(),
+                message: format!("{SCOPE_SELECTOR_ERROR_PREFIX}; none were set"),
             }),
             n => Err(AvpError::Validator {
                 validator: SCOPE_VALIDATOR.to_string(),
-                message: format!(
-                    "a review scope must set exactly one of file/glob/working/sha; {n} were set"
-                ),
+                message: format!("{SCOPE_SELECTOR_ERROR_PREFIX}; {n} were set"),
             }),
         }
     }
@@ -804,10 +808,74 @@ fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError
     }
 }
 
-/// Read a blob at `ref:path` via libgit2.
+/// A git refspec — the revision half of a `refspec:path` blob address. Any
+/// commit-ish the engine reads content at: `HEAD` (see [`GitRefSpec::head`]), a
+/// sha, a branch, a tag, `HEAD~3`.
 ///
-/// This is the same `git show ref:path` content read the git tool does, via the
-/// shared `swissarmyhammer-git` repository handle instead of a shell-out.
+/// Distinct from [`FilePath`] on purpose. Both halves of a blob address are
+/// strings, so the compiler is the only thing that can stop a call site passing
+/// them in the wrong order; giving each half its own type makes the
+/// transposition a type error instead of a silent mis-read.
+///
+/// This is deliberately **not** [`swissarmyhammer_git::BranchName`], the
+/// workspace's other git-string newtype: that type's validation rejects `~`,
+/// `^`, `:` and `..` — exactly the syntax a refspec needs — so it can only hold
+/// a refspec via `new_unchecked`, which would defeat the type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GitRefSpec(String);
+
+impl GitRefSpec {
+    /// Wrap a commit-ish.
+    fn new(refspec: impl Into<String>) -> Self {
+        Self(refspec.into())
+    }
+
+    /// The current checkout tip — the implicit "before" side of a working-tree or
+    /// single-file scope, and the implicit "to" side of a bare-ref range. This is
+    /// the single place the `HEAD` literal appears; every caller goes through it.
+    fn head() -> Self {
+        Self("HEAD".to_string())
+    }
+
+    /// The refspec as libgit2 wants it.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for GitRefSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A repo-relative file path — the path half of a `refspec:path` blob address.
+///
+/// Distinct from [`GitRefSpec`] so the two halves cannot be transposed at a call
+/// site; see that type for why the pair is typed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FilePath(String);
+
+impl FilePath {
+    /// Wrap a repo-relative path.
+    fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+}
+
+impl std::fmt::Display for FilePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Read a blob at `refspec:path` via libgit2.
+///
+/// This is the same `git show refspec:path` content read the git tool does, via
+/// the shared `swissarmyhammer-git` repository handle instead of a shell-out.
+///
+/// The two halves of the address are separate types ([`GitRefSpec`],
+/// [`FilePath`]) so no call site can transpose them.
 ///
 /// Returns `Ok(None)` only when the path does **not exist** at the ref (the
 /// intended Added/Deleted signal — `revparse_single` resolving to not-found, or
@@ -817,19 +885,18 @@ fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError
 /// as wholly added/removed.
 fn read_at_ref(
     repo: &GitOperations,
-    refspec: &str,
-    path: &str,
+    refspec: GitRefSpec,
+    path: FilePath,
 ) -> Result<Option<String>, AvpError> {
+    // The blob address, composed once and reused by the read and both failure
+    // messages, so the `refspec:path` form lives in a single place.
+    let spec = format!("{refspec}:{path}");
     let inner = repo.repository().inner();
-    let object = match inner.revparse_single(&format!("{refspec}:{path}")) {
+    let object = match inner.revparse_single(&spec) {
         Ok(object) => object,
         // The path is absent at this ref — the intended Added/Deleted signal.
         Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(AvpError::Context(format!(
-                "failed to resolve {refspec}:{path}: {e}"
-            )))
-        }
+        Err(e) => return Err(AvpError::Context(format!("failed to resolve {spec}: {e}"))),
     };
     // Not a blob (e.g. a tree at that path) — there is no file content to read.
     let Some(blob) = object.as_blob() else {
@@ -837,7 +904,7 @@ fn read_at_ref(
     };
     String::from_utf8(blob.content().to_vec())
         .map(Some)
-        .map_err(|e| AvpError::Context(format!("blob {refspec}:{path} is not valid UTF-8: {e}")))
+        .map_err(|e| AvpError::Context(format!("blob {spec} is not valid UTF-8: {e}")))
 }
 
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
@@ -867,7 +934,7 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     let mut builder = FileChangeBuilder::new();
     for path in &files {
         let after = after_by_path.get(path).cloned().unwrap_or(None);
-        let before = read_at_ref(&repo, "HEAD", path)?;
+        let before = read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?;
         builder.push(path, before, after);
     }
     Ok(builder.finish(files, auto_purpose("working-tree changes")))
@@ -882,14 +949,14 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
         .map_err(|e| AvpError::Context(format!("failed to resolve range '{range}': {e}")))?;
 
     let (from_ref, to_ref) = match range.split_once("..") {
-        Some((from, to)) => (from.to_string(), to.to_string()),
-        None => (range.to_string(), "HEAD".to_string()),
+        Some((from, to)) => (GitRefSpec::new(from), GitRefSpec::new(to)),
+        None => (GitRefSpec::new(range), GitRefSpec::head()),
     };
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let before = read_at_ref(&repo, &from_ref, path)?;
-        let after = read_at_ref(&repo, &to_ref, path)?;
+        let before = read_at_ref(&repo, from_ref.clone(), FilePath::new(path))?;
+        let after = read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?;
         builder.push(path, before, after);
     }
 
@@ -908,7 +975,7 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
     let after = read_working(repo_path, path)?;
-    let before = read_at_ref(&repo, "HEAD", path)?;
+    let before = read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?;
 
     let mut builder = FileChangeBuilder::new();
     builder.push(path, before, after);
@@ -949,9 +1016,9 @@ fn auto_purpose(what: &str) -> String {
 }
 
 /// Read the commit message for a ref via libgit2, `None` when unresolvable.
-fn commit_messages(repo: &GitOperations, refspec: &str) -> Option<String> {
+fn commit_messages(repo: &GitOperations, refspec: &GitRefSpec) -> Option<String> {
     let inner = repo.repository().inner();
-    let object = inner.revparse_single(refspec).ok()?;
+    let object = inner.revparse_single(refspec.as_str()).ok()?;
     let commit = object.peel_to_commit().ok()?;
     let message = commit.message().unwrap_or("").trim().to_string();
     if message.is_empty() {
@@ -1196,17 +1263,31 @@ mod tests {
         assert_eq!(spec.resolve().unwrap(), Scope::Sha("HEAD~1".to_string()));
     }
 
+    /// The zero-selector message is pinned to its literal text on purpose. It is
+    /// a user-facing contract, and the assertion is deliberately NOT built from
+    /// [`SCOPE_SELECTOR_ERROR_PREFIX`] — an expectation composed from the same
+    /// constant the code uses would move with it and prove nothing. Editing the
+    /// selector list must break this test.
     #[test]
     fn scope_spec_errors_on_zero_selectors() {
         let err = ScopeSpec::default().resolve().unwrap_err();
         match err {
             AvpError::Validator { message, .. } => {
-                assert!(message.contains("none"), "got: {message}");
+                assert_eq!(
+                    message,
+                    "a review scope must set exactly one of file/glob/working/sha; none were set"
+                );
             }
             other => panic!("expected Validator error, got: {other:?}"),
         }
     }
 
+    /// The many-selector message reports the count AND shares the zero-selector
+    /// message's prefix. The prefix half is asserted against
+    /// [`SCOPE_SELECTOR_ERROR_PREFIX`] deliberately: together with the literal
+    /// pinned in `scope_spec_errors_on_zero_selectors`, that catches BOTH ways
+    /// the pair can rot — editing the selector list (the literal there) and
+    /// re-introducing a divergent hardcoded message in this branch.
     #[test]
     fn scope_spec_errors_on_multiple_selectors() {
         let spec = ScopeSpec {
@@ -1217,7 +1298,14 @@ mod tests {
         let err = spec.resolve().unwrap_err();
         match err {
             AvpError::Validator { message, .. } => {
-                assert!(message.contains('2'), "got: {message}");
+                assert!(
+                    message.starts_with(SCOPE_SELECTOR_ERROR_PREFIX),
+                    "both selector errors must share one prefix, got: {message}"
+                );
+                assert_eq!(
+                    message,
+                    format!("{SCOPE_SELECTOR_ERROR_PREFIX}; 2 were set")
+                );
             }
             other => panic!("expected Validator error, got: {other:?}"),
         }
@@ -2374,8 +2462,12 @@ mod tests {
         repo.commit("initial");
         let git = open_repo(repo.path()).unwrap();
 
-        let got = read_at_ref(&git, "HEAD", "src/never_committed.rs")
-            .expect("a path absent at the ref must not be an error");
+        let got = read_at_ref(
+            &git,
+            GitRefSpec::head(),
+            FilePath::new("src/never_committed.rs"),
+        )
+        .expect("a path absent at the ref must not be an error");
         assert_eq!(got, None, "absent at the ref is Ok(None)");
     }
 
@@ -2387,8 +2479,35 @@ mod tests {
         repo.commit("initial");
         let git = open_repo(repo.path()).unwrap();
 
-        let got = read_at_ref(&git, "HEAD", "src/lib.rs").expect("a committed blob must succeed");
+        let got = read_at_ref(&git, GitRefSpec::head(), FilePath::new("src/lib.rs"))
+            .expect("a committed blob must succeed");
         assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+    }
+
+    /// The two halves of a `refspec:path` blob address are DISTINCT types, so a
+    /// call site cannot transpose them by accident — the compiler rejects it.
+    /// This pins the order the types carry: the refspec selects the revision,
+    /// the path selects the file within it, and the transposition addresses
+    /// nothing.
+    #[test]
+    fn read_at_ref_addresses_the_path_within_the_refspec_never_the_transposition() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn compute() {}\n");
+        repo.commit("initial");
+        let git = open_repo(repo.path()).unwrap();
+
+        let got = read_at_ref(&git, GitRefSpec::head(), FilePath::new("src/lib.rs"))
+            .expect("the path within the refspec must read");
+        assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+
+        // Swapping the halves yields the meaningless spec `src/lib.rs:HEAD`,
+        // whose revision half resolves to nothing — the absent-at-ref signal,
+        // never this file's content.
+        let transposed = read_at_ref(&git, GitRefSpec::new("src/lib.rs"), FilePath::new("HEAD"));
+        assert!(
+            matches!(transposed, Ok(None)),
+            "a transposed refspec/path addresses nothing: {transposed:?}"
+        );
     }
 
     /// A binary/non-UTF8 blob committed at the ref is a genuine read failure,
@@ -2401,7 +2520,7 @@ mod tests {
         repo.commit("add a binary blob");
         let git = open_repo(repo.path()).unwrap();
 
-        let err = read_at_ref(&git, "HEAD", "blob.bin")
+        let err = read_at_ref(&git, GitRefSpec::head(), FilePath::new("blob.bin"))
             .expect_err("a non-UTF8 blob must not be silently treated as absent");
         match err {
             AvpError::Context(msg) => {
