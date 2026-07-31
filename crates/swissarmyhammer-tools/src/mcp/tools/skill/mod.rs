@@ -151,7 +151,7 @@ impl McpTool for SkillTool {
     /// The default derives the CLI category from the tool-name prefix, which
     /// does not know `skill`. Name it, so `sah tool skill` exists.
     fn cli_category(&self) -> Option<&'static str> {
-        Some("skill")
+        Some(Self::name(self))
     }
 
     fn category(&self) -> ToolCategory {

@@ -155,8 +155,44 @@ comments:
 
     The 2 skipped tests are `#[ignore]`d heavy real-model proofs in `llama-agent` (`kv_prefix_reuse_recurrent`). They predate this card.
   timestamp: 2026-07-31T12:24:39.558110+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyw49nj0w5smbkr3e5v8hmgr
+  text: |-
+    Closing. The 54-finding section: 1 fixed here, 53 SPLIT OUT, none dropped.
+
+    The reviewer classified each against the commit's real hunks. Exactly one landed on code this commit wrote: `cli_category()` returned the literal `"skill"` / `"agent"`, duplicating what `McpTool::name()` already returns. Both now return `Some(Self::name(self))`.
+
+    The other 53 are pre-existing code the diff displaced:
+    - 36 missing `pub mod` docs in `mcp/mod.rs` → ^mz0s6bf (67% of the report, one cause; two validators double-reported the same modules at different offsets)
+    - XML injection in `agent`/`skill` `build_description` → ^gt1h2sc (the only security-class item, kept separate so it is not buried in a style sweep)
+    - dead `convert_result`, duplicated operation lists, missing Debug, deep nesting → ^6qjyz7r
+    - `tool_registry.rs` prefix table, duplicate macros, manual `register_file_tools` → ^fjs8tqv
+    - `main.rs` magic numbers and `&Arc` params → ^pxr6rxe
+
+    The clearest evidence of displacement: `main.rs:351` resolves to `report_validation_issues(&cli_builder, false, 5)`, a CONTEXT line inside the hunk range. Inserting `relax_required_tool_args` above it shifted it down, and a validator read the new line number as new work.
+
+    Verified after the fix: 40/40 on the targeted selection, 849/849 on swissarmyhammer-cli, fmt clean, clippy clean, and `sah tool ralph ralph check --` still answers.
+
+    Shipped: the card named one blocker; there were five.
+    1. 8 registrations vs 12 — ralph, agent, diagnostics, skill missing.
+    2. `agent`/`skill` invisible even once registered — `cli_category()` derives from the name prefix and had no arm for either. Root cause now filed as ^fjs8tqv.
+    3. clap rejected the piped call before stdin was read — `session_id` is schema-required and clap cannot see stdin. `relax_required_tool_args` is bounded to the `tool` subtree and to piped stdin only; both bounds proved.
+    4. The `tools.yaml` disable pass did not work as first written — a disabled tool still appeared in `--help`, then failed with `Tool 'ralph' not found ... Available tools: [... ralph ...]`. `get_cli_categories`/`filter_cli_tools` consulted only `hidden_from_cli`, unlike `get_tool`/`list_tool_names`. One `is_cli_visible` predicate now backs all of them.
+    5. `is_wrapper_tag` had been inserted between the `McpTool` doc comment and the trait, silently reattaching ~60 lines of public trait docs to a private helper.
+
+    The parity test is the real deliverable and is proved to fail in both modes — missing registration, and registered-but-invisible. Prose saying the two registries "should mirror" each other did not hold for either.
+
+    REMAINING GAP — the acceptance criterion said "returns the block/allow JSON". It returns YAML:
+
+    ```
+    $ echo '{"session_id":"probe"}' | ./target/debug/sah tool ralph ralph check --
+    decision: allow
+    ```
+
+    `--format json` does not reach the tool output path. A Stop hook parses JSON from stdout, so the ralph loop still does not work. Filed as ^634hqth and being driven next — both ralph cards are closed but the hook is not restored until that lands.
+  timestamp: 2026-07-31T13:02:26.880887+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8180
 title: CLI tool registry drifted from register_all_tools (sah tool ralph is missing)
 ---
 The CLI builds its own tool registry and it no longer matches the MCP server registry. Four tool families are absent from the CLI, so their `sah tool <name>` commands do not exist.
@@ -199,3 +235,97 @@ If a tool must stay out of the CLI on purpose, the parity test must name it in a
 - `sah tool --help` lists `ralph`, `agent`, `diagnostics`, and `skill`.
 
 Note: the hook is also stripped at skill-install time, in a separate card. Both cards are needed before the Stop hook works. #bug #cli #ralph
+
+## Review Findings (2026-07-31 07:26)
+
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:200` — Function takes `&Arc<CliToolContext>` but should take `Arc<CliToolContext>` directly. Arc is Copy-cheap to pass by value. Creating a reference to Arc is an unnecessary indirection that forces callers to pass a borrowed Arc when passing by value is more ergonomic. Change parameter to `cli_tool_context: Arc<CliToolContext>` and update the call to `display_verbose_validation_report(cli_tool_context.clone(), ...)` or `display_verbose_validation_report(cli_tool_context, ...)`.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:318` — Hardcoded 10 is a magic number for max errors display threshold — numeric thresholds should be named constants for readability and maintainability. Define `const MAX_CLI_VALIDATION_ERRORS_DISPLAY: usize = 10;` at module level and use it: `display_numbered_items(&warnings, false, MAX_CLI_VALIDATION_ERRORS_DISPLAY, "errors");`.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:351` — Hardcoded 5 is a magic number for max warnings display threshold — numeric thresholds should be named constants for readability and maintainability. Define `const MAX_CLI_VALIDATION_WARNINGS_DISPLAY: usize = 5;` at module level and use it: `report_validation_issues(&cli_builder, false, MAX_CLI_VALIDATION_WARNINGS_DISPLAY);`.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:43` — Public module `diagnostics_resource` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the diagnostics_resource module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:44` — Public module `error_handling` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the error_handling module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:45` — Public module `file_watcher` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the file_watcher module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:46` — Public module `host` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the host module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:47` — Public module `inline_diagnostics` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the inline_diagnostics module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:49` — Public module `notify_types` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the notify_types module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:51` — Public module `plan_notifications` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the plan_notifications module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:52` — Public module `progress` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the progress module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:53` — Public module `responses` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the responses module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:54` — Public module `server` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the server module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:56` — Public module `tool_config` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the tool_config module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:57` — Public module `tool_descriptions` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the tool_descriptions module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:58` — Public module `tool_handlers` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the tool_handlers module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:60` — Public module `tools` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the tools module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:61` — Public module `types` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the types module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:62` — Public module `unified_server` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the unified_server module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:63` — Public module `utils` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the utils module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:65` — Public module `test_utils` lacks documentation — its purpose is undocumented. Add a doc comment explaining what the test_utils module provides.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:68` — Public module `diagnostics_resource` lacks a doc comment. All public items must be documented. Add a doc comment describing the module's purpose and contents.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:69` — Public module `error_handling` lacks a doc comment. Add a doc comment describing error handling utilities.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:70` — Public module `file_watcher` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:71` — Public module `host` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:72` — Public module `inline_diagnostics` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:74` — Public module `notify_types` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:75` — Public module `op_tool_helpers` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:76` — Public module `plan_notifications` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:78` — Public module `responses` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:79` — Public module `server` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:81` — Public module `tool_config` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:82` — Public module `tool_descriptions` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:83` — Public module `tool_handlers` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:84` — Public module `tool_registry` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:85` — Public module `tools` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:86` — Public module `types` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:87` — Public module `unified_server` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/mod.rs:88` — Public module `utils` lacks a doc comment. Add a doc comment.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tool_registry.rs:161` — Hardcoded match statement maps tool name prefixes to CLI category strings. This is a fixed mapping table (memo→memo, file→file, files→file, web→web, shell→shell, outline→outline, notify→notify, kanban→kanban, git→git, cel→cel, question→question) whose arms differ only in constant string values. Should be expressed as a named constant data table interpreted by one code path, not as a parallel match arms. Define a const mapping table like `const PREFIX_TO_CATEGORY: &[(\"&str\", &str)] = &[(\"memo\", \"memo\"), (\"file\", \"file\"), (\"files\", \"file\"), ...];` and replace the match with a lookup: `PREFIX_TO_CATEGORY.iter().find(|(p, _)| *p == prefix).map(|(_, c)| *c)` to interpret data instead of parallel code paths.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tool_registry.rs:1134` — Macro `impl_default_doctorable!` is near-verbatim duplicate of `impl_empty_initializable!` at line 1159; both have identical bodies that differ only in the trait name. These should be consolidated into a single parameterized macro that takes the trait as an argument. Extract a shared parameterized macro `impl_trait_with_defaults!($trait_path, $tool_type)` that both doctorable and initializable impls can use, or wrap one as a thin macro over the other.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tool_registry.rs:1159` — Macro `impl_empty_initializable!` is near-verbatim duplicate of `impl_default_doctorable!` at line 1134; body is identical except for the trait name. These two macros should be consolidated into one. Consolidate into a single parameterized macro or use one as a wrapper over the other to avoid maintenance burden of keeping identical code in sync.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tool_registry.rs:1604` — Function `register_file_tools` manually implements what the `register_tool_category!` macro already does (line 1609+). The function is a verbatim match for the macro expansion: `use super::tools::files; files::register_file_tools(registry);` follows the exact same pattern as other register functions defined via the macro. Replace the manual `register_file_tools` implementation with `register_tool_category!(register_file_tools, files, "Register all file-related tools with the registry");` to use the existing macro and eliminate duplication.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/agent/mod.rs:26` — `AgentMcpTool` is a public struct that should derive `Clone` and `Debug`. All fields are `Clone`-capable (static reference and Arc), and `Debug` is always applicable to public types. Without these derives, downstream crates cannot implement them due to orphan rules. Add `#[derive(Clone, Debug)]` above the struct definition at line 25.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/agent/mod.rs:49` — Function `build_description` takes `&Arc<RwLock<AgentLibrary>>` but should take `Arc<RwLock<AgentLibrary>>` directly (Arc is Copy-cheap to clone/pass) or `&RwLock<AgentLibrary>` (generic over how the lock is obtained). Requiring a reference to an Arc is unnecessarily specific and forces callers into a particular borrowing pattern. Change to `fn build_description(library: Arc<RwLock<AgentLibrary>>) -> String` and update the call at line 45 to `let description = build_description(library.clone());` or `let description = build_description(library);` if Arc is consumed.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/agent/mod.rs:67` — Agent properties (name, description, source) are inserted into an XML string without escaping special characters. If the description is displayed in an HTML/XML context by a client, unescaped characters like <, >, &, or " could lead to XSS or XML injection. Escape XML special characters before inserting: replace `&` with `&amp;`, `<` with `&lt;`, `>` with `&gt;`, `"` with `&quot;`. Alternatively, use an XML escaping library like `xml-escape` crate.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/agent/mod.rs:152` — Three consecutive match arms (List at line 152–155, Use at line 156–159, Search at line 160–163) have identical bodies: each imports `Execute` trait and calls `op.execute(&ctx).await`. The arms differ only in the pattern being matched, not the logic executed. This is code that could drift and should be consolidated. Refactor to avoid the duplication: if all three operation types implement a common trait with `execute`, destructure and handle outside the match; or use a macro to collapse the three identical arms into one. Alternatively, implement a helper method or trait that centralizes the execution logic.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:44` — Public struct SkillTool has non-empty representation (three fields) but does not implement Debug. The documentation rule requires Debug for all public types with non-empty representation. Add #[derive(Debug)] annotation before the struct: add a line `#[derive(Debug)]` immediately before line 44 `pub struct SkillTool {`.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:60` — Deep nesting (4 levels): match → Ok arm → if/else conditional → for loop. The flow requires tracking multiple control-flow levels to understand what happens inside the loop. Extract the XML-building logic into a separate function to reduce nesting to 2–3 levels. Example: move the loop and its string operations into a helper `fn build_skills_xml(skills: &[SkillInfo]) -> String` and call it from the else branch.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:84` — XML injection: unescaped skill metadata (skill.name, skill.description, skill.source) is inserted directly into XML tags without character escaping. Special characters like <, >, &, or " could malform the XML structure or inject unintended elements. Escape XML special characters before insertion. Create a helper function: fn escape_xml(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") } then apply it to each field before formatting.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:101` — convert_result is a private function with no inbound callers. It is not an entry point, exported API, or test. Dead code adds maintenance burden and confuses readers. Delete the convert_result function and remove the unused ExecutionResult import from the swissarmyhammer_skills use statement.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:160` — Error message lists only 'list skill', 'use skill', 'search skill' as valid operations, but the code accepts additional aliases: 'get skill', 'load skill', 'activate skill', 'invoke skill', 'find skill', 'lookup skill'. Users who encounter an unknown operation error won't see the complete list of valid operations, creating confusion about what they can actually call. Update the error message to list all valid operations including aliases, or acknowledge aliases exist: "Unknown operation '{}'. Valid operations: 'list skill', 'use skill' (aliases: 'get skill', 'load skill', 'activate skill', 'invoke skill'), 'search skill' (aliases: 'find skill', 'lookup skill')".
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:177` — The cli_category returns a hardcoded 'skill' string that duplicates the tool name defined at line 135. If the tool name changes, both places must be updated manually. Define a module-level constant (e.g., `const TOOL_NAME: &str = "skill"`) and use it in both name() and cli_category(), or derive cli_category from self.name().
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/skill/mod.rs:220` — Error message hardcodes the list of valid operations, duplicating the match arms above. This must be manually kept in sync with lines 198-204 — if operations are added or renamed, both places must change, violating the data-driven principle. Define operation names and aliases as constants (e.g., `const VALID_OPS: &[&str] = &[...]`) and use them to generate both the match arms and error message, or derive the error message programmatically from the match statement to ensure consistency.
+
+### Provenance of the above (classified against the commit's real hunks)
+
+The engine's cited line numbers track the PRE-image and are offset — two validators
+gave 160 and 220 for the same error message, and 43-65 and 68-88 for the same
+`pub mod` list. Classification below uses the subject, not the number.
+
+Commit `18d62792a` touched these hunks only:
+
+- `mcp_integration.rs` — the four registrations + the `tools.yaml` pass. **Zero findings.**
+- `main.rs` — post 342-402 (`STDIN_ARGS_SUBCOMMAND`, `clear_required_args`, `relax_required_tool_args`, the `is_terminal` gate) and post 1446-1548 (new tests). **Zero findings.**
+- `tool_registry.rs` — post 791-798 (`is_wrapper_tag` moved), 1024-1030, 1461-1474 (`is_cli_visible`), 2669+ (new test). **Zero findings.**
+- `mcp/mod.rs` — post 100-104 (two `pub use`). **Zero findings.**
+- `agent/mod.rs` — post 166-171 (`cli_category`). **Zero findings.**
+- `skill/mod.rs` — post 151-156 (`cli_category`). **One finding: `:177`.**
+
+INTRODUCED by this commit (1 of 54):
+
+- `skill/mod.rs:177` — `cli_category` returns the literal `"skill"`, which `name()`
+  already returns. This is the added arm. Note `agent/mod.rs` has the identical
+  added arm returning `"agent"`, which the engine did not flag; fix both together.
+
+PRE-EXISTING, merely touched or displaced (53 of 54):
+
+- All 36 `mcp/mod.rs` module-doc items — the `pub mod` block is at post 60-82 and is
+  untouched. Double-reported by two validators.
+- All 4 `tool_registry.rs` items (`:161` prefix match, `:1134`/`:1159` macros,
+  `:1604` `register_file_tools`) — all outside every hunk. `:161` is the very
+  prefix match the commit worked around, but the match itself was not edited.
+- All 4 `agent/mod.rs` items — the struct, `build_description`, XML escaping and
+  the match arms all sit above the hunk at 163.
+- 6 of 7 `skill/mod.rs` items (`:44`, `:60`, `:84`, `:101`, `:160`, `:220`) — all
+  outside the hunk at 148.
+- All 3 `main.rs` items. `:200`/`:318` resolve to post 201 and post 523, outside
+  every hunk. `:351` resolves to `report_validation_issues(&cli_builder, false, 5)`
+  at post 386 — inside the hunk range but a CONTEXT line, displaced by the
+  insertion above it, not written by this commit.
