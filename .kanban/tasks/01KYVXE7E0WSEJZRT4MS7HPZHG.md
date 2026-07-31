@@ -1,6 +1,18 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kywq3vadtaezh5twz7vy3312
+  text: |-
+    Second confirmation from a different review round. ^qsr5rdt's review re-found this cluster — 7 findings in `skill_loader.rs` plus `SkillName::new` returning `Result<Self, String>` in `skill.rs`. All pre-existing; none on code that commit authored.
+
+    Note on `skill.rs`: the engine cited line 18 for `SkillName::new`, which is a DISPLACEMENT artifact — ^qsr5rdt deleted 19 lines above it (`Skill::profiles` and `SAH_INTERNAL_FRONTMATTER_KEYS`), moving the function up from ~37. Its signature was not touched. That is the clearest example this session of the engine reporting displaced code as new work.
+
+    Scope reduction since this card was written: `SAH_INTERNAL_FRONTMATTER_KEYS` no longer exists — ^qsr5rdt deleted it along with `Skill::profiles`, since keeping `profiles` out of deployed SKILL.md was its only purpose. If this card's item list mentions it, skip that part.
+
+    The frontmatter/filename constants item still stands, and the `skill_loader.rs` magic numbers from this round fold into it.
+  timestamp: 2026-07-31T18:31:19.117696+00:00
 position_column: todo
 position_ordinal: bf80
 title: 'swissarmyhammer-skills: typed SkillError instead of Result&lt;_, String&gt;'

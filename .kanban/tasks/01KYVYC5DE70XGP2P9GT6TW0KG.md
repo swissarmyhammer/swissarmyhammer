@@ -1,8 +1,24 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c180
+comments:
+- actor: claude-code
+  id: 01kywnch71fjpwv22n70e60q3k
+  text: |
+    Implementation landed. Changes:
+
+    - `crates/swissarmyhammer-tools/src/mcp/tools/review/validators.rs`: `ValidatorSummary.rules: Option<Vec<RuleDetail>>` (skipped when absent), new `rule_details()` shared by `get_validator` and the summary row, `list_validators(source, match, include_rules)`, and `engine_matched_names()` — a path-shaped `match` now resolves through `MatchContext::with_file` + `loader.matching_rulesets`, the engine's own matcher. A glob-fragment `match` keeps the lenient substring behavior.
+    - `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs`: new `rules` boolean ParamMeta, passed to `list_validators`; `scope_for_path` now uses the shared `is_glob_pattern`.
+    - `crates/swissarmyhammer-tools/src/mcp/op_tool_helpers.rs`: new `bool_arg` + `is_glob_pattern` (with unit tests) — the module is the declared home for op-tool argument primitives.
+    - `crates/swissarmyhammer-validators/src/review/scope.rs`: `engine_matched_validator_names()` behind `cfg(test, feature="test-support")`, a thin wrapper over the private `match_validators_and_files`, re-exported from `review::test_support`. This lets the tool test assert against the ENGINE pairing instead of a re-implementation.
+    - `description.md`: documents `rules: true` and the implement-time use.
+
+    Discovery worth keeping: the alignment change is observable. A validator that declares `match.files` AND `match.tools` matches a .rs glob, but the engine never pairs it with a file (a review MatchContext carries no tool name). The old glob-only filter listed it; the engine path does not. The test plants such a fixture (`edit-hook-rules`), and I verified RED by temporarily disabling the engine branch: the tool listed `edit-hook-rules`, the engine did not, and the equality assertion failed. Restored and green.
+
+    Also confirmed: builtin validators load inside `IsolatedTestEnvironment` (embedded, not from the real ~/.validators), so the engine-equality assertion covers the whole loaded stack, not just fixtures.
+  timestamp: 2026-07-31T18:01:06.529758+00:00
+position_column: doing
+position_ordinal: '8380'
 title: 'Review tool: `list validators` returns rule bodies on request (`rules: true`)'
 ---
 # Goal
