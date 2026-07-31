@@ -19,7 +19,7 @@ hooks:
 
 Drive kanban tasks all the way to `done` — orchestrating `/implement`, `/test`, `/commit`, and `/review` in a loop until each task lands in `done` or is reported stuck.
 
-**Orchestrator only** — does not pick tasks, write code, run tests, or commit. Delegates to `/implement`, `/review`, `/test`, `/commit`; uses `ralph` to stay alive between iterations.
+**Orchestrator only** — does not write code, run tests, or commit. Delegates to `/implement`, `/review`, `/test`, `/commit`; uses `ralph` to stay alive between iterations.
 
 **IMPORTANT** each of the skill driven steps should be run in an appropriate sub agent to minimize context bloat in this session.
 
@@ -59,7 +59,7 @@ The `^<task-id>` atom and every id argument accept a full ULID, a 7-char short i
 ```
 
 - single-task: `"Finish task <TASK_ID> — loop until it lands in done"`
-- scoped-batch: `"Finish all ready kanban tasks in scope until the scope is clear"`
+- scoped-batch: `"Finish all ready kanban tasks in <SCOPE> until the scope is clear"`
 
 The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the stop condition is met.
 

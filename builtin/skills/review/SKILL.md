@@ -129,13 +129,11 @@ Findings = checklist items on a host task — the task being reviewed (task-mode
 
 1. Re-read the target task (already have it from step 3): `{"op": "get task", "id": "<id>"}`.
 
-2. If not already in `review`, move it there now — **this is the only path a task takes into `review`**:
+2. If not already in `review`, move it there now.
 
    ```json
    {"op": "move task", "id": "<id>", "column": "review"}
    ```
-
-   Implement leaves finished tasks in `doing` (it never moves them to `review`), so this is a real `doing → review` move on the first review pass, and a no-op on re-reviews once the task is already in `review`.
 
 3. Parse the description for prior `## Review Findings (...)` sections; note whether every `- [ ]` has been flipped to `- [x]`.
 
