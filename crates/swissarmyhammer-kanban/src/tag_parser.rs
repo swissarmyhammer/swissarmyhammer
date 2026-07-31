@@ -160,12 +160,11 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             i = skip_inline_code(bytes, i);
             continue;
         }
-        match tag_slug_at(bytes, i) {
-            Some(slug) => {
-                tags.insert(line[slug.clone()].to_string());
-                i = slug.end;
-            }
-            None => i += 1,
+        if let Some(slug) = tag_slug_at(bytes, i) {
+            tags.insert(line[slug.clone()].to_string());
+            i = slug.end;
+        } else {
+            i += 1;
         }
     }
 }
@@ -255,6 +254,9 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
 ///    swallow it inline, so removal has to undo that instead of leaving a blank
 ///    line stapled to the end.
 ///
+/// Both rules live in [`tidy_removed_line`], which this calls only for a line
+/// [`edit_line_markers`] reported it edited.
+///
 /// Rule 2 is deliberately that narrow. Removal takes markers out; it does not
 /// reflow the body. An emptied line anywhere else stays as a blank line, and so
 /// does an emptied final line that the text terminated with a newline.
@@ -262,23 +264,45 @@ fn edit_tag_markers(text: &str, slug: &str, replacement: Option<&str>) -> String
     let removing = replacement.is_none();
     let mut result = String::with_capacity(text.len());
     for line in markdown_lines(text) {
-        if line.tag_bearing {
-            let content_start = result.len();
-            let edited = edit_line_markers(line.content, slug, replacement, &mut result);
-            if edited && removing {
-                let keep = content_start + result[content_start..].trim_end().len();
-                result.truncate(keep);
-                if keep == content_start && line.terminator.is_empty() {
-                    drop_last_line_terminator(&mut result);
-                    continue;
-                }
-            }
-        } else {
+        if !line.tag_bearing {
             result.push_str(line.content);
+            result.push_str(line.terminator);
+            continue;
+        }
+        let content_start = result.len();
+        let edited = edit_line_markers(line.content, slug, replacement, &mut result);
+        if edited && removing && tidy_removed_line(&mut result, content_start, line.terminator) {
+            continue;
         }
         result.push_str(line.terminator);
     }
     result
+}
+
+/// Tidy the line a removal just wrote into `result`, and report whether the
+/// whole line went away.
+///
+/// `content_start` is the offset in `result` where that line's content begins,
+/// and `terminator` is the line's own terminator, which the caller has not
+/// written yet.
+///
+/// The line is trimmed at its end, because removing a marker leaves a hole. When
+/// the trim leaves the line empty AND the text did not terminate it with a
+/// newline, the line goes away along with the newline that introduced it, and
+/// `true` comes back so the caller writes no terminator for it. Every other case
+/// returns `false`: the trimmed line stays, blank or not.
+///
+/// Call this only for a line a removal actually edited — it trims
+/// unconditionally, and [`edit_tag_markers`] owes untouched lines a byte-for-byte
+/// copy.
+fn tidy_removed_line(result: &mut String, content_start: usize, terminator: &str) -> bool {
+    let keep = content_start + result[content_start..].trim_end().len();
+    result.truncate(keep);
+    if keep == content_start && terminator.is_empty() {
+        drop_last_line_terminator(result);
+        return true;
+    }
+    false
 }
 
 /// Drop one trailing line terminator from `text`, if it has one.
@@ -304,10 +328,10 @@ fn drop_last_line_terminator(text: &mut String) {
 /// keep its whitespace tidying off the lines it did not edit.
 ///
 /// `out` is the caller's whole-text buffer, not a fresh one, so this only ever
-/// appends to it and pops bytes it appended itself — the space-absorb below is
-/// bounded by `line_start`. Never let it reach further back: the earlier bytes
-/// belong to lines this call must not touch, and [`edit_tag_markers`] indexes
-/// `out` from that same offset afterwards.
+/// appends to it and pops bytes it appended itself — the space-absorb in
+/// [`rewrite_marker`] is bounded by `line_start`. Never let it reach further
+/// back: the earlier bytes belong to lines this call must not touch, and
+/// [`edit_tag_markers`] indexes `out` from that same offset afterwards.
 fn edit_line_markers(line: &str, slug: &str, replacement: Option<&str>, out: &mut String) -> bool {
     let bytes = line.as_bytes();
     let line_start = out.len();
@@ -320,26 +344,49 @@ fn edit_line_markers(line: &str, slug: &str, replacement: Option<&str>, out: &mu
             i = end;
             continue;
         }
-        match tag_slug_at(bytes, i).filter(|found| line[found.clone()] == *slug) {
-            Some(found) => {
-                edited = true;
-                i = found.end;
-                if let Some(text) = replacement {
-                    out.push_str(text);
-                } else if i < bytes.len() && bytes[i] == b' ' {
-                    i += 1;
-                } else if out.len() > line_start && out.ends_with(' ') {
-                    out.pop();
-                }
-            }
-            None => {
-                let ch = line[i..].chars().next().unwrap();
-                out.push(ch);
-                i += ch.len_utf8();
-            }
+        if let Some(found) = tag_slug_at(bytes, i).filter(|found| line[found.clone()] == *slug) {
+            edited = true;
+            i = rewrite_marker(bytes, found.end, replacement, out, line_start);
+        } else {
+            let ch = line[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
         }
     }
     edited
+}
+
+/// Put one matched `#slug` marker's replacement into `out`, or take the marker
+/// out and absorb one adjacent space.
+///
+/// `after_marker` is the byte index in `bytes` just past the marker's slug, and
+/// `line_start` is where the current line begins in `out`. The `#` and the slug
+/// have not been written, so a rename appends `replacement` in their place and a
+/// removal writes nothing.
+///
+/// A removal also takes one space with the marker: the space after it when there
+/// is one, otherwise a space already written in front of it. That pop is bounded
+/// by `line_start`, so it can only reach a byte the current line wrote.
+///
+/// Returns the byte index to resume scanning `bytes` from.
+fn rewrite_marker(
+    bytes: &[u8],
+    after_marker: usize,
+    replacement: Option<&str>,
+    out: &mut String,
+    line_start: usize,
+) -> usize {
+    if let Some(text) = replacement {
+        out.push_str(text);
+        return after_marker;
+    }
+    if after_marker < bytes.len() && bytes[after_marker] == b' ' {
+        return after_marker + 1;
+    }
+    if out.len() > line_start && out.ends_with(' ') {
+        out.pop();
+    }
+    after_marker
 }
 
 /// Normalize a tag name into a slug that round-trips through [`parse_tags`].

@@ -35,6 +35,33 @@ comments:
 
     Green: 1605/1605 in swissarmyhammer-kanban, 95/95 on the tools kanban+tag filter, clippy `-D warnings` clean.
   timestamp: 2026-07-31T19:15:53.249185+00:00
+- actor: claude-code
+  id: 01kywxfyrff65kk8s4tce2z0bt
+  text: |-
+    Worked the 2026-07-31 15:08 review finding: control-flow nesting depth 4 in `edit_tag_markers`.
+
+    Pure structural extraction, no behavior change. Two helpers, because the cause had two instances in the file, not one:
+
+    1. `tidy_removed_line(result, content_start, terminator) -> bool` — the trim plus the emptied-final-line drop, lifted out of `edit_tag_markers`. The loop now returns early for a non-tag-bearing line, so `edit_tag_markers` is `for > if` (depth 2). The old `for > if > if > if` chain is gone. `&&` short-circuit keeps the helper off any line the removal did not edit, which is the byte-identity contract.
+    2. `rewrite_marker(bytes, after_marker, replacement, out, line_start) -> usize` — the replace-or-absorb-a-space policy, lifted out of the `Some(found)` arm of `edit_line_markers`. That arm was the sibling instance: `while > match > arm > if/else if/else if`. Counting a match arm as a level made it 4. The helper is three sequential guard `if`s at depth 1, and the arm is now one assignment.
+
+    Audited every other function in the file for depth 4. None left. Deepest remaining is 3 (`edit_line_markers`: `while > match > arm`, and the arm bodies hold no control flow). `split_line_terminator`'s nested match has expression arms and no nested blocks, so it stays at 2. The test module is `for` loops with asserts, depth 1.
+
+    Re-ran the `complexity` validator on the file: zero nesting findings. It did raise ONE unrelated pre-existing item — `append_tag` builds its inline candidate and its own-line candidate with near-duplicate blocks. Untouched code, different cause, so it went to its own card instead of into this change.
+
+    No test needed editing, which is the signal that behavior held. Every diff hunk is in the production section; none reach `mod tests`. Green: 1605/1605 in swissarmyhammer-kanban, `cargo clippy -p swissarmyhammer-kanban --all-targets -- -D warnings` clean, `cargo fmt --check` clean.
+  timestamp: 2026-07-31T20:22:47.311321+00:00
+- actor: claude-code
+  id: 01kywy67v73kpzk1yfw7kekxvr
+  text: |-
+    Proved the "no behavior change" claim instead of asserting it.
+
+    Built a differential harness in a scratch directory outside the repo: `git show HEAD:...tag_parser.rs` as module `old`, the working-tree file as module `new`, then compared them over a generated corpus. Tokens `#bug`, `#other`, `#bug-x`, one space, two spaces, `\n`, `\r\n`, `a`, a backticked marker, a fence, a heading, comma, period, tab, and `x #bug`, in every combination up to length 4 — 69,905 bodies. Each body ran through `remove_tag`, `rename_tag`, `append_tag`, `parse_tags`, and `normalize_slug` for four slugs, including one no body carries.
+
+    Result: 0 mismatches. Byte for byte identical to HEAD on every case, so the extraction moved code and nothing else. The corpus is ASCII; the multibyte path is the `None` arm, which the change does not touch, and `test_remove_tag_multibyte_chars` and `test_rename_tag_multibyte_chars` still cover it.
+
+    Also green: 95/95 on the `swissarmyhammer-tools` kanban+tag filter, same as the previous iteration.
+  timestamp: 2026-07-31T20:34:57.511487+00:00
 position_column: doing
 position_ordinal: '8480'
 title: remove_tag rewrites every task body, not just the ones carrying the marker
@@ -82,3 +109,7 @@ Whichever is chosen, `apply_tag_edit_to_all_tasks` must end with a stated, teste
 - No docstring in `tag/shared.rs` claims coverage the test does not have.
 
 Note: the write-skip guard `if new_body != body` in `apply_tag_edit_to_all_tasks` is unobservable — `StoreHandle::write` already short-circuits on identical text before the changelog append, the atomic write, and the pending ChangeEvent. Do not build the fix on that guard. #bug
+
+## Review Findings (2026-07-31 15:08)
+
+- [x] `crates/swissarmyhammer-kanban/src/tag_parser.rs:303` — edit_tag_markers function has control flow nesting depth of 4 (for > if > if > if), exceeding the threshold of 3 levels deep. The nested conditions make the logic hard to reason about and increases maintenance burden. Extract the innermost conditional and the logic it guards into a separate helper function (e.g., `fn should_drop_final_line_terminator(...) -> bool` or `fn handle_emptied_final_line(...)`), reducing edit_tag_markers nesting depth to 3 levels maximum.
