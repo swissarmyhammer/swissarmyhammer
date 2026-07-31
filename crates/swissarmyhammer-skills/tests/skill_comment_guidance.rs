@@ -1,6 +1,10 @@
-//! Enforces that the work-the-card builtin skills (`implement`, `finish`,
-//! `kanban`) instruct the agent to keep a conversation log on the task via
-//! the kanban comment ops (`add comment` / `list comments`).
+//! Enforces that the work-the-card builtin skills (`implement`, `kanban`)
+//! instruct the agent to keep a conversation log on the task via the kanban
+//! comment ops (`add comment` / `list comments`).
+//!
+//! `finish` is deliberately excluded. It is an orchestrator: it drives
+//! `/implement` and `/review` and does not work a card itself, so the
+//! comment trail is left to the skills it delegates to.
 //!
 //! The guidance lives in ONE shared partial —
 //! `builtin/_partials/record-progress.md` — pulled into each skill via Liquid
@@ -28,7 +32,7 @@ const CANONICAL_GUIDANCE: &str = "burn the same tokens repeating them";
 /// not just milestones.
 #[test]
 fn work_the_card_skills_render_record_progress_guidance() {
-    for name in ["implement", "finish", "kanban"] {
+    for name in ["implement", "kanban"] {
         let body = rendered_builtin_instructions(name);
         assert!(
             !body.contains("{% include \"_partials/record-progress\" %}"),
