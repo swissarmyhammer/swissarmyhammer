@@ -38,8 +38,25 @@ comments:
 
     That failure is a pre-existing load-dependent flake, not this change: it passes 3/3 in isolation, and an earlier full run of the same command passed it while three llama/GPU tests timed out instead (those three also pass in isolation — model-singleton contention). Nothing in this change touches the progress bridge. Filed as ^aekpq0b: fix the monotonic sequencing in the emitter, never relax the assertion.
   timestamp: 2026-07-31T19:22:49.200404+00:00
+- actor: claude-code
+  id: 01kywy56p5kdpbkrc7xp90eaqa
+  text: |
+    Fixed the Eq-without-Hash finding at the root (card back in `doing`).
+
+    Change: `Scope` in `crates/swissarmyhammer-validators/src/review/scope.rs` now derives `Hash`:
+    `#[derive(Debug, Clone, PartialEq, Eq, Hash)]`. All four variants hold only `String`, so the derive is exact.
+
+    Whole-file sweep: `Scope` is the ONLY type in the file that has `Eq`. A case-sensitive scan for `\bEq\b`, `\bHash\b` and `\bOrd\b` now reports the derive line plus the new test comments and nothing else. The other 10 types in the file (`ScopeSpec`, `WorkList`, `ValidatorWork`, `FileWork`, `GroupedEntities`, `MatchedValidators`, `MatchedValidator`, `FileFacts`, `ResolvedScope`, `FileChangeBuilder`) neither derive nor implement `Eq`, so the rule does not apply to them. No type had to be skipped. No manual `impl Hash for Scope` exists anywhere in the workspace, so the derive cannot conflict.
+
+    TDD: added `review::scope::tests::scope_is_usable_as_a_hash_key`. RED first — it failed to compile with `E0599 ... the following trait bounds were not satisfied: scope::Scope: Hash`. GREEN after the derive. The test proves Hash agrees with Eq: 4 distinct scopes insert, re-inserting `Working` and `Sha("HEAD~1")` is a no-op, and `Glob("a.rs")` stays distinct from `File("a.rs")`.
+
+    Verification:
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 5013 passed, 0 failed, 2 skipped (219s).
+    - `cargo fmt --all` — clean, no reformat of the change.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+  timestamp: 2026-07-31T20:34:23.557504+00:00
 position_column: doing
-position_ordinal: '8380'
+position_ordinal: '8280'
 title: 'Review tool: `list validators` returns rule bodies on request (`rules: true`)'
 ---
 # Goal
@@ -61,3 +78,9 @@ One call gets the full rules that apply to a target file. This supports the impl
 
 - A production-path test: `list validators` with `match: <a .rs path>` and `rules: true` returns the same ruleset names the engine pairs via `match_validators_and_files` for that path, each with verbatim rule bodies.
 - `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'` passes. #review
+
+## Review Findings (2026-07-31 15:15)
+
+Scope: a561c5b994767f7c008a476313adb01cba1c9863 (`HEAD~1..HEAD`)
+
+- [x] `crates/swissarmyhammer-validators/src/review/scope.rs:32` — Scope enum derives Eq but not Hash. Types implementing Eq should also implement Hash to maintain consistency and enable use in hash-based collections. Add Hash to the derive macro: `#[derive(Debug, Clone, PartialEq, Eq, Hash)]`.

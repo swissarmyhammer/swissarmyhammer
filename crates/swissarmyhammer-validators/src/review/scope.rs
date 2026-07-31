@@ -60,7 +60,7 @@ use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 const SCOPE_VALIDATOR: &str = "scope";
 
 /// The review scope — exactly one of these resolves to a file set.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Uncommitted changes vs HEAD (staged + unstaged + untracked). The default.
     Working,
@@ -1221,6 +1221,29 @@ mod tests {
             }
             other => panic!("expected Validator error, got: {other:?}"),
         }
+    }
+
+    /// `Scope` is a value key: callers cache and de-duplicate resolved scopes,
+    /// so it must work in hash-based collections, and its `Hash` must agree with
+    /// its `Eq` — equal scopes collapse to one entry, distinct ones do not.
+    #[test]
+    fn scope_is_usable_as_a_hash_key() {
+        use std::collections::HashSet;
+
+        let mut set: HashSet<Scope> = HashSet::new();
+        assert!(set.insert(Scope::Working));
+        assert!(set.insert(Scope::Sha("HEAD~1".to_string())));
+        assert!(set.insert(Scope::File("a.rs".to_string())));
+        assert!(set.insert(Scope::Glob("**/*.rs".to_string())));
+
+        // Eq-equal scopes must hash equal: re-inserting is a no-op.
+        assert!(!set.insert(Scope::Working));
+        assert!(!set.insert(Scope::Sha("HEAD~1".to_string())));
+        assert_eq!(set.len(), 4);
+
+        // Same payload, different variant, stays distinct.
+        assert!(set.insert(Scope::Glob("a.rs".to_string())));
+        assert_eq!(set.len(), 5);
     }
 
     // ---- scope_review: scope-phase progress events -------------------------
