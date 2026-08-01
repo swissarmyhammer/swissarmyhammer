@@ -45,9 +45,15 @@ input **shapes** as `tags`. Both **replace** the whole list on `update task`, so
 an empty array unassigns / detaches everything. The singular `assignee` is
 accepted as a one-element alias.
 
-`assignees` differs from `tags` and `depends_on` on unknown refs: an actor id
-that does not exist is dropped on write, not rejected. Register the actor with
-`add actor` first, or read the task back to confirm.
+Each `assignees` entry is an actor id exactly as `add actor` registered it —
+there is no short form or `^` sigil, because an actor id is a slug, not a ULID.
+An id that names no actor is an error, not a silent no-op: the whole write is
+rejected, so `add task` creates nothing and `update task` leaves the stored list
+alone. Register the actor with `add actor` first.
+
+The top-level `actor` key is not an assignee. It names the caller, and `add task`
+auto-assigns it only as a convenience. An unregistered `actor` never fails the
+create — it is left off the new task instead.
 
 `attachments` entries are source file paths to attach; the metadata objects
 `get task` returns are also accepted, so a task read can be sent straight back.

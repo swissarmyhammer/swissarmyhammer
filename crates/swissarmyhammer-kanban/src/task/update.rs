@@ -33,7 +33,18 @@ pub struct UpdateTask {
     pub title: Option<String>,
     /// New description (may contain #tag patterns)
     pub description: Option<String>,
-    /// Replace all assignees
+    /// Replace all assignees.
+    ///
+    /// `None` leaves the assignees untouched; `Some(list)` makes the list
+    /// exactly `list` (an empty list unassigns everyone). Each entry is an
+    /// actor id exactly as `add actor` registered it — an actor id is a slug,
+    /// not a ULID, so there is no short form or `^` sigil.
+    ///
+    /// Callers that reach this command through `execute_operation` get the id
+    /// checked first: an id that names no actor is an error there and leaves
+    /// the task unchanged, never a silent drop. This struct does not check the
+    /// ids itself, so a direct caller still hits the fields layer, which prunes
+    /// an unregistered id on write.
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies. Accepts a single ref or a list, in any id
     /// format (full ULID, 7-char short id, `^<short>`, unique ULID prefix,
