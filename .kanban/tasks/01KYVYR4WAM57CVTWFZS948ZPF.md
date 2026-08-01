@@ -89,8 +89,8 @@ comments:
 
     Verification: `cargo nextest run -E 'rdeps(swissarmyhammer-skills) or rdeps(swissarmyhammer-agents) or rdeps(mirdan)'` -> 10205 passed, 2 skipped, 0 failed. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
   timestamp: 2026-07-31T22:55:59.652515+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8780
 title: '_partials/findings-are-requirements: one rule-obedience stance, included by every coding agent and skill'
 ---
 

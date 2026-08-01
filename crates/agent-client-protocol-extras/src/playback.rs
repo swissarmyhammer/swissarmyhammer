@@ -52,6 +52,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use swissarmyhammer_common::Pretty;
 
+/// JSON-RPC method every `session/update` notification is sent under.
+///
+/// Both the recorded notifications and the end-of-turn marker ride this one
+/// method, and the tests below assert on it, so it is named once here.
+const SESSION_UPDATE_METHOD: &str = "session/update";
+
 // ---------------------------------------------------------------------------
 // PlaybackAgent
 // ---------------------------------------------------------------------------
@@ -282,7 +288,7 @@ fn send_turn_complete(
     send_message(
         tx,
         Message::Request(Request::notification_v2(
-            "session/update".to_string(),
+            SESSION_UPDATE_METHOD.to_string(),
             Some(params),
         )),
     )
@@ -330,7 +336,8 @@ fn send_recorded_notifications(
             tracing::debug!("PlaybackAgent: skipping non-object notification entry");
             continue;
         };
-        let notification = Request::notification_v2("session/update".to_string(), Some(params));
+        let notification =
+            Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params));
         send_message(tx, Message::Request(notification))?;
     }
     Ok(())
@@ -595,7 +602,7 @@ mod tests {
             let Message::Request(req) = msg else {
                 panic!("expected a notification request, got {msg:?}");
             };
-            assert_eq!(req.method, "session/update");
+            assert_eq!(req.method, SESSION_UPDATE_METHOD);
             assert!(req.id.is_none(), "notifications must not carry an id");
         }
     }
@@ -694,7 +701,7 @@ mod tests {
         let Message::Request(notif) = &messages[0] else {
             panic!("first message should be the recorded notification");
         };
-        assert_eq!(notif.method, "session/update");
+        assert_eq!(notif.method, SESSION_UPDATE_METHOD);
         assert!(notif.id.is_none());
 
         // A replayed prompt turn closes its notification stream, so a client
@@ -702,7 +709,7 @@ mod tests {
         let Message::Request(marker) = &messages[1] else {
             panic!("second message should be the end-of-turn marker");
         };
-        assert_eq!(marker.method, "session/update");
+        assert_eq!(marker.method, SESSION_UPDATE_METHOD);
         assert!(marker.id.is_none());
         let marker_params = serde_json::to_value(
             marker

@@ -19,6 +19,42 @@
 //! declares nothing when every field is absent, so a client that does not know
 //! the key ignores it.
 //!
+//! # Examples
+//!
+//! An agent marks its turn complete. Emit this on the same channel as the
+//! turn's chunks, after the last one:
+//!
+//! ```
+//! use agent_client_protocol::schema::SessionId;
+//! use agent_client_protocol_extras::turn_complete_notification;
+//!
+//! let session = SessionId::new("sess-1");
+//! let marker = turn_complete_notification(session.clone());
+//!
+//! assert_eq!(marker.session_id, session);
+//! ```
+//!
+//! A client draining that channel recognizes it. An ordinary chunk is not the
+//! marker, so the collector keeps reassembling until the marker arrives:
+//!
+//! ```
+//! use agent_client_protocol::schema::{
+//!     ContentBlock, ContentChunk, SessionId, SessionNotification, SessionUpdate, TextContent,
+//! };
+//! use agent_client_protocol_extras::{is_turn_complete, turn_complete_notification};
+//!
+//! let session = SessionId::new("sess-1");
+//! let chunk = SessionNotification::new(
+//!     session.clone(),
+//!     SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+//!         TextContent::new("hello"),
+//!     ))),
+//! );
+//!
+//! assert!(!is_turn_complete(&chunk));
+//! assert!(is_turn_complete(&turn_complete_notification(session)));
+//! ```
+//!
 //! [`MAX_TOKENS_META_KEY`]: crate::MAX_TOKENS_META_KEY
 //! [`PIN_ON_SAVE_META_KEY`]: crate::PIN_ON_SAVE_META_KEY
 

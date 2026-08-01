@@ -176,6 +176,177 @@ comments:
     paths that reply without a marker (`ScriptedReply::Error`, playback's "no recorded call")
     both FAIL the prompt response, so `run_prompt` short-circuits before the drain.
   timestamp: 2026-08-01T13:32:00.394119+00:00
+- actor: claude-code
+  id: 01kyz1r8k5ynx97qnrmk2p85hx
+  text: |-
+    Review findings fixed — all 12, plus one emitter defect the engine missed.
+
+    ## The two findings that asked for a decision
+
+    **Finding 5 — `matched_count` and the end-of-turn marker.** COUNT the marker; do not
+    weaken the docstring. The marker is addressed to the collector's own session and the
+    collector acts on it, so a counter that reports "notifications received for this
+    collector's own session" must include it. The other option (narrowing the docstring to
+    "only what `process_notification` saw") would have described an implementation detail
+    instead of the stream. The counter also stopped being dead: it was destructured as
+    `_matched_count` and never read, and it is now `matched_notifications` on every drain
+    error report, where "how many of this session's notifications arrived" is exactly the
+    context that explains a short reply.
+
+    **Finding 9 — empty reply, `error!` versus `Ok("")`.** Lower the LOG to `warn!`; keep
+    `Ok("")`. An empty reply is a fact about the turn, not a failure of the drain: the marker
+    proved the stream ended exactly where the agent said it did. Three legitimate paths reach
+    it — a turn cancelled before its first chunk, a turn that only made tool calls, and (after
+    the 13th fix below) a prompt the agent rejected. Returning `Err` would conflate "the agent
+    said nothing" with "chunks were lost", and every case where the reply CANNOT be proven
+    whole already returns `Err` above this point: lag, a channel closed before the marker, the
+    backstop, a dead collector task. So an empty `Ok` is unambiguous, and the caller can read
+    it as "no text", never as "something went missing". `warn!` keeps it visible — an empty
+    reply usually disappoints the caller — without claiming a failure the return value
+    contradicts. Pinned by
+    `collect_response_content_tests::a_turn_that_streams_no_text_is_an_empty_reply_not_an_error`.
+
+    ## 13th requirement — the emitter gap
+
+    `ClaudeAgent::prompt` had two `?` operators BEFORE the split that guarantees the marker:
+    `validate_prompt_request` and `resolve_session`. A bad prompt on a valid, already-subscribed
+    session returned without marking the turn complete, so that client's collector waited out
+    the full 10 s `NOTIFICATION_DRAIN_BACKSTOP_MS` and then errored.
+
+    Fix: resolve the session FIRST, then run the whole turn — request validation included —
+    inside `run_prompt_turn`, whose every exit passes through `notify_turn_complete`. Session
+    resolution is the right boundary: an unresolvable id names no notification stream, so
+    there is nothing to mark; a resolved id may already have a collector on it, so everything
+    after that point must mark the turn. Reordering does not weaken any contract — the
+    `opaque_session_ids` tests that pin one uniform `invalid_params` not-found code across
+    `prompt`/`cancel`/`set_session_mode` all send a well-formed prompt, and no test pins
+    "validation error beats not-found".
+
+    Regression test: `crates/claude-agent/tests/integration/turn_complete_marker.rs`.
+    RED against the unfixed code:
+
+        thread '...a_rejected_prompt_ends_the_turn_for_a_subscribed_collector' panicked at
+        turn_complete_marker.rs:68:6:
+        a rejected prompt must emit its end-of-turn marker, not leave the collector waiting
+        for the backstop: Elapsed(())
+
+    The 2 s bound is far below the 10 s backstop, so `Elapsed` IS the bug. GREEN after the
+    fix. Finding 5's test was RED as "the collector must count 2 notifications for its
+    session; it counted 1".
+
+    ## The other ten
+
+    1. `turn_complete.rs` — module docs gained two runnable examples (emit the marker;
+       recognize it, with an ordinary chunk as the negative). Both run under
+       `cargo test --doc -p agent-client-protocol-extras`.
+    2. `playback.rs` — `SESSION_UPDATE_METHOD` const; all five occurrences in the file now use
+       it, not only the two the finding cited.
+    3. `lib.rs` re-export — doc comment naming what each of the three items is for.
+    4. `NotificationCollector` — `#[derive(Debug)]`.
+    6-8. One `DrainReport` struct gathers the shared context once (collected text, stop reason,
+       total and matched notification counts, skipped) and `DrainReport::incomplete(message)`
+       is the single report path. All FOUR sites go through it — the finding named three lines
+       but said four, and the fourth is the `skipped > 0` lag branch. The `message` is now both
+       the `error!` log line and the `AgentError::Internal` text, so the log and the returned
+       error cannot drift apart. Existing assertions on "closed" / "backstop" / "dropped" still
+       hold.
+    10-12. `TEST_NOTIFICATION_RING = 64` with the rationale (a broadcast ring must exceed the
+       notifications in flight before the collector task runs; 64 leaves an order of magnitude
+       of margin so no test lags by accident) and its deliberate opposite
+       `LAGGING_NOTIFICATION_RING = 2`, which forces the drop the lag test asserts on. The
+       counter-polling constants got names too.
+
+    ARCHITECTURE.md: one sentence on the marker's exit-path contract — a turn ends at the
+    marker however it ends, and an unresolvable session id is the one case with none.
+
+    ## Results
+
+    - `cargo nextest run -E 'rdeps(claude-agent)'` — 6093/6093 passed (1 flaky:
+      `kanban-app::ai_panel_e2e`, the known llama KV flake, green on retry).
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 5021/5021 passed.
+    - `cargo nextest run -E 'rdeps(agent-client-protocol-extras)'` — 6395/6395 passed (same
+      ai_panel flake, green on retry).
+    - `cargo test --doc -p agent-client-protocol-extras turn_complete` — 2/2.
+    - `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings`
+      clean.
+
+    The review-coverage gap on `crates/llama-agent/src/acp/server.rs` stays OPEN: it is a
+    tooling limit (the file exceeds the review batch size and `batch_size` is ignored), not a
+    code finding, and nothing in this pass changes it.
+  timestamp: 2026-08-01T16:15:42.693941+00:00
+- actor: claude-code
+  id: 01kyz3xazn0jjhsc342zdc6989
+  text: |-
+    Adversarial self-review (/double-check) came back REVISE with 7 items. All 7 are fixed,
+    and two of them correct claims I made in the comment above.
+
+    1. **The new integration test really spawned the claude CLI.** `AgentConfig::default()`
+       has `spawn_claude_on_new_session: true`, so `new_session` exec'd the CLI and waited on
+       its init line — 3.9 s of the test, a stray child process, and a dependency on the local
+       install. Its own doc comment claimed the opposite. Now uses the headless seam
+       (`spawn_claude_on_new_session: false`, as `mcp_http_session` does) and says so. The test
+       runs in 0.219 s.
+
+    2. **"Every exit emits the marker" was false three ways.** `resolve_session` is not only a
+       not-found path: `resolve_session_with` maps an unreadable session store to
+       `internal_error` (-32603), and THAT session may exist with a client draining it — a
+       second no-marker case with a real stream. Panics and dropped futures also skip the emit.
+       Fixed by making the emit unconditional on ONE exit path: `prompt` resolves, picks the
+       marker's address, runs the turn, then emits. The address rule is explicit — a resolved
+       session gets its canonical id, the same key the turn's chunks carry, and a resolution
+       FAILURE gets the id the client literally sent, which is what that client's collector is
+       waiting on. Panics and cancellation are now stated as the one way past the emit, which
+       is exactly why the drain keeps a hang guard, instead of being papered over.
+
+    3. **The empty-reply test did not test the change it was credited with.** It asserted
+       `Ok("")`, which was already the behavior; only the log LEVEL moved. It now captures
+       through a scoped subscriber (`swissarmyhammer_common::test_utils::CaptureWriter`, the
+       pattern from `llama_agent::gpu_lock`) and asserts a WARN line with the message and NO
+       ERROR line. Verified by reverting `warn!` to `error!`: the test FAILS. So finding 9's
+       decision is genuinely pinned now, both halves of it.
+
+    4. **Correcting my own claim about the emitter gap's in-repo impact.** No in-repo caller
+       was stalling for 10 s. `pool::run_prompt` and `execute_prompt_with_agent` both `?` out
+       of the prompt error BEFORE calling `collect_response_content`, so neither drains after a
+       rejection. The in-repo gain is narrower: the orphaned detached collector task now ends
+       on the marker instead of living until the broadcast closes. The full-stall scenario
+       belongs to an external ACP client that drains regardless of the prompt result — real,
+       but not something this repo was hitting today. The fix is still required protocol
+       hygiene, and the regression test pins the contract ARCHITECTURE.md states.
+
+    5. **llama-agent's ordering comment went stale.** `AcpServer::prompt_inner` validates
+       content before resolving the session, under a comment claiming it mirrors claude-agent.
+       The comment now explains why the two orderings legitimately differ: llama's `prompt`
+       marks the turn complete for `request.session_id` whatever `prompt_inner` returns, so it
+       has no ordering constraint; claude resolves first because it addresses the marker to the
+       resolved id. Both errors are `invalid_params`, so only the message differs for a request
+       that is both unknown-session AND unsupported-content. Behavior unchanged.
+
+    6. **`DrainReport` had dropped two structured fields** — `error` (the join error) and
+       `backstop_ms` survived only interpolated into the message, so a log query filtering on
+       those names stopped matching. Fixed by giving the report a `DrainFailure` enum: one
+       variant per failure path, and `incomplete` derives the message AND the per-failure
+       fields from it. Every path still gains `matched_notifications` and `skipped`, and the
+       call sites are now one line each.
+
+    7. Missing blank line between two tests. Fixed.
+
+    ## Re-verified after the revision
+
+    - `cargo nextest run -E 'rdeps(claude-agent)'` — 6093/6093 passed, no flakes.
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 5021/5021 passed.
+    - `cargo nextest run -E 'rdeps(agent-client-protocol-extras)'` — 6395/6395 passed.
+    - `cargo test --doc -p agent-client-protocol-extras` — 5 passed, 1 ignored.
+    - `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings`
+      clean.
+  timestamp: 2026-08-01T16:53:26.133252+00:00
+- actor: claude-code
+  id: 01kyz3xhe6vbynpjnbbd2q9wq1
+  text: |-
+    ### implement — changed
+    - evidence: 7 files — crates/agent-client-protocol-extras/src/turn_complete.rs, crates/agent-client-protocol-extras/src/playback.rs, crates/claude-agent/src/lib.rs, crates/claude-agent/src/agent_trait_impl.rs, crates/claude-agent/tests/integration/turn_complete_marker.rs (new), crates/claude-agent/tests/integration/mod.rs, crates/llama-agent/src/acp/server.rs (comment), ARCHITECTURE.md. All 12 review findings checked off plus the 13th (emitter gap). rdeps(claude-agent) 6093/6093, rdeps(swissarmyhammer-validators) 5021/5021, rdeps(agent-client-protocol-extras) 6395/6395, doctests 5 passed; fmt and clippy clean.
+    - next: /review (the card stays in `doing`)
+  timestamp: 2026-08-01T16:53:32.742022+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'Flaky under full-suite load: collect_response_content drains notifications on a fixed 500ms sleep'
@@ -226,3 +397,30 @@ Check the blast radius before changing the signature: `collect_response_content`
 - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` passes.
 - `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings` clean. #review
 #test-failure
+
+## Review Findings (2026-08-01 10:09)
+
+Scope: commit `fcf1674b0` (`HEAD~1..HEAD`). Engine line numbers were resolved to
+their true location and blame-checked against `fcf1674b0`; pre-existing findings
+are dropped.
+
+- [x] `crates/agent-client-protocol-extras/src/turn_complete.rs:1` — Module-level documentation for public APIs should include code examples demonstrating common use cases; the current documentation explains the architecture but lacks code examples showing how to create and check turn-complete markers. Add code examples to the module or function documentation demonstrating the two primary use cases: (1) creating a turn-complete marker notification with `turn_complete_notification()`, and (2) checking whether a notification is a marker with `is_turn_complete()`.
+- [x] `crates/agent-client-protocol-extras/src/playback.rs:285` — String literal "session/update" is repeated — appears at line 285 and line 333, should be a named constant. Define const NOTIFICATION_METHOD: &str = "session/update" and use it in both locations.
+- [x] `crates/claude-agent/src/lib.rs:75` — Public re-export from `agent_client_protocol_extras` lacks a doc comment. Add a doc comment above the re-export explaining the purpose of `is_turn_complete`, `turn_complete_notification`, and `TURN_COMPLETE_META_KEY`.
+- [x] `crates/claude-agent/src/lib.rs:320` — pub struct NotificationCollector does not implement Debug, but all public types with non-empty representation must implement Debug for debuggability and to avoid downstream orphan-rule violations. Add #[derive(Debug)] to the struct on line 320.
+- [x] `crates/claude-agent/src/lib.rs:391` — `matched_count` is incremented only in `process_notification`, but that function is skipped when the end-of-turn marker is detected. The marker is a notification for the collector's own session, so it should be counted, but the invariant (docstring: 'Notifications received so far for this collector's own session') is violated when marker notifications bypass the increment. Increment `matched_count` when `is_turn_complete(&notification)` is true at line 391, before the break, so that marker notifications are counted. Or update the docstring to clarify that `matched_count` only counts notifications processed by `process_notification`, not all session notifications.
+- [x] `crates/claude-agent/src/lib.rs:472` — Error handling pattern repeated four times in `collect_response_content` error paths: get `collected_so_far`, call `tracing::error!()`, return `AgentError::Internal`. Structure is near-identical across lines 472, 486, 505, 520. Extract a helper function that encapsulates the common error reporting pattern. The function would take parameters for: (1) the error context/message, (2) which additional fields to log, and (3) the collected_text Mutex reference. This consolidates the error path logging and reduces maintenance burden.
+- [x] `crates/claude-agent/src/lib.rs:486` — Error handling pattern identical to line 472: get `collected_so_far`, call `tracing::error!()`, return `AgentError::Internal`, repeated in the `Err(_elapsed)` timeout case. Extract as noted in the line 472 finding; parameterize the error context and logging fields.
+- [x] `crates/claude-agent/src/lib.rs:520` — Error handling pattern identical to line 472: get `collected_so_far`, call `tracing::error!()`, return `AgentError::Internal`, repeated in the `if end == CollectorEnd::StreamClosed` case. Extract as noted in the line 472 finding; parameterize the error context and logging fields.
+- [x] `crates/claude-agent/src/lib.rs:537` — Empty response content is logged at error severity but the function returns Ok, creating a contract mismatch. Error-level diagnostics signal failure conditions that callers should act on, but Ok return indicates success. A caller checking return value success cannot detect this error condition. Either (a) return `Err(AgentError::Internal(...))` when content is empty (if empty response is a failure), or (b) change the tracing level to `tracing::warn!` or `tracing::debug!` (if empty response is valid). Align diagnostic severity with the semantic intent.
+- [x] `crates/claude-agent/src/lib.rs:588` — Unexplained buffer size `64` for NotificationSender; should be a named constant to document its purpose and allow reuse. Extract to a named constant (e.g., `const NOTIFICATION_SENDER_BUFFER_SIZE: usize = 64;`) at the top of the test module or file, and add a comment explaining why 64 is the right capacity for normal test operations (contrast with the intentional `2` in the lag test).
+- [x] `crates/claude-agent/src/lib.rs:627` — Unexplained buffer size `64` for NotificationSender; should be a named constant to document its purpose and allow reuse. Extract to a named constant (e.g., `const NOTIFICATION_SENDER_BUFFER_SIZE: usize = 64;`) at the top of the test module or file.
+- [x] `crates/claude-agent/src/lib.rs:654` — Unexplained buffer size `64` for NotificationSender; should be a named constant to document its purpose and allow reuse. Extract to a named constant (e.g., `const NOTIFICATION_SENDER_BUFFER_SIZE: usize = 64;`) at the top of the test module or file.
+
+### Emitter gap the review engine missed (13th requirement)
+
+- [x] `crates/claude-agent/src/agent_trait_impl.rs` — `ClaudeAgent::prompt` had two `?` operators BEFORE the split that guarantees the end-of-turn marker: `validate_prompt_request` and `resolve_session`. Either failure returned without emitting the marker, so a client with a live collector on that session waited out the full 10 s drain backstop and then errored — on a valid, already-subscribed session. Fixed by resolving the session FIRST (an unresolvable id names no notification stream, so there is nothing to mark) and moving request validation into `run_prompt_turn`, which every exit of leaves through `notify_turn_complete`. Regression test: `crates/claude-agent/tests/integration/turn_complete_marker.rs::a_rejected_prompt_ends_the_turn_for_a_subscribed_collector` — RED was `Elapsed(())` at a 2 s bound (the collector was on its way to the 10 s backstop), GREEN passes in ~4 s including agent construction.
+
+### Review coverage gap (not a code finding)
+
+- [ ] `crates/llama-agent/src/acp/server.rs` — the engine CANNOT review this file: it inlines 318,564 bytes, over the 262,144-byte review batch size, and a file is never split across batches. The `batch_size` modifier is ignored by the running MCP server (a review with `batch_size: 1` still reported the 262,144 default), and the `sah tool review` CLI path has no agent factory, so no route raises the budget. The 9 lines this commit adds at `server.rs:2705-2713` (the `AcpServer::prompt` end-of-turn marker emitter) therefore went un-reviewed. Split the file, or repair the `batch_size` passthrough, then re-review it.

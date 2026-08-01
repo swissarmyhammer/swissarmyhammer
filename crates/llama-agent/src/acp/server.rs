@@ -2723,11 +2723,19 @@ impl AcpServer {
 
         // Reject prompt content the agent advertised as unsupported (image,
         // audio, embedded resources). This enforces the `promptCapabilities`
-        // advertised in `initialize` — mirroring claude-agent's
-        // `ContentCapabilityValidator` step — so both agents reject exactly the
-        // content types they declare unsupported, with the same ACP error
-        // shape. Capability validation is a request-shape check independent of
-        // session resolution, so it runs first.
+        // advertised in `initialize` — claude-agent rejects the same content
+        // types in `validate_prompt_request` — so both agents refuse exactly
+        // what they declare unsupported, with the same `invalid_params` error
+        // shape.
+        //
+        // Capability validation is a request-shape check independent of session
+        // resolution, so it runs first HERE. claude-agent resolves the session
+        // first instead, because it addresses its end-of-turn marker to the
+        // resolved id; this agent has no such ordering constraint, since
+        // `prompt` marks the turn complete for `request.session_id` whatever
+        // `prompt_inner` returns. The two orderings differ only in which
+        // `invalid_params` message a request that is BOTH unknown-session and
+        // unsupported-content comes back with.
         Self::validate_prompt_content(&request.prompt)?;
 
         // Get ACP session

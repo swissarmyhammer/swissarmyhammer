@@ -70,8 +70,15 @@ pub mod url_validation;
 // Re-exports for convenient access to main types
 pub use agent::ClaudeAgent;
 pub use agent_client_protocol_extras::RawMessageManager;
-// The in-band end-of-turn marker. Re-exported so every consumer of this
-// crate's notification collector names the same contract the agents emit.
+/// The in-band end-of-turn marker, re-exported from
+/// [`agent_client_protocol_extras`].
+///
+/// [`turn_complete_notification`] builds the notification an agent emits as the
+/// last act of a turn; [`is_turn_complete`] recognizes it; and
+/// [`TURN_COMPLETE_META_KEY`] is the `_meta` key that carries it on the wire.
+/// Together they are the signal [`spawn_notification_collector`] stops on, so
+/// they are re-exported here: a consumer of this crate's collector names the
+/// same contract the agents emit, from one import.
 pub use agent_client_protocol_extras::{
     is_turn_complete, turn_complete_notification, TURN_COMPLETE_META_KEY,
 };
@@ -317,6 +324,7 @@ pub enum CollectorEnd {
 ///
 /// [`spawn_notification_collector`] starts it; [`collect_response_content`]
 /// consumes it once the prompt response has landed.
+#[derive(Debug)]
 pub struct NotificationCollector {
     /// The task draining the notification channel.
     task: tokio::task::JoinHandle<CollectorEnd>,
@@ -389,6 +397,11 @@ pub fn spawn_notification_collector(
                 Ok(notification) => {
                     notification_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if notification.session_id == session_id && is_turn_complete(&notification) {
+                        // The marker is one of this session's notifications, so
+                        // it counts. `matched_count` reports every notification
+                        // received for this session, not only the ones that
+                        // carried text.
+                        matched_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         tracing::debug!(
                             session = %session_id,
                             "Notification collector saw the end-of-turn marker"
@@ -430,6 +443,108 @@ pub fn spawn_notification_collector(
     }
 }
 
+/// Why a drain could not prove the reply whole.
+///
+/// One variant per failure path in [`collect_response_content`], each carrying
+/// the detail that path adds to the report. [`DrainReport::incomplete`] turns a
+/// variant into both the log line and the returned error, so the four paths
+/// cannot describe their failures differently.
+enum DrainFailure {
+    /// The collector task ended before the turn's stream did, carrying the join
+    /// error that says why.
+    CollectorDied(tokio::task::JoinError),
+    /// The drain hit its [`NOTIFICATION_DRAIN_BACKSTOP_MS`] hang guard without
+    /// ever seeing an end-of-turn marker.
+    Backstop,
+    /// The broadcast dropped notifications because the collector fell behind.
+    Lagged,
+    /// The notification channel closed before the end-of-turn marker.
+    StreamClosed,
+}
+
+/// Everything a failed drain reports, gathered once.
+///
+/// Every failure path in [`collect_response_content`] ends the same way: read
+/// how much text was reassembled before things went wrong, log that at `error`
+/// alongside the turn's counters, and hand the caller an
+/// [`AgentError::Internal`] explaining it. Gathering the shared context once
+/// and funnelling all four paths through [`incomplete`](Self::incomplete) is
+/// what keeps the log line and the returned error from drifting apart — they
+/// are the same string.
+struct DrainReport<'a> {
+    /// The reply text reassembled so far. Read at report time, because the
+    /// collector may still have been appending to it.
+    collected_text: &'a tokio::sync::Mutex<String>,
+    /// The turn's prompt response, for its stop reason.
+    prompt_response: &'a agent_client_protocol::schema::PromptResponse,
+    /// Every notification the collector received, this session's or not.
+    total_notifications: usize,
+    /// Notifications received for this turn's own session.
+    matched_notifications: usize,
+    /// Notifications the broadcast dropped because the collector fell behind.
+    skipped: u64,
+}
+
+impl DrainReport<'_> {
+    /// Report a drain that could not prove the reply whole.
+    ///
+    /// The explanation is derived from `failure` once and used twice: as the
+    /// `error`-level log message and as the text of the returned
+    /// [`AgentError::Internal`], which therefore can never disagree. The
+    /// per-failure details stay queryable as structured fields — `error` for a
+    /// dead collector, `backstop_ms` for the hang guard — instead of living only
+    /// as prose inside the message.
+    async fn incomplete(&self, failure: DrainFailure) -> AgentError {
+        let collected_so_far = self.collected_text.lock().await.len();
+        let skipped = self.skipped;
+        let (message, join_error, backstop_ms) = match failure {
+            DrainFailure::CollectorDied(join_error) => (
+                format!(
+                    "the notification collector ended before the turn's stream did \
+                     ({join_error}); the collected reply would be incomplete"
+                ),
+                Some(join_error.to_string()),
+                None,
+            ),
+            DrainFailure::Backstop => (
+                format!(
+                    "the notification drain hit its {NOTIFICATION_DRAIN_BACKSTOP_MS}ms backstop \
+                     without an end-of-turn marker ({skipped} notifications were dropped by \
+                     lag); the collected reply would be incomplete"
+                ),
+                None,
+                Some(NOTIFICATION_DRAIN_BACKSTOP_MS),
+            ),
+            DrainFailure::Lagged => (
+                format!(
+                    "the notification broadcast dropped {skipped} notifications while collecting \
+                     this turn; the collected reply may be missing chunks"
+                ),
+                None,
+                None,
+            ),
+            DrainFailure::StreamClosed => (
+                "the notification channel closed before the turn's end-of-turn marker; the \
+                 collected reply would be incomplete"
+                    .to_string(),
+                None,
+                None,
+            ),
+        };
+        tracing::error!(
+            stop_reason = ?self.prompt_response.stop_reason,
+            total_notifications = self.total_notifications,
+            matched_notifications = self.matched_notifications,
+            collected_so_far = collected_so_far,
+            skipped = skipped,
+            error = join_error.as_deref(),
+            backstop_ms = backstop_ms,
+            "{message}"
+        );
+        AgentError::Internal(message)
+    }
+}
+
 /// Collect the response content after prompt execution.
 ///
 /// Waits for the collector spawned by [`spawn_notification_collector`] to
@@ -450,6 +565,12 @@ pub fn spawn_notification_collector(
 /// - the drain hit the [`NOTIFICATION_DRAIN_BACKSTOP_MS`] hang guard (an agent
 ///   that never marks its turn complete, or a lag that ate the marker);
 /// - the collector task died.
+///
+/// An empty reply is NOT one of those cases. A turn that marks itself complete
+/// without streaming any text — cancelled before its first chunk, only tool
+/// calls, or a request the agent rejected — drained completely, so it returns
+/// `Ok("")`. Because every unprovable reply is an `Err`, a caller can read an
+/// empty `Ok` as "the agent said nothing", never as "something was lost".
 pub async fn collect_response_content(
     collector: NotificationCollector,
     prompt_response: &agent_client_protocol::schema::PromptResponse,
@@ -458,95 +579,70 @@ pub async fn collect_response_content(
         mut task,
         collected_text,
         notification_count,
-        matched_count: _matched_count,
+        matched_count,
         skipped,
     } = collector;
 
     let backstop = std::time::Duration::from_millis(NOTIFICATION_DRAIN_BACKSTOP_MS);
     let drained = tokio::time::timeout(backstop, &mut task).await;
     let total_notifications = notification_count.load(std::sync::atomic::Ordering::Relaxed);
+    let matched_notifications = matched_count.load(std::sync::atomic::Ordering::Relaxed);
     let skipped = skipped.load(std::sync::atomic::Ordering::Relaxed);
+
+    let report = DrainReport {
+        collected_text: &collected_text,
+        prompt_response,
+        total_notifications,
+        matched_notifications,
+        skipped,
+    };
 
     let end = match drained {
         Ok(Ok(end)) => end,
         Ok(Err(join_error)) => {
-            let collected_so_far = collected_text.lock().await.len();
-            tracing::error!(
-                stop_reason = ?prompt_response.stop_reason,
-                total_notifications = total_notifications,
-                collected_so_far = collected_so_far,
-                error = %join_error,
-                "Notification collector ended before the turn's stream did"
-            );
-            return Err(AgentError::Internal(format!(
-                "notification collector ended before the turn's stream did ({join_error}); \
-                 the collected reply would be incomplete"
-            )));
+            return Err(report
+                .incomplete(DrainFailure::CollectorDied(join_error))
+                .await);
         }
         Err(_elapsed) => {
             task.abort();
-            let collected_so_far = collected_text.lock().await.len();
-            tracing::error!(
-                stop_reason = ?prompt_response.stop_reason,
-                total_notifications = total_notifications,
-                collected_so_far = collected_so_far,
-                skipped = skipped,
-                backstop_ms = NOTIFICATION_DRAIN_BACKSTOP_MS,
-                "Notification drain hit its backstop without an end-of-turn marker"
-            );
-            return Err(AgentError::Internal(format!(
-                "notification drain hit its {NOTIFICATION_DRAIN_BACKSTOP_MS}ms backstop without \
-                 an end-of-turn marker ({skipped} notifications were dropped by lag); the \
-                 collected reply would be incomplete"
-            )));
+            return Err(report.incomplete(DrainFailure::Backstop).await);
         }
     };
 
     if skipped > 0 {
-        let collected_so_far = collected_text.lock().await.len();
-        tracing::error!(
-            stop_reason = ?prompt_response.stop_reason,
-            total_notifications = total_notifications,
-            collected_so_far = collected_so_far,
-            skipped = skipped,
-            "Notification collector lagged; the collected reply cannot be proven whole"
-        );
-        return Err(AgentError::Internal(format!(
-            "the notification broadcast dropped {skipped} notifications while collecting this \
-             turn; the collected reply may be missing chunks"
-        )));
+        return Err(report.incomplete(DrainFailure::Lagged).await);
     }
 
     if end == CollectorEnd::StreamClosed {
-        let collected_so_far = collected_text.lock().await.len();
-        tracing::error!(
-            stop_reason = ?prompt_response.stop_reason,
-            total_notifications = total_notifications,
-            collected_so_far = collected_so_far,
-            "Notification channel closed before the turn's end-of-turn marker"
-        );
-        return Err(AgentError::Internal(
-            "the notification channel closed before the turn's end-of-turn marker; the collected \
-             reply would be incomplete"
-                .to_string(),
-        ));
+        return Err(report.incomplete(DrainFailure::StreamClosed).await);
     }
 
     let content = collected_text.lock().await.clone();
 
+    // An empty reply is a fact about the turn, not a failure of the drain: the
+    // marker proved the stream ended exactly where the agent said it did. A
+    // turn cancelled before its first chunk, a turn that only made tool calls,
+    // and a request rejected by validation all legitimately end this way. Every
+    // case where the reply CANNOT be proven whole already returned `Err` above,
+    // so this stays a success — reported at `warn` because an empty reply
+    // usually disappoints the caller, not at `error`, which would claim a
+    // failure the return value contradicts.
     if content.is_empty() {
-        tracing::error!(
+        tracing::warn!(
             stop_reason = ?prompt_response.stop_reason,
             total_notifications = total_notifications,
+            matched_notifications = matched_notifications,
             content_length = content.len(),
-            "execute_prompt_with_agent received empty content"
+            "the turn ended with no streamed text content"
         );
     } else {
         tracing::debug!(
             stop_reason = ?prompt_response.stop_reason,
             total_notifications = total_notifications,
+            matched_notifications = matched_notifications,
             content_length = content.len(),
-            "execute_prompt_with_agent collected content"
+            "the turn's streamed text content was collected"
         );
     }
 
@@ -563,6 +659,60 @@ mod collect_response_content_tests {
     /// Deliberately longer than the fixed 500 ms window the drain used to
     /// sleep, so a drain that ends on wall-clock time misses this chunk.
     const LATE_CHUNK_DELAY: Duration = Duration::from_millis(700);
+
+    /// Broadcast ring capacity for a collector that must receive everything the
+    /// test feeds it.
+    ///
+    /// A tokio broadcast channel drops the oldest notification once the ring is
+    /// full, so the capacity has to exceed the number of notifications in
+    /// flight before the collector task runs. No test here sends more than a
+    /// handful, and 64 leaves that margin an order of magnitude over — a test
+    /// that lags by accident would assert on a hole rather than on the behavior
+    /// it names. [`LAGGING_NOTIFICATION_RING`] is the deliberate opposite.
+    const TEST_NOTIFICATION_RING: usize = 64;
+
+    /// Broadcast ring capacity small enough to FORCE a drop.
+    ///
+    /// Two slots, more than two notifications sent before the collector task
+    /// runs: the broadcast must discard the oldest, which is exactly the lag
+    /// `a_lagged_collector_is_an_error_not_a_reply_with_holes` asserts on.
+    const LAGGING_NOTIFICATION_RING: usize = 2;
+
+    /// How long a counter assertion waits for the collector task to catch up.
+    ///
+    /// The collector counts on its own task, so a test that reads a counter has
+    /// to let that task run first. Generous enough to absorb scheduling latency
+    /// on a loaded machine; a timeout means the count is genuinely wrong, not
+    /// merely late.
+    const COUNTER_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// How often a counter assertion re-reads the collector's counters while
+    /// waiting for [`COUNTER_SETTLE_TIMEOUT`].
+    const COUNTER_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+    /// Wait until `collector` has counted `expected` notifications for its own
+    /// session, then return.
+    ///
+    /// The collector counts on its own task, so a test that asserts on a
+    /// counter has to let that task run first. The collector ends its loop on
+    /// the end-of-turn marker, so this settles as soon as the marker is
+    /// processed. A timeout is a real failure: the count never reached
+    /// `expected`.
+    async fn await_matched_count(collector: &NotificationCollector, expected: usize) {
+        let settle = async {
+            while collector.matched_count() < expected {
+                tokio::time::sleep(COUNTER_POLL_INTERVAL).await;
+            }
+        };
+        tokio::time::timeout(COUNTER_SETTLE_TIMEOUT, settle)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the collector must count {expected} notifications for its session; it counted {}",
+                    collector.matched_count()
+                )
+            });
+    }
 
     /// Broadcast one agent text chunk for `session`.
     async fn send_chunk(notifier: &NotificationSender, session: &SessionId, text: &str) {
@@ -585,7 +735,7 @@ mod collect_response_content_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_chunk_delivered_after_the_old_fixed_window_is_still_collected() {
         let session = SessionId::new("sess-late");
-        let (notifier, _seed_rx) = NotificationSender::new(64);
+        let (notifier, _seed_rx) = NotificationSender::new(TEST_NOTIFICATION_RING);
         let notifier = Arc::new(notifier);
 
         let collector =
@@ -624,7 +774,7 @@ mod collect_response_content_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_channel_closed_before_the_marker_is_an_error() {
         let session = SessionId::new("sess-closed");
-        let (notifier, _seed_rx) = NotificationSender::new(64);
+        let (notifier, _seed_rx) = NotificationSender::new(TEST_NOTIFICATION_RING);
 
         let collector =
             spawn_notification_collector(notifier.sender().subscribe(), session.clone());
@@ -651,7 +801,7 @@ mod collect_response_content_tests {
     #[tokio::test(start_paused = true)]
     async fn a_missing_end_of_turn_marker_is_an_error_not_a_short_reply() {
         let session = SessionId::new("sess-unmarked");
-        let (notifier, _seed_rx) = NotificationSender::new(64);
+        let (notifier, _seed_rx) = NotificationSender::new(TEST_NOTIFICATION_RING);
 
         let collector =
             spawn_notification_collector(notifier.sender().subscribe(), session.clone());
@@ -675,9 +825,7 @@ mod collect_response_content_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_lagged_collector_is_an_error_not_a_reply_with_holes() {
         let session = SessionId::new("sess-lagged");
-        // A two-slot ring: sending more than two notifications before the
-        // collector runs forces the broadcast to drop the oldest.
-        let (notifier, _seed_rx) = NotificationSender::new(2);
+        let (notifier, _seed_rx) = NotificationSender::new(LAGGING_NOTIFICATION_RING);
 
         let collector =
             spawn_notification_collector(notifier.sender().subscribe(), session.clone());
@@ -697,6 +845,98 @@ mod collect_response_content_tests {
         assert!(
             error.to_string().contains("dropped"),
             "the error must name the dropped notifications: {error}"
+        );
+    }
+
+    /// The end-of-turn marker is a notification for the collector's own
+    /// session, so it counts toward `matched_count`.
+    ///
+    /// `matched_count` reports "notifications received for this collector's own
+    /// session". The marker is addressed to that session and the collector acts
+    /// on it, so leaving it out would make the counter under-report the stream
+    /// it is describing — and the drain reports that counter when it explains
+    /// an incomplete reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_end_of_turn_marker_counts_as_a_notification_for_its_session() {
+        let session = SessionId::new("sess-counted");
+        let (notifier, _seed_rx) = NotificationSender::new(TEST_NOTIFICATION_RING);
+
+        let collector =
+            spawn_notification_collector(notifier.sender().subscribe(), session.clone());
+
+        send_chunk(&notifier, &session, "one chunk").await;
+        notifier
+            .send_update(turn_complete_notification(session))
+            .await
+            .expect("the end-of-turn marker broadcasts");
+
+        await_matched_count(&collector, 2).await;
+        assert_eq!(
+            collector.matched_count(),
+            2,
+            "the chunk and the end-of-turn marker are both this session's notifications"
+        );
+        assert_eq!(
+            collector.notification_count(),
+            2,
+            "both notifications were received"
+        );
+    }
+
+    /// A turn that marks itself complete without streaming any text is a
+    /// SUCCESS with an empty reply, not a drain failure.
+    ///
+    /// The marker proves the stream ended where the agent said it did, so there
+    /// is nothing incomplete to report: the agent simply produced no text. A
+    /// turn cancelled before its first chunk, a turn that only made tool calls,
+    /// and a prompt rejected by request validation all reach here. Every case
+    /// where the reply CANNOT be proven whole returns `Err` instead, so `Ok("")`
+    /// is unambiguous.
+    ///
+    /// The diagnostic has to agree with that: an empty reply is logged at
+    /// `warn`, never at `error`, because an `error` line beside an `Ok` tells a
+    /// reader the call failed when it did not. The assertions below pin the
+    /// level as well as the return value.
+    ///
+    /// Captures through a scoped (thread-local) subscriber rather than
+    /// `#[tracing_test::traced_test]`, following `llama_agent::gpu_lock`: the
+    /// runtime here is single-threaded, so every event is emitted on the test
+    /// thread and the capture is deterministic.
+    #[tokio::test]
+    async fn a_turn_that_streams_no_text_is_an_empty_reply_not_an_error() {
+        let capture = swissarmyhammer_common::test_utils::CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let _scope = tracing::subscriber::set_default(subscriber);
+
+        let session = SessionId::new("sess-silent");
+        let (notifier, _seed_rx) = NotificationSender::new(TEST_NOTIFICATION_RING);
+
+        let collector =
+            spawn_notification_collector(notifier.sender().subscribe(), session.clone());
+
+        notifier
+            .send_update(turn_complete_notification(session))
+            .await
+            .expect("the end-of-turn marker broadcasts");
+
+        let prompt_response = PromptResponse::new(StopReason::EndTurn);
+        let content = collect_response_content(collector, &prompt_response)
+            .await
+            .expect("a marked turn is a complete drain, however little it streamed");
+        assert!(content.is_empty(), "the turn streamed no text: {content:?}");
+
+        let logged = capture.contents();
+        assert!(
+            logged.contains("WARN") && logged.contains("the turn ended with no streamed text"),
+            "an empty reply is reported at warn: {logged}"
+        );
+        assert!(
+            !logged.contains("ERROR"),
+            "an empty reply is a complete drain, so nothing may be logged as a failure: {logged}"
         );
     }
 }

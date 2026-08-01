@@ -42,8 +42,8 @@ comments:
 
     An independent double-check agent re-derived the four `builder.push` call sites against HEAD (no side swapped), confirmed `push` produces identical `SemFileChange` values, confirmed the tracing output and the serialized payload are unchanged, and ran its own signature parser: PASS.
   timestamp: 2026-08-01T00:25:56.955410+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8980
 title: 'scope.rs: type the 3 remaining transposable adjacent parameter pairs'
 ---
 # Why

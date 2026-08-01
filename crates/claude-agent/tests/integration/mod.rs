@@ -10,4 +10,5 @@ mod session_resume;
 mod terminal_rate_limiting;
 mod tool_call_permissions;
 mod tool_results_in_conversation;
+mod turn_complete_marker;
 mod user_approval_flow;
