@@ -1096,6 +1096,10 @@ pub struct ReviewCountsView {
     /// How many fan-out review tasks failed and degraded to zero findings. A
     /// non-zero value means the rendered findings are INCOMPLETE.
     failed: usize,
+    /// How many changed files were excluded from review because their inlined
+    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// markdown names each one as a "not reviewed, too large" gap.
+    skipped: usize,
 }
 
 impl ReviewCountsView {
@@ -1124,6 +1128,13 @@ impl ReviewCountsView {
     pub fn failed(&self) -> usize {
         self.failed
     }
+
+    /// How many changed files were excluded from review because their inlined
+    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// markdown names each one as a "not reviewed, too large" gap.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
 }
 
 /// Maps the engine's internal [`ReviewReport`] onto the tool-boundary wire
@@ -1140,6 +1151,7 @@ impl From<ReviewReport> for ReviewResponse {
                 refuted: counts.refuted(),
                 attempted: counts.tasks_attempted(),
                 failed: counts.tasks_failed(),
+                skipped: counts.skipped(),
             },
         }
     }
@@ -1938,7 +1950,7 @@ mod tests {
     /// through the engine's own `synthesize` (the one construction path a
     /// `ReviewReport` has now that its fields are encapsulated).
     fn report_with_tally(attempted: usize, failed: usize) -> ReviewReport {
-        synthesize(vec![], &FleetTally::new(attempted, failed), "now")
+        synthesize(vec![], &FleetTally::new(attempted, failed), &[], "now")
     }
 
     /// Parity guard: the `backend` modifier influences ONLY the pool's worker

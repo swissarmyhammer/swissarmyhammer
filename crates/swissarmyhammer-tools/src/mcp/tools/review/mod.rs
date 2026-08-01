@@ -68,7 +68,7 @@ const BACKEND_PARAM: ParamMeta = ParamMeta::new("backend")
 /// `review` op's parameter list.
 const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
     .description(
-        "Max inlined file content per review batch, in BYTES (default 262144 = 256 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is an error. Raise it to review larger files in one batch, lower it for smaller batches.",
+        "Max inlined file content per review batch, in BYTES (default 393216 = 384 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is skipped and reported as \"not reviewed, too large\" in the report — it never blocks review of the rest. Raise it to include larger files, lower it for smaller batches. Must be a non-negative integer; a negative or fractional value is ignored (falls back to the default).",
     )
     .param_type(ParamType::Integer);
 
@@ -351,8 +351,11 @@ impl ReviewTool {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let factory = self.agent_factory.as_ref().ok_or_else(|| {
             rmcp::ErrorData::internal_error(
-                "the `review` ops need a live agent; this tool was built without an agent factory \
-                 (the loader-read ops `list`/`get`/`check validators` work without one)",
+                "the `review` ops need a live agent; this tool was built without an agent factory. \
+                 The `sah tool review ...` CLI route never wires one, so it cannot run these ops — \
+                 call `review file`/`review working`/`review sha` through the MCP `review` tool from \
+                 a connected agent (e.g. `sah serve`) instead. (The loader-read ops \
+                 `list`/`get`/`check validators` work from either route, no agent required.)",
                 None,
             )
         })?;

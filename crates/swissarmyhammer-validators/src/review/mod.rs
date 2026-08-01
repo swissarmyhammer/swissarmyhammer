@@ -30,7 +30,8 @@ pub use probes::{
     ProbeResult, ProbeResults, ProbeRow, CATALOG,
 };
 pub use scope::{
-    scope_review, FileWork, ProbeNames, RuleNames, Scope, ScopeSpec, ValidatorWork, WorkList,
+    batch_work_list, scope_review, FileWork, ProbeNames, RuleNames, Scope, ScopeSpec, SkippedFile,
+    ValidatorWork, WorkList,
 };
 pub use synthesize::{run_review, synthesize, FleetTally, ReviewCounts, ReviewReport};
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
