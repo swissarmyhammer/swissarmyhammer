@@ -12,6 +12,8 @@ metadata:
 
 Execute the tasks from the board.
 
+{% include "_partials/findings-are-requirements" %}
+
 ## Use Kanban for All Task Tracking
 
 The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any other task tool** — only `kanban`. This is the single source of truth across Claude Code and llama-agent sessions.

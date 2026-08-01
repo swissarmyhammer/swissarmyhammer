@@ -28,10 +28,17 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 /// Builtin agents that write or judge code. Each must render the stance.
-const COVERED_AGENTS: &[&str] = &["implementer", "reviewer", "tester", "committer"];
+const COVERED_AGENTS: &[&str] = &[
+    "implementer",
+    "reviewer",
+    "tester",
+    "committer",
+    "double-check",
+    "general-purpose",
+];
 
 /// Builtin skills that write or judge code. Each must render the stance.
-const COVERED_SKILLS: &[&str] = &["implement", "finish", "review"];
+const COVERED_SKILLS: &[&str] = &["implement", "finish", "review", "kanban", "tdd", "test"];
 
 /// The Liquid tag each covered file must carry in its raw body.
 const PARTIAL_TAG: &str = "{% include \"_partials/findings-are-requirements\" %}";
@@ -48,7 +55,7 @@ const PARTIAL_TAG: &str = "{% include \"_partials/findings-are-requirements\" %}
 /// `crates/swissarmyhammer-skills/tests/findings_are_requirements_guidance.rs`,
 /// which pins the same sentences to exactly one `builtin/` source file. The two
 /// guards cover different things — that one owns single-source-of-truth, this one
-/// owns the production render of all four agents and all three skills — so both
+/// owns the production render of every covered agent and skill — so both
 /// must pin the whole stance or an agent can drop a sentence and still pass.
 const CANONICAL_STANCE: &[&str] = &[
     "Do not decide you know better than the rule.",

@@ -9,6 +9,8 @@ metadata:
 
 # Test-Driven Development (TDD)
 
+{% include "_partials/findings-are-requirements" %}
+
 ## Overview
 
 Write the test first. Watch it fail. Write minimal code to pass.
