@@ -118,8 +118,49 @@ comments:
     - evidence: 2 files — crates/swissarmyhammer-kanban/src/dispatch.rs, crates/swissarmyhammer-tools/src/mcp/tools/kanban/description.md. `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-tools -p swissarmyhammer-fields --no-fail-fast` — 3254 run, 3254 passed, 0 skipped, 0 failed (baseline 3249 + 5 new tests). `cargo fmt --all --check` clean. `cargo clippy -p swissarmyhammer-kanban -p swissarmyhammer-tools --all-targets -- -D warnings` clean. The known flake `review_working_emits_progress_notifications_per_pair_when_token_supplied` passed.
     - next: ready for /review. New card ^qd9z2xt filed for the `list tasks` `assignee` / `exclude_done` drop found during the sibling audit.
   timestamp: 2026-08-01T15:45:25.589923+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kyz044mbgtn95bwdbc2ftqws
+  text: |-
+    ### commit — changed
+    - evidence: 24b5d687e fix(kanban): route singular assignee key through list_param (^n36mc1q)
+    - next: none
+  timestamp: 2026-08-01T15:47:14.699701+00:00
+- actor: claude-code
+  id: 01kyz0rk4sxnexrppwzkd01ncp
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha HEAD~1..HEAD` (24b5d687e, iteration 2) — 0 findings, 0 confirmed, 4 refuted, 16 attempted. The one prior finding from iteration 1 is checked. Task moved doing -> review -> done.
+    - scope: blame shows the delta's only non-test production lines are `crates/swissarmyhammer-kanban/src/dispatch.rs:394-398` (doc comment) and `:403` (`list_param(op, "assignee")`), plus `crates/swissarmyhammer-tools/src/mcp/tools/kanban/description.md:45-46`. Everything else in the commit is tests and `.kanban/` board state.
+
+    Directed checks, all pass:
+
+    1. No bypass. `with_assignees` is called in exactly two places — `dispatch.rs:496` (add task, through `assignees_for_new_task` -> `resolve_explicit_assignees` at :455) and `dispatch.rs:551` (update task, direct). Both the plural and the singular key reach them only through `explicit_assignee_refs` -> `resolve_explicit_assignees`, which does an `ectx.read("actor", ...)` for every element and resolves the whole list before any write. An unknown actor under the singular key errors in all three shapes, each with a test: scalar (`dispatch.rs:4488`), array (`dispatch_add_task_unknown_singular_assignee_array_creates_nothing`), stringified array (`dispatch.rs:4602`).
+    2. Nothing narrowed. The plain scalar `assignee: "bob"` still works and is still tested (`dispatch.rs:2473`). `list_param` (`dispatch.rs:217-222`) matches on `op.get_param(key)`: an absent key gives `Ok(None)`, a present key gives `Ok(Some(ref_list(...)))`, and `ref_list` maps `[]` to `Ok(vec![])`. So an explicit empty array stays `Some(vec![])` and stays distinct from absent. Unassign by empty array is asserted at `dispatch.rs:4335`. `explicit_assignee_refs` binds with `if let Some(refs)`, so an explicit empty plural returns `Some(vec![])` and does not fall through to the singular key.
+    3. Sibling audit complete — re-swept, not trusted. Every param reader in the non-test region (lines 1-975) was checked. `tags`/`tag` both use `list_param` (:254, :257). `depends_on` uses `list_param` with no singular alias (:234). `attachments` uses `ref_list` (:285). `fields`/`sort` use `parse_json_array` (:1027, :1036, :1057, :1066). `assign task`, `unassign task`, `tag task`, `untag task` use `req` on the singular `assignee`/`tag` (:696, :701, :708, :713) and are single-ref commands, so `req` is correct. `req_alias` (:41) is used only for `id`/`column` on the column ops (:365, :369, :380), a scalar. Every other `get_string` reads a genuinely scalar field. No second get_string-instead-of-list_param asymmetry exists.
+    4. Doc accuracy. Both corrected texts state only what the code does. The `description.md` claim that an empty array unassigns is backed by the test at `dispatch.rs:4335`; the claim that the singular key takes every shape the plural takes rests on the single shared `list_param` call at `dispatch.rs:403`, and three of its four shapes have a direct singular-key test.
+
+    Out of scope, blame verified (do not action here): the phrase this commit corrected for `assignee` survives for `tag` at `dispatch.rs:250` and `description.md:26`, which say the singular `tag` is "a one-element alias" although `tag_refs` routes it through `list_param` and does not narrow the shape. Both lines blame to `74d0cacc48` (2026-07-30), not to `24b5d687e`. The engine did not raise it. It is a separate card if anyone wants it.
+
+    Engine mis-citation note: no occurrence this pass. All 16 attempts resolved with 4 refutations and no surviving finding, so there was nothing to blame-check.
+
+    - next: none. Card is done.
+  timestamp: 2026-08-01T15:58:24.921939+00:00
+- actor: claude-code
+  id: 01kyz0tft74j806nqjxnj61cvt
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 2 files (dispatch.rs, description.md); singular `assignee` key now routed through `list_param`
+    - test: green — cargo nextest -p swissarmyhammer-kanban -p swissarmyhammer-tools -p swissarmyhammer-fields, 3254 run / 3254 passed / 0 skipped (baseline 3249 + 5 new tests)
+    - commit: 24b5d687e
+    - review: clean — 0 findings, 4 refuted, 16 attempted; card moved doing -> review -> done
+    - no ^j4d2613 mis-citation this pass; the four-task streak did not extend
+    - sibling card filed: the same corrected phrasing survives for the singular `tag` key (dispatch.rs:250, description.md:26, both blaming 74d0cacc48)
+
+    Task closed. Two iterations, one round of findings.
+  timestamp: 2026-08-01T15:59:27.047071+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8980
 title: assignees silently drops an unknown actor ref
 ---
 Found by the sibling-field audit on ^1t92gnj.
