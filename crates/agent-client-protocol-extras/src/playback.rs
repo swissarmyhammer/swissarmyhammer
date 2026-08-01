@@ -285,13 +285,7 @@ fn send_turn_complete(
         tracing::warn!("PlaybackAgent: end-of-turn marker is not valid notification params");
         return Ok(());
     };
-    send_message(
-        tx,
-        Message::Request(Request::notification_v2(
-            SESSION_UPDATE_METHOD.to_string(),
-            Some(params),
-        )),
-    )
+    send_session_update_notification(tx, params)
 }
 
 /// Pop the next recorded call, logging a method mismatch as a warning.
@@ -336,9 +330,7 @@ fn send_recorded_notifications(
             tracing::debug!("PlaybackAgent: skipping non-object notification entry");
             continue;
         };
-        let notification =
-            Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params));
-        send_message(tx, Message::Request(notification))?;
+        send_session_update_notification(tx, params)?;
     }
     Ok(())
 }
@@ -389,6 +381,21 @@ fn value_to_params(value: &serde_json::Value) -> Option<Params> {
         serde_json::Value::Array(arr) => Some(Params::Array(arr.clone())),
         _ => None,
     }
+}
+
+/// Send one `session/update` notification to the client.
+///
+/// Every notification this module emits — the recorded ones and the
+/// end-of-turn marker alike — goes out through here, so the JSON-RPC method,
+/// the notification shape, and the send are named in ONE place. A replayed
+/// turn's stream is only readable by a client if every entry on it carries the
+/// same method, and a single construction site is what guarantees that.
+fn send_session_update_notification(
+    tx: &futures::channel::mpsc::UnboundedSender<AcpResult<Message>>,
+    params: Params,
+) -> AcpResult<()> {
+    let notification = Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params));
+    send_message(tx, Message::Request(notification))
 }
 
 /// Push a message onto the outgoing side of the client channel.

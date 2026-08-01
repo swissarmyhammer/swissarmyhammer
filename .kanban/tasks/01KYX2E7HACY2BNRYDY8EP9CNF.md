@@ -347,6 +347,117 @@ comments:
     - evidence: 7 files — crates/agent-client-protocol-extras/src/turn_complete.rs, crates/agent-client-protocol-extras/src/playback.rs, crates/claude-agent/src/lib.rs, crates/claude-agent/src/agent_trait_impl.rs, crates/claude-agent/tests/integration/turn_complete_marker.rs (new), crates/claude-agent/tests/integration/mod.rs, crates/llama-agent/src/acp/server.rs (comment), ARCHITECTURE.md. All 12 review findings checked off plus the 13th (emitter gap). rdeps(claude-agent) 6093/6093, rdeps(swissarmyhammer-validators) 5021/5021, rdeps(agent-client-protocol-extras) 6395/6395, doctests 5 passed; fmt and clippy clean.
     - next: /review (the card stays in `doing`)
   timestamp: 2026-08-01T16:53:32.742022+00:00
+- actor: claude-code
+  id: 01kyz6ja4yex97attwm9yvnk07
+  text: |
+    ### review — findings
+    - evidence: 2 findings — crates/agent-client-protocol-extras/src/playback.rs:290, crates/claude-agent/tests/integration/turn_complete_marker.rs:1. Scope d29a4ce25 (HEAD~1..HEAD). `review sha` hard-errored again on crates/llama-agent/src/acp/server.rs (319,069 bytes over the 262,144-byte batch budget), so the pass used per-file `review file` runs. 113 raw findings; 111 blame to 2025-12..2026-05 and are pre-existing. crates/llama-agent/src/acp/server.rs still un-reviewable (^3rnvage); its change here is comments only.
+    - next: fix the two findings, then re-review. The end-of-turn marker invariant HOLDS by construction on all four exits of ClaudeAgent::prompt; the gap is that two of them have no test.
+  timestamp: 2026-08-01T17:39:50.558593+00:00
+- actor: claude-code
+  id: 01kyz807ghqngb4dv53xfh6nbw
+  text: |
+    Review round 3 — both findings fixed.
+
+    ## Finding 1 — one construction site for a `session/update` notification
+
+    The engine swapped the two function names and its second range was stale. True
+    locations, verified before editing: `playback.rs:288-292` was inside
+    `send_turn_complete`, and `playback.rs:340-341` was inside
+    `send_recorded_notifications`.
+
+    New private helper `send_session_update_notification(tx, params)` holds the
+    `Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params))`
+    construction and the `send_message` call. Both sites are now one line each.
+
+    Fixed at the root, not only at the two cited sites: a sweep of the file for
+    `session/update` shows the ONLY remaining `notification_v2` calls are the one
+    inside the helper and a test's `session/cancel` (a different method). Nothing
+    else in the file builds a `session/update` notification by hand.
+
+    ## Finding 2 — one test per untested exit
+
+    `ClaudeAgent::prompt` has three exits that return before any backend work. Only
+    one had a test. Two added:
+
+    - `an_unresolvable_session_id_ends_the_turn_for_a_subscribed_collector` —
+      a ULID that names no session; `invalid_params`.
+    - `an_unreadable_session_store_ends_the_turn_for_a_subscribed_collector` —
+      `internal_error` (-32603).
+
+    Each subscribes its collector on the id the CLIENT sends, never on a resolved
+    id: that IS the addressing rule under test. Each asserts the drain finishes
+    inside `DRAIN_MUST_FINISH_WITHIN` (2 s), so hitting the 10 s backstop cannot
+    pass for success.
+
+    **How the -32603 exit is staged.** `SessionManager` keeps its sessions behind a
+    `std::sync::RwLock`, so a panic while a writer holds it poisons the lock and
+    every later `get_session` fails — which `resolve_session_with` maps to -32603.
+    The test induces exactly that through the manager's own public
+    `update_session` with a panicking closure, on a real session it created. No
+    test-only hook was added to production code. The default panic hook is silenced
+    for the duration so a deliberate panic does not read as a crash in passing test
+    output, then restored.
+
+    **No claude CLI.** All three tests build the agent with
+    `spawn_claude_on_new_session: false` — the headless seam `mcp_http_session`
+    uses, factored into a shared `headless_agent()` helper. Each test runs in
+    0.21 s, so nothing is exec'ing a CLI.
+
+    ## RED evidence
+
+    RED was produced by restoring the pre-fix shape in `prompt` — one `?` on
+    `resolve_session` before the emit, which is exactly the code the
+    `marker_session_id` fallback replaced:
+
+        FAIL [   2.215s] an_unresolvable_session_id_ends_the_turn_for_a_subscribed_collector
+        panicked at turn_complete_marker.rs:102:9:
+        an unresolvable session id must emit its end-of-turn marker, not leave the
+        collector waiting for the backstop: Elapsed(())
+
+        FAIL [   2.218s] an_unreadable_session_store_ends_the_turn_for_a_subscribed_collector
+        panicked at turn_complete_marker.rs:102:9:
+        an unreadable session store must emit its end-of-turn marker, not leave the
+        collector waiting for the backstop: Elapsed(())
+
+        Summary [2.222s] 3 tests run: 1 passed, 2 failed
+
+    `Elapsed` at 2.21 s IS the bug: the collector was on its way to the 10 s
+    backstop. The third test (rejected prompt) still passed under the break, which
+    is correct — it exercises the resolved path, which the `?` did not touch. After
+    restoring the fix, `git diff` on `agent_trait_impl.rs` is empty, so the restore
+    is byte-exact. All three GREEN at 0.21 s each.
+
+    ## The module doc no longer overclaims
+
+    The old first line, "Every `session/prompt` exit path emits the end-of-turn
+    marker", was broader than the file proved and broader than the file CAN prove: a
+    turn that reaches the backend needs the claude CLI, which these tests
+    deliberately never spawn. The doc now says "every `session/prompt` exit that
+    returns without running a turn", tabulates the three such exits with their error
+    code and the id the marker is addressed to, explains why the first two are the
+    reason the address is picked before resolution is known, and states that a
+    backend-driven turn leaves through the same emit but is not driven here. The one
+    way past the emit — a panic or a dropped future — is named, which is why the
+    drain keeps its hang guard.
+
+    ## Results
+
+    - `cargo nextest run -E 'rdeps(claude-agent)'` — 6095/6095 passed, 2 skipped, no
+      flakes (the real-local-model review E2E over ACP included, 139 s).
+    - `cargo nextest run -E 'rdeps(agent-client-protocol-extras)'` — 6397/6397
+      passed, 2 skipped, no flakes.
+    - `cargo test --doc -p agent-client-protocol-extras` — 5 passed, 1 ignored.
+    - `cargo fmt --all` — no change to the edited files.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+  timestamp: 2026-08-01T18:04:55.185788+00:00
+- actor: claude-code
+  id: 01kyz80cykcw9619p9s1htx0gf
+  text: |
+    ### implement — changed
+    - evidence: 2 files — crates/agent-client-protocol-extras/src/playback.rs, crates/claude-agent/tests/integration/turn_complete_marker.rs. Both round-3 findings checked. rdeps(claude-agent) 6095/6095, rdeps(agent-client-protocol-extras) 6397/6397, doctests 5 passed 1 ignored; fmt and clippy clean.
+    - next: /review (the card stays in `doing`)
+  timestamp: 2026-08-01T18:05:00.755032+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'Flaky under full-suite load: collect_response_content drains notifications on a fixed 500ms sleep'
@@ -424,3 +535,35 @@ are dropped.
 ### Review coverage gap (not a code finding)
 
 - [ ] `crates/llama-agent/src/acp/server.rs` — the engine CANNOT review this file: it inlines 318,564 bytes, over the 262,144-byte review batch size, and a file is never split across batches. The `batch_size` modifier is ignored by the running MCP server (a review with `batch_size: 1` still reported the 262,144 default), and the `sah tool review` CLI path has no agent factory, so no route raises the budget. The 9 lines this commit adds at `server.rs:2705-2713` (the `AcpServer::prompt` end-of-turn marker emitter) therefore went un-reviewed. Split the file, or repair the `batch_size` passthrough, then re-review it.
+
+## Review Findings (2026-08-01 12:35)
+
+Scope: commit `d29a4ce25` (`HEAD~1..HEAD`), 18 files. `review sha` HARD-ERRORED
+again on `crates/llama-agent/src/acp/server.rs` (319,069 bytes, over the
+262,144-byte batch budget), so this pass used per-file `review file` runs, as the
+previous pass did. `crates/llama-agent/src/acp/server.rs` could NOT be reviewed —
+the same tooling limit, tracked by ^3rnvage. Its change in this commit is comments
+only; the emitter code itself blames to `fcf1674b0`, out of this scope.
+
+Engine line numbers were resolved to their true location and blame-checked against
+`d29a4ce25`. 113 raw findings came back across the reviewed files; 111 blame to
+commits between 2025-12-09 and 2026-05-01 and are pre-existing, so they are
+dropped. Two remain.
+
+- [x] `crates/agent-client-protocol-extras/src/playback.rs:290` — Near-verbatim pattern for sending session update notifications repeats in two functions. Both `send_recorded_notifications` (lines 289-291) and `send_turn_complete` (lines 319-324) construct `Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params))` and send it via `send_message`. This pattern should be extracted into a shared helper to avoid drift if the structure or constants change. Extract a helper function `fn send_session_update_notification(tx: &..., params: Params) -> AcpResult<()>` that combines the `Request::notification_v2(SESSION_UPDATE_METHOD.to_string(), Some(params))` construction and `send_message` call. Call this helper from both `send_recorded_notifications` and `send_turn_complete` to eliminate the duplication.
+  - Resolved locations: the construction sits at `playback.rs:288-292` inside `send_turn_complete`, and at `playback.rs:340-341` inside `send_recorded_notifications`. The engine swapped the two function names, and its second range is stale.
+  - Guardrail: this is the SAME two call sites round 1 flagged at `playback.rs:285` and the same duplication rule, one level of abstraction up — round 1 asked for a shared constant, this asks for a shared helper. The two are additive, not contradictory.
+  - FIXED: `send_session_update_notification(tx, params)` is the one construction site. Both callers go through it. Swept the file for the root: no other site builds a `session/update` notification by hand — the only remaining `notification_v2` calls are inside the helper and a test's `session/cancel`.
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:1` — The module claims "Every `session/prompt` exit path emits the end-of-turn marker", but only ONE exit is tested: the rejected prompt. The two exits that the new `marker_session_id` fallback in `ClaudeAgent::prompt` exists to serve have no test — an unresolvable session id (`invalid_params`, not found) and a session store that cannot be read (`internal_error`, -32603). Those are exactly the exits where the marker is addressed to `request.session_id` instead of the resolved id, so the addressing rule the code documents is unverified. This card already claimed "every exit" once on unverified reasoning and was wrong three ways. Add one test per exit: subscribe a collector on the id the client sends, prompt with that id, and assert the drain ends on the marker inside `DRAIN_MUST_FINISH_WITHIN` rather than on the backstop.
+  - FIXED: two tests added, one per exit, each subscribing on the id the CLIENT sends. The -32603 exit is staged by poisoning the `SessionManager` `RwLock` through its own public `update_session` with a panicking closure — the real condition, no test-only production hook. Both RED with the pre-fix `?` (`Elapsed(())` at 2.21 s, far below the 10 s backstop), both GREEN after. Neither spawns the claude CLI (`spawn_claude_on_new_session: false`); each runs in 0.21 s.
+  - The module doc no longer overclaims. It now says what is proven — "every `session/prompt` exit that returns without running a turn" — tabulates the three exits with their error code and the id the marker is addressed to, and states plainly that a backend-driven turn is not tested here because it needs the CLI.
+
+### Judgment on the open review-coverage item
+
+The unchecked `crates/llama-agent/src/acp/server.rs` item does NOT block `done` for
+this card. It is a tooling limit, its remedy (split a 319 KB file, or repair the
+`batch_size` passthrough) is outside a card about a notification drain, and it is
+tracked with its own acceptance criterion on ^3rnvage ("`crates/llama-agent/src/acp/server.rs`
+gets a review through a normal route"). For THIS commit the un-reviewed delta is a
+comment block, read by hand and correct. The card stays in `review` for the two
+code findings above, not for this item.
