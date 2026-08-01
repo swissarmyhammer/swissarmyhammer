@@ -33,7 +33,7 @@ pub mod types;
 
 // Re-export main types
 pub use error::{GitError, GitResult};
-pub use operations::GitOperations;
+pub use operations::{GitOperations, LineBlame};
 pub use repository::GitRepository;
 pub use types::{BranchName, CommitInfo, StatusSummary};
 

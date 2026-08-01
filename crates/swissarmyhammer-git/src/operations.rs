@@ -23,6 +23,47 @@ pub struct GitOperations {
 /// accumulate into (see [`GitOperations::STATUS_BUCKETS`]).
 type StatusBucket = fn(&mut StatusSummary) -> &mut Vec<String>;
 
+/// The commit attribution for one line of a file's content at the point of
+/// review, from [`GitOperations::blame_lines`].
+///
+/// A real commit is the common case; the other variants cover every way a
+/// line can fail to attribute to one — an uncommitted edit, a path git has
+/// never heard of, or a blame call that failed outright. Each renders to a
+/// fixed-width 8-character label via [`LineBlame::sha_label`], the exact
+/// column width the review prime's numbered-line format uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LineBlame {
+    /// The full sha of the commit that last changed this line. Rendered as
+    /// its first 8 characters.
+    Commit(String),
+    /// The line has no committed history at this content — an uncommitted
+    /// worktree edit, or a line in a file git tracks (staged or already
+    /// committed elsewhere) that has never itself been committed.
+    Worktree,
+    /// Git does not track this path at all: it is in neither the index nor
+    /// HEAD's tree (or the revision blame was bounded to), so there is no
+    /// history to blame.
+    Untracked,
+    /// Blame was attempted and failed for a reason other than the path being
+    /// untracked or brand new. Never propagated as a hard error — the caller
+    /// logs it and continues.
+    Failed,
+}
+
+impl LineBlame {
+    /// The fixed 8-character sha-column label: the first 8 hex characters of
+    /// a real commit sha, or one of the fixed 8-character sentinels
+    /// (`worktree`, `untrackd`, `????????`).
+    pub fn sha_label(&self) -> String {
+        match self {
+            LineBlame::Commit(oid) => oid.chars().take(8).collect(),
+            LineBlame::Worktree => "worktree".to_string(),
+            LineBlame::Untracked => "untrackd".to_string(),
+            LineBlame::Failed => "????????".to_string(),
+        }
+    }
+}
+
 impl GitOperations {
     /// Create a new GitOperations instance for the current directory
     pub fn new() -> GitResult<Self> {
@@ -954,6 +995,129 @@ impl GitOperations {
     pub fn branch_exists_str(&self, branch_name: &str) -> GitResult<bool> {
         let branch = BranchName::new(branch_name)?;
         self.branch_exists(&branch)
+    }
+
+    /// Blame every line of `content` — the file's text at the point of review,
+    /// which may differ from the committed blob (an uncommitted worktree edit) —
+    /// against its committed history.
+    ///
+    /// `newest` bounds the history walk to the commit named, mirroring `git
+    /// blame <newest> -- path`; `None` blames against HEAD, the right anchor
+    /// for a working-tree/single-file/glob scope whose content may carry
+    /// uncommitted edits. A [`Scope::Sha`](crate) range review passes the
+    /// range's "to" commit so history past that point is never attributed.
+    ///
+    /// The algorithm layers two git2 primitives so an uncommitted edit is
+    /// distinguished from a real commit without reimplementing blame:
+    /// 1. [`git2::Repository::blame_file`] blames the path as of `newest`
+    ///    (or HEAD) — the committed history.
+    /// 2. [`git2::Blame::blame_buffer`] re-blames that result against
+    ///    `content`: a line that differs from the committed blob is marked
+    ///    with git's own uncommitted-change sentinel (a zero commit id),
+    ///    exactly how `git blame <path>` (no revision) reports a dirty edit.
+    ///
+    /// Returns one [`LineBlame`] per line of `content` (via
+    /// [`str::lines`]) — never fewer, never more, so a caller zipping this
+    /// with the same content's line iterator never runs out of either side.
+    /// A path git does not track at all (absent from both the index and the
+    /// resolved tree) short-circuits to [`LineBlame::Untracked`] for every
+    /// line without attempting blame. A path git tracks (staged or
+    /// committed) but that has no commit reachable from `newest`/HEAD yet — a
+    /// brand-new file — short-circuits to [`LineBlame::Worktree`] for every
+    /// line: it is not yet blamable at the point of review, the same
+    /// semantics as an uncommitted edit to an existing file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError`] only for a blame failure unrelated to the
+    /// tracked/brand-new cases above (both of which are handled without
+    /// error). Callers must not treat a blame failure as fatal to a larger
+    /// operation — [`LineBlame::Failed`] exists for exactly that: catch the
+    /// error, log it, and substitute [`LineBlame::Failed`] for every line.
+    pub fn blame_lines(
+        &self,
+        path: &str,
+        content: &str,
+        newest: Option<git2::Oid>,
+    ) -> GitResult<Vec<LineBlame>> {
+        let line_count = content.lines().count();
+        if line_count == 0 {
+            return Ok(Vec::new());
+        }
+        if !self.path_is_tracked(path, newest) {
+            return Ok(vec![LineBlame::Untracked; line_count]);
+        }
+
+        let mut opts = git2::BlameOptions::new();
+        if let Some(oid) = newest {
+            opts.newest_commit(oid);
+        }
+        let base = match self
+            .repo
+            .inner()
+            .blame_file(Path::new(path), Some(&mut opts))
+        {
+            Ok(blame) => blame,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                // Tracked (staged, or present in the bounding tree) but not
+                // yet reachable from any commit blame can walk to — a
+                // brand-new file. Every line is "not yet blamable": worktree.
+                return Ok(vec![LineBlame::Worktree; line_count]);
+            }
+            Err(e) => return Err(convert_git2_error("blame_file", e)),
+        };
+
+        let layered = base
+            .blame_buffer(content.as_bytes())
+            .map_err(|e| convert_git2_error("blame_buffer", e))?;
+
+        let mut out = Vec::with_capacity(line_count);
+        for lineno in 1..=line_count {
+            let attribution = match layered.get_line(lineno) {
+                Some(hunk) => {
+                    let oid = hunk.final_commit_id();
+                    if oid.is_zero() {
+                        LineBlame::Worktree
+                    } else {
+                        LineBlame::Commit(oid.to_string())
+                    }
+                }
+                // No hunk for this line is unexpected once the layered blame
+                // spans `content`'s own line count; treat conservatively as
+                // an uncommitted line rather than panicking on an index.
+                None => LineBlame::Worktree,
+            };
+            out.push(attribution);
+        }
+        Ok(out)
+    }
+
+    /// Whether git is aware of `path` at all as of `at` (or, when `at` is
+    /// `None`, the index/HEAD): present in the given commit's tree, or — only
+    /// when `at` is `None` — staged in the index. A path git does not track
+    /// (never staged, never committed, not present at `at`) returns `false`.
+    fn path_is_tracked(&self, path: &str, at: Option<git2::Oid>) -> bool {
+        let repo = self.repo.inner();
+        if let Some(oid) = at {
+            return repo
+                .find_commit(oid)
+                .and_then(|c| c.tree())
+                .map(|t| t.get_path(Path::new(path)).is_ok())
+                .unwrap_or(false);
+        }
+        if let Ok(index) = repo.index() {
+            if index.get_path(Path::new(path), 0).is_some() {
+                return true;
+            }
+        }
+        if let Ok(head) = repo.head() {
+            if let Ok(commit) = head.peel_to_commit() {
+                if let Ok(tree) = commit.tree() {
+                    return tree.get_path(Path::new(path)).is_ok();
+                }
+            }
+        }
+        false
     }
 }
 
@@ -2392,5 +2556,170 @@ mod tests {
         let target = git_ops.find_merge_target_for_issue(&branch).unwrap();
         // Should find main as the merge target
         assert_eq!(target, "main");
+    }
+
+    // ---- blame_lines --------------------------------------------------
+
+    /// Two commits, the second modifying only line 2. Blame must attribute
+    /// each line to the commit that actually last touched it — not both to
+    /// the newer commit — proving the per-line (not per-file) attribution.
+    #[test]
+    fn blame_lines_attributes_each_line_to_its_own_last_commit() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let repo_path = git_ops.work_dir().to_path_buf();
+
+        std::fs::write(repo_path.join("blamed.txt"), "one\ntwo\nthree\n").unwrap();
+        let first_sha = commit_all(&git_ops, "add blamed.txt");
+
+        std::fs::write(repo_path.join("blamed.txt"), "one\nTWO-EDITED\nthree\n").unwrap();
+        let second_sha = commit_all(&git_ops, "edit line two");
+
+        let content = "one\nTWO-EDITED\nthree\n";
+        let blame = git_ops.blame_lines("blamed.txt", content, None).unwrap();
+
+        assert_eq!(blame.len(), 3, "one entry per content line, got {blame:?}");
+        assert_eq!(
+            blame[0],
+            LineBlame::Commit(first_sha.clone()),
+            "line 1 was never touched by the second commit"
+        );
+        assert_eq!(
+            blame[1],
+            LineBlame::Commit(second_sha),
+            "line 2 was changed by the second commit"
+        );
+        assert_eq!(
+            blame[2],
+            LineBlame::Commit(first_sha),
+            "line 3 was never touched by the second commit"
+        );
+    }
+
+    /// A line edited in the working tree but never staged/committed has no
+    /// committed history at that content — `git blame`'s own "not committed
+    /// yet" sentinel — which `blame_lines` reports as [`LineBlame::Worktree`].
+    /// An untouched line in the same file keeps its real committed sha.
+    #[test]
+    fn blame_lines_marks_a_dirty_uncommitted_line_as_worktree() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let repo_path = git_ops.work_dir().to_path_buf();
+
+        std::fs::write(repo_path.join("dirty.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let sha = commit_all(&git_ops, "add dirty.txt");
+
+        // Dirty edit to line 2, left uncommitted (and unstaged).
+        let dirty_content = "alpha\nBETA-DIRTY\ngamma\n";
+        std::fs::write(repo_path.join("dirty.txt"), dirty_content).unwrap();
+
+        let blame = git_ops
+            .blame_lines("dirty.txt", dirty_content, None)
+            .unwrap();
+
+        assert_eq!(blame.len(), 3);
+        assert_eq!(blame[0], LineBlame::Commit(sha.clone()));
+        assert_eq!(
+            blame[1],
+            LineBlame::Worktree,
+            "an uncommitted dirty line must show as worktree, got {blame:?}"
+        );
+        assert_eq!(blame[2], LineBlame::Commit(sha));
+    }
+
+    /// A file git has never heard of at all (never staged, never committed)
+    /// has no history to blame — every line reports [`LineBlame::Untracked`].
+    #[test]
+    fn blame_lines_marks_every_line_untracked_for_a_file_git_does_not_track() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let repo_path = git_ops.work_dir().to_path_buf();
+
+        // Written to disk but never `git add`ed.
+        std::fs::write(repo_path.join("never_tracked.txt"), "solo line\n").unwrap();
+
+        let blame = git_ops
+            .blame_lines("never_tracked.txt", "solo line\n", None)
+            .unwrap();
+
+        assert_eq!(blame, vec![LineBlame::Untracked]);
+    }
+
+    /// A brand-new file that IS staged (added to the index) but never
+    /// committed is tracked, yet has no commit blame can walk to — "not yet
+    /// blamable at the point of review", the same [`LineBlame::Worktree`]
+    /// semantics as a dirty edit to an existing file.
+    #[test]
+    fn blame_lines_marks_a_staged_new_file_as_worktree() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let repo_path = git_ops.work_dir().to_path_buf();
+
+        std::fs::write(repo_path.join("brand_new.txt"), "fresh\ncontent\n").unwrap();
+        let repo = git_ops.repository().inner();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("brand_new.txt"))
+            .unwrap();
+        index.write().unwrap();
+
+        let blame = git_ops
+            .blame_lines("brand_new.txt", "fresh\ncontent\n", None)
+            .unwrap();
+
+        assert_eq!(
+            blame,
+            vec![LineBlame::Worktree, LineBlame::Worktree],
+            "a staged-but-uncommitted new file is not yet blamable, got {blame:?}"
+        );
+    }
+
+    /// Blame bounded to an older commit (`newest`) must not see a later
+    /// commit's edit — the line reads as it was at that historical endpoint,
+    /// attributed to the commit reachable from `newest`.
+    #[test]
+    fn blame_lines_bounds_history_to_the_newest_commit() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let repo_path = git_ops.work_dir().to_path_buf();
+
+        std::fs::write(repo_path.join("bounded.txt"), "v1\n").unwrap();
+        let first_sha = commit_all(&git_ops, "v1");
+        std::fs::write(repo_path.join("bounded.txt"), "v2\n").unwrap();
+        let _second_sha = commit_all(&git_ops, "v2");
+
+        let first_oid = git2::Oid::from_str(&first_sha).unwrap();
+        // Blame the FIRST commit's content bounded to the FIRST commit: the
+        // second commit must be invisible to this call.
+        let blame = git_ops
+            .blame_lines("bounded.txt", "v1\n", Some(first_oid))
+            .unwrap();
+
+        assert_eq!(blame, vec![LineBlame::Commit(first_sha)]);
+    }
+
+    /// An empty content string (the deleted-file case) has nothing to blame:
+    /// `blame_lines` returns an empty vec without touching git at all.
+    #[test]
+    fn blame_lines_returns_empty_for_empty_content() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let blame = git_ops.blame_lines("anything.txt", "", None).unwrap();
+        assert!(blame.is_empty());
+    }
+
+    /// Stage everything and commit in `git_ops`'s repo, returning the new
+    /// commit's full sha — the shared helper the blame tests use so each
+    /// scenario stays focused on its git state rather than commit plumbing.
+    fn commit_all(git_ops: &GitOperations, message: &str) -> String {
+        let repo = git_ops.repository().inner();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Test User", "test@example.com").unwrap();
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap();
+        oid.to_string()
     }
 }

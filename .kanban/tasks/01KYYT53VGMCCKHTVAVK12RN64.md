@@ -1,8 +1,39 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d980
+comments:
+- actor: claude-code
+  id: 01kyzkr6akxrzhs1yzqzsx8t2s
+  text: |-
+    ### implement — changed
+
+    **Files touched**
+    - `crates/swissarmyhammer-git/src/operations.rs` — new `LineBlame` enum (`Commit(sha)` / `Worktree` / `Untracked` / `Failed`, each with an 8-char `sha_label()`), new `GitOperations::blame_lines(path, content, newest)` (layers `blame_file` + `blame_buffer` so an uncommitted/dirty line reads as `Worktree`, bounded to `newest` for a historical `Sha` review), private `path_is_tracked` helper, 6 new tests.
+    - `crates/swissarmyhammer-git/src/lib.rs` — export `LineBlame`.
+    - `crates/swissarmyhammer-validators/src/review/scope.rs` — new `LineAnnotation` (sha + touched), `FileWork::line_annotations` (attached via `.with_line_annotations`, not a breaking ctor change), `ResolvedScope::blame_at` (the Sha-scope "to" commit anchor; `None` elsewhere), `compute_line_marks` (git2::Patch-based before/after diff — the ONLY source of the `+` mark, never blame), `compute_line_annotations` (one blame call per matched file, run concurrently via `tokio::task::spawn_blocking`, each opening its own `GitOperations` handle since `git2::Repository` is `Send` not `Sync`). 6 new tests + `resolve_oid` helper.
+    - `crates/swissarmyhammer-validators/src/review/fleet.rs` — `render_numbered_source` + `LINE_FORMAT_LEGEND` replace the bare fenced block; `DEFAULT_BATCH_SIZE` raised 256 KiB → 384 KiB.
+    - `crates/swissarmyhammer-validators/src/review/fleet/tests.rs` — updated the `DEFAULT_BATCH_SIZE` pin test.
+
+    **Format** (exact spec from the task): `{line:>6} | {sha:8} {mark} | {text}`, with a legend above the block instructing the model to READ the number, not count.
+
+    **Edge cases — all covered with real tests**
+    - Uncommitted/dirty line → `worktree` (git's own "not committed yet" sentinel via `blame_buffer`).
+    - Brand-new file, staged or untracked-but-code → `worktree` (tracked, no reachable commit yet) or `untrackd` (git doesn't track it at all) — distinguished via index/tree lookup, not a heuristic.
+    - Deleted file → block stays empty, unchanged from prior behavior (verified, no new code path touches it).
+    - Blame failure for any other reason → `????????`, `tracing::warn!`, review continues. `compute_line_annotations` has NO `Result` return — a blame failure is structurally incapable of aborting the review, not just tested not to.
+
+    **A real bug caught by the tests**: my first pass trimmed content with `.trim_end()` *before* handing it to blame/diff, which byte-mismatched every file's last line against its committed blob (which ends in `\n`) — falsely marking almost every file's LAST line as `worktree`/touched. Fixed by diffing/blaming the RAW content and only trimming for the final render-facing line count. Caught by `working_scope_dirty_line_gets_worktree_sha` and `sha_scope_line_annotations_carry_correct_number_sha_and_mark` before this ever reached review runs.
+
+    **batch_size decision**: kept the raw-`source_slice`-byte budget in `batch_work_list` (does NOT measure the rendered block) — avoids coupling the deterministic scope stage to the fleet stage's rendering. Raised `DEFAULT_BATCH_SIZE` 256 KiB → 384 KiB (1.5x) to comfortably clear the measured ~1.45x rendering overhead. Pinned by `default_batch_size_is_384_kib`.
+
+    **Blame wall-clock**: `blame_overhead_on_a_representative_commit_is_small_and_concurrent` measures a full `scope_review` (semantic diff + probes + blame) over 8 files × 150 lines each with a dirty edit: **~10.6ms** end-to-end. Blame itself runs one call per file concurrently via `spawn_blocking`; negligible next to a real validator LLM turn (seconds–minutes).
+
+    **Test counts**: swissarmyhammer-git 96 → 102 (+6). swissarmyhammer-validators 334 → 340 (+6, plus 1 modified). `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'`: 5031 passed, 0 failed, 2 skipped (including the real-model e2e `review_runs_over_acp_against_a_real_local_model`, which exercises this code on the real production path). `cargo clippy --workspace --all-targets -- -D warnings`: clean. `cargo fmt --all`: no diffs.
+
+    next: /review
+  timestamp: 2026-08-01T21:30:14.739171+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'Review prime: number every line and show its blame commit'
 ---
 # Problem 1: the model guesses the line number
