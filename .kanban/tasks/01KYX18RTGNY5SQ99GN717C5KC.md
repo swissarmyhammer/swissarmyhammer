@@ -1,8 +1,49 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d580
+comments:
+- actor: claude-code
+  id: 01kyxazg0zx34q836njbw8j32z
+  text: |-
+    Implemented all 3 typed pairs in `crates/swissarmyhammer-validators/src/review/scope.rs`.
+
+    1. `FileChangeBuilder::push(path: FilePath, versions: FileVersions)` — the two sides are now one named-field `FileVersions { before: BeforeContent, after: AfterContent }`. The card asked for a struct; the dispatch also required the two sides to be genuinely distinct types, so the struct carries two DIFFERENT newtypes. A transposed struct literal is `error[E0308]: mismatched types`, not just a mis-named field.
+    2. `ValidatorWork::new(validator_name, rules: RuleNames, probes: ProbeNames, files)` — two `#[serde(transparent)]` newtypes, so the serialized work-list payload does not change. `MatchedValidator` carries the same two types, so the internal path is typed end to end. The `rules()`/`probes()` accessors still return `&[String]`, so no consumer changed.
+    3. `select_probe_results(cache, file, changed_symbols: &[String], probes: &ProbeNames)` — reuses `ProbeNames` instead of a parallel newtype.
+
+    Also added `FilePath::into_string()` so `push` unwraps the path once.
+
+    `AfterContent::absent()` was written and then deleted: no production site needs it (only `BeforeContent::absent()` is used, by the glob scope), so it was dead code and `-D warnings` rejected it. The deletion side of the test uses `AfterContent::new(None)`.
+
+    Mechanical sweep tool at /tmp/sweep.py: parses every `fn` signature, splits parameters at top-level commas, compares adjacent types. Validated against `git show HEAD:...scope.rs` — it reports exactly the 3 pairs the card names. On the new file: 151 functions, 44 adjacent pairs, 0 same-typed.
+  timestamp: 2026-08-01T00:18:27.999245+00:00
+- actor: claude-code
+  id: 01kyxbd6ev4vpg4cdy3ngd21j6
+  text: |-
+    Verified. Evidence:
+
+    RED proof — deliberately transposing each pair and running `cargo check -p swissarmyhammer-validators --all-targets` gives 4 errors across the 3 pairs:
+    - `error[E0308]: mismatched types` ... `before: AfterContent::new(...)` — "expected `BeforeContent`, found `AfterContent`"; `after: BeforeContent::new(...)` — "expected `AfterContent`, found `BeforeContent`"
+    - `error[E0308]: arguments to this function are incorrect` on `ValidatorWork::new` — "expected `scope::RuleNames`, found `scope::ProbeNames`" and the mirror
+    - `error[E0308]: mismatched types` on `select_probe_results` — "expected `&ProbeNames`, found `&Vec<String>`"
+    The transpositions were reverted; `cargo check` is clean.
+
+    GREEN — `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'`: 5020 tests run, 5020 passed, 2 skipped. `cargo fmt --all` applied. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    Sweep — scope.rs after the change: 151 functions parsed, 44 adjacent parameter pairs compared, 0 same-typed. The same tool on HEAD reports exactly the 3 pairs the card names, so it is not vacuously passing.
+
+    Outside scope.rs (REPORT ONLY, not touched — needs a separate scope decision): 8 same-typed adjacent pairs in non-test crate code —
+    - review/types.rs `extract_json_value(open: char, close: char)` and `matching_delimiter(open: char, close: char)`
+    - review/fleet.rs `handle_fork_failed(parent_session_id: String, message: String)` and `parse_task_response(content: &str, validator: &str)`
+    - review/drive.rs `confine_under_repo(repo_root: &Path, requested: &Path)`
+    - review/synthesize.rs `FleetTally::new(attempted: usize, failed: usize)`
+    - validators/loader.rs `add_builtin(name: &str, content: &str)` and `add_builtin_include(name: &str, content: &str)`
+    (26 more sit in test helpers/fixtures.)
+
+    An independent double-check agent re-derived the four `builder.push` call sites against HEAD (no side swapped), confirmed `push` produces identical `SemFileChange` values, confirmed the tracing output and the serialized payload are unchanged, and ran its own signature parser: PASS.
+  timestamp: 2026-08-01T00:25:56.955410+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'scope.rs: type the 3 remaining transposable adjacent parameter pairs'
 ---
 # Why

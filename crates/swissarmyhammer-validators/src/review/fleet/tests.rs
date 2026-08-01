@@ -7,7 +7,7 @@ use serde_json::json;
 use swissarmyhammer_sem::model::change::{ChangeType, SemanticChange};
 
 use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
-use crate::review::scope::WorkList;
+use crate::review::scope::{ProbeNames, RuleNames, WorkList};
 use crate::review::test_support::{
     findings_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     MOCK_PREFIX_TOKENS,
@@ -138,8 +138,8 @@ fn file_work_with_slice(path: &str, symbol: &str, dup_at: &str, source_slice: St
 fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
     ValidatorWork::new(
         name.to_string(),
-        vec![format!("{name}-rule")],
-        vec!["duplicates".to_string()],
+        RuleNames::new([format!("{name}-rule")]),
+        ProbeNames::new(["duplicates".to_string()]),
         files,
     )
 }

@@ -182,25 +182,75 @@ impl WorkList {
     }
 }
 
+/// The rule names inside a validator — what a review fork applies to a file.
+///
+/// Distinct from [`ProbeNames`] on purpose. Both lists are name lists, and they
+/// sit next to each other in [`ValidatorWork::new`], so the compiler is the only
+/// thing that can stop a call site passing them in the wrong order; giving each
+/// list its own type makes the transposition a type error instead of a validator
+/// that reviews against probe names and declares its rules as evidence.
+///
+/// Serializes as the bare list, so the work-list payload is unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct RuleNames(Vec<String>);
+
+impl RuleNames {
+    /// Collect one validator's rule names.
+    pub fn new(names: impl IntoIterator<Item = String>) -> Self {
+        Self(names.into_iter().collect())
+    }
+
+    /// The rule names, in declaration order.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// The probe names a validator declared — the engine-run evidence it wants.
+///
+/// Distinct from [`RuleNames`] so the two name lists cannot be transposed at a
+/// call site; see that type for why the pair is typed.
+///
+/// Serializes as the bare list, so the work-list payload is unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ProbeNames(Vec<String>);
+
+impl ProbeNames {
+    /// Collect one validator's declared probe names.
+    pub fn new(names: impl IntoIterator<Item = String>) -> Self {
+        Self(names.into_iter().collect())
+    }
+
+    /// The probe names, in declaration order.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
 /// One matched validator's slice of the work-list.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidatorWork {
     /// The validator (RuleSet) name.
     validator_name: String,
     /// The rule names inside the validator.
-    rules: Vec<String>,
+    rules: RuleNames,
     /// The probe names the validator declared.
-    probes: Vec<String>,
+    probes: ProbeNames,
     /// The files this validator must review.
     files: Vec<FileWork>,
 }
 
 impl ValidatorWork {
     /// Assemble one validator's slice of the work-list.
+    ///
+    /// The two name lists are separate types ([`RuleNames`], [`ProbeNames`]) so
+    /// no call site can transpose them.
     pub fn new(
         validator_name: String,
-        rules: Vec<String>,
-        probes: Vec<String>,
+        rules: RuleNames,
+        probes: ProbeNames,
         files: Vec<FileWork>,
     ) -> Self {
         Self {
@@ -218,12 +268,12 @@ impl ValidatorWork {
 
     /// The rule names inside the validator.
     pub fn rules(&self) -> &[String] {
-        &self.rules
+        self.rules.as_slice()
     }
 
     /// The probe names the validator declared.
     pub fn probes(&self) -> &[String] {
-        &self.probes
+        self.probes.as_slice()
     }
 
     /// The files this validator must review.
@@ -569,8 +619,8 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
         tracing::debug!(
             validator = %validator.validator_name,
             files = ?files,
-            probes = ?validator.probes,
-            rules = ?validator.rules,
+            probes = ?validator.probes.as_slice(),
+            rules = ?validator.rules.as_slice(),
             "review scope: validator matched"
         );
     }
@@ -579,8 +629,8 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
 /// A validator matched to one or more files, accumulated during matching.
 struct MatchedValidator {
     name: String,
-    rules: Vec<String>,
-    probes: Vec<String>,
+    rules: RuleNames,
+    probes: ProbeNames,
     files: BTreeSet<String>,
 }
 
@@ -588,8 +638,8 @@ impl MatchedValidator {
     fn from_ruleset(rs: &RuleSet) -> Self {
         Self {
             name: rs.name().to_string(),
-            rules: rs.rules.iter().map(|r| r.name.clone()).collect(),
-            probes: rs.manifest.probes.clone(),
+            rules: RuleNames::new(rs.rules.iter().map(|r| r.name.clone())),
+            probes: ProbeNames::new(rs.manifest.probes.iter().cloned()),
             files: BTreeSet::new(),
         }
     }
@@ -861,6 +911,11 @@ impl FilePath {
     fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
+
+    /// Unwrap the path for a consumer that stores it as a plain `String`.
+    fn into_string(self) -> String {
+        self.0
+    }
 }
 
 impl std::fmt::Display for FilePath {
@@ -933,9 +988,10 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = after_by_path.get(path).cloned().unwrap_or(None);
-        let before = read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?;
-        builder.push(path, before, after);
+        let after = AfterContent::new(after_by_path.get(path).cloned().unwrap_or(None));
+        let before =
+            BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
+        builder.push(FilePath::new(path), FileVersions { before, after });
     }
     Ok(builder.finish(files, auto_purpose("working-tree changes")))
 }
@@ -955,9 +1011,9 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let before = read_at_ref(&repo, from_ref.clone(), FilePath::new(path))?;
-        let after = read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?;
-        builder.push(path, before, after);
+        let before = BeforeContent::new(read_at_ref(&repo, from_ref.clone(), FilePath::new(path))?);
+        let after = AfterContent::new(read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?);
+        builder.push(FilePath::new(path), FileVersions { before, after });
     }
 
     let purpose = commit_messages(&repo, &to_ref)
@@ -974,11 +1030,11 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 /// with [`AvpError::Validator`] and its content is never read into scope.
 fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
-    let after = read_working(repo_path, path)?;
-    let before = read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?;
+    let after = AfterContent::new(read_working(repo_path, path)?);
+    let before = BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
 
     let mut builder = FileChangeBuilder::new();
-    builder.push(path, before, after);
+    builder.push(FilePath::new(path), FileVersions { before, after });
     Ok(builder.finish(
         vec![path.to_string()],
         auto_purpose(&format!("review of {path}")),
@@ -1004,8 +1060,15 @@ fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpErr
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = read_working(repo_path, path)?;
-        builder.push(path, None, after);
+        // A glob scope has no base side: every matched file diffs as all-added.
+        let after = AfterContent::new(read_working(repo_path, path)?);
+        builder.push(
+            FilePath::new(path),
+            FileVersions {
+                before: BeforeContent::absent(),
+                after,
+            },
+        );
     }
     Ok(builder.finish(files, auto_purpose(&format!("files matching {pattern}"))))
 }
@@ -1028,6 +1091,68 @@ fn commit_messages(repo: &GitOperations, refspec: &GitRefSpec) -> Option<String>
     }
 }
 
+/// A file's content at the **base** revision of the change — `None` when the
+/// file did not exist there (the Added signal).
+///
+/// Distinct from [`AfterContent`] on purpose, and the sharper case of the same
+/// hazard as [`GitRefSpec`]/[`FilePath`]: both sides are `Option<String>` and
+/// they arrive together at [`FileChangeBuilder::push`], so nothing but the
+/// compiler can stop a call site swapping them — and a swap does not fail
+/// loudly, it flips [`FileStatus::Added`] to [`FileStatus::Deleted`] and hands
+/// the review a plausible-looking INVERTED diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BeforeContent(Option<String>);
+
+impl BeforeContent {
+    /// Wrap the base-revision content of a file.
+    fn new(content: Option<String>) -> Self {
+        Self(content)
+    }
+
+    /// The absent base side — a file that did not exist before the change.
+    fn absent() -> Self {
+        Self(None)
+    }
+
+    /// Unwrap for the sem-diff input.
+    fn into_inner(self) -> Option<String> {
+        self.0
+    }
+}
+
+/// A file's content **after** the change — `None` when the file no longer
+/// exists (the Deleted signal).
+///
+/// Distinct from [`BeforeContent`] so the two sides cannot be transposed; see
+/// that type for what a transposition would do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AfterContent(Option<String>);
+
+impl AfterContent {
+    /// Wrap the post-change content of a file.
+    fn new(content: Option<String>) -> Self {
+        Self(content)
+    }
+
+    /// Unwrap for the sem-diff input.
+    fn into_inner(self) -> Option<String> {
+        self.0
+    }
+}
+
+/// Both sides of one file's change, named rather than positional.
+///
+/// [`FileChangeBuilder::push`] takes this single argument instead of two
+/// `Option<String>`s: the fields name each side at the call site, and their
+/// distinct types ([`BeforeContent`], [`AfterContent`]) make a transposed
+/// struct literal a compile error rather than an inverted diff.
+struct FileVersions {
+    /// The content at the base revision.
+    before: BeforeContent,
+    /// The content after the change.
+    after: AfterContent,
+}
+
 /// Accumulates the per-file sem-diff inputs and after-content as files resolve.
 struct FileChangeBuilder {
     file_changes: Vec<SemFileChange>,
@@ -1043,9 +1168,15 @@ impl FileChangeBuilder {
     }
 
     /// Record one file's before/after content for the sem differ.
-    fn push(&mut self, path: &str, before: Option<String>, after: Option<String>) {
+    ///
+    /// The two sides arrive as one named-field [`FileVersions`], so they cannot
+    /// be transposed into an inverted diff.
+    fn push(&mut self, path: FilePath, versions: FileVersions) {
+        let FileVersions { before, after } = versions;
+        let (before, after) = (before.into_inner(), after.into_inner());
+        let path = path.into_string();
         if let Some(content) = &after {
-            self.after_content.insert(path.to_string(), content.clone());
+            self.after_content.insert(path.clone(), content.clone());
         }
         let status = match (&before, &after) {
             (None, Some(_)) => FileStatus::Added,
@@ -1053,7 +1184,7 @@ impl FileChangeBuilder {
             _ => FileStatus::Modified,
         };
         self.file_changes.push(SemFileChange {
-            file_path: path.to_string(),
+            file_path: path,
             status,
             old_file_path: None,
             before_content: before,
@@ -1082,7 +1213,7 @@ async fn run_probe_cache(
 ) -> Result<Vec<ProbeResult>, AvpError> {
     let union: BTreeSet<String> = validators
         .values()
-        .flat_map(|mv| mv.probes.iter().cloned())
+        .flat_map(|mv| mv.probes.as_slice().iter().cloned())
         .collect();
     if union.is_empty() || change_entities.is_empty() {
         return Ok(Vec::new());
@@ -1099,15 +1230,19 @@ async fn run_probe_cache(
 /// `changed_symbols` are this file's changed-entity names (the semantic diff's
 /// `entity_name → file_path` mapping, pre-resolved per file), used to attach a
 /// symbol-targeted probe result back to the file whose entity bears that name.
+///
+/// The two name lists are deliberately different types: the declared probes
+/// arrive as [`ProbeNames`] and the changed symbols as a plain slice, so a call
+/// site cannot transpose them into filtering probe names against symbols.
 fn select_probe_results(
     cache: &[ProbeResult],
     file: &str,
     changed_symbols: &[String],
-    probes: &[String],
+    probes: &ProbeNames,
 ) -> Vec<ProbeResult> {
     cache
         .iter()
-        .filter(|r| probes.contains(&r.name))
+        .filter(|r| probes.as_slice().contains(&r.name))
         .filter(|r| probe_result_for_file(r, file, changed_symbols))
         .cloned()
         .collect()
@@ -1240,6 +1375,7 @@ mod tests {
 
     use model_embedding::mock::MockEmbedder;
 
+    use crate::review::probes::ProbeKind;
     use crate::review::test_support::{
         body, dup_emb, index_conn, loader_with, ruleset, seed_call_edge, seed_chunk, seed_symbol,
         TestRepo, DIM,
@@ -1584,8 +1720,8 @@ mod tests {
     fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            rules: vec![format!("{name}-rule")],
-            probes: vec![],
+            rules: RuleNames::new([format!("{name}-rule")]),
+            probes: ProbeNames::default(),
             files: paths.iter().map(|p| file_at(p)).collect(),
         }
     }
@@ -1595,8 +1731,8 @@ mod tests {
     fn validator_sized(name: &str, files: &[(&str, usize)]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            rules: vec![format!("{name}-rule")],
-            probes: vec![],
+            rules: RuleNames::new([format!("{name}-rule")]),
+            probes: ProbeNames::default(),
             files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
         }
     }
@@ -1632,8 +1768,8 @@ mod tests {
 
         let validator = ValidatorWork::new(
             "dedup".to_string(),
-            vec!["dedup-rule".to_string()],
-            vec!["similar".to_string()],
+            RuleNames::new(["dedup-rule".to_string()]),
+            ProbeNames::new(["similar".to_string()]),
             vec![file],
         );
         assert_eq!(validator.validator_name(), "dedup");
@@ -2531,5 +2667,119 @@ mod tests {
             }
             other => panic!("expected AvpError::Context, got: {other:?}"),
         }
+    }
+
+    // ---- typed parameter pairs: a transposition must not compile ----------
+
+    /// The two sides of a file's change are DISTINCT types ([`BeforeContent`]
+    /// and [`AfterContent`]) carried by one named-field [`FileVersions`], so no
+    /// call site can transpose them: writing
+    /// `FileVersions { before: AfterContent::new(a), after: BeforeContent::new(b) }`
+    /// is `error[E0308]: mismatched types`, never a silently INVERTED diff.
+    /// This pins the direction each side carries into the semantic differ.
+    #[test]
+    fn file_change_builder_records_the_before_side_as_before_never_the_transposition() {
+        let mut builder = FileChangeBuilder::new();
+        builder.push(
+            FilePath::new("src/lib.rs"),
+            FileVersions {
+                before: BeforeContent::new(Some("fn old() {}\n".to_string())),
+                after: AfterContent::new(Some("fn new() {}\n".to_string())),
+            },
+        );
+        let resolved = builder.finish(vec!["src/lib.rs".to_string()], "purpose".to_string());
+
+        let change = &resolved.file_changes[0];
+        assert_eq!(change.file_path, "src/lib.rs");
+        assert_eq!(change.before_content.as_deref(), Some("fn old() {}\n"));
+        assert_eq!(change.after_content.as_deref(), Some("fn new() {}\n"));
+        assert_eq!(change.status, FileStatus::Modified);
+        // Only the AFTER side is the file's current content.
+        assert_eq!(
+            resolved.after_content.get("src/lib.rs").map(String::as_str),
+            Some("fn new() {}\n")
+        );
+    }
+
+    /// A file absent on the before side is an ADDITION; one absent on the after
+    /// side is a DELETION. Transposing the two sides inverts exactly this pair
+    /// — a plausible-looking but wholly wrong diff — which is why the sides are
+    /// separate types.
+    #[test]
+    fn an_absent_before_side_is_an_addition_and_an_absent_after_side_a_deletion() {
+        let mut builder = FileChangeBuilder::new();
+        builder.push(
+            FilePath::new("added.rs"),
+            FileVersions {
+                before: BeforeContent::absent(),
+                after: AfterContent::new(Some("fn added() {}\n".to_string())),
+            },
+        );
+        builder.push(
+            FilePath::new("deleted.rs"),
+            FileVersions {
+                before: BeforeContent::new(Some("fn deleted() {}\n".to_string())),
+                // A deleted file has no post-change content.
+                after: AfterContent::new(None),
+            },
+        );
+        let resolved = builder.finish(
+            vec!["added.rs".to_string(), "deleted.rs".to_string()],
+            "purpose".to_string(),
+        );
+
+        assert_eq!(resolved.file_changes[0].status, FileStatus::Added);
+        assert_eq!(resolved.file_changes[1].status, FileStatus::Deleted);
+        // A deleted file has no current content to inline.
+        assert!(!resolved.after_content.contains_key("deleted.rs"));
+    }
+
+    /// A validator's rule names and probe names are DISTINCT types
+    /// ([`RuleNames`], [`ProbeNames`]), so [`ValidatorWork::new`] cannot take
+    /// them transposed — the compiler rejects it. This pins which list each
+    /// accessor reports.
+    #[test]
+    fn validator_work_names_its_rules_and_probes_never_the_transposition() {
+        let validator = ValidatorWork::new(
+            "dedup".to_string(),
+            RuleNames::new(["dedup-rule".to_string()]),
+            ProbeNames::new(["similar".to_string()]),
+            vec![],
+        );
+        assert_eq!(validator.rules(), ["dedup-rule".to_string()]);
+        assert_eq!(validator.probes(), ["similar".to_string()]);
+    }
+
+    /// [`select_probe_results`] filters by PROBE NAME and attaches by changed
+    /// SYMBOL. The two lists are distinct types ([`ProbeNames`] against a plain
+    /// symbol slice), so they cannot be transposed; this pins which list each
+    /// filter reads.
+    #[test]
+    fn select_probe_results_filters_by_probe_name_and_attaches_by_changed_symbol() {
+        let probe = |name: &str, target: &str| ProbeResult {
+            name: name.to_string(),
+            kind: ProbeKind::Fact,
+            target: target.to_string(),
+            rows: vec![],
+        };
+        let cache = vec![probe("similar", "compute"), probe("callers", "compute")];
+        let declared = ProbeNames::new(["similar".to_string()]);
+        let changed = vec!["compute".to_string()];
+
+        let got = select_probe_results(&cache, "src/lib.rs", &changed, &declared);
+        let names: Vec<&str> = got.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["similar"],
+            "only the validator's DECLARED probe is selected"
+        );
+
+        // A symbol-targeted probe never attaches to a file whose changed
+        // symbols do not name that target.
+        let got = select_probe_results(&cache, "src/lib.rs", &[], &declared);
+        assert!(
+            got.is_empty(),
+            "an unrelated symbol target attaches to no file: {got:?}"
+        );
     }
 }

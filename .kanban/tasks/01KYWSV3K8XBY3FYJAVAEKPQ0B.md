@@ -78,8 +78,8 @@ comments:
     3. Acceptance criterion 2 had no recorded evidence. Recorded above.
     4. Unused `Clone` derive on the local `Tick` struct. Dropped.
   timestamp: 2026-07-31T23:41:33.530119+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8880
 title: Review progress ticks must be monotonic under load (bridge sequencing, not a test relaxation)
 ---
 # Problem

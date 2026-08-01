@@ -29,7 +29,9 @@ pub use probes::{
     probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,
     ProbeResult, ProbeResults, ProbeRow, CATALOG,
 };
-pub use scope::{scope_review, FileWork, Scope, ScopeSpec, ValidatorWork, WorkList};
+pub use scope::{
+    scope_review, FileWork, ProbeNames, RuleNames, Scope, ScopeSpec, ValidatorWork, WorkList,
+};
 pub use synthesize::{run_review, synthesize, FleetTally, ReviewCounts, ReviewReport};
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{

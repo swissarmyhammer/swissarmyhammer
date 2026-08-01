@@ -449,7 +449,7 @@ fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::review::scope::{FileWork, ValidatorWork};
+    use crate::review::scope::{FileWork, ProbeNames, RuleNames, ValidatorWork};
     use crate::review::types::RefutingLayer;
 
     /// The fixture timestamp passed as `now` to every `synthesize` call. Kept
@@ -876,7 +876,12 @@ mod tests {
 
     /// A `ValidatorWork` carrying the given files for one validator.
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
-        ValidatorWork::new(name.to_string(), vec![], vec![], files)
+        ValidatorWork::new(
+            name.to_string(),
+            RuleNames::default(),
+            ProbeNames::default(),
+            files,
+        )
     }
 
     #[test]
