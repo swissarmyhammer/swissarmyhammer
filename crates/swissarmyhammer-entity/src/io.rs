@@ -20,7 +20,7 @@ use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
-use crate::frontmatter::split_frontmatter_body;
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
 /// Maximum number of concurrent file reads issued by [`read_entity_dir`].
 ///

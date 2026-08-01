@@ -22,7 +22,6 @@ pub mod entity;
 pub mod error;
 pub mod events;
 pub mod filter;
-mod frontmatter;
 pub mod id_types;
 pub mod io;
 pub mod store;

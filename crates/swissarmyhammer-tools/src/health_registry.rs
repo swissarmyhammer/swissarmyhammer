@@ -6,6 +6,7 @@
 //! MCP tools implement the Doctorable trait via their registration, and
 //! standalone components (like prompts) also implement Doctorable directly.
 
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 use crate::mcp::tool_registry::ToolRegistry;
@@ -97,15 +98,8 @@ impl Doctorable for PromptHealthChecker {
             {
                 match std::fs::read_to_string(entry.path()) {
                     Ok(content) => {
-                        if content.starts_with("---") {
-                            let parts: Vec<&str> = content.splitn(3, "---").collect();
-                            if parts.len() >= 3 {
-                                if let Err(e) =
-                                    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(parts[1])
-                                {
-                                    yaml_errors.push((entry.path().to_path_buf(), e.to_string()));
-                                }
-                            }
+                        if let Some(error) = frontmatter_yaml_error(&content) {
+                            yaml_errors.push((entry.path().to_path_buf(), error));
                         }
                     }
                     Err(e) => {
@@ -137,6 +131,19 @@ impl Doctorable for PromptHealthChecker {
 
         checks
     }
+}
+
+/// Report the YAML error in a markdown file's frontmatter block
+///
+/// [`split_frontmatter_body`] finds the block between two lines of exactly
+/// three hyphens. Returns `None` when the text carries no such block -- a
+/// first line of `----` or `---x` opens nothing -- and when the block's YAML
+/// parses. Returns `Some(message)` with the parse error otherwise.
+fn frontmatter_yaml_error(content: &str) -> Option<String> {
+    let (frontmatter, _body) = split_frontmatter_body(content)?;
+    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter)
+        .err()
+        .map(|e| e.to_string())
 }
 
 /// Count markdown files in a directory
@@ -327,6 +334,45 @@ mod tests {
         assert!(
             !error_checks.is_empty(),
             "Should detect YAML parsing error in bad.md"
+        );
+    }
+
+    /// Test that a first line which only begins with three hyphens is not
+    /// read as a frontmatter delimiter, so the file reports no YAML error.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_prompt_health_checker_ignores_first_line_that_only_begins_with_hyphens() {
+        let tmp = TempDir::new().unwrap();
+        let prompts_dir = tmp.path().join(".prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+
+        // The first line starts with three hyphens but carries more text, so
+        // this file has no frontmatter block and its text is plain markdown.
+        fs::write(
+            prompts_dir.join("notfm.md"),
+            "---x\ntitle: [unclosed bracket\n---\n# Content",
+        )
+        .unwrap();
+
+        // The RAII guard restores the original working directory on drop,
+        // even if an assertion below panics.
+        let checks = {
+            use swissarmyhammer_common::test_utils::CurrentDirGuard;
+            let _cwd_guard = CurrentDirGuard::new(tmp.path())
+                .expect("Failed to pin working directory to the isolated temp dir");
+            let checker = PromptHealthChecker;
+            checker.run_health_checks()
+        };
+
+        let reported: Vec<&str> = checks
+            .iter()
+            .filter(|c| c.name.contains("notfm.md"))
+            .map(|c| c.message.as_str())
+            .collect();
+        assert!(
+            reported.is_empty(),
+            "notfm.md has no frontmatter, so it should report no YAML error, got: {:?}",
+            reported
         );
     }
 

@@ -20,8 +20,8 @@ use swissarmyhammer_fields::types::{EntityDef, FieldDef, FieldType};
 use swissarmyhammer_store::{StoreError, TrackedStore};
 
 use crate::entity::Entity;
-use crate::frontmatter::split_frontmatter_body;
 use crate::id_types::EntityId;
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
 /// Convenience alias matching the store crate's Result type.
 type StoreResult<T> = std::result::Result<T, StoreError>;

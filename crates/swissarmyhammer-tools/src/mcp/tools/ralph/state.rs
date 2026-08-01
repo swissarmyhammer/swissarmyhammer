@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use swissarmyhammer_directory::{ManagedDirectory, RalphConfig};
 
 /// Per-session ralph instruction state
@@ -178,14 +179,17 @@ pub fn delete_ralph(base_dir: &Path, session_id: &str) -> anyhow::Result<()> {
 ///
 /// Body text here
 /// ```
+///
+/// The frontmatter block runs between two lines of exactly three hyphens, as
+/// [`split_frontmatter_body`] reads them. A three-hyphen run inside a value --
+/// `write_ralph` escapes an instruction's newlines, so such a run stays on the
+/// `instruction:` line -- is part of that value, not the closing delimiter.
+///
+/// Returns `None` when the text has no frontmatter block, when the block has
+/// no closing delimiter line, and when the block carries no `instruction` key.
 fn parse_ralph_file(content: &str) -> Option<RalphState> {
-    // Split on frontmatter delimiters
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 2 {
-        return None;
-    }
+    let (frontmatter, body) = split_frontmatter_body(content)?;
 
-    let frontmatter = parts[1];
     let mut instruction = String::new();
     let mut iteration: u32 = 0;
     let mut max_iterations: u32 = 50;
@@ -209,11 +213,8 @@ fn parse_ralph_file(content: &str) -> Option<RalphState> {
         return None;
     }
 
-    let body = if parts.len() >= 3 {
-        parts[2].trim_start_matches('\n').to_string()
-    } else {
-        String::new()
-    };
+    // `write_ralph` puts a blank line between the frontmatter and the body.
+    let body = body.trim_start_matches('\n').to_string();
 
     Some(RalphState {
         instruction,
@@ -471,6 +472,37 @@ mod tests {
     #[test]
     fn test_completely_empty_frontmatter_returns_none() {
         let content = "---\n---\n\nBody.\n";
+        assert!(parse_ralph_file(content).is_none());
+    }
+
+    #[test]
+    fn test_instruction_with_three_hyphen_line_round_trips() {
+        let tmp = setup();
+        let state = RalphState {
+            instruction: "before\n---\nafter".to_string(),
+            iteration: 7,
+            max_iterations: 42,
+            body: "Notes.".to_string(),
+        };
+
+        write_ralph(tmp.path(), "hyphen-test", &state).unwrap();
+        let read = read_ralph(tmp.path(), "hyphen-test").unwrap().unwrap();
+
+        assert_eq!(read.instruction, "before\n---\nafter");
+        assert_eq!(read.iteration, 7);
+        assert_eq!(read.max_iterations, 42);
+        assert_eq!(read.body, "Notes.\n");
+    }
+
+    #[test]
+    fn test_missing_closing_delimiter_returns_none() {
+        let content = "---\ninstruction: never closed\niteration: 1\n";
+        assert!(parse_ralph_file(content).is_none());
+    }
+
+    #[test]
+    fn test_text_without_a_frontmatter_block_returns_none() {
+        let content = "Plain prose.\n---\ninstruction: not frontmatter\n---\n";
         assert!(parse_ralph_file(content).is_none());
     }
 }
