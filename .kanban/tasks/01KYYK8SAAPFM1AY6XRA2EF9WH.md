@@ -67,6 +67,45 @@ comments:
     - evidence: 7 files — crates/swissarmyhammer-common/src/frontmatter.rs, crates/swissarmyhammer-entity/src/frontmatter.rs (deleted), crates/swissarmyhammer-entity/src/lib.rs, crates/swissarmyhammer-entity/src/io.rs, crates/swissarmyhammer-entity/src/store.rs, crates/swissarmyhammer-tools/src/health_registry.rs, crates/swissarmyhammer-tools/src/mcp/tools/ralph/state.rs. nextest 2402/2403 pass (1 known flake ^pxhzk1s), clippy clean, fmt clean.
     - next: /review
   timestamp: 2026-08-01T13:52:36.341835+00:00
+- actor: claude-code
+  id: 01kyyv1tbmw6rkv5svgh5hgep4
+  text: |-
+    ### review — findings
+    - scope: `review sha HEAD~1..HEAD` (commit 3523b459)
+    - evidence: engine reported 10 findings / 10 confirmed / 8 refuted. All 10 are out of scope: `git blame` gives every cited line to a different commit (ddb3c8da1, 4b8a48703, a3db85e01, 4227e1331, 569279fb5, 355650537). The cited lines also do not agree with the text of the findings — the same defect as ^j4d2613. The finding on `io.rs:104` is wrong on the facts: `write_entity` uses `if let Some(parent)` and cannot panic.
+    - 1 real in-scope finding: `crates/swissarmyhammer-common/src/frontmatter.rs:6` and `:55` — the new module and function docstrings claim this is the workspace's only frontmatter splitter, but `parse_frontmatter_internal` at line 188 of the same file still uses `splitn(3, "---\n")`.
+    - verified good: the cross-crate move is complete (no dangling reference, one definition at common:76); `line_content` and `is_delimiter_line` stay private; all 8 tests moved; the `starts_with` gate removal does not widen behavior; `parse_ralph_file` narrows exactly as the acceptance criteria ask, so the Stop hook is safe.
+    - next: fix the two docstrings only. Do not touch `parse_frontmatter_internal` (^tv3692e owns it), and do not act on the 10 out-of-scope engine findings.
+  timestamp: 2026-08-01T14:18:35.764435+00:00
+- actor: claude-code
+  id: 01kyyve2hzm36gkh1d42fwf10e
+  text: |-
+    Docs-only pass on the one in-scope finding. No production logic touched, no test edited.
+
+    Three docstrings in `crates/swissarmyhammer-common/src/frontmatter.rs` changed. The first two are the finding. The third is a recurrence of the same cause found by the file-wide scan the review asked for.
+
+    1. Module doc. Removed "This module provides common frontmatter parsing logic used by both workflow and prompt parsers" (false -- see the discovery below) and "[`split_frontmatter_body`] is the workspace's one frontmatter splitter ... the delimiter rule is stated once". Now names the four real callers, and says plainly it is not the only split, in this module or in the workspace.
+    2. `split_frontmatter_body`. Removed "This is the workspace's single frontmatter splitter. Every reader ... calls it, so the delimiter rule cannot drift between them". Now: those four readers agree, [`parse_frontmatter`] in this module still cuts on the `---\n` substring until ^tv3692e closes it, other crates carry copies, call this one from a new reader.
+    3. `parse_frontmatter`. Its doc said only "Handles content with YAML frontmatter delimited by `---` markers", which reads as full support for the format. Added the actual rule: this path splits on the `---\n` substring, so any `---` followed by a newline -- including one indented inside a YAML block scalar -- closes the block early and the content parses short. ^tv3692e named as the owner. Docstring only; `parse_frontmatter_internal` untouched.
+
+    Verified before writing, not assumed:
+    - `split_frontmatter_body` has exactly four production call sites: `entity/src/io.rs`, `entity/src/store.rs`, `parse_ralph_file` in `tools/src/mcp/tools/ralph/state.rs`, and `frontmatter_yaml_error` in `tools/src/health_registry.rs`.
+    - The `splitn(3, "---\n")` claim: for `---\ntext: |-\n  before\n  ---\n  after\n---\nbody`, the indented `  ---\n` holds the substring `---\n`, so the frontmatter is cut at "before". The claim is exact, not hand-waved.
+
+    Discoveries worth recording for ^tv3692e:
+    - `swissarmyhammer_common::frontmatter::parse_frontmatter` and `parse_frontmatter_with_expansion` have ZERO callers anywhere in the workspace. Nothing imports them; `split_frontmatter_body` is the only item any other crate takes from this module. The old module doc claiming "used by both workflow and prompt parsers" was stale -- prompt parsing goes through `swissarmyhammer-templating`'s own copy. This may make ^tv3692e cheaper than its blast-radius note assumes.
+    - The count is not four splitters, it is five. Besides the two in this module: `swissarmyhammer-templating::frontmatter::parse_frontmatter` (its own `find_closing_delimiter`), `mirdan::list::parse_frontmatter` (`strip_prefix("---")` then `find("---")` -- the substring defect, unguarded), and `swissarmyhammer-merge::frontmatter::split_frontmatter` (line-anchored, so correct). The mirdan one carries the same defect this card fixed and is not tracked anywhere yet.
+
+    Left untouched, as instructed: the 10 engine findings marked out of scope, and `parse_frontmatter_internal` (^tv3692e owns it).
+  timestamp: 2026-08-01T14:25:17.375640+00:00
+- actor: claude-code
+  id: 01kyyvfg4mc7vqg1ctaxss2z0b
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-common/src/frontmatter.rs (docstrings only, 26 insertions / 10 deletions, zero lines of code). `cargo nextest run -p swissarmyhammer-common -p swissarmyhammer-entity -p swissarmyhammer-tools --no-fail-fast`: 2403 tests run, 2403 passed, 0 skipped, 0 failed — the known flake ^pxhzk1s passed this run too. `cargo clippy -p swissarmyhammer-common --all-targets -- -D warnings` clean. `cargo fmt` clean. `cargo doc -p swissarmyhammer-common --no-deps` clean, so the three new intra-doc links resolve. No test edited.
+    - follow-up card created: ^0zer2xf — `mirdan/src/list.rs` carries the same substring-split defect, untracked until now.
+    - next: /review
+  timestamp: 2026-08-01T14:26:04.052126+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Two more copies of the frontmatter substring-split bug in swissarmyhammer-tools
@@ -113,3 +152,94 @@ If `swissarmyhammer-tools` should not depend on `swissarmyhammer-entity` for thi
 - No behavior change for well-formed input: existing tests pass unedited.
 
 Blocked by nothing, but do it after ^fpcbeth lands so the shared splitter exists to call. #bug
+
+## Review Findings (2026-08-01 09:00)
+
+- [ ] `crates/swissarmyhammer-common/src/frontmatter.rs:118` — The Frontmatter construction for the no-metadata case is verbatim duplicated at line 159. Both return identical `Frontmatter { metadata: None, content: content.to_string() }`. If the default Frontmatter structure ever changes, both locations must be updated in lockstep or drift occurs. Extract a helper function like `fn no_metadata_frontmatter(content: &str) -> Result<Frontmatter>` that returns `Ok(Frontmatter { metadata: None, content: content.to_string() })`, then call it in both places to eliminate the duplication.
+- [ ] `crates/swissarmyhammer-common/src/frontmatter.rs:127` — Docstring example uses `.unwrap()` instead of `?`, teaching defensive rather than idiomatic error handling. Examples should show proper error propagation. Wrap the example in a function that returns `Result`: `# fn main() -> Result<(), Box<dyn std::error::Error>> { ... let result = parse_frontmatter_with_expansion(content, &expander)?; ... # Ok(()) # }` to allow proper `?` usage.
+- [ ] `crates/swissarmyhammer-entity/src/io.rs:104` — Public function `write_entity` panics on invalid input (paths with no parent directory) but this panic condition is not documented in the docstring. Per the documentation rule, 'Panics, errors, and safety requirements documented.'. Add a 'Panics' section to the docstring: `///\n/// # Panics\n/// Panics if `path` has no parent directory (e.g., a root path like `/`).
+- [ ] `crates/swissarmyhammer-entity/src/io.rs:250` — Public function `trash_entity_files` panics on invalid input (paths with no filename component) but this panic condition is not documented in the docstring. Per the documentation rule, 'Panics, errors, and safety requirements documented.'. Add a 'Panics' section to the docstring: `///\n/// # Panics\n/// Panics if `path` has no filename component (e.g., a directory path ending in `/`).
+- [ ] `crates/swissarmyhammer-entity/src/io.rs:278` — Public function `restore_entity_files` panics on invalid input (paths with no filename component) but this panic condition is not documented in the docstring. Per the documentation rule, 'Panics, errors, and safety requirements documented.'. Add a 'Panics' section to the docstring: `///\n/// # Panics\n/// Panics if `path` has no filename component (e.g., a directory path ending in `/`).
+- [ ] `crates/swissarmyhammer-tools/src/health_registry.rs:22` — The directory existence check and reporting pattern is near-verbatim duplicated at line 31. Both follow: if exists, count files and report 'Found'; else report 'Not found (optional)'. If the reporting logic or structure ever changes, both locations must be updated in lockstep or drift occurs. Extract a helper function like `fn check_prompts_dir(label: &str, path: &Path, cat: &str) -> Vec<HealthCheck>` that performs the check and returns the appropriate HealthCheck objects, then call it for both user and local directories to eliminate the duplicated check-and-report logic.
+- [ ] `crates/swissarmyhammer-tools/src/health_registry.rs:46` — The markdown file filter chain is near-verbatim duplicated from `count_markdown_files`. Both use identical `walkdir` setup with the same four filters to select `.md` files. If filter criteria ever change (e.g., to include `.markdown`), both locations must be updated in lockstep or drift occurs. Extract a shared helper function like `fn iter_markdown_files(path: &Path) -> impl Iterator<Item = DirEntry>` that returns the filtered iterator, then use it in both `count_markdown_files` (call `.count()` on it) and in the loop at line 46 (iterate directly). This eliminates the duplicated filter logic.
+- [ ] `crates/swissarmyhammer-tools/src/health_registry.rs:68` — Excessive nesting in YAML error checking loop: 5 levels deep (for → for → match → Ok arm → if let), making the control flow hard to follow and reason about. Extract the file-reading and error-checking logic into a helper function, e.g. `collect_yaml_errors_in_dir(dir: &Path) -> Vec<(PathBuf, String)>`, which returns the error list directly. Then replace the nested loop with a simple call to that helper.
+- [ ] `crates/swissarmyhammer-tools/src/health_registry.rs:88` — The library initialization pattern is near-verbatim duplicated at line 102. Both follow: `Arc::new(RwLock::new(Library::new()))` → get write lock → call `load_defaults()`. If initialization logic ever changes (e.g., different load method, error handling), both locations must be updated in lockstep or drift occurs. Extract a generic helper function like `fn init_library<T: NewAndDefaults>(name: &str) -> Arc<RwLock<T>>` or use a closure to parameterize the library type, then call it for both skill and agent libraries to eliminate the duplicated initialization pattern.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/ralph/state.rs:141` — The u32 field parsing pattern is near-verbatim duplicated at line 146. Both blocks follow identical structure: `strip_prefix(KEY)`, `trim().parse::<u32>()`, assign to variable. If the parsing logic ever changes (e.g., to handle negative numbers, validate ranges), both locations must be updated in lockstep or drift occurs. Extract a helper function like `fn parse_u32_field(line: &str, key: &str) -> Option<u32>` that returns the parsed value if the key matches, then use it for both fields: `if let Some(n) = parse_u32_field(line, "iteration") { iteration = n; } else if let Some(n) = parse_u32_field(line, "max_iterations") { max_iterations = n; }`.
+
+## Review Verification (2026-08-01 09:00)
+
+The scope of this review is the delta of commit 3523b459 (`HEAD~1..HEAD`).
+
+### The 10 engine findings above are out of scope. Do no work on them here.
+
+`git blame` gives every cited line to a different commit. Not one of the 10
+lines was changed by 3523b459:
+
+| Cited | Blame commit |
+|---|---|
+| `common/src/frontmatter.rs:118`, `:127` | `ddb3c8da1` |
+| `entity/src/io.rs:104` | `4b8a48703` |
+| `entity/src/io.rs:250` | `a3db85e01` |
+| `entity/src/io.rs:278` | `4227e1331` |
+| `tools/src/health_registry.rs:22`, `:46`, `:68`, `:88` | `569279fb5` |
+| `tools/.../ralph/state.rs:141` | `355650537` |
+
+### The cited lines also do not agree with the text of the findings
+
+This is the same defect as ^j4d2613. The line numbers point at other code:
+
+| Cited | Code that is really at that line | Where the described code is |
+|---|---|---|
+| `common/frontmatter.rs:118` | doc comment `/// use ...::parse_frontmatter;` | `metadata: None` is at 181 and 223 |
+| `common/frontmatter.rs:127` | doc comment `/// "#;` | the `.unwrap()` named is at 164 |
+| `io.rs:104` | `let content = if let Some(ref body_field)` | see the note below |
+| `io.rs:250` | inside `trash_entity_files` | the `.expect` is at 246 |
+| `io.rs:278` | `return Err(EntityError::RestoreFromTrashFailed ...)` | the `.expect` is at 273 |
+| `health_registry.rs:22` | a doc comment | the two directory checks are at 46-62 and 65-79 |
+| `health_registry.rs:46` | `if let Some(home) = dirs::home_dir()` | the walkdir filter chain is at 93-97 |
+| `health_registry.rs:68` | `checks.push(HealthCheck::ok(` | the nested loop is at 88-113 |
+| `health_registry.rs:88` | `for dir in dirs_to_check {` | the `Arc::new(RwLock::new(...))` set is at 194-206 |
+| `ralph/state.rs:141` | `Ok(parse_ralph_file(&content))` | the u32 parse pair is at 200-207 |
+
+The finding on `io.rs:104` is also wrong on the facts. `write_entity` cannot
+panic on a path with no parent. It uses `if let Some(parent) = path.parent()`
+and does nothing when the path has no parent.
+
+### What the delta itself does correctly
+
+- The cross-crate move is complete. No reference to the deleted
+  `swissarmyhammer-entity` module is left. Exactly one `split_frontmatter_body`
+  exists in the workspace, at `common/src/frontmatter.rs:76`.
+- The visibility is correct. `line_content` (line 42) and `is_delimiter_line`
+  (line 49) stay private. Only `split_frontmatter_body` is `pub`.
+- All 8 tests moved from the deleted module into `common`.
+- Removing the `starts_with("---")` gate does not widen the behavior.
+  `frontmatter_yaml_error` uses `?`, so a `None` from the splitter pushes no
+  diagnostic. A file that has real frontmatter is still parsed and still
+  reports a YAML error.
+- `parse_ralph_file` narrows correctly. The old `parts.len() < 2` test let
+  through any text that held a `---` substring anywhere. The new code needs a
+  first line of exactly `---` and a closing delimiter line. The acceptance
+  criteria of this card ask for that narrowing, and two new tests hold it. A
+  file that `write_ralph` writes always has both delimiter lines at column 0
+  and escapes the newlines in the instruction, so it round-trips. The Stop
+  hook is not at risk.
+
+### One real finding, in scope
+
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:6` and `:55` — Two new
+  docstrings claim this splitter is the only one, and the same file disagrees.
+  The module doc says "[`split_frontmatter_body`] is the workspace's one
+  frontmatter splitter" and "the delimiter rule is stated once". The function
+  doc says "This is the workspace's single frontmatter splitter. Every reader
+  of the frontmatter + markdown body format calls it, so the delimiter rule
+  cannot drift between them". `parse_frontmatter_internal`, at line 188 of this
+  same file, still splits with `splitn(3, "---\n")`, and the public
+  `parse_frontmatter` and `parse_frontmatter_with_expansion` both reach it.
+  Thus "one splitter", "single splitter", "every reader calls it" and "cannot
+  drift" are all false as written. Correct the two docstrings to state what is
+  true now: this is the line-anchored splitter for the readers of the
+  frontmatter + markdown body format, and a second splitter for the
+  YAML-parsing path stays in this file until ^tv3692e closes it. Change only
+  the docstrings. Do not change `parse_frontmatter_internal` — ^tv3692e owns
+  that code.

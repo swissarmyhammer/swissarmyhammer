@@ -1,6 +1,36 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kyyv4he3nd16r0pnmencrg7h
+  text: |-
+    Second occurrence, 2026-08-01, reviewing `3523b4594` for ^a2ef9wh. Stronger evidence this time: `git blame` on every cited line.
+
+    All 10 engine findings cited lines that blame to commits OTHER than the one under review. Not one was in the delta:
+
+    | Cited | Blames to |
+    |---|---|
+    | `swissarmyhammer-common/src/frontmatter.rs:118`, `:127` | `ddb3c8da1` |
+    | `swissarmyhammer-entity/src/io.rs:104` / `:250` / `:278` | `4b8a48703` / `a3db85e01` / `4227e1331` |
+    | `swissarmyhammer-tools/src/health_registry.rs:22`, `:46`, `:68`, `:88` | `569279fb5` |
+    | `swissarmyhammer-tools/src/mcp/tools/ralph/state.rs:141` | `355650537` |
+
+    Blame is a better test than the line-mismatch check used on the first occurrence: it proves the cited line is not part of the reviewed commit, rather than only showing the description does not match what sits there.
+
+    The line numbers were also wrong in the same way as before. `frontmatter.rs:118` is the doc line `/// use ...::parse_frontmatter;`, while the `metadata: None` construction the finding describes is at 181 and 223. `health_registry.rs:88` is `for dir in dirs_to_check {`, while the `Arc::new(RwLock::new(..))` it describes is at 194-206.
+
+    One finding was also factually wrong on its own terms, independent of the location problem: it claimed `write_entity` panics on a parentless path. It does not — `swissarmyhammer-entity/src/io.rs:100` is `if let Some(parent) = path.parent() {`, a no-op when there is no parent.
+
+    So the failure has two layers worth separating when fixing this:
+
+    1. **Scope** — `review sha <range>` reports on code the range does not touch. Blame makes this cheap to detect, and cheap to assert in a regression test: every finding's cited line must blame to a commit inside the reviewed range.
+    2. **Location** — within a reported file, the line number does not point at the described code.
+
+    A useful acceptance test falls straight out of the blame check: review a known commit, then assert that `git blame` for every reported `file:line` resolves to a commit in the reviewed range. That catches both layers without needing to judge whether a finding is substantively correct.
+
+    Cost so far: two consecutive tasks have each needed a manual cross-check to separate real findings from noise. On ^a2ef9wh that was 10 spurious findings against 1 real one.
+  timestamp: 2026-08-01T14:20:04.931960+00:00
 position_column: todo
 position_ordinal: d880
 title: Review engine reports findings against a stale revision — cited line numbers do not resolve

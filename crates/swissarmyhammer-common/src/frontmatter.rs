@@ -1,12 +1,18 @@
 //! Shared frontmatter parsing functionality
 //!
-//! This module provides common frontmatter parsing logic used by both
-//! workflow and prompt parsers to eliminate code duplication.
+//! [`split_frontmatter_body`] splits text on line-anchored `---` delimiters.
+//! Four readers of the frontmatter + markdown body format call it: the entity
+//! `io.rs` and `store.rs` readers, `parse_ralph_file` in the ralph MCP tool,
+//! and the prompt health check. Those four therefore agree on the delimiter
+//! rule.
 //!
-//! [`split_frontmatter_body`] is the workspace's one frontmatter splitter.
-//! Readers in other crates -- entity I/O, ralph state, the prompt health
-//! check -- call it rather than splitting the text themselves, so the
-//! delimiter rule is stated once.
+//! It is not the only frontmatter split in the workspace, and not even the
+//! only one in this module. The split behind [`parse_frontmatter`] and
+//! [`parse_frontmatter_with_expansion`] still cuts on the `---\n` substring,
+//! so the two paths disagree on text that holds a three-hyphen run inside a
+//! YAML scalar. Task ^tv3692e owns moving that path onto the line-anchored
+//! split. `swissarmyhammer-templating`, `swissarmyhammer-merge`, and `mirdan`
+//! each carry a further copy of their own.
 //!
 //! # YAML Include Expansion
 //!
@@ -52,9 +58,13 @@ fn is_delimiter_line(raw: &str) -> bool {
 
 /// Split frontmatter + body text on line-anchored `---` delimiters.
 ///
-/// This is the workspace's single frontmatter splitter. Every reader of the
-/// frontmatter + markdown body format calls it, so the delimiter rule cannot
-/// drift between them.
+/// Four readers of the frontmatter + markdown body format call it -- the
+/// entity `io.rs` and `store.rs` readers, `parse_ralph_file`, and the prompt
+/// health check -- so the delimiter rule holds the same for those four. It is
+/// not the only frontmatter split in the workspace: [`parse_frontmatter`] in
+/// this module still cuts on the `---\n` substring until ^tv3692e closes that,
+/// and other crates carry copies of their own. Call this one from a new
+/// reader rather than writing another.
 ///
 /// The opening delimiter is the first line of `content` and must be exactly
 /// three hyphens. The frontmatter runs to the next delimiter line. Returns
@@ -103,8 +113,14 @@ pub struct Frontmatter {
 
 /// Parses YAML frontmatter from markdown content
 ///
-/// Handles content with YAML frontmatter delimited by `---` markers.
+/// Reads content with YAML frontmatter delimited by `---` markers.
 /// If no frontmatter is found, returns the entire content unchanged.
+///
+/// This path splits on the `---\n` substring, not on whole lines the way
+/// [`split_frontmatter_body`] does. Any `---` immediately followed by a
+/// newline closes the block, even indented inside a YAML block scalar, so
+/// such content parses short. Task ^tv3692e owns moving this onto the
+/// line-anchored split.
 ///
 /// # Arguments
 /// * `content` - The raw content potentially containing YAML frontmatter
