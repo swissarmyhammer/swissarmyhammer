@@ -32,6 +32,41 @@ comments:
 
     next: /review
   timestamp: 2026-08-01T21:30:14.739171+00:00
+- actor: claude-code
+  id: 01kyzktma57kwmyw6azch62zdb
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — render_file_block now emits `{line:>6} | {sha:8} {mark} | {text}` with a legend; new GitOperations::blame_lines (Commit/Worktree/Untracked/Failed); LineAnnotation on FileWork with the + marker computed from a git2::Patch diff (never blame); blame runs once per file, concurrently via spawn_blocking; DEFAULT_BATCH_SIZE raised 256KiB->384KiB to cover ~1.45x render overhead (raw-source-byte budget kept). Blame overhead measured ~10.6ms for 8 files x 150 lines.
+    - test: green — rdeps(swissarmyhammer-validators) 5031 passed, 0 failed, 2 skipped (incl. real-model e2e); fmt clean, clippy clean
+    - commit: 71148449d
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-01T21:31:34.597636+00:00
+- actor: claude-code
+  id: 01kyzn2wt0ag7dsdjg74f0p0zm
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (71148449d2f443b10762841efab5c189f0bc97cb) — engine returned 6 findings; blame-checked each by hand against this commit's diff hunks. 5 (all in crates/swissarmyhammer-git/src/operations.rs, lines 294/304/485/537/612) blame to pre-existing commits (b6ac126c28, 63ec3f4bd9) outside this commit's changed ranges — dropped as pre-existing. 1 confirmed new finding: crates/swissarmyhammer-validators/src/review/scope.rs:625 (engine mis-cited as :559) — compute_line_marks excessive nesting, added by this commit (blame confirms 71148449d2 for lines 625-665).
+    - next: fix the compute_line_marks nesting finding, then /review ^k12rn64
+  timestamp: 2026-08-01T21:53:34.016918+00:00
+- actor: claude-code
+  id: 01kyzn4pc366pw650184te4dby
+  text: |-
+    ### finish iteration 1 — findings
+    - review: findings — 1 open: scope.rs::compute_line_marks (true line ~625, engine mis-cited 559) has 4+ levels of nesting; extract the inner per-hunk loop into a helper (e.g. collect_added_lines). 5 other engine findings dropped as pre-existing (blame to b6ac126c28 2025-09-04 and 63ec3f4bd9 2026-04-05).
+    - next: /implement to fix the nesting finding, then re-review
+  timestamp: 2026-08-01T21:54:32.963841+00:00
+- actor: claude-code
+  id: 01kyznrykh0mj4fvnpgn0ffs07
+  text: |-
+    ### implement — changed
+    - evidence: `crates/swissarmyhammer-validators/src/review/scope.rs` — extracted `collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32>` out of `compute_line_marks` (finding was at line 625, engine mis-cited `:559`). `compute_line_marks` now reduces to `if after.is_empty() { .. } / let-else before / if before == after / match git2::Patch::from_buffers(..) { Ok(patch) => collect_added_lines(&patch), Err(e) => .. }` — no more nested for/for/let-else/if-let inside it. The old inner body (the `for hunk_idx` / `for line_idx` / `let-else` / `if let` chain) moved verbatim into the new helper, unindented one level. No logic changed — same `+`-origin, `new_lineno()` marks computed the same way. This is diff-based marking (git2::Patch before/after), not blame — that distinction is untouched.
+    - `cargo fmt --all`: no diffs.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean, 0 warnings.
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'`: 5031 tests run, 5031 passed, 0 failed, 2 skipped (same count as the prior implement pass — pure refactor, no behavior change).
+    - Checked off the one open finding in `## Review Findings`.
+
+    next: /review
+  timestamp: 2026-08-01T22:05:36.753238+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'Review prime: number every line and show its blame commit'
@@ -137,3 +172,20 @@ Blame each file one time for each review run, not one time for each finding or f
 - A test that pins the `batch_size` decision above, whichever you choose.
 - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` passes.
 - The prime must continue to give the complete file. Do not increase the count of read round-trips. #review
+
+## Review Findings (2026-08-01 16:52)
+
+Scope reviewed: `review sha HEAD~1..HEAD` (commit 71148449d2f443b10762841efab5c189f0bc97cb). Engine returned 6 findings; 5 were blame-checked by hand against this commit and dropped as pre-existing (see below). 1 confirmed new finding remains.
+
+- [x] `crates/swissarmyhammer-validators/src/review/scope.rs:625` (engine cited `:559`, wrong line — correct location verified by hand) — `compute_line_marks` has excessive nesting (4+ levels: outer `for hunk_idx` loop, inner `for line_idx` loop, `let-else` guards, nested `if let`) that compounds cognitive load and makes the error-handling paths hard to follow. Extract the inner per-hunk loop into a helper (e.g. `fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32>`) so `compute_line_marks` reduces to a single outer loop, and the extracted helper can be tested independently. `compute_line_marks` was added in this commit (`git blame` confirms sha `71148449d2` for lines 625-665) so this is a new, in-scope finding.
+
+**Fixed**: extracted `collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32>` from `compute_line_marks`. `compute_line_marks` now reduces to a single `match` on the diff result; the outer for/for/let-else/if-let nest moved into the new helper, one level shallower on its own (no outer diff-result match wrapping it). No behavior change — same marks produced, verified by the full `rdeps(swissarmyhammer-validators)` suite (5031 passed, 0 failed, 2 skipped).
+
+**Dropped as pre-existing** (blamed to commits older than `71148449d2`, confirmed against the commit's diff hunks — none of these lines fall inside the ranges this commit touched):
+- `crates/swissarmyhammer-git/src/operations.rs:294` — blames to `b6ac126c28` (2025-09-04).
+- `crates/swissarmyhammer-git/src/operations.rs:304` — blames to `b6ac126c28` (2025-09-04).
+- `crates/swissarmyhammer-git/src/operations.rs:485` — blames to `b6ac126c28` (2025-09-04).
+- `crates/swissarmyhammer-git/src/operations.rs:537` — blames to `63ec3f4bd9` (2026-04-05).
+- `crates/swissarmyhammer-git/src/operations.rs:612` — blames to `63ec3f4bd9` (2026-04-05).
+
+Note per task instructions: the new numbered/blame-annotated line decoration itself is the feature under review, not a finding.

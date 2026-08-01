@@ -633,19 +633,29 @@ fn compute_line_marks(before: Option<&str>, after: &str) -> BTreeSet<u32> {
         return BTreeSet::new();
     }
 
+    match git2::Patch::from_buffers(before.as_bytes(), None, after.as_bytes(), None, None) {
+        Ok(patch) => collect_added_lines(&patch),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "review: failed to diff before/after content for change marks; \
+                 no line in this file will be marked as touched"
+            );
+            BTreeSet::new()
+        }
+    }
+}
+
+/// The new-side 1-based line numbers every `+` line in `patch`'s hunks maps
+/// to.
+///
+/// Extracted from [`compute_line_marks`] so the outer function reduces to a
+/// single match on the diff result. A hunk or line that fails to resolve (an
+/// out-of-range index, or a `+` line with no new-side line number) is
+/// skipped rather than treated as an error — partial hunk data still marks
+/// every line it CAN resolve.
+fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
     let mut marks = BTreeSet::new();
-    let patch =
-        match git2::Patch::from_buffers(before.as_bytes(), None, after.as_bytes(), None, None) {
-            Ok(patch) => patch,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "review: failed to diff before/after content for change marks; \
-                     no line in this file will be marked as touched"
-                );
-                return marks;
-            }
-        };
     for hunk_idx in 0..patch.num_hunks() {
         let Ok(lines) = patch.num_lines_in_hunk(hunk_idx) else {
             continue;
