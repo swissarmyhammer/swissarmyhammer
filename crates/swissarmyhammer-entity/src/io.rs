@@ -20,6 +20,7 @@ use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
+use crate::frontmatter::split_frontmatter_body;
 
 /// Maximum number of concurrent file reads issued by [`read_entity_dir`].
 ///
@@ -331,6 +332,15 @@ pub fn parse_entity_text(
 // --- Internal helpers ---
 
 /// Parse a frontmatter+body file into an Entity.
+///
+/// The frontmatter is the YAML between the opening and closing delimiter lines
+/// (see [`split_frontmatter_body`]); the body field is set from every byte
+/// after the closing delimiter line, unchanged. Nested YAML objects in the
+/// frontmatter are flattened one level (see [`flatten_into`]).
+///
+/// Returns [`EntityError::InvalidFrontmatter`] when `content` does not open
+/// with a delimiter line or carries no closing one, and [`EntityError::Yaml`]
+/// when the frontmatter is not a YAML mapping.
 fn parse_frontmatter_body(
     content: &str,
     entity_type: impl AsRef<str>,
@@ -341,17 +351,15 @@ fn parse_frontmatter_body(
     let entity_type = entity_type.as_ref();
     let id = id.as_ref();
     let body_field = body_field.as_ref();
-    // Split on --- delimiters: ["", frontmatter, body]
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
+    let Some((frontmatter, body)) = split_frontmatter_body(content) else {
         return Err(EntityError::InvalidFrontmatter {
             path: path.to_path_buf(),
         });
-    }
+    };
 
-    let frontmatter = parts[1].trim();
-    let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
-
+    // No trim: the slice is exactly the frontmatter bytes, and trimming its
+    // trailing newline would re-chomp a block scalar that ends the mapping,
+    // silently dropping that field's trailing newline.
     let yaml_map: HashMap<String, Value> =
         serde_yaml_ng::from_str(frontmatter).map_err(|e| EntityError::Yaml {
             path: path.to_path_buf(),
@@ -407,6 +415,16 @@ fn parse_plain_yaml(
 }
 
 /// Format an entity as frontmatter + markdown body.
+///
+/// Emits an opening delimiter line, the YAML for every field except
+/// `body_field`, a closing delimiter line, then the body verbatim.
+///
+/// The delimiter lines stay unambiguous because a three-hyphen run inside a
+/// field value is never emitted alone at column 0: it is written indented
+/// inside a block scalar, or escaped inside a quoted one. So
+/// [`split_frontmatter_body`] reads it back as frontmatter content rather than
+/// as the closing delimiter. `format_writes_exactly_two_delimiter_lines` pins
+/// that over the value shapes that push the emitter between those two styles.
 fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Result<String> {
     let body_field = body_field.as_ref();
     let body = entity.get_str(body_field).unwrap_or("").to_string();
@@ -708,6 +726,187 @@ mod tests {
         assert_eq!(
             parsed.get_str("body"),
             Some("This is the body.\nWith multiple lines.")
+        );
+    }
+
+    /// The "Research:" paragraph of the 2026-07-31T18:59:02 comment on
+    /// `^tnr56gg`, recovered verbatim from that task's changelog. It quotes a
+    /// backticked three-hyphen run, which is what corrupted the card.
+    const TNR56GG_RESEARCH_COMMENT: &str = r#"Research: the whole-body normalization was two defects, not one. `remove_tag` trimmed every line, AND `edit_tag_markers` reassembled with `text.lines()` + `join("\n")`, which also drops a final newline and turns `\r\n` into `\n`. The second half hits bystanders too: `swissarmyhammer-entity/src/io.rs` round-trips a task body verbatim (`parse_frontmatter_body` takes everything after `---\n`, `format_frontmatter_body` writes it back), so a body CAN carry a trailing newline or CRLF. So "byte-identical" was not honestly claimable without fixing the reassembly as well."#;
+
+    /// The title this bug's own card was first created with, before the
+    /// literal characters had to be removed to keep the card readable.
+    const FPCBETH_ORIGINAL_TITLE: &str = r#"Frontmatter split on the bare substring "---" corrupts any card whose comment contains it"#;
+
+    /// Build a task entity shaped like a real kanban card, carrying
+    /// `comment_text` as the text of its single comment.
+    fn task_with_comment(title: &str, comment_text: &str) -> Entity {
+        let mut entity = Entity::new("task", "01KYT178N9EGXEQ7YQ9TNR56GG");
+        entity.set("title", Value::String(title.into()));
+        entity.set("position_column", Value::String("doing".into()));
+        entity.set("position_ordinal", Value::String("8480".into()));
+        entity.set("assignees", serde_json::json!(["claude-code"]));
+        entity.set(
+            "comments",
+            serde_json::json!([{
+                "actor": "claude-code",
+                "id": "01kywrpksm7tx6akpgpaxa83x4",
+                "text": comment_text,
+                "timestamp": "2026-07-31T18:59:02.580990+00:00",
+            }]),
+        );
+        entity.set("body", Value::String("Card description.\n".into()));
+        entity
+    }
+
+    /// Assert `entity` survives `format_frontmatter_body` +
+    /// `parse_frontmatter_body` with every field it went in with.
+    fn assert_frontmatter_round_trip(entity: &Entity) {
+        let content = format_frontmatter_body(entity, "body").unwrap();
+        let parsed =
+            parse_frontmatter_body(&content, "task", &entity.id, "body", Path::new("test.md"))
+                .unwrap();
+
+        for (key, value) in &entity.fields {
+            assert_eq!(
+                parsed.get(key),
+                Some(value),
+                "field {key} did not survive the round trip\nserialized form:\n{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn comment_quoting_a_delimiter_inline_round_trips() {
+        assert_frontmatter_round_trip(&task_with_comment(
+            "remove_tag rewrites every task body, not just the ones carrying the marker",
+            TNR56GG_RESEARCH_COMMENT,
+        ));
+    }
+
+    #[test]
+    fn comment_with_a_delimiter_on_its_own_line_round_trips() {
+        let comment =
+            format!("Before the rule.\n\n---\n\nAfter the rule.\n\n{TNR56GG_RESEARCH_COMMENT}");
+        assert_frontmatter_round_trip(&task_with_comment("A card with a rule", &comment));
+    }
+
+    #[test]
+    fn comment_with_an_indented_delimiter_round_trips() {
+        let comment = "The parser writes:\n\n```text\n    ---\n    title: x\n    ---\n```\n\nDone.";
+        assert_frontmatter_round_trip(&task_with_comment("A card with a code block", comment));
+    }
+
+    #[test]
+    fn title_containing_a_delimiter_round_trips() {
+        assert_frontmatter_round_trip(&task_with_comment(
+            FPCBETH_ORIGINAL_TITLE,
+            "An ordinary comment.",
+        ));
+    }
+
+    #[test]
+    fn a_frontmatter_value_keeps_its_trailing_newline() {
+        // Only one frontmatter key, so its block scalar is unambiguously the
+        // last thing before the closing delimiter line. `Entity::fields` is a
+        // `HashMap`, so with more than one key the emitted order is not fixed.
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set(
+            "comments",
+            serde_json::json!([{ "actor": "claude-code", "text": "first line\nsecond line\n" }]),
+        );
+        entity.set("body", Value::String("Card description.\n".into()));
+
+        let content = format_frontmatter_body(&entity, "body").unwrap();
+        let parsed =
+            parse_frontmatter_body(&content, "task", "01ABC", "body", Path::new("test.md"))
+                .unwrap();
+
+        assert_eq!(
+            parsed.get("comments"),
+            entity.get("comments"),
+            "serialized form:\n{content}"
+        );
+    }
+
+    #[test]
+    fn empty_frontmatter_yields_an_entity_with_only_the_body() {
+        let content = "---\n---\nJust a body\n";
+
+        let parsed =
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
+
+        assert_eq!(parsed.get_str("body"), Some("Just a body\n"));
+    }
+
+    #[test]
+    fn format_writes_exactly_two_delimiter_lines() {
+        // The write side has to keep a field value that carries a three-hyphen
+        // run from producing a third delimiter line. These shapes push the
+        // emitter between block-scalar and quoted style: a trailing space or a
+        // CR on the line forces quoting, a plain newline allows a block
+        // scalar, and blank lines inside a block scalar are written at column
+        // 0 with no indent at all.
+        let long_line = "x".repeat(3000);
+        let comments = [
+            "---",
+            "  ---",
+            "---\n",
+            "Before.\n---\nAfter.",
+            "Before.\n\n---\n\nAfter.",
+            "Before. \n---\nAfter.",
+            "Before.\r\n---\r\nAfter.",
+            "Before.\n\t---\nAfter.",
+            "---\n---\n---",
+            &format!("{long_line}\n---\n"),
+        ];
+
+        for comment in comments {
+            let entity = task_with_comment(FPCBETH_ORIGINAL_TITLE, comment);
+
+            let content = format_frontmatter_body(&entity, "body").unwrap();
+
+            let delimiter_lines = content.lines().filter(|line| *line == "---").count();
+            assert_eq!(
+                delimiter_lines, 2,
+                "comment {comment:?} produced\n{content}"
+            );
+            // And the write survives its own reader.
+            let parsed =
+                parse_frontmatter_body(&content, "task", "01ABC", "body", Path::new("test.md"))
+                    .unwrap();
+            assert_eq!(
+                parsed.get("comments"),
+                entity.get("comments"),
+                "comment {comment:?} produced\n{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn crlf_delimiter_lines_leave_the_body_byte_exact() {
+        let content = "---\r\ntitle: CRLF card\r\n---\r\nFirst body line\r\nSecond body line\r\n";
+
+        let parsed =
+            parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
+
+        assert_eq!(parsed.get_str("title"), Some("CRLF card"));
+        assert_eq!(
+            parsed.get_str("body"),
+            Some("First body line\r\nSecond body line\r\n")
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_without_a_closing_delimiter_is_invalid() {
+        let content = "---\ntitle: Truncated\nposition_column: doing\n";
+
+        let err = parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md"))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, EntityError::InvalidFrontmatter { .. }),
+            "expected InvalidFrontmatter, got {err:?}"
         );
     }
 

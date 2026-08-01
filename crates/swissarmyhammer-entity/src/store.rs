@@ -5,7 +5,7 @@
 //! formats:
 //!
 //! - **MD+YAML** (when `entity_def.body_field` is `Some`): YAML frontmatter
-//!   delimited by `---` followed by a markdown body.
+//!   between two lines of exactly `---`, followed by a markdown body.
 //! - **Plain YAML** (when `body_field` is `None`): a single YAML document.
 //!
 //! Computed fields are stripped on serialize and never written to disk.
@@ -20,6 +20,7 @@ use swissarmyhammer_fields::types::{EntityDef, FieldDef, FieldType};
 use swissarmyhammer_store::{StoreError, TrackedStore};
 
 use crate::entity::Entity;
+use crate::frontmatter::split_frontmatter_body;
 use crate::id_types::EntityId;
 
 /// Convenience alias matching the store crate's Result type.
@@ -117,6 +118,12 @@ impl TrackedStore for EntityTypeStore {
     /// clean text diffs. This differs from io.rs which uses `HashMap`
     /// (non-deterministic). The text difference is harmless -- YAML semantics
     /// are identical.
+    ///
+    /// The delimiter lines stay unambiguous because a three-hyphen run inside
+    /// a field value is never emitted alone at column 0: it is written
+    /// indented inside a block scalar, or escaped inside a quoted one. So
+    /// [`split_frontmatter_body`] reads it back as frontmatter content rather
+    /// than as the closing delimiter.
     fn serialize(&self, entity: &Entity) -> StoreResult<String> {
         if let Some(body_field) = &self.entity_def.body_field {
             let body = entity
@@ -159,16 +166,20 @@ impl TrackedStore for EntityTypeStore {
     ///
     /// The `id` comes from the filename, not from file contents. Nested YAML
     /// objects are flattened one level deep with underscore-separated keys.
+    ///
+    /// In MD+YAML format the frontmatter runs between line-anchored `---`
+    /// delimiters (see [`split_frontmatter_body`]) and the body field takes
+    /// every byte after the closing delimiter line, unchanged.
     fn deserialize(&self, id: &EntityId, text: &str) -> StoreResult<Entity> {
         if let Some(body_field) = &self.entity_def.body_field {
-            let parts: Vec<&str> = text.splitn(3, "---").collect();
-            if parts.len() < 3 {
+            let Some((frontmatter, body)) = split_frontmatter_body(text) else {
                 return Err(StoreError::Deserialize("invalid frontmatter format".into()));
-            }
+            };
 
-            let frontmatter = parts[1].trim();
-            let body = parts[2].strip_prefix('\n').unwrap_or(parts[2]);
-
+            // No trim: the slice is exactly the frontmatter bytes, and
+            // trimming its trailing newline would re-chomp a block scalar that
+            // ends the mapping, silently dropping that field's trailing
+            // newline.
             let yaml_map: serde_json::Map<String, Value> = serde_yaml_ng::from_str(frontmatter)
                 .map_err(|e| StoreError::Deserialize(e.to_string()))?;
 
@@ -501,9 +512,108 @@ mod tests {
 
         let entity = store.deserialize(&id, text).unwrap();
         assert_eq!(entity.get_str("title"), Some("Fix bug"));
-        // splitn(3, "---") only splits three times, so the body keeps
-        // any subsequent `---` delimiters intact.
+        // The frontmatter ends at the FIRST delimiter line after the opening
+        // one, so every later three-hyphen line stays in the body.
         assert_eq!(entity.get_str("body"), Some("Before rule\n---\nAfter rule"));
+    }
+
+    #[test]
+    fn test_comment_carrying_a_delimiter_round_trips() {
+        // The "Research:" paragraph of the 2026-07-31T18:59:02 comment on
+        // ^tnr56gg, recovered from that task's changelog. It quotes a
+        // backticked three-hyphen run, which is what corrupted the card.
+        let comment = r#"Research: `parse_frontmatter_body` takes everything after `---\n`, `format_frontmatter_body` writes it back, so a body CAN carry a trailing newline or CRLF.
+
+---
+
+That rule line is prose, not a delimiter."#;
+
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set(
+            "title",
+            Value::String("remove_tag rewrites every task body".into()),
+        );
+        entity.set("position_column", Value::String("doing".into()));
+        entity.set("position_ordinal", Value::String("8480".into()));
+        entity.set(
+            "comments",
+            serde_json::json!([{ "actor": "claude-code", "text": comment }]),
+        );
+        entity.set("body", Value::String("Card description.\n".into()));
+
+        let text = store.serialize(&entity).unwrap();
+        let parsed = store.deserialize(&EntityId::from("01ABC"), &text).unwrap();
+
+        for (key, value) in &entity.fields {
+            assert_eq!(
+                parsed.get(key),
+                Some(value),
+                "field {key} did not survive the round trip\nserialized form:\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_frontmatter_value_keeps_its_trailing_newline() {
+        // Only one frontmatter key, so its block scalar is the last thing
+        // before the closing delimiter line.
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+        let mut entity = Entity::new("task", "01ABC");
+        entity.set(
+            "comments",
+            serde_json::json!([{ "actor": "claude-code", "text": "first line\nsecond line\n" }]),
+        );
+        entity.set("body", Value::String("Card description.\n".into()));
+
+        let text = store.serialize(&entity).unwrap();
+        let parsed = store.deserialize(&EntityId::from("01ABC"), &text).unwrap();
+
+        assert_eq!(
+            parsed.get("comments"),
+            entity.get("comments"),
+            "serialized form:\n{text}"
+        );
+    }
+
+    #[test]
+    fn test_empty_frontmatter_yields_an_entity_with_only_the_body() {
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+
+        let entity = store
+            .deserialize(&EntityId::from("01ABC"), "---\n---\nJust a body\n")
+            .unwrap();
+
+        assert_eq!(entity.get_str("body"), Some("Just a body\n"));
+    }
+
+    #[test]
+    fn test_crlf_delimiter_lines_leave_the_body_byte_exact() {
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+        let text = "---\r\ntitle: CRLF card\r\n---\r\nFirst body line\r\nSecond body line\r\n";
+
+        let entity = store.deserialize(&EntityId::from("01ABC"), text).unwrap();
+
+        assert_eq!(entity.get_str("title"), Some("CRLF card"));
+        assert_eq!(
+            entity.get_str("body"),
+            Some("First body line\r\nSecond body line\r\n")
+        );
+    }
+
+    #[test]
+    fn test_deserialize_without_a_closing_delimiter_is_an_error() {
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+        let text = "---\ntitle: Truncated\nposition_column: doing\n";
+
+        let err = store
+            .deserialize(&EntityId::from("01ABC"), text)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, StoreError::Deserialize(_)),
+            "expected Deserialize error, got {err:?}"
+        );
     }
 
     // -- NIT 5: empty entity serialization --
