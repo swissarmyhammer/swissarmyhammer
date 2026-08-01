@@ -1,0 +1,44 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: d880
+title: Review engine reports findings against a stale revision — cited line numbers do not resolve
+---
+`review sha HEAD~1..HEAD` returned 13 confirmed findings whose cited line numbers point at unrelated code in the current tree. Observed 2026-08-01 reviewing commit `42e32c3a3` for ^fpcbeth.
+
+## Evidence
+
+Every citation was off by a large, non-uniform offset. Verified by hand:
+
+| Finding cites | What is actually there | Where the described code really is |
+|---|---|---|
+| `io.rs:309` `<serialization>` | a bare `///` line | io.rs:443 and 460 |
+| `io.rs:140` / `334` `.tmp_{Ulid}` | — | io.rs:115 and 543 |
+| `io.rs:1321` magic number | — | io.rs:1709 and 1736 |
+| `store.rs:109` `EntityTypeStore::deserialize` | a bare `///` line | store.rs:173 |
+
+Cross-checking the commit's own hunk headers confirms the functions the engine named — `write_entity`, `copy_attachment`, `restore_entity_files`, `read_entity_dir`, `reconcile_read_results` — are untouched by `42e32c3a3`. `copy_attachment` appears zero times in the diff.
+
+So the engine was reasoning over a different revision of the file than the one the range names.
+
+## Why it matters
+
+1. **Findings become unactionable.** An agent told to fix `io.rs:309` finds a doc-comment line. The honest responses are to guess or to dismiss, and both are bad.
+2. **It invites wrong edits.** An agent that trusts the line number and "fixes" what it finds there damages unrelated code.
+3. **It breaks scoping.** `review sha` exists to review one delta. Reporting on untouched functions defeats the purpose and forces a manual hunk-header cross-check on every run to tell in-scope from out-of-scope.
+4. **It interacts badly with the finish loop.** The loop treats any open finding as blocking. Findings that cannot be located cannot be closed honestly.
+
+Related but distinct: ^k5wsxh0 (same validator returns different finding sets across runs on an unchanged file). That one is nondeterminism; this one is a stale or mismatched revision.
+
+## Investigate
+
+- Whether the file content handed to validators comes from the working tree, the index, or the named revision — and whether it matches the line numbers the finding reports.
+- Whether the batching that inlines file bytes (`batch_size`) offsets line numbers when a file is split or truncated.
+- Whether `review sha` resolves the range to the pre-image or post-image, and whether findings are numbered against the other one.
+
+## Acceptance
+
+- Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows.
+- `review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.
+- Add a regression test that reviews a known commit and asserts the reported lines resolve to the expected symbols. #bug #review

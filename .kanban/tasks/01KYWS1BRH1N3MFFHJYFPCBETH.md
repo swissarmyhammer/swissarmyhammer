@@ -102,8 +102,8 @@ comments:
 
     Rule to carry forward: editing an entity `.md` directly is not enough. Either repair the trailing changelog entry to match, or expect every changelog-derived field on that card to go quiet.
   timestamp: 2026-08-01T12:00:20.983356+00:00
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8780
 title: Frontmatter split on a bare triple-dash substring corrupts any card whose frontmatter contains one
 ---
 `parse_frontmatter_body` splits the entity file on the **substring** of three hyphens, not on a line-anchored delimiter.
