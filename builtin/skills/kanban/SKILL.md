@@ -62,6 +62,14 @@ Both resolve to that one task; write the short id.
 
 {% include "_partials/record-progress" %}
 
+{% include "_partials/step-record" %}
+
+Kanban works the card itself, so it writes its own step record. The step name is the phase you just ran.
+
+### Report to the user
+
+{% include "_partials/card-report" %}
+
 ## Filtering Work
 
 ### Filter DSL
