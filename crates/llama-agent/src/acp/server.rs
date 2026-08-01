@@ -2702,6 +2702,15 @@ impl AcpServer {
                     .evict_session_state(&acp_session.llama_session_id);
             }
         }
+        // The last thing a turn puts on the session's notification stream,
+        // however it ended. A client reassembling the reply from streamed
+        // chunks drains until it sees this marker, so it stops on a real
+        // end-of-stream signal instead of a wall-clock guess. Every chunk was
+        // broadcast synchronously inside `prompt_inner`, so the marker is
+        // strictly behind them on the same FIFO channel.
+        self.broadcast_notification(agent_client_protocol_extras::turn_complete_notification(
+            session_id,
+        ));
         result
     }
 

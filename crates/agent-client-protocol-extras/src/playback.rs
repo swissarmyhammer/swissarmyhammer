@@ -236,7 +236,56 @@ fn handle_incoming_request(
     };
 
     send_recorded_notifications(tx, &call.notifications)?;
+    if req.method == "session/prompt" {
+        send_turn_complete(tx, req)?;
+    }
     send_recorded_response(tx, &call.response, id)
+}
+
+/// Close a replayed prompt turn's notification stream with the end-of-turn
+/// marker, exactly as a live agent does.
+///
+/// Recorded fixtures predate the marker, so replaying only what was recorded
+/// would leave a client collector draining until its hang guard fires. The
+/// marker goes out after the recorded notifications and before the response,
+/// keeping the replay in the same order a live turn produces.
+fn send_turn_complete(
+    tx: &futures::channel::mpsc::UnboundedSender<AcpResult<Message>>,
+    req: &Request,
+) -> AcpResult<()> {
+    let session_id = req
+        .params
+        .as_ref()
+        .and_then(|params| serde_json::to_value(params).ok())
+        .and_then(|params| {
+            params
+                .get("sessionId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    let Some(session_id) = session_id else {
+        tracing::debug!("PlaybackAgent: prompt carries no sessionId; no end-of-turn marker");
+        return Ok(());
+    };
+
+    let marker = crate::turn_complete_notification(agent_client_protocol::schema::SessionId::new(
+        session_id,
+    ));
+    let Some(params) = serde_json::to_value(&marker)
+        .ok()
+        .as_ref()
+        .and_then(value_to_params)
+    else {
+        tracing::warn!("PlaybackAgent: end-of-turn marker is not valid notification params");
+        return Ok(());
+    };
+    send_message(
+        tx,
+        Message::Request(Request::notification_v2(
+            "session/update".to_string(),
+            Some(params),
+        )),
+    )
 }
 
 /// Pop the next recorded call, logging a method mismatch as a warning.
@@ -636,7 +685,11 @@ mod tests {
         drop(tx);
 
         let messages = drain(&mut rx).await;
-        assert_eq!(messages.len(), 2, "notification then response");
+        assert_eq!(
+            messages.len(),
+            3,
+            "recorded notification, end-of-turn marker, then response"
+        );
 
         let Message::Request(notif) = &messages[0] else {
             panic!("first message should be the recorded notification");
@@ -644,8 +697,26 @@ mod tests {
         assert_eq!(notif.method, "session/update");
         assert!(notif.id.is_none());
 
-        let Message::Response(resp) = &messages[1] else {
-            panic!("second message should be the response");
+        // A replayed prompt turn closes its notification stream, so a client
+        // collector stops on that marker instead of a wall-clock window.
+        let Message::Request(marker) = &messages[1] else {
+            panic!("second message should be the end-of-turn marker");
+        };
+        assert_eq!(marker.method, "session/update");
+        assert!(marker.id.is_none());
+        let marker_params = serde_json::to_value(
+            marker
+                .params
+                .as_ref()
+                .expect("the marker carries notification params"),
+        )
+        .expect("marker params serialize");
+        let decoded: agent_client_protocol::schema::SessionNotification =
+            serde_json::from_value(marker_params).expect("the marker is a SessionNotification");
+        assert!(crate::is_turn_complete(&decoded));
+
+        let Message::Response(resp) = &messages[2] else {
+            panic!("last message should be the response");
         };
         assert_eq!(resp.id, Some(Id::Number(5)));
         assert_eq!(

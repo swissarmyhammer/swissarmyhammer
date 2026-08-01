@@ -866,7 +866,21 @@ impl ScriptedAgent {
         let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
             TextContent::new(text),
         )));
-        let notif = SessionNotification::new(session_id.clone(), update);
+        self.emit(cx, SessionNotification::new(session_id.clone(), update));
+    }
+
+    /// Close the turn's notification stream, exactly as a real backend does:
+    /// the end-of-turn marker, routed the same way the reply chunks were, so a
+    /// client collector stops on a real signal instead of a timer.
+    fn emit_turn_complete(&self, cx: &ConnectionTo<Client>, session_id: &SessionId) {
+        self.emit(
+            cx,
+            claude_agent::turn_complete_notification(session_id.clone()),
+        );
+    }
+
+    /// Route one notification per the configured emit policy.
+    fn emit(&self, cx: &ConnectionTo<Client>, notif: SessionNotification) {
         match &self.config.broadcast {
             Some(tx) => {
                 let _ = tx.send(notif.clone());
@@ -1007,6 +1021,7 @@ async fn handle_prompt(
             .respond_with_error(agent_client_protocol::Error::internal_error());
     };
     mock.emit_reply(cx, &req.session_id, text);
+    mock.emit_turn_complete(cx, &req.session_id);
     mock.complete_turn(&session_key, pin_on_save(&req));
     responder
         .cast()

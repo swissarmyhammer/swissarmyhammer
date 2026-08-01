@@ -335,6 +335,14 @@ impl ClaudeAgent {
     /// dispatches to the streaming or non-streaming prompt handler. Resets the
     /// per-session cancellation flag once the turn finishes so the next prompt
     /// starts fresh.
+    ///
+    /// However the turn ends, the LAST thing it emits on the session's
+    /// notification stream is the end-of-turn marker
+    /// ([`turn_complete_notification`](agent_client_protocol_extras::turn_complete_notification)).
+    /// A client reassembling the reply from streamed chunks drains until it
+    /// sees that marker, so emitting it is what lets the client stop on a real
+    /// signal instead of guessing a wall-clock window — and why it is emitted
+    /// on the error paths too, where the reply is over just the same.
     pub async fn prompt(
         &self,
         request: PromptRequest,
@@ -351,6 +359,23 @@ impl ClaudeAgent {
         let session = self.resolve_session(&request.session_id)?;
         let session_id = session.id;
 
+        let outcome = self.run_prompt_turn(request, session, session_id).await;
+        self.notify_turn_complete(&session_id).await;
+        outcome
+    }
+
+    /// The body of one `session/prompt` turn, from the resolved session to the
+    /// [`PromptResponse`].
+    ///
+    /// Split out of [`prompt`](Self::prompt) so the end-of-turn marker is
+    /// emitted on EVERY exit — early return and error alike — instead of only
+    /// where a `return` happens to be written.
+    async fn run_prompt_turn(
+        &self,
+        request: PromptRequest,
+        session: crate::session::Session,
+        session_id: crate::session::SessionId,
+    ) -> Result<PromptResponse, agent_client_protocol::Error> {
         // Send user message chunks for conversation transparency
         self.send_user_message_chunks(&request).await;
 
@@ -429,6 +454,25 @@ impl ClaudeAgent {
 
         self.log_response("prompt", &response);
         Ok(response)
+    }
+
+    /// Emit the end-of-turn marker on the session's notification stream.
+    ///
+    /// The marker rides the SAME broadcast the turn's chunks rode, so every
+    /// FIFO hop between here and a client's collector delivers it after the
+    /// last chunk. A send failure means nobody is listening, which is not a
+    /// turn failure.
+    async fn notify_turn_complete(&self, session_id: &crate::session::SessionId) {
+        let notification = agent_client_protocol_extras::turn_complete_notification(
+            SessionId::new(session_id.to_string()),
+        );
+        if let Err(e) = self.send_session_update(notification).await {
+            tracing::debug!(
+                "No listener for the end-of-turn marker on session {}: {}",
+                session_id,
+                e
+            );
+        }
     }
 
     /// Handle the ACP `session/cancel` notification.

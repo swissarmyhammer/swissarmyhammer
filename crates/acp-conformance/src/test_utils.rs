@@ -213,6 +213,7 @@ fn dispatch_mock_request<M: MockAgent + 'static>(
     use agent_client_protocol::ClientRequest as Req;
 
     let mock = Arc::clone(mock);
+    let notifier = cx.clone();
     cx.spawn(async move {
         match request {
             Req::InitializeRequest(req) => responder
@@ -230,7 +231,24 @@ fn dispatch_mock_request<M: MockAgent + 'static>(
             Req::SetSessionModeRequest(req) => responder
                 .cast()
                 .respond_with_result(mock.set_session_mode(req).await),
-            Req::PromptRequest(req) => responder.cast().respond_with_result(mock.prompt(req).await),
+            Req::PromptRequest(req) => {
+                let session_id = req.session_id.clone();
+                let result = mock.prompt(req).await;
+                // Close the turn's notification stream exactly as a real
+                // backend does. A client collector reassembling the reply
+                // drains until it sees this marker, so a mock that omitted it
+                // would leave every collector waiting out its hang guard.
+                //
+                // The marker is emitted here, not by the mock, because
+                // `MockAgent::prompt` has no connection handle. A mock that
+                // streams its own chunks must therefore have DELIVERED every
+                // one of them before `prompt` returns — a mock that streams
+                // from a detached task would race this marker.
+                let _ = notifier.send_notification(
+                    agent_client_protocol_extras::turn_complete_notification(session_id),
+                );
+                responder.cast().respond_with_result(result)
+            }
             Req::ExtMethodRequest(req) => {
                 let result = mock.ext_method(req).await.and_then(|ext_response| {
                     serde_json::from_str::<serde_json::Value>(ext_response.0.get())
