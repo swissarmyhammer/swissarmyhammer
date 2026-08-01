@@ -10,30 +10,82 @@
 //! answer.
 //!
 //! `ClaudeAgent::prompt` emits the marker on ONE unconditional path, so the
-//! exits that need pinning are the early ones — the three that return a
-//! `prompt` error before any backend work, which is where an implementation
-//! forgets the marker. There is one test per exit:
+//! exits that need pinning are the early ones, which is where an
+//! implementation forgets the marker.
 //!
-//! | exit | error | marker addressed to |
-//! |------|-------|---------------------|
-//! | session id resolves to no session | `invalid_params` | the id the client sent |
-//! | session store cannot be read | `internal_error` (-32603) | the id the client sent |
-//! | request validation rejects the prompt | `invalid_params` | the resolved session id |
+//! # What these tests pin
 //!
-//! The first two are the reason `prompt` picks the marker's address BEFORE it
-//! knows whether resolution succeeded: an unresolved id has no canonical form,
-//! so the only address a client's collector could be waiting on is the id that
-//! client literally sent. Each test therefore subscribes its collector on the
-//! id it sends, never on a resolved id.
+//! Three tests cover the three exits that return before the turn streams
+//! anything at all — everything reachable before `run_prompt_turn` calls
+//! `send_user_message_chunks`. That set is complete: `prompt` runs only
+//! `resolve_session` ahead of the turn body, and the turn body runs only
+//! `validate_prompt_request` ahead of the first chunk.
 //!
-//! A turn that does reach the backend leaves through the very same emit, and no
-//! test here drives one: that needs the claude CLI, which these tests
-//! deliberately never spawn. The one way past the emit is a panic or a dropped
+//! | exit | result |
+//! |------|--------|
+//! | the session id resolves to no session | `invalid_params` |
+//! | the session store cannot be read | `internal_error` (-32603) |
+//! | request validation rejects the prompt | `invalid_params` |
+//!
+//! A fourth test covers the first exit PAST that point, and the only one of
+//! them that is reachable without the claude CLI: a session cancelled before
+//! the prompt arrives returns `Ok(StopReason::Cancelled)` after the user
+//! message is streamed but before the model runs.
+//!
+//! # What these tests do NOT pin
+//!
+//! `run_prompt_turn` returns without running the model at four further exits,
+//! and no test here covers any of them: `prepare_session_for_turn`,
+//! `check_turn_limits` and `get_updated_session` each return a `prompt` error,
+//! and a turn that trips its turn limit returns `Ok`. Neither does any test
+//! here drive a turn that reaches the backend — that needs the claude CLI,
+//! which these tests deliberately never spawn.
+//!
+//! Every one of those exits leaves through the very same emit, so this module
+//! pins the rule at the exits an implementation is likeliest to miss, not every
+//! path that obeys it. The one way past the emit is a panic or a dropped
 //! future, which is why a client's drain keeps its hang guard at all.
+//!
+//! # Which id the marker is addressed to
+//!
+//! `prompt` picks the marker's address BEFORE it knows whether resolution
+//! succeeded: a resolved session gets its canonical id, and an unresolved one
+//! gets the id the client literally sent, because an unresolved id has no
+//! canonical form. Every test therefore subscribes its collector on the id it
+//! sends, never on a resolved id.
+//!
+//! Only the unresolvable-id test can tell those two rules apart. Wherever the
+//! session resolves, `resolve_session` found it by parsing the client's own id,
+//! so the canonical `session.id.to_string()` and the id the client sent are the
+//! SAME string, and no assertion could say which of them the marker carried.
+//! The unresolvable-id test names an id no session was ever created for, so the
+//! client's id is the only address that can exist — and its drain finishing is
+//! what proves the marker carried that address.
+//!
+//! # Why `worker_threads = 2`
+//!
+//! The multi-threaded flavor is what makes the marker cross a real thread
+//! boundary: the collector is a `tokio::spawn`ed task, so it is polled on a
+//! runtime worker while the test body runs on the thread that called
+//! `block_on`. That is the production shape — the agent emits on one thread and
+//! a client's collector observes on another. Two workers rather than one let
+//! the collector and the tasks the agent spawns be polled at the same time
+//! instead of in turn.
+//!
+//! The count is a deliberate choice, not a passing condition: these tests also
+//! pass under `flavor = "current_thread"`, where the collector shares the test
+//! body's thread and nothing crosses threads at all.
+//!
+//! The literal cannot be replaced by a named constant. `tokio::test` reads
+//! `worker_threads` at macro-expansion time, and `tokio-macros` (2.7.0, the
+//! locked version) matches the argument value against `syn::Expr::Lit`,
+//! returning "Must be a literal" for anything else. A constant path is a
+//! `syn::Expr::Path`, so `worker_threads = TEST_WORKER_THREADS` does not
+//! compile, and the `2` has to be written out at each attribute.
 
 use agent_client_protocol::schema::{
-    ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    StopReason, TextContent,
+    CancelNotification, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionId,
+    SessionNotification, StopReason, TextContent,
 };
 use agent_client_protocol::ErrorCode;
 use claude_agent::{config::AgentConfig, ClaudeAgent};
@@ -58,9 +110,9 @@ const UNKNOWN_ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 ///
 /// `spawn_claude_on_new_session` off is the headless seam this module shares
 /// with `mcp_http_session`: `new_session` records a session without exec'ing
-/// the CLI or waiting on its init line. Every exit these tests pin returns
-/// before any backend work, so no test here needs a live CLI — and must not
-/// depend on one being installed.
+/// the CLI or waiting on its init line. No exit these tests pin ever reaches
+/// the model, so no test here needs a live CLI — and must not depend on one
+/// being installed.
 async fn headless_agent() -> (ClaudeAgent, broadcast::Receiver<SessionNotification>) {
     let config = AgentConfig {
         spawn_claude_on_new_session: false,
@@ -250,5 +302,48 @@ async fn a_rejected_prompt_ends_the_turn_for_a_subscribed_collector() {
     assert!(
         content.is_empty(),
         "a rejected prompt streams no reply: {content:?}"
+    );
+}
+
+/// A prompt on a session cancelled beforehand still marks its turn complete,
+/// even though it returns `Ok` rather than an error.
+///
+/// This is the first exit PAST the point where the turn starts streaming: the
+/// user message goes out as a `UserMessageChunk`, then
+/// `check_cancelled_before_processing` returns `Cancelled` and the model is
+/// never reached. It pins the marker on a SUCCESSFUL return, so the rule cannot
+/// be read as "error paths also emit the marker".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_cancelled_session_ends_the_turn_for_a_subscribed_collector() {
+    let (agent, notifications) = headless_agent().await;
+    let session = new_session(&agent).await;
+
+    agent
+        .cancel(CancelNotification::new(session.clone()))
+        .await
+        .expect("cancelling a live session should succeed");
+
+    // Subscribe after the cancel and before the prompt, so the collector sees
+    // only this turn's notifications.
+    let collector =
+        claude_agent::spawn_notification_collector(notifications.resubscribe(), session.clone());
+
+    let cancelled = agent
+        .prompt(PromptRequest::new(
+            session,
+            vec![ContentBlock::Text(TextContent::new("hello".to_string()))],
+        ))
+        .await
+        .expect("a pre-cancelled prompt returns Ok, not an error");
+    assert_eq!(
+        cancelled.stop_reason,
+        StopReason::Cancelled,
+        "a pre-cancelled session stops the turn as cancelled: {cancelled:?}"
+    );
+
+    let content = drain_must_end_on_the_marker(collector, "a pre-cancelled session").await;
+    assert!(
+        content.is_empty(),
+        "a turn that never reached the model streams no agent reply: {content:?}"
     );
 }

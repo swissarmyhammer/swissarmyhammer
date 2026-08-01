@@ -458,6 +458,26 @@ comments:
     - evidence: 2 files — crates/agent-client-protocol-extras/src/playback.rs, crates/claude-agent/tests/integration/turn_complete_marker.rs. Both round-3 findings checked. rdeps(claude-agent) 6095/6095, rdeps(agent-client-protocol-extras) 6397/6397, doctests 5 passed 1 ignored; fmt and clippy clean.
     - next: /review (the card stays in `doing`)
   timestamp: 2026-08-01T18:05:00.755032+00:00
+- actor: claude-code
+  id: 01kyz94n3x5s67zcg3m6phj67b
+  text: |
+    ### review — findings
+    - evidence: 5 open findings — turn_complete_marker.rs:152, :191, :230 (engine, `worker_threads = 2`), plus turn_complete_marker.rs:17-21 and :13-15 (reviewer assessment on the module doc). Engine returned 7 findings / 7 confirmed / 2 refuted on `review sha HEAD~1..HEAD` (359a19014); 4 blame to 2025-12-24 and 2026-05-01 and are dropped as pre-existing.
+    - notes: `review sha` did NOT error this round — this commit does not touch crates/llama-agent/src/acp/server.rs. The round-3 playback.rs duplication finding is closed; the engine raised nothing against the new `send_session_update_notification` helper. The `RwLock` poisoning that stages the -32603 exit is ACCEPTED: it drives the branch the production doc names, uses only the public API, and two asserts make a broken setup fail loudly. Half of the `worker_threads` remedy cannot compile — tokio's attribute macro needs a literal, so a named constant is impossible.
+    - next: add the module comment that explains the 2 worker threads and record the macro limit; correct the module doc's addressing table and its count of three early exits.
+  timestamp: 2026-08-01T18:24:48.765332+00:00
+- actor: claude-code
+  id: 01kyzbpc7gqscqbqb6p2g41qmq
+  text: |
+    ### implement — changed
+    - The working tree had an interrupted prior session's changes already in place: `crates/claude-agent/tests/integration/turn_complete_marker.rs` had its module doc rewritten (dropped the "addressed to" table column, added a `# Which id the marker is addressed to` section, added a `# What these tests do NOT pin` section, added a `# Why worker_threads = 2` section with the macro-limitation note) and gained a fourth test, `a_pre_cancelled_session_ends_the_turn_for_a_subscribed_collector`, covering the pre-cancelled `Ok(StopReason::Cancelled)` exit. But `crates/claude-agent/src/agent_trait_impl.rs` still held a deliberate RED-check break: `let _ = &marker_session_id; // TEMP RED CHECK: emit removed` in place of `self.notify_turn_complete(&marker_session_id).await;`.
+    - Restored the `notify_turn_complete` call. `git diff` against HEAD on that file is now empty (byte-exact restore).
+    - Verified the restored doc/test changes fully resolve all 3 open round-4 findings: worker_threads=2 magic-number finding (module comment + macro-limitation note added, no attempt to re-introduce the impossible named constant), the addressing-table finding (table restructured to drop the misleading distinction, addressing rule explained separately with the "only the unresolvable-id test can tell them apart" statement), and the exit-count finding (doc now states the exact reading — "every exit reachable before `run_prompt_turn` calls `send_user_message_chunks`" — names it complete under that reading, and a `# What these tests do NOT pin` section lists the four remaining unpinned exits by name: `prepare_session_for_turn`, `check_turn_limits`, `get_updated_session`, and the turn-limit `Ok` exit). Cross-checked the doc's claims against `agent_trait_impl.rs::prompt`/`run_prompt_turn` line by line — accurate.
+    - Did not touch `crates/llama-agent/src/acp/server.rs` (^3rnvage, out of scope).
+    - evidence: `cargo nextest run -p claude-agent turn_complete_marker` — 4/4 passed (including the new pre-cancelled test). `cargo fmt --all` — no changes to source. `cargo clippy --workspace --all-targets -- -D warnings` — clean. `cargo nextest run -E 'rdeps(claude-agent)'` — 6096/6096 passed, 2 skipped. `cargo nextest run -E 'rdeps(agent-client-protocol-extras)'` — 6398/6398 passed, 2 skipped. All 5 open round-4 checklist items marked `[x]` on the task description with resolution notes.
+    - files touched: crates/claude-agent/src/agent_trait_impl.rs (1-line restore only).
+    - next: /review
+  timestamp: 2026-08-01T19:09:26.640212+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'Flaky under full-suite load: collect_response_content drains notifications on a fixed 500ms sleep'
@@ -567,3 +587,79 @@ tracked with its own acceptance criterion on ^3rnvage ("`crates/llama-agent/src/
 gets a review through a normal route"). For THIS commit the un-reviewed delta is a
 comment block, read by hand and correct. The card stays in `review` for the two
 code findings above, not for this item.
+
+## Review Findings (2026-08-01 13:06)
+
+Scope: commit `359a19014` (`HEAD~1..HEAD`), 4 files — 2 code, 2 kanban. `review sha`
+did NOT error this round. This commit does not touch
+`crates/llama-agent/src/acp/server.rs`, so the 262,144-byte batch budget was never
+reached and the whole range went through one normal run. The engine returned 7
+findings (7 confirmed, 2 refuted).
+
+Every engine line number was stale. Each was resolved to its true location and
+blame-checked against `359a19014`. Four findings blame to older commits. They are
+pre-existing and are dropped:
+
+- `playback.rs:107` (`PlaybackAgent` needs `Debug`) — true line 83, blame `b3b00137af`, 2025-12-24.
+- `playback.rs:113` (`new` should take `impl AsRef<Path>`) — true line 108, blame `b3b00137af`, 2025-12-24.
+- `playback.rs:148` (`-32603` needs a constant) — true lines 233 and 361, blame `71441e9127`, 2026-05-01.
+- `playback.rs:312` (`20` ms needs a constant) — true line 585, blame `71441e9127`, 2026-05-01. That line is also inside `#[cfg(test)] mod tests`, so the existing-test exception covers it as well.
+
+The engine raised NOTHING against `send_session_update_notification`, which is the
+code this commit adds to `playback.rs`. The round-3 duplication finding is closed.
+
+Three findings remain. All three name one cause in one file.
+
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:72` — 2 is a hardcoded worker thread count that configures test behavior and appears in multiple tests without explanation. Define `const TEST_WORKER_THREADS: usize = 2;` as a module constant and document why 2 threads are needed.
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:143` — 2 is a hardcoded worker thread count that repeats across tests without naming. Use the same named constant as line 72 to avoid duplication.
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:176` — 2 is a hardcoded worker thread count that repeats across tests without naming. Use the same named constant as line 72 to avoid duplication.
+  - Resolved locations: the three `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` attributes are at lines 152, 191 and 230. All three blame to `359a19014`. Lines 152 and 191 belong to the two NEW tests. Line 230 is the pre-existing rejected-prompt test, which this commit moved; its attribute already read `worker_threads = 2`, so the existing-test exception covers that site alone. The other two are new code and stay in scope.
+  - HALF OF THIS REMEDY CANNOT COMPILE. The `tokio::test` attribute macro reads `worker_threads` at expansion time. In `tokio-macros-2.7.1/src/entry.rs` the argument value must match `syn::Expr::Lit`, and anything else returns the error "Must be a literal"; `parse_int` then accepts only `syn::Lit::Int`. A constant path such as `TEST_WORKER_THREADS` is a `syn::Expr::Path`, so `worker_threads = TEST_WORKER_THREADS` does not compile. The named-constant part of the remedy is impossible, and the duplication that the second and third findings name cannot be removed this way.
+  - RESOLVED: the named-constant half stays impossible for the stated macro reason; the module now carries a `# Why worker_threads = 2` doc section next to the three attributes that explains why the multi-threaded flavor is needed (the collector is a separately-polled `tokio::spawn`ed task, so 2 workers let it and the agent's own tasks run at the same time instead of in turn) and records the `syn::Expr::Lit`-only macro limitation so a later round does not re-ask for the constant.
+
+### Reviewer assessment recorded as a requirement — the module doc still claims more than the three tests prove
+
+The engine did not raise this. It answers a question the caller asked directly, so
+it is a requirement here, in the same way the round-2 emitter gap was.
+
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:17-21` — the "marker addressed to" column is proven for one row only. In row 1 the id names no session, so "the id the client sent" is the only address that can exist, and the passing drain proves it. In row 2 and row 3 the test sends the canonical id that `new_session` returned, so "the id the client sent" and "the resolved session id" are the SAME string. Those two rows cannot tell the two addressing rules apart, so the distinction the table draws between them stays unproven. Say in the doc that rows 2 and 3 do not discriminate the address, or make the client-sent id differ from the canonical id where that is possible.
+  - RESOLVED: the table lost its "addressed to" column — it now lists only `exit` and `result`. Addressing is explained separately in a `# Which id the marker is addressed to` section, which states plainly that only the unresolvable-id test can tell the two addressing rules apart, because in every other test the client's id and the resolved id are the same string.
+- [x] `crates/claude-agent/tests/integration/turn_complete_marker.rs:13-15` — "the three that return a `prompt` error before any backend work" reads as a complete list. It is complete only under the narrow reading "before any turn output is streamed". After `send_user_message_chunks`, `run_prompt_turn` returns a `prompt` error before the model runs at three more places: `prepare_session_for_turn(&session_id, &prompt_text)?`, `check_turn_limits(&session_id, &prompt_text)?` and `get_updated_session(&session_id)?`. It also returns `Ok` without running a turn at two more places — the pre-cancelled session and the turn limit. The headline sentence covers all five, and no test pins any of them. State which reading "before any backend work" takes, or remove the count.
+  - RESOLVED: the module doc now states the exact reading — three tests cover every exit reachable before `run_prompt_turn` calls `send_user_message_chunks` — and names that set as complete under that reading. A fourth test, `a_pre_cancelled_session_ends_the_turn_for_a_subscribed_collector`, was added for the pre-cancelled `Ok(StopReason::Cancelled)` exit immediately past that point, since it needs no claude CLI. A new `# What these tests do NOT pin` section lists the four exits that remain unpinned by name — `prepare_session_for_turn`, `check_turn_limits`, `get_updated_session` (all three `prompt`-error exits) and the turn-limit `Ok` exit — and says plainly that driving a turn into the backend needs the claude CLI, which this module deliberately never spawns.
+
+The headline sentence itself is correct and was verified: `ClaudeAgent::prompt`
+holds no `?` and no early `return` before `notify_turn_complete`, so every exit
+passes through the one emit.
+
+### Assessment — poisoning the `RwLock` to stage the -32603 exit is accepted
+
+The approach is sound, and it is accepted.
+
+- It drives the real branch. `SessionManager.sessions` is a `std::sync::RwLock`. `update_session` calls the updater while it holds the write guard, so a panic in the closure unwinds through the guard and poisons the lock. That is guaranteed `std::sync` behavior, not a local accident. `get_session` then maps the `PoisonError` to `AgentError::Session`, and `resolve_session_with` maps that to `internal_error` (-32603).
+- It is not a stand-in for the real cause. The production doc on `resolve_session_with` names lock poisoning as the cause of that branch, word for word: "A session-store FAILURE (lock poisoning) is a retryable `-32603` internal error instead". The test reproduces the documented condition, not an analogue of it.
+- It uses only the public API — `session_manager()`, `update_session`, `get_session`. No test-only hook was added to production code.
+- It cannot silently stop reproducing. Two asserts guard it. `assert!(panicked.is_err())` fails if the closure ever stops panicking — for example if the session lookup inside `update_session` misses, because the updater only runs `if let Some(session) = sessions.get_mut(session_id)`. `assert!(manager.get_session(&internal_id).is_err())` then proves the store is unreadable BEFORE the prompt is sent. Neither depends on inferring the state from the prompt's error code, so a broken setup is a loud failure, never a green test on the wrong path.
+- The coupling is real but it fails loudly. The technique needs a poisoning lock. Move `sessions` to `tokio::sync::RwLock` or `parking_lot::RwLock` and nothing poisons, so `get_session` succeeds and the second assert fails. Whoever does that migration gets a red test that says the -32603 branch has no reachable fault injection left. That is useful information, not a false alarm.
+- It needs unwinding. No profile in this workspace sets `panic = "abort"`, so `std::thread::spawn` plus `join()` returns `Err` as the test expects.
+- One caveat, not a finding: `poison_the_session_store` swaps the PROCESS-global panic hook. `.config/nextest.toml` is present and nextest runs one process per test, so the swap is isolated. Under plain `cargo test` the three tests share one binary and run concurrently, and a genuine panic in a sibling test inside the swap window would lose its backtrace. That degrades diagnosis; it cannot turn a failure into a pass.
+
+### Guardrail — repeat check for round 4
+
+No new finding repeats an earlier round on the same file with the same cause.
+
+- `turn_complete_marker.rs` and "a magic number needs a named constant": FIRST appearance on this file.
+- `turn_complete_marker.rs` and "the module doc claims more than the tests prove": SECOND appearance. Round 3 raised it against the words "Every `session/prompt` exit path". This round raises it against the table and against the count of three. Two, not three, so the card is not stuck on it — but a third would mean it is.
+- `playback.rs` and "a magic literal needs a named constant": round 1 asked for a `session/update` constant; this round names `-32603` and `20`. That is a second appearance on the file. Both new instances are pre-existing code and are dropped, so neither becomes work on this card.
+
+Pattern to watch: the "unexplained literal needs a named constant" rule has fired in
+2 of the 3 recorded rounds — 4 times in round 1, 5 times in round 4 — each time
+against whatever file the newest commit touched. It is not a stuck loop yet. It will
+become one if every round adds test code that holds a bare literal.
+
+### The open review-coverage item still does not block `done`
+
+The round-3 judgment stands, and this round supports it. `crates/llama-agent/src/acp/server.rs`
+is a tooling limit tracked on ^3rnvage with its own acceptance criterion. This
+commit does not touch the file, which is exactly why `review sha` ran clean through
+the whole range this time. The card stays in `review` for the findings above, not
+for that item.
