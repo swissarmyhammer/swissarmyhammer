@@ -224,7 +224,7 @@ pub async fn execute_detect(
     );
 
     let projects = detect_projects(&root_path, Some(max_depth))
-        .map_err(|e| McpError::internal_error(format!("Failed to detect projects: {}", e), None))?;
+        .map_err(|e| McpError::internal_error(format!("failed to detect projects: {}", e), None))?;
 
     // Get the prompt library for guideline rendering (if available)
     let prompt_lib_guard;

@@ -116,7 +116,7 @@ pub async fn execute_grep_history(
             Ok(BaseToolImpl::create_success_response(output))
         }
         Err(e) => Err(McpError::internal_error(
-            format!("Grep failed: {}", e),
+            format!("grep failed: {}", e),
             None,
         )),
     }

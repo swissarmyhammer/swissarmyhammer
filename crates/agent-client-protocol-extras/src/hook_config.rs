@@ -1041,11 +1041,11 @@ pub trait HookEvaluator: Send + Sync {
 /// Error building hook registrations from config.
 #[derive(Debug, thiserror::Error)]
 pub enum HookConfigError {
-    #[error("Invalid regex pattern in hook matcher: {0}")]
+    #[error("invalid regex pattern in hook matcher: {0}")]
     InvalidRegex(#[from] regex::Error),
-    #[error("Hook entry has empty hooks list")]
+    #[error("hook entry has empty hooks list")]
     EmptyHooks,
-    #[error("Prompt or agent hook requires a HookEvaluator, but none was provided")]
+    #[error("prompt or agent hook requires a HookEvaluator, but none was provided")]
     MissingEvaluator,
 }
 

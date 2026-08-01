@@ -219,7 +219,7 @@ pub fn execute_inline_diff(
 
     let plugin = registry
         .get_plugin(&synthetic_path)
-        .ok_or_else(|| format!("No parser plugin found for language '{language}'"))?;
+        .ok_or_else(|| format!("no parser plugin found for language '{language}'"))?;
 
     let before_entities = plugin.extract_entities(left_text, &synthetic_path);
     let after_entities = plugin.extract_entities(right_text, &synthetic_path);
@@ -266,7 +266,7 @@ pub fn execute_inline_diff(
     };
 
     serde_json::to_string_pretty(&response)
-        .map_err(|e| format!("Failed to serialize diff response: {e}"))
+        .map_err(|e| format!("failed to serialize diff response: {e}"))
 }
 
 /// Executes the file-mode diff.
@@ -315,7 +315,7 @@ pub fn execute_file_diff(
     let response = diff_result_to_response(&diff_result);
 
     serde_json::to_string_pretty(&response)
-        .map_err(|e| format!("Failed to serialize diff response: {e}"))
+        .map_err(|e| format!("failed to serialize diff response: {e}"))
 }
 
 /// Executes the auto-detect diff mode.
@@ -338,9 +338,9 @@ pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String
         .args(["rev-parse", "--git-dir"])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git: {e}"))?;
+        .map_err(|e| format!("failed to run git: {e}"))?;
     if !check.status.success() {
-        return Err("Failed to open git repository: not a git repository".to_string());
+        return Err("failed to open git repository: not a git repository".to_string());
     }
 
     let registry = create_default_registry();
@@ -352,7 +352,7 @@ pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String
         let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
         let response = diff_result_to_response(&diff_result);
         return serde_json::to_string_pretty(&response)
-            .map_err(|e| format!("Failed to serialize diff response: {e}"));
+            .map_err(|e| format!("failed to serialize diff response: {e}"));
     }
 
     // Check for working tree changes + untracked files
@@ -365,7 +365,7 @@ pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String
         let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
         let response = diff_result_to_response(&diff_result);
         return serde_json::to_string_pretty(&response)
-            .map_err(|e| format!("Failed to serialize diff response: {e}"));
+            .map_err(|e| format!("failed to serialize diff response: {e}"));
     }
 
     // Fall back to HEAD commit diff (HEAD vs HEAD~1)
@@ -374,7 +374,7 @@ pub fn execute_auto_diff(working_dir: &std::path::Path) -> Result<String, String
     let diff_result = compute_semantic_diff(&file_changes, &registry, None, None);
     let response = diff_result_to_response(&diff_result);
     serde_json::to_string_pretty(&response)
-        .map_err(|e| format!("Failed to serialize diff response: {e}"))
+        .map_err(|e| format!("failed to serialize diff response: {e}"))
 }
 
 /// Detects files with staged changes using `git diff --cached --name-status`.
@@ -387,7 +387,7 @@ fn detect_staged_changes(working_dir: &std::path::Path) -> Result<Vec<FileChange
         .args(["diff", "--cached", "--name-status"])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git diff --cached: {e}"))?;
+        .map_err(|e| format!("failed to run git diff --cached: {e}"))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
@@ -407,7 +407,7 @@ fn detect_working_changes(working_dir: &std::path::Path) -> Result<Vec<FileChang
         .args(["diff", "--name-status"])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git diff: {e}"))?;
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
@@ -427,7 +427,7 @@ fn detect_untracked_files(working_dir: &std::path::Path) -> Result<Vec<FileChang
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git ls-files: {e}"))?;
+        .map_err(|e| format!("failed to run git ls-files: {e}"))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
@@ -464,7 +464,7 @@ fn detect_head_commit_changes(working_dir: &std::path::Path) -> Result<Vec<FileC
         .args(["diff", "--name-status", "HEAD~1", "HEAD"])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git diff HEAD: {e}"))?;
+        .map_err(|e| format!("failed to run git diff HEAD: {e}"))?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -483,7 +483,7 @@ fn detect_head_commit_changes(working_dir: &std::path::Path) -> Result<Vec<FileC
         ])
         .current_dir(working_dir)
         .output()
-        .map_err(|e| format!("Failed to run git diff-tree: {e}"))?;
+        .map_err(|e| format!("failed to run git diff-tree: {e}"))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
@@ -662,7 +662,7 @@ fn read_file_content(
                 .args(["show", &format!("{refspec}:{file_path}")])
                 .current_dir(working_dir)
                 .output()
-                .map_err(|e| format!("Failed to run git show: {e}"))?;
+                .map_err(|e| format!("failed to run git show: {e}"))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -670,13 +670,13 @@ fn read_file_content(
             }
 
             String::from_utf8(output.stdout)
-                .map_err(|e| format!("File content is not valid UTF-8: {e}"))
+                .map_err(|e| format!("file content is not valid UTF-8: {e}"))
         }
         None => {
             // Read from disk
             let full_path = working_dir.join(file_path);
             std::fs::read_to_string(&full_path)
-                .map_err(|e| format!("Failed to read file '{}': {e}", full_path.display()))
+                .map_err(|e| format!("failed to read file '{}': {e}", full_path.display()))
         }
     }
 }

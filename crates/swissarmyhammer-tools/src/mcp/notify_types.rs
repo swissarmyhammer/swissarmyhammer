@@ -117,7 +117,7 @@ impl NotifyRequest {
     /// Validate the request
     pub fn validate(&self) -> Result<(), String> {
         if self.message.trim().is_empty() {
-            return Err("Message cannot be empty".to_string());
+            return Err("message cannot be empty".to_string());
         }
         Ok(())
     }

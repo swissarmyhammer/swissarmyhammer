@@ -81,7 +81,7 @@ impl ServerHandler for ShellToolServer {
     ) -> Result<CallToolResult, McpError> {
         if request.name != self.tool.name() {
             return Err(McpError::invalid_request(
-                format!("Unknown tool: {}", request.name),
+                format!("unknown tool: {}", request.name),
                 None,
             ));
         }

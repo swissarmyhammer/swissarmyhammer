@@ -235,7 +235,7 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
     // Ensure path is not empty
     if path.trim().is_empty() {
         return Err(McpError::invalid_request(
-            "File path cannot be empty".to_string(),
+            "file path cannot be empty".to_string(),
             None,
         ));
     }
@@ -245,7 +245,7 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
     if path.len() > MAX_PATH_LENGTH {
         return Err(McpError::invalid_request(
             format!(
-                "Path too long ({} characters, maximum {}): {}",
+                "path too long ({} characters, maximum {}): {}",
                 path.len(),
                 MAX_PATH_LENGTH,
                 path
@@ -277,7 +277,7 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
                     if let Some(parent) = resolved_path.parent() {
                         if !parent.exists() {
                             return Err(McpError::invalid_request(
-                                format!("Parent directory does not exist: {}", parent.display()),
+                                format!("parent directory does not exist: {}", parent.display()),
                                 None,
                             ));
                         }
@@ -287,18 +287,18 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
                 }
                 ErrorKind::PermissionDenied => Err(McpError::invalid_request(
                     format!(
-                        "Permission denied accessing path: {}",
+                        "permission denied accessing path: {}",
                         resolved_path.display()
                     ),
                     None,
                 )),
                 ErrorKind::InvalidInput => Err(McpError::invalid_request(
-                    format!("Invalid path format: {}", resolved_path.display()),
+                    format!("invalid path format: {}", resolved_path.display()),
                     None,
                 )),
                 _ => Err(McpError::invalid_request(
                     format!(
-                        "Failed to resolve path '{}': {}",
+                        "failed to resolve path '{}': {}",
                         resolved_path.display(),
                         e
                     ),
@@ -339,9 +339,9 @@ pub fn reject_filesystem_root(search_dir: &Path) -> Result<(), McpError> {
     if !search_dir.is_absolute() {
         return Err(McpError::invalid_request(
             format!(
-                "Refusing to search '{}': the session working directory could not be \
+                "refusing to search '{}': the session working directory could not be \
                  resolved to an absolute path. Provide a `path`, or run with a session \
-                 working directory set.",
+                 working directory set",
                 search_dir.display()
             ),
             None,
@@ -353,8 +353,8 @@ pub fn reject_filesystem_root(search_dir: &Path) -> Result<(), McpError> {
     if search_dir.parent().is_none() {
         return Err(McpError::invalid_request(
             format!(
-                "Refusing to search the filesystem root: {}. \
-                 Provide a `path`, or run with a session working directory set.",
+                "refusing to search the filesystem root: {}. \
+                 Provide a `path`, or run with a session working directory set",
                 search_dir.display()
             ),
             None,
@@ -378,7 +378,7 @@ pub fn reject_filesystem_root(search_dir: &Path) -> Result<(), McpError> {
 /// * `Result<std::fs::Metadata, McpError>` - File metadata or error
 pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
     std::fs::metadata(path)
-        .map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {}", e), None))
+        .map_err(|e| McpError::invalid_request(format!("failed to get file metadata: {}", e), None))
 }
 
 /// Ensure a directory exists, creating it if necessary
@@ -396,7 +396,7 @@ pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
 pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
     if !dir_path.exists() {
         std::fs::create_dir_all(dir_path).map_err(|e| {
-            McpError::internal_error(format!("Failed to create directory: {}", e), None)
+            McpError::internal_error(format!("failed to create directory: {}", e), None)
         })?;
     }
     Ok(())
@@ -431,7 +431,7 @@ pub fn enforce_rate_limit(operation: &str, cost: u32) -> Result<(), McpError> {
         .check_rate_limit(&client_id, operation, cost)
         .map_err(|e| {
             tracing::warn!("Rate limit exceeded for {operation}: {e}");
-            McpError::invalid_request(format!("Rate limit exceeded: {e}"), None)
+            McpError::invalid_request(format!("rate limit exceeded: {e}"), None)
         })
 }
 
@@ -452,19 +452,19 @@ pub fn enforce_rate_limit(operation: &str, cost: u32) -> Result<(), McpError> {
 pub fn handle_file_error(error: std::io::Error, operation: &str, path: &Path) -> McpError {
     let error_message = match error.kind() {
         std::io::ErrorKind::NotFound => {
-            format!("File not found: {}", path.display())
+            format!("file not found: {}", path.display())
         }
         std::io::ErrorKind::PermissionDenied => {
-            format!("Permission denied accessing: {}", path.display())
+            format!("permission denied accessing: {}", path.display())
         }
         std::io::ErrorKind::AlreadyExists => {
-            format!("File already exists: {}", path.display())
+            format!("file already exists: {}", path.display())
         }
         std::io::ErrorKind::InvalidData => {
-            format!("Invalid file data in: {}", path.display())
+            format!("invalid file data in: {}", path.display())
         }
         _ => {
-            format!("Failed to {} {}: {}", operation, path.display(), error)
+            format!("failed to {} {}: {}", operation, path.display(), error)
         }
     };
 
@@ -655,7 +655,7 @@ impl FilePathValidator {
         if path.len() > MAX_PATH_LENGTH {
             return Err(McpError::invalid_request(
                 format!(
-                    "Path too long ({} characters, maximum {}): {}",
+                    "path too long ({} characters, maximum {}): {}",
                     path.len(),
                     MAX_PATH_LENGTH,
                     path
@@ -680,7 +680,7 @@ impl FilePathValidator {
         // Step 2: Symlink validation BEFORE canonicalization
         if resolved_path.is_symlink() && !self.allow_symlinks {
             return Err(McpError::invalid_request(
-                format!("Symlinks are not allowed: {}", resolved_path.display()),
+                format!("symlinks are not allowed: {}", resolved_path.display()),
                 None,
             ));
         }
@@ -728,13 +728,13 @@ impl FilePathValidator {
     ) -> Result<(), McpError> {
         // Canonicalize both paths for accurate comparison
         let canonical_workspace = workspace_root.canonicalize().map_err(|e| {
-            McpError::invalid_request(format!("Invalid workspace root: {}", e), None)
+            McpError::invalid_request(format!("invalid workspace root: {}", e), None)
         })?;
 
         // For non-existent paths, check the deepest existing parent
         let path_to_check = if path.exists() {
             path.canonicalize().map_err(|e| {
-                McpError::invalid_request(format!("Failed to canonicalize path: {}", e), None)
+                McpError::invalid_request(format!("failed to canonicalize path: {}", e), None)
             })?
         } else {
             // Find the deepest existing parent directory
@@ -745,7 +745,7 @@ impl FilePathValidator {
                 if parent.exists() {
                     let canonical_parent = parent.canonicalize().map_err(|e| {
                         McpError::invalid_request(
-                            format!("Failed to canonicalize parent directory: {}", e),
+                            format!("failed to canonicalize parent directory: {}", e),
                             None,
                         )
                     })?;
@@ -755,7 +755,7 @@ impl FilePathValidator {
                         .strip_prefix(parent)
                         .map_err(|_| {
                             McpError::invalid_request(
-                                "Failed to determine relative path component".to_string(),
+                                "failed to determine relative path component".to_string(),
                                 None,
                             )
                         })?
@@ -770,7 +770,7 @@ impl FilePathValidator {
             // If no parent exists, this is likely an invalid path
             found_path.ok_or_else(|| {
                 McpError::invalid_request(
-                    format!("Path has no existing parent directory: {}", path.display()),
+                    format!("path has no existing parent directory: {}", path.display()),
                     None,
                 )
             })?
@@ -780,7 +780,7 @@ impl FilePathValidator {
         if !path_to_check.starts_with(&canonical_workspace) {
             return Err(McpError::invalid_request(
                 format!(
-                    "Path is outside workspace boundaries: {} (workspace: {})",
+                    "path is outside workspace boundaries: {} (workspace: {})",
                     path_to_check.display(),
                     canonical_workspace.display()
                 ),
@@ -796,7 +796,7 @@ impl FilePathValidator {
         for pattern in &self.blocked_patterns {
             if path.contains(pattern) {
                 return Err(McpError::invalid_request(
-                    format!("Path contains blocked pattern '{}': {}", pattern, path),
+                    format!("path contains blocked pattern '{}': {}", pattern, path),
                     None,
                 ));
             }
@@ -816,7 +816,7 @@ impl FilePathValidator {
                 .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
         {
             return Err(McpError::invalid_request(
-                "Path contains invalid control characters".to_string(),
+                "path contains invalid control characters".to_string(),
                 None,
             ));
         }
@@ -827,7 +827,7 @@ impl FilePathValidator {
     /// Securely resolves symlinks while maintaining workspace boundaries
     fn resolve_symlink_securely(&self, path: &Path) -> Result<PathBuf, McpError> {
         let resolved = path.canonicalize().map_err(|e| {
-            McpError::invalid_request(format!("Failed to resolve symlink: {}", e), None)
+            McpError::invalid_request(format!("failed to resolve symlink: {}", e), None)
         })?;
 
         // Re-check workspace boundaries after symlink resolution
@@ -863,7 +863,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                 // Check if it's a regular file (not a directory or special file)
                 if !metadata.is_file() {
                     return Err(McpError::invalid_request(
-                        format!("Path is not a regular file: {}", path.display()),
+                        format!("path is not a regular file: {}", path.display()),
                         None,
                     ));
                 }
@@ -882,7 +882,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                     if !is_readable {
                         return Err(McpError::invalid_request(
                             format!(
-                                "File is not readable (no read permissions): {}",
+                                "file is not readable (no read permissions): {}",
                                 path.display()
                             ),
                             None,
@@ -901,7 +901,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                             return Err(McpError::invalid_request(
                                 format!(
-                                    "File is not readable (permission denied): {}",
+                                    "file is not readable (permission denied): {}",
                                     path.display()
                                 ),
                                 None,
@@ -912,7 +912,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                         }
                         Err(e) => {
                             return Err(McpError::invalid_request(
-                                format!("Cannot access file: {}", e),
+                                format!("cannot access file: {}", e),
                                 None,
                             ));
                         }
@@ -927,7 +927,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                 // For existing files, check if they're writable
                 if get_file_metadata(path)?.permissions().readonly() {
                     return Err(McpError::invalid_request(
-                        format!("File is read-only: {}", path.display()),
+                        format!("file is read-only: {}", path.display()),
                         None,
                     ));
                 }
@@ -936,7 +936,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                 if let Some(parent) = path.parent() {
                     if !parent.exists() {
                         return Err(McpError::invalid_request(
-                            format!("Parent directory does not exist: {}", parent.display()),
+                            format!("parent directory does not exist: {}", parent.display()),
                             None,
                         ));
                     }
@@ -950,14 +950,14 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
             // For edit operations, the file must exist and be writable
             if !path.exists() {
                 return Err(McpError::invalid_request(
-                    format!("Cannot edit non-existent file: {}", path.display()),
+                    format!("cannot edit non-existent file: {}", path.display()),
                     None,
                 ));
             }
 
             if get_file_metadata(path)?.permissions().readonly() {
                 return Err(McpError::invalid_request(
-                    format!("File is read-only and cannot be edited: {}", path.display()),
+                    format!("file is read-only and cannot be edited: {}", path.display()),
                     None,
                 ));
             }
@@ -967,7 +967,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
             // For directory operations, check if directory exists or can be created
             if path.exists() && !path.is_dir() {
                 return Err(McpError::invalid_request(
-                    format!("Path exists but is not a directory: {}", path.display()),
+                    format!("path exists but is not a directory: {}", path.display()),
                     None,
                 ));
             }
@@ -1153,13 +1153,13 @@ impl SecureFileAccess {
             let matches: Vec<_> = content.matches(old_string).collect();
             if matches.is_empty() {
                 return Err(McpError::invalid_request(
-                    format!("String '{}' not found in file", old_string),
+                    format!("string '{}' not found in file", old_string),
                     None,
                 ));
             }
             if matches.len() > 1 {
                 return Err(McpError::invalid_request(
-                    format!("String '{}' appears {} times in file. Use replace_all=true for multiple replacements",
+                    format!("string '{}' appears {} times in file. Use replace_all=true for multiple replacements",
                            old_string, matches.len()),
                     None,
                 ));
@@ -1328,7 +1328,7 @@ mod tests {
         let error_msg = format!("{:?}", result.unwrap_err());
         println!("Error message: {}", error_msg);
         assert!(
-            error_msg.contains("Path too long") || error_msg.contains("path too long"),
+            error_msg.contains("path too long"),
             "Should mention path length issue"
         );
     }
@@ -1382,8 +1382,8 @@ mod tests {
         );
         let err = format!("{:?}", result.unwrap_err());
         assert!(
-            err.contains("Failed to resolve path"),
-            "expected the catch-all 'Failed to resolve path' message, got: {err}"
+            err.contains("failed to resolve path"),
+            "expected the catch-all 'failed to resolve path' message, got: {err}"
         );
     }
 
@@ -1421,11 +1421,11 @@ mod tests {
 
         let not_found_error = Error::new(ErrorKind::NotFound, "test error");
         let mcp_error = handle_file_error(not_found_error, "read", path);
-        assert!(format!("{:?}", mcp_error).contains("File not found"));
+        assert!(format!("{:?}", mcp_error).contains("file not found"));
 
         let permission_error = Error::new(ErrorKind::PermissionDenied, "test error");
         let mcp_error = handle_file_error(permission_error, "write", path);
-        assert!(format!("{:?}", mcp_error).contains("Permission denied"));
+        assert!(format!("{:?}", mcp_error).contains("permission denied"));
     }
 
     // Enhanced Security Framework Tests
@@ -1902,7 +1902,7 @@ mod tests {
         let io_error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         let mcp_error = handle_file_error(io_error, "read", path);
         let err_str = format!("{:?}", mcp_error);
-        assert!(err_str.contains("Permission denied") || err_str.contains("permission"));
+        assert!(err_str.contains("permission denied") || err_str.contains("permission"));
     }
 
     #[test]
@@ -1920,7 +1920,7 @@ mod tests {
         let io_error = std::io::Error::from(std::io::ErrorKind::InvalidData);
         let mcp_error = handle_file_error(io_error, "read", path);
         let err_str = format!("{:?}", mcp_error);
-        assert!(err_str.contains("Invalid") || err_str.contains("data"));
+        assert!(err_str.contains("invalid") || err_str.contains("data"));
     }
 
     #[test]
@@ -1996,7 +1996,7 @@ mod tests {
         let result = validator.validate_path(&long_path);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
-        assert!(err.contains("too long") || err.contains("Path too long") || err.contains("4096"));
+        assert!(err.contains("too long") || err.contains("4096"));
     }
 
     // =====================================================================
@@ -2037,7 +2037,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let missing = temp_dir.path().join("no_such_dir").join("file.txt");
         let err = validate_file_path(temp_dir.path(), &missing.to_string_lossy()).unwrap_err();
-        assert!(format!("{err:?}").contains("Parent directory does not exist"));
+        assert!(format!("{err:?}").contains("parent directory does not exist"));
     }
 
     /// A not-yet-existing file in an EXISTING directory is accepted (the
@@ -2076,7 +2076,7 @@ mod tests {
         if !is_root() {
             let err = format!("{:?}", result.unwrap_err());
             assert!(
-                err.contains("Permission denied") || err.contains("Parent directory"),
+                err.contains("permission denied") || err.contains("parent directory"),
                 "expected a permission-related rejection, got: {err}"
             );
         }
@@ -2111,7 +2111,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let target = temp_dir.path().join("absent_dir").join("out.txt");
         let err = check_file_permissions(&target, FileOperation::Write).unwrap_err();
-        assert!(format!("{err:?}").contains("Parent directory does not exist"));
+        assert!(format!("{err:?}").contains("parent directory does not exist"));
     }
 
     /// Editing a read-only file is rejected with a read-only error, and the file
@@ -2200,7 +2200,7 @@ mod tests {
         let err = validator
             .ensure_workspace_boundary(&some_path, &bogus_root)
             .unwrap_err();
-        assert!(format!("{err:?}").contains("Invalid workspace root"));
+        assert!(format!("{err:?}").contains("invalid workspace root"));
     }
 
     // =====================================================================

@@ -133,7 +133,7 @@ fn validate_tool_names(names: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "Unknown tool(s): {}. Valid tools: {}",
+            "unknown tool(s): {}. Valid tools: {}",
             unknown
                 .iter()
                 .map(|s| s.as_str())

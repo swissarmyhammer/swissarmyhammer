@@ -18,8 +18,8 @@ pub fn run_new_skill(
 ) -> Result<(), RegistryError> {
     if !is_valid_package_name(name) {
         return Err(RegistryError::Validation(format!(
-            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens.",
+            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens",
             name
         )));
     }
@@ -29,7 +29,7 @@ pub fn run_new_skill(
         let config = agents::load_agents_config()?;
         let agents = agents::resolve_target_agents(&config, agent_filter)?;
         let agent = agents.first().ok_or_else(|| {
-            RegistryError::Validation("No agents detected for global skill creation".to_string())
+            RegistryError::Validation("no agents detected for global skill creation".to_string())
         })?;
         agents::agent_global_skill_dir(&agent.def).join(name)
     } else {
@@ -39,7 +39,7 @@ pub fn run_new_skill(
 
     if base_dir.exists() {
         return Err(RegistryError::Validation(format!(
-            "Directory already exists: {}",
+            "directory already exists: {}",
             base_dir.display()
         )));
     }
@@ -111,8 +111,8 @@ TODO: Add reference documentation, API specs, or other context the agent needs.
 pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> {
     if !is_valid_package_name(name) {
         return Err(RegistryError::Validation(format!(
-            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens.",
+            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens",
             name
         )));
     }
@@ -127,7 +127,7 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
 
     if base_dir.exists() {
         return Err(RegistryError::Validation(format!(
-            "Directory already exists: {}",
+            "directory already exists: {}",
             base_dir.display()
         )));
     }
@@ -231,8 +231,8 @@ mirdan publish
 pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
     if !is_valid_package_name(name) {
         return Err(RegistryError::Validation(format!(
-            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens.",
+            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens",
             name
         )));
     }
@@ -240,7 +240,7 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
             .map_err(|e| {
-                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
+                RegistryError::Validation(format!("could not resolve XDG data dir: {}", e))
             })?
             .root()
             .join("tools")
@@ -251,7 +251,7 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
 
     if base_dir.exists() {
         return Err(RegistryError::Validation(format!(
-            "Directory already exists: {}",
+            "directory already exists: {}",
             base_dir.display()
         )));
     }
@@ -339,8 +339,8 @@ mirdan publish
 pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
     if !is_valid_package_name(name) {
         return Err(RegistryError::Validation(format!(
-            "Invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens.",
+            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+             no leading/trailing/consecutive hyphens",
             name
         )));
     }
@@ -369,7 +369,7 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
 
     if base_dir.exists() {
         return Err(RegistryError::Validation(format!(
-            "Directory already exists: {}",
+            "directory already exists: {}",
             base_dir.display()
         )));
     }

@@ -1040,7 +1040,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                     if let Err(e) = std::fs::create_dir_all(&cc_dir) {
                         return vec![InitResult::error(
                             "code-context",
-                            format!("Failed to create .code-context/: {}", e),
+                            format!("failed to create .code-context/: {}", e),
                         )];
                     }
                 }
@@ -1093,7 +1093,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                     if let Err(e) = std::fs::remove_dir_all(&cc_dir) {
                         return vec![InitResult::error(
                             "code-context",
-                            format!("Failed to remove .code-context/: {}", e),
+                            format!("failed to remove .code-context/: {}", e),
                         )];
                     }
                     vec![InitResult::ok(
@@ -1187,12 +1187,12 @@ impl McpTool for CodeContextTool {
             "get implementations" => execute_get_implementations(&arguments, context).await,
             "get code_actions" => execute_get_code_actions(&arguments, context).await,
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
+                "missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
+                    "unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                     other
                 ),
                 None,
@@ -1226,7 +1226,7 @@ pub(crate) fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspa
 
     CodeContextWorkspace::open(&workspace_root).map_err(|e| {
         McpError::internal_error(
-            format!("Failed to open code context workspace: {}", e),
+            format!("failed to open code context workspace: {}", e),
             None,
         )
     })
@@ -1364,7 +1364,7 @@ fn execute_get_symbol(
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
 
     let options = GetSymbolOptions {
         max_results: args
@@ -1392,7 +1392,7 @@ fn execute_search_symbol(
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
 
     let options = SearchSymbolOptions {
         kind: args.get("kind").and_then(|v| v.as_str()).map(String::from),
@@ -1421,7 +1421,7 @@ fn execute_list_symbols(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
@@ -1442,7 +1442,7 @@ fn execute_grep_code(
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'pattern'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'pattern'", None))?;
 
     let language = args.get("language").and_then(|v| {
         v.as_array().map(|arr| {
@@ -1498,20 +1498,20 @@ async fn execute_search_code(
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
 
     // Embed the query text
     use swissarmyhammer_embedding::{Embedder, TextEmbedder};
     let embedder = Embedder::default()
         .await
-        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
+        .map_err(|e| McpError::internal_error(format!("failed to create embedder: {}", e), None))?;
     embedder.load().await.map_err(|e| {
-        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
+        McpError::internal_error(format!("failed to load embedding model: {}", e), None)
     })?;
     let embed_result = embedder
         .embed_text(query)
         .await
-        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
+        .map_err(|e| McpError::internal_error(format!("failed to embed query: {}", e), None))?;
 
     search_code_with_query_embedding(args, context, query, embed_result.embedding())
 }
@@ -1579,7 +1579,7 @@ fn execute_find_duplicates(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let min_similarity = args
         .get("min_similarity")
@@ -1625,12 +1625,12 @@ fn execute_query_ast(
     let query_str = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
 
     let language_name = args
         .get("language")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'language'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'language'", None))?;
 
     // Resolve language via LanguageRegistry
     use swissarmyhammer_treesitter::LanguageRegistry;
@@ -1639,7 +1639,7 @@ fn execute_query_ast(
         .get_by_name(language_name)
         .ok_or_else(|| {
             McpError::invalid_params(
-                format!("Unsupported language '{}'. Use a language name like 'rust', 'python', 'typescript', etc.", language_name),
+                format!("unsupported language '{}'. Use a language name like 'rust', 'python', 'typescript' and so on", language_name),
                 None,
             )
         })?;
@@ -1714,7 +1714,7 @@ fn execute_get_callgraph(
     let symbol = args
         .get("symbol")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'symbol'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'symbol'", None))?;
 
     let direction = match args.get("direction").and_then(|v| v.as_str()) {
         Some("inbound") => CallGraphDirection::Inbound,
@@ -1723,7 +1723,7 @@ fn execute_get_callgraph(
         Some(other) => {
             return Err(McpError::invalid_params(
                 format!(
-                    "Invalid direction '{}'. Valid values: 'inbound', 'outbound', 'both'",
+                    "invalid direction '{}'. Valid values: 'inbound', 'outbound', 'both'",
                     other
                 ),
                 None,
@@ -1763,7 +1763,7 @@ fn execute_get_blastradius(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let symbol = args
         .get("symbol")
@@ -2475,7 +2475,7 @@ async fn execute_rebuild_index(
         Some(other) => {
             return Err(McpError::invalid_params(
                 format!(
-                    "Invalid layer '{}'. Valid values: 'treesitter', 'lsp', 'both'",
+                    "invalid layer '{}'. Valid values: 'treesitter', 'lsp', 'both'",
                     other
                 ),
                 None,
@@ -2705,24 +2705,24 @@ async fn execute_get_rename_edits(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let new_name = args
         .get("new_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'new_name'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'new_name'", None))?;
 
     let opts = swissarmyhammer_code_context::GetRenameEditsOptions {
         file_path: file_path.to_string(),
@@ -2753,7 +2753,7 @@ fn execute_get_diagnostics(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let severity_filter = args
         .get("severity_filter")
@@ -2791,18 +2791,18 @@ async fn execute_get_inbound_calls(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
@@ -2836,7 +2836,7 @@ async fn execute_workspace_symbol_live(
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
 
     let max_results = args
         .get("max_results")
@@ -2870,18 +2870,18 @@ async fn execute_get_definition(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let include_source = args
@@ -2916,18 +2916,18 @@ async fn execute_get_type_definition(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let include_source = args
@@ -2963,18 +2963,18 @@ async fn execute_get_hover(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let opts = GetHoverOptions {
@@ -3009,18 +3009,18 @@ async fn execute_get_references(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let include_declaration = args
@@ -3061,18 +3061,18 @@ async fn execute_get_implementations(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
         as u32;
 
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
         as u32;
 
     let max_results = args
@@ -3109,32 +3109,32 @@ async fn execute_get_code_actions(
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
 
     let start_line = args
         .get("start_line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'start_line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'start_line'", None))?
         as u32;
 
     let start_character = args
         .get("start_character")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'start_character'", None)
+            McpError::invalid_params("missing required parameter 'start_character'", None)
         })? as u32;
 
     let end_line = args
         .get("end_line")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'end_line'", None))?
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'end_line'", None))?
         as u32;
 
     let end_character = args
         .get("end_character")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| {
-            McpError::invalid_params("Missing required parameter 'end_character'", None)
+            McpError::invalid_params("missing required parameter 'end_character'", None)
         })? as u32;
 
     let filter_kind = args.get("filter_kind").and_then(|v| {
@@ -3302,7 +3302,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]
@@ -3317,7 +3317,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Missing 'op' field"));
+            .contains("missing 'op' field"));
     }
 
     #[test]
@@ -3457,7 +3457,7 @@ impl Calculator {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]
@@ -3470,7 +3470,7 @@ impl Calculator {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Missing 'op' field"));
+            .contains("missing 'op' field"));
     }
 
     // -----------------------------------------------------------------------

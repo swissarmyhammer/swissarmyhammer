@@ -227,7 +227,7 @@ pub async fn execute_search(
 
     Ok(BaseToolImpl::create_success_response(
         serde_json::to_string_pretty(&response).map_err(|e| {
-            McpError::internal_error(format!("Failed to serialize response: {e}"), None)
+            McpError::internal_error(format!("failed to serialize response: {e}"), None)
         })?,
     ))
 }

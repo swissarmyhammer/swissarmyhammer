@@ -876,13 +876,13 @@ impl McpServer {
 
             let info = ModelManager::find_agent_by_name(&override_model_name).map_err(|e| {
                 SwissArmyHammerError::Other {
-                    message: format!("Invalid model override '{}': {}", override_model_name, e),
+                    message: format!("invalid model override '{}': {}", override_model_name, e),
                 }
             })?;
 
             let config =
                 parse_model_config(&info.content).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Invalid model override '{}': {}", override_model_name, e),
+                    message: format!("invalid model override '{}': {}", override_model_name, e),
                 })?;
 
             Ok(Arc::new(config))
@@ -899,7 +899,7 @@ impl McpServer {
                     // Fall back to loading from template context
                     let template_context = TemplateContext::load_for_cli().map_err(|e| {
                         SwissArmyHammerError::Other {
-                            message: format!("Failed to load configuration: {}", e),
+                            message: format!("failed to load configuration: {}", e),
                         }
                     })?;
                     Ok(Arc::new(template_context.get_agent_config(None)))
@@ -1320,7 +1320,7 @@ impl McpServer {
             crate::mcp::inline_diagnostics::fold_in_diagnostics(result, &tool_context).await
         } else {
             Err(rmcp::ErrorData::invalid_request(
-                format!("Unknown tool: {}", name),
+                format!("unknown tool: {}", name),
                 None,
             ))
         }
@@ -2449,7 +2449,7 @@ impl ServerHandler for McpServer {
             let registry = self.tool_registry.read().await;
             let tool = registry.get_tool(&request.name).ok_or_else(|| {
                 tracing::error!(tool = %request.name, "unknown tool requested");
-                McpError::invalid_request(format!("Unknown tool: {}", request.name), None)
+                McpError::invalid_request(format!("unknown tool: {}", request.name), None)
             })?;
             let parse_ms = parse_start.elapsed().as_millis() as u64;
 
@@ -2929,8 +2929,8 @@ mod tests {
                 .expect_err("split by-name tools must not be registered on the validator server");
             let msg = format!("{:?}", err);
             assert!(
-                msg.contains("Unknown tool"),
-                "validator should reject '{split}' as Unknown tool; got: {msg}"
+                msg.contains("unknown tool"),
+                "validator should reject '{split}' as an unknown tool; got: {msg}"
             );
         }
     }
@@ -3102,11 +3102,11 @@ mod tests {
             .execute_tool("nonexistent_tool", serde_json::json!({}))
             .await;
 
-        assert!(result.is_err(), "Unknown tool should return an error");
+        assert!(result.is_err(), "an unknown tool should return an error");
         let err = result.unwrap_err();
         let msg = format!("{:?}", err);
         assert!(
-            msg.contains("Unknown tool"),
+            msg.contains("unknown tool"),
             "Error should mention unknown tool: {}",
             msg
         );
@@ -3228,7 +3228,7 @@ mod tests {
         if let Err(e) = &result {
             let msg = format!("{:?}", e);
             assert!(
-                !msg.contains("Unknown tool"),
+                !msg.contains("unknown tool"),
                 "files tool should be available on validator: {}",
                 msg
             );

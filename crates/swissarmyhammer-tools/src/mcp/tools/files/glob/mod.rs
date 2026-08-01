@@ -83,7 +83,7 @@ pub async fn execute_glob(
     if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_glob", 2) {
         tracing::warn!("Rate limit exceeded for file_glob: {}", e);
         return Err(McpError::invalid_request(
-            format!("Rate limit exceeded: {}", e),
+            format!("rate limit exceeded: {}", e),
             None,
         ));
     }
@@ -107,7 +107,7 @@ pub async fn execute_glob(
             if !validated_path.exists() {
                 return Err(rmcp::ErrorData::invalid_request(
                     format!(
-                        "Search directory does not exist: {}",
+                        "search directory does not exist: {}",
                         validated_path.display()
                     ),
                     None,
@@ -233,7 +233,7 @@ fn find_files_with_gitignore(
         Ok(p) => p,
         Err(e) => {
             return Err(rmcp::ErrorData::invalid_request(
-                format!("Invalid glob pattern: {}", e),
+                format!("invalid glob pattern: {}", e),
                 None,
             ));
         }
@@ -344,7 +344,7 @@ fn find_files_with_glob(
 
     // Execute glob pattern
     let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-        rmcp::ErrorData::invalid_request(format!("Invalid glob pattern: {}", e), None)
+        rmcp::ErrorData::invalid_request(format!("invalid glob pattern: {}", e), None)
     })?;
 
     let mut matched_files = Vec::new();
@@ -428,7 +428,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
     // Check for empty pattern
     if pattern.trim().is_empty() {
         return Err(rmcp::ErrorData::invalid_request(
-            "Pattern cannot be empty".to_string(),
+            "pattern cannot be empty".to_string(),
             None,
         ));
     }
@@ -455,7 +455,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
                 );
                 return Err(rmcp::ErrorData::invalid_request(
                     format!(
-                        "Pattern '{}' is not allowed: {}.\n\n\
+                        "pattern '{}' is not allowed: {}.\n\n\
                         Instead, use targeted patterns:\n\
                         - For root configs: '*.toml', '*.json', 'package.json'\n\
                         - For specific dirs: 'src/**/*.rs', 'tests/**/*.py'\n\
@@ -480,7 +480,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
                 );
                 return Err(rmcp::ErrorData::invalid_request(
                     format!(
-                        "Pattern '{}' is too broad: matches ALL {} files recursively.\n\n\
+                        "pattern '{}' is too broad: matches ALL {} files recursively.\n\n\
                         Instead, scope to specific directories:\n\
                         - 'src/**/*.rs' for Rust files in src/\n\
                         - 'tests/**/*.py' for Python files in tests/\n\
@@ -500,7 +500,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
     // Check for extremely long patterns that might cause performance issues
     if pattern.len() > 1000 {
         return Err(rmcp::ErrorData::invalid_request(
-            "Pattern is too long (maximum 1000 characters)".to_string(),
+            "pattern is too long (maximum 1000 characters)".to_string(),
             None,
         ));
     }
@@ -508,7 +508,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
     // Validate pattern syntax by trying to compile it
     if let Err(e) = glob::Pattern::new(pattern) {
         return Err(rmcp::ErrorData::invalid_request(
-            format!("Invalid glob pattern: {}", e),
+            format!("invalid glob pattern: {}", e),
             None,
         ));
     }
@@ -516,7 +516,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
     // Check for potentially problematic patterns
     if pattern.starts_with('/') && !Path::new(pattern).is_absolute() {
         return Err(rmcp::ErrorData::invalid_request(
-            "Pattern cannot start with '/' unless it's an absolute path".to_string(),
+            "pattern cannot start with '/' unless it's an absolute path".to_string(),
             None,
         ));
     }

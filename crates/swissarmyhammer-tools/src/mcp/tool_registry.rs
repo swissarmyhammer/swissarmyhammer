@@ -738,14 +738,14 @@ impl ToolContext {
         async {
             // Get the tool registry
             let registry = self.tool_registry.as_ref().ok_or_else(|| {
-                McpError::internal_error("Tool registry not available in this context", None)
+                McpError::internal_error("tool registry not available in this context", None)
             })?;
 
             // Look up the tool
             let registry_guard = registry.read().await;
             let tool = registry_guard.get_tool(name).ok_or_else(|| {
                 tracing::error!(tool = %tool_name, "tool not found in registry");
-                McpError::internal_error(format!("Tool '{}' not found in registry", name), None)
+                McpError::internal_error(format!("tool '{}' not found in registry", name), None)
             })?;
 
             // Convert params to a map
@@ -753,7 +753,7 @@ impl ToolContext {
                 serde_json::Value::Object(map) => map,
                 _ => {
                     return Err(McpError::invalid_params(
-                        format!("Tool parameters must be a JSON object, got: {:?}", params),
+                        format!("tool parameters must be a JSON object, got: {:?}", params),
                         None,
                     ));
                 }
@@ -1789,7 +1789,7 @@ impl BaseToolImpl {
         arguments: serde_json::Map<String, serde_json::Value>,
     ) -> std::result::Result<T, McpError> {
         serde_json::from_value(serde_json::Value::Object(arguments))
-            .map_err(|e| McpError::invalid_request(format!("Invalid arguments: {e}"), None))
+            .map_err(|e| McpError::invalid_request(format!("invalid arguments: {e}"), None))
     }
 
     /// Create a success response with serializable content
@@ -1878,14 +1878,14 @@ impl std::fmt::Display for ToolValidationError {
             ToolValidationError::SchemaValidation { tool_name, error } => {
                 write!(
                     f,
-                    "Schema validation failed for tool '{}': {}",
+                    "schema validation failed for tool '{}': {}",
                     tool_name, error
                 )
             }
             ToolValidationError::MissingCliCategory { tool_name } => {
                 write!(
                     f,
-                    "Tool '{}' is visible in CLI but missing CLI category",
+                    "tool '{}' is visible in CLI but missing CLI category",
                     tool_name
                 )
             }
@@ -1896,14 +1896,14 @@ impl std::fmt::Display for ToolValidationError {
             } => {
                 write!(
                     f,
-                    "Tool '{}' has invalid CLI name '{}': {}",
+                    "tool '{}' has invalid CLI name '{}': {}",
                     tool_name, cli_name, reason
                 )
             }
             ToolValidationError::InvalidDescription { tool_name, reason } => {
                 write!(
                     f,
-                    "Tool '{}' has invalid description: {}",
+                    "tool '{}' has invalid description: {}",
                     tool_name, reason
                 )
             }
@@ -1913,7 +1913,7 @@ impl std::fmt::Display for ToolValidationError {
             } => {
                 write!(
                     f,
-                    "Tool '{}' conflicts with existing tool '{}'",
+                    "tool '{}' conflicts with existing tool '{}'",
                     tool_name, conflicting_tool
                 )
             }
@@ -2038,15 +2038,15 @@ impl std::fmt::Display for ValidationError {
             } => {
                 write!(
                     f,
-                    "Unsupported schema type '{}' for parameter '{}'",
+                    "unsupported schema type '{}' for parameter '{}'",
                     schema_type, parameter
                 )
             }
             ValidationError::InvalidSchema { message } => {
-                write!(f, "Invalid schema structure: {}", message)
+                write!(f, "invalid schema structure: {}", message)
             }
             ValidationError::MissingSchemaField { field } => {
-                write!(f, "Missing required schema field: {}", field)
+                write!(f, "missing required schema field: {}", field)
             }
         }
     }
@@ -2870,7 +2870,7 @@ mod tests {
         };
 
         let display_str = format!("{}", error);
-        assert!(display_str.contains("Schema validation failed"));
+        assert!(display_str.contains("schema validation failed"));
         assert!(display_str.contains("test_tool"));
     }
 
@@ -3332,8 +3332,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            format!("{:?}", err).contains("Tool registry not available"),
-            "expected 'Tool registry not available' in error, got: {:?}",
+            format!("{:?}", err).contains("tool registry not available"),
+            "expected 'tool registry not available' in error, got: {:?}",
             err
         );
     }
@@ -3819,7 +3819,7 @@ mod tests {
             message: "schema is broken".to_string(),
         };
         let s = format!("{}", err);
-        assert!(s.contains("Invalid schema structure"));
+        assert!(s.contains("invalid schema structure"));
         assert!(s.contains("schema is broken"));
     }
 
@@ -3829,7 +3829,7 @@ mod tests {
             field: "properties".to_string(),
         };
         let s = format!("{}", err);
-        assert!(s.contains("Missing required schema field"));
+        assert!(s.contains("missing required schema field"));
         assert!(s.contains("properties"));
     }
 
@@ -3840,7 +3840,7 @@ mod tests {
             parameter: "nested".to_string(),
         };
         let s = format!("{}", err);
-        assert!(s.contains("Unsupported schema type"));
+        assert!(s.contains("unsupported schema type"));
         assert!(s.contains("object"));
         assert!(s.contains("nested"));
     }

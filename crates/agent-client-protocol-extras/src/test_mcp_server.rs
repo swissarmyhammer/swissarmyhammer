@@ -270,7 +270,7 @@ impl ServerHandler for TestMcpServerHandler {
                 )]))
             }
             _ => Err(McpError::invalid_request(
-                format!("Unknown tool: {}", request.name),
+                format!("unknown tool: {}", request.name),
                 None,
             )),
         }

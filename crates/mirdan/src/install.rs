@@ -87,7 +87,7 @@ pub async fn run_install(
                         Err(_) => {
                             // Git parse also failed — report the original registry error
                             Err(RegistryError::NotFound(format!(
-                                "Package '{}' not found in registry",
+                                "package '{}' not found in registry",
                                 spec
                             )))
                         }
@@ -106,7 +106,7 @@ async fn run_install_local(
     global: bool,
 ) -> Result<(), RegistryError> {
     let dir = Path::new(local_path).canonicalize().map_err(|e| {
-        RegistryError::Validation(format!("Cannot resolve path '{}': {}", local_path, e))
+        RegistryError::Validation(format!("cannot resolve path '{}': {}", local_path, e))
     })?;
 
     if !dir.is_dir() {
@@ -119,7 +119,7 @@ async fn run_install_local(
     // Detect package type
     let pkg_type = package_type::detect_package_type(&dir).ok_or_else(|| {
         RegistryError::Validation(format!(
-            "Cannot determine package type in '{}'. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json",
+            "cannot determine package type in '{}'. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json",
             local_path
         ))
     })?;
@@ -280,17 +280,17 @@ fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
 
     let rest = &content[3..];
     let end = rest.find("---").ok_or_else(|| {
-        RegistryError::Validation(format!("No closing --- in {} frontmatter", path.display()))
+        RegistryError::Validation(format!("no closing --- in {} frontmatter", path.display()))
     })?;
 
     let frontmatter = &rest[..end];
     let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("Invalid YAML frontmatter: {}", e)))?;
+        .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))?;
 
     let name = yaml
         .get("name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| RegistryError::Validation("Missing 'name' in frontmatter".to_string()))?
+        .ok_or_else(|| RegistryError::Validation("missing 'name' in frontmatter".to_string()))?
         .to_string();
 
     let version = yaml
@@ -411,7 +411,7 @@ async fn install_from_archive(
         })
         .ok_or_else(|| {
             RegistryError::Validation(
-                "Cannot determine package type. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json".to_string(),
+                "cannot determine package type. Expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json".to_string(),
             )
         })?;
 
@@ -446,7 +446,7 @@ async fn install_tool_from_metadata(
 
     if !is_tool {
         return Err(RegistryError::NotFound(format!(
-            "Package '{}' has no downloadable artifact and is not a tool",
+            "package '{}' has no downloadable artifact and is not a tool",
             name
         )));
     }
@@ -503,8 +503,8 @@ async fn install_tool_from_metadata(
     }
 
     Err(RegistryError::Validation(format!(
-        "Tool '{}' has no downloadable artifact and no MCP configuration in the registry. \
-         The registry entry may be incomplete.",
+        "tool '{}' has no downloadable artifact and no MCP configuration in the registry. \
+         The registry entry may be incomplete",
         name
     )))
 }
@@ -644,7 +644,7 @@ pub fn deploy_skill_to_agents_at(
 
     if agents.is_empty() {
         return Err(RegistryError::Validation(
-            "No agents detected. Run 'mirdan agents' to check.".to_string(),
+            "no agents detected. Run 'mirdan agents' to check".to_string(),
         ));
     }
 
@@ -774,7 +774,7 @@ pub fn deploy_agent_to_agents_at(
 
     if agents.is_empty() {
         return Err(RegistryError::Validation(
-            "No agents detected. Run 'mirdan agents' to check.".to_string(),
+            "no agents detected. Run 'mirdan agents' to check".to_string(),
         ));
     }
 
@@ -2431,7 +2431,7 @@ fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
     if !target_dir.exists() {
         let scope = if global { "global" } else { "project" };
         return Err(RegistryError::NotFound(format!(
-            "Validator '{}' not found ({} scope)",
+            "validator '{}' not found ({} scope)",
             name, scope
         )));
     }
@@ -2771,7 +2771,7 @@ fn deploy_plugin(
 
     if targets.is_empty() {
         return Err(RegistryError::Validation(
-            "No agents with plugin support detected. Plugins are currently supported by Claude Code."
+            "no agents with plugin support detected. Plugins are currently supported by Claude Code"
                 .to_string(),
         ));
     }
@@ -2823,7 +2823,7 @@ fn uninstall_tool(
     if removed == 0 {
         let scope = if global { "global" } else { "project" };
         return Err(RegistryError::NotFound(format!(
-            "Tool '{}' not found ({} scope)",
+            "tool '{}' not found ({} scope)",
             name, scope
         )));
     }
@@ -2862,7 +2862,7 @@ fn uninstall_plugin(
     if removed == 0 {
         let scope = if global { "global" } else { "project" };
         return Err(RegistryError::NotFound(format!(
-            "Plugin '{}' not found ({} scope)",
+            "plugin '{}' not found ({} scope)",
             name, scope
         )));
     }
@@ -2879,7 +2879,7 @@ fn uninstall_agent(
     if removed == 0 {
         let scope = if global { "global" } else { "project" };
         return Err(RegistryError::NotFound(format!(
-            "Agent '{}' not found in any coding agent ({} scope)",
+            "agent '{}' not found in any coding agent ({} scope)",
             name, scope
         )));
     }
@@ -2987,7 +2987,7 @@ pub fn validators_dir(global: bool) -> PathBuf {
 fn extract_zip(data: &[u8], target_dir: &Path) -> Result<(), RegistryError> {
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| RegistryError::Validation(format!("Invalid ZIP archive: {}", e)))?;
+        .map_err(|e| RegistryError::Validation(format!("invalid ZIP archive: {}", e)))?;
 
     for i in 0..archive.len() {
         let mut file = archive
@@ -2999,7 +2999,7 @@ fn extract_zip(data: &[u8], target_dir: &Path) -> Result<(), RegistryError> {
         // Path traversal protection
         if name.contains("..") || name.starts_with('/') || name.starts_with('\\') {
             return Err(RegistryError::Validation(format!(
-                "Unsafe path in ZIP: {}",
+                "unsafe path in ZIP: {}",
                 name
             )));
         }
@@ -3105,7 +3105,7 @@ fn detected_agents_or_error() -> Result<Vec<crate::agents::DetectedAgent>, Vec<I
         Ok(config) => Ok(agents::get_detected_agents(&config)),
         Err(e) => Err(vec![InitResult::error(
             APPLIER_COMPONENT,
-            format!("Failed to load agents config: {e}"),
+            format!("failed to load agents config: {e}"),
         )]),
     }
 }

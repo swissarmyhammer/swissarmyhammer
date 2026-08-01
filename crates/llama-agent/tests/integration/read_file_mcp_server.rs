@@ -166,14 +166,14 @@ impl ServerHandler for ReadFileMcpServer {
                 match std::fs::read_to_string(path) {
                     Ok(contents) => Ok(CallToolResult::success(vec![Content::text(contents)])),
                     Err(e) => {
-                        let msg = format!("Failed to read file '{}': {}", path, e);
+                        let msg = format!("failed to read file '{}': {}", path, e);
                         tracing::warn!("ReadFileMcpServer: {}", msg);
                         Err(McpError::invalid_request(msg, None))
                     }
                 }
             }
             other => Err(McpError::invalid_request(
-                format!("Unknown tool: {}", other),
+                format!("unknown tool: {}", other),
                 None,
             )),
         }

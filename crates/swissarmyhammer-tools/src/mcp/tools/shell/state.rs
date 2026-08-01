@@ -169,7 +169,7 @@ impl ShellState {
             .commands
             .iter_mut()
             .find(|r| r.id == cmd_id)
-            .ok_or_else(|| anyhow::anyhow!("Unknown command ID {}", cmd_id))?;
+            .ok_or_else(|| anyhow::anyhow!("unknown command ID {}", cmd_id))?;
 
         let mut log_file = OpenOptions::new().append(true).open(&self.log_path)?;
 
@@ -213,7 +213,7 @@ impl ShellState {
             .processes
             .get(&cmd_id)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("No running process for command ID {}", cmd_id))?;
+            .ok_or_else(|| anyhow::anyhow!("no running process for command ID {}", cmd_id))?;
 
         // Send SIGKILL to the process group
         #[cfg(unix)]
@@ -236,7 +236,7 @@ impl ShellState {
             record.completed_at_wall = Some(Local::now());
             Ok(record.clone())
         } else {
-            anyhow::bail!("Command record not found for ID {}", cmd_id)
+            anyhow::bail!("command record not found for ID {}", cmd_id)
         }
     }
 
@@ -297,7 +297,7 @@ impl ShellState {
     ) -> anyhow::Result<(Vec<GrepResult>, usize)> {
         let limit = limit.unwrap_or(10);
         let matcher = RegexMatcher::new_line_matcher(pattern)
-            .map_err(|e| anyhow::anyhow!("Invalid regex pattern: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("invalid regex pattern: {}", e))?;
 
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(0))
@@ -469,7 +469,7 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("Unknown command ID 999"),
+            err_msg.contains("unknown command ID 999"),
             "Error: {err_msg}"
         );
     }

@@ -140,12 +140,12 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
     if let Ok(path) = std::env::var("MIRDAN_AGENTS_CONFIG") {
         let content = std::fs::read_to_string(&path).map_err(|e| {
             RegistryError::Validation(format!(
-                "Cannot read MIRDAN_AGENTS_CONFIG '{}': {}",
+                "cannot read MIRDAN_AGENTS_CONFIG '{}': {}",
                 path, e
             ))
         })?;
         return serde_yaml_ng::from_str(&content).map_err(|e| {
-            RegistryError::Validation(format!("Invalid agents config '{}': {}", path, e))
+            RegistryError::Validation(format!("invalid agents config '{}': {}", path, e))
         });
     }
 
@@ -156,7 +156,7 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
             let content = std::fs::read_to_string(&user_config)?;
             return serde_yaml_ng::from_str(&content).map_err(|e| {
                 RegistryError::Validation(format!(
-                    "Invalid agents config '{}': {}",
+                    "invalid agents config '{}': {}",
                     user_config.display(),
                     e
                 ))
@@ -166,7 +166,7 @@ pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
 
     // Use embedded default
     serde_yaml_ng::from_str(DEFAULT_AGENTS_YAML)
-        .map_err(|e| RegistryError::Validation(format!("Invalid embedded agents config: {}", e)))
+        .map_err(|e| RegistryError::Validation(format!("invalid embedded agents config: {}", e)))
 }
 
 /// Expand ~ to home directory in a path string.
@@ -402,7 +402,7 @@ pub fn resolve_target_agents(
     match found {
         Some(agent) => Ok(vec![agent.clone()]),
         None => Err(RegistryError::Validation(format!(
-            "Unknown agent '{}'. Run 'mirdan agents --all' to see available agents.",
+            "unknown agent '{}'. Run 'mirdan agents --all' to see available agents",
             filter_id
         ))),
     }
@@ -418,7 +418,7 @@ pub fn validate_agent_id(config: &AgentsConfig, agent_id: &str) -> Result<(), Re
 
     let valid_ids: Vec<&str> = config.agents.iter().map(|a| a.id.as_str()).collect();
     Err(RegistryError::Validation(format!(
-        "Unknown agent '{}'. Valid agents: {}",
+        "unknown agent '{}'. Valid agents: {}",
         agent_id,
         valid_ids.join(", ")
     )))

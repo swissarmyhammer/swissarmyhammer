@@ -839,7 +839,7 @@ async fn tool_property<T>(
     let registry = registry_arc.read().await;
     let tool = registry
         .get_tool(full_tool_name)
-        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
+        .ok_or_else(|| format!("tool not found: {}", full_tool_name))?;
     Ok(read(tool))
 }
 
@@ -1020,7 +1020,7 @@ async fn convert_matches_to_arguments(
     let registry = registry_arc.read().await;
     let tool = registry
         .get_tool(tool_name)
-        .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
+        .ok_or_else(|| format!("tool not found: {}", tool_name))?;
 
     // Extract properties from the FULL schema — operation-based tools serve a
     // slim wire schema from `schema()` that omits the flat per-op properties.

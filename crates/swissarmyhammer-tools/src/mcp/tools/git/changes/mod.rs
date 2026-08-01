@@ -160,13 +160,13 @@ impl GitChangesTool {
             // Inline text mode
             let lt = left_text.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
-                    "Both 'left_text' and 'right_text' are required for inline mode",
+                    "both 'left_text' and 'right_text' are required for inline mode",
                     None,
                 )
             })?;
             let rt = right_text.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
-                    "Both 'left_text' and 'right_text' are required for inline mode",
+                    "both 'left_text' and 'right_text' are required for inline mode",
                     None,
                 )
             })?;
@@ -183,13 +183,13 @@ impl GitChangesTool {
             // File mode
             let l = left.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
-                    "Both 'left' and 'right' are required for file mode",
+                    "both 'left' and 'right' are required for file mode",
                     None,
                 )
             })?;
             let r = right.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
-                    "Both 'left' and 'right' are required for file mode",
+                    "both 'left' and 'right' are required for file mode",
                     None,
                 )
             })?;
@@ -238,7 +238,7 @@ impl GitChangesTool {
 
         std::env::current_dir().map_err(|e| {
             rmcp::ErrorData::internal_error(
-                format!("Failed to determine working directory: {e}"),
+                format!("failed to determine working directory: {e}"),
                 None,
             )
         })
@@ -307,7 +307,7 @@ impl McpTool for GitChangesTool {
             other => {
                 return Err(rmcp::ErrorData::invalid_params(
                     format!(
-                        "Unknown operation '{}'. Valid operations: 'get changes', 'get diff'",
+                        "unknown operation '{}'. Valid operations: 'get changes', 'get diff'",
                         other
                     ),
                     None,
@@ -330,7 +330,7 @@ impl McpTool for GitChangesTool {
             Some(b) => b,
             None => git_ops.current_branch().map_err(|e| {
                 rmcp::ErrorData::internal_error(
-                    format!("Failed to get current branch: {}", e),
+                    format!("failed to get current branch: {}", e),
                     None,
                 )
             })?,
@@ -340,7 +340,7 @@ impl McpTool for GitChangesTool {
         let parent_branch = {
             use swissarmyhammer_git::BranchName;
             let branch_name = BranchName::new(&branch).map_err(|e| {
-                rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None)
+                rmcp::ErrorData::invalid_params(format!("invalid branch name: {}", e), None)
             })?;
 
             // Try to find merge target, but if it returns the branch itself or fails, treat as no parent
@@ -353,7 +353,7 @@ impl McpTool for GitChangesTool {
         // Fetch uncommitted changes once and reuse across all branches below
         let uncommitted = get_uncommitted_changes(git_ops).map_err(|e| {
             rmcp::ErrorData::internal_error(
-                format!("Failed to get uncommitted changes: {}", e),
+                format!("failed to get uncommitted changes: {}", e),
                 None,
             )
         })?;
@@ -390,7 +390,7 @@ impl McpTool for GitChangesTool {
                 }
                 Err(e) => {
                     return Err(rmcp::ErrorData::internal_error(
-                        format!("Failed to get changed files from range: {}", e),
+                        format!("failed to get changed files from range: {}", e),
                         None,
                     ));
                 }
@@ -401,7 +401,7 @@ impl McpTool for GitChangesTool {
                 .get_changed_files_from_parent(&branch, parent)
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(
-                        format!("Failed to get changed files: {}", e),
+                        format!("failed to get changed files: {}", e),
                         None,
                     )
                 })?;
@@ -428,7 +428,7 @@ impl McpTool for GitChangesTool {
 
         // Serialize to JSON and create response
         let response_json = serde_json::to_string_pretty(&response).map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to serialize response: {}", e), None)
+            rmcp::ErrorData::internal_error(format!("failed to serialize response: {}", e), None)
         })?;
 
         Ok(CallToolResult::success(vec![rmcp::model::Content::text(
@@ -929,7 +929,7 @@ mod tests {
             Err(error) => {
                 // Or it might fail with an appropriate error
                 assert!(
-                    error.message.contains("Failed to get")
+                    error.message.contains("failed to get")
                         || error.message.contains("empty")
                         || error.message.contains("no commits")
                 );
@@ -1030,7 +1030,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.message.contains("Unknown operation") || err.message.contains("bogus"),
+            err.message.contains("unknown operation") || err.message.contains("bogus"),
             "Expected unknown op error, got: {}",
             err.message
         );

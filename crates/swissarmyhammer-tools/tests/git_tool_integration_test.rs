@@ -568,7 +568,7 @@ async fn test_mcp_dispatch_unknown_op() {
     let result = tool.execute(args, &context).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("Unknown operation"));
+    assert!(err.message.contains("unknown operation"));
 }
 
 #[tokio::test]

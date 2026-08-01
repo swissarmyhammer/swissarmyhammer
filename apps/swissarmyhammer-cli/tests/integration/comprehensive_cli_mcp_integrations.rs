@@ -263,7 +263,7 @@ async fn test_error_message_formatting() -> Result<()> {
     assert!(result.is_err(), "Should error on nonexistent tool");
 
     if let Err(error) = result {
-        assert_error_contains_any(&error, &["not found", "Tool not found", "Unknown tool"]);
+        assert_error_contains_any(&error, &["not found", "tool not found", "unknown tool"]);
     }
 
     Ok(())

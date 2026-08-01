@@ -227,7 +227,7 @@ pub async fn execute_grep(
             let validated_path = validator.validate_path(path_str)?;
             if !validated_path.exists() {
                 return Err(McpError::invalid_request(
-                    format!("Search path does not exist: {}", validated_path.display()),
+                    format!("search path does not exist: {}", validated_path.display()),
                     None,
                 ));
             }
@@ -257,7 +257,7 @@ pub async fn execute_grep(
     } else {
         RegexMatcher::new_line_matcher(&request.pattern)
     }
-    .map_err(|e| McpError::invalid_request(format!("Invalid regex pattern: {}", e), None))?;
+    .map_err(|e| McpError::invalid_request(format!("invalid regex pattern: {}", e), None))?;
 
     let output_mode = request.output_mode.as_deref().unwrap_or("content");
 
@@ -291,7 +291,7 @@ pub async fn execute_grep(
         .as_ref()
         .map(|g| glob::Pattern::new(g))
         .transpose()
-        .map_err(|e| McpError::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
+        .map_err(|e| McpError::invalid_request(format!("invalid glob pattern: {}", e), None))?;
 
     // Walk directory and search files.
     //
@@ -492,7 +492,7 @@ mod tests {
         let result = execute_grep(arguments, &context).await;
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
-        assert!(err.contains("Invalid regex") || err.contains("regex") || err.contains("pattern"));
+        assert!(err.contains("invalid regex") || err.contains("regex") || err.contains("pattern"));
     }
 
     #[tokio::test]

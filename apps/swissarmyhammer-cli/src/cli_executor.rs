@@ -131,7 +131,7 @@ impl CliExecutor {
         let registry = self.tool_registry.read().await;
         let tool = match registry.get_tool(tool_name) {
             Some(t) => t,
-            None => return ExecutionResult::error(format!("Tool not found: {}", tool_name)),
+            None => return ExecutionResult::error(format!("tool not found: {}", tool_name)),
         };
 
         let output_is_json = tool.cli_output_is_json();

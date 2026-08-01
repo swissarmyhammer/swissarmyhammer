@@ -92,12 +92,12 @@ fn generate_tool_descriptions_code(descriptions: &HashMap<String, String>, dest_
 fn validate_tool_description(content: &str, tool_path: &str) -> Result<(), String> {
     // Basic validation
     if content.trim().is_empty() {
-        return Err(format!("Description for {tool_path} is empty"));
+        return Err(format!("description for {tool_path} is empty"));
     }
 
     // Check for basic structure - should have some content
     if content.len() < 10 {
-        return Err(format!("Description for {tool_path} is too short"));
+        return Err(format!("description for {tool_path} is too short"));
     }
 
     Ok(())

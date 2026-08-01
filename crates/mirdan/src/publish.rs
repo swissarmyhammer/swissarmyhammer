@@ -80,7 +80,7 @@ async fn run_publish_marketplace(source: &str, dry_run: bool) -> Result<(), Regi
 async fn run_publish_local(source: &str, dry_run: bool) -> Result<(), RegistryError> {
     let path = Path::new(source);
     let dir = path.canonicalize().map_err(|e| {
-        RegistryError::Validation(format!("Cannot resolve path '{}': {}", path.display(), e))
+        RegistryError::Validation(format!("cannot resolve path '{}': {}", path.display(), e))
     })?;
 
     let dir_name = dir
@@ -145,7 +145,7 @@ fn parse_name_version(spec: &str) -> Result<(String, String), RegistryError> {
             Ok((name.to_string(), version.to_string()))
         }
         _ => Err(RegistryError::Validation(format!(
-            "Expected format: name@version (got '{}')",
+            "expected format: name@version (got '{}')",
             spec
         ))),
     }

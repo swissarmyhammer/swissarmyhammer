@@ -133,7 +133,7 @@ impl FileWatcher {
                 let _ = tx.send(built);
             })
             .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to spawn FSEvents registration thread: {e}"),
+                message: format!("failed to spawn FSEvents registration thread: {e}"),
             })?;
 
         // Await completion. This await is the only thing the background-startup
@@ -188,7 +188,7 @@ impl FileWatcher {
         )
         .await
         .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to create async debouncer: {}", e),
+            message: format!("failed to create async debouncer: {}", e),
         })?;
 
         // Watch all directories. On macOS this `.watch()` call is the slow,
@@ -200,7 +200,7 @@ impl FileWatcher {
                 .watcher()
                 .watch(path, RecursiveMode::Recursive)
                 .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to watch directory {path:?}: {}", e),
+                    message: format!("failed to watch directory {path:?}: {}", e),
                 })?;
             tracing::info!("Watching directory: {}", Pretty(&path));
         }

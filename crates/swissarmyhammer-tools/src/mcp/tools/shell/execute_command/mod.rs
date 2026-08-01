@@ -133,7 +133,7 @@ async fn prepare_command(
         default_dir,
         parsed_environment.as_ref(),
     )
-    .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;
+    .map_err(|e| McpError::internal_error(format!("failed to spawn command: {}", e), None))?;
 
     if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
         let mut guard = state.lock().await;
@@ -325,7 +325,7 @@ fn validate_shell_request(request: &ShellExecuteRequest) -> Result<(), McpError>
 
     swissarmyhammer_shell::validate_command(&request.command).map_err(|e| {
         tracing::warn!("Command security validation failed: {}", e);
-        McpError::invalid_params(format!("Command security check failed: {e}"), None)
+        McpError::invalid_params(format!("command security check failed: {e}"), None)
     })?;
 
     if let Some(ref working_dir) = request.working_directory {
@@ -338,7 +338,7 @@ fn validate_shell_request(request: &ShellExecuteRequest) -> Result<(), McpError>
         .map_err(|e| {
             tracing::warn!("Working directory security validation failed: {}", e);
             McpError::invalid_params(
-                format!("Working directory security check failed: {e}"),
+                format!("working directory security check failed: {e}"),
                 None,
             )
         })?;
@@ -367,7 +367,7 @@ fn parse_environment_variables(
         let env_vars: HashMap<String, String> = serde_json::from_str(env_str).map_err(|e| {
             tracing::warn!("Failed to parse environment variables JSON: {}", e);
             McpError::invalid_params(
-                format!("Invalid JSON format for environment variables: {e}"),
+                format!("invalid JSON format for environment variables: {e}"),
                 None,
             )
         })?;
@@ -375,7 +375,7 @@ fn parse_environment_variables(
         swissarmyhammer_shell::validate_environment_variables_security(&env_vars).map_err(|e| {
             tracing::warn!("Environment variables security validation failed: {}", e);
             McpError::invalid_params(
-                format!("Environment variables security check failed: {e}"),
+                format!("environment variables security check failed: {e}"),
                 None,
             )
         })?;

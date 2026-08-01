@@ -177,7 +177,7 @@ async fn handle_callback(
     if let Some(received_state) = &params.state {
         if received_state != &state.expected_state {
             if let Some(tx) = state.tx.take() {
-                let _ = tx.send(Err("Invalid state parameter".to_string()));
+                let _ = tx.send(Err("invalid state parameter".to_string()));
             }
             let error_url = format!(
                 "{}/cli/error?message={}",
@@ -188,7 +188,7 @@ async fn handle_callback(
         }
     } else {
         if let Some(tx) = state.tx.take() {
-            let _ = tx.send(Err("Missing state parameter".to_string()));
+            let _ = tx.send(Err("missing state parameter".to_string()));
         }
         let error_url = format!(
             "{}/cli/error?message={}",
@@ -206,7 +206,7 @@ async fn handle_callback(
         Redirect::to(&success_url).into_response()
     } else {
         if let Some(tx) = state.tx.take() {
-            let _ = tx.send(Err("Missing authorization code".to_string()));
+            let _ = tx.send(Err("missing authorization code".to_string()));
         }
         let error_url = format!(
             "{}/cli/error?message={}",
@@ -248,7 +248,7 @@ async fn verify_token(token: &str) -> Result<UserInfo, RegistryError> {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
         return Err(RegistryError::Unauthorized(format!(
-            "Token verification failed ({}): {}",
+            "token verification failed ({}): {}",
             status, body
         )));
     }
@@ -257,7 +257,7 @@ async fn verify_token(token: &str) -> Result<UserInfo, RegistryError> {
 
     let verify_response: VerifyResponse = serde_json::from_str(&body).map_err(|e| {
         RegistryError::Json(format!(
-            "Failed to parse verify response: {}. Body: {}",
+            "failed to parse verify response: {}. Body: {}",
             e, body
         ))
     })?;
@@ -344,12 +344,12 @@ pub async fn login() -> Result<(), RegistryError> {
         result = rx => {
             result.map_err(|_| {
                 spinner.finish_and_clear();
-                RegistryError::Validation("Callback channel closed unexpectedly".to_string())
+                RegistryError::Validation("callback channel closed unexpectedly".to_string())
             })?
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {
             spinner.finish_and_clear();
-            return Err(RegistryError::Validation("Login timed out after 5 minutes".to_string()));
+            return Err(RegistryError::Validation("login timed out after 5 minutes".to_string()));
         }
     };
 
@@ -394,7 +394,7 @@ pub async fn login() -> Result<(), RegistryError> {
     let token_response: TokenResponse = serde_json::from_str(&body).map_err(|e| {
         exchange_spinner.finish_and_clear();
         RegistryError::Json(format!(
-            "Failed to parse token response: {}. Body: {}",
+            "failed to parse token response: {}. Body: {}",
             e, body
         ))
     })?;
@@ -427,7 +427,7 @@ pub async fn logout() -> Result<(), RegistryError> {
 
     if std::env::var("MIRDAN_TOKEN").is_ok() {
         return Err(RegistryError::Validation(
-            "Cannot logout when using MIRDAN_TOKEN environment variable. Unset the variable instead."
+            "cannot logout when using MIRDAN_TOKEN environment variable. Unset the variable instead"
                 .to_string(),
         ));
     }

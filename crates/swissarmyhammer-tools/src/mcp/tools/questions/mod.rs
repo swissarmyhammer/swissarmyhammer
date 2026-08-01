@@ -96,7 +96,7 @@ impl McpTool for QuestionTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'ask question', 'summarize questions'",
+                    "unknown operation '{}'. Valid operations: 'ask question', 'summarize questions'",
                     other
                 ),
                 None,
@@ -249,7 +249,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]

@@ -50,7 +50,7 @@ pub async fn execute_summary(
 
     // Load all questions
     let mut entries = load_all_questions()
-        .map_err(|e| McpError::internal_error(format!("Failed to load questions: {}", e), None))?;
+        .map_err(|e| McpError::internal_error(format!("failed to load questions: {}", e), None))?;
 
     // Apply limit if specified (take most recent N)
     if let Some(limit) = request.limit {

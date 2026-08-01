@@ -54,7 +54,7 @@ pub fn write_json(path: &Path, value: &Value) -> Result<(), RegistryError> {
         }
     }
     let json = serde_json::to_string_pretty(value)
-        .map_err(|e| RegistryError::Validation(format!("Failed to serialize JSON: {}", e)))?;
+        .map_err(|e| RegistryError::Validation(format!("failed to serialize JSON: {}", e)))?;
     fs::write(path, format!("{}\n", json))?;
     Ok(())
 }

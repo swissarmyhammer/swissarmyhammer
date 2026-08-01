@@ -159,7 +159,7 @@ impl McpTool for FilesTool {
                 "write file" | "edit file" => {
                     return Err(McpError::invalid_params(
                         format!(
-                            "Operation '{}' is not available in read-only mode. Only 'read file', 'glob files', and 'grep files' are available.",
+                            "operation '{}' is not available in read-only mode. Only 'read file', 'glob files', and 'grep files' are available",
                             op_str
                         ),
                         None,
@@ -189,7 +189,7 @@ impl McpTool for FilesTool {
                         read::execute_read(args, context).await
                     } else {
                         Err(McpError::invalid_params(
-                            "Cannot determine operation. Provide 'op' field (\"read file\", \"glob files\", or \"grep files\").",
+                            "cannot determine operation. Provide 'op' field (\"read file\", \"glob files\", or \"grep files\")",
                             None,
                         ))
                     }
@@ -212,14 +212,14 @@ impl McpTool for FilesTool {
                     read::execute_read(args, context).await
                 } else {
                     Err(McpError::invalid_params(
-                        "Cannot determine operation. Provide 'op' field (\"read file\", \"write file\", \"edit file\", \"glob files\", or \"grep files\").",
+                        "cannot determine operation. Provide 'op' field (\"read file\", \"write file\", \"edit file\", \"glob files\", or \"grep files\")",
                         None,
                     ))
                 }
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: {}",
+                    "unknown operation '{}'. Valid operations: {}",
                     other,
                     if self.operations == FileOperationSubset::ReadOnly {
                         "'read file', 'glob files', 'grep files'"
@@ -414,7 +414,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]
@@ -429,7 +429,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Cannot determine operation"));
+            .contains("cannot determine operation"));
     }
 
     #[tokio::test]
@@ -851,7 +851,7 @@ mod tests {
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unknown operation"));
+        assert!(err.contains("unknown operation"));
     }
 
     #[tokio::test]
@@ -865,7 +865,7 @@ mod tests {
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Cannot determine operation"));
+        assert!(err.contains("cannot determine operation"));
     }
 
     // =========================================================================
