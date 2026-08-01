@@ -106,8 +106,91 @@ comments:
     - follow-up card created: ^0zer2xf — `mirdan/src/list.rs` carries the same substring-split defect, untracked until now.
     - next: /review
   timestamp: 2026-08-01T14:26:04.052126+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kyyw71evwmqnk8npht7evns4
+  text: |
+    ### review — clean
+
+    Iteration 2. Scope: `review sha HEAD~1..HEAD` = commit `60a173bf2` only. Iteration 1
+    (`3523b4594`) was not re-reviewed.
+
+    - evidence: engine reported 5 findings, 0 of them in scope. No dated findings section
+      appended; the card keeps its history unchanged.
+    - next: card moves to `done`.
+
+    #### The delta changes comment lines only
+
+    `git show 60a173bf2 -- crates/` gives one code file,
+    `crates/swissarmyhammer-common/src/frontmatter.rs`. Filtering the diff for added or
+    removed lines that are not `//`, `//!` or `///` returns nothing. Zero executable lines
+    changed. The other 8 files in the commit are `.kanban/tasks/*` board state, which is
+    data.
+
+    #### Every new factual claim is true
+
+    1. **The four callers.** `split_frontmatter_body` has exactly four call sites in the
+       workspace, and no fifth:
+       - `crates/swissarmyhammer-entity/src/io.rs:354`
+       - `crates/swissarmyhammer-entity/src/store.rs:175`
+       - `crates/swissarmyhammer-tools/src/mcp/tools/ralph/state.rs:191`, inside
+         `parse_ralph_file`
+       - `crates/swissarmyhammer-tools/src/health_registry.rs:143`, inside
+         `frontmatter_yaml_error`, which `PromptHealthChecker::run_health_checks` calls at
+         line 101. "The prompt health check" names it correctly.
+
+    2. **The second split.** `parse_frontmatter` (line 149) and
+       `parse_frontmatter_with_expansion` (line 182) both call
+       `parse_frontmatter_internal`, which gates on `content.starts_with("---\n")` and cuts
+       with `content.splitn(3, "---\n")`. The two paths do disagree: an indented `  ---`
+       line holds the `---\n` substring, so the substring path cuts there, while
+       `is_delimiter_line` compares the whole line to `---` and keeps it in the frontmatter.
+
+    3. **The `parse_frontmatter` doc.** "Any `---` immediately followed by a newline closes
+       the block, even indented inside a YAML block scalar" matches `splitn(3, "---\n")`
+       exactly. The substring match ignores what comes before the three hyphens, so an
+       indented run cuts. The doc names the `---\n` substring explicitly, so it does not
+       over-claim CRLF, which that path does not accept.
+
+    4. **The other crates.** All three copies exist:
+       - `crates/swissarmyhammer-templating/src/frontmatter.rs:35` — `starts_with("---")`
+       - `crates/swissarmyhammer-merge/src/frontmatter.rs:44,47` —
+         `lines.first() == Some(&"---")` and `position(|l| *l == "---")`, both whole-line
+         comparisons on `str::lines()`. Line-anchored, so the comment on ^tv3692e calling it
+         "line-anchored, so correct" is right.
+       - `crates/mirdan/src/list.rs:406` — `strip_prefix("---")` then `find("---")`
+
+       The module doc says only that the three crates "each carry a further copy of their
+       own". That is true of all three, merge included, and it claims nothing about their
+       correctness.
+
+    No sentence swings from an over-claim to a different inaccuracy.
+
+    #### The 5 engine findings are all out of scope. Do no work on them here.
+
+    This is ^j4d2613 a third time. Not one cited line blames to `60a173bf2`, and not one
+    resolves to the code the finding describes.
+
+    | Cited | Blame | Code really at that line | Where the described code is |
+    |---|---|---|---|
+    | `common/frontmatter.rs:90` | `3523b4594` | `}` closing the `is_delimiter_line` guard | the `Frontmatter` derive is at 106 |
+    | `common/frontmatter.rs:169` | `d6dd0ada4` | an empty `///` line | the `.unwrap()` is at 171 |
+    | `common/frontmatter.rs:187` | `d6dd0ada4` | `}` closing `parse_frontmatter_with_expansion` | `starts_with("---\n")` is at 203 |
+    | `common/frontmatter.rs:233` | `ddb3c8da1` | `});` | `parts.len() >= 3` is at 205 |
+    | `common/frontmatter.rs:354`, `:355` | `ddb3c8da1` | `title: Test` and `---` inside a test fixture string | no `"---\n"` literal is at either line |
+
+    Two of the five (`:187` CRLF handling, `:233` the literal `3`) name
+    `parse_frontmatter_internal`, which ^tv3692e owns and this commit did not touch. A
+    comment-only delta cannot cause a missing `PartialEq` derive, a CRLF gap, or a magic
+    number.
+
+    #### Prior findings left as they are
+
+    The 10 findings from iteration 1 stay unchecked, as their own out-of-scope note on this
+    card instructs. They are not this delta's work and do not block closure. The one
+    in-scope finding from iteration 1 is checked, and this commit is the fix for it.
+  timestamp: 2026-08-01T14:38:55.451008+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8880
 title: Two more copies of the frontmatter substring-split bug in swissarmyhammer-tools
 ---
 The same defect fixed for the entity layer in ^fpcbeth survives in two more places, both in `swissarmyhammer-tools`. Each splits frontmatter on the bare three-hyphen **substring** instead of a line-anchored delimiter, so any occurrence inside the frontmatter block truncates the parse and silently drops every key after it.

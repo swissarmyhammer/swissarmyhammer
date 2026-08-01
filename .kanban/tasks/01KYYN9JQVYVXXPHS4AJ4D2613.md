@@ -31,6 +31,36 @@ comments:
 
     Cost so far: two consecutive tasks have each needed a manual cross-check to separate real findings from noise. On ^a2ef9wh that was 10 spurious findings against 1 real one.
   timestamp: 2026-08-01T14:20:04.931960+00:00
+- actor: claude-code
+  id: 01kyyw91btmxr1sjw2w7y9c942
+  text: |-
+    Third consecutive occurrence, 2026-08-01, reviewing `60a173bf2` for ^a2ef9wh iteration 2. This one carries a proof that needs no blame check.
+
+    **The reviewed commit changed comment lines only — zero executable lines.** Verified by filtering the diff for any added or removed line that is not `//`, `//!`, or `///`; the result is empty. The engine nonetheless reported 5 findings, including:
+
+    - a missing `PartialEq`/`Eq` derive on `Frontmatter`
+    - a CRLF handling gap in `parse_frontmatter_internal`
+    - a magic literal `3`
+    - a hardcoded `"---\n"`
+
+    A comment-only delta cannot introduce a missing derive, a CRLF gap, or a magic number. These are structurally impossible as findings *on this delta*, independent of where their line numbers point. That makes this occurrence stronger evidence than the previous two: no blame comparison is needed to rule them out, only the observation that no code changed.
+
+    Blame agrees anyway — the 5 cited lines blame to `3523b4594`, `d6dd0ada4`, and `ddb3c8da1`, none of them the reviewed commit. And the line numbers are misplaced in the usual way: `:90` is a closing brace while the derive it names is at 106; `:187` is a closing brace while the `starts_with("---\n")` it names is at 203; `:354`/`:355` sit inside a test fixture string with no `"---\n"` literal at either line.
+
+    Two of the five also target `parse_frontmatter_internal`, which ^tv3692e owns and this commit did not touch.
+
+    ## Running cost
+
+    | Task | Engine findings | Actually in scope |
+    |---|---|---|
+    | ^fpcbeth | 13 | 0 |
+    | ^a2ef9wh iter 1 | 10 | 1 |
+    | ^a2ef9wh iter 2 | 5 | 0 |
+
+    28 findings, 1 real. Every one of the three reviews needed a manual cross-check to separate signal from noise, and without that check an implementer would have been dispatched to edit code the commits never touched.
+
+    This suggests a cheap, high-value guard independent of the root cause: **when the reviewed delta contains no executable lines, no finding about code structure can be in scope.** Asserting that alone would have caught this occurrence outright.
+  timestamp: 2026-08-01T14:40:00.890638+00:00
 position_column: todo
 position_ordinal: d880
 title: Review engine reports findings against a stale revision — cited line numbers do not resolve
