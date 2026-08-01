@@ -50,6 +50,74 @@ comments:
     - known flake `review_working_emits_progress_notifications_per_pair_when_token_supplied`: ran and PASSED (slow, ~11.6s) in this run — did not need isolation re-run.
     - did not run rdeps closure or full workspace, per instruction.
   timestamp: 2026-08-01T15:23:34.306364+00:00
+- actor: claude-code
+  id: 01kyyyty5brex5rqrewm30m51f
+  text: |-
+    ### commit — changed
+    - evidence: 08a64a965 fix(kanban): reject dangling actor refs in add/update task assignees (^n36mc1q)
+    - next: none
+  timestamp: 2026-08-01T15:24:44.587369+00:00
+- actor: claude-code
+  id: 01kyyzh0x5qgn0fh28fkszwmxn
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (08a64a965). Engine counts: 7 findings, 7 confirmed, 3 refuted, 16 attempted. After the ^j4d2613 blame check: 1 in-scope — crates/swissarmyhammer-kanban/src/dispatch.rs:401 (singular `assignee` alias uses `get_string`, not `list_param`, so a list or stringified-array shape under the singular key is silently dropped). 6 out of scope: add.rs:101, add.rs:106, update.rs:97, update.rs:102, update.rs:107, update.rs:156 — every cited line blames to another commit (090b3f3ab9, 74d0cacc48, 7b47bf029c, d47ba21a, eb375282) and holds unrelated code; the add.rs/update.rs delta is doc comments only.
+    - next: fix dispatch.rs:401 to use `list_param(op, "assignee")`, matching `tag_refs`. Task stays in `review`. Atomic rejection, `from_entity_error` IO/NotFound split, `op.actor` fallback, and description.md accuracy all verified clean.
+  timestamp: 2026-08-01T15:36:48.293760+00:00
+- actor: claude-code
+  id: 01kyyzjrmtsgqm0fhxdz65p8fs
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 4 files (dispatch.rs, task/add.rs, task/update.rs, description.md)
+    - test: green — cargo nextest -p swissarmyhammer-kanban -p swissarmyhammer-tools -p swissarmyhammer-fields, 3249 run / 3249 passed / 0 skipped
+    - commit: 08a64a965
+    - review: findings — crates/swissarmyhammer-kanban/src/dispatch.rs:401 (singular `assignee` alias uses `get_string`, not `list_param`, so a list shape under the singular key is silently dropped; the doc comment added in this commit over-claims that it accepts the same forgiving shapes)
+    - also: 6 engine findings ruled out of scope by blame check (add.rs:101/106, update.rs:97/102/107/156 — blame 090b3f3ab9, 74d0cacc48, 7b47bf029c). Fourth consecutive occurrence of ^j4d2613; not this delta's work.
+  timestamp: 2026-08-01T15:37:45.370217+00:00
+- actor: claude-code
+  id: 01kyz00jfpcerf5v79w3ep0qwq
+  text: |-
+    Review finding worked. One line of production code, proved RED first.
+
+    **The fix.** `explicit_assignee_refs` (crates/swissarmyhammer-kanban/src/dispatch.rs) ended with `Ok(op.get_string("assignee").map(|a| vec![a.to_string()]))`. It now ends with `list_param(op, "assignee")`, the same call `tag_refs` makes for the singular `tag`.
+
+    **RED evidence.** 5 new tests written before the change. `cargo nextest run -p swissarmyhammer-kanban -E 'test(singular_assignee)'` reported `6 tests run: 1 passed, 5 failed`:
+
+    - `dispatch_add_task_singular_assignee_array_shape_persists` — `left: [], right: ["alice"]`
+    - `dispatch_update_task_singular_assignee_array_shape_persists` — `left: [], right: ["alice"]`
+    - `dispatch_add_task_singular_assignee_stringified_array_persists` — same empty-list failure
+    - `dispatch_add_task_unknown_singular_assignee_array_creates_nothing` — the create succeeded instead of erroring
+    - `dispatch_update_task_unknown_singular_assignee_stringified_array_errors` — `expected ActorNotFound, got: Err(ActorNotFound { id: "[\"nosuchactor\"]" })`
+
+    The one that passed is the pre-existing scalar case `dispatch_add_task_unknown_singular_assignee_creates_nothing`, which confirms the RED set isolates the shape gap and not the actor check.
+
+    The last failure is worth keeping in mind: a stringified array under the singular key DID error, but it reported the whole raw string `["nosuchactor"]` as the actor id. So the old code did not always drop silently — sometimes it produced a nonsense error message. Both faces of the bug are gone.
+
+    **GREEN.** `cargo nextest run -p swissarmyhammer-kanban -E 'test(assignee)'` — 27 tests run, 27 passed.
+
+    **Sibling audit of dispatch.rs.** Every ref-list param and its singular alias was checked. No second instance of the asymmetry exists.
+
+    - `tags` / `tag` — `tag_refs` already routes both through `list_param`. Correct.
+    - `depends_on` — `list_param`, no singular alias. Correct.
+    - `attachments` — `attachment_param` reads `op.get_param` and falls through to `ref_list`. No singular alias exists, so there is no alias to narrow.
+    - `fields` / `sort` on perspectives — `parse_json_array` errors on a wrong shape rather than dropping. Different helper, not a silent drop, no alias.
+    - `assignee` on `assign task` / `unassign task` and `tag` on `tag task` / `untag task` are single-ref commands (`AssignTask::new(id, assignee)`), not ref-lists. `req` is the right reader there. Left alone.
+
+    **Discovery — filed as a new card, not worked here.** ^qd9z2xt. `crates/swissarmyhammer-kanban/src/schema.rs` advertises `{"op": "list tasks", "assignee": "alice", "exclude_done": true}`, but the `list tasks` arm of `execute_task_query_operation` reads only column, filter, project, page, page_size, and detail. `exclude_done` matches exactly one line in the whole workspace — the schema example itself. Both params are dropped behind an `ok`. The existing test `dispatch_list_tasks_with_assignee_filter` cannot catch it: the board holds one task, so `count == 1` passes whether the filter runs or not.
+
+    **Docs.** Two claims that the old code could not reach were corrected, not extended:
+    - The `explicit_assignee_refs` doc comment said the singular key "is accepted as a one-element alias". It now says the singular key is an alias read through the same `list_param` path, so it takes every shape the plural key takes — the alias names the key, it does not narrow the shape.
+    - `crates/swissarmyhammer-tools/src/mcp/tools/kanban/description.md` carried the same sentence. Corrected the same way.
+
+    **No existing test was edited.** `git diff -U0 -- crates/` shows exactly 4 deleted lines: 3 doc-comment lines and the one `get_string` line. Every one of the 117 additions in dispatch.rs is new. Nothing inside `#[cfg(test)]` was removed or altered.
+  timestamp: 2026-08-01T15:45:17.814305+00:00
+- actor: claude-code
+  id: 01kyz00t2nzazag29wdmfas0k4
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — crates/swissarmyhammer-kanban/src/dispatch.rs, crates/swissarmyhammer-tools/src/mcp/tools/kanban/description.md. `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-tools -p swissarmyhammer-fields --no-fail-fast` — 3254 run, 3254 passed, 0 skipped, 0 failed (baseline 3249 + 5 new tests). `cargo fmt --all --check` clean. `cargo clippy -p swissarmyhammer-kanban -p swissarmyhammer-tools --all-targets -- -D warnings` clean. The known flake `review_working_emits_progress_notifications_per_pair_when_token_supplied` passed.
+    - next: ready for /review. New card ^qd9z2xt filed for the `list tasks` `assignee` / `exclude_done` drop found during the sibling audit.
+  timestamp: 2026-08-01T15:45:25.589923+00:00
 position_column: doing
 position_ordinal: '8480'
 title: assignees silently drops an unknown actor ref
@@ -84,3 +152,33 @@ The same reason the `tags` defect mattered: the response says `ok`, the caller h
 - `update task { assignees: ["nosuchactor"] }` returns an error and leaves the assignee list unchanged. Test must fail before the change.
 - `add task` with an unknown assignee does not create the task.
 - The note in crates/swissarmyhammer-tools/src/mcp/tools/kanban/description.md that says an unknown actor id is dropped gets updated to match the new behavior. #bug #kanban
+
+## Review Findings (2026-08-01 10:25)
+
+Scope: `HEAD~1..HEAD` (08a64a965 only).
+
+- [x] `crates/swissarmyhammer-kanban/src/dispatch.rs:401` — In `explicit_assignee_refs`, the singular `assignee` alias reads `op.get_string("assignee")` instead of `list_param(op, "assignee")`, so it does not get the forgiving-shape tolerance that `tag_refs` gives the singular `tag`. `assignee: ["alice"]` or `assignee: "[\"alice\"]"` makes `get_string` return `None`, so the function returns `Ok(None)` and the requested assignee is silently ignored — `add task` then falls back to `op.actor` and `update task` leaves the list unchanged, both acked `ok`. That is the same silent-drop class this card fixes. The doc comment written on this function in this commit states "`assignees` takes the same forgiving shapes as every other ref-list param (see [`ref_list`]); the singular `assignee` is accepted as a one-element alias", which holds for the plural key but over-claims for the singular one. Use `list_param(op, "assignee")` to match `tag_refs`. **FIXED 2026-08-01** — `explicit_assignee_refs` now ends with `list_param(op, "assignee")`. Its doc comment was rewritten to state what the code does: the singular key is an alias read through the same `list_param` path, so it takes every shape the plural key takes. `description.md` was corrected the same way. 5 new tests, all proved RED first.
+
+### Out of scope — engine mis-citation (^j4d2613, fourth consecutive occurrence)
+
+The engine returned 7 findings. Six describe code that this commit never touched, and all seven cited a line that does not contain the code described. `add.rs` and `update.rs` in this delta changed **doc comments only** — no builder signature and no `execute` method was modified.
+
+| Engine citation | What the cited line holds | Described code really at | Real blame |
+|---|---|---|---|
+| dispatch.rs:317 | `let name = req(op, "name")?;` (blames 899c0267) | dispatch.rs:401 | 08a64a965 — in scope, kept above with the corrected line |
+| add.rs:101 | `/// Set the position (column, ordinal)...` (blames d47ba21a) | add.rs:115 `with_depends_on` | 090b3f3ab9, 2026-02-01 |
+| add.rs:106 | `}` (blames 090b3f3ab9) | add.rs:121 `with_tags` | 74d0cacc48, 2026-07-30 |
+| update.rs:97 | `due: None,` (blames eb375282) | update.rs:115 `with_assignees` | 090b3f3ab9, 2026-02-01 |
+| update.rs:102 | `/// Set the title` (blames 090b3f3ab9) | update.rs:121 `with_depends_on` | 090b3f3ab9, 2026-02-01 |
+| update.rs:107 | blank line (blames 090b3f3ab9) | update.rs:127 `with_tags` | 74d0cacc48, 2026-07-30 |
+| update.rs:156 | `/// Set the earliest start date (ISO 8601).` (blames eb375282) | update.rs:232 `execute` | 7b47bf029c, 2026-02-03 |
+
+The six builder/`execute` findings ask to change pre-existing public signatures (`Vec<T>` to `impl IntoIterator`) and to add a doc comment to a pre-existing trait method. None is work created by this commit. Do not action them here.
+
+### Verified clean on this delta
+
+- Rejection is complete and atomic. Both the plural and singular ref paths funnel through `resolve_explicit_assignees`, which resolves the whole list before any write, so one bad ref rejects the operation with nothing stored.
+- `from_entity_error` (crates/swissarmyhammer-kanban/src/error.rs:153) maps only `EntityError::NotFound { entity_type: "actor" }` to `ActorNotFound`; every other variant falls through to `EntityError(err)`, so a genuine IO error is not flattened.
+- The `op.actor` fallback skips an unregistered actor rather than failing the create, and skips it rather than passing it on, so the echoed `assignees` equals what was stored.
+- `description.md` matches behavior, including the paragraph separating the top-level `actor` key from `assignees`.
+- The new `AddTask.assignees` / `UpdateTask.assignees` doc comments disclaim rather than over-claim: both state the struct does not check ids itself and that a direct caller still hits the fields-layer pruning.

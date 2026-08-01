@@ -391,14 +391,16 @@ async fn execute_column_operation(
 /// Read the explicit assignee refs from an operation, before resolution.
 ///
 /// `assignees` takes the same forgiving shapes as every other ref-list param
-/// (see [`ref_list`]); the singular `assignee` is accepted as a one-element
-/// alias. Returns `Ok(None)` only when neither key is present — an explicit
-/// empty array is `Some(vec![])`, which `update task` uses to unassign.
+/// (see [`ref_list`]). The singular `assignee` is an alias read through the
+/// same [`list_param`] path, so it accepts every shape the plural key does —
+/// the alias names the key, it does not narrow the shape. Returns `Ok(None)`
+/// only when neither key is present — an explicit empty array is
+/// `Some(vec![])`, which `update task` uses to unassign.
 fn explicit_assignee_refs(op: &KanbanOperation) -> Result<Option<Vec<String>>, KanbanError> {
     if let Some(refs) = list_param(op, "assignees")? {
         return Ok(Some(refs));
     }
-    Ok(op.get_string("assignee").map(|a| vec![a.to_string()]))
+    list_param(op, "assignee")
 }
 
 /// Normalize the explicit `assignees` param to registered actor ids.
@@ -4497,6 +4499,117 @@ mod tests {
         assert_eq!(
             listed["count"], 0,
             "the rejected create must leave no partial task"
+        );
+    }
+
+    /// The singular `assignee` key accepts an array, the same shape the
+    /// plural key accepts. A dropped array reads as "no assignee asked for"
+    /// and `add task` falls back to the operation actor.
+    #[tokio::test]
+    async fn dispatch_add_task_singular_assignee_array_shape_persists() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Array under singular key",
+            "assignee": ["alice"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        assert_eq!(stored_assignees(&ctx, &id).await, vec!["alice"]);
+    }
+
+    /// The singular `assignee` key accepts an array on `update task` too.
+    /// A dropped array leaves the stored list untouched behind an `ok` ack.
+    #[tokio::test]
+    async fn dispatch_update_task_singular_assignee_array_shape_persists() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+        let id = add_one_task(&ctx, "Array under singular key").await;
+
+        let ops =
+            parse_input(json!({"op": "update task", "id": id, "assignee": ["alice"]})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(stored_assignees(&ctx, &id).await, vec!["alice"]);
+    }
+
+    /// The singular `assignee` key accepts a stringified array, the shape a
+    /// client sends when the transport gives it no array type hint.
+    #[tokio::test]
+    async fn dispatch_add_task_singular_assignee_stringified_array_persists() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+        add_one_actor(&ctx, "bob").await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Stringified array under singular key",
+            "assignee": "[\"alice\",\"bob\"]",
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        assert_eq!(stored_assignees(&ctx, &id).await, vec!["alice", "bob"]);
+    }
+
+    /// Shape tolerance on the singular key does not bypass actor validation:
+    /// an unknown id inside an array still rejects the create.
+    #[tokio::test]
+    async fn dispatch_add_task_unknown_singular_assignee_array_creates_nothing() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Ghost in an array",
+            "assignee": ["nosuchactor"],
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            matches!(result, Err(KanbanError::ActorNotFound { ref id }) if id == "nosuchactor"),
+            "expected ActorNotFound, got: {result:?}"
+        );
+
+        let ops = parse_input(json!({"op": "list tasks"})).unwrap();
+        let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            listed["count"], 0,
+            "the rejected create must leave no partial task"
+        );
+    }
+
+    /// An unknown id inside a stringified array under the singular key
+    /// rejects the update and leaves the stored list exactly as it was.
+    #[tokio::test]
+    async fn dispatch_update_task_unknown_singular_assignee_stringified_array_errors() {
+        let (_temp, ctx) = setup().await;
+        add_one_actor(&ctx, "alice").await;
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Keep alice through the alias",
+            "assignees": ["alice"],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let ops =
+            parse_input(json!({"op": "update task", "id": id, "assignee": "[\"nosuchactor\"]"}))
+                .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            matches!(result, Err(KanbanError::ActorNotFound { ref id }) if id == "nosuchactor"),
+            "expected ActorNotFound, got: {result:?}"
+        );
+        assert_eq!(
+            stored_assignees(&ctx, &id).await,
+            vec!["alice"],
+            "a rejected update must not disturb the stored assignees"
         );
     }
 }

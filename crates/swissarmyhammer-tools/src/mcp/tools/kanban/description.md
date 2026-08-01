@@ -42,8 +42,8 @@ ones are added at the end. The prose is kept.
 
 `assignees` (both ops) and `attachments` (`update task`) take the same forgiving
 input **shapes** as `tags`. Both **replace** the whole list on `update task`, so
-an empty array unassigns / detaches everything. The singular `assignee` is
-accepted as a one-element alias.
+an empty array unassigns / detaches everything. The singular `assignee` is an
+alias for the same list and takes every shape `assignees` takes.
 
 Each `assignees` entry is an actor id exactly as `add actor` registered it —
 there is no short form or `^` sigil, because an actor id is a slug, not a ULID.
