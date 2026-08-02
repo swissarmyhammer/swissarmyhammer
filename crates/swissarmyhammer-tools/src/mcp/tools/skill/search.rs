@@ -14,7 +14,7 @@ pub async fn execute_search(
     let query = arguments
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required field: 'query'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required field: 'query'", None))?;
 
     let ctx = SkillContext::new(library.clone());
     let op = SearchSkill::new(query);

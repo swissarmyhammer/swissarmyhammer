@@ -588,7 +588,7 @@ impl McpTool for ReviewTool {
                     .collect::<Vec<_>>()
                     .join(", ");
                 Err(rmcp::ErrorData::invalid_params(
-                    format!("Unknown operation '{other}'. Valid operations: {valid_ops}"),
+                    format!("unknown operation '{other}'. Valid operations: {valid_ops}"),
                     None,
                 ))
             }

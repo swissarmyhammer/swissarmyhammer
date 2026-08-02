@@ -610,20 +610,20 @@ impl fmt::Display for ShellError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ShellError::CommandSpawnError { command, source } => {
-                write!(f, "Failed to spawn command '{command}': {source}")
+                write!(f, "failed to spawn command '{command}': {source}")
             }
             ShellError::ExecutionError { command, message } => {
-                write!(f, "Command '{command}' execution failed: {message}")
+                write!(f, "command '{command}' execution failed: {message}")
             }
 
             ShellError::InvalidCommand { message } => {
-                write!(f, "Invalid command: {message}")
+                write!(f, "invalid command: {message}")
             }
             ShellError::SystemError { message } => {
-                write!(f, "System error during command execution: {message}")
+                write!(f, "system error during command execution: {message}")
             }
             ShellError::WorkingDirectoryError { message } => {
-                write!(f, "Working directory error: {message}")
+                write!(f, "working directory error: {message}")
             }
         }
     }

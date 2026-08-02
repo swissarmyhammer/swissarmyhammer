@@ -189,7 +189,7 @@ impl McpTool for SkillTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'list skill', 'use skill', 'search skill'",
+                    "unknown operation '{}'. Valid operations: 'list skill', 'use skill', 'search skill'",
                     other
                 ),
                 None,
@@ -456,7 +456,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]

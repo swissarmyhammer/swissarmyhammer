@@ -77,8 +77,42 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
    - **clean** → task moves to `done`. Step 6.
    - **findings** → fresh dated `## Review Findings` checklist appended to the task, task stays in `review`. Step 2 — `/implement <TASK_ID>` pulls it back to `doing`, works the unchecked items, and flips them to `- [x]`.
 6. **Verify done**: `op: "get task"`. Not in `done` → step 2. In `done` → the last checkpoint (step 4) already **is** the verified-good commit (green + clean review); no separate post-done commit is needed.
-7. **Guardrail**: same finding (file:line + message) across 3 iterations — or 3 consecutive no-change iterations (step 4 "nothing to commit") — → stop, clear ralph, report what persists. Hitting the guardrail means the task is **stuck**: leave it in `review` and report it — **never force it to `done`**. A finding that survives 3 rounds is either a fix you haven't cracked yet or a contradictory/faulty rule; if it's the latter (per **Findings Are Requirements** below), report it on the task and leave it **stuck** for a human to resolve — do not edit validators yourself and do not re-close. Closing a task with open findings is out of bounds.
-8. **Clear ralph** and report.
+7. **Write the ledger entry, then check the guardrail.** Record this iteration on the task (see **The iteration ledger** below), then decide from the ledger — never from your memory of it: the same finding (file:line + message) in 3 ledger entries — or 3 consecutive `no-change` entries (step 4 "nothing to commit") — → stop, clear ralph, report what persists. Hitting the guardrail means the task is **stuck**: leave it in `review` and report it — **never force it to `done`**. A finding that survives 3 rounds is either a fix you haven't cracked yet or a contradictory/faulty rule; if it's the latter (per Scope), report it on the task and leave it **stuck** for a human to resolve — do not edit validators yourself and do not re-close. Closing a task with open findings is out of bounds.
+8. **Clear ralph** and report with the card block (see **Report the card**).
+
+### The iteration ledger (both modes)
+
+{% include "_partials/step-record" %}
+
+Every delegated step returns that block. Read the block — do not re-derive the outcome from the step's prose, and do not re-run the step to find out what it did.
+
+At the end of every iteration, write one ledger comment on the task. This is the only durable copy of the loop state:
+
+```json
+{"op": "add comment", "task_id": "<TASK_ID>", "text": "### finish iteration 3 — findings\n- implement: changed — 3 files\n- test: green — cargo nextest, 1284 passed\n- commit: 42e32c3a3\n- review: findings — crates/kanban/src/tag.rs:88, crates/kanban/src/tag.rs:140"}
+```
+
+Rules for the ledger:
+
+- The heading outcome is the outcome of the **last** step that ran in the iteration.
+- The iteration number is the count of ledger comments already on the card, plus one. It is not the count of iterations in this session. A card picked up after a restart continues the count.
+- Write the entry even when the iteration made no progress. `no-change` is the entry that arms the guardrail.
+
+**Read the ledger before you decide:**
+
+```json
+{"op": "list comments", "task_id": "<TASK_ID>"}
+```
+
+The guardrail in step 7 compares the last three ledger entries. Reading them from the card — not from this conversation — is what makes the loop survive a context summary, a stopped session, or a different agent that picks the card up.
+
+### Report the card
+
+{% include "_partials/card-report" %}
+
+Show the card block after every iteration, and once more when the loop stops.
+
+In scoped-batch mode, show one block for each task as it leaves the loop. When the scope is clear, close with a list of three groups: **done**, **stuck**, and **skipped**. Name each task by its `short_id` and give the reason for every stuck and skipped task.
 
 ### Scoped-batch mode
 

@@ -78,7 +78,7 @@ pub enum HookSettingsError {
     #[error(transparent)]
     File(#[from] JsonFileError),
     /// A file's `hooks` value did not deserialize into the expected shape.
-    #[error("Invalid `hooks` in {path}: {source}")]
+    #[error("invalid `hooks` in {path}: {source}")]
     Hooks {
         /// Path of the settings file whose `hooks` value was malformed.
         path: PathBuf,

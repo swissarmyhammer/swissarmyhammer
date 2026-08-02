@@ -81,11 +81,29 @@ When you think you are done `/double-check` your work and implement the feedback
 
 **Do not** use `complete task` — it jumps to the terminal column, skipping the review gate entirely.
 
-Cannot finish the work? Do NOT pretend it's done. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
-
-Summarize what was done and what tests pass, and tell the user it's ready for `/review` (which moves it into `review`). User decides next — no auto-continue.
+Cannot finish the work? Do NOT pretend it's done. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report the `stuck` outcome.
 
 
 ### Record progress
 
 {% include "_partials/record-progress" %}
+
+{% include "_partials/step-record" %}
+
+Implement reports `changed`, `no-change`, or `stuck`. The evidence is the list of files it touched.
+
+```
+step: implement
+outcome: changed
+evidence: 3 files — src/auth/login.rs, src/auth/mod.rs, tests/auth.rs
+task: ^rc9rb4g
+```
+
+`no-change` is a real result, not a failure to report. It tells the orchestrator that this pass made no progress.
+
+
+### Report to the user
+
+{% include "_partials/card-report" %}
+
+After the block, tell the user the task is ready for `/review` (which moves it into `review`). The user decides next — no auto-continue.

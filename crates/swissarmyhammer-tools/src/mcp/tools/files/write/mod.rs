@@ -657,7 +657,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("Invalid arguments"));
+        assert!(format!("{:?}", error).contains("invalid arguments"));
     }
 
     #[tokio::test]

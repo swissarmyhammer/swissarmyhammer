@@ -190,7 +190,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for RalphTool {
             Ok(()) => vec![InitResult::ok("ralph", "Created .ralph/ directory")],
             Err(e) => vec![InitResult::error(
                 "ralph",
-                format!("Failed to create .ralph/: {e}"),
+                format!("failed to create .ralph/: {e}"),
             )],
         }
     }
@@ -292,7 +292,7 @@ impl McpTool for RalphTool {
                 // Preserve iteration counter from existing state to prevent safety cap bypass
                 let existing_iteration = read_ralph(base_dir, session_id)
                     .map_err(|e| {
-                        McpError::internal_error(format!("Failed to read ralph: {e}"), None)
+                        McpError::internal_error(format!("failed to read ralph: {e}"), None)
                     })?
                     .map(|s| s.iteration)
                     .unwrap_or(0);
@@ -305,7 +305,7 @@ impl McpTool for RalphTool {
                 };
 
                 write_ralph(base_dir, session_id, &state).map_err(|e| {
-                    McpError::internal_error(format!("Failed to set ralph: {e}"), None)
+                    McpError::internal_error(format!("failed to set ralph: {e}"), None)
                 })?;
 
                 let response = serde_json::json!({
@@ -324,7 +324,7 @@ impl McpTool for RalphTool {
 
                 let state_result = read_ralph(base_dir, session_id).map_err(|e| {
                     McpError::internal_error(
-                        format!("Failed to read ralph state: {e}"),
+                        format!("failed to read ralph state: {e}"),
                         None,
                     )
                 })?;
@@ -339,7 +339,7 @@ impl McpTool for RalphTool {
                             // Auto-stop: delete file and allow
                             delete_ralph(base_dir, session_id).map_err(|e| {
                                 McpError::internal_error(
-                                    format!("Failed to clear ralph after max iterations: {e}"),
+                                    format!("failed to clear ralph after max iterations: {e}"),
                                     None,
                                 )
                             })?;
@@ -360,7 +360,7 @@ impl McpTool for RalphTool {
                         // Persist incremented iteration
                         write_ralph(base_dir, session_id, &state).map_err(|e| {
                             McpError::internal_error(
-                                format!("Failed to update ralph iteration: {e}"),
+                                format!("failed to update ralph iteration: {e}"),
                                 None,
                             )
                         })?;
@@ -397,11 +397,11 @@ impl McpTool for RalphTool {
 
                 // Read state before deleting to include final iteration count
                 let final_state = read_ralph(base_dir, session_id).map_err(|e| {
-                    McpError::internal_error(format!("Failed to read ralph: {e}"), None)
+                    McpError::internal_error(format!("failed to read ralph: {e}"), None)
                 })?;
 
                 delete_ralph(base_dir, session_id).map_err(|e| {
-                    McpError::internal_error(format!("Failed to clear ralph: {e}"), None)
+                    McpError::internal_error(format!("failed to clear ralph: {e}"), None)
                 })?;
 
                 let response = match final_state {
@@ -429,7 +429,7 @@ impl McpTool for RalphTool {
                 let session_id = session_id.as_str();
 
                 let state_result = read_ralph(base_dir, session_id).map_err(|e| {
-                    McpError::internal_error(format!("Failed to read ralph: {e}"), None)
+                    McpError::internal_error(format!("failed to read ralph: {e}"), None)
                 })?;
 
                 match state_result {
@@ -454,7 +454,7 @@ impl McpTool for RalphTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation: '{other}'. Valid operations: set ralph, check ralph, clear ralph, get ralph"
+                    "unknown operation: '{other}'. Valid operations: set ralph, check ralph, clear ralph, get ralph"
                 ),
                 None,
             )),

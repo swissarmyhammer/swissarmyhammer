@@ -33,7 +33,16 @@ pub struct AddTask {
     pub column: Option<String>,
     /// Initial ordinal (if None, appended at end)
     pub ordinal: Option<String>,
-    /// Assignees for this task
+    /// Assignees for this task.
+    ///
+    /// Each entry is an actor id exactly as `add actor` registered it — an
+    /// actor id is a slug, not a ULID, so there is no short form or `^` sigil.
+    ///
+    /// Callers that reach this command through `execute_operation` get the id
+    /// checked first: an id that names no actor is an error there and no task
+    /// is created, never a silent drop. This struct does not check the ids
+    /// itself, so a direct caller still hits the fields layer, which prunes an
+    /// unregistered id on write.
     #[serde(default)]
     pub assignees: Vec<ActorId>,
     /// Task refs this task depends on. Accepts a single ref or a list, in any

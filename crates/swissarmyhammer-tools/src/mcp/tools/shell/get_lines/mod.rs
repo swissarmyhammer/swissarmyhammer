@@ -97,7 +97,7 @@ pub async fn execute_get_lines(
             Ok(BaseToolImpl::create_success_response(output))
         }
         Err(e) => Err(McpError::internal_error(
-            format!("Get lines failed: {}", e),
+            format!("get lines failed: {}", e),
             None,
         )),
     }

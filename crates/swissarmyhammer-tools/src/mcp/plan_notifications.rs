@@ -154,7 +154,7 @@ impl PlanNotification {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SendError {
     /// Channel was closed, receiver no longer exists
-    #[error("Plan notification channel closed: {0}")]
+    #[error("plan notification channel closed: {0}")]
     ChannelClosed(String),
 }
 

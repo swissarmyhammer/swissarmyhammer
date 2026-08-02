@@ -17,7 +17,7 @@ pub struct QuestionAnswerEntry {
 
 /// Get the questions directory path
 fn get_questions_dir() -> Result<PathBuf> {
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let current_dir = std::env::current_dir().context("failed to get current directory")?;
     let questions_dir = current_dir
         .join(SwissarmyhammerDirectory::dir_name())
         .join("questions");
@@ -42,7 +42,7 @@ pub fn save_question_answer(question: &str, answer: &str) -> Result<PathBuf> {
     let questions_dir = get_questions_dir()?;
 
     // Create directory if it doesn't exist
-    std::fs::create_dir_all(&questions_dir).context("Failed to create questions directory")?;
+    std::fs::create_dir_all(&questions_dir).context("failed to create questions directory")?;
 
     // Generate filename with timestamp (including microseconds to avoid collisions)
     let now = Utc::now();
@@ -59,7 +59,7 @@ pub fn save_question_answer(question: &str, answer: &str) -> Result<PathBuf> {
 
     // Serialize to YAML with header comment
     let yaml_body =
-        serde_yaml_ng::to_string(&entry).context("Failed to serialize entry to YAML")?;
+        serde_yaml_ng::to_string(&entry).context("failed to serialize entry to YAML")?;
     let yaml_content = format!(
         "# Saved at {}\n{}",
         now.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -67,7 +67,7 @@ pub fn save_question_answer(question: &str, answer: &str) -> Result<PathBuf> {
     );
 
     // Write to file
-    std::fs::write(&file_path, yaml_content).context("Failed to write question file")?;
+    std::fs::write(&file_path, yaml_content).context("failed to write question file")?;
 
     tracing::info!("Saved question/answer to {}", file_path.display());
 
@@ -99,7 +99,7 @@ pub fn load_all_questions() -> Result<Vec<QuestionAnswerEntry>> {
 
     // Read all YAML files
     for entry_result in
-        std::fs::read_dir(&questions_dir).context("Failed to read questions directory")?
+        std::fs::read_dir(&questions_dir).context("failed to read questions directory")?
     {
         let entry = match entry_result {
             Ok(e) => e,

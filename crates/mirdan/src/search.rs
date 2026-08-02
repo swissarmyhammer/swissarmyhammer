@@ -75,7 +75,7 @@ pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
 pub async fn run_interactive_search() -> Result<(), RegistryError> {
     if !io::stdin().is_terminal() {
         return Err(RegistryError::Validation(
-            "Interactive search requires a terminal. Use 'mirdan search <query>' instead.".into(),
+            "interactive search requires a terminal. Use 'mirdan search <query>' instead".into(),
         ));
     }
 

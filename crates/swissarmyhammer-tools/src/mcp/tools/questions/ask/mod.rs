@@ -55,7 +55,7 @@ pub async fn execute_ask(
     // Check if peer is available for elicitation
     let peer = context.peer.as_ref().ok_or_else(|| {
         McpError::invalid_request(
-            "Elicitation not available. This tool requires MCP client support for elicitation (MCP protocol 2025-06-18 or later).",
+            "elicitation not available. This tool requires MCP client support for elicitation (MCP protocol 2025-06-18 or later)",
             None
         )
     })?;
@@ -79,7 +79,7 @@ pub async fn execute_ask(
         .create_elicitation(elicitation_request)
         .await
         .map_err(|e| {
-            McpError::internal_error(format!("Elicitation request failed: {}", e), None)
+            McpError::internal_error(format!("elicitation request failed: {}", e), None)
         })?;
 
     // Check if user accepted, declined, or cancelled
@@ -92,14 +92,14 @@ pub async fn execute_ask(
                 .and_then(|content| content.get("answer"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    McpError::invalid_request("No answer provided in elicitation response", None)
+                    McpError::invalid_request("no answer provided in elicitation response", None)
                 })?;
 
             tracing::info!("User answered: {}", answer);
 
             // Save question/answer to file
             let file_path = save_question_answer(&request.question, answer).map_err(|e| {
-                McpError::internal_error(format!("Failed to save question/answer: {}", e), None)
+                McpError::internal_error(format!("failed to save question/answer: {}", e), None)
             })?;
 
             // Return success response
@@ -112,7 +112,7 @@ pub async fn execute_ask(
             ))
         }
         rmcp::model::ElicitationAction::Decline | rmcp::model::ElicitationAction::Cancel => Err(
-            McpError::invalid_request("User declined or cancelled the question", None),
+            McpError::invalid_request("user declined or cancelled the question", None),
         ),
     }
 }

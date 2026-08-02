@@ -493,7 +493,7 @@ impl McpServerHandle {
     pub async fn wait_for_completion(&mut self) -> Result<()> {
         if let Some(task) = self.server_task.take() {
             task.await.map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Server task panicked: {}", e),
+                message: format!("server task panicked: {}", e),
             })?;
             tracing::debug!("Server task completed successfully");
         }
@@ -649,13 +649,13 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
         TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to bind to random port: {}", e),
+                message: format!("failed to bind to random port: {}", e),
             })?;
 
     let port = temp_listener
         .local_addr()
         .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to get local address: {}", e),
+            message: format!("failed to get local address: {}", e),
         })?
         .port();
 
@@ -879,7 +879,7 @@ async fn request_observer(
 /// * `Result<std::net::SocketAddr>` - Parsed socket address
 fn parse_socket_addr(bind_addr: &str) -> Result<std::net::SocketAddr> {
     bind_addr.parse().map_err(|e| SwissArmyHammerError::Other {
-        message: format!("Failed to parse bind address {}: {}", bind_addr, e),
+        message: format!("failed to parse bind address {}: {}", bind_addr, e),
     })
 }
 
@@ -894,7 +894,7 @@ async fn bind_tcp_listener(socket_addr: std::net::SocketAddr) -> Result<TcpListe
     TcpListener::bind(socket_addr)
         .await
         .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to bind to {}: {}", socket_addr, e),
+            message: format!("failed to bind to {}: {}", socket_addr, e),
         })
 }
 
@@ -1108,7 +1108,7 @@ async fn create_tcp_listener(port: u16) -> Result<(tokio::net::TcpListener, Stri
 /// * `Result<()>` - Ok if server signaled readiness
 async fn wait_for_server_ready(ready_rx: oneshot::Receiver<()>) -> Result<()> {
     ready_rx.await.map_err(|_| SwissArmyHammerError::Other {
-        message: "Server task failed to signal readiness".to_string(),
+        message: "server task failed to signal readiness".to_string(),
     })
 }
 
@@ -1514,7 +1514,7 @@ mod tests {
         );
         let error_msg = format!("{}", result.unwrap_err());
         assert!(
-            error_msg.contains("Failed to bind") || error_msg.contains("18082"),
+            error_msg.contains("failed to bind") || error_msg.contains("18082"),
             "Error should mention binding failure or port number. Got: {}",
             error_msg
         );
@@ -1538,7 +1538,7 @@ mod tests {
         );
         let error_msg = format!("{}", result.unwrap_err());
         assert!(
-            error_msg.contains("Failed to bind")
+            error_msg.contains("failed to bind")
                 || error_msg.contains("Permission denied")
                 || error_msg.contains("1"),
             "Error should mention binding failure, permission denied, or port 1. Got: {}",
@@ -1752,7 +1752,7 @@ mod tests {
         assert!(result.is_err(), "Invalid address should return error");
         let err = format!("{}", result.unwrap_err());
         assert!(
-            err.contains("Failed to parse bind address"),
+            err.contains("failed to parse bind address"),
             "Error should mention parsing failure. Got: {}",
             err
         );

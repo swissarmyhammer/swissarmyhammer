@@ -296,9 +296,9 @@ fn ensure_project_config(
         return Ok(());
     }
     std::fs::create_dir_all(&shell_dir)
-        .map_err(|e| format!("Failed to create .shell/ directory: {}", e))?;
+        .map_err(|e| format!("failed to create .shell/ directory: {}", e))?;
     std::fs::write(&config_path, BUILTIN_CONFIG_YAML)
-        .map_err(|e| format!("Failed to write .shell/config.yaml: {}", e))?;
+        .map_err(|e| format!("failed to write .shell/config.yaml: {}", e))?;
     reporter.emit(&InitEvent::Action {
         verb: "Created".to_string(),
         message: format!("{}", config_path.display()),
@@ -563,7 +563,7 @@ impl McpTool for ShellExecuteTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, grep history, get lines",
+                    "unknown operation '{}'. Valid operations: execute command, list processes, kill process, grep history, get lines",
                     other
                 ),
                 None,
@@ -1008,7 +1008,7 @@ mod tests {
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            !err.contains("Unknown operation"),
+            !err.contains("unknown operation"),
             "Error should not be 'Unknown operation': {}",
             err
         );

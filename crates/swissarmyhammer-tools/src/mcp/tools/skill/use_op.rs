@@ -19,7 +19,7 @@ pub async fn execute_use(
     let name = arguments
         .get("name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("Missing required field: 'name'", None))?;
+        .ok_or_else(|| McpError::invalid_params("missing required field: 'name'", None))?;
 
     let skill_arguments = arguments
         .get("arguments")
@@ -114,7 +114,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("name") || err.contains("Missing"),
+            err.contains("name") || err.contains("missing"),
             "Expected missing name error, got: {}",
             err
         );

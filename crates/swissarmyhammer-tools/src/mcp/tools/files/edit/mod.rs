@@ -977,7 +977,7 @@ impl EditFileTool {
         let path = validate_file_path(base_dir, file_path)?;
         if !path.exists() {
             return Err(McpError::invalid_request(
-                format!("File does not exist: {}", file_path),
+                format!("file does not exist: {}", file_path),
                 None,
             ));
         }
@@ -987,7 +987,7 @@ impl EditFileTool {
         let old_string_count = matches.len();
         if old_string_count == 0 {
             return Err(McpError::invalid_request(
-                format!("String '{}' not found in file", old_string),
+                format!("string '{}' not found in file", old_string),
                 None,
             ));
         }
@@ -1025,7 +1025,7 @@ impl EditFileTool {
         if had_decode_errors {
             return Err(McpError::internal_error(
                 format!(
-                    "Failed to decode file with detected encoding {}",
+                    "failed to decode file with detected encoding {}",
                     encoding.name()
                 ),
                 None,
@@ -1131,7 +1131,7 @@ impl EditFileTool {
             .parent()
             .ok_or_else(|| {
                 McpError::internal_error(
-                    "Cannot determine parent directory for temporary file".to_string(),
+                    "cannot determine parent directory for temporary file".to_string(),
                     None,
                 )
             })?
@@ -1197,7 +1197,7 @@ impl EditFileTool {
 
         if had_errors {
             return Err(McpError::internal_error(
-                format!("Failed to encode content with encoding {}", encoding.name()),
+                format!("failed to encode content with encoding {}", encoding.name()),
                 None,
             ));
         }
@@ -1265,7 +1265,7 @@ pub async fn execute_edit(
     for (idx, edit_op) in edit_operations.iter().enumerate() {
         if edit_op.find.is_empty() {
             return Err(McpError::invalid_request(
-                format!("Edit operation {}: old_text cannot be empty", idx),
+                format!("edit operation {}: old_text cannot be empty", idx),
                 None,
             ));
         }
@@ -1277,7 +1277,7 @@ pub async fn execute_edit(
         if edit_op.find == edit_op.replace {
             return Err(McpError::invalid_request(
                 format!(
-                    "Edit operation {idx}: no-op edit — `find` and `replace` are identical, so \
+                    "edit operation {idx}: no-op edit — `find` and `replace` are identical, so \
                      they must be different"
                 ),
                 None,
@@ -1301,7 +1301,7 @@ pub async fn execute_edit(
     let path = validate_file_path(&base_dir, &file_path)?;
     if !path.exists() {
         return Err(McpError::invalid_request(
-            format!("File does not exist: {}", file_path),
+            format!("file does not exist: {}", file_path),
             None,
         ));
     }
@@ -1589,8 +1589,8 @@ mod tests {
         let error_str = format!("{:?}", error);
         // The error message from shared_utils says "File not found"
         assert!(
-            error_str.contains("File does not exist")
-                || error_str.contains("File not found")
+            error_str.contains("file does not exist")
+                || error_str.contains("file not found")
                 || error_str.contains("does not exist")
                 || error_str.contains("NotFound")
         );
@@ -3734,7 +3734,7 @@ mod tests {
                 false,
             )
             .unwrap_err();
-        assert!(format!("{err:?}").contains("File does not exist"));
+        assert!(format!("{err:?}").contains("file does not exist"));
     }
 
     /// `validate_edit_operation` rejects an `old_string` absent from the content.
@@ -3791,7 +3791,7 @@ mod tests {
         // A lone trailing byte after a UTF-16LE BOM is a malformed code unit, so
         // encoding_rs reports a decode error and this arm must reject it.
         let err = result.expect_err("a malformed UTF-16LE byte sequence must be rejected");
-        assert!(format!("{err:?}").contains("Failed to decode"));
+        assert!(format!("{err:?}").contains("failed to decode"));
     }
 
     /// `read_with_encoding_detection` surfaces a file-read error when the path is
@@ -3867,7 +3867,7 @@ mod tests {
             .write_with_encoding(&unwritable, "content", encoding_rs::UTF_8)
             .unwrap_err();
         // The missing parent surfaces as a NotFound, mapped to "File not found".
-        assert!(format!("{err:?}").contains("File not found"));
+        assert!(format!("{err:?}").contains("file not found"));
     }
 
     /// `write_with_encoding` rejects content the target encoding cannot represent
@@ -3880,7 +3880,7 @@ mod tests {
         // windows-1252 cannot encode an emoji → had_errors is true.
         let result = tool.write_with_encoding(&out, "🌍", encoding_rs::WINDOWS_1252);
         assert!(result.is_err(), "un-encodable content must error");
-        assert!(format!("{:?}", result.unwrap_err()).contains("Failed to encode"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("failed to encode"));
     }
 
     // =====================================================================

@@ -69,7 +69,7 @@ impl Lockfile {
         // `save` -> `serde_json::to_string_pretty`. Users should not hand-edit
         // it; a JSONC tolerance would mask corruption rather than help.
         serde_json::from_str(&content).map_err(|e| {
-            RegistryError::Validation(format!("Invalid lockfile '{}': {}", path.display(), e))
+            RegistryError::Validation(format!("invalid lockfile '{}': {}", path.display(), e))
         })
     }
 
@@ -137,9 +137,9 @@ fn lockfile_path(project_root: &Path) -> PathBuf {
 pub fn lockfile_root_for_scope(scope: &InitScope) -> Result<PathBuf, String> {
     match scope {
         InitScope::User => dirs::home_dir()
-            .ok_or_else(|| "Could not resolve home directory for user-scope lockfile".to_string()),
+            .ok_or_else(|| "could not resolve home directory for user-scope lockfile".to_string()),
         InitScope::Project | InitScope::Local => {
-            std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))
+            std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))
         }
     }
 }
@@ -152,7 +152,7 @@ pub fn verify_integrity(data: &[u8], expected: &str) -> Result<(), String> {
     // Expected format: "sha512-<base64>"
     let hash_b64 = expected
         .strip_prefix("sha512-")
-        .ok_or_else(|| format!("Expected sha512- prefix, got: {}", expected))?;
+        .ok_or_else(|| format!("expected sha512- prefix, got: {}", expected))?;
 
     let mut hasher = sha2::Sha512::new();
     hasher.update(data);
@@ -160,7 +160,7 @@ pub fn verify_integrity(data: &[u8], expected: &str) -> Result<(), String> {
 
     if actual != hash_b64 {
         return Err(format!(
-            "Integrity mismatch: expected {}, got sha512-{}",
+            "integrity mismatch: expected {}, got sha512-{}",
             expected, actual
         ));
     }

@@ -183,7 +183,7 @@ impl McpTool for AgentMcpTool {
 
         let input = Value::Object(arguments);
         let operation = parse_input(input).map_err(|e| {
-            McpError::invalid_params(format!("Failed to parse agent operation: {}", e), None)
+            McpError::invalid_params(format!("failed to parse agent operation: {}", e), None)
         })?;
 
         let is_use_op = matches!(&operation, AgentOperation::Use(_));

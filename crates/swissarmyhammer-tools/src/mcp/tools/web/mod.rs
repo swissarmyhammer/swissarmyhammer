@@ -101,14 +101,14 @@ impl McpTool for WebTool {
                     fetch::execute_fetch(args, context).await
                 } else {
                     Err(McpError::invalid_params(
-                        "Cannot determine operation. Provide 'op' field (\"search url\" or \"fetch url\"), or include 'query' for search / 'url' for fetch.",
+                        "cannot determine operation. Provide 'op' field (\"search url\" or \"fetch url\"), or include 'query' for search / 'url' for fetch",
                         None,
                     ))
                 }
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'search url', 'fetch url'",
+                    "unknown operation '{}'. Valid operations: 'search url', 'fetch url'",
                     other
                 ),
                 None,
@@ -257,7 +257,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unknown operation"));
+            .contains("unknown operation"));
     }
 
     #[tokio::test]
@@ -272,7 +272,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Cannot determine operation"));
+            .contains("cannot determine operation"));
     }
 
     #[tokio::test]

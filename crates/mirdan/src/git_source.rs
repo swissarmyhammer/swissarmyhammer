@@ -189,7 +189,7 @@ pub fn parse_git_source(
     }
 
     Err(RegistryError::Validation(format!(
-        "Cannot parse '{}' as a git source",
+        "cannot parse '{}' as a git source",
         spec
     )))
 }
@@ -246,14 +246,14 @@ fn checkout_ref(repo: &git2::Repository, refspec: &str) -> Result<(), RegistryEr
     let remote_ref = format!("refs/remotes/origin/{}", refspec);
     if let Ok(reference) = repo.find_reference(&remote_ref) {
         let commit = reference.peel_to_commit().map_err(|e| {
-            RegistryError::Validation(format!("Cannot resolve ref '{}': {}", refspec, e))
+            RegistryError::Validation(format!("cannot resolve ref '{}': {}", refspec, e))
         })?;
         repo.set_head_detached(commit.id()).map_err(|e| {
-            RegistryError::Validation(format!("Cannot checkout '{}': {}", refspec, e))
+            RegistryError::Validation(format!("cannot checkout '{}': {}", refspec, e))
         })?;
         repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
             .map_err(|e| {
-                RegistryError::Validation(format!("Checkout failed for '{}': {}", refspec, e))
+                RegistryError::Validation(format!("checkout failed for '{}': {}", refspec, e))
             })?;
         return Ok(());
     }
@@ -262,14 +262,14 @@ fn checkout_ref(repo: &git2::Repository, refspec: &str) -> Result<(), RegistryEr
     let tag_ref = format!("refs/tags/{}", refspec);
     if let Ok(reference) = repo.find_reference(&tag_ref) {
         let obj = reference.peel(git2::ObjectType::Commit).map_err(|e| {
-            RegistryError::Validation(format!("Cannot resolve tag '{}': {}", refspec, e))
+            RegistryError::Validation(format!("cannot resolve tag '{}': {}", refspec, e))
         })?;
         repo.set_head_detached(obj.id()).map_err(|e| {
-            RegistryError::Validation(format!("Cannot checkout tag '{}': {}", refspec, e))
+            RegistryError::Validation(format!("cannot checkout tag '{}': {}", refspec, e))
         })?;
         repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
             .map_err(|e| {
-                RegistryError::Validation(format!("Checkout failed for '{}': {}", refspec, e))
+                RegistryError::Validation(format!("checkout failed for '{}': {}", refspec, e))
             })?;
         return Ok(());
     }
@@ -278,18 +278,18 @@ fn checkout_ref(repo: &git2::Repository, refspec: &str) -> Result<(), RegistryEr
     if let Ok(oid) = git2::Oid::from_str(refspec) {
         if repo.find_commit(oid).is_ok() {
             repo.set_head_detached(oid).map_err(|e| {
-                RegistryError::Validation(format!("Cannot checkout commit '{}': {}", refspec, e))
+                RegistryError::Validation(format!("cannot checkout commit '{}': {}", refspec, e))
             })?;
             repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
                 .map_err(|e| {
-                    RegistryError::Validation(format!("Checkout failed for '{}': {}", refspec, e))
+                    RegistryError::Validation(format!("checkout failed for '{}': {}", refspec, e))
                 })?;
             return Ok(());
         }
     }
 
     Err(RegistryError::Validation(format!(
-        "Ref '{}' not found in repository",
+        "ref '{}' not found in repository",
         refspec
     )))
 }
@@ -304,7 +304,7 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
         || msg.contains("403")
     {
         return RegistryError::Unauthorized(format!(
-            "Authentication failed for '{}': {}",
+            "authentication failed for '{}': {}",
             url, err
         ));
     }
@@ -314,7 +314,7 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
         || msg.contains("does not exist")
         || msg.contains("repository not found")
     {
-        return RegistryError::NotFound(format!("Repository not found: '{}'", url));
+        return RegistryError::NotFound(format!("repository not found: '{}'", url));
     }
 
     if msg.contains("resolve host")
@@ -369,7 +369,7 @@ pub fn discover_packages(
             }
         }
         return Err(RegistryError::Validation(format!(
-            "Subpath '{}' not found or contains no packages",
+            "subpath '{}' not found or contains no packages",
             sub
         )));
     }
@@ -400,7 +400,7 @@ pub fn discover_packages(
 
     if packages.is_empty() {
         return Err(RegistryError::Validation(
-            "No packages found in repository (expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json)"
+            "no packages found in repository (expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json)"
                 .to_string(),
         ));
     }
@@ -528,7 +528,7 @@ fn filter_by_select(
 
     if filtered.is_empty() {
         return Err(RegistryError::NotFound(format!(
-            "Package '{}' not found in repository",
+            "package '{}' not found in repository",
             name
         )));
     }

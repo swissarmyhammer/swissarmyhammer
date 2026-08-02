@@ -123,13 +123,13 @@ pub fn set_mcp_server_entry(
         .ok_or_else(|| RegistryError::Validation(format!("'{}' is not an object", servers_key)))?;
 
     let mut serialized = serde_json::to_value(entry)
-        .map_err(|e| RegistryError::Validation(format!("Failed to serialize MCP entry: {}", e)))?;
+        .map_err(|e| RegistryError::Validation(format!("failed to serialize MCP entry: {}", e)))?;
 
     // Merge extras into the entry object. Extras win on key collision so the
     // YAML can override a default-shape field if a future agent ever needs to.
     if !extras.is_empty() {
         let entry_obj = serialized.as_object_mut().ok_or_else(|| {
-            RegistryError::Validation("Serialized MCP entry is not a JSON object".to_string())
+            RegistryError::Validation("serialized MCP entry is not a JSON object".to_string())
         })?;
         for (k, v) in extras {
             entry_obj.insert(k.clone(), v.clone());
@@ -212,12 +212,12 @@ pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml_ng::Value, Regis
 
     let rest = &content[3..];
     let end = rest.find("---").ok_or_else(|| {
-        RegistryError::Validation(format!("No closing --- in {} frontmatter", path.display()))
+        RegistryError::Validation(format!("no closing --- in {} frontmatter", path.display()))
     })?;
 
     let frontmatter = &rest[..end];
     serde_yaml_ng::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("Invalid YAML frontmatter: {}", e)))
+        .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))
 }
 
 /// Read the plugin name from `.claude-plugin/plugin.json`.
@@ -228,7 +228,7 @@ pub fn read_plugin_json(plugin_json_path: &Path) -> Result<String, RegistryError
     let content = std::fs::read_to_string(plugin_json_path)?;
     let json: serde_json::Value = crate::parse_jsonc(&content).map_err(|e| {
         RegistryError::Validation(format!(
-            "Invalid JSON in {}: {}",
+            "invalid JSON in {}: {}",
             plugin_json_path.display(),
             e
         ))
@@ -238,7 +238,7 @@ pub fn read_plugin_json(plugin_json_path: &Path) -> Result<String, RegistryError
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
-            RegistryError::Validation(format!("Missing 'name' in {}", plugin_json_path.display()))
+            RegistryError::Validation(format!("missing 'name' in {}", plugin_json_path.display()))
         })
 }
 
@@ -282,7 +282,7 @@ pub fn project_key() -> Result<String, RegistryError> {
     }
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
-        .map_err(|e| RegistryError::Validation(format!("Failed to get current directory: {}", e)))
+        .map_err(|e| RegistryError::Validation(format!("failed to get current directory: {}", e)))
 }
 
 /// Ensure that `root["projects"][key]` exists as an empty object and

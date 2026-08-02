@@ -172,6 +172,25 @@ Findings = checklist items on a host task — the task being reviewed (task-mode
 
 ### Summarize
 
+{% include "_partials/step-record" %}
+
+Review reports `clean`, `findings`, or `stuck`. The evidence is the `counts` and the `file:line` list.
+
+```
+step: review
+outcome: findings
+evidence: 2 findings — crates/kanban/src/tag.rs:88, crates/kanban/src/tag.rs:140
+task: ^rc9rb4g
+```
+
+Report `stuck` only for a contradiction you cannot obey (see the Guidelines above). Record the conflict on the task, leave the task in `review`, and stop.
+
+Write the same record as a comment on the host task. The two writes have different jobs: the dated `## Review Findings` section is the state the implementer must act on, and the comment is the history of this pass. A range-mode review that is clean has no task — return `task: none` and skip the card block below.
+
+{% include "_partials/card-report" %}
+
+After the block, add these facts:
+
 - **Mode**: task-mode (with id) or range-mode (with scope)
 - **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
 - **Counts**: from `counts` — the findings tally ("3 findings" or "clean")

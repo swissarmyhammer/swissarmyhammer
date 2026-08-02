@@ -73,11 +73,11 @@ impl McpErrorHandler {
         match error {
             // File system errors
             SwissArmyHammerError::FileNotFound { path, suggestion } => McpError::invalid_params(
-                format!("File not found: {path}. Suggestion: {suggestion}"),
+                format!("file not found: {path}. Suggestion: {suggestion}"),
                 None,
             ),
             SwissArmyHammerError::NotAFile { path, suggestion } => McpError::invalid_params(
-                format!("Path is not a file: {path}. Suggestion: {suggestion}"),
+                format!("path is not a file: {path}. Suggestion: {suggestion}"),
                 None,
             ),
             SwissArmyHammerError::PermissionDenied {
@@ -85,11 +85,11 @@ impl McpErrorHandler {
                 error,
                 suggestion,
             } => McpError::invalid_params(
-                format!("Permission denied: {path} - {error}. Suggestion: {suggestion}"),
+                format!("permission denied: {path} - {error}. Suggestion: {suggestion}"),
                 None,
             ),
             SwissArmyHammerError::InvalidFilePath { path, suggestion } => McpError::invalid_params(
-                format!("Invalid file path: {path}. Suggestion: {suggestion}"),
+                format!("invalid file path: {path}. Suggestion: {suggestion}"),
                 None,
             ),
 
@@ -98,13 +98,13 @@ impl McpErrorHandler {
                 McpError::internal_error(format!("I/O error: {err}"), None)
             }
             SwissArmyHammerError::Serialization(err) => {
-                McpError::internal_error(format!("Serialization error: {err}"), None)
+                McpError::internal_error(format!("serialization error: {err}"), None)
             }
             SwissArmyHammerError::Json(err) => {
                 McpError::internal_error(format!("JSON error: {err}"), None)
             }
             SwissArmyHammerError::Semantic { message } => {
-                McpError::internal_error(format!("Search error: {message}"), None)
+                McpError::internal_error(format!("search error: {message}"), None)
             }
             SwissArmyHammerError::Other { message } => {
                 // Try to infer the error type from the message
@@ -116,7 +116,7 @@ impl McpErrorHandler {
             }
 
             // Handle all other variants generically
-            _ => McpError::internal_error(format!("Operation failed: {error}"), None),
+            _ => McpError::internal_error(format!("operation failed: {error}"), None),
         }
     }
 
@@ -139,7 +139,7 @@ impl McpValidation {
             return Err(SwissArmyHammerError::Other {
                 message: format!(
                     "{} too long: {} characters (max: {})",
-                    Self::capitalize_first_letter(field),
+                    field,
                     value.len(),
                     max_length
                 ),
@@ -152,35 +152,24 @@ impl McpValidation {
     pub fn validate_not_empty(value: &str, field: &str) -> Result<()> {
         if value.trim().is_empty() {
             return Err(SwissArmyHammerError::Other {
-                message: format!("{} cannot be empty", Self::capitalize_first_letter(field)),
+                message: format!("{field} cannot be empty"),
             });
         }
         Ok(())
-    }
-
-    /// Helper function to capitalize the first letter of a string
-    fn capitalize_first_letter(s: &str) -> String {
-        let mut chars = s.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        }
     }
 
     /// Validate identifier format (alphanumeric, hyphens, underscores only)
     pub fn validate_identifier(value: &str, field: &str) -> Result<()> {
         if value.is_empty() {
             return Err(SwissArmyHammerError::Other {
-                message: format!("{} cannot be empty", Self::capitalize_first_letter(field)),
+                message: format!("{field} cannot be empty"),
             });
         }
 
         for char in value.chars() {
             if !char.is_alphanumeric() && char != '-' && char != '_' {
                 return Err(SwissArmyHammerError::Other { message: format!(
-                    "{} contains invalid character: '{}'. Only alphanumeric characters, hyphens, and underscores are allowed",
-                    Self::capitalize_first_letter(field),
-                    char
+                    "{field} contains invalid character: '{char}'. Only alphanumeric characters, hyphens, and underscores are allowed"
                 ) });
             }
         }
@@ -392,7 +381,7 @@ mod tests {
         };
         let mcp_err = McpErrorHandler::handle_error(err, "test_op");
         let msg = format!("{:?}", mcp_err);
-        assert!(msg.contains("File not found") || msg.contains("missing.txt"));
+        assert!(msg.contains("file not found") || msg.contains("missing.txt"));
     }
 
     #[test]
@@ -404,7 +393,7 @@ mod tests {
         };
         let mcp_err = McpErrorHandler::handle_error(err, "test_op");
         let msg = format!("{:?}", mcp_err);
-        assert!(msg.contains("Permission denied") || msg.contains("passwd"));
+        assert!(msg.contains("permission denied") || msg.contains("passwd"));
     }
 
     #[test]

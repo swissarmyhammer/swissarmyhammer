@@ -983,7 +983,7 @@ async fn test_read_tool_missing_file_error() {
     let error = result.unwrap_err();
     let error_msg = format!("{:?}", error);
     assert!(
-        error_msg.contains("Parent directory does not exist")
+        error_msg.contains("parent directory does not exist")
             || error_msg.contains("not found")
             || error_msg.contains("No such file")
     );
@@ -2032,7 +2032,7 @@ async fn test_grep_tool_error_handling() {
     let error_msg = format!("{:?}", error);
     // The error might come from ripgrep or the regex engine - both are acceptable
     assert!(
-        error_msg.contains("Invalid regex pattern")
+        error_msg.contains("invalid regex pattern")
             || error_msg.contains("regex")
             || error_msg.contains("failed")
             || error_msg.contains("search failed"),
@@ -2443,7 +2443,7 @@ async fn test_write_tool_error_handling() {
             );
             // May fail due to parent directory not existing, which is fine
             assert!(
-                error_msg.contains("Parent directory does not exist")
+                error_msg.contains("parent directory does not exist")
                     || error_msg.contains("No such file or directory"),
                 "Should fail due to missing parent directory, not relative path: {}",
                 error_msg
@@ -3436,7 +3436,7 @@ async fn test_write_tool_malformed_input() {
                     || error_msg.contains("permission")
                     || error_msg.contains("NUL byte")
                     || error_msg.contains("File name too long")
-                    || error_msg.contains("Path too long")
+                    || error_msg.contains("path too long")
                     || error_msg.contains("Read-only"),
                 "Should provide clear validation error: {}",
                 error_msg
@@ -3489,7 +3489,7 @@ async fn test_grep_tool_malformed_input() {
         if let Err(error) = grep_result {
             let error_msg = format!("{:?}", error);
             assert!(
-                error_msg.contains("Invalid regex")
+                error_msg.contains("invalid regex")
                     || error_msg.contains("pattern")
                     || !error_msg.contains("panic"),
                 "Grep should handle malformed regex gracefully: {}",

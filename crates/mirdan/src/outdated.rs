@@ -93,7 +93,7 @@ pub async fn run_update(
             .iter()
             .find(|p| p.name == name || p.source == name)
             .ok_or_else(|| {
-                RegistryError::NotFound(format!("Package '{}' is not installed", name))
+                RegistryError::NotFound(format!("package '{}' is not installed", name))
             })?;
 
         // Use the display name for registry lookups, source for matching

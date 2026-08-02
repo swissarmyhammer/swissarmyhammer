@@ -24,7 +24,24 @@ Create a git commit with a well-crafted conventional commit message.
 
 1. Review `git status` — stage source + tests, skip scratch
 2. Commit with a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/#summary) message
-3. Report progress
+3. Report the step record
+
+## Report
+
+{% include "_partials/step-record" %}
+
+Commit reports `changed`, `no-change`, or `stuck`. The evidence is the short sha and the subject line.
+
+```
+step: commit
+outcome: changed
+evidence: 42e32c3a3 fix(entity): parse frontmatter on line boundaries
+task: none
+```
+
+"Nothing to commit" is `no-change`, not an error. Say so plainly — the caller counts it.
+
+Commit takes no task id, so it writes nothing to the board. The caller records the sha on the card.
 
 ## Examples
 

@@ -324,7 +324,7 @@ async fn test_search_dispatch_invalid_language_returns_error() {
     );
     let err = result.unwrap_err();
     assert!(
-        err.message.contains("language") || err.message.contains("Invalid"),
+        err.message.contains("language") || err.message.contains("invalid"),
         "error should mention language, got: {}",
         err.message
     );

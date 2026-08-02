@@ -550,7 +550,7 @@ impl McpTool for DiagnosticsTool {
                     .collect::<Vec<_>>()
                     .join(", ");
                 Err(rmcp::ErrorData::invalid_params(
-                    format!("Unknown operation '{other}'. Valid operations: {valid}"),
+                    format!("unknown operation '{other}'. Valid operations: {valid}"),
                     None,
                 ))
             }
@@ -792,7 +792,7 @@ mod tests {
             .execute(args(serde_json::json!({"op": "frobnicate"})), &context())
             .await
             .expect_err("unknown op must error");
-        assert!(err.message.contains("Unknown operation"));
+        assert!(err.message.contains("unknown operation"));
     }
 
     #[tokio::test]

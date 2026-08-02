@@ -31,6 +31,23 @@ metadata:
 4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.
 5. **Repeat** until all tests pass.
 
+## Report
+
+{% include "_partials/step-record" %}
+
+Test reports `green`, `red`, or `stuck`. The evidence is the command and its counts.
+
+```
+step: test
+outcome: green
+evidence: cargo nextest run — 1284 passed, 0 failed, 0 skipped; cargo clippy -- -D warnings clean
+task: none
+```
+
+**Test does not touch the kanban board.** It takes no task id, it writes no comment, and it moves no card. It returns the block, and the caller — `/finish`, `/implement`, or the user — records the outcome on the card. This keeps `/test` usable on a repository with no board.
+
+Report `green` only after a full run passes. A run that was narrowed to one test, or that ended early, is not `green` — say what you ran.
+
 ## Troubleshooting
 
 ### No Tests

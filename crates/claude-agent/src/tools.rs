@@ -1013,7 +1013,7 @@ impl ToolCallHandler {
             "terminal_create" => self.handle_terminal_create(request).await,
             "terminal_write" => self.handle_terminal_write(request).await,
             _ => Err(crate::AgentError::ToolExecution(format!(
-                "Unknown tool: {}",
+                "unknown tool: {}",
                 request.name
             ))),
         }

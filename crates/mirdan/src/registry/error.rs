@@ -32,16 +32,16 @@ pub enum RegistryError {
 impl fmt::Display for RegistryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Http(e) => write!(f, "Network error: {}", e),
-            Self::AuthRequired => write!(f, "Not logged in. Run 'mirdan login' first."),
-            Self::Unauthorized(msg) => write!(f, "Authentication failed: {}", msg),
+            Self::Http(e) => write!(f, "network error: {}", e),
+            Self::AuthRequired => write!(f, "not logged in. Run 'mirdan login' first"),
+            Self::Unauthorized(msg) => write!(f, "authentication failed: {}", msg),
             Self::NotFound(msg) => write!(f, "{}", msg),
-            Self::Conflict(msg) => write!(f, "Conflict: {}", msg),
-            Self::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
+            Self::Conflict(msg) => write!(f, "conflict: {}", msg),
+            Self::Forbidden(msg) => write!(f, "forbidden: {}", msg),
             Self::Api { status, body } => write!(f, "API error ({}): {}", status, body),
             Self::Io(e) => write!(f, "I/O error: {}", e),
-            Self::Validation(msg) => write!(f, "Validation error: {}", msg),
-            Self::Integrity(msg) => write!(f, "Integrity error: {}", msg),
+            Self::Validation(msg) => write!(f, "validation error: {}", msg),
+            Self::Integrity(msg) => write!(f, "integrity error: {}", msg),
             Self::Json(msg) => write!(f, "JSON error: {}", msg),
         }
     }
