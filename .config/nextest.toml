@@ -130,7 +130,7 @@ test-group = "llama-embedding-serial"
 slow-timeout = { period = "30s", terminate-after = 10 }
 # Bounded retry for the same reason as the kanban / swissarmyhammer-agent
 # real-model overrides above: llama-agent's real-model integration tests
-# (e.g. acp_hooks_real_model) drive the nondeterministic qwen-0.6B chat model
+# (e.g. acp_agentic_loop) drive the nondeterministic qwen-0.6B chat model
 # through the live ACP loop; under CI GPU contention a tool-calling turn can slow
 # past the test's own hang guard (`must not hang: Elapsed`) even while the model
 # answers. Re-run lands green when contention eases; it does not mask a defect.

@@ -3,9 +3,8 @@
 //! Centralizes the canonical real-model `AgentConfig`, the server bootstrap
 //! with its environmental-failure skip heuristic, the plain-text
 //! `PromptRequest` constructor, and the per-turn prompt driver, so the sibling
-//! real-model tests (`acp_agentic_loop.rs`, `acp_hooks_real_model.rs`,
-//! `session_fork_real_model.rs`, `kv_prefix_reuse_recurrent.rs`) cannot drift
-//! apart.
+//! real-model tests (`acp_agentic_loop.rs`, `session_fork_real_model.rs`,
+//! `kv_prefix_reuse_recurrent.rs`) cannot drift apart.
 
 use std::sync::Arc;
 use std::time::Duration;
