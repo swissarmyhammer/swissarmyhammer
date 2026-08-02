@@ -52,8 +52,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-01T22:56:25.072757+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyzrryjmdxv0xb6kqat3ksvf
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — root cause was a STALE running MCP server binary (built 2026-08-01 08:34, predating HEAD), not a code defect; batch_size threading was already correct in current source (proven via a live probe test). Added real improvements anyway: batch_work_list no longer hard-errors on an oversized file, instead returns (WorkList, Vec<SkippedFile>) and synthesize() renders a "not reviewed, too large" gap section with a skipped count; ReviewCountsView carries skipped through the JSON response; BATCH_SIZE_PARAM docs updated; CLI "no agent factory" error reworded to point at sah serve; 10 new production-path tests including one that reviews the real crates/llama-agent/src/acp/server.rs bytes end to end.
+    - test: green — swissarmyhammer-tools review tests 58 passed, swissarmyhammer-validators review tests 176 passed, rdeps(swissarmyhammer-tools) 5042 passed 0 failed; fmt clean, clippy clean
+    - commit: 6edfbd741
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-01T22:58:02.452081+00:00
+- actor: claude-code
+  id: 01kyztbxaat3j3hjp0gmwayexv
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 6edfbd74173fc6fa7deecc409ae26c121d41e0f8) returned 11 raw findings; blame-checked every reported file:line against this commit and all 11 blamed to earlier commits (5a176d4dd, ae990af59, 3c6a9e875, c376628a7 x2, c234b49e9, efed482ea, 6c4bef404 x2, 945a7583f, 71148449d) — none touch this commit's diff, so all dropped as pre-existing. Net new findings: 0.
+    - next: done
+  timestamp: 2026-08-01T23:25:52.330128+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8e80
 title: batch_size is ignored at runtime; a 318 KB file cannot be reviewed by any route
 ---
 # Problem

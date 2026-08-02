@@ -57,8 +57,29 @@ comments:
     - evidence: 3 files — crates/swissarmyhammer-agent/src/lib.rs (await_collector/notification_collector/spawn_collector_task redesigned to drain on the ACP end-of-turn marker instead of a fixed 100ms sleep; incomplete drains now return `AcpError::PromptError` instead of `String::new()`), crates/swissarmyhammer-agent/Cargo.toml (added `test-util` to dev-dependency tokio features), ARCHITECTURE.md (end-of-turn-marker paragraph updated). RED confirmed against the pre-fix fixed-sleep drain (`left: "early ", right: "early late"`), GREEN after the fix. `cargo nextest run -p swissarmyhammer-agent` 97/97, `cargo nextest run -E 'rdeps(swissarmyhammer-agent)'` 1109/1109, fmt clean, clippy (workspace, all-targets, -D warnings) clean.
     - next: /review (the card stays in `doing`)
   timestamp: 2026-08-01T19:51:12.013398+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyze6jhs5qj5rpactphygk6m
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — notification_collector now ends on the ACP end-of-turn marker or channel close, never a fixed sleep; await_collector returns AcpResult<(String,u64)> with a DrainFailure enum (CollectorDied/Backstop/Lagged/StreamClosed) so no path returns an empty/truncated string; NOTIFICATION_COLLECTION_DELAY_MS (100ms) deleted, replaced by a 10s hang-guard backstop only; RED (late-chunk test failed against old code) -> GREEN confirmed
+    - test: green — rdeps(swissarmyhammer-agent) 1109/1109, fmt clean, clippy clean
+    - commit: f2bffc989
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-01T19:53:14.553925+00:00
+- actor: claude-code
+  id: 01kyzh2wg1kedr4q6xqr9z1r2f
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit f2bffc989) returned 26 candidate findings, all in `crates/swissarmyhammer-agent/src/lib.rs`. Blame-checked every reported file:line against `f2bffc989`:
+      - 10 "error message capitalization" findings (lines 117/119/121/123/125/128/387/467/474/699/729/1051) — the real `AcpError` enum with those exact `#[error(...)]` messages lives at the enum definition, blame `ed9629afb3` (2025-12-31), untouched by this commit. The engine's cited line numbers don't even land on the enum (they land on unrelated context/doc-comment lines); the underlying code they describe predates this change either way.
+      - 2 "hardcoded MCP server name" findings (lines 282/488) — real occurrences are at the `HttpTransport`/`HttpServerConfig` construction sites, blame `bd1c09b1cb` (2026-01-17) and `ed9629afb3` (2025-12-31). Pre-existing.
+      - 1 "dispatch_claude_notification/dispatch_llama_notification duplication" finding (line 925) — real functions are pre-existing, blame `646b63b739`/`71441e9127` (2026-05-27/05-01). Pre-existing.
+      - 13 "hardcoded test constant" findings (broadcast capacity 16, batch size 512, worker threads 2, various test timeouts) — all at line numbers below the first changed hunk (1437) or between changed hunks; none fall inside a diff hunk. Pre-existing.
+      - Net result: zero findings attributable to this commit's diff (the `notification_collector`/`await_collector`/`DrainFailure`/backstop-constant changes, the `Cargo.toml` `test-util` feature, and the `ARCHITECTURE.md` update). The engine found nothing wrong in the actual changed code.
+    - next: none — task moved to done
+  timestamp: 2026-08-01T20:43:39.393671+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8c80
 title: swissarmyhammer_agent::await_collector drains on a fixed 100ms sleep and drops all content on timeout
 ---
 # Symptom

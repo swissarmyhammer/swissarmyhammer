@@ -67,8 +67,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-01T22:05:36.753238+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyznyvd61c999zmp71q37sz4
+  text: |-
+    ### finish iteration 2 — changed
+    - implement: changed — extracted collect_added_lines(patch) from compute_line_marks, no behavior change
+    - test: green — rdeps(swissarmyhammer-validators) 5031 passed, 0 failed, 2 skipped; fmt clean, clippy clean
+    - commit: aa69318dc
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-01T22:08:50.086728+00:00
+- actor: claude-code
+  id: 01kyzpfsm68wg1ha8ceeer7k5m
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (aa69318dc) — engine returned 1 finding at scope.rs:1988; blame shows it belongs to the prior commit (71148449d2, doc-comment line) and the real subject (hardcoded `10`-byte sizes in batch_work_list tests, lines 2447-2536) blames to 6c4bef4046/b4bac5136a — pre-existing and pre-existing test code, dropped. Round-1 finding (compute_line_marks nesting) confirmed fixed and checked off.
+    - next: none — task done
+  timestamp: 2026-08-01T22:18:05.318219+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8d80
 title: 'Review prime: number every line and show its blame commit'
 ---
 # Problem 1: the model guesses the line number
@@ -189,3 +205,11 @@ Scope reviewed: `review sha HEAD~1..HEAD` (commit 71148449d2f443b10762841efab5c1
 - `crates/swissarmyhammer-git/src/operations.rs:612` — blames to `63ec3f4bd9` (2026-04-05).
 
 Note per task instructions: the new numbered/blame-annotated line decoration itself is the feature under review, not a finding.
+
+## Review Findings (2026-08-01 17:09)
+
+Scope reviewed: `review sha HEAD~1..HEAD` (commit aa69318dc, "refactor(validators): extract collect_added_lines to cut nesting in compute_line_marks"). Round-1 finding above is confirmed fixed and checked off. Engine returned 1 new finding; blame-checked and dropped as pre-existing.
+
+- Engine cited `crates/swissarmyhammer-validators/src/review/scope.rs:1988` — hardcoded byte size 10, use a named constant `TEST_FILE_SIZE`. `git blame` on line 1988 at `aa69318dc` shows it blames to `71148449d2` (the prior commit, not this one) and is a doc-comment line, not code containing the literal 10. The actual subject — hardcoded `10`-byte test fixture sizes in `batch_work_list_*` tests — lives at lines 2447-2536, which blame to `6c4bef4046` and `b4bac5136a`, both well before this commit. Dropped for two independent reasons: pre-existing outside this commit's diff hunks, and the subject is existing test code, which the review skill's blanket exception excludes from findings regardless of blame.
+
+**Result: clean.** Zero new in-scope findings; round-1 finding remains checked off. Task moved to `done`.

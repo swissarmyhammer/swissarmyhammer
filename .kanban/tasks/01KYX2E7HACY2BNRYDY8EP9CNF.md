@@ -478,8 +478,24 @@ comments:
     - files touched: crates/claude-agent/src/agent_trait_impl.rs (1-line restore only).
     - next: /review
   timestamp: 2026-08-01T19:09:26.640212+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kyzbrysszexb4x0w20c5zta6
+  text: |-
+    ### finish iteration 5 — changed
+    - implement: changed — restored 1-line RED-check regression in agent_trait_impl.rs (already matched HEAD after restore); round-4 doc/test fixes in turn_complete_marker.rs were already present in the dirty tree from an interrupted prior session and were verified correct
+    - test: green — rdeps(claude-agent) 6096/6096, rdeps(agent-client-protocol-extras) 6398/6398, fmt clean, clippy clean
+    - commit: 84d5521ca
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-01T19:10:51.193682+00:00
+- actor: claude-code
+  id: 01kyzc2g75w86jjz2tkt0fkxg4
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 84d5521ca) — 0 findings, 0 confirmed, 0 refuted, 16 validator tasks attempted, 0 failed. Diff was 3 files: two `.kanban` files for this card and `crates/claude-agent/tests/integration/turn_complete_marker.rs`; `agent_trait_impl.rs` carried no diff in this commit (byte-exact restore). All rounds 1-4 code findings are `[x]`. The one remaining `[ ]` (`crates/llama-agent/src/acp/server.rs` review-coverage gap) is a documented tooling limit tracked on ^3rnvage, not a code finding — rounds 2 and 4 already recorded it does not block `done`.
+    - next: none — moved to `done`.
+  timestamp: 2026-08-01T19:16:03.941677+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8a80
 title: 'Flaky under full-suite load: collect_response_content drains notifications on a fixed 500ms sleep'
 ---
 # Symptom
@@ -526,8 +542,8 @@ Check the blast radius before changing the signature: `collect_response_content`
 - `notification_rx_is_the_pools_single_collected_stream` cannot truncate: with the collector artificially delayed past the old 500ms window, the test still collects the full reply (add that as a regression test — it should FAIL against the current fixed-sleep code).
 - No silent truncation path remains in `collect_response_content`: an incomplete drain must surface as an error or a failed assertion, never as a short string.
 - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` passes.
-- `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings` clean. #review
-#test-failure
+- `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
 
 ## Review Findings (2026-08-01 10:09)
 
@@ -663,3 +679,32 @@ is a tooling limit tracked on ^3rnvage with its own acceptance criterion. This
 commit does not touch the file, which is exactly why `review sha` ran clean through
 the whole range this time. The card stays in `review` for the findings above, not
 for that item.
+
+## Review Findings (2026-08-01 14:11)
+
+Scope: commit `84d5521ca` (`test(claude-agent): address round-4 findings on ^8ep9cnf`,
+`HEAD~1..HEAD`). `git diff --stat HEAD~1..HEAD` shows 3 files changed: the two
+`.kanban` task files for this card, and
+`crates/claude-agent/tests/integration/turn_complete_marker.rs` (143 lines
+changed). `crates/claude-agent/src/agent_trait_impl.rs` carries NO diff in this
+commit — the round-4 restore described in the prior comment made it byte-identical
+to the already-committed version, so there was nothing to commit for that file.
+This commit does not touch `crates/llama-agent/src/acp/server.rs`, so the
+262,144-byte batch-budget error did not recur; `review sha` ran the whole range in
+one pass.
+
+`review sha HEAD~1..HEAD` returned **zero findings** (0 confirmed, 0 refuted, 16
+validator tasks attempted, 0 failed).
+
+No new checklist items — nothing to blame-check.
+
+### Verdict
+
+Every code finding from rounds 1-4 is checked `[x]`. The one item still
+unchecked, `crates/llama-agent/src/acp/server.rs` under "Review coverage gap (not
+a code finding)", is a documented tooling limit, not a code finding — it is
+tracked with its own acceptance criteria on ^3rnvage, this commit does not touch
+that file, and rounds 2 and 4 already recorded that it does not block `done` for
+this card. With a clean engine pass and no other open item, this card moves to
+`done`.
+#review #test-failure
