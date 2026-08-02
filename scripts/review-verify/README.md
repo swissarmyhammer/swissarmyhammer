@@ -24,8 +24,7 @@ works from this repository alone — no ad-hoc external checkouts.
 
 1. Build the CLI: `just sah` (the harness invokes `sah` from `PATH`).
 2. Make sure the qwen model is available. Model selection happens via the
-   `--model qwen` flag drive.py passes to `sah serve`; alternatively run
-   `sah init && sah model use qwen` inside `sample/` to persist it there.
+   `--model qwen` flag drive.py passes to `sah serve`.
 3. From the repository root:
 
    ```sh

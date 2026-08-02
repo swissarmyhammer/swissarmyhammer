@@ -589,7 +589,6 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
-        Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
         Some(("tools", sub_matches)) => handle_tools_command(sub_matches),
@@ -1308,51 +1307,6 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     commands::validate::handle_command(validate_tools, cli_context).await
 }
 
-/// Parse output format from clap matches with fallback
-///
-/// This helper function extracts the output format from clap matches,
-/// providing a consistent fallback to Table format.
-///
-/// # Arguments
-/// * `matches` - The clap ArgMatches to extract from
-///
-/// # Returns
-/// The parsed OutputFormat, defaulting to Table if not found or invalid
-fn parse_output_format(matches: &clap::ArgMatches) -> crate::cli::OutputFormat {
-    use crate::cli::OutputFormat;
-    use std::str::FromStr;
-
-    matches
-        .get_one::<String>("format")
-        .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
-        .unwrap_or(OutputFormat::Table)
-}
-
-async fn handle_model_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::ModelSubcommand;
-
-    let subcommand = match matches.subcommand() {
-        Some(("list", sub_matches)) => {
-            let format = parse_output_format(sub_matches);
-            Some(ModelSubcommand::List { format })
-        }
-        Some(("show", sub_matches)) => {
-            let format = parse_output_format(sub_matches);
-            Some(ModelSubcommand::Show { format })
-        }
-        Some(("use", sub_matches)) => {
-            let name = sub_matches.get_one::<String>("name").cloned().unwrap();
-            let for_purpose = sub_matches.get_one::<String>("for").cloned();
-            Some(ModelSubcommand::Use { name, for_purpose })
-        }
-        // Default to show when no subcommand is provided
-        None => None,
-        _ => return report_error_and_exit("Unknown model subcommand"),
-    };
-
-    commands::model::handle_command(subcommand, context).await
-}
-
 async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::cli::AgentSubcommand;
 
@@ -1496,9 +1450,12 @@ mod tests_relax_required_tool_args {
     use super::relax_required_tool_args;
     use clap::{Arg, Command};
 
-    /// `sah tool ralph ralph check --session_id <required>` beside a static
-    /// `model use --name <required>` command: the required argument sits three
-    /// levels below `tool`, and the static command must keep its own check.
+    /// `sah tool ralph ralph check --session_id <required>` beside a synthetic
+    /// static `static child --name <required>` command: the required argument
+    /// sits three levels below `tool`, and the static command must keep its own
+    /// check. Relaxation keys off `STDIN_ARGS_SUBCOMMAND` alone, so the static
+    /// branch stands for any command outside the `tool` tree; the real command
+    /// tree is covered by `stdin_args_subcommand_names_a_real_command` below.
     fn cli() -> Command {
         Command::new("sah")
             .subcommand(
@@ -1511,11 +1468,9 @@ mod tests_relax_required_tool_args {
                     ),
                 ),
             )
-            .subcommand(
-                Command::new("model").subcommand(
-                    Command::new("use").arg(Arg::new("name").long("name").required(true)),
-                ),
-            )
+            .subcommand(Command::new("static").subcommand(
+                Command::new("child").arg(Arg::new("name").long("name").required(true)),
+            ))
     }
 
     const HOOK_ARGV: [&str; 5] = ["sah", "tool", "ralph", "ralph", "check"];
@@ -1585,8 +1540,8 @@ mod tests_relax_required_tool_args {
     #[test]
     fn relaxing_leaves_static_commands_strict() {
         let err = relax_required_tool_args(cli())
-            .try_get_matches_from(["sah", "model", "use"])
-            .expect_err("model use --name stays required");
+            .try_get_matches_from(["sah", "static", "child"])
+            .expect_err("static child --name stays required");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 }

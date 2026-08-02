@@ -1882,10 +1882,10 @@ impl ModelManager {
     /// 3. The baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`) — the
     ///    review scope's factory default, used only when *nothing* is configured.
     ///
-    /// Kept as a pure function so every resolution path (the `sah model`
-    /// display, the serve-time review factory wiring, and
-    /// [`resolve_review_agent_name`]) shares the exact same rule and cannot
-    /// disagree, regardless of where each reads the raw config from.
+    /// Kept as a pure function so every resolution path (the serve-time review
+    /// factory wiring and [`resolve_review_agent_name`]) shares the exact same
+    /// rule and cannot disagree, regardless of where each reads the raw config
+    /// from.
     pub fn review_agent_name_from(
         review_model: Option<String>,
         default_model: Option<String>,
@@ -1901,9 +1901,9 @@ impl ModelManager {
     /// [`review_agent_name_from`]: explicit `review.model` → explicit overall
     /// `model:` → the baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`).
     ///
-    /// So `sah model set <x>` (an overall default) also drives the review scope,
-    /// while a `review.model` override applies to review alone. Only a fully
-    /// unconfigured project falls through to `claude-code-haiku`.
+    /// So a top-level `model:` (an overall default) also drives the review
+    /// scope, while a `review.model` override applies to review alone. Only a
+    /// fully unconfigured project falls through to `claude-code-haiku`.
     ///
     /// # Returns
     /// * `Result<String, ModelError>` - The effective review model name

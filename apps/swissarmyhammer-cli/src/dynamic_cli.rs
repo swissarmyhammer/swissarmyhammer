@@ -199,7 +199,6 @@ struct ArgSpec {
     default_value: Option<String>,
     value_parser: Option<ArgSpecValueParser>,
     hide: bool,
-    required: bool,
 }
 
 /// Action type for argument specification
@@ -232,7 +231,6 @@ impl ArgSpec {
             default_value: None,
             value_parser: None,
             hide: false,
-            required: false,
         }
     }
 
@@ -269,12 +267,6 @@ impl ArgSpec {
     /// Set the value parser
     fn value_parser(mut self, parser: ArgSpecValueParser) -> Self {
         self.value_parser = Some(parser);
-        self
-    }
-
-    /// Set whether the argument is required
-    fn required(mut self, required: bool) -> Self {
-        self.required = required;
         self
     }
 
@@ -320,10 +312,6 @@ impl ArgSpec {
 
         if self.hide {
             arg = arg.hide(true);
-        }
-
-        if self.required {
-            arg = arg.required(true);
         }
 
         arg
@@ -644,7 +632,7 @@ const BASE_CLI_LONG_ABOUT: &str = "
 SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into two types:
-- Static commands (serve, init, deinit, doctor, validate, model, agent)
+- Static commands (serve, init, deinit, doctor, validate, agent)
 - Tool commands (git, kanban, shell, web, js, questions)
 
 Examples:
@@ -751,39 +739,6 @@ Examples:
   swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
   swissarmyhammer validate --format json   # JSON output for tooling
 ";
-
-const MODEL_COMMAND_LONG_ABOUT: &str = "
-Manage and interact with models in the SwissArmyHammer system.
-Models provide AI model configurations for project workflows.
-
-The model system provides three main commands:
-• show - Display current model configuration (default)
-• list - Display all available models from all sources
-• use - Apply a specific model to the project
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah model                                # Show current model
-  sah model show                           # Same as above
-  sah model list                           # List all models
-  sah --verbose model list                 # Show detailed information
-  sah --format=json model list             # Output as JSON
-  sah model use claude-code                # Apply claude-code model
-  sah --debug model use qwen         # Use model with debug output
-";
-
-/// Long help text for `sah model use`.
-///
-/// Re-exported from `crate::cli` so the static clap derive and this runtime
-/// command tree share a single source of truth. The canonical definition
-/// lives in `cli.rs` because that module is the one `build.rs` compiles
-/// standalone for doc generation.
-use crate::cli::MODEL_USE_LONG_ABOUT;
 
 /// Statistics about CLI tool validation results
 #[derive(Debug, Clone, Default)]
@@ -1583,7 +1538,7 @@ impl CliBuilder {
     ///
     /// Commands are organized into semantic groups for maintainability:
     /// - Server commands: serve, init, deinit, doctor, validate
-    /// - Content commands: model, agent
+    /// - Content commands: agent
     fn add_static_commands(cli: Command) -> Command {
         let cli = Self::add_server_commands(cli);
         Self::add_content_commands(cli)
@@ -1598,61 +1553,14 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (model, agent, statusline, completion).
+    /// Add content management commands (agent, statusline, completion).
     fn add_content_commands(cli: Command) -> Command {
-        cli.subcommand(Self::build_model_command())
-            .subcommand(Self::build_agent_command())
+        cli.subcommand(Self::build_agent_command())
             .subcommand(Self::build_statusline_command())
             // The completion subcommand (builder + script-rendering dispatch) is
             // shared with the other workspace CLIs via the cli-completions crate;
             // the long_about template is parameterised on the binary name.
             .subcommand(swissarmyhammer_cli_completions::lifecycle::completion_subcommand("sah"))
-    }
-
-    /// Build the model command with all its subcommands
-    ///
-    /// Creates the 'model' command with subcommands for showing, listing,
-    /// and using models for different use cases.
-    ///
-    /// # Returns
-    ///
-    /// A configured `Command` for model management
-    pub fn build_model_command() -> Command {
-        let format_arg = ArgSpec::new("format", "Output format")
-            .long("format")
-            .value_parser(ArgSpecValueParser::Strings(vec!["table", "json", "yaml"]))
-            .default_value("table".to_string());
-
-        let subcommand_specs = vec![
-            SubcommandSpec::new("show", "Show current model configuration")
-                .args(vec![format_arg.clone()]),
-            SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
-            SubcommandSpec::new("use", "Use a specific model")
-                .long_about(MODEL_USE_LONG_ABOUT)
-                .args(vec![
-                    ArgSpec::new("name", "Model name to apply to the project")
-                        .value_name("NAME")
-                        .required(true),
-                    ArgSpec::new(
-                        "for",
-                        "Scope the model to a purpose (e.g. review); absent sets the global default",
-                    )
-                    .long("for")
-                    .value_name("PURPOSE")
-                    .value_parser(ArgSpecValueParser::Strings(
-                        crate::commands::model::use_command::supported_purpose_names(),
-                    )),
-                ]),
-        ];
-
-        Self::build_command_with_subcommands(
-            CommandConfig {
-                name: "model",
-                about: "Manage and interact with models",
-                long_about: MODEL_COMMAND_LONG_ABOUT,
-            },
-            Self::build_subcommands_from_specs(&subcommand_specs),
-        )
     }
 
     /// Build the agent command with ACP subcommand

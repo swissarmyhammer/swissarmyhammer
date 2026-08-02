@@ -76,13 +76,7 @@ The review tool reads two optional keys from `.sah/sah.yaml`, both under a `revi
 | `review.model` | The model the review tool runs its validator agents with. | The global default model (top-level `model:`) is used. |
 | `review.concurrency` | The number of validator agents run in parallel. Must be a positive integer. | The platform default concurrency is used. |
 
-Set the review model with the `model use` command rather than editing the file by hand:
-
-```bash
-sah model use qwen --for review
-```
-
-This writes `review.model: qwen` and leaves the global default (`model:`) untouched, so only the review tool switches models. Omit `--for review` to set the global default that every tool — including review — falls back to.
+Set `review.model` in `.sah/sah.yaml` to switch only the review tool; the global default (`model:`) stays untouched. Set the top-level `model:` instead to change the default that every tool — including review — falls back to.
 
 A configured `.sah/sah.yaml` looks like:
 

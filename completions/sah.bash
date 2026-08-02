@@ -34,9 +34,6 @@ _sah() {
             sah,init)
                 cmd="sah__subcmd__init"
                 ;;
-            sah,model)
-                cmd="sah__subcmd__model"
-                ;;
             sah,serve)
                 cmd="sah__subcmd__serve"
                 ;;
@@ -79,9 +76,6 @@ _sah() {
             sah__subcmd__help,init)
                 cmd="sah__subcmd__help__subcmd__init"
                 ;;
-            sah__subcmd__help,model)
-                cmd="sah__subcmd__help__subcmd__model"
-                ;;
             sah__subcmd__help,serve)
                 cmd="sah__subcmd__help__subcmd__serve"
                 ;;
@@ -97,15 +91,6 @@ _sah() {
             sah__subcmd__help__subcmd__agent,acp)
                 cmd="sah__subcmd__help__subcmd__agent__subcmd__acp"
                 ;;
-            sah__subcmd__help__subcmd__model,list)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__list"
-                ;;
-            sah__subcmd__help__subcmd__model,show)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__show"
-                ;;
-            sah__subcmd__help__subcmd__model,use)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__use"
-                ;;
             sah__subcmd__help__subcmd__serve,http)
                 cmd="sah__subcmd__help__subcmd__serve__subcmd__http"
                 ;;
@@ -117,30 +102,6 @@ _sah() {
                 ;;
             sah__subcmd__help__subcmd__tools,enable)
                 cmd="sah__subcmd__help__subcmd__tools__subcmd__enable"
-                ;;
-            sah__subcmd__model,help)
-                cmd="sah__subcmd__model__subcmd__help"
-                ;;
-            sah__subcmd__model,list)
-                cmd="sah__subcmd__model__subcmd__list"
-                ;;
-            sah__subcmd__model,show)
-                cmd="sah__subcmd__model__subcmd__show"
-                ;;
-            sah__subcmd__model,use)
-                cmd="sah__subcmd__model__subcmd__use"
-                ;;
-            sah__subcmd__model__subcmd__help,help)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__help"
-                ;;
-            sah__subcmd__model__subcmd__help,list)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__list"
-                ;;
-            sah__subcmd__model__subcmd__help,show)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__show"
-                ;;
-            sah__subcmd__model__subcmd__help,use)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__use"
                 ;;
             sah__subcmd__serve,help)
                 cmd="sah__subcmd__serve__subcmd__help"
@@ -191,7 +152,7 @@ _sah() {
 
     case "${cmd}" in
         sah)
-            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor completion validate model agent tools statusline help"
+            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor completion validate agent tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -377,7 +338,7 @@ _sah() {
             return 0
             ;;
         sah__subcmd__help)
-            opts="serve init deinit doctor completion validate model agent tools statusline help"
+            opts="serve init deinit doctor completion validate agent tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -477,62 +438,6 @@ _sah() {
         sah__subcmd__help__subcmd__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__model)
-            opts="list show use"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__model__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__model__subcmd__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__model__subcmd__use)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -663,160 +568,6 @@ _sah() {
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model)
-            opts="-h --model --help list show use help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__help)
-            opts="list show use help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__help__subcmd__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__help__subcmd__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__help__subcmd__use)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__list)
-            opts="-h --format --model --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "table json yaml" -- "${cur}"))
-                    return 0
-                    ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__show)
-            opts="-h --format --model --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --format)
-                    COMPREPLY=($(compgen -W "table json yaml" -- "${cur}"))
-                    return 0
-                    ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__model__subcmd__use)
-            opts="-h --for --model --help <name>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --for)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 --model)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

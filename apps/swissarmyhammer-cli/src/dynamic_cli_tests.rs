@@ -574,8 +574,27 @@ fn test_build_cli_basic_structure() {
     // Verify core subcommands exist
     // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
     // This test uses an empty registry, so rule won't appear here
-    let expected_commands = ["serve", "doctor", "validate", "model"];
+    let expected_commands = ["serve", "doctor", "validate", "agent"];
     assert_commands_exist(&cli, &expected_commands);
+}
+
+/// The `model` command was removed when Claude became the only chat executor.
+///
+/// This guards the tree the real binary actually parses. `main.rs` builds its
+/// command tree here, via `CliBuilder`, not from the `cli.rs` clap derive, and
+/// the two are free to disagree. The sibling regression tests in
+/// `tests/integration/model_command_removed.rs` drive the derive tree, so
+/// without this assertion a `model` subcommand could be reintroduced into
+/// `add_content_commands` and every other test would stay green.
+#[test]
+fn test_build_cli_has_no_model_command() {
+    let (_registry, cli) = create_test_cli_with_defaults();
+
+    let names: Vec<&str> = cli.get_subcommands().map(|c| c.get_name()).collect();
+    assert!(
+        !names.contains(&"model"),
+        "the built CLI still offers a `model` subcommand: {names:?}"
+    );
 }
 
 #[test]
@@ -1008,7 +1027,6 @@ fn test_arg_spec_new() {
     assert_eq!(spec.help, "Help text");
     assert!(spec.long.is_none());
     assert!(spec.short.is_none());
-    assert!(!spec.required);
     assert!(!spec.hide);
 }
 
@@ -1017,7 +1035,6 @@ fn test_arg_spec_builder_chain() {
     let spec = ArgSpec::new("port", "Port number")
         .long("port")
         .short('p')
-        .required(true)
         .value_name("PORT")
         .default_value("8080".to_string())
         .value_parser(ArgSpecValueParser::U16)
@@ -1026,7 +1043,6 @@ fn test_arg_spec_builder_chain() {
     assert_eq!(spec.name, "port");
     assert_eq!(spec.long, Some("port"));
     assert_eq!(spec.short, Some('p'));
-    assert!(spec.required);
     assert_eq!(spec.value_name, Some("PORT"));
     assert_eq!(spec.default_value, Some("8080".to_string()));
 }
@@ -1148,16 +1164,6 @@ fn test_build_validate_command() {
     assert_eq!(cmd.get_name(), "validate");
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "quiet"));
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "format"));
-}
-
-#[test]
-fn test_build_model_command() {
-    let cmd = CliBuilder::build_model_command();
-    assert_eq!(cmd.get_name(), "model");
-    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
-    assert!(subcmd_names.contains(&"show"));
-    assert!(subcmd_names.contains(&"list"));
-    assert!(subcmd_names.contains(&"use"));
 }
 
 #[test]

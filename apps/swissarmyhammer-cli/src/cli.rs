@@ -76,7 +76,6 @@ Main commands:
   init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
   agent         Manage and interact with the Agent Client Protocol server
-  model         Manage and interact with models
   validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
@@ -84,7 +83,6 @@ Example usage:
   swissarmyhammer serve                           # Run as MCP server
   swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer model list                      # List available models
   swissarmyhammer agent acp                       # Start the ACP server
 ")]
 pub struct Cli {
@@ -222,13 +220,6 @@ Examples:
         validate_tools: bool,
     },
 
-    /// Manage and interact with models
-    #[command(long_about = include_str!("commands/model/description.md"))]
-    Model {
-        #[command(subcommand)]
-        subcommand: Option<ModelSubcommand>,
-    },
-
     /// Manage and interact with Agent Client Protocol server
     #[command(long_about = include_str!("commands/agent/description.md"))]
     Agent {
@@ -306,99 +297,6 @@ Example:
         /// Host to bind to
         #[arg(long, short = 'H', default_value = "127.0.0.1")]
         host: String,
-    },
-}
-
-/// Long help text for `sah model use`.
-///
-/// Single source of truth: the static clap derive
-/// (`ModelSubcommand::Use`) and the runtime command tree
-/// (`crate::dynamic_cli`) both reference this constant so the two cannot
-/// drift apart. It lives in `cli.rs` because this module is the one
-/// `build.rs` compiles standalone (via `#[path = "src/cli.rs"]`), so the
-/// constant must be reachable without pulling in `dynamic_cli`.
-pub const MODEL_USE_LONG_ABOUT: &str = "
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-By default the model is applied as the global default (top-level `model:`).
-Use `--for <purpose>` to scope the model to a specific tool instead; the value
-is written under that purpose's mapping (e.g. `--for review` writes
-`review.model:`) and leaves the global default untouched.
-
-`--for review` sets the model the review tool runs its validator agents with.
-When `review.model` is unset, the review tool uses the global default model.
-
-Examples:
-  sah model use claude-code                # Apply Claude Code as the default model
-  sah model use qwen                       # Apply the Qwen model as the default
-  sah model use qwen --for review          # Set the review-tool model only
-";
-
-#[derive(Subcommand, Debug)]
-pub enum ModelSubcommand {
-    /// List available models
-    #[command(long_about = "
-List all available models from built-in, project, and user sources.
-
-Models are discovered with hierarchical precedence where user models override
-project models, which override built-in models. This command shows all available
-models with their sources and descriptions.
-
-Built-in models are embedded in the binary and provide default configurations
-for common workflows. Project models (./models/*.yaml) allow customization for
-specific projects. User models (~/.models/*.yaml) provide
-personal configurations that apply across all projects.
-
-Output includes:
-• Model name and source (built-in, project, or user)
-• Description when available
-• Current model status (if one is applied to the project)
-
-Examples:
-  sah model list                           # List all models in table format
-  sah model list --format json            # Output as JSON for processing
-  sah --verbose model list                 # Include detailed descriptions
-  sah --quiet model list                   # Only show model names
-")]
-    List {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-    },
-    /// Show current model configuration
-    #[command(long_about = "
-Display the current model configured for this project.
-
-Shows the model name, source, and description. If no model is explicitly
-configured, the default (claude-code) is used.
-
-Examples:
-  sah model show                           # Show current model
-  sah model                               # Same as 'show' (default)
-")]
-    Show {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-    },
-    /// Use a specific model
-    #[command(long_about = MODEL_USE_LONG_ABOUT)]
-    Use {
-        /// Model name to apply to the project
-        #[arg(id = "name")]
-        name: String,
-        /// Purpose to scope the model to (e.g. `review`). Absent sets the
-        /// global default model.
-        #[arg(long = "for", id = "for", value_name = "PURPOSE")]
-        for_purpose: Option<String>,
     },
 }
 

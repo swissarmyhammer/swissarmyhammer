@@ -70,8 +70,20 @@ comments:
     - evidence: 88 files, +78 / -26256. Verification: `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings; `cargo nextest run --workspace` → `15120 tests run: 15120 passed (4 slow, 1 leaky), 0 skipped`, exit 0; `npx tsc --noEmit` exit 0, empty output; `npm test` → `Test Files 242 passed (242)` / `Tests 2251 passed (2251)`, exit 0. All four acceptance criteria met — the sole `grep -rin "ai_start_agent\|ai-panel\|aiPanel" apps/kanban-app/` hit is `apps/kanban-app/binaries/kanban-aarch64-apple-darwin`, an untracked gitignored Mach-O build artifact, not source.
     - next: ready for `/review`. Task stays in `doing`.
   timestamp: 2026-08-02T22:44:15.343683+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz2b6w5y49fvg2dgm8vzjj42
+  text: |-
+    ### finish iteration 1 — done
+    - implement: changed — 88 files, +78/-26256. Agent was interrupted mid-run by a session exit and resumed from its transcript; no work was lost.
+    - test: green — cargo fmt --all --check clean; cargo clippy --workspace --all-targets -D warnings 0 warnings (verified cached AND via forced rebuild of the kanban-app chain); cargo nextest run --workspace 15120 passed / 0 failed / 0 skipped; npx tsc --noEmit clean; npm test 242 files / 2251 tests passed; npm ci --dry-run exit 0.
+    - commit: 91a93e1fd feat(kanban-app): remove the AI panel and llama-agent integration
+    - review: SKIPPED by user instruction for every card in the drop-llama-agent project this session.
+    - Two risks investigated and cleared: (1) the eight deleted `components/ui/` primitives each had exactly one importer, all inside the deleted AI surface, confirmed by tsc; (2) a reported 26 failures in the standalone browser vitest project did not reproduce in three runs, and `npm test` was proven to execute both projects in full — file counts 233+9=242 and test counts 2157+94=2251 match exactly.
+    - Four edits beyond the card's list: removed the `View` menu submenu (`ai.toggle` was its only entry, so it would have shipped empty), updated the builtin-YAML assertion in swissarmyhammer-kanban/src/lib.rs, fixed eleven clippy::needless_update errors in scope_commands.rs exposed by dropping DynamicSources::ai_models, and corrected the composed command count to 72.
+    - next: card 2 of the project, ^yze6rv3 — remove the `sah model` CLI command.
+  timestamp: 2026-08-02T22:58:41.982257+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9080
 project: drop-llama-agent
 title: Remove the kanban AI panel
 ---

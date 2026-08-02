@@ -325,7 +325,7 @@ mod tests {
     /// `std::env::current_dir()` and roots an `McpServer` at whatever it
     /// observes. `#[serial_test::serial(cwd)]` joins the crate-wide `cwd`
     /// group so this CWD-reading test cannot run while another test
-    /// (`skill.rs`, `registry.rs`, `doctor/checks.rs`, `model/use_command.rs`)
+    /// (`skill.rs`, `registry.rs`, `doctor/checks.rs`)
     /// is mid-`set_current_dir`/`CurrentDirGuard` and the observed CWD would
     /// be a tempdir about to be dropped.
     #[tokio::test]
