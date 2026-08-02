@@ -970,40 +970,62 @@ impl Default for HookOutput {
 ///
 /// Tagged by `hookEventName` to enforce per-event field sets, matching
 /// AVP's `#[serde(tag = "hookEventName")]` convention.
+///
+/// A hook sets only the field(s) it cares about; every other field is
+/// absent, not `null`. Every field on every variant is therefore
+/// `#[serde(default)]` so a partial `hookSpecificOutput` — one field
+/// present, the rest missing — deserializes with the missing fields as
+/// `None` and its one present field still drives the decision, instead of
+/// the whole `HookOutput` document failing to parse. serde's derive already
+/// treats a missing `Option<T>` field as `None` without this attribute, but
+/// it is written explicitly here so the contract does not depend on that
+/// implicit behavior surviving a future edit (e.g. a field type that stops
+/// being spelled literally as `Option<...>`).
+///
+/// A `hookSpecificOutput` that is genuinely unparseable — an unrecognized
+/// `hookEventName`, or a value of the wrong shape — is a deliberate error,
+/// not a silently permissive default: `serde_json::from_str::<HookOutput>`
+/// (via [`parse_hook_stdout`]) fails, and the caller
+/// (`interpret_exit_0_stdout`) logs that failure at `tracing::warn!` —
+/// command, error, and raw stdout — before falling back to
+/// `HookDecision::Allow`. `Allow` is the permissive direction, so the log is
+/// the only signal that a malformed deny became a permit; it is deliberately
+/// visible rather than silent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "hookEventName")]
 pub enum HookSpecificOutput {
     PreToolUse {
-        #[serde(rename = "permissionDecision")]
+        #[serde(rename = "permissionDecision", default)]
         permission_decision: Option<String>,
-        #[serde(rename = "permissionDecisionReason")]
+        #[serde(rename = "permissionDecisionReason", default)]
         permission_decision_reason: Option<String>,
-        #[serde(rename = "updatedInput")]
+        #[serde(rename = "updatedInput", default)]
         updated_input: Option<serde_json::Value>,
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
     PostToolUse {
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
     PostToolUseFailure {
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
     UserPromptSubmit {
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
     Stop {
+        #[serde(default)]
         reason: Option<String>,
     },
     SessionStart {
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
     Notification {
-        #[serde(rename = "additionalContext")]
+        #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
 }
@@ -2500,6 +2522,160 @@ hooks:
             }
             other => panic!("Expected PreToolUse, got {:?}", other),
         }
+    }
+
+    /// A hook only ever sets one field of `hookSpecificOutput` — the rest are
+    /// absent, not `null`. Before `#[serde(default)]` was added to the sibling
+    /// `Option` fields, `PreToolUse` required every key to be present, so a
+    /// hook that emitted only `permissionDecision` failed the whole
+    /// `HookOutput` parse and the caller fell back to `HookDecision::Allow`.
+    /// A hook that meant to block ran, reported success, and did nothing.
+    #[test]
+    fn partial_pre_tool_use_hook_specific_output_deserializes() {
+        let json = r#"{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny"
+        }"#;
+        let output: HookSpecificOutput = serde_json::from_str(json)
+            .expect("a hookSpecificOutput with only permissionDecision set must deserialize");
+        match output {
+            HookSpecificOutput::PreToolUse {
+                permission_decision,
+                permission_decision_reason,
+                updated_input,
+                additional_context,
+            } => {
+                assert_eq!(permission_decision, Some("deny".to_string()));
+                assert_eq!(permission_decision_reason, None);
+                assert_eq!(updated_input, None);
+                assert_eq!(additional_context, None);
+            }
+            other => panic!("Expected PreToolUse, got {:?}", other),
+        }
+    }
+
+    /// The partial `hookSpecificOutput` must also be honored end to end: its
+    /// one present field decides the outcome, not `Allow`.
+    #[test]
+    fn partial_pre_tool_use_hook_specific_output_decision_is_honored() {
+        let json = r#"{
+            "continue": true,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny"
+            }
+        }"#;
+        let hook_output: HookOutput =
+            serde_json::from_str(json).expect("partial hookSpecificOutput must deserialize");
+        let decision = interpret_output(&hook_output, HookEventKind::PreToolUse);
+        assert!(
+            matches!(decision, HookDecision::Block { .. }),
+            "expected Block, got {:?}",
+            decision
+        );
+    }
+
+    /// Every non-PreToolUse variant carries a single optional field. A hook
+    /// that emits the bare tag with none of that field set must still
+    /// deserialize as that variant with the field `None`, not fail the parse.
+    #[test]
+    fn sibling_variants_with_no_fields_set_deserialize() {
+        let cases = [
+            "PostToolUse",
+            "PostToolUseFailure",
+            "UserPromptSubmit",
+            "SessionStart",
+            "Notification",
+            "Stop",
+        ];
+        for name in cases {
+            let json = format!(r#"{{"hookEventName": "{name}"}}"#);
+            let output: HookSpecificOutput = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("bare {name} must deserialize: {e}"));
+            assert!(
+                extract_specific_context(&Some(output)).is_none(),
+                "bare {name} must carry no context"
+            );
+        }
+    }
+
+    /// A `hookSpecificOutput` that is genuinely unparseable — an unknown
+    /// `hookEventName` tag — must not be silently swallowed into a permissive
+    /// decision without a visible trace. The whole `HookOutput` parse fails
+    /// (checked here), and the caller (`interpret_exit_0_stdout`) logs that
+    /// failure at `warn` before falling back to `Allow`, which is the
+    /// documented, deliberate behavior for a genuinely malformed payload.
+    #[test]
+    fn malformed_hook_specific_output_tag_is_a_parse_error_not_a_silent_allow() {
+        let json = r#"{
+            "continue": true,
+            "hookSpecificOutput": { "hookEventName": "NotARealEvent" }
+        }"#;
+        let result: Result<HookOutput, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "an unknown hookEventName tag must be a deserialize error, not a silent Allow"
+        );
+    }
+
+    /// End to end: a hook command that exits 0 with a genuinely malformed
+    /// `hookSpecificOutput` falls back to `Allow`, but only after an
+    /// explicit, visible `warn`-level log — never a silent permit.
+    #[test]
+    #[tracing_test::traced_test]
+    fn malformed_hook_specific_output_allows_with_an_explicit_asserted_log() {
+        let stdout = r#"{"hookSpecificOutput": {"hookEventName": "NotARealEvent"}}"#;
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo '{stdout}'"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+
+        let decision = interpret_exit_0_stdout(&output, "test-cmd", HookEventKind::PreToolUse);
+
+        assert!(
+            matches!(decision, HookDecision::Allow),
+            "expected Allow, got {:?}",
+            decision
+        );
+        assert!(
+            logs_contain("Failed to parse hook command output"),
+            "a malformed hookSpecificOutput must log a visible warning before falling back to Allow"
+        );
+    }
+
+    #[test]
+    fn yaml_partial_pre_tool_use_hook_specific_output_deserializes() {
+        let yaml = "hookEventName: PreToolUse\npermissionDecision: deny\n";
+        let output: HookSpecificOutput = serde_yaml_ng::from_str(yaml)
+            .expect("a hookSpecificOutput with only permissionDecision set must deserialize");
+        match output {
+            HookSpecificOutput::PreToolUse {
+                permission_decision,
+                ..
+            } => {
+                assert_eq!(permission_decision, Some("deny".to_string()));
+            }
+            other => panic!("Expected PreToolUse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bare_pre_tool_use_tag_with_no_other_fields_deserializes() {
+        let json = r#"{"hookEventName": "PreToolUse"}"#;
+        let output: HookSpecificOutput = serde_json::from_str(json)
+            .expect("a bare PreToolUse tag with no other fields must deserialize");
+        assert!(matches!(
+            output,
+            HookSpecificOutput::PreToolUse {
+                permission_decision: None,
+                permission_decision_reason: None,
+                updated_input: None,
+                additional_context: None,
+            }
+        ));
     }
 
     #[test]
