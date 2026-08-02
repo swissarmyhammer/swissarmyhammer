@@ -190,20 +190,30 @@ pub enum HookEvent {
 /// Which category of event a hook registration matches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HookEventKind {
+    /// Session started event kind.
     SessionStart,
     UserPromptSubmit,
+    /// Pre-tool use event kind.
     PreToolUse,
+    /// Post-tool use event kind.
     PostToolUse,
     PostToolUseFailure,
+    /// Stop event kind.
     Stop,
+    /// Notification event kind.
     Notification,
+    /// Post-compaction event kind.
     PostCompact,
+    /// Teammate idle event kind.
     TeammateIdle,
+    /// Task completed event kind.
     TaskCompleted,
     Elicitation,
     ElicitationResult,
+    /// Instructions loaded event kind.
     InstructionsLoaded,
     ConfigChange,
+    /// Worktree creation event kind.
     WorktreeCreate,
     WorktreeRemove,
 }
@@ -684,8 +694,11 @@ fn is_identifier_matcher(raw: &str) -> bool {
 
 /// A registered hook: event filter + matcher + handler.
 pub struct HookRegistration {
+    /// Which event kinds this hook fires on.
     pub events: Vec<HookEventKind>,
+    /// Matcher to filter events by value (tool name, event source, etc.).
     pub matcher: Matcher,
+    /// The handler to invoke when this hook matches an event.
     pub handler: Arc<dyn HookHandler>,
 }
 
@@ -778,21 +791,32 @@ pub struct MatcherGroup {
 /// allowing the same config file to work with both Claude Code and ACP.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookEventKindConfig {
+    /// Matches HookEventKind::SessionStart events.
     SessionStart,
     UserPromptSubmit,
+    /// Matches HookEventKind::PreToolUse events.
     PreToolUse,
+    /// Matches HookEventKind::PostToolUse events.
     PostToolUse,
     PostToolUseFailure,
+    /// Matches HookEventKind::Stop events.
     Stop,
+    /// Matches HookEventKind::Notification events.
     Notification,
     // Forward-compatible: not fired by ACP, silently skipped
+    /// Forward-compatible: permission request event.
     PermissionRequest,
     SubagentStart,
+    /// Forward-compatible: subagent stop event.
     SubagentStop,
+    /// Forward-compatible: pre-compaction event.
     PreCompact,
     Setup,
+    /// Forward-compatible: session end event.
     SessionEnd,
+    /// Forward-compatible: teammate idle event.
     TeammateIdle,
+    /// Forward-compatible: task completion event.
     TaskCompleted,
     /// Forward-compatible: MCP elicitation request.
     Elicitation,
@@ -893,8 +917,14 @@ pub enum HookHandlerConfig {
     },
 }
 
+/// Default timeout, in seconds, for `command` hook handlers.
+const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 600;
+
+/// Default timeout, in seconds, for `agent` hook handlers.
+const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 60;
+
 fn default_command_timeout() -> u64 {
-    600
+    DEFAULT_COMMAND_TIMEOUT_SECS
 }
 
 fn default_prompt_timeout() -> u64 {
@@ -902,7 +932,7 @@ fn default_prompt_timeout() -> u64 {
 }
 
 fn default_agent_timeout() -> u64 {
-    60
+    DEFAULT_AGENT_TIMEOUT_SECS
 }
 
 // ---------------------------------------------------------------------------

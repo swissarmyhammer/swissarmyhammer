@@ -231,6 +231,25 @@ fn extract_decision(candidate: &str) -> Option<String> {
     serde_json::to_string(&parsed).ok()
 }
 
+/// Advance the in-string/escaped state machine by one byte.
+///
+/// Only meaningful while `in_string` is `true`; returns the updated
+/// `(in_string, escaped)` pair after consuming `byte`.
+fn is_string_escape(in_string: bool, escaped: bool, byte: u8) -> (bool, bool) {
+    if !in_string {
+        return (in_string, escaped);
+    }
+    if escaped {
+        (true, false)
+    } else if byte == b'\\' {
+        (true, true)
+    } else if byte == b'"' {
+        (false, false)
+    } else {
+        (true, false)
+    }
+}
+
 /// Extract the first balanced `{ ... }` object from `text`, if any.
 ///
 /// Walks the text tracking brace depth so a complete top-level object is
@@ -247,25 +266,17 @@ fn first_json_object(text: &str) -> Option<String> {
 
     for (offset, &b) in bytes[start..].iter().enumerate() {
         if in_string {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
+            (in_string, escaped) = is_string_escape(in_string, escaped, b);
             continue;
         }
         match b {
             b'"' => in_string = true,
             b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(text[start..=start + offset].to_string());
-                }
-            }
+            b'}' => depth -= 1,
             _ => {}
+        }
+        if depth == 0 {
+            return Some(text[start..=start + offset].to_string());
         }
     }
     None

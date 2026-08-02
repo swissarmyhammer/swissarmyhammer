@@ -42,6 +42,38 @@ comments:
     - evidence: crates/agent-client-protocol-extras/src/hook_config.rs — added `EXIT_CODE_SUCCESS`/`EXIT_CODE_BLOCK` named constants replacing the hardcoded 0/2 in `interpret_exit_code` (findings 1, 2); merged `PromptHandler` and `AgentHandler` into one `EvaluatorHandler` struct (`is_agent: bool` + `label()` helper) with a single `HookHandler::handle` impl, removing the duplicated nested-match logic (findings 3, 4); replaced the duplicated `Prompt`/`Agent` match arms in `build_handler` with a shared `build_evaluator_handler` factory function (finding 5). Also updated crates/llama-agent/src/acp/llama_hook_evaluator.rs doc comment referencing the old `PromptHandler`/`AgentHandler` names to say `EvaluatorHandler`. `cargo nextest run -p agent-client-protocol-extras`: 309/309 passed. `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean, 0 warnings/errors. All 5 review findings checked off on the task description.
     - next: ready for review
   timestamp: 2026-08-02T14:34:49.848005+00:00
+- actor: claude-code
+  id: 01kz1f65szb7mtcbwtck4skgkq
+  text: |-
+    ### review — findings
+    - evidence: 27 findings — crates/agent-client-protocol-extras/src/hook_config.rs:194, :196, :197, :199, :200, :201, :202, :203, :206, :208, :687, :688, :689, :781, :783, :784, :786, :787, :789, :791, :792, :794, :795, :796, :897, :905, crates/llama-agent/src/acp/llama_hook_evaluator.rs:240. Scope: `review sha 7f5971787~1..7f5971787` (HEAD had moved past this checkpoint via housekeeping commit ff6ee4c3f; scoped explicitly to the commit, not HEAD~1..HEAD). All 5 prior findings confirmed checked and fixed by this commit. All 27 new findings fall outside this commit's diff hunks (hook_config.rs changes at lines ~1160-1610, llama_hook_evaluator.rs change at line ~11) — pre-existing code surfaced by the engine's whole-file scan, relayed per the review skill's documented behavior rather than dropped.
+    - next: implementer addresses the 27 findings (missing doc comments on HookEventKind/Matcher enum variants and HookConfig struct fields, magic-number timeout constants, 4-level nesting in first_json_object) or files a follow-up if out of scope; task stays in `review` until a clean re-review.
+  timestamp: 2026-08-02T14:48:58.943062+00:00
+- actor: claude-code
+  id: 01kz1man7w508b728d682vhdxp
+  text: |-
+    Fixed all 27 findings from the 2026-08-02 09:36 review round.
+
+    hook_config.rs (26 findings):
+    - Added missing doc comments to 10 `HookEventKind` variants (SessionStart, PreToolUse, PostToolUse, Stop, Notification, PostCompact, TeammateIdle, TaskCompleted, InstructionsLoaded, WorktreeCreate) using the exact suggested text from the review.
+    - Added missing doc comments to the `HookRegistration` struct's `events`, `matcher`, `handler` fields.
+    - Added missing doc comments to 11 `HookEventKindConfig` variants (the review mislabeled this enum "Matcher" in its finding text, but the cited line numbers and variant names unambiguously identify `HookEventKindConfig` — there is a separate `Matcher` enum earlier in the file with unrelated All/Exact/Regex variants that was not the review's actual target).
+    - Extracted `DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 600` and `DEFAULT_AGENT_TIMEOUT_SECS: u64 = 60` constants, used by `default_command_timeout()`/`default_agent_timeout()` in place of the bare literals.
+
+    llama_hook_evaluator.rs (1 finding):
+    - `first_json_object` had 4-level nesting (for → match → b'}' arm → if depth == 0). Extracted the string-escape-state handling into `is_string_escape(in_string, escaped, byte) -> (bool, bool)` and moved the `depth == 0` closing check out of the match arm to a sibling `if` after the match, reducing max nesting to 2 levels. Preserved the original doc comment on `first_json_object` (had to fix an ordering bug where my first attempt orphaned it above the new helper).
+
+    All 27 checkboxes in the "## Review Findings (2026-08-02 09:36)" section are now checked via the official `update task` API (not by hand-editing the .kanban jsonl/md files directly).
+
+    Verification:
+    - `cargo nextest run -p agent-client-protocol-extras -p llama-agent`: 1793/1793 relevant tests pass. Two unrelated tests (`agent_tools_mount_lists_intrinsic_tools_with_no_external_servers`, `llama_dual_source_aggregation_has_shell_exactly_once`) time out after 300s — confirmed via `git stash` that these time out identically against unmodified HEAD, so they are pre-existing GPU/model-loading flakiness unrelated to this change, not a regression.
+    - `cargo fmt --all -- --check`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+
+    ### implement — changed
+    - evidence: 2 files — crates/agent-client-protocol-extras/src/hook_config.rs (+34/-4: 21 doc comments added, 2 named timeout constants extracted), crates/llama-agent/src/acp/llama_hook_evaluator.rs (+37/-15: is_string_escape helper extracted, nesting reduced). cargo nextest run -p agent-client-protocol-extras -p llama-agent: 1793 passed (2 pre-existing unrelated timeouts confirmed present on unmodified HEAD via git stash). cargo fmt --all -- --check: clean. cargo clippy --workspace --all-targets -- -D warnings: clean.
+    - next: ready for /review
+  timestamp: 2026-08-02T16:18:48.700173+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Partial hookSpecificOutput silently becomes Allow — Option fields lack serde(default)
@@ -95,3 +127,37 @@ Findings 3, 4, and 5: these are one root cause (`PromptHandler` and `AgentHandle
 Also updated a doc comment in `crates/llama-agent/src/acp/llama_hook_evaluator.rs` that named the old `PromptHandler`/`AgentHandler` types, to reference `EvaluatorHandler` instead.
 
 Verified: `cargo nextest run -p agent-client-protocol-extras` — 309 passed, 0 failed. `cargo fmt --all -- --check` — clean. `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+
+## Review Findings (2026-08-02 09:36)
+
+Scope: `7f5971787~1..7f5971787` — "fix(agent-client-protocol-extras): merge PromptHandler/AgentHandler into EvaluatorHandler". HEAD had moved past this checkpoint (housekeeping commit `ff6ee4c3f` landed on top); scoped explicitly to `7f5971787~1..7f5971787`, not `HEAD~1..HEAD`. All 5 prior findings above confirmed checked and fixed in this commit.
+
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:194` — Public enum variant `SessionStart` lacks documentation; other similar enums in this file document their variants (SessionSource, HookEvent, HookDecision, Matcher, HookEventKindConfig), and this enum is used as a return type in public methods (e.g., line 213). Add documentation comment: `/// Session started event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:196` — Public enum variant `PreToolUse` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Pre-tool use event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:197` — Public enum variant `PostToolUse` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Post-tool use event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:199` — Public enum variant `Stop` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Stop event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:200` — Public enum variant `Notification` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Notification event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:201` — Public enum variant `PostCompact` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Post-compaction event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:202` — Public enum variant `TeammateIdle` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Teammate idle event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:203` — Public enum variant `TaskCompleted` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Task completed event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:206` — Public enum variant `InstructionsLoaded` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Instructions loaded event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:208` — Public enum variant `WorktreeCreate` lacks documentation; other similar enums in this file document their variants. Add documentation comment: `/// Worktree creation event kind.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:687` — Public struct field `events` lacks documentation; all other public structs in this file document their public fields (e.g., HookCommandContext, HookOutput, HookConfig, MatcherGroup, PromptHookResponse). Add a documentation comment above line 687: `/// Which event kinds this hook fires on.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:688` — Public struct field `matcher` lacks documentation; all other public structs in this file document their public fields. Add a documentation comment above line 688: `/// Matcher to filter events by value (tool name, event source, etc.).`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:689` — Public struct field `handler` lacks documentation; all other public structs in this file document their public fields. Add a documentation comment above line 689: `/// The handler to invoke when this hook matches an event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:781` — Public enum variant `SessionStart` lacks documentation; other similar enums in this file document their variants (e.g., SessionSource at line 66-69, HookEvent at line 86-188), and later variants in the same enum ARE documented (e.g., line 797-810). Add documentation comment: `/// Matches HookEventKind::SessionStart events.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:783` — Public enum variant `PreToolUse` lacks documentation; inconsistent with later variants in same enum that are documented. Add documentation comment: `/// Matches HookEventKind::PreToolUse events.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:784` — Public enum variant `PostToolUse` lacks documentation; inconsistent with later variants in same enum that are documented. Add documentation comment: `/// Matches HookEventKind::PostToolUse events.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:786` — Public enum variant `Stop` lacks documentation; inconsistent with later variants in same enum that are documented. Add documentation comment: `/// Matches HookEventKind::Stop events.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:787` — Public enum variant `Notification` lacks documentation; inconsistent with later variants in same enum that are documented. Add documentation comment: `/// Matches HookEventKind::Notification events.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:789` — Public enum variant `PermissionRequest` lacks documentation; inconsistent with later variants in same enum (lines 797-810) that are individually documented despite also being forward-compatible. Add documentation comment: `/// Forward-compatible: permission request event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:791` — Public enum variant `SubagentStop` lacks documentation; inconsistent with documented forward-compatible variants at lines 797-810. Add documentation comment: `/// Forward-compatible: subagent stop event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:792` — Public enum variant `PreCompact` lacks documentation; inconsistent with documented forward-compatible variants at lines 797-810. Add documentation comment: `/// Forward-compatible: pre-compaction event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:794` — Public enum variant `SessionEnd` lacks documentation; inconsistent with documented forward-compatible variants at lines 797-810. Add documentation comment: `/// Forward-compatible: session end event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:795` — Public enum variant `TeammateIdle` lacks documentation; inconsistent with documented forward-compatible variants at lines 797-810. Add documentation comment: `/// Forward-compatible: teammate idle event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:796` — Public enum variant `TaskCompleted` lacks documentation; inconsistent with documented forward-compatible variants at lines 797-810. Add documentation comment: `/// Forward-compatible: task completion event.`.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:897` — Hardcoded timeout value 600 (seconds) for command hooks should be a named constant, not a magic number in a function body. Extract `const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 600;` and use it in `default_command_timeout()` instead of the literal.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:905` — Hardcoded timeout value 60 (seconds) for agent hooks should be a named constant, not a magic number in a function body. Extract `const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 60;` and use it in `default_agent_timeout()` instead of the literal.
+- [x] `crates/llama-agent/src/acp/llama_hook_evaluator.rs:240` — Function `first_json_object` has 4-level nesting depth (for → match → b'}' arm → if depth == 0), exceeding the 3-level threshold. The nested logic tracking JSON brace depth while handling string escape sequences is difficult to follow and maintain. Extract the string-state handling into a separate helper function, or refactor the escape sequence tracking logic into a dedicated state machine to reduce nesting. For example, create a helper like `fn is_string_escape(in_string: bool, escaped: bool, byte: u8) -> (bool, bool)` to handle the in_string/escaped state transitions separately.
+
+Note: all 27 findings above fall outside the diff hunks introduced by `7f5971787` (that commit's changes to `hook_config.rs` sit at lines ~1160-1610, and its change to `llama_hook_evaluator.rs` sits at line ~11; every flagged line here — 194-905 in `hook_config.rs`, 240 in `llama_hook_evaluator.rs` — is pre-existing code untouched by this commit). Relayed per the review skill's documented behavior for whole-file scans: real findings on pre-existing code are requirements, not bugs in the engine, and are not dropped.
