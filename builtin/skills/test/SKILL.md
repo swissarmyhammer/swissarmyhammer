@@ -21,6 +21,8 @@ metadata:
 - Never silence: no `#[allow(...)]`, `@suppress`, `// eslint-disable`.
 - Never skip: no `#[ignore]` or `skip` to make a test stop failing.
 
+{% include "_partials/findings-are-requirements" %}
+
 ## Process
 
 1. **Run the full test suite** using project detection to pick the right command.

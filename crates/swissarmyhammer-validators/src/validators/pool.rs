@@ -805,8 +805,7 @@ async fn run_prompt(
 
     // 3. spawn notification collector before prompt() so streaming content is
     //    captured as it arrives.
-    let (collector, collected_text, notification_count, _matched_count) =
-        claude_agent::spawn_notification_collector(notifications, session_id.clone());
+    let collector = claude_agent::spawn_notification_collector(notifications, session_id.clone());
 
     // 4. prompt, with the per-call token cap attached via `meta`. A prime turn
     //    also carries the born-pinned save intent so the prefix it leaves
@@ -833,14 +832,10 @@ async fn run_prompt(
             claude_agent::AgentError::Internal(format!("failed to execute prompt: {}", e))
         })?;
 
-    // 5. drain trailing notifications and assemble the collected response.
-    let content = claude_agent::collect_response_content(
-        collector,
-        collected_text,
-        notification_count,
-        &prompt_response,
-    )
-    .await;
+    // 5. drain the turn's notifications to their end — the agent's end-of-turn
+    //    marker — and assemble the collected response. An incomplete drain is
+    //    an error, never a silently truncated reply.
+    let content = claude_agent::collect_response_content(collector, &prompt_response).await?;
 
     // Audit log: record this reply's full text so a `review … backend=local` run
     // is auditable end-to-end. The review driver drains notifications through its
@@ -1923,8 +1918,9 @@ mod tests {
             // Two workers so both turns are simultaneously inside
             // `run_turn_with_liveness` (post-new_session, awaiting the gated
             // prompt) — the second turn is queued for the GPU, not queued in
-            // the pool's mpsc channel. The idle window sits above claude_agent's
-            // fixed 500ms trailing notification drain, below the 1.5s queue wait.
+            // the pool's mpsc channel. The idle window sits below the 1.5s
+            // queue wait, and well above the post-response drain, which now
+            // ends on the agent's end-of-turn marker rather than a sleep.
             let config = PoolConfig::remote(2)
                 .with_idle_timeout(std::time::Duration::from_millis(700))
                 .with_turn_ceiling(std::time::Duration::from_secs(30));
@@ -1971,7 +1967,8 @@ mod tests {
             // Enough workers that every turn sits in `run_turn_with_liveness`
             // at once, all serialized behind the single GPU permit (300ms decode
             // each). The later turns wait > 1s in the queue — well past the idle
-            // window (set above the 500ms trailing drain) yet under the ceiling.
+            // window (well clear of the marker-driven drain) yet under the
+            // ceiling.
             let config = PoolConfig::remote(8)
                 .with_idle_timeout(std::time::Duration::from_millis(700))
                 .with_turn_ceiling(std::time::Duration::from_secs(30));

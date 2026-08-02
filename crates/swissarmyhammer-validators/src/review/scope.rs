@@ -36,7 +36,7 @@ use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_git::{GitOperations, LineBlame};
 use swissarmyhammer_sem::git_types::{FileChange as SemFileChange, FileStatus};
 use swissarmyhammer_sem::model::change::SemanticChange;
 use swissarmyhammer_sem::parser::differ::compute_semantic_diff;
@@ -59,8 +59,16 @@ use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 /// to this fixed name rather than any user RuleSet.
 const SCOPE_VALIDATOR: &str = "scope";
 
+/// The shared prefix of [`ScopeSpec::resolve`]'s exactly-one-selector errors.
+///
+/// Both the zero-selector and the many-selector message are built from this one
+/// constant, so adding or renaming a selector edits the list in a single place
+/// instead of requiring synchronized edits to two literals that must agree.
+const SCOPE_SELECTOR_ERROR_PREFIX: &str =
+    "a review scope must set exactly one of file/glob/working/sha";
+
 /// The review scope — exactly one of these resolves to a file set.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Uncommitted changes vs HEAD (staged + unstaged + untracked). The default.
     Working,
@@ -118,15 +126,11 @@ impl ScopeSpec {
             1 => Ok(chosen.into_iter().next().expect("len checked")),
             0 => Err(AvpError::Validator {
                 validator: SCOPE_VALIDATOR.to_string(),
-                message:
-                    "a review scope must set exactly one of file/glob/working/sha; none were set"
-                        .to_string(),
+                message: format!("{SCOPE_SELECTOR_ERROR_PREFIX}; none were set"),
             }),
             n => Err(AvpError::Validator {
                 validator: SCOPE_VALIDATOR.to_string(),
-                message: format!(
-                    "a review scope must set exactly one of file/glob/working/sha; {n} were set"
-                ),
+                message: format!("{SCOPE_SELECTOR_ERROR_PREFIX}; {n} were set"),
             }),
         }
     }
@@ -178,25 +182,75 @@ impl WorkList {
     }
 }
 
+/// The rule names inside a validator — what a review fork applies to a file.
+///
+/// Distinct from [`ProbeNames`] on purpose. Both lists are name lists, and they
+/// sit next to each other in [`ValidatorWork::new`], so the compiler is the only
+/// thing that can stop a call site passing them in the wrong order; giving each
+/// list its own type makes the transposition a type error instead of a validator
+/// that reviews against probe names and declares its rules as evidence.
+///
+/// Serializes as the bare list, so the work-list payload is unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct RuleNames(Vec<String>);
+
+impl RuleNames {
+    /// Collect one validator's rule names.
+    pub fn new(names: impl IntoIterator<Item = String>) -> Self {
+        Self(names.into_iter().collect())
+    }
+
+    /// The rule names, in declaration order.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// The probe names a validator declared — the engine-run evidence it wants.
+///
+/// Distinct from [`RuleNames`] so the two name lists cannot be transposed at a
+/// call site; see that type for why the pair is typed.
+///
+/// Serializes as the bare list, so the work-list payload is unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ProbeNames(Vec<String>);
+
+impl ProbeNames {
+    /// Collect one validator's declared probe names.
+    pub fn new(names: impl IntoIterator<Item = String>) -> Self {
+        Self(names.into_iter().collect())
+    }
+
+    /// The probe names, in declaration order.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
 /// One matched validator's slice of the work-list.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidatorWork {
     /// The validator (RuleSet) name.
     validator_name: String,
     /// The rule names inside the validator.
-    rules: Vec<String>,
+    rules: RuleNames,
     /// The probe names the validator declared.
-    probes: Vec<String>,
+    probes: ProbeNames,
     /// The files this validator must review.
     files: Vec<FileWork>,
 }
 
 impl ValidatorWork {
     /// Assemble one validator's slice of the work-list.
+    ///
+    /// The two name lists are separate types ([`RuleNames`], [`ProbeNames`]) so
+    /// no call site can transpose them.
     pub fn new(
         validator_name: String,
-        rules: Vec<String>,
-        probes: Vec<String>,
+        rules: RuleNames,
+        probes: ProbeNames,
         files: Vec<FileWork>,
     ) -> Self {
         Self {
@@ -214,17 +268,60 @@ impl ValidatorWork {
 
     /// The rule names inside the validator.
     pub fn rules(&self) -> &[String] {
-        &self.rules
+        self.rules.as_slice()
     }
 
     /// The probe names the validator declared.
     pub fn probes(&self) -> &[String] {
-        &self.probes
+        self.probes.as_slice()
     }
 
     /// The files this validator must review.
     pub fn files(&self) -> &[FileWork] {
         &self.files
+    }
+}
+
+/// One source line's blame + change annotation — the `sha` and `mark` columns
+/// [`render_file_block`](crate::review::fleet::render_file_block) renders next
+/// to each numbered line of a file's inlined source.
+///
+/// Computed ONCE per review run by [`scope_review`] (never per finding, never
+/// per validator): [`sha`](Self::sha) comes from a single blame call per file
+/// (see [`swissarmyhammer_git::GitOperations::blame_lines`]), and
+/// [`touched`](Self::touched) comes from the scope stage's own before/after
+/// diff — never from blame, which attributes a line to a commit but says
+/// nothing about whether THIS review's change touched it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LineAnnotation {
+    /// The fixed 8-character sha-column label: the first 8 characters of the
+    /// commit that last changed this line, or a fixed 8-character sentinel
+    /// (`worktree`, `untrackd`, `????????`) — see
+    /// [`swissarmyhammer_git::LineBlame::sha_label`].
+    sha: String,
+    /// Whether THIS review's diff touched this line (renders `+` rather than
+    /// a space).
+    touched: bool,
+}
+
+impl LineAnnotation {
+    /// Pair a sha-column label with whether this review's diff touched the
+    /// line.
+    pub fn new(sha: impl Into<String>, touched: bool) -> Self {
+        Self {
+            sha: sha.into(),
+            touched,
+        }
+    }
+
+    /// The fixed 8-character sha-column label.
+    pub fn sha(&self) -> &str {
+        &self.sha
+    }
+
+    /// Whether this review's diff touched the line.
+    pub fn touched(&self) -> bool {
+        self.touched
     }
 }
 
@@ -249,10 +346,18 @@ pub struct FileWork {
     source_slice: String,
     /// The shared `(file, probe)` results.
     probe_results: Vec<ProbeResult>,
+    /// One [`LineAnnotation`] per line of `source_slice.trim_end()` (empty for
+    /// a deletion, which has no lines to annotate). Attached via
+    /// [`with_line_annotations`](Self::with_line_annotations) after
+    /// [`new`](Self::new) so the one-shot-per-run blame/diff computation stays
+    /// out of the plain constructor every test fixture already calls.
+    line_annotations: Vec<LineAnnotation>,
 }
 
 impl FileWork {
-    /// Assemble one file's worth of work for one validator.
+    /// Assemble one file's worth of work for one validator, with no line
+    /// annotations attached (use [`with_line_annotations`](Self::with_line_annotations)
+    /// when they matter — the production `scope_review` path always does).
     pub fn new(
         path: String,
         semantic_diff: Vec<SemanticChange>,
@@ -266,7 +371,15 @@ impl FileWork {
             changed_symbols,
             source_slice,
             probe_results,
+            line_annotations: Vec::new(),
         }
+    }
+
+    /// Attach the per-line blame/change annotations computed once for this
+    /// review run.
+    pub fn with_line_annotations(mut self, line_annotations: Vec<LineAnnotation>) -> Self {
+        self.line_annotations = line_annotations;
+        self
     }
 
     /// The file path.
@@ -294,6 +407,11 @@ impl FileWork {
     /// The shared `(file, probe)` results.
     pub fn probe_results(&self) -> &[ProbeResult] {
         &self.probe_results
+    }
+
+    /// One [`LineAnnotation`] per line of `source_slice.trim_end()`.
+    pub fn line_annotations(&self) -> &[LineAnnotation] {
+        &self.line_annotations
     }
 }
 
@@ -334,6 +452,15 @@ pub async fn scope_review(
     progress: Option<&ReviewProgressSender>,
 ) -> Result<WorkList, AvpError> {
     let resolved = resolve_scope_files(&scope, repo_path)?;
+
+    // The base-revision content per file, keyed for the line-mark diff below.
+    // Built from the same `file_changes` the sem differ reads (a borrow, not a
+    // move), so this never drifts from what the semantic diff itself saw.
+    let before_by_path: BTreeMap<String, Option<String>> = resolved
+        .file_changes
+        .iter()
+        .map(|fc| (fc.file_path.clone(), fc.before_content.clone()))
+        .collect();
 
     // Announce every resolved file BEFORE the semantic-diff + probe pass —
     // these are the run's FIRST progress events, emitted within seconds of the
@@ -381,9 +508,25 @@ pub async fn scope_review(
         &resolved.after_content,
     );
 
+    // Blame + change-mark every matched file ONCE for the whole run (never per
+    // finding, never per validator): one blame call per file, run concurrently.
+    let line_annotations = compute_line_annotations(
+        repo_path,
+        &matched.matched_files,
+        &resolved.after_content,
+        &before_by_path,
+        resolved.blame_at,
+    )
+    .await;
+
     // Assemble the work-list: name-sorted validators, each carrying their matched
     // files (path-sorted) with the shared facts + their probe subset.
-    let validator_work = assemble_validator_work(matched.validators, &per_file, &probe_cache);
+    let validator_work = assemble_validator_work(
+        matched.validators,
+        &per_file,
+        &probe_cache,
+        &line_annotations,
+    );
 
     log_scope_selection(&validator_work);
 
@@ -455,6 +598,199 @@ fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> Mat
     }
 }
 
+/// The validator names the engine pairs with `file`, in name order.
+///
+/// A thin wrapper over `match_validators_and_files` — the pairing every review
+/// run performs — so a test (in this crate or downstream, behind the
+/// `test-support` feature) can assert against the engine itself instead of a
+/// re-implementation that could drift from it.
+#[cfg(any(test, feature = "test-support"))]
+pub fn engine_matched_validator_names(file: &str, loader: &ValidatorLoader) -> Vec<String> {
+    match_validators_and_files(&[file.to_string()], loader)
+        .validators
+        .into_keys()
+        .collect()
+}
+
+/// The 1-based line numbers in `after` this review's change touched, from a
+/// pure in-memory diff of `before` against `after` — never from blame, which
+/// only attributes a line to a commit and says nothing about whether THIS
+/// change touched it.
+///
+/// `before` is `None` for a file with no base side (a brand-new file, or a
+/// glob/single-file scope with no "before" — every line in `after` is then
+/// marked, since the whole file is new relative to the review). Identical
+/// `before`/`after` (a validator matched a file the diff otherwise left
+/// untouched) short-circuits to no marks without invoking git2 at all.
+fn compute_line_marks(before: Option<&str>, after: &str) -> BTreeSet<u32> {
+    if after.is_empty() {
+        return BTreeSet::new();
+    }
+    let Some(before) = before else {
+        return (1..=after.lines().count() as u32).collect();
+    };
+    if before == after {
+        return BTreeSet::new();
+    }
+
+    match git2::Patch::from_buffers(before.as_bytes(), None, after.as_bytes(), None, None) {
+        Ok(patch) => collect_added_lines(&patch),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "review: failed to diff before/after content for change marks; \
+                 no line in this file will be marked as touched"
+            );
+            BTreeSet::new()
+        }
+    }
+}
+
+/// The new-side 1-based line numbers every `+` line in `patch`'s hunks maps
+/// to.
+///
+/// Extracted from [`compute_line_marks`] so the outer function reduces to a
+/// single match on the diff result. A hunk or line that fails to resolve (an
+/// out-of-range index, or a `+` line with no new-side line number) is
+/// skipped rather than treated as an error — partial hunk data still marks
+/// every line it CAN resolve.
+fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
+    let mut marks = BTreeSet::new();
+    for hunk_idx in 0..patch.num_hunks() {
+        let Ok(lines) = patch.num_lines_in_hunk(hunk_idx) else {
+            continue;
+        };
+        for line_idx in 0..lines {
+            let Ok(line) = patch.line_in_hunk(hunk_idx, line_idx) else {
+                continue;
+            };
+            if line.origin() == '+' {
+                if let Some(new_lineno) = line.new_lineno() {
+                    marks.insert(new_lineno);
+                }
+            }
+        }
+    }
+    marks
+}
+
+/// Blame every matched file's current content ONCE for the whole review run
+/// (never per finding, never per validator) and combine it with each file's
+/// change marks ([`compute_line_marks`]) into [`LineAnnotation`]s — the `sha`
+/// and `mark` columns [`render_file_block`](crate::review::fleet::render_file_block)
+/// renders.
+///
+/// Every matched file's blame call runs CONCURRENTLY: each is a
+/// [`tokio::task::spawn_blocking`] that opens its own [`GitOperations`] handle
+/// (git2's `Repository` is `Send` but not `Sync`, so a fresh handle per task —
+/// cheap, a local `git2_open` — is how independent files blame in parallel
+/// without sharing one connection across threads). A file with no content
+/// (a deletion) is skipped entirely — nothing to blame, nothing to annotate,
+/// matching [`render_file_block`]'s existing empty-block behavior.
+///
+/// A blame failure for one file is caught, logged with `tracing::warn!`, and
+/// degrades that file's every line to [`LineBlame::Failed`]
+/// (`????????`) — a blame failure must never abort the review.
+async fn compute_line_annotations(
+    repo_path: &Path,
+    matched_files: &BTreeSet<String>,
+    after_content: &BTreeMap<String, String>,
+    before_by_path: &BTreeMap<String, Option<String>>,
+    blame_at: Option<git2::Oid>,
+) -> BTreeMap<String, Vec<LineAnnotation>> {
+    // Blame and the change-mark diff both need the file's content EXACTLY as
+    // git (and the sem differ) see it, trailing newline and all: a byte diff
+    // against a committed blob that ends in `\n` reads a trimmed copy's final
+    // line as changed, which would falsely mark the file's last line dirty
+    // (blame) or touched (marks) on every file that happens to end in a
+    // newline — i.e. nearly every source file. So this stage diffs the RAW
+    // content; only the render-facing line COUNT (and thus how many
+    // annotations survive) is trimmed, to match
+    // [`FileWork::source_slice`]'s `.trim_end()` at render time. `.lines()`
+    // ignores a single trailing newline either way, so a normal file's line
+    // count is identical between the raw and trimmed forms — this only
+    // shortens the annotation list for the rare file with several trailing
+    // blank lines, exactly as the pre-existing renderer already discarded them.
+    let raw_contents: BTreeMap<String, String> = matched_files
+        .iter()
+        .filter_map(|file| after_content.get(file).map(|c| (file.clone(), c.clone())))
+        .collect();
+
+    let mut tasks = Vec::new();
+    for (file, content) in &raw_contents {
+        if content.trim_end().is_empty() {
+            continue;
+        }
+        let file = file.clone();
+        let content = content.clone();
+        let repo_path = repo_path.to_path_buf();
+        tasks.push(tokio::task::spawn_blocking(move || {
+            let blame = GitOperations::with_work_dir(&repo_path)
+                .and_then(|ops| ops.blame_lines(&file, &content, blame_at));
+            (file, blame)
+        }));
+    }
+
+    let mut blame_by_path: BTreeMap<String, Vec<LineBlame>> = BTreeMap::new();
+    for task in tasks {
+        match task.await {
+            Ok((file, Ok(lines))) => {
+                blame_by_path.insert(file, lines);
+            }
+            Ok((file, Err(err))) => {
+                let line_count = raw_contents
+                    .get(&file)
+                    .map(|c| c.trim_end().lines().count())
+                    .unwrap_or(0);
+                tracing::warn!(
+                    file = %file,
+                    error = %err,
+                    "review: blame failed for file; every line will show as unattributed"
+                );
+                blame_by_path.insert(file, vec![LineBlame::Failed; line_count]);
+            }
+            Err(join_err) => {
+                tracing::warn!(
+                    error = %join_err,
+                    "review: a blame task panicked or was cancelled; the affected \
+                     file's lines will show as unattributed"
+                );
+            }
+        }
+    }
+
+    let mut out = BTreeMap::new();
+    for file in matched_files {
+        let raw = raw_contents.get(file).map(String::as_str).unwrap_or("");
+        let trimmed = raw.trim_end();
+        if trimmed.is_empty() {
+            out.insert(file.clone(), Vec::new());
+            continue;
+        }
+        let before = before_by_path.get(file).and_then(|b| b.as_deref());
+        // Diffed against the RAW after-content (see the function doc for why),
+        // so `marks` is keyed by line numbers in `raw`, not `trimmed` — safe to
+        // reuse below since `.trim_end()` only ever shortens the tail, never
+        // renumbers a leading line.
+        let marks = compute_line_marks(before, raw);
+        let blame = blame_by_path.get(file);
+        let annotations: Vec<LineAnnotation> = trimmed
+            .lines()
+            .enumerate()
+            .map(|(i, _)| {
+                let n = (i + 1) as u32;
+                let sha = blame
+                    .and_then(|b| b.get(i))
+                    .map(LineBlame::sha_label)
+                    .unwrap_or_else(|| LineBlame::Failed.sha_label());
+                LineAnnotation::new(sha, marks.contains(&n))
+            })
+            .collect();
+        out.insert(file.clone(), annotations);
+    }
+    out
+}
+
 /// Pre-compute the [`FileFacts`] (full inlined source, changed symbols, semantic
 /// diff) once per matched file — shared by every validator that reviews that file.
 fn compute_per_file_facts(
@@ -490,6 +826,7 @@ fn assemble_validator_work(
     validators: BTreeMap<String, MatchedValidator>,
     per_file: &BTreeMap<String, FileFacts>,
     probe_cache: &[ProbeResult],
+    line_annotations: &BTreeMap<String, Vec<LineAnnotation>>,
 ) -> Vec<ValidatorWork> {
     let mut validator_work: Vec<ValidatorWork> = validators
         .into_values()
@@ -510,6 +847,7 @@ fn assemble_validator_work(
                             &facts.changed_symbols,
                             &mv.probes,
                         ),
+                        line_annotations: line_annotations.get(file).cloned().unwrap_or_default(),
                     }
                 })
                 .collect();
@@ -551,8 +889,8 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
         tracing::debug!(
             validator = %validator.validator_name,
             files = ?files,
-            probes = ?validator.probes,
-            rules = ?validator.rules,
+            probes = ?validator.probes.as_slice(),
+            rules = ?validator.rules.as_slice(),
             "review scope: validator matched"
         );
     }
@@ -561,8 +899,8 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
 /// A validator matched to one or more files, accumulated during matching.
 struct MatchedValidator {
     name: String,
-    rules: Vec<String>,
-    probes: Vec<String>,
+    rules: RuleNames,
+    probes: ProbeNames,
     files: BTreeSet<String>,
 }
 
@@ -570,8 +908,8 @@ impl MatchedValidator {
     fn from_ruleset(rs: &RuleSet) -> Self {
         Self {
             name: rs.name().to_string(),
-            rules: rs.rules.iter().map(|r| r.name.clone()).collect(),
-            probes: rs.manifest.probes.clone(),
+            rules: RuleNames::new(rs.rules.iter().map(|r| r.name.clone())),
+            probes: ProbeNames::new(rs.manifest.probes.iter().cloned()),
             files: BTreeSet::new(),
         }
     }
@@ -585,12 +923,19 @@ struct FileFacts {
 }
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
-/// after-content, and the review-level change purpose.
+/// after-content, the review-level change purpose, and blame's history anchor.
 struct ResolvedScope {
     files: Vec<String>,
     file_changes: Vec<SemFileChange>,
     after_content: BTreeMap<String, String>,
     change_purpose: String,
+    /// The commit blame's history walk is bounded to, mirroring `git blame
+    /// <blame_at> -- path`. `None` blames against HEAD — the right anchor for
+    /// a scope whose content may carry uncommitted edits (working tree,
+    /// single file, glob). [`Scope::Sha`] sets this to the range's "to"
+    /// commit so a bounded historical review never attributes a line to a
+    /// commit past that point.
+    blame_at: Option<git2::Oid>,
 }
 
 /// Map a semantic-diff [`SemanticChange`] to the probe runner's [`ChangeEntry`].
@@ -644,6 +989,7 @@ fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> Resolv
         file_changes,
         after_content,
         change_purpose,
+        blame_at,
     } = resolved;
 
     let mut kept: Vec<String> = Vec::with_capacity(files.len());
@@ -673,6 +1019,7 @@ fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> Resolv
         file_changes,
         after_content,
         change_purpose,
+        blame_at,
     }
 }
 
@@ -790,10 +1137,79 @@ fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError
     }
 }
 
-/// Read a blob at `ref:path` via libgit2.
+/// A git refspec — the revision half of a `refspec:path` blob address. Any
+/// commit-ish the engine reads content at: `HEAD` (see [`GitRefSpec::head`]), a
+/// sha, a branch, a tag, `HEAD~3`.
 ///
-/// This is the same `git show ref:path` content read the git tool does, via the
-/// shared `swissarmyhammer-git` repository handle instead of a shell-out.
+/// Distinct from [`FilePath`] on purpose. Both halves of a blob address are
+/// strings, so the compiler is the only thing that can stop a call site passing
+/// them in the wrong order; giving each half its own type makes the
+/// transposition a type error instead of a silent mis-read.
+///
+/// This is deliberately **not** [`swissarmyhammer_git::BranchName`], the
+/// workspace's other git-string newtype: that type's validation rejects `~`,
+/// `^`, `:` and `..` — exactly the syntax a refspec needs — so it can only hold
+/// a refspec via `new_unchecked`, which would defeat the type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GitRefSpec(String);
+
+impl GitRefSpec {
+    /// Wrap a commit-ish.
+    fn new(refspec: impl Into<String>) -> Self {
+        Self(refspec.into())
+    }
+
+    /// The current checkout tip — the implicit "before" side of a working-tree or
+    /// single-file scope, and the implicit "to" side of a bare-ref range. This is
+    /// the single place the `HEAD` literal appears; every caller goes through it.
+    fn head() -> Self {
+        Self("HEAD".to_string())
+    }
+
+    /// The refspec as libgit2 wants it.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for GitRefSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A repo-relative file path — the path half of a `refspec:path` blob address.
+///
+/// Distinct from [`GitRefSpec`] so the two halves cannot be transposed at a call
+/// site; see that type for why the pair is typed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FilePath(String);
+
+impl FilePath {
+    /// Wrap a repo-relative path.
+    fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// Unwrap the path for a consumer that stores it as a plain `String`.
+    fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for FilePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Read a blob at `refspec:path` via libgit2.
+///
+/// This is the same `git show refspec:path` content read the git tool does, via
+/// the shared `swissarmyhammer-git` repository handle instead of a shell-out.
+///
+/// The two halves of the address are separate types ([`GitRefSpec`],
+/// [`FilePath`]) so no call site can transpose them.
 ///
 /// Returns `Ok(None)` only when the path does **not exist** at the ref (the
 /// intended Added/Deleted signal — `revparse_single` resolving to not-found, or
@@ -803,19 +1219,18 @@ fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError
 /// as wholly added/removed.
 fn read_at_ref(
     repo: &GitOperations,
-    refspec: &str,
-    path: &str,
+    refspec: GitRefSpec,
+    path: FilePath,
 ) -> Result<Option<String>, AvpError> {
+    // The blob address, composed once and reused by the read and both failure
+    // messages, so the `refspec:path` form lives in a single place.
+    let spec = format!("{refspec}:{path}");
     let inner = repo.repository().inner();
-    let object = match inner.revparse_single(&format!("{refspec}:{path}")) {
+    let object = match inner.revparse_single(&spec) {
         Ok(object) => object,
         // The path is absent at this ref — the intended Added/Deleted signal.
         Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(AvpError::Context(format!(
-                "failed to resolve {refspec}:{path}: {e}"
-            )))
-        }
+        Err(e) => return Err(AvpError::Context(format!("failed to resolve {spec}: {e}"))),
     };
     // Not a blob (e.g. a tree at that path) — there is no file content to read.
     let Some(blob) = object.as_blob() else {
@@ -823,7 +1238,7 @@ fn read_at_ref(
     };
     String::from_utf8(blob.content().to_vec())
         .map(Some)
-        .map_err(|e| AvpError::Context(format!("blob {refspec}:{path} is not valid UTF-8: {e}")))
+        .map_err(|e| AvpError::Context(format!("blob {spec} is not valid UTF-8: {e}")))
 }
 
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
@@ -852,11 +1267,14 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = after_by_path.get(path).cloned().unwrap_or(None);
-        let before = read_at_ref(&repo, "HEAD", path)?;
-        builder.push(path, before, after);
+        let after = AfterContent::new(after_by_path.get(path).cloned().unwrap_or(None));
+        let before =
+            BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
+        builder.push(FilePath::new(path), FileVersions { before, after });
     }
-    Ok(builder.finish(files, auto_purpose("working-tree changes")))
+    // No blame anchor: the working tree may carry uncommitted edits, so blame
+    // must be bound to HEAD (`None`) and layered against the live content.
+    Ok(builder.finish(files, auto_purpose("working-tree changes"), None))
 }
 
 /// Resolve a commit/range scope, reusing the git tool's range semantics
@@ -868,20 +1286,22 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
         .map_err(|e| AvpError::Context(format!("failed to resolve range '{range}': {e}")))?;
 
     let (from_ref, to_ref) = match range.split_once("..") {
-        Some((from, to)) => (from.to_string(), to.to_string()),
-        None => (range.to_string(), "HEAD".to_string()),
+        Some((from, to)) => (GitRefSpec::new(from), GitRefSpec::new(to)),
+        None => (GitRefSpec::new(range), GitRefSpec::head()),
     };
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let before = read_at_ref(&repo, &from_ref, path)?;
-        let after = read_at_ref(&repo, &to_ref, path)?;
-        builder.push(path, before, after);
+        let before = BeforeContent::new(read_at_ref(&repo, from_ref.clone(), FilePath::new(path))?);
+        let after = AfterContent::new(read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?);
+        builder.push(FilePath::new(path), FileVersions { before, after });
     }
 
     let purpose = commit_messages(&repo, &to_ref)
         .unwrap_or_else(|| auto_purpose(&format!("changes in range {range}")));
-    Ok(builder.finish(files, purpose))
+    // Bound blame to the range's "to" endpoint: a historical review must
+    // never attribute a line to a commit past the point it reviews.
+    Ok(builder.finish(files, purpose, resolve_oid(&repo, &to_ref)))
 }
 
 /// Resolve a single-file scope: its working-tree changes if any, else its whole
@@ -893,14 +1313,17 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 /// with [`AvpError::Validator`] and its content is never read into scope.
 fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
-    let after = read_working(repo_path, path)?;
-    let before = read_at_ref(&repo, "HEAD", path)?;
+    let after = AfterContent::new(read_working(repo_path, path)?);
+    let before = BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
 
     let mut builder = FileChangeBuilder::new();
-    builder.push(path, before, after);
+    builder.push(FilePath::new(path), FileVersions { before, after });
+    // No blame anchor: the working-tree read above may carry uncommitted
+    // edits, so blame is bound to HEAD (`None`), same as `resolve_working`.
     Ok(builder.finish(
         vec![path.to_string()],
         auto_purpose(&format!("review of {path}")),
+        None,
     ))
 }
 
@@ -923,10 +1346,23 @@ fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpErr
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = read_working(repo_path, path)?;
-        builder.push(path, None, after);
+        // A glob scope has no base side: every matched file diffs as all-added.
+        let after = AfterContent::new(read_working(repo_path, path)?);
+        builder.push(
+            FilePath::new(path),
+            FileVersions {
+                before: BeforeContent::absent(),
+                after,
+            },
+        );
     }
-    Ok(builder.finish(files, auto_purpose(&format!("files matching {pattern}"))))
+    // No blame anchor: matched files are read from the working tree, so
+    // blame is bound to HEAD (`None`) and layered against the live content.
+    Ok(builder.finish(
+        files,
+        auto_purpose(&format!("files matching {pattern}")),
+        None,
+    ))
 }
 
 /// Wrap a one-line auto summary as the review-level change purpose.
@@ -934,10 +1370,21 @@ fn auto_purpose(what: &str) -> String {
     format!("Auto summary: reviewing {what}.")
 }
 
-/// Read the commit message for a ref via libgit2, `None` when unresolvable.
-fn commit_messages(repo: &GitOperations, refspec: &str) -> Option<String> {
+/// Resolve a refspec to its commit [`git2::Oid`] via libgit2, `None` when
+/// unresolvable — the blame anchor [`resolve_sha`] binds a bounded historical
+/// review's blame calls to. An unresolvable ref degrades to `None` (blame
+/// against HEAD) rather than failing the whole scope resolution: blame
+/// attribution is best-effort, never load-bearing for the review itself.
+fn resolve_oid(repo: &GitOperations, refspec: &GitRefSpec) -> Option<git2::Oid> {
     let inner = repo.repository().inner();
-    let object = inner.revparse_single(refspec).ok()?;
+    let object = inner.revparse_single(refspec.as_str()).ok()?;
+    object.peel_to_commit().ok().map(|c| c.id())
+}
+
+/// Read the commit message for a ref via libgit2, `None` when unresolvable.
+fn commit_messages(repo: &GitOperations, refspec: &GitRefSpec) -> Option<String> {
+    let inner = repo.repository().inner();
+    let object = inner.revparse_single(refspec.as_str()).ok()?;
     let commit = object.peel_to_commit().ok()?;
     let message = commit.message().unwrap_or("").trim().to_string();
     if message.is_empty() {
@@ -945,6 +1392,68 @@ fn commit_messages(repo: &GitOperations, refspec: &str) -> Option<String> {
     } else {
         Some(message)
     }
+}
+
+/// A file's content at the **base** revision of the change — `None` when the
+/// file did not exist there (the Added signal).
+///
+/// Distinct from [`AfterContent`] on purpose, and the sharper case of the same
+/// hazard as [`GitRefSpec`]/[`FilePath`]: both sides are `Option<String>` and
+/// they arrive together at [`FileChangeBuilder::push`], so nothing but the
+/// compiler can stop a call site swapping them — and a swap does not fail
+/// loudly, it flips [`FileStatus::Added`] to [`FileStatus::Deleted`] and hands
+/// the review a plausible-looking INVERTED diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BeforeContent(Option<String>);
+
+impl BeforeContent {
+    /// Wrap the base-revision content of a file.
+    fn new(content: Option<String>) -> Self {
+        Self(content)
+    }
+
+    /// The absent base side — a file that did not exist before the change.
+    fn absent() -> Self {
+        Self(None)
+    }
+
+    /// Unwrap for the sem-diff input.
+    fn into_inner(self) -> Option<String> {
+        self.0
+    }
+}
+
+/// A file's content **after** the change — `None` when the file no longer
+/// exists (the Deleted signal).
+///
+/// Distinct from [`BeforeContent`] so the two sides cannot be transposed; see
+/// that type for what a transposition would do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AfterContent(Option<String>);
+
+impl AfterContent {
+    /// Wrap the post-change content of a file.
+    fn new(content: Option<String>) -> Self {
+        Self(content)
+    }
+
+    /// Unwrap for the sem-diff input.
+    fn into_inner(self) -> Option<String> {
+        self.0
+    }
+}
+
+/// Both sides of one file's change, named rather than positional.
+///
+/// [`FileChangeBuilder::push`] takes this single argument instead of two
+/// `Option<String>`s: the fields name each side at the call site, and their
+/// distinct types ([`BeforeContent`], [`AfterContent`]) make a transposed
+/// struct literal a compile error rather than an inverted diff.
+struct FileVersions {
+    /// The content at the base revision.
+    before: BeforeContent,
+    /// The content after the change.
+    after: AfterContent,
 }
 
 /// Accumulates the per-file sem-diff inputs and after-content as files resolve.
@@ -962,9 +1471,15 @@ impl FileChangeBuilder {
     }
 
     /// Record one file's before/after content for the sem differ.
-    fn push(&mut self, path: &str, before: Option<String>, after: Option<String>) {
+    ///
+    /// The two sides arrive as one named-field [`FileVersions`], so they cannot
+    /// be transposed into an inverted diff.
+    fn push(&mut self, path: FilePath, versions: FileVersions) {
+        let FileVersions { before, after } = versions;
+        let (before, after) = (before.into_inner(), after.into_inner());
+        let path = path.into_string();
         if let Some(content) = &after {
-            self.after_content.insert(path.to_string(), content.clone());
+            self.after_content.insert(path.clone(), content.clone());
         }
         let status = match (&before, &after) {
             (None, Some(_)) => FileStatus::Added,
@@ -972,7 +1487,7 @@ impl FileChangeBuilder {
             _ => FileStatus::Modified,
         };
         self.file_changes.push(SemFileChange {
-            file_path: path.to_string(),
+            file_path: path,
             status,
             old_file_path: None,
             before_content: before,
@@ -980,13 +1495,20 @@ impl FileChangeBuilder {
         });
     }
 
-    /// Finish into a [`ResolvedScope`].
-    fn finish(self, files: Vec<String>, change_purpose: String) -> ResolvedScope {
+    /// Finish into a [`ResolvedScope`]. `blame_at` is the commit blame's
+    /// history walk is bounded to (see [`ResolvedScope::blame_at`]).
+    fn finish(
+        self,
+        files: Vec<String>,
+        change_purpose: String,
+        blame_at: Option<git2::Oid>,
+    ) -> ResolvedScope {
         ResolvedScope {
             files,
             file_changes: self.file_changes,
             after_content: self.after_content,
             change_purpose,
+            blame_at,
         }
     }
 }
@@ -1001,7 +1523,7 @@ async fn run_probe_cache(
 ) -> Result<Vec<ProbeResult>, AvpError> {
     let union: BTreeSet<String> = validators
         .values()
-        .flat_map(|mv| mv.probes.iter().cloned())
+        .flat_map(|mv| mv.probes.as_slice().iter().cloned())
         .collect();
     if union.is_empty() || change_entities.is_empty() {
         return Ok(Vec::new());
@@ -1018,15 +1540,19 @@ async fn run_probe_cache(
 /// `changed_symbols` are this file's changed-entity names (the semantic diff's
 /// `entity_name → file_path` mapping, pre-resolved per file), used to attach a
 /// symbol-targeted probe result back to the file whose entity bears that name.
+///
+/// The two name lists are deliberately different types: the declared probes
+/// arrive as [`ProbeNames`] and the changed symbols as a plain slice, so a call
+/// site cannot transpose them into filtering probe names against symbols.
 fn select_probe_results(
     cache: &[ProbeResult],
     file: &str,
     changed_symbols: &[String],
-    probes: &[String],
+    probes: &ProbeNames,
 ) -> Vec<ProbeResult> {
     cache
         .iter()
-        .filter(|r| probes.contains(&r.name))
+        .filter(|r| probes.as_slice().contains(&r.name))
         .filter(|r| probe_result_for_file(r, file, changed_symbols))
         .cloned()
         .collect()
@@ -1059,6 +1585,55 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
+/// A changed file [`batch_work_list`] could not pack into any batch because its
+/// inlined source alone exceeds `batch_size`.
+///
+/// A file is atomic — it is never split across batches — so an oversized file
+/// cannot be packed at all. Rather than a hard error that would block review of
+/// every OTHER file in the scope, `batch_work_list` excludes it and reports it
+/// here; [`run_review`](crate::review::run_review) carries it through to the
+/// final [`ReviewReport`](crate::review::ReviewReport) as a named "not reviewed,
+/// too large" gap. The fields are private (read through the getters) so the
+/// shape can evolve without a field-level API commitment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    /// The oversized file's repo-relative path.
+    path: String,
+    /// The file's inlined source size, in bytes.
+    size: usize,
+    /// The `batch_size` budget it exceeded, in bytes.
+    batch_size: usize,
+}
+
+impl SkippedFile {
+    /// Construct a [`SkippedFile`] directly for a synthesis-layer test fixture
+    /// (`crate::review::synthesize`'s tests), which asserts on rendering given a
+    /// skip list rather than driving the whole packer to produce one.
+    #[cfg(test)]
+    pub(crate) fn for_test(path: &str, size: usize, batch_size: usize) -> Self {
+        Self {
+            path: path.to_string(),
+            size,
+            batch_size,
+        }
+    }
+
+    /// The oversized file's repo-relative path.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The file's inlined source size, in bytes.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// The `batch_size` budget it exceeded, in bytes.
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+}
+
 /// Split a [`WorkList`] into content-budgeted batches at **whole-file**
 /// granularity, so every batch's primed prefix stays inside `batch_size` bytes.
 ///
@@ -1077,31 +1652,28 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
 /// verbatim so every batch's prime frames the same overall change. A work-list
 /// with no files (no validator matched) yields no batches.
 ///
-/// # Errors
-///
-/// Returns [`AvpError::Validator`] when a single file's inlined source alone
-/// exceeds `batch_size`: it cannot be packed without either splitting it
-/// (forbidden) or blowing the budget. The error names the file, its byte size, and
-/// the limit, and directs the caller to raise `batch_size` or narrow the scope.
-/// This is the loud replacement for the old silent slice-degrade of an oversized
-/// file.
-pub fn batch_work_list(work: &WorkList, batch_size: usize) -> Result<Vec<WorkList>, AvpError> {
+/// A single file whose inlined source alone exceeds `batch_size` cannot be
+/// packed without either splitting it (forbidden) or blowing the budget. Rather
+/// than erroring the WHOLE run over one oversized file, it is excluded from
+/// packing and reported in the second return value as a [`SkippedFile`] — every
+/// other file still packs and reviews normally. This never errors; a caller that
+/// wants a hard stop on an oversized file checks the returned skip list itself.
+pub fn batch_work_list(work: &WorkList, batch_size: usize) -> (Vec<WorkList>, Vec<SkippedFile>) {
     // Pack the distinct files (first-seen order, matching the prime's file set)
     // into byte-budgeted batches; a file is never split across a batch boundary.
     let mut batches: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();
     let mut current_bytes = 0usize;
+    let mut skipped: Vec<SkippedFile> = Vec::new();
     for file in work.distinct_files() {
         let size = file.source_slice.len();
         if size > batch_size {
-            return Err(AvpError::Validator {
-                validator: SCOPE_VALIDATOR.to_string(),
-                message: format!(
-                    "file `{}` inlines {size} bytes, over the {batch_size}-byte review batch_size; \
-                     a file is never split across review batches — raise `batch_size` or narrow the review scope",
-                    file.path
-                ),
+            skipped.push(SkippedFile {
+                path: file.path.clone(),
+                size,
+                batch_size,
             });
+            continue;
         }
         if !current.is_empty() && current_bytes + size > batch_size {
             batches.push(std::mem::take(&mut current));
@@ -1114,10 +1686,11 @@ pub fn batch_work_list(work: &WorkList, batch_size: usize) -> Result<Vec<WorkLis
         batches.push(current);
     }
 
-    Ok(batches
+    let batches = batches
         .into_iter()
         .map(|paths| project_onto_files(work, &paths))
-        .collect())
+        .collect();
+    (batches, skipped)
 }
 
 /// Project a [`WorkList`] onto a subset of file paths: keep every validator that
@@ -1159,6 +1732,7 @@ mod tests {
 
     use model_embedding::mock::MockEmbedder;
 
+    use crate::review::probes::ProbeKind;
     use crate::review::test_support::{
         body, dup_emb, index_conn, loader_with, ruleset, seed_call_edge, seed_chunk, seed_symbol,
         TestRepo, DIM,
@@ -1182,17 +1756,31 @@ mod tests {
         assert_eq!(spec.resolve().unwrap(), Scope::Sha("HEAD~1".to_string()));
     }
 
+    /// The zero-selector message is pinned to its literal text on purpose. It is
+    /// a user-facing contract, and the assertion is deliberately NOT built from
+    /// [`SCOPE_SELECTOR_ERROR_PREFIX`] — an expectation composed from the same
+    /// constant the code uses would move with it and prove nothing. Editing the
+    /// selector list must break this test.
     #[test]
     fn scope_spec_errors_on_zero_selectors() {
         let err = ScopeSpec::default().resolve().unwrap_err();
         match err {
             AvpError::Validator { message, .. } => {
-                assert!(message.contains("none"), "got: {message}");
+                assert_eq!(
+                    message,
+                    "a review scope must set exactly one of file/glob/working/sha; none were set"
+                );
             }
             other => panic!("expected Validator error, got: {other:?}"),
         }
     }
 
+    /// The many-selector message reports the count AND shares the zero-selector
+    /// message's prefix. The prefix half is asserted against
+    /// [`SCOPE_SELECTOR_ERROR_PREFIX`] deliberately: together with the literal
+    /// pinned in `scope_spec_errors_on_zero_selectors`, that catches BOTH ways
+    /// the pair can rot — editing the selector list (the literal there) and
+    /// re-introducing a divergent hardcoded message in this branch.
     #[test]
     fn scope_spec_errors_on_multiple_selectors() {
         let spec = ScopeSpec {
@@ -1203,10 +1791,40 @@ mod tests {
         let err = spec.resolve().unwrap_err();
         match err {
             AvpError::Validator { message, .. } => {
-                assert!(message.contains('2'), "got: {message}");
+                assert!(
+                    message.starts_with(SCOPE_SELECTOR_ERROR_PREFIX),
+                    "both selector errors must share one prefix, got: {message}"
+                );
+                assert_eq!(
+                    message,
+                    format!("{SCOPE_SELECTOR_ERROR_PREFIX}; 2 were set")
+                );
             }
             other => panic!("expected Validator error, got: {other:?}"),
         }
+    }
+
+    /// `Scope` is a value key: callers cache and de-duplicate resolved scopes,
+    /// so it must work in hash-based collections, and its `Hash` must agree with
+    /// its `Eq` — equal scopes collapse to one entry, distinct ones do not.
+    #[test]
+    fn scope_is_usable_as_a_hash_key() {
+        use std::collections::HashSet;
+
+        let mut set: HashSet<Scope> = HashSet::new();
+        assert!(set.insert(Scope::Working));
+        assert!(set.insert(Scope::Sha("HEAD~1".to_string())));
+        assert!(set.insert(Scope::File("a.rs".to_string())));
+        assert!(set.insert(Scope::Glob("**/*.rs".to_string())));
+
+        // Eq-equal scopes must hash equal: re-inserting is a no-op.
+        assert!(!set.insert(Scope::Working));
+        assert!(!set.insert(Scope::Sha("HEAD~1".to_string())));
+        assert_eq!(set.len(), 4);
+
+        // Same payload, different variant, stays distinct.
+        assert!(set.insert(Scope::Glob("a.rs".to_string())));
+        assert_eq!(set.len(), 5);
     }
 
     // ---- scope_review: scope-phase progress events -------------------------
@@ -1338,6 +1956,350 @@ mod tests {
         );
     }
 
+    // ---- scope_review: line annotations (blame + change marks) ------------
+
+    /// Production-path test: a real two-commit git history feeds `scope_review`
+    /// (`Scope::Sha`), and the resulting `FileWork::line_annotations` must carry
+    /// the CORRECT 1-based line number (by position), the correct 8-char blame
+    /// sha per line, and the correct `touched` mark from the diff — not from
+    /// blame. Line 2 (edited by the second commit) is attributed to the second
+    /// commit AND marked touched; lines 1 and 3 (untouched) keep the first
+    /// commit's sha and are NOT marked. The real rendered prime block is then
+    /// asserted to show line 2 with exactly that number, sha, and `+` mark —
+    /// closing the loop from `scope_review` through to what the model reads.
+    #[tokio::test]
+    async fn sha_scope_line_annotations_carry_correct_number_sha_and_mark() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "line one\nline two\nline three\n");
+        let first_sha = repo.commit("first");
+        repo.write("src/lib.rs", "line one\nEDITED two\nline three\n");
+        let second_sha = repo.commit("second");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Sha(format!("{first_sha}..{second_sha}")),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must be under review");
+
+        let annotations = file.line_annotations();
+        assert_eq!(annotations.len(), 3, "one annotation per source line");
+        assert_eq!(annotations[0].sha(), &first_sha[..8], "line 1 untouched");
+        assert!(!annotations[0].touched());
+        assert_eq!(
+            annotations[1].sha(),
+            &second_sha[..8],
+            "line 2 was changed by the second commit"
+        );
+        assert!(
+            annotations[1].touched(),
+            "line 2 is exactly what this review's diff touched"
+        );
+        assert_eq!(annotations[2].sha(), &first_sha[..8], "line 3 untouched");
+        assert!(!annotations[2].touched());
+
+        // The actual rendered prime block a model reads must show line 2 with
+        // this exact number, sha, and `+` mark — the numbering the model is
+        // told to READ rather than count.
+        let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+        let expected_line_2 = format!("     2 | {} + | EDITED two", &second_sha[..8]);
+        assert!(
+            rendered.contains(&expected_line_2),
+            "rendered block must show line 2 numbered with its blame sha and a `+` mark, got:\n{rendered}"
+        );
+        // An untouched line renders a space, never a `+`.
+        let expected_line_1 = format!("     1 | {}   | line one", &first_sha[..8]);
+        assert!(
+            rendered.contains(&expected_line_1),
+            "untouched line 1 must render a space in the mark column, got:\n{rendered}"
+        );
+    }
+
+    /// A dirty, uncommitted edit in the `review working` scope has no committed
+    /// history at that content: `LineBlame::Worktree` (the same sentinel `git
+    /// blame` itself uses for "not committed yet"), rendered as `worktree` in
+    /// the sha column. The SAME line is also marked touched, since the
+    /// before/after diff sees it as changed — showing that `touched` and `sha`
+    /// are computed independently and can legitimately agree.
+    #[tokio::test]
+    async fn working_scope_dirty_line_gets_worktree_sha() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "alpha\nbeta\ngamma\n");
+        let sha = repo.commit("initial");
+
+        // Dirty, uncommitted edit to line 2.
+        repo.write("src/lib.rs", "alpha\nBETA-DIRTY\ngamma\n");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must be under review");
+
+        let annotations = file.line_annotations();
+        assert_eq!(annotations.len(), 3);
+        assert_eq!(annotations[0].sha(), &sha[..8]);
+        assert!(!annotations[0].touched());
+        assert_eq!(
+            annotations[1].sha(),
+            "worktree",
+            "an uncommitted dirty line must show worktree in the sha column, got: {:?}",
+            annotations[1]
+        );
+        assert!(annotations[1].touched());
+        assert_eq!(annotations[2].sha(), &sha[..8]);
+        assert!(!annotations[2].touched());
+    }
+
+    /// A brand-new untracked file (never `git add`ed) has no git history at
+    /// all: every line shows `untrackd`, and the whole file is marked touched
+    /// (there is no "before" side — it is entirely new relative to the review).
+    #[tokio::test]
+    async fn working_scope_untracked_new_file_gets_untrackd_sha() {
+        let repo = TestRepo::new();
+        repo.write("README.md", "# base\n");
+        repo.commit("initial");
+
+        repo.write("src/new.rs", "pub fn brand_new() {}\n");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/new.rs"))
+            .expect("the untracked new file must be under review");
+
+        let annotations = file.line_annotations();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].sha(), "untrackd");
+        assert!(
+            annotations[0].touched(),
+            "every line of a brand-new file is touched by this review"
+        );
+    }
+
+    /// A blame failure for any other reason (here: the repo handle itself
+    /// cannot be opened) must never abort the review: every affected line
+    /// degrades to the `????????` sentinel and `compute_line_annotations`
+    /// still returns a complete, non-panicking result — proving the
+    /// review-completes contract structurally (the function has no `Result`
+    /// to propagate a failure through in the first place).
+    #[tokio::test]
+    async fn blame_failure_degrades_to_unknown_marker_without_aborting() {
+        let mut matched_files = BTreeSet::new();
+        matched_files.insert("src/lib.rs".to_string());
+        let mut after_content = BTreeMap::new();
+        after_content.insert("src/lib.rs".to_string(), "line one\nline two\n".to_string());
+        let before_by_path = BTreeMap::new();
+
+        // A path with no git repository at all: `GitOperations::with_work_dir`
+        // fails for every file, exercising the "blame fails for any other
+        // reason" arm rather than the untracked/brand-new short-circuits.
+        let not_a_repo = tempfile::tempdir().unwrap();
+
+        let annotations = compute_line_annotations(
+            not_a_repo.path(),
+            &matched_files,
+            &after_content,
+            &before_by_path,
+            None,
+        )
+        .await;
+
+        let file_annotations = annotations
+            .get("src/lib.rs")
+            .expect("the file is still annotated even though blame failed");
+        assert_eq!(file_annotations.len(), 2);
+        for annotation in file_annotations {
+            assert_eq!(
+                annotation.sha(),
+                "????????",
+                "a blame failure must degrade to the unknown sentinel, got: {annotation:?}"
+            );
+        }
+    }
+
+    /// End-to-end: the line number the model READS off the real rendered prime
+    /// (not counted, not derived) survives, byte-for-byte, all the way through
+    /// `Finding.line` and into `synthesize`'s final report — no stage in
+    /// between renumbers it. This is the numbering half of the task closed
+    /// loop: [`sha_scope_line_annotations_carry_correct_number_sha_and_mark`]
+    /// proves the printed number is correct; this proves it is never lost.
+    #[tokio::test]
+    async fn a_findings_line_number_survives_from_the_prime_to_the_report() {
+        let repo = TestRepo::new();
+        repo.write(
+            "src/lib.rs",
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        );
+        repo.commit("initial");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Glob("src/*.rs".to_string()),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must be under review");
+
+        let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+        // The exact numbered line the model would read for line 3 — pulled
+        // from the REAL render, not hand-typed, so this test would fail if the
+        // format ever drifted.
+        let printed_line_3 = rendered
+            .lines()
+            .find(|l| l.trim_start().starts_with("3 |") || l.trim_start().starts_with("     3 |"))
+            .expect("the rendered block must number line 3");
+        assert!(
+            printed_line_3.ends_with("fn three() {}"),
+            "line 3 as printed must be line 3 of the real source: {printed_line_3}"
+        );
+
+        // The model "reads" the number 3 off that exact line and cites it in
+        // its findings JSON — simulated here via the real parse path rather
+        // than constructing a `Finding` by hand, so the whole textual
+        // round-trip is exercised.
+        let agent_response = crate::review::test_support::findings_json(
+            "src/lib.rs",
+            3,
+            "no-unused",
+            "`three` looks unused",
+        );
+        let findings = crate::review::types::parse_findings(&agent_response).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].line, 3,
+            "the parsed finding must keep the exact line the model cited"
+        );
+
+        // Verify + synthesize: the line must reach the final report unchanged.
+        let verified = vec![crate::review::types::VerifiedFinding {
+            finding: findings[0].clone(),
+            confirmed: true,
+            reason: "confirmed".to_string(),
+            decided_by: None,
+        }];
+        let report = crate::review::synthesize::synthesize(
+            verified,
+            &crate::review::synthesize::FleetTally::new(1, 0),
+            &[],
+            "2026-04-11 13:08",
+        );
+        assert!(
+            report.markdown().contains("`src/lib.rs:3`"),
+            "the final report must cite the SAME line the model read off the prime: {}",
+            report.markdown()
+        );
+    }
+
+    /// Measures (does not tightly pin — wall-clock is inherently machine-
+    /// dependent) the blame overhead `scope_review` now pays on a
+    /// representative "normal commit": 8 changed files of ~150 lines each,
+    /// each with one dirty edit. Blame runs ONCE per file, concurrently
+    /// (`compute_line_annotations`'s `tokio::task::spawn_blocking` fan-out) —
+    /// this asserts only the coarse sanity bound that 8 files blame well
+    /// under a second, which would fail loudly if concurrency regressed to
+    /// sequential. The printed wall-clock (`cargo test -- --nocapture`) is
+    /// the number recorded on the task as the measured added cost.
+    #[tokio::test]
+    async fn blame_overhead_on_a_representative_commit_is_small_and_concurrent() {
+        const FILE_COUNT: usize = 8;
+        const LINES_PER_FILE: usize = 150;
+
+        let repo = TestRepo::new();
+        let body = |seed: usize| -> String {
+            (0..LINES_PER_FILE)
+                .map(|i| format!("fn line_{seed}_{i}() {{}}\n"))
+                .collect()
+        };
+        for i in 0..FILE_COUNT {
+            repo.write(&format!("src/file_{i}.rs"), &body(i));
+        }
+        repo.commit("initial");
+        // A dirty, uncommitted one-line edit per file — a realistic "normal
+        // commit" shape (every file touched, not wholesale rewritten).
+        for i in 0..FILE_COUNT {
+            let mut content = body(i);
+            content.push_str("fn dirty_edit() {}\n");
+            repo.write(&format!("src/file_{i}.rs"), &content);
+        }
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let started = std::time::Instant::now();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        println!(
+            "scope_review with blame over {FILE_COUNT} files x {LINES_PER_FILE} lines took {elapsed:?}"
+        );
+
+        let validator = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .expect("the rust validator must match");
+        assert_eq!(validator.files().len(), FILE_COUNT);
+        for file in validator.files() {
+            assert!(
+                !file.line_annotations().is_empty(),
+                "every file must carry line annotations"
+            );
+        }
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "blame across {FILE_COUNT} small files run concurrently must not take {elapsed:?}"
+        );
+    }
+
     // ---- scope_review: untracked files in the working scope ---------------
 
     #[tokio::test]
@@ -1453,14 +2415,15 @@ mod tests {
             changed_symbols: vec![],
             source_slice: "x".repeat(bytes),
             probe_results: vec![],
+            line_annotations: vec![],
         }
     }
 
     fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            rules: vec![format!("{name}-rule")],
-            probes: vec![],
+            rules: RuleNames::new([format!("{name}-rule")]),
+            probes: ProbeNames::default(),
             files: paths.iter().map(|p| file_at(p)).collect(),
         }
     }
@@ -1470,8 +2433,8 @@ mod tests {
     fn validator_sized(name: &str, files: &[(&str, usize)]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            rules: vec![format!("{name}-rule")],
-            probes: vec![],
+            rules: RuleNames::new([format!("{name}-rule")]),
+            probes: ProbeNames::default(),
             files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
         }
     }
@@ -1507,8 +2470,8 @@ mod tests {
 
         let validator = ValidatorWork::new(
             "dedup".to_string(),
-            vec!["dedup-rule".to_string()],
-            vec!["similar".to_string()],
+            RuleNames::new(["dedup-rule".to_string()]),
+            ProbeNames::new(["similar".to_string()]),
             vec![file],
         );
         assert_eq!(validator.validator_name(), "dedup");
@@ -1539,13 +2502,14 @@ mod tests {
             )],
         };
 
-        let batches = batch_work_list(&work, 25).expect("packs within budget");
+        let (batches, skipped) = batch_work_list(&work, 25);
 
         assert_eq!(
             batches.iter().map(batch_paths).collect::<Vec<_>>(),
             vec![vec!["a.rs", "b.rs"], vec!["c.rs"]],
             "files pack greedily into whole-file batches under the budget"
         );
+        assert!(skipped.is_empty(), "no file is oversized: {skipped:?}");
         for batch in &batches {
             let total: usize = batch.distinct_files().map(|f| f.source_slice.len()).sum();
             assert!(total <= 25, "every batch stays within the byte budget");
@@ -1553,23 +2517,26 @@ mod tests {
     }
 
     #[test]
-    fn batch_work_list_errors_on_a_single_file_over_the_budget() {
+    fn batch_work_list_skips_a_single_file_over_the_budget_and_packs_the_rest() {
         // One file larger than the budget cannot be packed without splitting it
-        // (forbidden) — it is a hard error, not a slice, not a spill.
+        // (forbidden) — it is excluded and reported, never a hard error that
+        // blocks the rest of the scope. `small.rs` still packs normally.
         let work = WorkList {
             change_purpose: "p".to_string(),
-            validators: vec![validator_sized("v", &[("big.rs", 100)])],
+            validators: vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
         };
 
-        let err = batch_work_list(&work, 32).expect_err("an oversized file errors");
-        let msg = err.to_string();
-        assert!(msg.contains("big.rs"), "names the offending file: {msg}");
-        assert!(msg.contains("100"), "names the file's size: {msg}");
-        assert!(msg.contains("32"), "names the limit: {msg}");
-        assert!(
-            msg.contains("batch_size") && msg.contains("narrow"),
-            "directs the caller to raise batch_size or narrow scope: {msg}"
+        let (batches, skipped) = batch_work_list(&work, 32);
+
+        assert_eq!(
+            batches.iter().map(batch_paths).collect::<Vec<_>>(),
+            vec![vec!["small.rs"]],
+            "the non-oversized file still packs and reviews: {batches:?}"
         );
+        assert_eq!(skipped.len(), 1, "exactly the oversized file is skipped");
+        assert_eq!(skipped[0].path(), "big.rs", "names the offending file");
+        assert_eq!(skipped[0].size(), 100, "names the file's size");
+        assert_eq!(skipped[0].batch_size(), 32, "names the limit");
     }
 
     #[test]
@@ -1580,10 +2547,11 @@ mod tests {
             validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
         };
 
-        let batches = batch_work_list(&work, 32 * 1024).expect("small diff packs");
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
 
         assert_eq!(batches.len(), 1, "a small diff is a single batch");
         assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
+        assert!(skipped.is_empty());
     }
 
     #[test]
@@ -1599,13 +2567,14 @@ mod tests {
             ],
         };
 
-        let batches = batch_work_list(&work, 25).expect("packs within budget");
+        let (batches, skipped) = batch_work_list(&work, 25);
 
         assert_eq!(batches.len(), 2);
         assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
         assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
         assert_eq!(batch_validators(&batches[1]), vec!["v2"]);
         assert_eq!(batch_paths(&batches[1]), vec!["c.rs"]);
+        assert!(skipped.is_empty());
     }
 
     #[test]
@@ -1620,7 +2589,7 @@ mod tests {
             ],
         };
 
-        let batches = batch_work_list(&work, 25).expect("packs within budget");
+        let (batches, skipped) = batch_work_list(&work, 25);
 
         assert_eq!(batches.len(), 1, "the one distinct file is one batch");
         assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
@@ -1629,6 +2598,7 @@ mod tests {
             vec!["v1", "v2"],
             "both validators that matched the shared file ride the same batch"
         );
+        assert!(skipped.is_empty());
     }
 
     #[test]
@@ -1637,7 +2607,9 @@ mod tests {
             change_purpose: "p".to_string(),
             validators: vec![],
         };
-        assert!(batch_work_list(&work, 32 * 1024).unwrap().is_empty());
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
+        assert!(batches.is_empty());
+        assert!(skipped.is_empty());
     }
 
     #[test]
@@ -2337,8 +3309,12 @@ mod tests {
         repo.commit("initial");
         let git = open_repo(repo.path()).unwrap();
 
-        let got = read_at_ref(&git, "HEAD", "src/never_committed.rs")
-            .expect("a path absent at the ref must not be an error");
+        let got = read_at_ref(
+            &git,
+            GitRefSpec::head(),
+            FilePath::new("src/never_committed.rs"),
+        )
+        .expect("a path absent at the ref must not be an error");
         assert_eq!(got, None, "absent at the ref is Ok(None)");
     }
 
@@ -2350,8 +3326,35 @@ mod tests {
         repo.commit("initial");
         let git = open_repo(repo.path()).unwrap();
 
-        let got = read_at_ref(&git, "HEAD", "src/lib.rs").expect("a committed blob must succeed");
+        let got = read_at_ref(&git, GitRefSpec::head(), FilePath::new("src/lib.rs"))
+            .expect("a committed blob must succeed");
         assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+    }
+
+    /// The two halves of a `refspec:path` blob address are DISTINCT types, so a
+    /// call site cannot transpose them by accident — the compiler rejects it.
+    /// This pins the order the types carry: the refspec selects the revision,
+    /// the path selects the file within it, and the transposition addresses
+    /// nothing.
+    #[test]
+    fn read_at_ref_addresses_the_path_within_the_refspec_never_the_transposition() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn compute() {}\n");
+        repo.commit("initial");
+        let git = open_repo(repo.path()).unwrap();
+
+        let got = read_at_ref(&git, GitRefSpec::head(), FilePath::new("src/lib.rs"))
+            .expect("the path within the refspec must read");
+        assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+
+        // Swapping the halves yields the meaningless spec `src/lib.rs:HEAD`,
+        // whose revision half resolves to nothing — the absent-at-ref signal,
+        // never this file's content.
+        let transposed = read_at_ref(&git, GitRefSpec::new("src/lib.rs"), FilePath::new("HEAD"));
+        assert!(
+            matches!(transposed, Ok(None)),
+            "a transposed refspec/path addresses nothing: {transposed:?}"
+        );
     }
 
     /// A binary/non-UTF8 blob committed at the ref is a genuine read failure,
@@ -2364,7 +3367,7 @@ mod tests {
         repo.commit("add a binary blob");
         let git = open_repo(repo.path()).unwrap();
 
-        let err = read_at_ref(&git, "HEAD", "blob.bin")
+        let err = read_at_ref(&git, GitRefSpec::head(), FilePath::new("blob.bin"))
             .expect_err("a non-UTF8 blob must not be silently treated as absent");
         match err {
             AvpError::Context(msg) => {
@@ -2375,5 +3378,120 @@ mod tests {
             }
             other => panic!("expected AvpError::Context, got: {other:?}"),
         }
+    }
+
+    // ---- typed parameter pairs: a transposition must not compile ----------
+
+    /// The two sides of a file's change are DISTINCT types ([`BeforeContent`]
+    /// and [`AfterContent`]) carried by one named-field [`FileVersions`], so no
+    /// call site can transpose them: writing
+    /// `FileVersions { before: AfterContent::new(a), after: BeforeContent::new(b) }`
+    /// is `error[E0308]: mismatched types`, never a silently INVERTED diff.
+    /// This pins the direction each side carries into the semantic differ.
+    #[test]
+    fn file_change_builder_records_the_before_side_as_before_never_the_transposition() {
+        let mut builder = FileChangeBuilder::new();
+        builder.push(
+            FilePath::new("src/lib.rs"),
+            FileVersions {
+                before: BeforeContent::new(Some("fn old() {}\n".to_string())),
+                after: AfterContent::new(Some("fn new() {}\n".to_string())),
+            },
+        );
+        let resolved = builder.finish(vec!["src/lib.rs".to_string()], "purpose".to_string(), None);
+
+        let change = &resolved.file_changes[0];
+        assert_eq!(change.file_path, "src/lib.rs");
+        assert_eq!(change.before_content.as_deref(), Some("fn old() {}\n"));
+        assert_eq!(change.after_content.as_deref(), Some("fn new() {}\n"));
+        assert_eq!(change.status, FileStatus::Modified);
+        // Only the AFTER side is the file's current content.
+        assert_eq!(
+            resolved.after_content.get("src/lib.rs").map(String::as_str),
+            Some("fn new() {}\n")
+        );
+    }
+
+    /// A file absent on the before side is an ADDITION; one absent on the after
+    /// side is a DELETION. Transposing the two sides inverts exactly this pair
+    /// — a plausible-looking but wholly wrong diff — which is why the sides are
+    /// separate types.
+    #[test]
+    fn an_absent_before_side_is_an_addition_and_an_absent_after_side_a_deletion() {
+        let mut builder = FileChangeBuilder::new();
+        builder.push(
+            FilePath::new("added.rs"),
+            FileVersions {
+                before: BeforeContent::absent(),
+                after: AfterContent::new(Some("fn added() {}\n".to_string())),
+            },
+        );
+        builder.push(
+            FilePath::new("deleted.rs"),
+            FileVersions {
+                before: BeforeContent::new(Some("fn deleted() {}\n".to_string())),
+                // A deleted file has no post-change content.
+                after: AfterContent::new(None),
+            },
+        );
+        let resolved = builder.finish(
+            vec!["added.rs".to_string(), "deleted.rs".to_string()],
+            "purpose".to_string(),
+            None,
+        );
+
+        assert_eq!(resolved.file_changes[0].status, FileStatus::Added);
+        assert_eq!(resolved.file_changes[1].status, FileStatus::Deleted);
+        // A deleted file has no current content to inline.
+        assert!(!resolved.after_content.contains_key("deleted.rs"));
+    }
+
+    /// A validator's rule names and probe names are DISTINCT types
+    /// ([`RuleNames`], [`ProbeNames`]), so [`ValidatorWork::new`] cannot take
+    /// them transposed — the compiler rejects it. This pins which list each
+    /// accessor reports.
+    #[test]
+    fn validator_work_names_its_rules_and_probes_never_the_transposition() {
+        let validator = ValidatorWork::new(
+            "dedup".to_string(),
+            RuleNames::new(["dedup-rule".to_string()]),
+            ProbeNames::new(["similar".to_string()]),
+            vec![],
+        );
+        assert_eq!(validator.rules(), ["dedup-rule".to_string()]);
+        assert_eq!(validator.probes(), ["similar".to_string()]);
+    }
+
+    /// [`select_probe_results`] filters by PROBE NAME and attaches by changed
+    /// SYMBOL. The two lists are distinct types ([`ProbeNames`] against a plain
+    /// symbol slice), so they cannot be transposed; this pins which list each
+    /// filter reads.
+    #[test]
+    fn select_probe_results_filters_by_probe_name_and_attaches_by_changed_symbol() {
+        let probe = |name: &str, target: &str| ProbeResult {
+            name: name.to_string(),
+            kind: ProbeKind::Fact,
+            target: target.to_string(),
+            rows: vec![],
+        };
+        let cache = vec![probe("similar", "compute"), probe("callers", "compute")];
+        let declared = ProbeNames::new(["similar".to_string()]);
+        let changed = vec!["compute".to_string()];
+
+        let got = select_probe_results(&cache, "src/lib.rs", &changed, &declared);
+        let names: Vec<&str> = got.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["similar"],
+            "only the validator's DECLARED probe is selected"
+        );
+
+        // A symbol-targeted probe never attaches to a file whose changed
+        // symbols do not name that target.
+        let got = select_probe_results(&cache, "src/lib.rs", &[], &declared);
+        assert!(
+            got.is_empty(),
+            "an unrelated symbol target attaches to no file: {got:?}"
+        );
     }
 }

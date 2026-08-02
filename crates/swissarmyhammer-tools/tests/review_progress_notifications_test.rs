@@ -13,7 +13,9 @@
 //! 1. At least one `notifications/progress` arrives, and every captured
 //!    notification echoes the same `progressToken`.
 //! 2. `progress` is monotonically non-decreasing on the wire and `total >=
-//!    progress` on every notification.
+//!    progress` on every notification. The monotonicity comparison is only a
+//!    statement about the server on a CURRENT-THREAD runtime — see
+//!    [`assert_arrival_order_is_wire_order`], which enforces that.
 //! 3. Every announced (validator, file) pair ("Reviewing <file> against
 //!    <validator>") also completes ("Reviewed <file> against <validator>"),
 //!    and the final notification closes with `progress == total` — one
@@ -76,6 +78,16 @@ impl ClientHandler for CapturingClient {
         self.info.clone()
     }
 
+    /// MUST complete in its first poll — no `.await` anywhere in this body.
+    ///
+    /// rmcp dispatches each notification on its own spawned task. The pairwise
+    /// monotonicity assertion in the test below relies on those tasks running
+    /// to completion in spawn order, which current-thread FIFO scheduling gives
+    /// only while each one finishes without yielding. Introducing an `.await`
+    /// here — a `tokio::sync::Mutex`, a channel handoff, anything — re-queues
+    /// the task behind later notifications and silently turns that assertion
+    /// back into a statement about tokio's scheduler. `std::sync::Mutex` +
+    /// `push` is deliberate; see [`assert_arrival_order_is_wire_order`].
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
@@ -98,8 +110,62 @@ fn parse_pair<'m>(message: &'m str, verb_prefix: &str) -> Option<(&'m str, &'m s
     Some((file, validator))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Fail loudly unless this test runs on a CURRENT-THREAD tokio runtime.
+///
+/// The capture below is compared pairwise (`captured.windows(2)`) to assert the
+/// MCP spec's monotonic-`progress` requirement. That comparison is only a
+/// statement about the SERVER while the capture's arrival order equals the
+/// order the server wrote the frames — and whether that holds is decided
+/// entirely by this test's runtime flavor:
+///
+/// rmcp 1.7 dispatches every incoming peer notification on its own spawned task
+/// (`service.rs`, `spawn_service_task` per notification), so each
+/// `on_progress` call is independently scheduled. On a MULTI-THREAD runtime two
+/// of those tasks can push into the capture in either order, and the pairwise
+/// comparison then asserts tokio's scheduling instead of the server's wire
+/// behavior — it reports a phantom regression (observed: `55 -> 53`) on a
+/// server whose emission was strictly monotonic, at roughly a 30% rate under
+/// load. On a CURRENT-THREAD runtime the local run queue is FIFO
+/// (`push_back`/`pop_front`, tokio `scheduler/current_thread`), so the dispatch
+/// tasks run in spawn order and arrival order IS wire order.
+///
+/// FIFO scheduling is only half the precondition: each dispatch task must also
+/// finish in its FIRST poll, or it re-queues behind later notifications. That
+/// half cannot be asserted from here — it is a property of the handler body, so
+/// it is stated at [`CapturingClient::on_progress`], which must stay `.await`-free.
+///
+/// So the flavor is not a style choice and not a way to make a flake quieter:
+/// it is the precondition that makes the assertion mean what it says. Asserting
+/// it here turns "someone adds `flavor = \"multi_thread\"`" into an immediate,
+/// self-explaining failure instead of a returning intermittent one.
+///
+/// Wire-order monotonicity is additionally pinned where the transport itself
+/// guarantees the order, with no runtime-flavor precondition at all, by
+/// `review_progress_stdio_test::review_progress_ticks_are_monotonic_in_wire_order`
+/// (raw JSON-RPC frames read sequentially off one byte stream). The
+/// server-side emitter's single-sequencer property is pinned by
+/// `review_op::tests::concurrent_producers_still_emit_a_dense_monotonic_counter`.
+fn assert_arrival_order_is_wire_order() {
+    let flavor = tokio::runtime::Handle::current().runtime_flavor();
+    assert_eq!(
+        flavor,
+        tokio::runtime::RuntimeFlavor::CurrentThread,
+        "this test compares captured notifications pairwise, which is only a \
+         statement about the SERVER on a current-thread runtime: rmcp spawns a \
+         task per incoming notification, so on a multi-thread runtime the \
+         capture order is tokio's scheduling and the comparison reports \
+         phantom regressions. Keep `#[tokio::test]` (no flavor). For wire-order \
+         monotonicity under real concurrency see \
+         review_progress_stdio_test::review_progress_ticks_are_monotonic_in_wire_order."
+    );
+}
+
+/// The runtime flavor is load-bearing here, so it is asserted rather than
+/// merely commented — see [`assert_arrival_order_is_wire_order`].
+#[tokio::test]
 async fn review_working_emits_progress_notifications_per_pair_when_token_supplied() {
+    assert_arrival_order_is_wire_order();
+
     // Keep the server-side code_context bootstrap hermetic: this test asserts
     // review progress wiring, not semantic embeddings, so skip the multi-GB
     // embedding-model load. nextest runs each test in its own process, so the

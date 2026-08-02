@@ -6,18 +6,25 @@
 //!
 //! - `list validators` — one summary row per loaded RuleSet (name, description,
 //!   source layer, match globs, probes, rule count, path), optionally
-//!   filtered by `source` and/or a path/glob `match`.
+//!   filtered by `source` and/or a path/glob `match`, and optionally carrying
+//!   every rule's verbatim body (`rules: true`). One call with
+//!   `match: <file>` + `rules: true` therefore answers "what will a review
+//!   enforce on this file?" without a `get validator` call per name.
 //! - `get validator` — one RuleSet's full rule bodies + probes.
 //! - `check validators` — lint every loaded RuleSet: frontmatter is valid (it
 //!   parsed), declared globs compile, no stray `triggerMatcher`, and every
 //!   declared probe exists in the engine's probe catalog.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 use swissarmyhammer_validators::review::probe_exists;
 use swissarmyhammer_validators::validators::{
-    compile_glob_patterns, matches_any_pattern, ValidatorMatch,
+    compile_glob_patterns, matches_any_pattern, MatchContext, ValidatorLoader, ValidatorMatch,
 };
 use swissarmyhammer_validators::{load_rules, RuleSet};
+
+use crate::mcp::op_tool_helpers::is_glob_pattern;
 
 /// A `list validators` summary row.
 #[derive(Debug, Serialize)]
@@ -36,6 +43,10 @@ pub struct ValidatorSummary {
     pub rule_count: usize,
     /// The RuleSet directory path.
     pub path: String,
+    /// Every rule's name and verbatim body — present only when the call asked
+    /// for them (`rules: true`), so a plain listing stays a summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<RuleDetail>>,
 }
 
 /// One rule in a `get validator` response.
@@ -109,8 +120,24 @@ fn match_globs(ruleset: &RuleSet) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Build the summary row for one RuleSet.
-fn summary(ruleset: &RuleSet) -> ValidatorSummary {
+/// Every rule of a RuleSet, name plus verbatim body.
+///
+/// The one place a `RuleDetail` list is built, so `get validator` and a
+/// `rules: true` listing always report the same bytes.
+fn rule_details(ruleset: &RuleSet) -> Vec<RuleDetail> {
+    ruleset
+        .rules
+        .iter()
+        .map(|rule| RuleDetail {
+            name: rule.name.clone(),
+            body: rule.body.clone(),
+        })
+        .collect()
+}
+
+/// Build the summary row for one RuleSet, carrying its rule bodies when
+/// `include_rules` is set.
+fn summary(ruleset: &RuleSet, include_rules: bool) -> ValidatorSummary {
     ValidatorSummary {
         name: ruleset.name().to_string(),
         description: ruleset.description().to_string(),
@@ -119,22 +146,55 @@ fn summary(ruleset: &RuleSet) -> ValidatorSummary {
         probes: ruleset.manifest.probes.clone(),
         rule_count: ruleset.rules.len(),
         path: ruleset.base_path.display().to_string(),
+        rules: include_rules.then(|| rule_details(ruleset)),
     }
+}
+
+/// The names of the RuleSets the engine pairs with one concrete file path.
+///
+/// This is the engine's own matcher — a [`MatchContext`] carrying the file, run
+/// through [`ValidatorLoader::matching_rulesets`] — which is exactly how
+/// `scope_review` pairs each changed file with its validators. Answering a
+/// path-shaped `match` through it means the tool cannot drift from the set a
+/// review run will actually enforce on that file.
+fn engine_matched_names(loader: &ValidatorLoader, path: &str) -> BTreeSet<String> {
+    let ctx = MatchContext::new().with_file(path.to_string());
+    loader
+        .matching_rulesets(&ctx)
+        .into_iter()
+        .map(|rs| rs.name().to_string())
+        .collect()
 }
 
 /// Whether a RuleSet passes the `source` and `match` filters.
 ///
 /// `source` is one of `builtin` / `user` / `project` / `all` (or absent = all).
-/// `match` is a path/glob string the RuleSet's own match globs must overlap with
-/// (matched leniently: the filter is treated as a path and tested against each of
-/// the RuleSet's globs).
-fn passes_filters(ruleset: &RuleSet, source: Option<&str>, match_filter: Option<&str>) -> bool {
+///
+/// `match` is answered two ways, by the shape of the value:
+///
+/// - A concrete path (no glob metacharacter) is delegated to the engine matcher,
+///   pre-computed into `engine_matched` by [`list_validators`]; membership in that
+///   set is the whole test.
+/// - A glob fragment (`*.rs`, `**/*.ts`) keeps the documented lenient behavior:
+///   the fragment is tested as a path against the RuleSet's globs, and also
+///   matched as a substring of them, so a caller can find a validator by the
+///   pattern it declares.
+fn passes_filters(
+    ruleset: &RuleSet,
+    source: Option<&str>,
+    match_filter: Option<&str>,
+    engine_matched: Option<&BTreeSet<String>>,
+) -> bool {
     if let Some(source) = source {
         if !source.eq_ignore_ascii_case("all")
             && !ruleset.source.to_string().eq_ignore_ascii_case(source)
         {
             return false;
         }
+    }
+
+    if let Some(matched) = engine_matched {
+        return matched.contains(ruleset.name());
     }
 
     if let Some(needle) = match_filter {
@@ -153,6 +213,10 @@ fn passes_filters(ruleset: &RuleSet, source: Option<&str>, match_filter: Option<
 /// `list validators`: load the full RuleSet stack, filter, and return summaries
 /// sorted by name.
 ///
+/// `include_rules` adds each RuleSet's rules (name + verbatim body) to its row,
+/// so one call with a path-shaped `match_filter` returns the full rule text a
+/// review run will enforce on that file.
+///
 /// # Errors
 ///
 /// Returns a message when [`load_rules`] fails (user/project directory read
@@ -160,13 +224,20 @@ fn passes_filters(ruleset: &RuleSet, source: Option<&str>, match_filter: Option<
 pub fn list_validators(
     source: Option<&str>,
     match_filter: Option<&str>,
+    include_rules: bool,
 ) -> Result<Vec<ValidatorSummary>, String> {
     let loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+    // A path-shaped `match` is answered by the engine matcher, once for the whole
+    // stack rather than per row.
+    let engine_matched = match_filter
+        .filter(|needle| !is_glob_pattern(needle))
+        .map(|path| engine_matched_names(&loader, path));
+
     let mut summaries: Vec<ValidatorSummary> = loader
         .list_rulesets()
         .into_iter()
-        .filter(|rs| passes_filters(rs, source, match_filter))
-        .map(summary)
+        .filter(|rs| passes_filters(rs, source, match_filter, engine_matched.as_ref()))
+        .map(|rs| summary(rs, include_rules))
         .collect();
     summaries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(summaries)
@@ -184,15 +255,6 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
         .get_ruleset(name)
         .ok_or_else(|| format!("no validator named '{name}'"))?;
 
-    let rules = ruleset
-        .rules
-        .iter()
-        .map(|rule| RuleDetail {
-            name: rule.name.clone(),
-            body: rule.body.clone(),
-        })
-        .collect();
-
     Ok(ValidatorDetail {
         name: ruleset.name().to_string(),
         frontmatter: ValidatorFrontmatterView {
@@ -205,7 +267,7 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
         source_layer: ruleset.source.to_string(),
         path: ruleset.base_path.display().to_string(),
         probes: ruleset.manifest.probes.clone(),
-        rules,
+        rules: rule_details(ruleset),
     })
 }
 

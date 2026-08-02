@@ -79,7 +79,7 @@ use crate::validators::{
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// The default review `batch_size` in **bytes** (256 KiB).
+/// The default review `batch_size` in **bytes** (384 KiB).
 ///
 /// Cramming every changed file's full source into one shared prime overflows the
 /// review model's context on a large diff (every fan-out validator then fails
@@ -93,7 +93,24 @@ use agent_client_protocol_extras::SessionStateStatusResponse;
 /// still splits across batches. (32 KiB, then 128 KiB — the previous defaults —
 /// were smaller than many real source files, so default reviews of normal
 /// commits errored.)
-pub const DEFAULT_BATCH_SIZE: usize = 256 * 1024;
+///
+/// # Why 384 KiB, not 256 KiB
+///
+/// [`batch_work_list`](crate::review::scope::batch_work_list) budgets on
+/// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice)'s
+/// raw byte length — the deliberate choice here, over measuring the rendered
+/// prime, so the scope stage (stage 1, deterministic and rendering-agnostic)
+/// never has to know how the fleet stage (stage 2) formats a file block. But
+/// [`render_numbered_source`] (via [`render_file_block`]) now renders each
+/// line as `{line:>6} | {sha:8} {mark} | {text}` — roughly 16 extra bytes
+/// PER LINE (the numbering, sha, and mark columns) on source lines that
+/// average ~35 bytes, so the rendered prime a batch actually sends is
+/// ~1.45x the raw `source_slice` bytes the budget measures. Raising the
+/// default from 256 KiB to 384 KiB (1.5x — comfortably over the measured
+/// 1.45x) keeps a normal commit inside ONE batch under the new format with
+/// the same margin the 256 KiB default gave the old unnumbered one, without
+/// coupling the scope stage to the fleet stage's rendering.
+pub const DEFAULT_BATCH_SIZE: usize = 384 * 1024;
 
 /// Configuration for a fan-out run.
 ///
@@ -1418,9 +1435,7 @@ fn render_file_block(out: &mut String, file: &FileWork) {
          review boundary: report every place a rule fires anywhere in it, including \
          pre-existing instances that sit outside the change described below.\n\n",
     );
-    out.push_str("```\n");
-    out.push_str(file.source_slice().trim_end());
-    out.push_str("\n```\n\n");
+    render_numbered_source(out, file);
 
     out.push_str(
         "### What changed (semantic diff — orientation only, NOT the review boundary)\n\n",
@@ -1434,6 +1449,70 @@ fn render_file_block(out: &mut String, file: &FileWork) {
 
     out.push_str("### Probe evidence\n\n");
     render_probe_evidence(out, file.probe_results(), false);
+}
+
+/// The legend printed above every numbered source block, explaining the
+/// `{line:>6} | {sha:8} {mark} | {text}` layout [`render_numbered_source`]
+/// writes. Explicit about reading the printed number rather than counting
+/// lines — the failure mode this whole format exists to close (an LLM
+/// estimating a line number by counting drifts further wrong the deeper into
+/// the file the cited line sits).
+const LINE_FORMAT_LEGEND: &str = "\
+Each line below is numbered and shows the commit that last changed it, in this \
+exact layout: `{line:>6} | {sha:8} {mark} | {text}`.
+
+- `line` — the 1-based line number. READ this number for any `Finding.line` \
+you report — do NOT count lines yourself; counting is exactly how a cited \
+line number drifts wrong, worse the deeper into the file it sits.
+- `sha` — the first 8 characters of the commit that last changed the line, or \
+`worktree` (an uncommitted line — including every line of a brand-new file), \
+`untrackd` (git does not track this file), or `????????` (blame could not be \
+determined).
+- `mark` — `+` when THIS review's change touched the line, a space when it \
+did not. A rule that excludes pre-existing code reads this mark, never the \
+sha (the sha attributes a line to a commit; only the mark says whether this \
+change touched it).
+- Everything after the second `|` is the unmodified source line, exactly as \
+it appears in the file.
+
+";
+
+/// Append `file`'s source as a numbered, blame-annotated block — one line of
+/// [`LINE_FORMAT_LEGEND`]'s `{line:>6} | {sha:8} {mark} | {text}` layout per
+/// source line, inside a fenced code block.
+///
+/// `file.source_slice().trim_end()` is the SAME content
+/// [`crate::review::scope::compute_line_annotations`] (the scope stage) used
+/// to compute [`FileWork::line_annotations`] — trimmed identically in both
+/// places — so line `i` of this render is guaranteed to be annotation `i`,
+/// never off-by-one. An empty (deletion) source renders the bare empty fence,
+/// unchanged from the format this format replaces: no legend, no numbering,
+/// nothing to number.
+fn render_numbered_source(out: &mut String, file: &FileWork) {
+    let source = file.source_slice().trim_end();
+    if source.is_empty() {
+        out.push_str("```\n\n```\n\n");
+        return;
+    }
+
+    let annotations = file.line_annotations();
+    out.push_str(LINE_FORMAT_LEGEND);
+    out.push_str("```\n");
+    for (i, text) in source.lines().enumerate() {
+        let line = i + 1;
+        // A missing annotation (should not happen once the scope stage always
+        // attaches one per line) falls back to the same `????????` sentinel a
+        // blame failure uses, never a panic on an out-of-bounds index.
+        let (sha, mark) = match annotations.get(i) {
+            Some(annotation) => (
+                annotation.sha().to_string(),
+                if annotation.touched() { '+' } else { ' ' },
+            ),
+            None => ("????????".to_string(), ' '),
+        };
+        let _ = writeln!(out, "{line:>6} | {sha:8} {mark} | {text}");
+    }
+    out.push_str("```\n\n");
 }
 
 /// Append the structured semantic diff for a file as a list of changed entities.

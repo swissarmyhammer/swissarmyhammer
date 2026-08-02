@@ -39,6 +39,28 @@ pub(crate) fn string_array_arg(
         .unwrap_or_default()
 }
 
+/// Read an optional boolean argument, falling back to `default`.
+///
+/// A wrong-typed value (string, number, null) is treated as absent, so the
+/// caller's default stands.
+pub(crate) fn bool_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: bool,
+) -> bool {
+    args.get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
+}
+
+/// The glob metacharacters that make a target a pattern rather than a literal path.
+const GLOB_METACHARACTERS: [char; 3] = ['*', '?', '['];
+
+/// Whether a path-shaped argument is a glob pattern rather than a concrete path.
+pub(crate) fn is_glob_pattern(target: &str) -> bool {
+    target.contains(GLOB_METACHARACTERS)
+}
+
 /// Read an optional non-negative integer argument as a `usize`.
 ///
 /// Returns `None` when the key is absent or is not a JSON unsigned integer (a
@@ -92,6 +114,27 @@ mod tests {
         // Non-array and absent both yield empty.
         assert!(string_array_arg(&args, "scalar").is_empty());
         assert!(string_array_arg(&args, "missing").is_empty());
+    }
+
+    #[test]
+    fn bool_arg_reads_booleans_and_falls_back_to_the_default() {
+        let args = map(serde_json::json!({"yes": true, "no": false, "str": "true"}));
+        assert!(bool_arg(&args, "yes", false));
+        assert!(!bool_arg(&args, "no", true));
+        // Absent and wrong-typed both defer to the caller's default.
+        assert!(bool_arg(&args, "missing", true));
+        assert!(!bool_arg(&args, "missing", false));
+        assert!(bool_arg(&args, "str", true));
+    }
+
+    #[test]
+    fn is_glob_pattern_separates_patterns_from_paths() {
+        for pattern in ["*.rs", "**/*.ts", "src/a?.rs", "src/[ab].rs"] {
+            assert!(is_glob_pattern(pattern), "{pattern} is a glob");
+        }
+        for path in ["src/lib.rs", "crates/a/src/mod.rs", "Cargo.toml"] {
+            assert!(!is_glob_pattern(path), "{path} is a concrete path");
+        }
     }
 
     #[test]

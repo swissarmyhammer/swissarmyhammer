@@ -23,8 +23,8 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 // harness, the throwaway git repo, the on-disk index builder + row seeders, and
 // the shared embedding dimension.
 use swissarmyhammer_validators::review::test_support::{
-    body as dup_body, dup_emb, on_disk_index_conn, seed_chunk, ScriptedAdapter, ScriptedAgent,
-    ScriptedReply, TestRepo, DIM,
+    body as dup_body, dup_emb, engine_matched_validator_names, on_disk_index_conn, seed_chunk,
+    ScriptedAdapter, ScriptedAgent, ScriptedReply, TestRepo, DIM,
 };
 use tokio::sync::broadcast;
 
@@ -230,6 +230,28 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     .unwrap();
 }
 
+/// Write a RuleSet whose match criteria pin it to a TOOL as well as a file glob.
+///
+/// The review engine matches by changed file with no tool name in context, so it
+/// never pairs such a validator with a file — the fixture that proves the tool's
+/// `match` filter uses the engine matcher rather than a glob test of its own.
+fn write_tool_scoped_ruleset(base: &Path, name: &str, glob: &str, tool: &str) {
+    let dir = base.join(name);
+    std::fs::create_dir_all(dir.join("rules")).unwrap();
+    std::fs::write(
+        dir.join("VALIDATOR.md"),
+        format!(
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n  tools:\n    - {tool}\n---\n\n# {name}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rules/check.md"),
+        "---\nname: check\ndescription: Check\n---\n\nCheck the code.\n",
+    )
+    .unwrap();
+}
+
 /// Write a malformed RuleSet under `base/<name>/`: a VALIDATOR.md whose
 /// frontmatter does not parse (unterminated YAML), so the loader drops it.
 fn write_malformed_ruleset(base: &Path, name: &str) {
@@ -297,6 +319,240 @@ async fn list_validators_surfaces_user_and_project_layers_with_probes() {
     let project_row = find("project-dead").expect("project validator listed");
     assert_eq!(project_row["source_layer"], json!("project"));
     assert_eq!(project_row["probes"], json!(["callers"]));
+}
+
+/// The Rust source path the `match` filter targets in the pairing tests. Nothing
+/// reads it from disk — validator matching is a pure glob test over the path.
+const RUST_MATCH_TARGET: &str = "src/lib.rs";
+
+/// One call answers "what rules will a review enforce on this file?": `match: <a
+/// .rs path>` + `rules: true` must return EXACTLY the validators the engine pairs
+/// with that path (via its own `match_validators_and_files`), each carrying its
+/// rule bodies verbatim — byte-identical to what `get validator` returns.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_with_rules_pairs_like_the_engine_and_carries_bodies() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    // Matches the .rs glob but is pinned to a tool, so the engine never pairs it
+    // with a file: listing it would mean the tool matched by its own glob test.
+    write_tool_scoped_ruleset(&project_validators, "edit-hook-rules", "**/*.rs", "Edit");
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    args.insert("match".to_string(), json!(RUST_MATCH_TARGET));
+    args.insert("rules".to_string(), json!(true));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let rows = parsed.as_array().expect("list returns an array");
+
+    // The tool's answer IS the engine's pairing for that path — same code path,
+    // so the two can never disagree about what a review run will enforce.
+    let loader = swissarmyhammer_validators::load_rules().expect("load rules");
+    let listed: Vec<String> = rows
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        listed,
+        engine_matched_validator_names(RUST_MATCH_TARGET, &loader),
+        "`list validators` must pair with the file exactly as the engine does: {body}"
+    );
+    assert!(
+        listed.contains(&"rust-rules".to_string()),
+        "the Rust-matching validator must be paired: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"ts-rules".to_string()),
+        "a TypeScript-only validator must not be paired with a .rs path: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"edit-hook-rules".to_string()),
+        "a tool-scoped validator the engine never pairs with a file must not be listed: {listed:?}"
+    );
+
+    // Every row carries the ruleset's rules verbatim — the same shape and the
+    // same bytes `get validator` returns for that name.
+    for row in rows {
+        let name = row["name"].as_str().unwrap();
+        let mut detail_args = serde_json::Map::new();
+        detail_args.insert("op".to_string(), json!("get validator"));
+        detail_args.insert("name".to_string(), json!(name));
+        let detail = tool
+            .execute(detail_args, &context)
+            .await
+            .expect("get validator");
+        let detail: serde_json::Value = serde_json::from_str(&extract_text(&detail)).unwrap();
+        assert_eq!(
+            row["rules"], detail["rules"],
+            "`{name}` rules must be the verbatim `get validator` bodies"
+        );
+    }
+
+    // And those bodies are the real rule text, not empty placeholders.
+    let fixture = rows
+        .iter()
+        .find(|r| r["name"] == json!("rust-rules"))
+        .expect("the fixture validator is listed");
+    assert_eq!(fixture["rules"][0]["name"], json!("check"));
+    assert!(
+        fixture["rules"][0]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Check the code"),
+        "rule bodies must be the verbatim markdown: {fixture}"
+    );
+}
+
+/// A glob-fragment `match` (not a concrete path) keeps its documented lenient
+/// behavior: it answers "which validators declare this glob?", so a caller can
+/// still discover a ruleset by the pattern it matches on.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_matches_a_glob_fragment_leniently() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    args.insert("match".to_string(), json!("**/*.ts"));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let listed: Vec<String> = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+
+    assert!(
+        listed.contains(&"ts-rules".to_string()),
+        "a glob fragment must find the validator declaring it: {body}"
+    );
+    assert!(
+        !listed.contains(&"rust-rules".to_string()),
+        "a glob fragment must not drag in unrelated validators: {listed:?}"
+    );
+}
+
+/// An empty `match` is no filter at all, not a path that matches nothing: the
+/// listing is the same one a call with no `match` returns.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_treats_an_empty_match_as_no_filter() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_ruleset(&project_validators, "rust-rules", "**/*.rs", &[]);
+    write_ruleset(&project_validators, "ts-rules", "**/*.ts", &[]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let listed = |match_value: Option<&str>| {
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("list validators"));
+        if let Some(value) = match_value {
+            args.insert("match".to_string(), json!(value));
+        }
+        async {
+            let result = tool.execute(args, &context).await.expect("list validators");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&extract_text(&result)).expect("json array");
+            parsed
+                .as_array()
+                .expect("list returns an array")
+                .iter()
+                .map(|r| r["name"].as_str().unwrap().to_string())
+                .collect::<Vec<String>>()
+        }
+    };
+
+    let unfiltered = listed(None).await;
+    assert_eq!(
+        listed(Some("")).await,
+        unfiltered,
+        "an empty `match` must not filter anything out"
+    );
+    assert!(
+        unfiltered.contains(&"rust-rules".to_string())
+            && unfiltered.contains(&"ts-rules".to_string()),
+        "the unfiltered listing carries every validator: {unfiltered:?}"
+    );
+}
+
+/// `rules` defaults to false: a plain `list validators` row stays a summary and
+/// carries no rule bodies.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_omits_rule_bodies_by_default() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    write_ruleset(
+        &project.path().join(".validators"),
+        "rust-rules",
+        "*.rs",
+        &[],
+    );
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    let row = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .find(|r| r["name"] == json!("rust-rules"))
+        .expect("the fixture validator is listed");
+    assert_eq!(
+        row["rule_count"],
+        json!(1),
+        "the summary still counts rules"
+    );
+    assert!(
+        row.get("rules").is_none(),
+        "rule bodies must be omitted unless `rules: true`: {body}"
+    );
 }
 
 #[tokio::test]
@@ -699,6 +955,56 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
     scripted_factory(agent)
 }
 
+/// Like [`planted_duplicate_fixture`], plus a second changed file
+/// (`src/huge.rs`, ~2000 bytes) matched by the same "deduplicate" validator but
+/// carrying no findings of its own. Used to prove an oversized `batch_size`
+/// skip on ONE file does not stop review of the others: the packer excludes
+/// `huge.rs` before fan-out, so the batch (and this same scripted script) only
+/// ever sees `src/lib.rs`.
+fn two_file_fixture_one_oversized(repo: &TestRepo) -> AgentFactory {
+    let factory = planted_duplicate_fixture(repo);
+    // Untracked/added in the working-tree diff; large enough to exceed a
+    // 500-byte `batch_size` while `src/lib.rs` (~181 bytes) still fits.
+    repo.write("src/huge.rs", &"// filler line of source text\n".repeat(80));
+    factory
+}
+
+/// Like [`planted_duplicate_fixture`], but the duplicate addition is COMMITTED
+/// (not left as a working-tree change) so a `review sha HEAD~1..HEAD` range
+/// scope sees it. The on-disk `.code-context` index is seeded AFTER the
+/// commit — `TestRepo::commit` stages everything (`git add -A`), so seeding it
+/// first would commit the binary index db as a tracked (and undiffable) blob.
+fn planted_duplicate_fixture_committed(repo: &TestRepo) -> AgentFactory {
+    repo.write("src/lib.rs", "fn placeholder() {}\n");
+    repo.commit("initial");
+    let dup = dup_body("compute");
+    repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
+    repo.commit("add duplicate");
+
+    write_ruleset(
+        &repo.path().join(".validators"),
+        "deduplicate",
+        "*.rs",
+        &["duplicates"],
+    );
+    seed_on_disk_index(repo.path(), &dup);
+
+    let agent = ScriptedAgent::new(vec![
+        (
+            "# Validator: deduplicate".to_string(),
+            ScriptedReply::Text(findings_json(
+                "src/lib.rs",
+                "compute duplicates old_compute",
+            )),
+        ),
+        (
+            "compute duplicates old_compute".to_string(),
+            ScriptedReply::Text(confirm_json()),
+        ),
+    ]);
+    scripted_factory(agent)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(cwd)]
 async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
@@ -737,6 +1043,383 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
     );
     assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
+}
+
+// ---------------------------------------------------------------------------
+// `batch_size` modifier: reaches the engine for each of the three review ops,
+// bad values behave as documented, and an oversized file is a named gap
+// (never a hard error that blocks the rest of the scope). Regression coverage
+// for ^3rnvage.
+// ---------------------------------------------------------------------------
+
+/// A `batch_size`, in bytes, well under the ~181-byte planted `src/lib.rs`
+/// fixture (`fn placeholder() {}\n\n<dup body>\n`) but well over zero — small
+/// enough that only an override this small (not the ~384 KiB default) could
+/// make the packer skip it.
+const TINY_BATCH_SIZE: u64 = 50;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_working_batch_size_override_skips_a_file_the_default_would_review() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(TINY_BATCH_SIZE));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("an oversized file must be a named gap, never a hard error");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let markdown = parsed["markdown"].as_str().unwrap();
+
+    // The SAME fixture, at the DEFAULT batch_size, is confirmed and reviewed
+    // (`review_working_through_the_registered_tool_flags_a_planted_duplicate`).
+    // Here it is skipped instead — proof the passed value, not the default,
+    // reached the packer.
+    assert!(
+        markdown.contains("src/lib.rs"),
+        "the skipped file must be named: {markdown}"
+    );
+    assert!(
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        "the report must name THIS run's batch_size, not the default: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["skipped"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_file_batch_size_override_skips_a_file_the_default_would_review() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review file"));
+    args.insert("path".to_string(), json!("src/lib.rs"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(TINY_BATCH_SIZE));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("an oversized file must be a named gap, never a hard error");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let markdown = parsed["markdown"].as_str().unwrap();
+
+    assert!(
+        markdown.contains("src/lib.rs"),
+        "the skipped file must be named: {markdown}"
+    );
+    assert!(
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        "the report must name THIS run's batch_size, not the default: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["skipped"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture_committed(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review sha"));
+    args.insert("sha".to_string(), json!("HEAD~1..HEAD"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(TINY_BATCH_SIZE));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("an oversized file must be a named gap, never a hard error");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let markdown = parsed["markdown"].as_str().unwrap();
+
+    assert!(
+        markdown.contains("src/lib.rs"),
+        "the skipped file must be named: {markdown}"
+    );
+    assert!(
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        "the report must name THIS run's batch_size, not the default: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["skipped"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+}
+
+/// `crates/llama-agent/src/acp/server.rs` — the concrete file this task
+/// (^3rnvage) named: too large for the OLD 256 KiB default, but the raised
+/// 384 KiB default (^k12rn64) now covers it. Reads its REAL bytes from this
+/// workspace so the size assertions are genuine, then drives an actual
+/// `review file` run over them through the registered tool — proof this file
+/// is reviewable through a normal route (the default budget), not a claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_file_reviews_the_real_llama_agent_acp_server_file_under_the_default_budget() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let real_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../llama-agent/src/acp/server.rs");
+    let real_content = std::fs::read_to_string(&real_path).unwrap_or_else(|e| {
+        panic!("crates/llama-agent/src/acp/server.rs must exist in this workspace: {e}")
+    });
+    const OLD_DEFAULT_BATCH_SIZE: usize = 262_144;
+    const CURRENT_DEFAULT_BATCH_SIZE: usize = 393_216;
+    assert!(
+        real_content.len() > OLD_DEFAULT_BATCH_SIZE,
+        "fixture assumption stale: this file no longer exceeds the old 256 KiB \
+         default ({} bytes) — the ^3rnvage regression this test guards no longer applies",
+        real_content.len()
+    );
+    assert!(
+        real_content.len() < CURRENT_DEFAULT_BATCH_SIZE,
+        "fixture assumption stale: this file no longer fits the current 384 KiB \
+         default ({} bytes) — pass `batch_size` explicitly or update this test",
+        real_content.len()
+    );
+
+    let repo = TestRepo::new();
+    repo.write("src/lib.rs", "pub fn placeholder() {}\n");
+    repo.commit("initial");
+    // Untracked/added: the whole real file becomes this run's `review file` scope.
+    repo.write("src/server.rs", &real_content);
+    write_ruleset(&repo.path().join(".validators"), "rust-rules", "*.rs", &[]);
+    on_disk_index_conn(repo.path()); // creates the schema; no rows needed here.
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let agent = ScriptedAgent::new(vec![(
+        "# Validator: rust-rules".to_string(),
+        ScriptedReply::Text("```json\n[]\n```".to_string()),
+    )]);
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(scripted_factory(agent))
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review file"));
+    args.insert("path".to_string(), json!("src/server.rs"));
+    args.insert("backend".to_string(), json!("local"));
+    let result = tool.execute(args, &context).await.expect(
+        "the real acp/server.rs file must be reviewable under the current default batch_size",
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    assert_eq!(
+        parsed["counts"]["skipped"],
+        json!(0),
+        "the file must NOT be skipped as too large under the current default: {parsed}"
+    );
+    // The exact count depends on how many loaded validators (builtins included)
+    // match `*.rs`, which is not this test's concern — only that fan-out
+    // actually ran over the file at all, proving it entered a batch rather
+    // than being rejected before ever reaching the engine.
+    assert!(
+        parsed["counts"]["attempted"].as_u64().unwrap_or(0) >= 1,
+        "the fan-out must actually run over the file (proves it entered a batch): {parsed}"
+    );
+}
+
+/// A negative `batch_size` is documented (`usize_arg`) as treated-as-absent,
+/// not rejected: the run must fall back to the default budget and review
+/// normally, exactly like omitting the modifier.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_batch_size_negative_value_falls_back_to_the_default() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(-1));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("a negative batch_size falls back to the default, never errors");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    assert_eq!(
+        parsed["counts"]["skipped"],
+        json!(0),
+        "the default budget comfortably covers the tiny fixture file: {parsed}"
+    );
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["confirmed"], json!(1));
+}
+
+/// A fractional `batch_size` is documented as treated-as-absent, same as
+/// negative — falls back to the default budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_batch_size_fractional_value_falls_back_to_the_default() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(1.5));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("a fractional batch_size falls back to the default, never errors");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    assert_eq!(parsed["counts"]["skipped"], json!(0));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["confirmed"], json!(1));
+}
+
+/// `batch_size: 0` is a real (if degenerate) value, not absent — `usize_arg`
+/// only treats a NEGATIVE or FRACTIONAL number as absent. Zero is a clean
+/// unsigned integer, so it is honored: every file (having at least one byte)
+/// exceeds it and is skipped, never a hard error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_batch_size_zero_skips_every_file() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    args.insert("batch_size".to_string(), json!(0));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("batch_size: 0 is a gap, never a hard error");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    assert_eq!(parsed["counts"]["skipped"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+}
+
+/// Two changed files matched by the same validator: one fits `batch_size`, one
+/// does not. The oversized file must not block review of the other — the
+/// small file is still reviewed and confirmed, and the report separately names
+/// the skipped one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_working_an_oversized_file_does_not_block_review_of_the_others() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = two_file_fixture_one_oversized(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    // Clears the ~181-byte small file but not the ~2000-byte huge one.
+    args.insert("batch_size".to_string(), json!(500));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("the oversized file must not block review of the other file");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let markdown = parsed["markdown"].as_str().unwrap();
+
+    assert!(
+        markdown.contains("- [ ] `src/lib.rs:1`"),
+        "the small file must still be reviewed and confirmed: {markdown}"
+    );
+    assert!(
+        markdown.contains("src/huge.rs"),
+        "the oversized file must be named as a gap: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["confirmed"], json!(1));
+    assert_eq!(parsed["counts"]["skipped"], json!(1));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

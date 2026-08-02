@@ -335,6 +335,17 @@ impl ClaudeAgent {
     /// dispatches to the streaming or non-streaming prompt handler. Resets the
     /// per-session cancellation flag once the turn finishes so the next prompt
     /// starts fresh.
+    ///
+    /// However the turn ends, the LAST thing it emits on the session's
+    /// notification stream is the end-of-turn marker
+    /// ([`turn_complete_notification`](agent_client_protocol_extras::turn_complete_notification)).
+    /// A client reassembling the reply from streamed chunks drains until it
+    /// sees that marker, so emitting it is what lets the client stop on a real
+    /// signal instead of guessing a wall-clock window — and why it is emitted
+    /// on the error paths too, where the reply is over just the same. Every
+    /// `return` and `?` of the turn leaves through the single emit below; a
+    /// panic or a dropped future is the one way past it, and a client's drain
+    /// keeps its hang guard for exactly that.
     pub async fn prompt(
         &self,
         request: PromptRequest,
@@ -342,14 +353,60 @@ impl ClaudeAgent {
         self.log_request("prompt", &request);
         self.log_prompt_debug(&request);
 
-        self.validate_prompt_request(&request).await?;
-
         // Resolve the opaque session id by existence — this is the single
         // not-found path shared with `cancel` and `set_mode`. An unknown id
         // (non-ULID or simply absent) fails here with one `invalid_params`
-        // error before any turn work begins.
-        let session = self.resolve_session(&request.session_id)?;
-        let session_id = session.id;
+        // error before any turn work begins; a session store that cannot be
+        // read fails with `internal_error`.
+        let resolved = self.resolve_session(&request.session_id);
+
+        // Which session id the end-of-turn marker is addressed to. A resolved
+        // session gets its canonical id — the same key the turn's chunks carry,
+        // so a collector matching on it sees the chunks and the marker alike. A
+        // resolution FAILURE gets the id the client sent, because that is what
+        // the client's collector is waiting on, and the failure ends the turn
+        // just as a reply does. The failure that matters most here is the
+        // unreadable session store: that session may well exist, with a client
+        // draining it.
+        let marker_session_id = resolved.as_ref().map_or_else(
+            |_| request.session_id.clone(),
+            |session| SessionId::new(session.id.to_string()),
+        );
+
+        // One exit for the whole turn, so no `return` or `?` inside it — and no
+        // rejected request — can skip the marker. Request validation lives in
+        // the turn body for that reason.
+        let outcome = match resolved {
+            Ok(session) => {
+                let session_id = session.id;
+                self.run_prompt_turn(request, session, session_id).await
+            }
+            Err(unresolved) => Err(unresolved),
+        };
+        self.notify_turn_complete(&marker_session_id).await;
+        outcome
+    }
+
+    /// The body of one `session/prompt` turn, from the resolved session to the
+    /// [`PromptResponse`].
+    ///
+    /// Split out of [`prompt`](Self::prompt) so every `return` and `?` of the
+    /// turn passes through the end-of-turn marker, instead of only the exits
+    /// where a `return` happens to be written. Request validation is part of
+    /// the turn for that reason: a rejected request ends the turn, so it must
+    /// end the notification stream too.
+    async fn run_prompt_turn(
+        &self,
+        request: PromptRequest,
+        session: crate::session::Session,
+        session_id: crate::session::SessionId,
+    ) -> Result<PromptResponse, agent_client_protocol::Error> {
+        // Reject a malformed request (no content, undecodable image or audio
+        // data, an over-long prompt) before any turn work. This runs inside the
+        // turn body, not in `prompt`, so the rejection still passes through the
+        // end-of-turn marker: a client already draining this session's stream
+        // learns the turn is over instead of waiting out the drain's backstop.
+        self.validate_prompt_request(&request).await?;
 
         // Send user message chunks for conversation transparency
         self.send_user_message_chunks(&request).await;
@@ -429,6 +486,27 @@ impl ClaudeAgent {
 
         self.log_response("prompt", &response);
         Ok(response)
+    }
+
+    /// Emit the end-of-turn marker on the session's notification stream.
+    ///
+    /// The marker rides the SAME broadcast the turn's chunks rode, so every
+    /// FIFO hop between here and a client's collector delivers it after the
+    /// last chunk. A send failure means nobody is listening, which is not a
+    /// turn failure.
+    ///
+    /// `session_id` is the id a client's collector matches on — see the
+    /// addressing rule in [`prompt`](Self::prompt).
+    async fn notify_turn_complete(&self, session_id: &SessionId) {
+        let notification =
+            agent_client_protocol_extras::turn_complete_notification(session_id.clone());
+        if let Err(e) = self.send_session_update(notification).await {
+            tracing::debug!(
+                "No listener for the end-of-turn marker on session {}: {}",
+                session_id,
+                e
+            );
+        }
     }
 
     /// Handle the ACP `session/cancel` notification.

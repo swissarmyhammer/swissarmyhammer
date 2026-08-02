@@ -17,3 +17,5 @@ The `review` MCP tool runs the multi-agent analysis fleet (design, reuse and dea
 3. Take the report's `markdown` (the dated `## Review Findings` section) and `counts`, and record them on the kanban task per the `review` skill's contract: append to the task in task-mode, create a single tracking task in range-mode, or move a clean task to the terminal column.
 
 Do not re-read files, re-run layers, or duplicate the engine's analysis — that work lives in the engine. The column movement is the verdict.
+
+{% include "_partials/findings-are-requirements" %}

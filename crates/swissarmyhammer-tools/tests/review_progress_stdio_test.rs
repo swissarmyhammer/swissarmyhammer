@@ -39,6 +39,19 @@
 //! uniformity, `total >= progress`, and the order-free corollaries of a
 //! monotonic wire emission (see the final assertion block for why arrival
 //! order cannot be compared directly at an rmcp client).
+//!
+//! ## The other two tests in this file
+//!
+//! Both use a RAW newline-delimited JSON-RPC client over the same duplex
+//! transport, because each pins something an rmcp client cannot express:
+//!
+//! - [`review_content_is_streamed_to_a_client_that_omits_the_progress_token`] —
+//!   rmcp always injects a `progressToken`, so only a raw client can make a
+//!   tokenless call.
+//! - [`review_progress_ticks_are_monotonic_in_wire_order`] — frames read
+//!   sequentially off one byte stream arrive in the order the server wrote
+//!   them, so this is where `progress` monotonicity can be compared pairwise
+//!   as an actual statement about the server.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -48,8 +61,8 @@ use rmcp::model::{
     LoggingMessageNotificationParam, NumberOrString, ProgressNotificationParam, ProgressToken,
     RequestParamsMeta,
 };
-use rmcp::service::NotificationContext;
-use rmcp::{serve_server, ClientHandler, RoleClient, ServiceExt};
+use rmcp::service::{NotificationContext, RunningService};
+use rmcp::{serve_server, ClientHandler, RoleClient, RoleServer, ServiceExt};
 use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
@@ -588,6 +601,93 @@ async fn next_frame(
     serde_json::from_str(&line).expect("frame is valid JSON")
 }
 
+/// Build the real `McpServer` for `repo_path` with the scripted review
+/// factories wired through the production injection seam, its prompt gate
+/// already open so the run streams straight through.
+///
+/// The gated variant lives inline in
+/// [`review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`],
+/// which needs the controller to hold and release the gate mid-test.
+async fn ungated_review_server(repo_path: &std::path::Path) -> McpServer {
+    let (gate, controller) = PromptGate::new();
+    controller.release();
+
+    let server =
+        McpServer::new_with_work_dir(TemplateLibrary::default(), repo_path.to_path_buf(), None)
+            .await
+            .expect("server builds");
+    server
+        .set_review_factories(
+            scripted_factory(gated_planted_agent(gate)),
+            Some(mock_embedder_factory()),
+            None,
+        )
+        .await;
+    server
+}
+
+/// The client half of a raw newline-delimited JSON-RPC connection: the write
+/// sink and the frame reader, in the order a test uses them.
+type RawClient = (
+    tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    tokio::io::Lines<tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>>,
+);
+
+/// Serve `server` over one end of a duplex byte stream, complete the MCP
+/// handshake from a RAW JSON-RPC client on the other end, and hand back the
+/// running server plus that client.
+///
+/// Raw rather than rmcp because both callers need something rmcp cannot
+/// express — a tokenless `tools/call`, and frames observed in true wire order.
+async fn serve_to_raw_client(
+    server: McpServer,
+    client_name: &str,
+) -> (RunningService<RoleServer, McpServer>, RawClient) {
+    let (client_io, server_io) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    // `serve_server(...).await` resolves only after the client's `initialize`
+    // handshake, so the raw handshake below runs concurrently with it.
+    let server_task = tokio::spawn(serve_server(server, tokio::io::split(server_io)));
+
+    let (read_half, mut write) = tokio::io::split(client_io);
+    let mut lines = tokio::io::BufReader::new(read_half).lines();
+
+    // Raw MCP handshake: initialize -> response -> initialized notification.
+    send_frame(
+        &mut write,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": client_name, "version": "0"}
+            }
+        }),
+    )
+    .await;
+    let init_response = next_frame(&mut lines).await;
+    assert_eq!(
+        init_response["id"], 1,
+        "initialize response: {init_response}"
+    );
+    assert!(
+        init_response.get("error").is_none(),
+        "initialize failed: {init_response}"
+    );
+    send_frame(
+        &mut write,
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
+    let running_server = server_task
+        .await
+        .expect("server task joins")
+        .expect("server serves over the duplex transport");
+
+    (running_server, (write, lines))
+}
+
 /// The field regression: a client that omits `_meta.progressToken` (as
 /// subagent Claude Code connections do) must still receive the streamed
 /// review CONTENT as `notifications/message` — and, per the MCP spec, zero
@@ -616,64 +716,11 @@ async fn review_content_is_streamed_to_a_client_that_omits_the_progress_token() 
     seed_on_disk_index(repo.path());
     let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
 
-    // This test needs no stall window: open the gate up front so the
-    // scripted run streams straight through.
-    let (gate, controller) = PromptGate::new();
-    controller.release();
-
-    let server =
-        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf(), None)
-            .await
-            .expect("server builds");
-    server
-        .set_review_factories(
-            scripted_factory(gated_planted_agent(gate)),
-            Some(mock_embedder_factory()),
-            None,
-        )
-        .await;
-
-    let (client_io, server_io) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
-    // `serve_server(...).await` resolves only after the client's `initialize`
-    // handshake, so the raw handshake below runs concurrently with it.
-    let server_task = tokio::spawn(serve_server(server, tokio::io::split(server_io)));
-
-    let (read_half, mut write) = tokio::io::split(client_io);
-    let mut lines = tokio::io::BufReader::new(read_half).lines();
-
-    // Raw MCP handshake: initialize -> response -> initialized notification.
-    send_frame(
-        &mut write,
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "raw-tokenless-client", "version": "0"}
-            }
-        }),
-    )
-    .await;
-    let init_response = next_frame(&mut lines).await;
-    assert_eq!(
-        init_response["id"], 1,
-        "initialize response: {init_response}"
-    );
-    assert!(
-        init_response.get("error").is_none(),
-        "initialize failed: {init_response}"
-    );
-    send_frame(
-        &mut write,
-        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-    )
-    .await;
-    let running_server = server_task
-        .await
-        .expect("server task joins")
-        .expect("server serves over the duplex transport");
+    // This test needs no stall window: the helper opens the gate up front so
+    // the scripted run streams straight through.
+    let server = ungated_review_server(repo.path()).await;
+    let (running_server, (mut write, mut lines)) =
+        serve_to_raw_client(server, "raw-tokenless-client").await;
 
     // The tokenless call: `tools/call` with NO `_meta` at all.
     send_frame(
@@ -757,4 +804,202 @@ async fn review_content_is_streamed_to_a_client_that_omits_the_progress_token() 
     );
 
     running_server.cancel().await.ok();
+}
+
+// ---------------------------------------------------------------------------
+// Wire-order monotonicity, read where the order IS guaranteed.
+// ---------------------------------------------------------------------------
+
+/// The MCP spec's monotonic-`progress` requirement, asserted in true WIRE
+/// order by reading raw JSON-RPC frames off the transport.
+///
+/// ## Why this test exists, and why an rmcp client cannot host it
+///
+/// The review pool fans out across workers, so it is fair to ask whether two
+/// workers finishing at once can put a smaller `progress` on the wire after a
+/// larger one. They cannot: no worker computes a count. Every
+/// `ReviewProgressEvent` crosses one channel into one mapping task owning one
+/// counter (`completed += 1`), and one drain task awaits each
+/// `send_notification` in turn — so param order is the counter's order and
+/// wire order is param order.
+///
+/// Proving that at an rmcp CLIENT is impossible: rmcp 1.7 dispatches each
+/// incoming notification on its own spawned task (`service.rs`,
+/// `spawn_service_task` per peer notification), so `on_progress` ARRIVAL order
+/// is the client runtime's scheduling, not the wire's. A capture compared
+/// pairwise there asserts tokio, not the server — which is why the sibling
+/// rmcp-client test above uses order-free corollaries instead.
+///
+/// A raw newline-delimited JSON-RPC reader has no such indirection: frames are
+/// read sequentially off one byte stream, so `lines.next_line()` order IS the
+/// order the server wrote. That makes the adjacent-pair comparison below the
+/// authoritative statement of the spec requirement, and it is deterministic on
+/// any runtime flavor.
+///
+/// Unlike the tokenless test above, this raw client supplies its own
+/// `_meta.progressToken`, so it also pins that the server echoes the
+/// client's token verbatim (an rmcp client cannot check that: rmcp rewrites
+/// the token for its own multiplexing).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_progress_ticks_are_monotonic_in_wire_order() {
+    // Hermetic bootstrap, exactly as the tests above.
+    std::env::set_var("SAH_DISABLE_EMBEDDING", "1");
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    plant_diff(&repo);
+    seed_on_disk_index(repo.path());
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    // No stall window is needed: the helper opens the gate up front so the
+    // scripted run streams straight through and the pool's pairs land as fast
+    // as they can — the burst that would expose an unsequenced emitter.
+    let server = ungated_review_server(repo.path()).await;
+    let (running_server, (mut write, mut lines)) =
+        serve_to_raw_client(server, "raw-wire-order-client").await;
+
+    // The tokenful call: this exact token must come back on every tick.
+    const TOKEN: &str = "raw-wire-order-token";
+    send_frame(
+        &mut write,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "review",
+                "arguments": {"op": "review working", "backend": "local"},
+                "_meta": {"progressToken": TOKEN}
+            }
+        }),
+    )
+    .await;
+
+    /// One `notifications/progress` as it appeared on the wire.
+    #[derive(Debug, PartialEq)]
+    struct Tick {
+        progress: f64,
+        total: Option<f64>,
+        message: String,
+    }
+
+    // Read frames until the call's response, recording every progress tick in
+    // the order the server wrote it. Server->client requests are declined so
+    // nothing blocks. The tool awaits its drain before returning, so every
+    // tick precedes the response frame.
+    let mut ticks: Vec<Tick> = Vec::new();
+    let response = loop {
+        let frame = next_frame(&mut lines).await;
+        match frame["method"].as_str() {
+            Some("notifications/progress") => {
+                let params = &frame["params"];
+                assert_eq!(
+                    params["progressToken"], TOKEN,
+                    "every tick must echo the client-supplied token verbatim: {frame}"
+                );
+                ticks.push(Tick {
+                    progress: params["progress"]
+                        .as_f64()
+                        .unwrap_or_else(|| panic!("progress is a number: {frame}")),
+                    total: params["total"].as_f64(),
+                    message: params["message"].as_str().unwrap_or_default().to_string(),
+                });
+            }
+            Some("notifications/message") => {}
+            Some(_) if frame.get("id").is_some() => {
+                // A server->client request: decline politely.
+                send_frame(
+                    &mut write,
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": frame["id"],
+                        "error": {"code": -32601, "message": "client has no handlers"}
+                    }),
+                )
+                .await;
+            }
+            _ => {
+                if frame["id"] == 2 {
+                    break frame;
+                }
+            }
+        }
+    };
+
+    assert!(
+        response.get("error").is_none(),
+        "tokenful review call returned a JSON-RPC error: {response}"
+    );
+    assert_ne!(
+        response["result"]["isError"],
+        serde_json::Value::Bool(true),
+        "tokenful review call returned an error result: {response}"
+    );
+
+    running_server.cancel().await.ok();
+
+    assert!(
+        !ticks.is_empty(),
+        "a call carrying _meta.progressToken must receive notifications/progress"
+    );
+
+    // THE assertion: `progress` never decreases from one wire frame to the
+    // next. Deterministic here — this is read order off one byte stream.
+    for (i, w) in ticks.windows(2).enumerate() {
+        assert!(
+            w[1].progress >= w[0].progress,
+            "notifications/progress regressed on the wire between frame {i} and \
+             {next} (MCP spec violation): {prev:#?} -> {curr:#?}",
+            next = i + 1,
+            prev = w[0],
+            curr = w[1],
+        );
+    }
+    for tick in &ticks {
+        assert!(
+            tick.total.map(|t| t >= tick.progress).unwrap_or(true),
+            "total < progress on the wire (spec violation): {tick:#?}"
+        );
+    }
+
+    // Stronger than non-decreasing: the completion ticks carry the DENSE
+    // sequence 1..=N in wire order, so a skipped or double-counted increment
+    // fails even though it stays monotonic. Keep-alive re-sends are verbatim
+    // copies of the previous tick, so a repeat of the immediately preceding
+    // tick is collapsed first (a genuine counter bug pairs one progress value
+    // with two DIFFERENT messages and still fails).
+    let mut completions: Vec<u64> = Vec::new();
+    let mut previous: Option<&Tick> = None;
+    for tick in ticks.iter().filter(|t| t.message.starts_with("Reviewed ")) {
+        if previous != Some(tick) {
+            completions.push(tick.progress as u64);
+        }
+        previous = Some(tick);
+    }
+    let final_total = ticks.iter().filter_map(|t| t.total).fold(0.0_f64, f64::max);
+    // Without this the dense-sequence check below passes VACUOUSLY on a run
+    // that planned no pairs: `completions` and `(1..=0)` are both empty, and a
+    // lone `Scoping …` tick satisfies every other assertion in this test. A
+    // fixture regression must be RED, not silently green.
+    assert!(
+        final_total > 0.0,
+        "the scripted run must plan at least one (validator, file) pair — with \
+         none, the counter assertions below assert nothing: {ticks:#?}"
+    );
+    assert_eq!(
+        completions,
+        (1..=final_total as u64).collect::<Vec<_>>(),
+        "the completion ticks must arrive as the dense counter sequence \
+         1..={final_total} — the signature of a monotonic wire emission; got \
+         {ticks:#?}"
+    );
+
+    // The run closes the bar: the LAST tick on the wire reports progress ==
+    // total. Position, not mere existence — the wire order is known here.
+    let last = ticks.last().expect("at least one tick");
+    assert_eq!(
+        Some(last.progress),
+        last.total,
+        "the final wire tick must report progress == total: {last:#?}"
+    );
 }

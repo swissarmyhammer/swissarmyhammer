@@ -7,7 +7,7 @@ use serde_json::json;
 use swissarmyhammer_sem::model::change::{ChangeType, SemanticChange};
 
 use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
-use crate::review::scope::WorkList;
+use crate::review::scope::{ProbeNames, RuleNames, WorkList};
 use crate::review::test_support::{
     findings_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     MOCK_PREFIX_TOKENS,
@@ -138,8 +138,8 @@ fn file_work_with_slice(path: &str, symbol: &str, dup_at: &str, source_slice: St
 fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
     ValidatorWork::new(
         name.to_string(),
-        vec![format!("{name}-rule")],
-        vec!["duplicates".to_string()],
+        RuleNames::new([format!("{name}-rule")]),
+        ProbeNames::new(["duplicates".to_string()]),
         files,
     )
 }
@@ -308,12 +308,15 @@ async fn run_fleet_and_unpin(
 // ---- config tests ----------------------------------------------------
 
 #[test]
-fn default_batch_size_is_256_kib() {
-    // The default budget clears the largest single source file in a typical
-    // change (~95 KB) so an ordinary commit reviews without tripping the
-    // oversize-file error; only genuinely huge multi-file diffs still split.
-    assert_eq!(DEFAULT_BATCH_SIZE, 256 * 1024);
-    assert_eq!(DEFAULT_BATCH_SIZE, 262144);
+fn default_batch_size_is_384_kib() {
+    // Raised from 256 KiB (1x the ~95 KB largest-typical-file target) to
+    // 384 KiB (1.5x) so the numbered/blame-annotated render — measured at
+    // ~1.45x the raw `source_slice` bytes `batch_work_list` budgets on — still
+    // clears an ordinary commit in one batch, the same margin the old 256 KiB
+    // default gave the unnumbered format. See `DEFAULT_BATCH_SIZE`'s doc for
+    // the full "why not measure the rendered size instead" rationale.
+    assert_eq!(DEFAULT_BATCH_SIZE, 384 * 1024);
+    assert_eq!(DEFAULT_BATCH_SIZE, 393216);
     assert_eq!(FleetConfig::default().batch_size(), DEFAULT_BATCH_SIZE);
 }
 

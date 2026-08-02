@@ -35,7 +35,7 @@ use rusqlite::Connection;
 
 use crate::error::AvpError;
 use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome, ReviewProgressSender};
-use crate::review::scope::{batch_work_list, scope_review, Scope, WorkList};
+use crate::review::scope::{batch_work_list, scope_review, Scope, SkippedFile, WorkList};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
@@ -95,6 +95,12 @@ pub struct ReviewCounts {
     /// How many fan-out tasks failed and degraded to zero findings. A non-zero
     /// value means the rendered findings are INCOMPLETE.
     tasks_failed: usize,
+    /// How many changed files were excluded from review because their inlined
+    /// source alone exceeded the `batch_size` budget (see
+    /// [`SkippedFile`](crate::review::scope::SkippedFile)). A non-zero value
+    /// means the run is a named GAP, not a failure — the markdown names each
+    /// skipped file.
+    skipped: usize,
 }
 
 impl ReviewCounts {
@@ -122,6 +128,13 @@ impl ReviewCounts {
     /// value means the rendered findings are INCOMPLETE.
     pub fn tasks_failed(&self) -> usize {
         self.tasks_failed
+    }
+
+    /// How many changed files were excluded from review because their inlined
+    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// markdown names a "not reviewed, too large" gap for each one.
+    pub fn skipped(&self) -> usize {
+        self.skipped
     }
 }
 
@@ -168,9 +181,16 @@ impl ReviewReport {
 /// a clearly visible warning line is rendered directly under the dated header so
 /// an incomplete run cannot be mistaken for a clean diff, and the tally is
 /// carried through into [`ReviewCounts`]. When the run attempted zero tasks and
-/// kept no findings — the resolved scope was empty — the report states
-/// "Nothing in scope to review." so an empty scope cannot be mistaken for a
-/// clean review either.
+/// kept no findings and skipped no files — the resolved scope was empty — the
+/// report states "Nothing in scope to review." so an empty scope cannot be
+/// mistaken for a clean review either.
+///
+/// `skipped` names every [`SkippedFile`] [`batch_work_list`] excluded because its
+/// inlined source alone exceeded `batch_size`: each is rendered as a named
+/// "not reviewed, too large" gap directly under the header (and any
+/// incomplete-run banner), and their count rides into [`ReviewCounts::skipped`].
+/// This is deliberately never an error — one oversized file must not block
+/// review of every OTHER file in scope.
 ///
 /// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
 /// caller) — it is collected once up front so a caller need not materialize a
@@ -178,6 +198,7 @@ impl ReviewReport {
 pub fn synthesize(
     verified: impl IntoIterator<Item = VerifiedFinding>,
     tally: &FleetTally,
+    skipped: &[SkippedFile],
     now: &str,
 ) -> ReviewReport {
     let verified = verified.into_iter().collect::<Vec<_>>();
@@ -192,6 +213,7 @@ pub fn synthesize(
         refuted: counts_refuted,
         tasks_attempted: tally.attempted,
         tasks_failed: tally.failed,
+        skipped: skipped.len(),
         ..ReviewCounts::default()
     };
 
@@ -208,9 +230,31 @@ pub fn synthesize(
         );
     }
 
-    // Say so explicitly when the resolved scope was empty (zero fan-out tasks):
-    // a bare findings header would read identically to a genuinely clean review.
-    if tally.attempted == 0 && kept.is_empty() {
+    // Name every oversized file as a gap, not a failure: sorted by path so the
+    // rendering is deterministic regardless of scope/scan order.
+    if !skipped.is_empty() {
+        let mut sorted: Vec<&SkippedFile> = skipped.iter().collect();
+        sorted.sort_by(|a, b| a.path().cmp(b.path()));
+        let _ = writeln!(
+            markdown,
+            "\n> ⚠️ {} file(s) not reviewed — too large for the `batch_size` budget:",
+            sorted.len()
+        );
+        for file in sorted {
+            let _ = writeln!(
+                markdown,
+                "> - `{}` — {} bytes, over the {}-byte batch_size (raise `batch_size` or narrow the scope)",
+                file.path(),
+                file.size(),
+                file.batch_size()
+            );
+        }
+    }
+
+    // Say so explicitly when the resolved scope was empty (zero fan-out tasks,
+    // nothing skipped either): a bare findings header would read identically to
+    // a genuinely clean review.
+    if tally.attempted == 0 && kept.is_empty() && skipped.is_empty() {
         let _ = writeln!(markdown, "\nNothing in scope to review.");
     }
 
@@ -306,7 +350,8 @@ fn sentence(text: &str) -> String {
 /// 2. [`batch_work_list`] — split the work-list into content-budgeted batches at
 ///    whole-file granularity ([`FleetConfig::batch_size`]) so no single shared
 ///    prime overflows the model's context. A small diff is one batch; a large one
-///    is several. A single file larger than `batch_size` is a hard error here.
+///    is several. A single file larger than `batch_size` is excluded and reported
+///    as a named gap (see [`SkippedFile`]), never a hard error.
 /// 3. For **each batch**, independently: [`run_fleet`] fans every validator out
 ///    across the shared `pool` over that batch's files (its own shared prime,
 ///    forked per validator), then [`verify_findings`] pairs each candidate back
@@ -331,10 +376,11 @@ fn sentence(text: &str) -> String {
 /// # Errors
 ///
 /// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or when
-/// a matched validator declares an unknown probe, or from [`batch_work_list`] when
-/// a single file's inlined source exceeds `batch_size`. Fan-out and verify failures
-/// never error: a failed task degrades to zero findings (fan-out) or a
-/// refute-by-default verdict (verify), so the report is always produced.
+/// a matched validator declares an unknown probe. [`batch_work_list`] never
+/// errors: a file too large for `batch_size` is excluded and reported as a named
+/// gap instead. Fan-out and verify failures never error either: a failed task
+/// degrades to zero findings (fan-out) or a refute-by-default verdict (verify),
+/// so the report is always produced.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
     scope: Scope,
@@ -353,13 +399,15 @@ pub async fn run_review(
     let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
     // Stage 2: split the work-list into content-budgeted batches (whole-file
-    // granularity). A single file over `batch_size` is a hard error here.
-    let batches = batch_work_list(&work, fleet_config.batch_size())?;
+    // granularity). A single file over `batch_size` is excluded and reported as
+    // a named gap, never a hard error that would block the rest of the scope.
+    let (batches, skipped) = batch_work_list(&work, fleet_config.batch_size());
 
     tracing::info!(
         validators = work.validators().len(),
         files = work.distinct_files().count(),
         batches = batches.len(),
+        skipped = skipped.len(),
         batch_size = fleet_config.batch_size(),
         "review run: scoped work-list ready, batched, fanning out"
     );
@@ -403,8 +451,9 @@ pub async fn run_review(
 
     // Stage 4: synthesize the merged, deduped, ordered, dated report. The summed
     // tally rides into the report so the tool boundary can flag/fail an incomplete
-    // run; the engine itself stays a pure data barrier and never errors on it.
-    let report = synthesize(verified, &FleetTally::new(attempted, failed), now);
+    // run; the engine itself stays a pure data barrier and never errors on it. Any
+    // oversized files stage 2 excluded ride in too, as a named gap.
+    let report = synthesize(verified, &FleetTally::new(attempted, failed), &skipped, now);
 
     Ok(report)
 }
@@ -449,7 +498,7 @@ fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::review::scope::{FileWork, ValidatorWork};
+    use crate::review::scope::{FileWork, ProbeNames, RuleNames, ValidatorWork};
     use crate::review::types::RefutingLayer;
 
     /// The fixture timestamp passed as `now` to every `synthesize` call. Kept
@@ -516,6 +565,7 @@ mod tests {
         let report = synthesize(
             vec![],
             &FleetTally::new(ATTEMPTED_TASKS, ATTEMPTED_TASKS),
+            &[],
             NOW,
         );
 
@@ -539,7 +589,7 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), &[], NOW);
 
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
         assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
@@ -548,7 +598,7 @@ mod tests {
 
     #[test]
     fn renders_dated_header_with_the_input_timestamp_verbatim() {
-        let report = synthesize(vec![], &FleetTally::default(), NOW);
+        let report = synthesize(vec![], &FleetTally::default(), &[], NOW);
         assert!(
             report
                 .markdown
@@ -563,7 +613,7 @@ mod tests {
         // Zero attempted tasks means the resolved scope was empty — the report
         // must say so explicitly instead of rendering a bare findings header
         // that reads identically to a genuinely clean review.
-        let report = synthesize(vec![], &FleetTally::default(), NOW);
+        let report = synthesize(vec![], &FleetTally::default(), &[], NOW);
         assert!(
             report
                 .markdown
@@ -580,10 +630,85 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_file_renders_a_named_gap_and_counts_but_is_never_an_error() {
+        // A run whose scope was ENTIRELY one oversized file: no fan-out tasks ran
+        // (nothing packed), but the skip must be a named gap — not the "Nothing
+        // in scope" marker, which would misleadingly claim there was nothing to
+        // review at all.
+        let skipped = vec![SkippedFile::for_test("src/huge.rs", 500_000, 393_216)];
+        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+
+        assert!(
+            report.markdown.contains("src/huge.rs"),
+            "the skipped file must be named: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("500000"),
+            "the file's size must be named: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("393216"),
+            "the batch_size limit must be named: {}",
+            report.markdown
+        );
+        assert!(
+            !report.markdown.contains("Nothing in scope to review"),
+            "a skipped file is a gap, not an empty scope: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.skipped, 1);
+    }
+
+    #[test]
+    fn skipped_files_render_sorted_by_path_regardless_of_input_order() {
+        let skipped = vec![
+            SkippedFile::for_test("src/z.rs", 10, 5),
+            SkippedFile::for_test("src/a.rs", 10, 5),
+        ];
+        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+
+        let a = report.markdown.find("src/a.rs").unwrap();
+        let z = report.markdown.find("src/z.rs").unwrap();
+        assert!(a < z, "skipped files render sorted: {}", report.markdown);
+        assert_eq!(report.counts.skipped, 2);
+    }
+
+    #[test]
+    fn a_skipped_file_alongside_confirmed_findings_renders_both() {
+        // The oversized file does not swallow findings from the files that DID
+        // review — both the gap and the confirmed finding must render.
+        let verified = vec![confirmed(
+            "src/small.rs",
+            3,
+            "dead-code",
+            None,
+            "`foo` is never called",
+            None,
+        )];
+        let skipped = vec![SkippedFile::for_test("src/huge.rs", 1_000, 100)];
+        let report = synthesize(verified, &FleetTally::new(1, 0), &skipped, NOW);
+
+        assert!(
+            report.markdown.contains("src/huge.rs"),
+            "{}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("- [ ] `src/small.rs:3`"),
+            "the reviewed file's finding must still render: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.skipped, 1);
+        assert_eq!(report.counts.findings, 1);
+    }
+
+    #[test]
     fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
         // Tasks ran and found nothing — that is a clean review, not an empty
         // scope, so the marker must not appear.
-        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), &[], NOW);
         assert!(
             !report.markdown.contains("Nothing in scope"),
             "a clean attempted run is not an empty scope: {:?}",
@@ -606,7 +731,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let _report = synthesize(verified, &FleetTally::default(), NOW);
+        let _report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         // The synthesis summary reports the rendered-finding + per-verdict tallies.
         assert!(logs_contain("review synthesis complete"));
@@ -629,7 +754,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let report = synthesize(verified, &FleetTally::default(), NOW);
+        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         // The refuted finding does not appear in the rendered markdown.
         assert!(
@@ -661,7 +786,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![one.clone(), one], &FleetTally::default(), NOW);
+        let report = synthesize(vec![one.clone(), one], &FleetTally::default(), &[], NOW);
 
         // Collapsed to a single checklist item.
         let occurrences = report.markdown.matches("src/a.rs:42").count();
@@ -695,7 +820,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![dup, dead], &FleetTally::default(), NOW);
+        let report = synthesize(vec![dup, dead], &FleetTally::default(), &[], NOW);
 
         // Both findings survive — cross-validator findings are never merged.
         assert!(
@@ -742,7 +867,7 @@ mod tests {
                 )
             })
             .collect();
-        let report = synthesize(verified, &FleetTally::default(), NOW);
+        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         // Every occurrence survives as its own checklist item, one per file:line.
         for line in lines {
@@ -772,7 +897,7 @@ mod tests {
             confirmed("src/a.rs", 10, "dead-code", None, "First concern", None),
             confirmed("src/b.rs", 20, "style", None, "Second concern", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), NOW);
+        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         assert!(
             !report.markdown.contains("### Blockers")
@@ -818,7 +943,7 @@ mod tests {
             ),
             confirmed("path/to/file.rs", 88, "style", None, "Minor issue", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), NOW);
+        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
@@ -838,7 +963,7 @@ mod tests {
             confirmed("src/a.rs", 90, "v", None, "a90 concern", None),
             confirmed("src/a.rs", 9, "v", None, "a9 concern", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), NOW);
+        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
 
         let a9 = report.markdown.find("src/a.rs:9`").unwrap();
         let a90 = report.markdown.find("src/a.rs:90`").unwrap();
@@ -876,7 +1001,12 @@ mod tests {
 
     /// A `ValidatorWork` carrying the given files for one validator.
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
-        ValidatorWork::new(name.to_string(), vec![], vec![], files)
+        ValidatorWork::new(
+            name.to_string(),
+            RuleNames::default(),
+            ProbeNames::default(),
+            files,
+        )
     }
 
     #[test]

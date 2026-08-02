@@ -456,9 +456,14 @@ mod tests {
     /// class these tests exist to pin).
     const BACKEND_BROADCAST_CAPACITY: usize = 64;
 
-    /// Capacity for the single-stream invariant test, whose channels must hold
-    /// EVERY chunk sent before any collector subscribes and drains.
+    /// Capacity for the single-stream invariant tests, whose channels hold the
+    /// whole streamed reply plus its end-of-turn marker.
     const PRELOADED_STREAM_CAPACITY: usize = 256;
+
+    /// How long the slow-hop regression holds its tail chunk back. Longer than
+    /// the 500 ms the drain used to sleep, so a wall-clock drain truncates the
+    /// reply and a marker-driven one does not.
+    const SLOW_HOP_DELAY: Duration = Duration::from_millis(700);
 
     /// Worker count for the pool the pipeline tests fan out across. Two workers
     /// let the multi-validator/multi-batch tests exercise genuine concurrency
@@ -473,12 +478,15 @@ mod tests {
     /// The caller-formatted timestamp rendered verbatim into the report header.
     const TEST_NOW: &str = "2026-06-05 12:00";
 
-    /// The abandoned-turn test's pool idle window, in milliseconds: claude-agent's
-    /// fixed post-response notification-drain sleep — during which a completed
-    /// turn is silent — plus margin. Deriving it from the exported constant keeps
-    /// the two values moving together: a window at or under the drain would
-    /// abandon every SUCCESSFUL turn mid-drain.
-    const ABANDON_IDLE_WINDOW_MS: u64 = claude_agent::NOTIFICATION_COLLECTION_DELAY_MS + 300;
+    /// The abandoned-turn test's pool idle window, in milliseconds: short
+    /// enough that the stalled turn is abandoned quickly, long enough that a
+    /// live turn's keep-alives sail well under it.
+    ///
+    /// It no longer has to clear a post-response drain window. The drain ends
+    /// on the agent's end-of-turn marker, which is itself notification traffic
+    /// the liveness supervisor counts as progress, so a successful turn is
+    /// never silent while it drains.
+    const ABANDON_IDLE_WINDOW_MS: u64 = 800;
 
     /// Keep-alive interval for the live turn — a small fraction of the idle
     /// window so the streaming turn never looks stalled.
@@ -865,25 +873,30 @@ mod tests {
         chunks
     }
 
-    /// Collect a multi-chunk streamed reply through the pool's notifier, exactly
-    /// as a pool worker does: subscribe to the notifier's broadcast, reassemble
-    /// the streamed text for `session`, and return the collected string.
-    async fn collect_through_notifier(
+    /// A pool worker's collector, subscribed to the notifier's broadcast and
+    /// waiting for `session`'s stream to end.
+    ///
+    /// Subscribing is separate from draining because a broadcast subscriber
+    /// only ever sees what is sent AFTER it subscribes. A test therefore
+    /// subscribes first, then feeds the stream, then awaits
+    /// [`drain_collector`] — the same order production runs in, where the
+    /// collector is spawned before the prompt is sent.
+    fn subscribe_collector(
         notifier: &Arc<claude_agent::NotificationSender>,
         session: agent_client_protocol::schema::SessionId,
-    ) -> String {
-        let (collector, collected_text, notification_count, _matched) =
-            claude_agent::spawn_notification_collector(notifier.sender().subscribe(), session);
+    ) -> claude_agent::NotificationCollector {
+        claude_agent::spawn_notification_collector(notifier.sender().subscribe(), session)
+    }
+
+    /// Drain a subscribed collector to the end of its turn's stream and return
+    /// the reassembled reply, exactly as a pool worker does.
+    async fn drain_collector(collector: claude_agent::NotificationCollector) -> String {
         let prompt_response = agent_client_protocol::schema::PromptResponse::new(
             agent_client_protocol::schema::StopReason::EndTurn,
         );
-        claude_agent::collect_response_content(
-            collector,
-            collected_text,
-            notification_count,
-            &prompt_response,
-        )
-        .await
+        claude_agent::collect_response_content(collector, &prompt_response)
+            .await
+            .expect("the collector must reach the end of the turn's stream")
     }
 
     /// The driver feeds the pool's collectors from EXACTLY ONE source: the
@@ -902,6 +915,11 @@ mod tests {
     ///    every chunk, so the collected text is twice as long and no longer the
     ///    original. The length doubling holds for every interleaving, so the
     ///    discriminating assertion is not flaky.
+    ///
+    /// Both halves end their stream the way a real backend does: with the
+    /// end-of-turn marker, in band, behind the last chunk. That is what makes
+    /// the collected text deterministic — there is no wall-clock window for a
+    /// slow hop to lose a chunk behind.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn notification_rx_is_the_pools_single_collected_stream() {
         let session = agent_client_protocol::schema::SessionId::new("sess-single".to_string());
@@ -915,10 +933,12 @@ mod tests {
         let (notify_tx, notification_rx) =
             broadcast::channel::<SessionNotification>(PRELOADED_STREAM_CAPACITY);
         let (single_notifier, single_forward) = build_pool_notifier(notification_rx);
+        let collector = subscribe_collector(&single_notifier, session.clone());
         for notif in &stream {
             let _ = notify_tx.send(notif.clone());
         }
-        let collected_single = collect_through_notifier(&single_notifier, session.clone()).await;
+        let _ = notify_tx.send(claude_agent::turn_complete_notification(session.clone()));
+        let collected_single = drain_collector(collector).await;
         single_forward.abort();
 
         assert_eq!(
@@ -933,19 +953,30 @@ mod tests {
         // re-emission) both copy into one notifier. Every chunk lands twice, so
         // the collected text is twice as long for any interleaving — which is
         // precisely what corrupted the JSON the verify/fleet parser reads.
+        //
+        // The marker cannot ride this doubled feed: each forwarder would copy
+        // it too, and the collector would stop at whichever copy arrived first,
+        // mid-stream. So the source is CLOSED and both forwarders are awaited —
+        // proof that every chunk has been copied — and only then is the marker
+        // put on the notifier, behind all twelve.
         let (dual_tx, dual_rx_a) =
             broadcast::channel::<SessionNotification>(PRELOADED_STREAM_CAPACITY);
         let dual_rx_b = dual_tx.subscribe();
         let (dual_notifier, _seed) = claude_agent::NotificationSender::new(NOTIFY_BUFFER);
         let dual_notifier = Arc::new(dual_notifier);
+        let dual_collector = subscribe_collector(&dual_notifier, session.clone());
         let fwd_a = tokio::spawn(forward_notifications(dual_rx_a, Arc::clone(&dual_notifier)));
         let fwd_b = tokio::spawn(forward_notifications(dual_rx_b, Arc::clone(&dual_notifier)));
         for notif in &stream {
             let _ = dual_tx.send(notif.clone());
         }
-        let collected_dual = collect_through_notifier(&dual_notifier, session).await;
-        fwd_a.abort();
-        fwd_b.abort();
+        drop(dual_tx);
+        fwd_a.await.expect("forwarder a drains its closed source");
+        fwd_b.await.expect("forwarder b drains its closed source");
+        let _ = dual_notifier
+            .send_update(claude_agent::turn_complete_notification(session))
+            .await;
+        let collected_dual = drain_collector(dual_collector).await;
 
         assert_ne!(
             collected_dual, reply,
@@ -957,6 +988,53 @@ mod tests {
             reply.len() * 2,
             "a dual feed doubles every chunk, doubling the collected length and \
              corrupting the JSON; the single-feed driver avoids this"
+        );
+    }
+
+    /// The drive-seam regression for the fixed-window drain: a chunk that
+    /// reaches the pool's notifier LATER than the 500 ms the drain used to
+    /// sleep is still collected, because the drain ends on the agent's
+    /// end-of-turn marker rather than on wall-clock time.
+    ///
+    /// Against the fixed sleep this test fails with a reply truncated at the
+    /// slow chunk — the silent truncation that made
+    /// [`notification_rx_is_the_pools_single_collected_stream`] flaky under
+    /// full-suite load.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_chunk_forwarded_after_the_old_drain_window_is_still_collected() {
+        let session = agent_client_protocol::schema::SessionId::new("sess-slow".to_string());
+        let reply = findings_json("src/lib.rs", "compute duplicates old_compute");
+        let stream = chunked_notifications(&session, &reply, 6);
+        let (head, tail) = stream.split_at(stream.len() - 1);
+
+        let (notify_tx, notification_rx) =
+            broadcast::channel::<SessionNotification>(PRELOADED_STREAM_CAPACITY);
+        let (notifier, forward) = build_pool_notifier(notification_rx);
+        let collector = subscribe_collector(&notifier, session.clone());
+
+        for notif in head {
+            let _ = notify_tx.send(notif.clone());
+        }
+
+        // The tail chunk lands well past the old fixed window, WHILE the drain
+        // is already running — the shape a loaded machine produces, where a
+        // forwarding hop does not get scheduled before the drain gives up.
+        let tail: Vec<SessionNotification> = tail.to_vec();
+        let slow_hop = tokio::spawn(async move {
+            tokio::time::sleep(SLOW_HOP_DELAY).await;
+            for notif in tail {
+                let _ = notify_tx.send(notif);
+            }
+            let _ = notify_tx.send(claude_agent::turn_complete_notification(session));
+        });
+
+        let collected = drain_collector(collector).await;
+        slow_hop.await.expect("the slow hop completes");
+        forward.abort();
+
+        assert_eq!(
+            collected, reply,
+            "a chunk forwarded after the old 500 ms drain window must still be collected"
         );
     }
 
@@ -1000,6 +1078,7 @@ mod tests {
             self.stream_reply(session_id, "starting".to_string());
             self.cancelled.notified().await;
             self.late_answered.notify_one();
+            self.mark_turn_complete(session_id);
             PromptResponse::new(StopReason::EndTurn)
         }
 
@@ -1034,6 +1113,14 @@ mod tests {
                 .notify_tx
                 .send(SessionNotification::new(session_id.clone(), update));
         }
+
+        /// Close the turn's notification stream onto the same broadcast, as a
+        /// real backend does, so the pool's collector stops on that marker.
+        fn mark_turn_complete(&self, session_id: &SessionId) {
+            let _ = self
+                .notify_tx
+                .send(claude_agent::turn_complete_notification(session_id.clone()));
+        }
     }
 
     impl MockAgent for LateAnsweringAgent {
@@ -1065,6 +1152,7 @@ mod tests {
                 };
 
                 self.stream_reply(&request.session_id, reply);
+                self.mark_turn_complete(&request.session_id);
                 Ok(PromptResponse::new(StopReason::EndTurn))
             })
         }
@@ -1206,8 +1294,7 @@ mod tests {
                 &embedder,
                 // A sub-second idle window so the stalled turn is abandoned
                 // fast; the live turn's keep-alives sail well under it. See
-                // [`ABANDON_IDLE_WINDOW_MS`] for why it must exceed
-                // claude-agent's post-response notification-drain sleep.
+                // [`ABANDON_IDLE_WINDOW_MS`] for how it is sized.
                 PoolConfig::remote(TEST_POOL_WORKERS)
                     .with_idle_timeout(Duration::from_millis(ABANDON_IDLE_WINDOW_MS)),
                 FleetConfig::default(),

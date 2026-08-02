@@ -48,6 +48,9 @@
 //! - [`tolerant_routing`] — the [`TolerantResponseRouter`] dispatch middleware
 //!   that keeps a connection alive when a turn's response receiver was dropped
 //!   (an abandoned turn fails that turn only, not the whole connection).
+//! - [`turn_complete`] — the in-band end-of-turn marker
+//!   ([`turn_complete_notification`], [`is_turn_complete`]) that tells a
+//!   notification collector a turn's streamed chunks are all delivered.
 
 pub mod fixture;
 pub mod hook_config;
@@ -64,6 +67,7 @@ pub mod test_mcp_server;
 pub mod test_support;
 pub mod tolerant_routing;
 pub mod tracing_agent;
+pub mod turn_complete;
 
 pub use fixture::{
     get_fixture_path_for, get_test_name_from_thread, AgentWithFixture, PlaybackAgentWithFixture,
@@ -134,6 +138,7 @@ pub use session_title::{
 };
 pub use tolerant_routing::TolerantResponseRouter;
 pub use tracing_agent::{trace_notifications, TracingAgent};
+pub use turn_complete::{is_turn_complete, turn_complete_notification, TURN_COMPLETE_META_KEY};
 
 // Re-export MCP notification types for convenience
 pub use model_context_protocol_extras::{

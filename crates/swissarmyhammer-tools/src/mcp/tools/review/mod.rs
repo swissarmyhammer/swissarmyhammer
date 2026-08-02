@@ -40,7 +40,9 @@ use swissarmyhammer_operations::{
 };
 use swissarmyhammer_validators::review::Scope;
 
-use crate::mcp::op_tool_helpers::{json_result, string_arg, string_array_arg, usize_arg};
+use crate::mcp::op_tool_helpers::{
+    bool_arg, is_glob_pattern, json_result, string_arg, string_array_arg, usize_arg,
+};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use review_op::{AgentFactory, EmbedderFactory, ReviewRequest, ReviewResponse};
 
@@ -66,7 +68,7 @@ const BACKEND_PARAM: ParamMeta = ParamMeta::new("backend")
 /// `review` op's parameter list.
 const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
     .description(
-        "Max inlined file content per review batch, in BYTES (default 262144 = 256 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is an error. Raise it to review larger files in one batch, lower it for smaller batches.",
+        "Max inlined file content per review batch, in BYTES (default 393216 = 384 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is skipped and reported as \"not reviewed, too large\" in the report — it never blocks review of the rest. Raise it to include larger files, lower it for smaller batches. Must be a non-negative integer; a negative or fractional value is ignored (falls back to the default).",
     )
     .param_type(ParamType::Integer);
 
@@ -160,6 +162,11 @@ static LIST_VALIDATORS_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("match")
         .description("Filter to validators whose globs match this path/glob.")
         .param_type(ParamType::String),
+    ParamMeta::new("rules")
+        .description(
+            "Also return each validator's rules — name plus verbatim body (default false). With `match: <file>` this returns, in one call, the full rule text a review will enforce on that file.",
+        )
+        .param_type(ParamType::Boolean),
 ];
 
 impl Operation for ListValidators {
@@ -344,8 +351,11 @@ impl ReviewTool {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let factory = self.agent_factory.as_ref().ok_or_else(|| {
             rmcp::ErrorData::internal_error(
-                "the `review` ops need a live agent; this tool was built without an agent factory \
-                 (the loader-read ops `list`/`get`/`check validators` work without one)",
+                "the `review` ops need a live agent; this tool was built without an agent factory. \
+                 The `sah tool review ...` CLI route never wires one, so it cannot run these ops — \
+                 call `review file`/`review working`/`review sha` through the MCP `review` tool from \
+                 a connected agent (e.g. `sah serve`) instead. (The loader-read ops \
+                 `list`/`get`/`check validators` work from either route, no agent required.)",
                 None,
             )
         })?;
@@ -543,9 +553,14 @@ impl McpTool for ReviewTool {
                 self.execute_review(Scope::Sha(sha), &args, context).await
             }
             "list validators" => {
+                // An empty `match` is no filter, not a path that matches nothing
+                // — the same treatment an empty `op` gets above.
                 let summaries = validators::list_validators(
                     string_arg(&args, "source").as_deref(),
-                    string_arg(&args, "match").as_deref(),
+                    string_arg(&args, "match")
+                        .as_deref()
+                        .filter(|value| !value.is_empty()),
+                    bool_arg(&args, "rules", false),
                 )
                 .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
                 json_result(&summaries)
@@ -584,7 +599,7 @@ impl McpTool for ReviewTool {
 /// Build the [`Scope`] for a `review file` target: a glob when it has glob
 /// metacharacters, else a single file path.
 fn scope_for_path(target: &str) -> Scope {
-    if target.contains(['*', '?', '[']) {
+    if is_glob_pattern(target) {
         Scope::Glob(target.to_string())
     } else {
         Scope::File(target.to_string())
