@@ -1,18 +1,15 @@
 //! Shared frontmatter parsing functionality
 //!
 //! [`split_frontmatter_body`] splits text on line-anchored `---` delimiters.
-//! Four readers of the frontmatter + markdown body format call it: the entity
+//! Five readers of the frontmatter + markdown body format call it: the entity
 //! `io.rs` and `store.rs` readers, `parse_ralph_file` in the ralph MCP tool,
-//! and the prompt health check. Those four therefore agree on the delimiter
-//! rule.
+//! the prompt health check, and [`parse_frontmatter`] (through
+//! [`parse_frontmatter_with_expansion`]). All five therefore agree on the
+//! delimiter rule.
 //!
-//! It is not the only frontmatter split in the workspace, and not even the
-//! only one in this module. The split behind [`parse_frontmatter`] and
-//! [`parse_frontmatter_with_expansion`] still cuts on the `---\n` substring,
-//! so the two paths disagree on text that holds a three-hyphen run inside a
-//! YAML scalar. Task ^tv3692e owns moving that path onto the line-anchored
-//! split. `swissarmyhammer-templating`, `swissarmyhammer-merge`, and `mirdan`
-//! each carry a further copy of their own.
+//! It is not the only frontmatter split in the workspace, though.
+//! `swissarmyhammer-templating`, `swissarmyhammer-merge`, and `mirdan` each
+//! carry a further copy of their own.
 //!
 //! # YAML Include Expansion
 //!
@@ -58,13 +55,12 @@ fn is_delimiter_line(raw: &str) -> bool {
 
 /// Split frontmatter + body text on line-anchored `---` delimiters.
 ///
-/// Four readers of the frontmatter + markdown body format call it -- the
-/// entity `io.rs` and `store.rs` readers, `parse_ralph_file`, and the prompt
-/// health check -- so the delimiter rule holds the same for those four. It is
-/// not the only frontmatter split in the workspace: [`parse_frontmatter`] in
-/// this module still cuts on the `---\n` substring until ^tv3692e closes that,
-/// and other crates carry copies of their own. Call this one from a new
-/// reader rather than writing another.
+/// Five readers of the frontmatter + markdown body format call it -- the
+/// entity `io.rs` and `store.rs` readers, `parse_ralph_file`, the prompt
+/// health check, and [`parse_frontmatter`] -- so the delimiter rule holds the
+/// same for those five. It is not the only frontmatter split in the
+/// workspace: other crates carry copies of their own. Call this one from a
+/// new reader rather than writing another.
 ///
 /// The opening delimiter is the first line of `content` and must be exactly
 /// three hyphens. The frontmatter runs to the next delimiter line. Returns
@@ -116,11 +112,10 @@ pub struct Frontmatter {
 /// Reads content with YAML frontmatter delimited by `---` markers.
 /// If no frontmatter is found, returns the entire content unchanged.
 ///
-/// This path splits on the `---\n` substring, not on whole lines the way
-/// [`split_frontmatter_body`] does. Any `---` immediately followed by a
-/// newline closes the block, even indented inside a YAML block scalar, so
-/// such content parses short. Task ^tv3692e owns moving this onto the
-/// line-anchored split.
+/// Delegates the split to [`split_frontmatter_body`], so only a line that is
+/// exactly three hyphens delimits: a three-hyphen run indented inside a YAML
+/// block scalar, or embedded in a longer line, stays in the frontmatter
+/// instead of closing it early.
 ///
 /// # Arguments
 /// * `content` - The raw content potentially containing YAML frontmatter
@@ -200,38 +195,32 @@ fn parse_frontmatter_internal<C: DirectoryConfig>(
     }
 
     // Check for YAML frontmatter delimiter
-    if content.starts_with("---\n") {
-        let parts: Vec<&str> = content.splitn(3, "---\n").collect();
-        if parts.len() >= 3 {
-            let yaml_content = parts[1];
-            let body_content = parts[2].to_string();
+    if let Some((yaml_content, body_content)) = split_frontmatter_body(content) {
+        // Parse YAML frontmatter
+        let mut yaml_value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(yaml_content).map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Invalid YAML frontmatter: {e}"),
+            })?;
 
-            // Parse YAML frontmatter
-            let mut yaml_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml_content)
+        // Expand includes if an expander is provided
+        if let Some(exp) = expander {
+            yaml_value = exp
+                .expand(yaml_value)
                 .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Invalid YAML frontmatter: {e}"),
+                    message: format!("Failed to expand YAML includes: {e}"),
                 })?;
-
-            // Expand includes if an expander is provided
-            if let Some(exp) = expander {
-                yaml_value = exp
-                    .expand(yaml_value)
-                    .map_err(|e| SwissArmyHammerError::Other {
-                        message: format!("Failed to expand YAML includes: {e}"),
-                    })?;
-            }
-
-            // Convert to JSON for consistent handling
-            let json_value =
-                serde_json::to_value(yaml_value).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to convert YAML to JSON: {e}"),
-                })?;
-
-            return Ok(Frontmatter {
-                metadata: Some(json_value),
-                content: body_content,
-            });
         }
+
+        // Convert to JSON for consistent handling
+        let json_value =
+            serde_json::to_value(yaml_value).map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to convert YAML to JSON: {e}"),
+            })?;
+
+        return Ok(Frontmatter {
+            metadata: Some(json_value),
+            content: body_content.to_string(),
+        });
     }
 
     // No frontmatter found, return entire content
@@ -453,14 +442,48 @@ Content after empty frontmatter
 
     #[test]
     fn test_parse_frontmatter_opening_delimiter_no_closing() {
-        // Content starts with --- but never has a closing --- delimiter.
-        // splitn(3, "---\n") yields fewer than 3 parts, so we fall through
-        // to the "no frontmatter" branch.
+        // Content starts with --- but never has a closing --- delimiter
+        // line, so split_frontmatter_body finds no match and we fall
+        // through to the "no frontmatter" branch.
         let content = "---\nkey: value\nno closing delimiter here\n";
 
         let result = parse_frontmatter(content).unwrap();
         assert!(result.metadata.is_none());
         assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn closing_delimiter_without_trailing_newline_parses_with_an_empty_body() {
+        // A closing delimiter at end of file with no terminator used to
+        // fall through to "no frontmatter" under the old substring split,
+        // because splitn(3, "---\n") never found a second "---\n"
+        // occurrence. The line-anchored splitter recognizes the
+        // unterminated "---" as a valid closing delimiter line and reads
+        // an empty body.
+        let content = "---\nkey: value\n---";
+
+        let result = parse_frontmatter(content).unwrap();
+        assert!(result.metadata.is_some());
+        let metadata = result.metadata.as_ref().unwrap();
+        assert_eq!(metadata.get("key").and_then(|v| v.as_str()), Some("value"));
+        assert_eq!(result.content, "");
+    }
+
+    #[test]
+    fn crlf_frontmatter_parses() {
+        // A CRLF file used to fall through to "no frontmatter" because the
+        // old substring gate checked `starts_with("---\n")`, which a
+        // "---\r\n" opening line never matches. The line-anchored
+        // splitter strips the trailing \r before comparing delimiter
+        // lines, so it recognizes the CRLF delimiters and parses the
+        // frontmatter.
+        let content = "---\r\nkey: value\r\n---\r\nbody\r\n";
+
+        let result = parse_frontmatter(content).unwrap();
+        assert!(result.metadata.is_some());
+        let metadata = result.metadata.as_ref().unwrap();
+        assert_eq!(metadata.get("key").and_then(|v| v.as_str()), Some("value"));
+        assert!(result.content.contains("body"));
     }
 
     #[test]
