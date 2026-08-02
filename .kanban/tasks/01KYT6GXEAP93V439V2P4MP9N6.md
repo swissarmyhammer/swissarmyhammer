@@ -97,8 +97,23 @@ comments:
     - 71 files changed, 570 insertions(+), 414 deletions(-); staged confined to crates/swissarmyhammer-tools, crates/mirdan, crates/agent-client-protocol-extras, crates/claude-agent (tools.rs), crates/llama-agent (test fixture), apps/code-context-cli, apps/shelltool-cli, apps/swissarmyhammer-cli, plus .kanban/tasks (^p4mp9n6 update + new cards ^f70h1pr, ^p3qx2hc). No builtin/ files, no .trash pairs.
     - next: none — commit is local only, not pushed
   timestamp: 2026-08-01T17:00:52.101173+00:00
-position_column: review
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz17q19ycyxt21kc15ycv48z
+  text: |-
+    ### review — stuck
+    - evidence: `{"op": "review sha", "sha": "0c8b969b8~1..0c8b969b8"}` returned `128/128 review tasks failed — results are INCOMPLETE` on two separate attempts (06:30 and 06:47), and again at 07:11 when narrowed to `validators: [\"rust\"]` (still 128/128 failed, count unchanged by the narrowing — a sign the failure happens before per-task dispatch, not per validator).
+    - diagnosis: `sah` binary was rebuilt today at 06:26 (fresh, not stale) and `check validators` reports all 21 validators OK. The review engine itself is not broken in general — `review sha HEAD~1..HEAD` succeeded cleanly (16 attempted, 0 failed, real findings returned) and `review file crates/swissarmyhammer-tools/src/mcp/server.rs` with `validators: ["rust"]` also succeeded (16 attempted, 0 failed). The failure is specific to scoping `review sha` at the large 71-file range `0c8b969b8~1..0c8b969b8` — the commit resolves fine in git (`git cat-file -t 0c8b969b8` → commit, `git diff --stat` confirms 71 files / 570(+) / 414(-)), so this is not a bad ref. This looks like a scale-triggered systemic infrastructure fault in the review engine's task fan-out, not real findings.
+    - next: a human should re-run `{"op": "review sha", "sha": "0c8b969b8~1..0c8b969b8"}` after the engine's large-batch/fan-out path is checked, or split the review into smaller per-crate `review file` globs as a workaround. Task left in `review`, no findings recorded, no column move made.
+  timestamp: 2026-08-02T12:38:22.782863+00:00
+- actor: claude-code
+  id: 01kz182re9w2hk8ztypdc5sv8e
+  text: |-
+    ### done — manual override by user
+    - evidence: tests green (cargo nextest 4194 passed, clippy clean, fmt clean) on checkpoint commit 0c8b969b8. Review could not run — engine fails 128/128 on this commit's large diff, confirmed as a review-engine defect (^cbg6zsw), not a content issue. Not a fixable code problem on this task.
+    - next: user directed moving this task to done despite the review gate not completing, since the blocker is an external engine bug already filed separately.
+  timestamp: 2026-08-02T12:44:46.921512+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8f80
 title: Lowercase the remaining capitalized MCP error Display messages outside the kanban tool
 ---
 `builtin/validators/rust/rules/error-handling.md` states: Display messages on errors are lowercase, with no trailing punctuation.
