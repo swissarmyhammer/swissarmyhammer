@@ -54,9 +54,11 @@ use agent_client_protocol::schema::SessionId;
 use serde::Deserialize;
 
 use crate::review::fleet::{
-    classify_reuse, emit_progress, PrefixReuse, ReviewProgressEvent, ReviewProgressSender,
+    classify_reuse, emit_progress, render_numbered_lines, PrefixReuse, ReviewProgressEvent,
+    ReviewProgressSender,
 };
 use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
+use crate::review::scope::LineAnnotation;
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::{AgentPool, PoolError};
 
@@ -64,8 +66,9 @@ use crate::validators::{AgentPool, PoolError};
 /// it against.
 ///
 /// The fan-out stage emits a [`Finding`]; the verify stage pairs it with the
-/// `source_slice` and `probe_results` of the work item it came from (the same
-/// data already on the [`FileWork`](crate::review::FileWork) — never re-derived).
+/// `source_slice`, `probe_results`, and `line_annotations` of the work item it
+/// came from (the same data already on the
+/// [`FileWork`](crate::review::FileWork) — never re-derived).
 #[derive(Debug, Clone)]
 pub struct Candidate {
     /// The candidate finding fan-out emitted.
@@ -74,6 +77,18 @@ pub struct Candidate {
     pub source_slice: String,
     /// The probe results already attached to the work item — reused, never re-run.
     pub probe_results: Vec<ProbeResult>,
+    /// The per-line blame/change annotations for `source_slice` — the SAME data
+    /// [`crate::review::fleet::render_numbered_source`] renders into the fan-out
+    /// prime. Carrying it through to verify lets
+    /// [`render_verify_prompt`] show the adversary the identical numbered,
+    /// blame-annotated block the fan-out agent saw, so it can check the
+    /// finding's cited `line` against what is ACTUALLY printed at that line
+    /// instead of taking the citation on faith (^j4d2613: a finding whose line
+    /// does not resolve to matching code is unactionable no matter how
+    /// plausible its claim reads). Empty when the finding's `(validator, file)`
+    /// did not resolve to work-list context (see `build_candidates`), matching
+    /// the empty `source_slice`/`probe_results` in that case.
+    pub line_annotations: Vec<LineAnnotation>,
 }
 
 /// The outcome of the deterministic guard pass: the survivors that must go to
@@ -148,16 +163,73 @@ static GUARD_RULES: &[GuardRule] = &[
     },
 ];
 
+/// The verdict reason recorded when [`line_out_of_bounds`] refutes a finding.
+const LINE_OUT_OF_BOUNDS_REASON: &str = "refuted: the cited line does not exist in the file's \
+current content — a citation past the end of the file cannot be describing code that is \
+actually there (stale or mismatched line number, see ^j4d2613)";
+
+/// Whether `candidate.finding.line` cannot possibly be describing code in
+/// `candidate.source_slice` — the cheapest, LLM-free half of the location check
+/// (^j4d2613: "review engine reports findings against a stale revision — cited
+/// line numbers do not resolve").
+///
+/// A `Finding.line` is 1-based (see [`Finding::line`]'s doc), so `0` never names
+/// a real line, and any value past the file's own line count names a line that
+/// does not exist in the SAME content this engine run handed the review agent —
+/// there is no revision, no batching offset, and no counting error that makes
+/// such a citation correct. This is a structural fact about the candidate's own
+/// paired content, decidable with no probe and no agent round trip, so it runs
+/// ahead of [`guard_verdict`] rather than waiting on the adversarial layer.
+///
+/// A candidate with no content to bound against (an empty `source_slice` — a
+/// deletion, or a finding whose `(validator, file)` never resolved to work-list
+/// context) is undecidable here, not a violation: [`build_candidates`] already
+/// sends that case to the agent, which refutes it by default.
+///
+/// [`build_candidates`]: crate::review::synthesize::build_candidates
+fn line_out_of_bounds(candidate: &Candidate) -> bool {
+    let trimmed = candidate.source_slice.trim_end();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let total_lines = trimmed.lines().count() as u32;
+    candidate.finding.line == 0 || candidate.finding.line > total_lines
+}
+
 /// Run the deterministic probe guard over a batch of candidates.
 ///
-/// For each candidate this consults [`GUARD_RULES`], reusing the candidate's own
-/// `probe_results` (never re-running a probe) and acting only on
-/// [`ProbeKind::Fact`] probes. A candidate a `fact` probe contradicts is refuted
-/// outright (recorded with [`RefutingLayer::Guard`]); every other candidate —
-/// `similar`-backed, or one no `fact` probe can decide — survives to the agent.
+/// Two independent checks run per candidate, both deterministic and probe/agent
+/// free where they can decide:
+///
+/// 1. [`line_out_of_bounds`] — the cited line does not exist in the candidate's
+///    own paired content. Checked FIRST: an out-of-bounds citation is refuted
+///    before [`guard_verdict`] ever runs, since a probe-based fact about a
+///    symbol cannot rescue a finding that cannot even be describing this file.
+/// 2. [`guard_verdict`] — [`GUARD_RULES`], reusing the candidate's own
+///    `probe_results` (never re-running a probe) and acting only on
+///    [`ProbeKind::Fact`] probes.
+///
+/// A candidate either check refutes is recorded outright (with
+/// [`RefutingLayer::Guard`]); every other candidate — `similar`-backed, or one
+/// neither check can decide — survives to the adversarial agent.
 pub fn run_guard(candidates: &[Candidate]) -> GuardOutcome {
     let mut outcome = GuardOutcome::default();
     for candidate in candidates {
+        if line_out_of_bounds(candidate) {
+            tracing::debug!(
+                file = %candidate.finding.file,
+                line = candidate.finding.line,
+                validator = %candidate.finding.validator,
+                "guard auto-refuted finding: cited line is out of bounds"
+            );
+            outcome.refuted.push(VerifiedFinding {
+                finding: candidate.finding.clone(),
+                confirmed: false,
+                reason: LINE_OUT_OF_BOUNDS_REASON.to_string(),
+                decided_by: Some(RefutingLayer::Guard),
+            });
+            continue;
+        }
         match guard_verdict(candidate) {
             Some(rule) => {
                 tracing::debug!(
@@ -517,11 +589,20 @@ fn parse_verdict(agent_text: &str) -> Verdict {
 /// fan-out prompt.
 ///
 /// Where fan-out asks the agent to *find* issues, this hands the agent one
-/// specific finding plus the same ground-truth context (the file's
-/// `source_slice` and the relevant `probe_results`) and instructs it to **try to
-/// DISPROVE the claim**, emitting a `{"confirmed", "reason"}` verdict. The
-/// contract is refute-by-default: only a verdict that positively substantiates
-/// the finding confirms it.
+/// specific finding plus the same ground-truth context (the file's numbered,
+/// blame-annotated source and the relevant `probe_results`) and instructs it to
+/// **try to DISPROVE the claim**, emitting a `{"confirmed", "reason"}` verdict.
+/// The contract is refute-by-default: only a verdict that positively
+/// substantiates the finding, AT the line it cites, confirms it.
+///
+/// The source renders via the SAME [`render_numbered_lines`] the fan-out prime
+/// uses (^j4d2613): before this, verify saw only a bare, unnumbered fence, so
+/// the adversary had no printed line number to check a finding's cited `line`
+/// against — it could only judge whether the claim was plausible SOMEWHERE in
+/// the file, never whether the citation pointed at the right place. Giving
+/// verify the identical numbered view — plus [`VERIFY_OUTPUT_CONTRACT`]'s
+/// explicit instruction to read the code AT that line before confirming —
+/// closes that gap.
 pub fn render_verify_prompt(candidate: &Candidate) -> String {
     let finding = &candidate.finding;
     let mut out = String::new();
@@ -544,9 +625,12 @@ pub fn render_verify_prompt(candidate: &Candidate) -> String {
     let _ = writeln!(out, "- Cited evidence: {}", finding.evidence);
     out.push('\n');
 
-    out.push_str("# Source slice\n\n```\n");
-    out.push_str(candidate.source_slice.trim_end());
-    out.push_str("\n```\n\n");
+    out.push_str("# Source slice\n\n");
+    render_numbered_lines(
+        &mut out,
+        &candidate.source_slice,
+        &candidate.line_annotations,
+    );
 
     out.push_str("# Probe evidence (ground truth)\n\n");
     render_probe_evidence(&mut out, &candidate.probe_results, true);
@@ -560,10 +644,17 @@ pub fn render_verify_prompt(candidate: &Candidate) -> String {
 const VERIFY_OUTPUT_CONTRACT: &str = "\
 # Output contract
 
+First, read the printed `line` column above and find the row matching the claim's \
+cited line — do NOT count lines yourself. Compare what is ACTUALLY on that line \
+against what the claim describes. A claim whose cited line does not match its own \
+description is disproven by mislocation alone: set `confirmed` to `false` and say \
+so in `reason`, even if the described issue is real somewhere else in the file.
+
 Emit exactly one JSON object:
 
-- `confirmed`: `true` only if the evidence positively substantiates the claim; \
-`false` if you can disprove it OR cannot positively substantiate it.
+- `confirmed`: `true` only if the evidence positively substantiates the claim AT \
+the line it cites; `false` if you can disprove it, OR the cited line does not \
+match the claim, OR you cannot positively substantiate it.
 - `reason`: one sentence — what in the evidence confirmed or disproved the claim.
 
 If you are uncertain, set `confirmed` to `false`. The claim must be proven, not \
@@ -575,11 +666,14 @@ mod tests {
     use super::*;
     use crate::review::probes::ProbeRow;
 
-    /// A `dead-code` finding about `symbol` in `file`.
+    /// A `dead-code` finding about `symbol` in `file`. `line: 1` matches every
+    /// one-line `source_slice` fixture these tests pair it with, so the new
+    /// deterministic line-bounds guard (see `line_out_of_bounds`) never
+    /// preempts the fact-probe guard behavior these tests actually exercise.
     fn dead_code_finding(file: &str, symbol: &str) -> Finding {
         Finding {
             file: file.to_string(),
-            line: 10,
+            line: 1,
             validator: "dead-code".to_string(),
             rule: Some("no-unused".to_string()),
             claim: format!("`{symbol}` is dead code — nothing calls it."),
@@ -614,6 +708,7 @@ mod tests {
             finding: dead_code_finding("src/lib.rs", "target"),
             source_slice: "fn target() {}".to_string(),
             probe_results: vec![callers_probe("target", &["uses_target"])],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -636,6 +731,7 @@ mod tests {
             finding: dead_code_finding("src/lib.rs", "target"),
             source_slice: "fn target() {}".to_string(),
             probe_results: vec![callers_probe("target", &["uses_target"])],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -655,6 +751,7 @@ mod tests {
             finding: dead_code_finding("src/lib.rs", "orphan"),
             source_slice: "fn orphan() {}".to_string(),
             probe_results: vec![callers_probe("orphan", &[])],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -674,7 +771,7 @@ mod tests {
         // never a fact, so the guard must never refute it.
         let finding = Finding {
             file: "src/new.rs".to_string(),
-            line: 5,
+            line: 1,
             validator: "deduplicate".to_string(),
             rule: Some("prefer-reuse".to_string()),
             claim: "Reimplements an existing util — reuse `mean_squared_error`.".to_string(),
@@ -696,6 +793,7 @@ mod tests {
                     detail: None,
                 }],
             }],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -713,7 +811,7 @@ mod tests {
         // A duplication finding whose `duplicates` fact found NO matching block.
         let finding = Finding {
             file: "src/a.rs".to_string(),
-            line: 12,
+            line: 1,
             validator: "duplication".to_string(),
             rule: Some("no-copy-paste".to_string()),
             claim: "Duplicated block also lives in b.rs.".to_string(),
@@ -729,6 +827,7 @@ mod tests {
                 target: "src/a.rs".to_string(),
                 rows: vec![],
             }],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -747,7 +846,7 @@ mod tests {
         // guard cannot refute it, so it survives to the agent.
         let finding = Finding {
             file: "src/a.rs".to_string(),
-            line: 12,
+            line: 1,
             validator: "duplication".to_string(),
             rule: None,
             claim: "Duplicated block also lives in b.rs.".to_string(),
@@ -769,6 +868,7 @@ mod tests {
                     detail: None,
                 }],
             }],
+            line_annotations: Vec::new(),
         };
 
         let outcome = run_guard(&[candidate]);
@@ -777,6 +877,95 @@ mod tests {
             outcome.survivors.len(),
             1,
             "a real duplication survives the guard"
+        );
+        assert!(outcome.refuted.is_empty());
+    }
+
+    // ---- line-bounds guard (^j4d2613) -------------------------------------
+
+    /// A finding whose file has no content available to bound against — it must
+    /// survive the bounds check (undecidable, not a violation) and go on to
+    /// whatever the fact-probe guard or agent decides.
+    fn candidate_with_line(line: u32, source_slice: &str) -> Candidate {
+        Candidate {
+            finding: Finding {
+                file: "src/bounds.rs".to_string(),
+                line,
+                validator: "style".to_string(),
+                rule: None,
+                claim: "some claim".to_string(),
+                evidence: "some evidence".to_string(),
+                suggestion: None,
+            },
+            source_slice: source_slice.to_string(),
+            probe_results: vec![],
+            line_annotations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn guard_auto_refutes_a_finding_whose_line_is_past_the_end_of_the_file() {
+        // The file has 3 lines; the finding cites line 9 — past the end, so it
+        // cannot be describing code that is actually in this content.
+        let candidate = candidate_with_line(9, "line one\nline two\nline three\n");
+
+        let outcome = run_guard(&[candidate]);
+
+        assert!(
+            outcome.survivors.is_empty(),
+            "a line past the end of the file must be refuted, not sent to the agent"
+        );
+        assert_eq!(outcome.refuted.len(), 1);
+        assert!(!outcome.refuted[0].confirmed);
+        assert_eq!(outcome.refuted[0].decided_by, Some(RefutingLayer::Guard));
+        assert!(
+            outcome.refuted[0].reason.contains("does not exist"),
+            "the reason must name the out-of-bounds citation: {}",
+            outcome.refuted[0].reason
+        );
+    }
+
+    #[test]
+    fn guard_auto_refutes_a_finding_whose_line_is_zero() {
+        // `Finding.line` is documented 1-based; 0 never names a real line.
+        let candidate = candidate_with_line(0, "line one\nline two\n");
+
+        let outcome = run_guard(&[candidate]);
+
+        assert!(outcome.survivors.is_empty(), "line 0 must be refuted");
+        assert_eq!(outcome.refuted.len(), 1);
+        assert_eq!(outcome.refuted[0].decided_by, Some(RefutingLayer::Guard));
+    }
+
+    #[test]
+    fn guard_passes_a_finding_whose_line_is_exactly_the_last_line() {
+        // The last real line is the boundary — it must NOT be treated as out of
+        // bounds (an off-by-one would wrongly refute every last-line finding).
+        let candidate = candidate_with_line(3, "line one\nline two\nline three\n");
+
+        let outcome = run_guard(&[candidate]);
+
+        assert_eq!(
+            outcome.survivors.len(),
+            1,
+            "the file's last line is in bounds, not a violation"
+        );
+        assert!(outcome.refuted.is_empty());
+    }
+
+    #[test]
+    fn guard_never_bounds_checks_a_candidate_with_no_content() {
+        // No source to bound against (e.g. `build_candidates`'s unmatched-path
+        // case, or a deletion) — undecidable, must pass through rather than be
+        // wrongly refuted as "out of bounds" against nothing.
+        let candidate = candidate_with_line(42, "");
+
+        let outcome = run_guard(&[candidate]);
+
+        assert_eq!(
+            outcome.survivors.len(),
+            1,
+            "no content to bound against is undecidable, not a violation"
         );
         assert!(outcome.refuted.is_empty());
     }
@@ -848,6 +1037,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn render_verify_prompt_shows_the_numbered_blame_annotated_source() {
+        // ^j4d2613: verify must see the SAME numbered, blame-annotated view the
+        // fan-out agent saw, not a bare unnumbered fence — otherwise the
+        // adversary has no printed line number to check a citation against.
+        use crate::review::scope::LineAnnotation;
+
+        let mut candidate = survivor("numbered");
+        candidate.source_slice = "fn one() {}\nfn two() {}\n".to_string();
+        candidate.line_annotations = vec![
+            LineAnnotation::new("aaaaaaaa", false),
+            LineAnnotation::new("bbbbbbbb", true),
+        ];
+
+        let prompt = render_verify_prompt(&candidate);
+
+        assert!(
+            prompt.contains("     1 | aaaaaaaa"),
+            "line 1's printed number and blame sha must appear: {prompt}"
+        );
+        assert!(
+            prompt.contains("     2 | bbbbbbbb +"),
+            "line 2's touched mark must appear: {prompt}"
+        );
+        assert!(
+            prompt.contains("READ this number"),
+            "the legend instructing the model to read, not count, must appear: {prompt}"
+        );
+    }
+
+    #[test]
+    fn render_verify_prompt_instructs_checking_the_cited_line_before_confirming() {
+        let candidate = survivor("checked");
+        let prompt = render_verify_prompt(&candidate);
+
+        assert!(
+            prompt.contains("does not match its own description"),
+            "the contract must instruct checking the code AT the cited line: {prompt}"
+        );
+        assert!(
+            prompt.contains("cited line does not match the claim"),
+            "the confirmed field's contract must name the mislocation case: {prompt}"
+        );
+    }
+
     // ---- scripted mock-agent harness (shared) ------------------------------
     //
     // The scripted ACP agent lives in `crate::review::test_support`. The
@@ -907,6 +1141,7 @@ mod tests {
                 target: marker.to_string(),
                 rows: vec![],
             }],
+            line_annotations: Vec::new(),
         }
     }
 
@@ -981,6 +1216,7 @@ mod tests {
             finding: dead_code_finding("src/live.rs", "called"),
             source_slice: "fn called() {}".to_string(),
             probe_results: vec![callers_probe("called", &["a_caller"])],
+            line_annotations: Vec::new(),
         };
         // One agent-confirmed and one agent-refuted survivor.
         let confirmed = survivor("confirmed");

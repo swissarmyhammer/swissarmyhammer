@@ -1005,6 +1005,108 @@ fn planted_duplicate_fixture_committed(repo: &TestRepo) -> AgentFactory {
     scripted_factory(agent)
 }
 
+/// A findings array citing an explicit `line`, unlike [`findings_json`] (which
+/// always cites `1`) — needed to plant a finding whose line does not exist in
+/// the file at all.
+fn findings_json_at_line(file: &str, line: u32, claim: &str) -> String {
+    let array = json!([{
+        "file": file,
+        "line": line,
+        "validator": "agent-tagged",
+        "rule": "r",
+        "claim": claim,
+        "evidence": "per file inspection",
+        "suggestion": "fix it",
+    }]);
+    format!("```json\n{array}\n```")
+}
+
+/// A single 3-line changed file and a scripted fan-out response that cites a
+/// wildly out-of-range line for it (^j4d2613: "review engine reports findings
+/// against a stale revision — cited line numbers do not resolve"). The
+/// `style` validator declares no probes, so the deterministic fact-probe guard
+/// (`GUARD_RULES`) cannot decide this finding either way — only the line-bounds
+/// guard can catch it before it ever reaches the adversarial verifier.
+///
+/// The verify script CONFIRMS the claim if this candidate ever reaches it —
+/// deliberately, so a regression in the bounds guard would surface the finding
+/// in the report rather than vanishing behind some other refute-by-default
+/// path and giving a false-negative "still passes" result.
+fn stale_line_fixture(repo: &TestRepo) -> AgentFactory {
+    repo.write("src/lib.rs", "fn placeholder() {}\n");
+    repo.commit("initial");
+    repo.write("src/lib.rs", "fn placeholder() {}\n\nfn changed() {}\n");
+
+    write_ruleset(&repo.path().join(".validators"), "style", "*.rs", &[]);
+    // The `style` validator declares no probes, but the review tool still
+    // requires an on-disk code_context index to exist (production contract);
+    // an empty schema is enough since no probe ever queries it here.
+    let _ = on_disk_index_conn(repo.path());
+
+    let agent = ScriptedAgent::new(vec![
+        (
+            "# Validator: style".to_string(),
+            ScriptedReply::Text(findings_json_at_line(
+                "src/lib.rs",
+                9999,
+                "changed has a stale-line style violation",
+            )),
+        ),
+        (
+            "changed has a stale-line style violation".to_string(),
+            ScriptedReply::Text(confirm_json()),
+        ),
+    ]);
+    scripted_factory(agent)
+}
+
+/// A finding citing a line past the end of the file's current content must
+/// never reach the report, even when the (deliberately rigged) adversarial
+/// verifier would confirm it if it ever saw it — proving the deterministic
+/// line-bounds guard, not luck, is what removes it (^j4d2613).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_working_drops_a_finding_whose_cited_line_is_out_of_bounds() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = stale_line_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("review working dispatch");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    let markdown = parsed["markdown"].as_str().unwrap();
+    assert!(
+        !markdown.contains("stale-line"),
+        "a finding citing a line that does not exist in the file must never \
+         render, even though the scripted verifier would confirm it if it were \
+         ever reached: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+    assert_eq!(parsed["counts"]["confirmed"], json!(0));
+    assert_eq!(
+        parsed["counts"]["refuted"],
+        json!(1),
+        "the out-of-bounds finding must still be tallied as refuted: {parsed}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(cwd)]
 async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {

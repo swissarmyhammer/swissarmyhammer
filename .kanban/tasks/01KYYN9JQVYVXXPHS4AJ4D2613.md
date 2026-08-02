@@ -61,8 +61,48 @@ comments:
 
     This suggests a cheap, high-value guard independent of the root cause: **when the reviewed delta contains no executable lines, no finding about code structure can be in scope.** Asserting that alone would have caught this occurrence outright.
   timestamp: 2026-08-01T14:40:00.890638+00:00
-position_column: todo
-position_ordinal: d880
+- actor: claude-code
+  id: 01kz1agd5ttqnf8ztzkb2vpjwp
+  text: |-
+    ### Research
+
+    Read the 3 prior occurrence comments (^fpcbeth, ^a2ef9wh x2) and the sibling task ^k12rn64 ("Review prime: number every line and show its blame commit", done 2026-08-01 21:xx-22:18), which landed commits 71148449d2 + aa69318dc. That work gave the FAN-OUT prime numbered, blame-annotated source (`{line:>6} | {sha:8} {mark} | {text}`) so the finding agent reads a real line number instead of counting.
+
+    Key discovery: even AFTER that fix landed, ^k12rn64's own review passes still caught the engine mis-citing lines (`scope.rs:625` cited as `:559`; `scope.rs:1988` cited when the real subject was at 2447-2536). So the fan-out numbering closed part of the gap but not all of it, and — more important — I found the adversarial VERIFY stage (`render_verify_prompt` in `verify.rs`) was still rendering the candidate's source as a bare, unnumbered fence (`candidate.source_slice.trim_end()` in a plain fenced block). The verifier that is supposed to catch a bad finding before it reaches the report had no printed line number to check a citation against at all — it could only judge whether a claim was plausible somewhere in the file.
+
+    ### Fix
+
+    1. Extracted the numbered/blame-annotated renderer out of `fleet.rs::render_numbered_source` into a shared `pub(crate) fn render_numbered_lines(out, source, annotations)` (`crates/swissarmyhammer-validators/src/review/fleet.rs`), reused by both the fan-out prime and the new verify render.
+    2. `Candidate` (`verify.rs`) now carries `line_annotations: Vec<LineAnnotation>` alongside `source_slice`/`probe_results`, populated in `synthesize.rs::build_candidates` from the SAME `FileWork::line_annotations()` the fan-out prime used — never re-derived.
+    3. `render_verify_prompt` now renders the candidate's source through `render_numbered_lines`, and `VERIFY_OUTPUT_CONTRACT` explicitly instructs the adversary to read the code AT the cited line and refute (`confirmed: false`) if it does not match the claim's own description — closing the exact gap ^k12rn64's own review runs exposed.
+    4. Added a new, LLM-free deterministic guard check `line_out_of_bounds` in `run_guard`: a `Finding.line` of `0`, or past the end of the candidate's own paired `source_slice`, is refuted immediately (`RefutingLayer::Guard`) before any probe or agent round trip — the cheapest, unambiguous half of "does this line even exist in this content." Ran before `guard_verdict` in the same loop.
+
+    ### Tests
+
+    - `crates/swissarmyhammer-validators/src/review/verify.rs`: 5 new unit tests for `line_out_of_bounds` (past-end refuted, zero refuted, last-line-exactly passes, no-content-undecidable passes), plus 2 new tests on `render_verify_prompt` (numbered/blame source appears; contract names the mislocation case). Verified RED without the fix (temporarily short-circuited the bounds check with `if false && ...` — both new unit tests AND the new e2e test below failed as expected), then GREEN with it restored.
+    - `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs`: new production-path test `review_working_drops_a_finding_whose_cited_line_is_out_of_bounds` — a real temp git repo, a custom probe-less validator, a scripted fan-out response citing line 9999 in a 3-line file, and a verify script that would CONFIRM the claim if it were ever reached (so a regression would show the finding in the report, not silently pass). Drives the real registered `review` tool end to end.
+    - Full suites green: `cargo nextest run -p swissarmyhammer-validators` (349 passed), `cargo nextest run -p swissarmyhammer-tools review` (73 passed, includes all 4 `review_e2e` production-path tests). `cargo fmt --all -- --check` clean. `cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings` clean.
+    - Also ran `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` once; it aborted after 1576s on an unrelated, pre-existing flaky GPU test (`kanban-app::ai_panel_e2e test_ai_panel_e2e_mcp_tool_reachable_in_session`, matches the known `ai_panel_e2e qwen NoKvCacheSlot` flakiness), with 3563/3564 run tests passing before the abort — not a regression from this change.
+
+    ### Discovered tension — flagging, not resolving
+
+    Acceptance criterion 2 ("`review sha <range>` reports only on code the range actually changed... a finding on an untouched function is a bug in scoping") directly conflicts with a separate, deliberate, well-documented design decision already in `fleet.rs` (`OUTPUT_CONTRACT`, `render_focus_files`, commit `7449c0c99` "sweep whole file in find-stage + bounded completeness re-scan", 2026-06-27): the review boundary is declared to be the WHOLE current file, not the diff, specifically so pre-existing issues in a changed file are reported in the same pass rather than needing a separate audit. ^k12rn64's own review-driving comments show this tension in practice too: 5 of 6 engine findings were manually dropped as "pre-existing" during that task's own `/review` passes, which is the review-SKILL operator applying judgment on top of the engine's by-design whole-file output, not evidence the engine is scoping incorrectly.
+
+    I did not change scope_review/match_validators_and_files to narrow "sha" review to diff-only lines — doing so would reverse a separate, deliberate, documented architectural decision, which is a true conflict per the review-findings rules (a criterion fighting a documented contract), not something to resolve unilaterally inside a bug-fix task. The location-accuracy fix above (criteria 1 and 3) is unaffected by this and stands on its own: once a citation is accurate, a human/agent's existing blame-check discipline for separating new-vs-pre-existing becomes cheap instead of needing to first relocate a wrong citation by hand. Recommend a human decide whether criterion 2 should become its own task (redesign `review sha` to diff-only) or be dropped as already covered by intended behavior.
+
+    ### implement — changed
+    - evidence: 5 files changed (413 insertions, 41 deletions) — `crates/swissarmyhammer-validators/src/review/{fleet.rs,mod.rs,synthesize.rs,verify.rs}`, `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs`. `cargo nextest run -p swissarmyhammer-validators` → 349 passed, 0 failed. `cargo nextest run -p swissarmyhammer-tools review` → 73 passed, 0 failed. `cargo fmt --all -- --check` clean. `cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings` clean.
+    - next: /review — also see the "Discovered tension" note above regarding acceptance criterion 2, which needs a human decision before it can be closed as satisfied or split into a separate task.
+  timestamp: 2026-08-02T13:27:11.290143+00:00
+- actor: claude-code
+  id: 01kz1aywmz4ke0hahrb0115g2f
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run -p swissarmyhammer-validators — 349 passed, 0 skipped; cargo nextest run -p swissarmyhammer-tools review — 73 passed (includes review_working_drops_a_finding_whose_cited_line_is_out_of_bounds), 0 failed, 1412 skipped (name-filtered, not #[ignore]); cargo fmt --all -- --check — clean; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings — clean (re-verified after touching all 5 changed files to force a fresh check, still zero warnings)
+    - next: spot check confirms review_working_drops_a_finding_whose_cited_line_is_out_of_bounds drives the real ReviewTool through a real libgit2-backed TestRepo (temp dir, real git init/commit), a real ToolRegistry, and the real review engine stages (fleet/synthesize/verify); only the ACP agent and embedder are scripted at the external-call boundary, which is the correct real-path pattern, not a fixture-only test. Ready for commit.
+  timestamp: 2026-08-02T13:35:05.887714+00:00
+position_column: doing
+position_ordinal: '8380'
 title: Review engine reports findings against a stale revision — cited line numbers do not resolve
 ---
 `review sha HEAD~1..HEAD` returned 13 confirmed findings whose cited line numbers point at unrelated code in the current tree. Observed 2026-08-01 reviewing commit `42e32c3a3` for ^fpcbeth.
@@ -100,5 +140,5 @@ Related but distinct: ^k5wsxh0 (same validator returns different finding sets ac
 ## Acceptance
 
 - Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows.
-- `review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.
+- ~~`review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.~~ **Dropped 2026-08-02**: this conflicts with the deliberate, documented whole-file review design (`fleet.rs` `OUTPUT_CONTRACT`, commit `7449c0c99`) — the review boundary is the whole current file by design, so pre-existing issues in a touched file are reported too. Whole-file review is intended behavior, not a scoping bug. User decision: drop this criterion; close on the two remaining criteria.
 - Add a regression test that reviews a known commit and asserts the reported lines resolve to the expected symbols. #bug #review

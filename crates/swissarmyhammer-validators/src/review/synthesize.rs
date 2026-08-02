@@ -465,11 +465,11 @@ pub async fn run_review(
 /// A finding is tagged with its `validator` and the `file` it is about; the
 /// matching [`ValidatorWork`](crate::review::ValidatorWork) /
 /// [`FileWork`](crate::review::FileWork) in `work` holds that file's
-/// `source_slice` and shared `probe_results`. This reuses the stage-1 data
-/// verbatim — it never re-derives a slice or re-runs a probe. A finding whose
-/// `(validator, file)` is not in the work-list (an agent inventing a path) yields
-/// empty context rather than being dropped, so it still reaches the verifier and
-/// refutes by default there.
+/// `source_slice`, shared `probe_results`, and `line_annotations`. This reuses
+/// the stage-1 data verbatim — it never re-derives a slice, re-runs a probe, or
+/// recomputes blame. A finding whose `(validator, file)` is not in the
+/// work-list (an agent inventing a path) yields empty context rather than being
+/// dropped, so it still reaches the verifier and refutes by default there.
 fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
     findings
         .into_iter()
@@ -479,17 +479,19 @@ fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
                 .iter()
                 .find(|v| v.validator_name() == finding.validator)
                 .and_then(|v| v.files().iter().find(|f| f.path() == finding.file));
-            let (source_slice, probe_results) = match context {
+            let (source_slice, probe_results, line_annotations) = match context {
                 Some(file) => (
                     file.source_slice().to_string(),
                     file.probe_results().to_vec(),
+                    file.line_annotations().to_vec(),
                 ),
-                None => (String::new(), Vec::new()),
+                None => (String::new(), Vec::new(), Vec::new()),
             };
             Candidate {
                 finding,
                 source_slice,
                 probe_results,
+                line_annotations,
             }
         })
         .collect()

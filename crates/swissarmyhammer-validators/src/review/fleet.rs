@@ -70,7 +70,7 @@
 use std::fmt::Write as _;
 
 use crate::review::probes::render_probe_evidence;
-use crate::review::scope::{FileWork, ValidatorWork, WorkList};
+use crate::review::scope::{FileWork, LineAnnotation, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
@@ -1485,24 +1485,56 @@ it appears in the file.
 /// [`crate::review::scope::compute_line_annotations`] (the scope stage) used
 /// to compute [`FileWork::line_annotations`] — trimmed identically in both
 /// places — so line `i` of this render is guaranteed to be annotation `i`,
-/// never off-by-one. An empty (deletion) source renders the bare empty fence,
-/// unchanged from the format this format replaces: no legend, no numbering,
-/// nothing to number.
+/// never off-by-one. Delegates to [`render_numbered_lines`], the shared
+/// renderer the verify stage also uses (see that function's docs for why: a
+/// verifier that cannot read the SAME numbered source the fan-out agent saw
+/// has no way to check a finding's cited line against what is actually there).
 fn render_numbered_source(out: &mut String, file: &FileWork) {
-    let source = file.source_slice().trim_end();
+    render_numbered_lines(out, file.source_slice(), file.line_annotations());
+}
+
+/// Append `source` as a numbered, blame-annotated block — one line of
+/// [`LINE_FORMAT_LEGEND`]'s `{line:>6} | {sha:8} {mark} | {text}` layout per
+/// source line, inside a fenced code block. An empty (trimmed) `source` renders
+/// the bare empty fence: no legend, no numbering, nothing to number.
+///
+/// Shared by two call sites that both need the model to read a `Finding.line`
+/// off a real printed number rather than guess one:
+///
+/// - [`render_numbered_source`] — the fan-out prime, over a [`FileWork`]'s
+///   `source_slice` + `line_annotations`.
+/// - [`crate::review::verify::render_verify_prompt`] — the adversarial verify
+///   prompt, over a `Candidate`'s own `source_slice` + `line_annotations` (the
+///   SAME pair the work-list attached to that file, carried through
+///   `build_candidates`). Before this was shared, verify rendered the source as
+///   a bare, unnumbered fence, so the adversary had no printed line number to
+///   check a finding's cited `line` against — it could only judge whether the
+///   CLAIM was plausible somewhere in the file, never whether the citation
+///   itself pointed at the right place. Giving verify the identical numbered
+///   view closes that gap: the adversary can now read line `N` off the same
+///   block the fan-out agent read it from and refute a finding whose citation
+///   does not match.
+///
+/// `annotations[i]` is assumed to correspond to `source`'s line `i` (both
+/// derived from the same trimmed content upstream); a missing entry — should
+/// not happen once every producer always attaches one per line — falls back to
+/// the same `????????` sentinel a blame failure uses, never a panic on an
+/// out-of-bounds index.
+pub(crate) fn render_numbered_lines(
+    out: &mut String,
+    source: &str,
+    annotations: &[LineAnnotation],
+) {
+    let source = source.trim_end();
     if source.is_empty() {
         out.push_str("```\n\n```\n\n");
         return;
     }
 
-    let annotations = file.line_annotations();
     out.push_str(LINE_FORMAT_LEGEND);
     out.push_str("```\n");
     for (i, text) in source.lines().enumerate() {
         let line = i + 1;
-        // A missing annotation (should not happen once the scope stage always
-        // attaches one per line) falls back to the same `????????` sentinel a
-        // blame failure uses, never a panic on an out-of-bounds index.
         let (sha, mark) = match annotations.get(i) {
             Some(annotation) => (
                 annotation.sha().to_string(),
