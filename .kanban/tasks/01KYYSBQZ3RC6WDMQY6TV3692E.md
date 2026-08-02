@@ -82,8 +82,15 @@ comments:
     - Verification: `cargo nextest run -p swissarmyhammer-common -p swissarmyhammer-templating -p mirdan` → 1259 passed, 0 failed, 0 skipped. `cargo test -p swissarmyhammer-common --doc` → 23 passed, 0 failed, 4 ignored (pre-existing); the `parse_frontmatter` doctest now compiles and runs with `?` instead of `.unwrap()`. `cargo clippy -p swissarmyhammer-common --all-targets -- -D warnings` → clean. `cargo fmt --all` → applied, `git diff --stat` on the file shows only the intended 14 insertions/8 deletions, no unrelated reformatting.
     - next: ready for /review
   timestamp: 2026-08-02T14:03:08.883022+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz1csrthxp6ws8pfxs1ahsab
+  text: |-
+    ### review — clean
+    - evidence: review sha c2c98ce97~1..c2c98ce97 → 0 findings (16 attempted, 0 confirmed, 0 refuted). All 5 prior findings from 2026-08-02 08:54 remain checked. Task moved doing → review → done.
+    - next: none
+  timestamp: 2026-08-02T14:07:15.281480+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9180
 title: parse_frontmatter in swissarmyhammer-common still splits frontmatter on a substring
 ---
 A fourth copy of the frontmatter substring-split defect, found while implementing ^a2ef9wh. It sits in the same module as the shared splitter, which makes it the last one.
