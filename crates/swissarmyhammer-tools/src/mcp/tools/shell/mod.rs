@@ -712,6 +712,43 @@ mod tests {
         assert!(full["x-op-signatures"].is_object());
     }
 
+    /// The agent-facing text must state that `execute command` runs to
+    /// completion before it answers, and must forbid `| tail` / `| head` /
+    /// `| grep` pipelines — the tool already keeps the full output, so a
+    /// pipeline throws it away. Both the tool description and the operation
+    /// description carry the blocking fact.
+    ///
+    /// The text must also name the limit of that promise: a command the
+    /// timeout kills stores nothing. `finalize_timed_out` only marks the
+    /// command, and `store_command_output` runs solely in
+    /// `finalize_completed`, so `get lines` on a timed-out command returns
+    /// nothing.
+    #[test]
+    fn shell_description_states_blocking_and_no_tail() {
+        let tool = ShellExecuteTool::new_isolated();
+        let description = McpTool::description(&tool);
+        for marker in [
+            "blocks until the command exits",
+            "Do not pipe to `tail`",
+            "get lines",
+            "grep history",
+            "no output is stored",
+        ] {
+            assert!(
+                description.contains(marker),
+                "shell tool description must contain {marker:?}"
+            );
+        }
+
+        assert!(
+            super::EXECUTE_CMD
+                .description()
+                .contains("blocks until the command exits"),
+            "the `execute command` operation description must say it blocks \
+             until the command exits"
+        );
+    }
+
     // =====================================================================
     // Tests for unknown operations
     // =====================================================================

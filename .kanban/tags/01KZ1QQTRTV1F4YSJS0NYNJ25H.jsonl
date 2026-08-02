@@ -1,0 +1,1 @@
+{"id":"01KZ1QQTRXJ2N8ZW0GKFENJ2ZV","timestamp":"2026-08-02T17:18:26.077059Z","op":"create","item_id":"01KZ1QQTRTV1F4YSJS0NYNJ25H","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: b60205\n+tag_name: test-hygiene\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: b60205\n-tag_name: test-hygiene\n","transaction_id":null}

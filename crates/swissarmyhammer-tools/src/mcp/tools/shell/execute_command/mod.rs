@@ -54,7 +54,7 @@ impl Operation for ExecuteCommand {
         "command"
     }
     fn description(&self) -> &'static str {
-        "Execute a shell command with timeout and environment control"
+        "Execute a shell command with timeout and environment control; blocks until the command exits or the timeout kills it"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         EXECUTE_COMMAND_PARAMS
