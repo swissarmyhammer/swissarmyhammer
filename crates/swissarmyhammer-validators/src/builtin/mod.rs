@@ -74,20 +74,21 @@ mod tests {
     // Focused review validators (split out from the monolithic code-quality set)
     // ========================================================================
 
-    /// The four probe-bearing focused validators and the catalog probe each one
+    /// The probe-bearing focused validators and the catalog probe each one
     /// declares. Probe names must be real catalog entries (`duplicates` /
-    /// `similar` / `callers`); never `search_symbol` or `get_blastradius`.
+    /// `similar` / `callers` / `complexity`); never `search_symbol` or
+    /// `get_blastradius`.
     const PROBE_VALIDATORS: &[(&str, &str)] = &[
         ("duplication", "duplicates"),
         ("reuse", "similar"),
         ("dead-code", "callers"),
+        ("complexity", "complexity"),
     ];
 
     /// In-file focused validators that declare NO probes — every judgment is made
     /// by reading the diff, with no engine-run code_context probe.
     const IN_FILE_VALIDATORS: &[&str] = &[
         "data-driven",
-        "complexity",
         "function-length",
         "no-commented-code",
         "missing-docs",

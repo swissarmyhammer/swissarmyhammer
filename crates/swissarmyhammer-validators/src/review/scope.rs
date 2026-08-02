@@ -495,6 +495,8 @@ pub async fn scope_review(
     let probe_cache = run_probe_cache(
         &matched.validators,
         &grouped.change_entities,
+        &matched.matched_files,
+        &resolved.after_content,
         conn,
         embedder,
     )
@@ -1515,9 +1517,15 @@ impl FileChangeBuilder {
 
 /// Build the shared probe-result cache from a single [`run_probes`] call over the
 /// whole change set with the union of every validator's declared probes.
+///
+/// Entity-bound probes read `change_entities`; file-bound probes (`complexity`)
+/// read the current source of every matched file, so they measure the whole
+/// review boundary rather than only the entities the diff touched.
 async fn run_probe_cache(
     validators: &BTreeMap<String, MatchedValidator>,
     change_entities: &[ChangeEntry],
+    matched_files: &BTreeSet<String>,
+    after_content: &BTreeMap<String, String>,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
 ) -> Result<Vec<ProbeResult>, AvpError> {
@@ -1525,11 +1533,21 @@ async fn run_probe_cache(
         .values()
         .flat_map(|mv| mv.probes.as_slice().iter().cloned())
         .collect();
-    if union.is_empty() || change_entities.is_empty() {
+    let sources: BTreeMap<String, String> = matched_files
+        .iter()
+        .filter_map(|file| {
+            after_content
+                .get(file)
+                .map(|content| (file.clone(), content.clone()))
+        })
+        .collect();
+    // A file-bound probe still has work when the diff produced no entities, so
+    // an empty entity list alone must not short-circuit the whole cache.
+    if union.is_empty() || (change_entities.is_empty() && sources.is_empty()) {
         return Ok(Vec::new());
     }
     let names: Vec<String> = union.into_iter().collect();
-    let change = ProbeChange::new(change_entities.to_vec());
+    let change = ProbeChange::new(change_entities.to_vec()).with_sources(sources);
     let results = run_probes(&names, &change, conn, embedder).await?;
     Ok(results.results)
 }
@@ -2829,6 +2847,112 @@ mod tests {
                 .any(|row| row.file_path == "src/util.rs"),
             "similar should carry the reuse candidate, got: {:?}",
             similar.rows
+        );
+    }
+
+    // ---- scope_review: complexity probe evidence -------------------------
+
+    /// A file with one function far over the nesting gate and one well under it.
+    const MIXED_COMPLEXITY_SOURCE: &str = r#"fn deep(a: bool, b: bool, items: &[u8]) -> u8 {
+    if a {
+        for item in items {
+            while b {
+                if *item > 0 {
+                    return 1;
+                }
+            }
+        }
+    }
+    0
+}
+
+fn shallow(a: Option<u8>) -> u8 {
+    match a {
+        Some(v) => v,
+        None => 0,
+    }
+}
+"#;
+
+    /// Drive the real `scope_review` over a repo holding `source`, and return the
+    /// `complexity` probe evidence the pipeline attached to the file.
+    async fn complexity_evidence_for(source: &str) -> Vec<ProbeResult> {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        repo.write("src/lib.rs", source);
+
+        let conn = index_conn();
+        let loader = loader_with("complexity", "*.rs", &["complexity"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .expect("the working scope resolves");
+
+        work.validators
+            .iter()
+            .find(|v| v.validator_name == "complexity")
+            .expect("the complexity validator matched the changed .rs file")
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .expect("the changed file is work")
+            .probe_results
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn scope_review_attaches_computed_complexity_evidence_to_the_file() {
+        // The production path: a real repo, the real loader, the real probe
+        // runner. The agent must receive the measured numbers, not be asked for
+        // them.
+        let evidence = complexity_evidence_for(MIXED_COMPLEXITY_SOURCE).await;
+
+        let result = evidence
+            .iter()
+            .find(|r| r.name == "complexity")
+            .expect("the complexity probe result reaches the work item");
+        let symbols: Vec<&str> = result
+            .rows
+            .iter()
+            .filter_map(|row| row.symbol.as_deref())
+            .collect();
+
+        assert_eq!(
+            symbols,
+            vec!["deep"],
+            "only the over-gate function is listed, got: {:?}",
+            result.rows
+        );
+        assert!(
+            result.rows[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("max condition-nesting depth 4 (gate 4)")),
+            "the row carries the measured depth and its gate, got: {:?}",
+            result.rows[0].detail
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_review_reports_an_empty_complexity_result_for_a_simple_file() {
+        // An empty result is the deterministic fact the verify guard refutes a
+        // complexity claim with. It must survive the whole pipeline, not be
+        // dropped as "no evidence".
+        let evidence = complexity_evidence_for(
+            "fn shallow(a: Option<u8>) -> u8 {\n    match a {\n        Some(v) => v,\n        None => 0,\n    }\n}\n",
+        )
+        .await;
+
+        let result = evidence
+            .iter()
+            .find(|r| r.name == "complexity")
+            .expect("a simple file still gets a complexity result");
+        assert!(
+            result.rows.is_empty(),
+            "no function is over a gate, got: {:?}",
+            result.rows
         );
     }
 

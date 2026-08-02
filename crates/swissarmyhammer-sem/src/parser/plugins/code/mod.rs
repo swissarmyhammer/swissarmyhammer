@@ -1,3 +1,4 @@
+mod complexity;
 mod entity_extractor;
 mod languages;
 
@@ -8,6 +9,13 @@ pub use languages::get_all_code_extensions;
 /// Whether a path has a code extension per [`get_all_code_extensions`] — the
 /// predicate that owns the dotted-lowercase matching convention.
 pub use languages::is_code_file;
+
+/// Cognitive complexity computed from the parse, so a reviewer compares numbers
+/// instead of counting nesting by eye. See [`complexity`].
+pub use complexity::{
+    cognitive_complexity, FileComplexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
+    NESTING_DEPTH_THRESHOLD,
+};
 
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
