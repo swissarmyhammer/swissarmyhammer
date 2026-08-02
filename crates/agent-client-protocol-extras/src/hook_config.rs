@@ -859,6 +859,8 @@ impl std::error::Error for UnsupportedEventKind {}
 impl TryFrom<HookEventKindConfig> for HookEventKind {
     type Error = UnsupportedEventKind;
 
+    /// Maps a supported `HookEventKindConfig` variant to its `HookEventKind`.
+    /// Returns `UnsupportedEventKind` for forward-compatible variants that ACP does not support.
     fn try_from(config: HookEventKindConfig) -> Result<Self, Self::Error> {
         match config {
             HookEventKindConfig::SessionStart => Ok(HookEventKind::SessionStart),
