@@ -688,6 +688,85 @@ mod tests {
     }
 
     #[test]
+    /// A comment holding a markdown table must not truncate the frontmatter.
+    ///
+    /// Reduced from the real card
+    /// `.kanban/tasks/01KYT6GXEAP93V439V2P4MP9N6.md` (`^p4mp9n6`), which reads
+    /// back with an empty `title` and an empty `position_column`.
+    ///
+    /// Kanban writes each comment as a YAML block scalar, and agents routinely
+    /// put markdown tables in comments. A table's separator row is `|---|---|`,
+    /// which holds the bare run `---`. A reader that searches for that run as a
+    /// SUBSTRING stops inside the table instead of at the closing delimiter
+    /// line, so every field written after the comment is lost and the body
+    /// starts mid-row at `|---|`.
+    ///
+    /// The delimiter is a whole line at column 0. YAML block scalar content is
+    /// always indented deeper than its key, so an indented run can never be the
+    /// delimiter.
+    #[test]
+    fn a_markdown_table_in_a_comment_does_not_truncate_the_frontmatter() {
+        let content = concat!(
+            "---\n",
+            "assignees:\n",
+            "- claude-code\n",
+            "comments:\n",
+            "- actor: claude-code\n",
+            "  id: 01kyz187f5e4atkkz1apxxk3r8\n",
+            "  text: |-\n",
+            "    Picked up. Research done.\n",
+            "\n",
+            "    | crate | sites with a leading capital |\n",
+            "    |---|---|\n",
+            "    | swissarmyhammer-tools | 80 ctors |\n",
+            "  timestamp: 2026-08-01T16:06:57.253428+00:00\n",
+            "position_column: review\n",
+            "position_ordinal: '8280'\n",
+            "title: Lowercase the remaining capitalized MCP error Display messages\n",
+            "---\n",
+            "`error-handling.md` states: Display messages on errors are lowercase.\n",
+        );
+
+        let parsed = parse_frontmatter_body(
+            content,
+            "task",
+            "01KYT6GXEAP93V439V2P4MP9N6",
+            "description",
+            Path::new("01KYT6GXEAP93V439V2P4MP9N6.md"),
+        )
+        .expect("a card whose comment holds a markdown table must still parse");
+
+        // These three are written AFTER the comment, so a truncated split drops
+        // them and they come back empty.
+        assert_eq!(
+            parsed.get_str("title"),
+            Some("Lowercase the remaining capitalized MCP error Display messages"),
+            "the title is written after the comment; a substring split loses it"
+        );
+        assert_eq!(
+            parsed.get_str("position_column"),
+            Some("review"),
+            "the column is written after the comment; a substring split loses it"
+        );
+        assert_eq!(
+            parsed.get_str("position_ordinal"),
+            Some("8280"),
+            "the ordinal is written after the comment; a substring split loses it"
+        );
+
+        // The body starts after the CLOSING delimiter line, never mid-table.
+        let body = parsed.get_str("description").unwrap_or_default();
+        assert!(
+            !body.starts_with("|---|"),
+            "the body must not start inside the comment's table row: {body:?}"
+        );
+        assert_eq!(
+            body,
+            "`error-handling.md` states: Display messages on errors are lowercase.\n"
+        );
+    }
+
+    #[test]
     fn parse_frontmatter_body_round_trip() {
         let mut entity = Entity::new("task", "01ABC");
         entity.set("title", Value::String("My Task".into()));
