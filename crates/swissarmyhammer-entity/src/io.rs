@@ -705,7 +705,6 @@ mod tests {
         assert_eq!(sanitize_filename("..hidden"), "hidden");
     }
 
-    #[test]
     /// A comment holding a markdown table must not truncate the frontmatter.
     ///
     /// Reduced from the real card
