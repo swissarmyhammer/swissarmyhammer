@@ -152,6 +152,17 @@ comments:
 
     - next: /review
   timestamp: 2026-08-02T15:36:23.726160+00:00
+- actor: claude-code
+  id: 01kz1j272cae1s8sg1kzgj2rgw
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — root cause was the rule asking the model to COUNT. Sampling could not be pinned (the review agent is claude-code-haiku; `claude` exposes no --temperature/--top-p/--seed), so the count moved out of the model. New Sonar cognitive-complexity scorer as a pure tree-sitter function (swissarmyhammer-sem), a fourth `complexity` catalog probe, a verify guard that refutes a complexity claim against an empty result with no model involved, and the rule rewritten as a lookup. Gates: COGNITIVE_COMPLEXITY_THRESHOLD=15, NESTING_DEPTH_THRESHOLD=4. Rust only; every other language reports "not computed", never zero.
+    - evidence: the two functions the review flagged as "depth 4" actually score 5 at depth 2 and 12 at depth 3, pinned against the pre-flattening source from 4a7bbf7e0^. Determinism now runs in CI with no model: 25 repeated scorings, 10 repeated run_probes, plus a declaration-order test.
+    - test: green — fmt clean, clippy clean, `cargo nextest run -p swissarmyhammer-sem -p swissarmyhammer-validators` 553 passed. A wider run showed 3 timeouts, proven pre-existing by re-running them at stashed HEAD.
+    - commit: 8d7d8f57d
+    - next: BLOCKED on /review. The review engine currently fails fat batches with a bare `invalid_params` because the batch budget (393,216) is ~4x the agent prompt cap (100,000) — tracked as ^6jsxjbc. This card stays in `doing` until that lands, because a review run today could not distinguish "clean" from "the engine did not run".
+    - follow-ups filed: ^xjyb2qf (non-Rust language coverage), ^8p6kjmw (blame shas drift the prompt between finish-loop iterations), ^mxv793g (ValidatorLoader enumerates in HashMap order), ^7wpd955 (stale doc comments; its budget half was folded into ^6jsxjbc)
+  timestamp: 2026-08-02T15:39:14.892279+00:00
 position_column: doing
 position_ordinal: '8280'
 title: complexity validator is nondeterministic on tag_parser.rs — same file, different findings per run
