@@ -106,8 +106,21 @@ const PROJECT_CONFIG_CHECK: &str = "Project config";
 /// results.
 const SHELL_TOOL_CATEGORY: &str = "tools";
 
-/// Operation string the tool runs when the caller sends no `op`.
+/// Operation string that runs a shell command. The tool also runs it when the
+/// caller sends no `op`.
 const EXECUTE_COMMAND_OP: &str = "execute command";
+
+/// Operation string that lists every command this session has run.
+const LIST_PROCESSES_OP: &str = "list processes";
+
+/// Operation string that stops a running command by id.
+const KILL_PROCESS_OP: &str = "kill process";
+
+/// Operation string that searches stored command output by regex.
+const GREP_HISTORY_OP: &str = "grep history";
+
+/// Operation string that reads stored output lines back by command id.
+const GET_LINES_OP: &str = "get lines";
 
 // Static operation instances for schema generation
 static EXECUTE_CMD: Lazy<execute_command::ExecuteCommand> =
@@ -655,10 +668,10 @@ impl McpTool for ShellExecuteTool {
             EXECUTE_COMMAND_OP | "" => {
                 execute_command::run(args, self.state.clone(), _context).await
             }
-            "list processes" => list_processes::execute_list_processes(self.state.clone()).await,
-            "kill process" => kill_process::execute_kill_process(&args, self.state.clone()).await,
-            "grep history" => grep_history::execute_grep_history(&args, self.state.clone()).await,
-            "get lines" => get_lines::execute_get_lines(&args, self.state.clone()).await,
+            LIST_PROCESSES_OP => list_processes::execute_list_processes(self.state.clone()).await,
+            KILL_PROCESS_OP => kill_process::execute_kill_process(&args, self.state.clone()).await,
+            GREP_HISTORY_OP => grep_history::execute_grep_history(&args, self.state.clone()).await,
+            GET_LINES_OP => get_lines::execute_get_lines(&args, self.state.clone()).await,
             other => Err(McpError::invalid_params(
                 format!(
                     "unknown operation '{}'. Valid operations: {}",
@@ -788,6 +801,28 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "kill process"));
         assert!(ops.iter().any(|o| o.op_string() == "grep history"));
         assert!(ops.iter().any(|o| o.op_string() == "get lines"));
+    }
+
+    /// The dispatch constants and [`SHELL_OPERATIONS`] must name the same five
+    /// operations. A constant that drifts from the registry would route an
+    /// operation the schema advertises into the unknown-operation arm.
+    #[test]
+    fn test_dispatch_constants_match_the_operation_registry() {
+        let registry: Vec<String> = SHELL_OPERATIONS.iter().map(|o| o.op_string()).collect();
+        let constants = [
+            EXECUTE_COMMAND_OP,
+            LIST_PROCESSES_OP,
+            KILL_PROCESS_OP,
+            GREP_HISTORY_OP,
+            GET_LINES_OP,
+        ];
+        assert_eq!(registry.len(), constants.len());
+        for op in constants {
+            assert!(
+                registry.iter().any(|known| known == op),
+                "dispatch constant {op:?} names no operation in SHELL_OPERATIONS: {registry:?}"
+            );
+        }
     }
 
     #[tokio::test]

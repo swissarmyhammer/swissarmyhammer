@@ -215,4 +215,20 @@ mod tests {
             text
         );
     }
+
+    /// The advertised default start must be the line `ShellState::get_lines`
+    /// really reads from.
+    #[test]
+    fn test_start_parameter_advertises_the_real_default() {
+        let start = super::GET_LINES_PARAMS
+            .iter()
+            .find(|p| p.name == "start")
+            .expect("get lines must take a start parameter");
+        let advertised = format!("(default: {})", super::super::state::DEFAULT_START_LINE);
+        assert!(
+            start.description.contains(&advertised),
+            "start description {:?} must advertise {advertised}",
+            start.description
+        );
+    }
 }

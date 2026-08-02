@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use chrono::{DateTime, Local};
@@ -16,16 +16,38 @@ use grep::searcher::{BinaryDetection, SearcherBuilder};
 
 use swissarmyhammer_directory::{DirectoryConfig, ShellConfig};
 
+/// Number of matches [`ShellState::grep`] returns when the caller names no
+/// limit. The reported total match count is never capped.
+pub const DEFAULT_GREP_LIMIT: usize = 10;
+
+/// Line number [`ShellState::get_lines`] reads from when the caller names no
+/// start. Stored output lines are numbered from 1.
+pub const DEFAULT_START_LINE: usize = 1;
+
 /// Command execution status
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandStatus {
+    /// The record exists and has not reached a terminal state. A command whose
+    /// spawn failed also stays here, because nothing marks that record.
     Running,
+    /// The command reached its end without a kill and without a timeout.
+    /// `execute command` also lands here when the run failed inside the shell,
+    /// with exit code -1.
     Completed,
+    /// `kill process` sent SIGKILL to the command's process group. This state
+    /// is transient while `execute command` still owns the child: that task
+    /// reaps the signalled child and then writes [`CommandStatus::Completed`]
+    /// with exit code -1 over it. The status stays `Killed` only when nothing
+    /// is left to reap the child, as after the request is cancelled.
     Killed,
+    /// The command's timeout elapsed, so the process guard killed it.
     TimedOut,
 }
 
 impl fmt::Display for CommandStatus {
+    /// Writes the wire name of the status — `running`, `completed`, `killed`,
+    /// or `timed_out`. Responses read these names through this impl, so it is
+    /// the single source of truth for the status text.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CommandStatus::Running => write!(f, "running"),
@@ -39,18 +61,38 @@ impl fmt::Display for CommandStatus {
 /// Metadata for a single command execution
 #[derive(Debug, Clone)]
 pub struct CommandRecord {
+    /// Id the caller passes back to `get lines`, `grep history`, and
+    /// `kill process`. Ids start at 1 and count up within one session.
     pub id: usize,
+    /// The command line as the caller wrote it.
     pub command: String,
+    /// Where the command stands: running, or how it reached its end.
     pub status: CommandStatus,
+    /// Exit code of the child process, or `None` when none was recorded — a
+    /// command that still runs, and a command `kill process` just signalled,
+    /// both hold `None`. `Some(-1)` means no exit code was reported: a signal
+    /// killed the child, the timeout fired, or the run failed inside the
+    /// shell.
     pub exit_code: Option<i32>,
+    /// Number of output lines stored in the log for this command.
     pub line_count: usize,
+    /// Monotonic start instant, used to measure elapsed time.
     pub started_at: Instant,
+    /// Wall-clock start time, used to report the time of day to the caller.
     pub started_at_wall: DateTime<Local>,
+    /// Monotonic instant the command reached a terminal state, or `None` while
+    /// it still runs. Every terminal state sets it, so it pairs with
+    /// [`CommandRecord::duration`].
     pub completed_at: Option<Instant>,
+    /// Wall-clock time the command reached a terminal state, or `None` while
+    /// it still runs.
     pub completed_at_wall: Option<DateTime<Local>>,
 }
 
 impl CommandRecord {
+    /// Returns the elapsed time from the command's start. A command that
+    /// reached a terminal state reports the span between its start and that
+    /// end; a command that still runs reports the time since its start.
     pub fn duration(&self) -> std::time::Duration {
         match self.completed_at {
             Some(end) => end.duration_since(self.started_at),
@@ -62,6 +104,8 @@ impl CommandRecord {
 /// The virtual shell state — singleton per server process
 #[derive(Debug)]
 pub struct ShellState {
+    /// Unique id of this shell session. Every log entry carries it, so one log
+    /// file can hold the output of more than one session.
     pub session_id: String,
     commands: Vec<CommandRecord>,
     processes: HashMap<usize, u32>, // cmd_id -> PID
@@ -92,9 +136,10 @@ impl ShellState {
     /// Build a `ShellState`, preferring `preferred` (e.g. `<cwd>/.shell`) but
     /// falling back to a unique temp directory when it is `None` or cannot be
     /// created (missing, read-only, or otherwise unwritable).
-    fn new_with_preferred(preferred: Option<PathBuf>) -> anyhow::Result<Self> {
+    fn new_with_preferred(preferred: Option<impl AsRef<Path>>) -> anyhow::Result<Self> {
         if let Some(dir) = preferred {
-            match Self::with_dir(dir.clone()) {
+            let dir = dir.as_ref();
+            match Self::with_dir(dir) {
                 Ok(state) => return Ok(state),
                 Err(error) => tracing::warn!(
                     %error,
@@ -113,14 +158,15 @@ impl ShellState {
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
     /// This avoids relying on the process-wide CWD, which is important for tests.
-    pub fn new_in_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
+    pub fn new_in_dir(shell_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         Self::with_dir(shell_dir)
     }
 
     /// Create a new ShellState rooted at the given directory.
-    pub fn with_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
+    pub fn with_dir(shell_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let shell_dir = shell_dir.as_ref();
         let session_id = ulid::Ulid::new().to_string();
-        fs::create_dir_all(&shell_dir)?;
+        fs::create_dir_all(shell_dir)?;
 
         // Write .gitignore if it doesn't exist yet
         let gitignore_path = shell_dir.join(".gitignore");
@@ -144,12 +190,12 @@ impl ShellState {
     }
 
     /// Start tracking a new command. Returns the assigned command ID.
-    pub fn start_command(&mut self, command: String) -> usize {
+    pub fn start_command(&mut self, command: impl Into<String>) -> usize {
         let id = self.commands.len() + 1;
         let now = Instant::now();
         self.commands.push(CommandRecord {
             id,
-            command,
+            command: command.into(),
             status: CommandStatus::Running,
             exit_code: None,
             line_count: 0,
@@ -171,7 +217,11 @@ impl ShellState {
     /// Note: This performs blocking file I/O (log file append). This is acceptable because
     /// the shell tool is single-user and log writes are small and fast. The outer async mutex
     /// is held during this call, but concurrent shell operations are not expected.
-    pub async fn append_lines(&mut self, cmd_id: usize, lines: &[String]) -> anyhow::Result<()> {
+    pub async fn append_lines(
+        &mut self,
+        cmd_id: usize,
+        lines: &[impl AsRef<str>],
+    ) -> anyhow::Result<()> {
         let record = self
             .commands
             .iter_mut()
@@ -184,7 +234,10 @@ impl ShellState {
             record.line_count += 1;
             let log_line = format!(
                 "{}:{}:{}:{}\n",
-                self.session_id, cmd_id, record.line_count, line
+                self.session_id,
+                cmd_id,
+                record.line_count,
+                line.as_ref()
             );
             log_file.write_all(log_line.as_bytes())?;
         }
@@ -254,6 +307,9 @@ impl ShellState {
 
     /// Get lines from a specific command's output by reading the log file.
     ///
+    /// An absent `start` reads from [`DEFAULT_START_LINE`], and an absent `end`
+    /// reads to the last stored line.
+    ///
     /// Note: This performs blocking file I/O. Acceptable for single-user shell tool
     /// where log reads are fast and infrequent.
     pub fn get_lines(
@@ -262,7 +318,7 @@ impl ShellState {
         start: Option<usize>,
         end: Option<usize>,
     ) -> anyhow::Result<Vec<(usize, String)>> {
-        let start = start.unwrap_or(1);
+        let start = start.unwrap_or(DEFAULT_START_LINE);
         let end = end.unwrap_or(usize::MAX);
         let prefix = format!("{}:{}:", self.session_id, cmd_id);
 
@@ -295,14 +351,15 @@ impl ShellState {
     /// Note: This performs blocking file I/O. Acceptable for single-user shell tool
     /// where grep is fast over local log files.
     /// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
-    /// (default 10) but `total_match_count` reflects all matches found.
+    /// (default [`DEFAULT_GREP_LIMIT`]) but `total_match_count` reflects all
+    /// matches found.
     pub fn grep(
         &self,
         pattern: &str,
         command_id: Option<usize>,
         limit: Option<usize>,
     ) -> anyhow::Result<(Vec<GrepResult>, usize)> {
-        let limit = limit.unwrap_or(10);
+        let limit = limit.unwrap_or(DEFAULT_GREP_LIMIT);
         let matcher = RegexMatcher::new_line_matcher(pattern)
             .map_err(|e| anyhow::anyhow!("invalid regex pattern: {}", e))?;
 
@@ -362,8 +419,12 @@ fn parse_grep_log_line(
 /// Result from grep operation
 #[derive(Debug, Clone)]
 pub struct GrepResult {
+    /// Id of the command whose output holds the matching line.
     pub command_id: usize,
+    /// Position of the line within that command's output, counting from
+    /// [`DEFAULT_START_LINE`].
     pub line_number: usize,
+    /// Text of the matching line, with the trailing newline removed.
     pub text: String,
 }
 
@@ -433,8 +494,8 @@ mod tests {
     #[serial]
     async fn test_start_command_returns_sequential_ids() {
         let (mut state, _tmp) = create_test_state();
-        let id1 = state.start_command("echo hello".into());
-        let id2 = state.start_command("echo world".into());
+        let id1 = state.start_command("echo hello");
+        let id2 = state.start_command("echo world");
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
     }
@@ -443,7 +504,7 @@ mod tests {
     #[serial]
     async fn test_start_command_creates_running_record() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("ls -la".into());
+        let id = state.start_command("ls -la");
         let commands = state.list_commands();
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].id, id);
@@ -457,7 +518,7 @@ mod tests {
     #[serial]
     async fn test_append_lines_increments_line_count() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("echo test".into());
+        let id = state.start_command("echo test");
         let lines = vec![
             "line1".to_string(),
             "line2".to_string(),
@@ -485,7 +546,7 @@ mod tests {
     #[serial]
     async fn test_complete_command_sets_status_and_exit_code() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("echo done".into());
+        let id = state.start_command("echo done");
         state.complete_command(id, Some(0)).await;
         let commands = state.list_commands();
         assert_eq!(commands[0].status, CommandStatus::Completed);
@@ -498,7 +559,7 @@ mod tests {
     #[serial]
     async fn test_timeout_command_sets_status() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("sleep 999".into());
+        let id = state.start_command("sleep 999");
         state.timeout_command(id).await;
         let commands = state.list_commands();
         assert_eq!(commands[0].status, CommandStatus::TimedOut);
@@ -510,7 +571,7 @@ mod tests {
     #[serial]
     async fn test_command_record_duration() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("quick".into());
+        let id = state.start_command("quick");
         // Duration before completion (still running) should be a valid duration
         let running_duration = state.list_commands()[0].duration();
         // Duration is always non-negative by construction; verify it's a reasonable value
@@ -531,7 +592,7 @@ mod tests {
     #[serial]
     async fn test_register_process() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("sleep 10".into());
+        let id = state.start_command("sleep 10");
         state.register_process(id, 12345);
         // Verify registration via internal state
         assert!(state.processes.contains_key(&id));
@@ -546,7 +607,7 @@ mod tests {
     #[serial]
     async fn test_get_lines_all() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("echo stuff".into());
+        let id = state.start_command("echo stuff");
         let lines: Vec<String> = (1..=5).map(|i| format!("line{i}")).collect();
         state.append_lines(id, &lines).await.unwrap();
 
@@ -560,7 +621,7 @@ mod tests {
     #[serial]
     async fn test_get_lines_with_start_and_end() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("seq".into());
+        let id = state.start_command("seq");
         let lines: Vec<String> = (1..=10).map(|i| format!("data{i}")).collect();
         state.append_lines(id, &lines).await.unwrap();
 
@@ -574,7 +635,7 @@ mod tests {
     #[serial]
     async fn test_get_lines_start_only() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("cmd".into());
+        let id = state.start_command("cmd");
         let lines: Vec<String> = (1..=5).map(|i| format!("row{i}")).collect();
         state.append_lines(id, &lines).await.unwrap();
 
@@ -588,7 +649,7 @@ mod tests {
     #[serial]
     async fn test_get_lines_end_only() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("cmd".into());
+        let id = state.start_command("cmd");
         let lines: Vec<String> = (1..=5).map(|i| format!("val{i}")).collect();
         state.append_lines(id, &lines).await.unwrap();
 
@@ -602,7 +663,7 @@ mod tests {
     #[serial]
     async fn test_get_lines_no_output() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("true".into());
+        let id = state.start_command("true");
         // Don't append any lines
         let result = state.get_lines(id, None, None).unwrap();
         assert!(result.is_empty());
@@ -612,8 +673,8 @@ mod tests {
     #[serial]
     async fn test_get_lines_isolates_commands() {
         let (mut state, _tmp) = create_test_state();
-        let id1 = state.start_command("cmd1".into());
-        let id2 = state.start_command("cmd2".into());
+        let id1 = state.start_command("cmd1");
+        let id2 = state.start_command("cmd2");
 
         state
             .append_lines(id1, &["from_cmd1".to_string()])
@@ -640,7 +701,7 @@ mod tests {
     #[serial]
     async fn test_grep_finds_matching_lines() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("build".into());
+        let id = state.start_command("build");
         state
             .append_lines(
                 id,
@@ -665,7 +726,7 @@ mod tests {
     #[serial]
     async fn test_grep_no_matches_returns_empty() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("ok".into());
+        let id = state.start_command("ok");
         state
             .append_lines(id, &["all good".to_string()])
             .await
@@ -679,8 +740,8 @@ mod tests {
     #[serial]
     async fn test_grep_filters_by_command_id() {
         let (mut state, _tmp) = create_test_state();
-        let id1 = state.start_command("first".into());
-        let id2 = state.start_command("second".into());
+        let id1 = state.start_command("first");
+        let id2 = state.start_command("second");
 
         state
             .append_lines(id1, &["target_word here".to_string()])
@@ -708,7 +769,7 @@ mod tests {
     #[serial]
     async fn test_grep_respects_limit() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("many".into());
+        let id = state.start_command("many");
         let lines: Vec<String> = (1..=20).map(|i| format!("match_{i}")).collect();
         state.append_lines(id, &lines).await.unwrap();
 
@@ -721,7 +782,7 @@ mod tests {
     #[serial]
     async fn test_grep_regex_pattern() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("log".into());
+        let id = state.start_command("log");
         state
             .append_lines(
                 id,
@@ -742,7 +803,7 @@ mod tests {
     #[serial]
     async fn test_grep_invalid_regex_returns_error() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("x".into());
+        let id = state.start_command("x");
         state.append_lines(id, &["text".to_string()]).await.unwrap();
 
         let result = state.grep("[unclosed", None, None);
@@ -751,9 +812,91 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn test_grep_without_limit_caps_at_default_grep_limit() {
+        let (mut state, _tmp) = create_test_state();
+        let id = state.start_command("many");
+        let extra = 5;
+        let lines: Vec<String> = (1..=DEFAULT_GREP_LIMIT + extra)
+            .map(|i| format!("match_{i}"))
+            .collect();
+        state.append_lines(id, &lines).await.unwrap();
+
+        let (results, total) = state.grep("match_", None, None).unwrap();
+        assert_eq!(results.len(), DEFAULT_GREP_LIMIT);
+        assert_eq!(total, DEFAULT_GREP_LIMIT + extra);
+    }
+
+    /// An absent `start` must read exactly as `Some(DEFAULT_START_LINE)` does.
+    /// The second assertion pins that the constant is the value in use: any
+    /// other default would make the two reads differ.
+    #[tokio::test]
+    #[serial]
+    async fn test_get_lines_without_start_begins_at_default_start_line() {
+        let (mut state, _tmp) = create_test_state();
+        let id = state.start_command("numbered");
+        state
+            .append_lines(id, &["first", "second", "third"])
+            .await
+            .expect("append_lines");
+
+        let defaulted = state.get_lines(id, None, None).expect("get_lines");
+        let explicit = state
+            .get_lines(id, Some(DEFAULT_START_LINE), None)
+            .expect("get_lines");
+        assert_eq!(defaulted, explicit);
+
+        let next = state
+            .get_lines(id, Some(DEFAULT_START_LINE + 1), None)
+            .expect("get_lines");
+        assert_ne!(
+            defaulted,
+            next,
+            "a default of {DEFAULT_START_LINE} must not read the same as {}",
+            DEFAULT_START_LINE + 1
+        );
+    }
+
+    /// The path-taking constructors accept any borrowed path, so a caller that
+    /// already holds a `&Path` or a `&str` needs no allocation.
+    #[tokio::test]
+    #[serial]
+    async fn test_constructors_accept_borrowed_paths() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+
+        let with_dir_path = tmp.path().join("with-dir");
+        let state = ShellState::with_dir(with_dir_path.as_path()).expect("with_dir(&Path)");
+        assert!(state.log_path.starts_with(&with_dir_path));
+
+        let in_dir_path = tmp.path().join("in-dir");
+        let in_dir_str = in_dir_path.to_str().expect("temp path is UTF-8");
+        let state = ShellState::new_in_dir(in_dir_str).expect("new_in_dir(&str)");
+        assert!(state.log_path.starts_with(&in_dir_path));
+    }
+
+    /// `start_command` and `append_lines` accept borrowed strings, so a caller
+    /// with `&str` data needs no `to_string()` conversion.
+    #[tokio::test]
+    #[serial]
+    async fn test_command_recording_accepts_borrowed_strings() {
+        let (mut state, _tmp) = create_test_state();
+        let id = state.start_command("echo borrowed");
+        state
+            .append_lines(id, &["one", "two"])
+            .await
+            .expect("append_lines(&[&str])");
+
+        assert_eq!(state.list_commands()[0].command, "echo borrowed");
+        let result = state.get_lines(id, None, None).expect("get_lines");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], (1, "one".to_string()));
+        assert_eq!(result[1], (2, "two".to_string()));
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn test_grep_result_has_correct_line_numbers() {
         let (mut state, _tmp) = create_test_state();
-        let id = state.start_command("test".into());
+        let id = state.start_command("test");
         state
             .append_lines(
                 id,
