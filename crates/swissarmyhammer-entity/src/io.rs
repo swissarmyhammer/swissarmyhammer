@@ -748,7 +748,7 @@ mod tests {
             content,
             "task",
             "01KYT6GXEAP93V439V2P4MP9N6",
-            "description",
+            "body",
             Path::new("01KYT6GXEAP93V439V2P4MP9N6.md"),
         )
         .expect("a card whose comment holds a markdown table must still parse");
@@ -772,7 +772,7 @@ mod tests {
         );
 
         // The body starts after the CLOSING delimiter line, never mid-table.
-        let body = parsed.get_str("description").unwrap_or_default();
+        let body = parsed.get_str("body").unwrap_or_default();
         assert!(
             !body.starts_with("|---|"),
             "the body must not start inside the comment's table row: {body:?}"
