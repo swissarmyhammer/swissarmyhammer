@@ -192,11 +192,13 @@ pub enum HookEvent {
 pub enum HookEventKind {
     /// Session started event kind.
     SessionStart,
+    /// User prompt submission event kind.
     UserPromptSubmit,
     /// Pre-tool use event kind.
     PreToolUse,
     /// Post-tool use event kind.
     PostToolUse,
+    /// Post-tool use failure event kind.
     PostToolUseFailure,
     /// Stop event kind.
     Stop,
@@ -208,13 +210,17 @@ pub enum HookEventKind {
     TeammateIdle,
     /// Task completed event kind.
     TaskCompleted,
+    /// Elicitation event kind.
     Elicitation,
+    /// Elicitation result event kind.
     ElicitationResult,
     /// Instructions loaded event kind.
     InstructionsLoaded,
+    /// Config change event kind.
     ConfigChange,
     /// Worktree creation event kind.
     WorktreeCreate,
+    /// Worktree removal event kind.
     WorktreeRemove,
 }
 
@@ -793,11 +799,13 @@ pub struct MatcherGroup {
 pub enum HookEventKindConfig {
     /// Matches HookEventKind::SessionStart events.
     SessionStart,
+    /// Matches HookEventKind::UserPromptSubmit events.
     UserPromptSubmit,
     /// Matches HookEventKind::PreToolUse events.
     PreToolUse,
     /// Matches HookEventKind::PostToolUse events.
     PostToolUse,
+    /// Matches HookEventKind::PostToolUseFailure events.
     PostToolUseFailure,
     /// Matches HookEventKind::Stop events.
     Stop,
@@ -806,11 +814,13 @@ pub enum HookEventKindConfig {
     // Forward-compatible: not fired by ACP, silently skipped
     /// Forward-compatible: permission request event.
     PermissionRequest,
+    /// Forward-compatible: subagent start event.
     SubagentStart,
     /// Forward-compatible: subagent stop event.
     SubagentStop,
     /// Forward-compatible: pre-compaction event.
     PreCompact,
+    /// Forward-compatible: setup event.
     Setup,
     /// Forward-compatible: session end event.
     SessionEnd,
@@ -923,12 +933,15 @@ const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 600;
 /// Default timeout, in seconds, for `agent` hook handlers.
 const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 60;
 
+/// Default timeout, in seconds, for `prompt` hook handlers.
+const DEFAULT_PROMPT_TIMEOUT_SECS: u64 = 30;
+
 fn default_command_timeout() -> u64 {
     DEFAULT_COMMAND_TIMEOUT_SECS
 }
 
 fn default_prompt_timeout() -> u64 {
-    30
+    DEFAULT_PROMPT_TIMEOUT_SECS
 }
 
 fn default_agent_timeout() -> u64 {
@@ -1024,6 +1037,7 @@ impl Default for HookOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "hookEventName")]
 pub enum HookSpecificOutput {
+    /// PreToolUse-specific output fields.
     PreToolUse {
         #[serde(rename = "permissionDecision", default)]
         permission_decision: Option<String>,
@@ -1034,26 +1048,32 @@ pub enum HookSpecificOutput {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
+    /// PostToolUse-specific output fields.
     PostToolUse {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
+    /// PostToolUseFailure-specific output fields.
     PostToolUseFailure {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
+    /// UserPromptSubmit-specific output fields.
     UserPromptSubmit {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
+    /// Stop-specific output fields.
     Stop {
         #[serde(default)]
         reason: Option<String>,
     },
+    /// SessionStart-specific output fields.
     SessionStart {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
     },
+    /// Notification-specific output fields.
     Notification {
         #[serde(rename = "additionalContext", default)]
         additional_context: Option<String>,
@@ -1093,10 +1113,13 @@ pub trait HookEvaluator: Send + Sync {
 /// Error building hook registrations from config.
 #[derive(Debug, thiserror::Error)]
 pub enum HookConfigError {
+    /// Invalid regex pattern in hook matcher.
     #[error("invalid regex pattern in hook matcher: {0}")]
     InvalidRegex(#[from] regex::Error),
+    /// Hook entry has empty hooks list.
     #[error("hook entry has empty hooks list")]
     EmptyHooks,
+    /// Prompt or agent hook requires an evaluator but none was provided.
     #[error("prompt or agent hook requires a HookEvaluator, but none was provided")]
     MissingEvaluator,
 }
