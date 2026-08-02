@@ -4,7 +4,6 @@
 //! The `register_commands()` function returns a map of command IDs to
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
-pub mod ai_commands;
 pub mod app_commands;
 pub mod board_commands;
 pub mod clipboard_commands;
@@ -95,7 +94,7 @@ fn register_entity_and_tag(map: &mut CmdMap) {
 
 /// Register the `update.board` board-metadata command.
 ///
-/// The frontend AI panel and any future board-metadata editor dispatch
+/// A board-metadata editor dispatches
 /// `update.board` with whichever of `name`, `description`, and `model` it
 /// needs to change. The Rust impl wraps the [`crate::board::UpdateBoard`]
 /// operation so the underlying read-modify-write contract (untouched fields
@@ -285,23 +284,6 @@ fn register_perspective(map: &mut CmdMap) {
     );
 }
 
-/// Register the `ai.*` window-layer commands that drive the AI panel.
-///
-/// Every impl is a no-op on the backend — the AI panel's open-state,
-/// conversation, and ACP session are webview-only, so the frontend resolves a
-/// local `execute` handler before any dispatch reaches the backend (the
-/// `ui.entity.startRename` pattern). The commands are still registered here so
-/// the YAML ↔ Rust completeness guard passes and the palette / keybinding
-/// pipeline has a registered command to surface. `ai.cancel` is the one impl
-/// with a real `available()` gate (streaming-only).
-fn register_ai(map: &mut CmdMap) {
-    map.insert("ai.toggle".into(), Arc::new(ai_commands::AiToggleCmd));
-    map.insert("ai.focus".into(), Arc::new(ai_commands::AiFocusCmd));
-    map.insert("ai.newChat".into(), Arc::new(ai_commands::AiNewChatCmd));
-    map.insert("ai.model".into(), Arc::new(ai_commands::AiModelCmd));
-    map.insert("ai.cancel".into(), Arc::new(ai_commands::AiCancelCmd));
-}
-
 fn register_app(map: &mut CmdMap) {
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
     map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
@@ -360,7 +342,6 @@ pub fn register_commands() -> CmdMap {
     register_file(&mut map);
     register_perspective(&mut map);
     register_app(&mut map);
-    register_ai(&mut map);
     map
 }
 
@@ -426,105 +407,11 @@ mod tests {
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // + 5 ai (toggle, focus, newChat, model, cancel) — window-layer
-        //   commands driving the AI panel; backend impls are no-ops, the
-        //   frontend resolves a local `execute` handler. Added by
-        //   01KRRN69YDB2B03RB1N9G6RR3J.
         // + 1 board (update.board) — wraps `crate::board::UpdateBoard` so
-        //   the AI panel and future board-metadata editors can persist
-        //   `name`/`description`/`model` through the unified dispatcher.
-        //   Added by 01KSNJ6AE18EQYDC2WSYFSSAY1 to fix the regression where
-        //   `update.board` was dispatched by the AI panel but had no
-        //   registered impl — every model selection was rejected with
-        //   `Unknown command: update.board` and the model never reached
-        //   `.kanban/boards/board.yaml`.
-        // = 68 (67 prior, +1 for `update.board`).
-        assert_eq!(cmds.len(), 68);
-    }
-
-    // =========================================================================
-    // AI panel command resolution + availability tests
-    // =========================================================================
-
-    /// Every `ai.*` command must resolve to a registered handler.
-    #[test]
-    fn ai_commands_all_registered() {
-        let cmds = register_commands();
-        for id in [
-            "ai.toggle",
-            "ai.focus",
-            "ai.newChat",
-            "ai.model",
-            "ai.cancel",
-        ] {
-            assert!(
-                cmds.contains_key(id),
-                "{id} must be registered by register_ai()",
-            );
-        }
-    }
-
-    /// `ai.toggle`, `ai.focus`, `ai.newChat`, and `ai.model` are always
-    /// available — they have no precondition.
-    #[test]
-    fn ai_toggle_focus_new_chat_model_always_available() {
-        let cmds = register_commands();
-        for id in ["ai.toggle", "ai.focus", "ai.newChat", "ai.model"] {
-            let cmd = cmds.get(id).unwrap();
-            assert!(
-                cmd.available(&ctx_scope(&[])),
-                "{id} should always be available"
-            );
-        }
-    }
-
-    /// `ai.cancel` is unavailable when the conversation is idle (or when no
-    /// UIState is present) and available only while it is streaming.
-    #[test]
-    fn ai_cancel_gated_to_streaming_state() {
-        let cmds = register_commands();
-        let cmd = cmds.get("ai.cancel").unwrap();
-
-        // No UIState — fail closed.
-        assert!(
-            !cmd.available(&ctx_scope(&[])),
-            "ai.cancel must be unavailable without UIState"
-        );
-
-        // UIState present, not streaming — unavailable.
-        let idle = Arc::new(UIState::new());
-        assert!(
-            !cmd.available(&ctx_with(&[], None, Some(idle))),
-            "ai.cancel must be unavailable when the conversation is idle"
-        );
-
-        // UIState present, streaming — available.
-        let streaming = Arc::new(UIState::new());
-        streaming.set_ai_streaming(true);
-        assert!(
-            cmd.available(&ctx_with(&[], None, Some(streaming))),
-            "ai.cancel must be available while the conversation streams"
-        );
-    }
-
-    /// Each `ai.*` backend impl is a deliberate no-op returning null — the
-    /// webview intercepts the command with a local `execute` handler.
-    #[tokio::test]
-    async fn ai_commands_execute_as_noops() {
-        let cmds = register_commands();
-        let ui = Arc::new(UIState::new());
-        ui.set_ai_streaming(true);
-        let ctx = ctx_with(&[], None, Some(ui));
-        for id in [
-            "ai.toggle",
-            "ai.focus",
-            "ai.newChat",
-            "ai.model",
-            "ai.cancel",
-        ] {
-            let result = cmds.get(id).unwrap().execute(&ctx).await.unwrap();
-            assert!(result.is_null(), "{id} backend execute must be a no-op");
-        }
+        //   board-metadata editors can persist `name`/`description`/`model`
+        //   through the unified dispatcher.
+        // = 63 (68 prior, -5 for the retired `ai.*` commands).
+        assert_eq!(cmds.len(), 63);
     }
 
     // =========================================================================

@@ -469,7 +469,7 @@ mod tests {
     }
 
     /// A board with no `model` set must report `null` in both response
-    /// shapes — the AI panel uses this to decide whether to fall back to its
+    /// shapes — a consumer uses this to decide whether to fall back to its
     /// default selection or restore the persisted choice.
     #[tokio::test]
     async fn test_get_board_model_null_when_unset() {

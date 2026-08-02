@@ -99,8 +99,8 @@ pub(crate) struct BoardHandle {
     ///
     /// The server is rooted at the board folder, so its `kanban` tool operates
     /// on this board's `.kanban` and its skills/prompts resolve from the
-    /// board's `.skills/` deploy store. It binds a random loopback HTTP port; the
-    /// AI backend reaches it via [`BoardHandle::mcp_url`].
+    /// board's `.skills/` deploy store. It binds a random loopback HTTP port;
+    /// callers read that endpoint via [`BoardHandle::mcp_url`].
     ///
     /// `Option` so the handle can be taken in `Drop` to drive an async
     /// `shutdown()`. It is always `Some` for a board returned by
@@ -444,11 +444,10 @@ impl BoardHandle {
     /// gets the full SwissArmyHammer toolset scoped to this board. Returns
     /// `None` only if the server failed to start at board-open time.
     ///
-    /// `#[allow(dead_code)]`: this accessor is the exposure point the AI
-    /// backend will read, but the call site lives in the follow-up task
-    /// `01KRRN3SP5D1H63TQ8HM7SQZ1F` that wires `ai_start_agent` to consume
-    /// this URL. The board-lifecycle integration test already exercises it.
-    /// This mirrors the `#![allow(dead_code)]` rationale on `ai/mod.rs`.
+    /// `#[allow(dead_code)]`: this accessor is the board's public exposure
+    /// point for its MCP endpoint. No in-process caller reads it today — the
+    /// AI panel that did was removed — but the board-lifecycle integration
+    /// test exercises it, and an external agent host needs the URL.
     #[allow(dead_code)]
     pub fn mcp_url(&self) -> Option<&str> {
         self.mcp_server.as_ref().map(|s| s.url())
@@ -615,12 +614,6 @@ pub(crate) struct AppState {
     /// spatial commands routinely take both `spatial_registry` and
     /// `spatial_state` for the duration of a single transaction.
     pub(crate) spatial_state: TokioMutex<SpatialState>,
-    /// Running in-process AI agent endpoints, keyed by board path.
-    ///
-    /// `ai_start_agent` registers one endpoint per board here; `close_board`
-    /// stops the matching endpoint and app teardown stops all of them, so an
-    /// agent's WebSocket server never outlives its board or the process.
-    pub(crate) running_agents: crate::ai::models::RunningAgents,
 }
 
 impl AppState {
@@ -673,7 +666,6 @@ impl AppState {
             deep_link_handled: AtomicBool::new(false),
             spatial_registry: TokioMutex::new(SpatialRegistry::new()),
             spatial_state: TokioMutex::new(SpatialState::new()),
-            running_agents: crate::ai::models::RunningAgents::new(),
         }
     }
 
@@ -1021,11 +1013,6 @@ impl AppState {
         self.ui_state
             .remove_open_board(&canonical.display().to_string());
 
-        // Stop the board's in-process AI agent endpoint, if one was started
-        // via `ai_start_agent`, so its WebSocket server does not outlive the
-        // board.
-        self.running_agents.stop(&canonical).await;
-
         tracing::info!(path = %canonical.display(), "closed board");
         Ok(())
     }
@@ -1261,7 +1248,7 @@ fn deploy_workspace_tools(board_dir: &Path) {
 ///
 /// Returns `None` when the `.kanban` path has no parent or the server fails
 /// to bind; failures are logged and swallowed so a filesystem or port problem
-/// never blocks a board from opening. The board simply has no AI MCP endpoint
+/// never blocks a board from opening. The board simply has no MCP endpoint
 /// in that case, and [`BoardHandle::mcp_url`] returns `None`.
 async fn start_board_mcp_server(kanban_path: &Path) -> Option<McpServerHandle> {
     let Some(board_dir) = kanban_path.parent() else {
@@ -1883,9 +1870,8 @@ mod tests {
         //   - `Shared` tools (`kanban`, `git`, `code_context`) — advertised to
         //     every host.
         //   - `Agent`-category tools (`skill`, `files`, `web`) — never advertised
-        //     to any host: off-the-shelf agents provide those natively and llama
-        //     mounts its own, so the board's AI-panel agent supplies them rather
-        //     than consuming them from this server.
+        //     to any host: off-the-shelf agents provide those natively, so the
+        //     agent supplies them rather than consuming them from this server.
         // `create_test_client` connects under an unknown client identity, which
         // gets the conservative `Shared`-only default.
         let client = swissarmyhammer_tools::mcp::test_utils::create_test_client(&mcp_url).await;

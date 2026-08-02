@@ -15,7 +15,7 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 const CLAUDE_CODE_MODEL_ID: &str = "claude-code";
 
 /// Validate that `model_id` names a chat-capable agent that can back the
-/// board's AI panel.
+/// board's chat agent.
 ///
 /// `claude-code` is always accepted. Any other id must resolve via
 /// [`ModelManager::find_agent_by_name`] and parse to a `ModelConfig` whose
@@ -67,7 +67,7 @@ pub struct UpdateBoard {
     pub name: Option<String>,
     /// New board description
     pub description: Option<String>,
-    /// New AI-panel model id (e.g. `claude-code`, `qwen`).
+    /// New chat-agent model id (e.g. `claude-code`, `qwen`).
     ///
     /// `None` leaves the existing `model` field on the board entity untouched;
     /// `Some(id)` writes the id after validating it via [`validate_model_id`].
@@ -96,7 +96,7 @@ impl UpdateBoard {
         self
     }
 
-    /// Set the new AI-panel model id.
+    /// Set the new chat-agent model id.
     ///
     /// The id is validated at `execute` time, not here, so the builder stays
     /// infallible and matches the shape of `with_name` / `with_description`.

@@ -1,7 +1,7 @@
 //! End-to-end regression test for the per-board model contract.
 //!
 //! Two independent `.kanban` directories must each remember their own
-//! AI-panel model id without leaking state through any shared/global
+//! chat-agent model id without leaking state through any shared/global
 //! location. This is the disk-round-trip companion to the unit tests in
 //! `src/board/update.rs`, which only exercise a single context.
 //!

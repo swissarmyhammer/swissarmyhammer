@@ -4043,11 +4043,9 @@ dependencies = [
 name = "kanban-app"
 version = "0.17.0"
 dependencies = [
- "agent-client-protocol",
  "base64 0.22.1",
  "clap",
  "dirs",
- "futures-util",
  "mirdan",
  "objc2",
  "objc2-foundation",
@@ -4055,10 +4053,8 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "swissarmyhammer-agent",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
- "swissarmyhammer-config",
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-fields",
@@ -4080,13 +4076,11 @@ dependencies = [
  "tauri-plugin-log",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "tracing-oslog",
  "tracing-subscriber",
  "ulid",
  "urlencoding",
- "which",
  "whoami",
 ]
 

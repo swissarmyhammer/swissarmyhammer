@@ -17,7 +17,9 @@ use swissarmyhammer_commands::{compose_registry, CommandsRegistry};
 /// `perspective.filter.focus` (the first command-driven tab button, task
 /// 01KRE1YA65MMG29RDQDQ0VPJQG) lifts it to 71; adding the five `ai.*`
 /// AI-panel commands (task 01KRRN69YDB2B03RB1N9G6RR3J) lifts it to 76;
-/// adding `update.board` (task 01KSNJ6AE18EQYDC2WSYFSSAY1) lifts it to 77.
+/// adding `update.board` (task 01KSNJ6AE18EQYDC2WSYFSSAY1) lifts it to 77;
+/// removing the AI panel and its five `ai.*` commands (task
+/// 01KZ23M5980FBS5HHGVTPVW1Q6) drops it to 72.
 #[test]
 fn composed_registry_matches_manual_composition() {
     let registry: CommandsRegistry = compose_registry![
@@ -28,7 +30,7 @@ fn composed_registry_matches_manual_composition() {
 
     assert_eq!(
         registry.all_commands().len(),
-        77,
+        72,
         "composed registry must contain the full generic + focus + kanban command set",
     );
 
@@ -130,16 +132,13 @@ fn composed_registry_command_id_set_snapshot() {
     // when the five `ai.*` AI-panel commands joined (task
     // `01KRRN69YDB2B03RB1N9G6RR3J`). Bumped to 77 when `update.board`
     // joined as the dispatch-layer wrapper around `UpdateBoard` (task
-    // `01KSNJ6AE18EQYDC2WSYFSSAY1`) so the AI panel's model picker can
-    // persist its selection through the unified dispatcher. If you
-    // intentionally add or remove a command, update this list and
-    // explain why in the commit message.
+    // `01KSNJ6AE18EQYDC2WSYFSSAY1`) so a board-metadata editor can
+    // persist its selection through the unified dispatcher. Dropped to
+    // 72 when the AI panel and its five `ai.*` commands were removed
+    // (task `01KZ23M5980FBS5HHGVTPVW1Q6`). If you intentionally add or
+    // remove a command, update this list and explain why in the commit
+    // message.
     let expected: Vec<&str> = vec![
-        "ai.cancel",
-        "ai.focus",
-        "ai.model",
-        "ai.newChat",
-        "ai.toggle",
         "app.about",
         "app.command",
         "app.dismiss",
@@ -215,5 +214,5 @@ fn composed_registry_command_id_set_snapshot() {
     ];
 
     assert_eq!(ids, expected, "command id set drifted; ids = {ids:?}",);
-    assert_eq!(ids.len(), 77);
+    assert_eq!(ids.len(), 72);
 }
