@@ -66,6 +66,22 @@ comments:
     - commit: pending
     - review: pending
   timestamp: 2026-08-02T13:52:51.842249+00:00
+- actor: claude-code
+  id: 01kz1cb50k860xg4ra6ajytydy
+  text: |-
+    ### review — findings
+    - evidence: 5 findings — crates/swissarmyhammer-common/src/frontmatter.rs:140, crates/swissarmyhammer-common/src/frontmatter.rs:175, crates/swissarmyhammer-common/src/frontmatter.rs:202, crates/swissarmyhammer-common/src/frontmatter.rs:210, crates/swissarmyhammer-common/src/frontmatter.rs:217
+    - next: fix each finding (doc examples must use `?` not `.unwrap()`; error Display messages must start lowercase), then re-run /review
+  timestamp: 2026-08-02T13:59:16.243645+00:00
+- actor: claude-code
+  id: 01kz1cj86kjg9x46zjx5tcws2n
+  text: |-
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-common/src/frontmatter.rs — fixed all 5 review findings. (1) `parse_frontmatter` doc example (was line 140) now wraps in `fn main() -> Result<(), Box<dyn std::error::Error>>`, uses `parse_frontmatter(content)?`, ends `Ok(())`. (2) `parse_frontmatter_with_expansion` `ignore`d doc example (was line 175) same treatment: `expander.load_all()?`, `parse_frontmatter_with_expansion(content, &expander)?`, `Ok(())`. (3)/(4)/(5) lowercased the three `SwissArmyHammerError::Other` Display messages: "invalid YAML frontmatter: {e}", "failed to expand YAML includes: {e}", "failed to convert YAML to JSON: {e}". Also updated the two unit-test assertions (`test_parse_frontmatter_malformed_yaml`, `test_parse_frontmatter_with_expansion_malformed_yaml`) that checked `.contains("Invalid YAML frontmatter")` to match the new lowercase text, since they'd otherwise fail against the corrected error message.
+    - Root-cause sweep: grepped the whole file for `unwrap()` and for other `message: format!("...")` error constructions. Only two doc examples used `.unwrap()` (both covered above, plus the shared `expander.load_all().unwrap()` line inside the same doc block as finding 2), and only the three findings' `format!` calls exist in the file — no other capitalized error Display messages present.
+    - Verification: `cargo nextest run -p swissarmyhammer-common -p swissarmyhammer-templating -p mirdan` → 1259 passed, 0 failed, 0 skipped. `cargo test -p swissarmyhammer-common --doc` → 23 passed, 0 failed, 4 ignored (pre-existing); the `parse_frontmatter` doctest now compiles and runs with `?` instead of `.unwrap()`. `cargo clippy -p swissarmyhammer-common --all-targets -- -D warnings` → clean. `cargo fmt --all` → applied, `git diff --stat` on the file shows only the intended 14 insertions/8 deletions, no unrelated reformatting.
+    - next: ready for /review
+  timestamp: 2026-08-02T14:03:08.883022+00:00
 position_column: doing
 position_ordinal: '8380'
 title: parse_frontmatter in swissarmyhammer-common still splits frontmatter on a substring
@@ -97,3 +113,11 @@ Two edge cases move, so prove each with a test before changing the code:
 ## Verification
 
 Run `cargo nextest run` for `swissarmyhammer-common`, `swissarmyhammer-templating`, and `mirdan` -- those are the crates that call `parse_frontmatter`. Existing tests must pass unedited; `test_parse_frontmatter_opening_delimiter_no_closing` in that module names the old `splitn` behaviour in a comment and will need its comment refreshed, not its assertions. #bug
+
+## Review Findings (2026-08-02 08:54)
+
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:140` — Doc example uses `.unwrap()` instead of `?`. Examples teach habits to readers; showing `.unwrap()` in a compilable doc example contradicts Rust error-handling best practices. Wrap the example in `fn main() -> Result<(), Box<dyn std::error::Error>>` and use `parse_frontmatter(content)?` with final `Ok(())` return.
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:175` — Doc example uses `.unwrap()` instead of `?`. Even though marked ignore, examples shown in rendered docs teach patterns to readers; should demonstrate error propagation. Wrap the example in `fn main() -> Result<(), Box<dyn std::error::Error>>`, use `expander.load_all()?`, and `parse_frontmatter_with_expansion(content, &expander)?` with final `Ok(())` return.
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:202` — Error message begins with capital letter. Display messages on errors must be lowercase per dtolnay guidance; inconsistent capitalization breaks readability when errors are chained or wrapped. Change to `format!("invalid YAML frontmatter: {e}")`.
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:210` — Error message begins with capital letter. Display messages on errors must be lowercase per dtolnay guidance. Change to `format!("failed to expand YAML includes: {e}")`.
+- [x] `crates/swissarmyhammer-common/src/frontmatter.rs:217` — Error message begins with capital letter. Display messages on errors must be lowercase per dtolnay guidance. Change to `format!("failed to convert YAML to JSON: {e}")`.

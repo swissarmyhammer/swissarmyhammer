@@ -128,6 +128,7 @@ pub struct Frontmatter {
 /// ```
 /// use swissarmyhammer_common::frontmatter::parse_frontmatter;
 ///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let content = r#"---
 /// title: Example
 /// description: A test document
@@ -137,9 +138,11 @@ pub struct Frontmatter {
 /// This is the body.
 /// "#;
 ///
-/// let result = parse_frontmatter(content).unwrap();
+/// let result = parse_frontmatter(content)?;
 /// assert!(result.metadata.is_some());
 /// assert!(result.content.contains("Main Content"));
+/// Ok(())
+/// }
 /// ```
 pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
     parse_frontmatter_internal(
@@ -162,8 +165,9 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
 /// use swissarmyhammer_common::frontmatter::parse_frontmatter_with_expansion;
 /// use swissarmyhammer_directory::{YamlExpander, SwissarmyhammerConfig};
 ///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
-/// expander.load_all().unwrap();
+/// expander.load_all()?;
 ///
 /// let content = r#"---
 /// files:
@@ -172,7 +176,9 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
 /// Content here
 /// "#;
 ///
-/// let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+/// let result = parse_frontmatter_with_expansion(content, &expander)?;
+/// Ok(())
+/// }
 /// ```
 pub fn parse_frontmatter_with_expansion<C: DirectoryConfig>(
     content: &str,
@@ -199,7 +205,7 @@ fn parse_frontmatter_internal<C: DirectoryConfig>(
         // Parse YAML frontmatter
         let mut yaml_value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(yaml_content).map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Invalid YAML frontmatter: {e}"),
+                message: format!("invalid YAML frontmatter: {e}"),
             })?;
 
         // Expand includes if an expander is provided
@@ -207,14 +213,14 @@ fn parse_frontmatter_internal<C: DirectoryConfig>(
             yaml_value = exp
                 .expand(yaml_value)
                 .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to expand YAML includes: {e}"),
+                    message: format!("failed to expand YAML includes: {e}"),
                 })?;
         }
 
         // Convert to JSON for consistent handling
         let json_value =
             serde_json::to_value(yaml_value).map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to convert YAML to JSON: {e}"),
+                message: format!("failed to convert YAML to JSON: {e}"),
             })?;
 
         return Ok(Frontmatter {
@@ -305,7 +311,7 @@ Content here
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Invalid YAML frontmatter"));
+            .contains("invalid YAML frontmatter"));
     }
 
     #[test]
@@ -419,7 +425,7 @@ Content
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Invalid YAML frontmatter"));
+            .contains("invalid YAML frontmatter"));
     }
 
     #[test]
