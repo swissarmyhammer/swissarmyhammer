@@ -28,6 +28,20 @@ comments:
     - evidence: cargo nextest run -p agent-client-protocol-extras — 309 passed, 0 failed, 0 skipped; cargo fmt --all -- --check — clean, exit 0; cargo clippy --workspace --all-targets -- -D warnings — clean, exit 0. Confirmed every Option field on all seven HookSpecificOutput variants (PreToolUse x4, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, Notification) has #[serde(default)]. Confirmed partial-JSON coverage: partial_pre_tool_use_hook_specific_output_deserializes, partial_pre_tool_use_hook_specific_output_decision_is_honored, sibling_variants_with_no_fields_set_deserialize (bare tag, no optional fields, for PostToolUse/PostToolUseFailure/UserPromptSubmit/SessionStart/Notification/Stop), and malformed_hook_specific_output_tag_is_a_parse_error_not_a_silent_allow all exercise missing-field documents, not only full ones.
     - next: ready for commit
   timestamp: 2026-08-02T14:16:36.531144+00:00
+- actor: claude-code
+  id: 01kz1e2c47df6awxygf3m16cz5
+  text: |-
+    ### review — findings
+    - evidence: 5 findings — crates/agent-client-protocol-extras/src/hook_config.rs:1169, crates/agent-client-protocol-extras/src/hook_config.rs:1170, crates/agent-client-protocol-extras/src/hook_config.rs:1284, crates/agent-client-protocol-extras/src/hook_config.rs:1348, crates/agent-client-protocol-extras/src/hook_config.rs:1556. Scope: `review sha ccaa79b17~1..ccaa79b17` (HEAD confirmed equal to ccaa79b17, no drift). All 5 lines fall outside this commit's diff hunks (verified against ccaa79b17~1 — identical content present before the commit, same relative offset); the commit itself only touched the Option-default fields and added tests. Relayed per the review skill's contract (no written rule or true conflict authorizes dropping a non-test-refactor finding).
+    - next: implementer addresses the 5 findings (named constants for exit codes 0/2, dedupe PromptHandler::handle/AgentHandler::handle, dedupe build_handler's Prompt/Agent match arms) or files a follow-up if out of scope; task stays in `review` until a clean re-review.
+  timestamp: 2026-08-02T14:29:25.767062+00:00
+- actor: claude-code
+  id: 01kz1ec8krtapj5tv03rz10m95
+  text: |-
+    ### implement — changed
+    - evidence: crates/agent-client-protocol-extras/src/hook_config.rs — added `EXIT_CODE_SUCCESS`/`EXIT_CODE_BLOCK` named constants replacing the hardcoded 0/2 in `interpret_exit_code` (findings 1, 2); merged `PromptHandler` and `AgentHandler` into one `EvaluatorHandler` struct (`is_agent: bool` + `label()` helper) with a single `HookHandler::handle` impl, removing the duplicated nested-match logic (findings 3, 4); replaced the duplicated `Prompt`/`Agent` match arms in `build_handler` with a shared `build_evaluator_handler` factory function (finding 5). Also updated crates/llama-agent/src/acp/llama_hook_evaluator.rs doc comment referencing the old `PromptHandler`/`AgentHandler` names to say `EvaluatorHandler`. `cargo nextest run -p agent-client-protocol-extras`: 309/309 passed. `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean, 0 warnings/errors. All 5 review findings checked off on the task description.
+    - next: ready for review
+  timestamp: 2026-08-02T14:34:49.848005+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Partial hookSpecificOutput silently becomes Allow — Option fields lack serde(default)
@@ -59,3 +73,25 @@ Each one reported success while discarding the caller's input. Worth considering
 - A test that a malformed `hookSpecificOutput` does not silently permit: either it errors, or it allows with an explicit, asserted log.
 - The sibling variants are covered too, or the audit records why they need nothing.
 - `cargo nextest run -p agent-client-protocol-extras`, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` clean. #bug
+
+## Review Findings (2026-08-02 09:18)
+
+Scope: `ccaa79b17~1..ccaa79b17` — "fix(agent-client-protocol-extras): make Option defaulting explicit on HookSpecificOutput"
+
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:1169` — Hardcoded exit code 0 should be a named constant. This exit code means 'parse stdout as HookOutput JSON' per the documented protocol on lines 1081-1083. Extract `0` as a named constant, e.g., `const EXIT_CODE_SUCCESS: i32 = 0;` and use it in the match statement.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:1170` — Hardcoded exit code 2 should be a named constant. This exit code means 'Block (stderr becomes reason)' per the documented protocol on lines 1081-1083. Extract `2` as a named constant, e.g., `const EXIT_CODE_BLOCK: i32 = 2;` and use it in the match statement.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:1284` — PromptHandler::handle and AgentHandler::handle contain identical logic that differs only by a single boolean parameter and logging message strings. These near-verbatim blocks are one function with an argument and should be extracted to a shared helper to prevent logic drift. Extract the shared implementation to a standalone async fn (e.g., `evaluate_hook_impl`) that accepts `is_agent: bool` and `handler_type: &str` parameters for logging. Have both trait impl blocks delegate to this function, eliminating the duplication and reducing maintenance burden.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:1348` — Function `AgentHandler::handle` has the same nested match issue as `PromptHandler::handle`: outer match on result → Ok(Ok(...)) arm → inner match on serde_json parse → Err arm body reaching 4 levels of nesting. Extract the inner match and its error handling into a separate helper function (could be shared with `PromptHandler::handle`) to eliminate nesting duplication.
+- [x] `crates/agent-client-protocol-extras/src/hook_config.rs:1556` — The Prompt and Agent match arms in build_handler (lines 1556–1565 and 1570–1579) contain identical logic differing only by the struct type constructed (PromptHandler vs AgentHandler). The duplicated evaluator extraction and struct construction could drift out of sync if logic changes are applied to one branch but not the other. Extract the shared struct construction into a factory function or generic helper that accepts the struct type as a parameter (via a type constructor, closure, or factory trait), eliminating the duplication and ensuring the evaluator extraction logic stays synchronized.
+
+Note: all five findings above are located outside the diff hunks introduced by `ccaa79b17` (that commit only touched lines ~970-1032 and appended tests after line ~2524); the flagged lines are pre-existing code, unchanged by this commit. Verified against `ccaa79b17~1` — identical content present before the commit, at the same relative offset. Recorded per the review skill's "relay, don't editorialize" rule rather than dropped, since no written rule or true conflict authorizes dropping a non-test-refactor finding.
+
+## Fix summary (2026-08-02)
+
+Findings 1 and 2: added `EXIT_CODE_SUCCESS: i32 = 0` and `EXIT_CODE_BLOCK: i32 = 2` constants next to `interpret_exit_code`, used in its match arms in place of the bare literals.
+
+Findings 3, 4, and 5: these are one root cause (`PromptHandler` and `AgentHandler` were two near-identical structs differing only by an `is_agent` bool and log-message wording), fixed with one refactor rather than three patches. Merged both structs into a single `EvaluatorHandler` struct carrying an `is_agent: bool` field and a `label()` helper ("Prompt"/"Agent") used in every log message and the timeout block reason. It has one `HookHandler::handle` impl (removes the duplicated nested-match logic from both findings 3 and 4). `build_handler`'s `Prompt`/`Agent` match arms now both delegate to a new `build_evaluator_handler(prompt, timeout, evaluator, command_context, is_agent)` factory function (finding 5), so there is a single construction site instead of two that could drift.
+
+Also updated a doc comment in `crates/llama-agent/src/acp/llama_hook_evaluator.rs` that named the old `PromptHandler`/`AgentHandler` types, to reference `EvaluatorHandler` instead.
+
+Verified: `cargo nextest run -p agent-client-protocol-extras` — 309 passed, 0 failed. `cargo fmt --all -- --check` — clean. `cargo clippy --workspace --all-targets -- -D warnings` — clean.

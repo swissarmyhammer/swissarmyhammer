@@ -1158,6 +1158,12 @@ async fn run_command(
     }
 }
 
+/// Exit code meaning "parse stdout as HookOutput JSON, interpret based on event".
+const EXIT_CODE_SUCCESS: i32 = 0;
+
+/// Exit code meaning "Block (stderr becomes reason)".
+const EXIT_CODE_BLOCK: i32 = 2;
+
 /// Interpret a command's exit code into a HookDecision.
 fn interpret_exit_code(
     output: &std::process::Output,
@@ -1166,8 +1172,8 @@ fn interpret_exit_code(
 ) -> HookDecision {
     let code = output.status.code().unwrap_or(-1);
     match code {
-        0 => interpret_exit_0_stdout(output, command, event_kind),
-        2 => interpret_exit_2_stderr(output, command, event_kind),
+        EXIT_CODE_SUCCESS => interpret_exit_0_stdout(output, command, event_kind),
+        EXIT_CODE_BLOCK => interpret_exit_2_stderr(output, command, event_kind),
         other => {
             tracing::warn!(
                 command = %command,
@@ -1271,72 +1277,44 @@ fn feeds_stderr_to_agent(kind: HookEventKind) -> bool {
     )
 }
 
-/// Prompt handler: calls HookEvaluator for single-turn LLM evaluation.
-struct PromptHandler {
+/// Prompt/agent handler: calls a [`HookEvaluator`] for LLM-backed evaluation.
+///
+/// `is_agent` selects the evaluation mode passed through to
+/// [`HookEvaluator::evaluate`] — single-turn (`type: prompt`, `is_agent=false`)
+/// vs. multi-turn with tool access (`type: agent`, `is_agent=true`) — and also
+/// labels log messages and the timeout's block reason, so the two hook types
+/// share one implementation instead of two near-identical copies.
+struct EvaluatorHandler {
     prompt_template: String,
     evaluator: Arc<dyn HookEvaluator>,
     timeout: std::time::Duration,
     command_context: HookCommandContext,
+    is_agent: bool,
 }
 
-#[async_trait::async_trait]
-impl HookHandler for PromptHandler {
-    async fn handle(&self, event: &HookEvent) -> HookDecision {
-        let arguments_json = event
-            .to_command_input_full(&self.command_context)
-            .to_string();
-        let prompt = self.prompt_template.replace("$ARGUMENTS", &arguments_json);
-
-        let result = tokio::time::timeout(self.timeout, async {
-            self.evaluator.evaluate(&prompt, false).await
-        })
-        .await;
-
-        match result {
-            Ok(Ok(response_json)) => {
-                match serde_json::from_str::<PromptHookResponse>(&response_json) {
-                    Ok(response) => interpret_prompt_response(&response, event.kind()),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "Failed to parse prompt hook response, treating as Allow"
-                        );
-                        HookDecision::Allow
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                tracing::error!(error = %e, "Prompt hook evaluator failed");
-                HookDecision::Allow
-            }
-            Err(_) => {
-                tracing::error!("Prompt hook timed out");
-                HookDecision::Block {
-                    reason: "Prompt hook timed out".to_string(),
-                }
-            }
+impl EvaluatorHandler {
+    /// Human-readable label for this handler's mode, used in log messages
+    /// and timeout reasons (e.g. "Prompt hook timed out").
+    fn label(&self) -> &'static str {
+        if self.is_agent {
+            "Agent"
+        } else {
+            "Prompt"
         }
     }
 }
 
-/// Agent handler: calls HookEvaluator for multi-turn evaluation with tool access.
-struct AgentHandler {
-    prompt_template: String,
-    evaluator: Arc<dyn HookEvaluator>,
-    timeout: std::time::Duration,
-    command_context: HookCommandContext,
-}
-
 #[async_trait::async_trait]
-impl HookHandler for AgentHandler {
+impl HookHandler for EvaluatorHandler {
     async fn handle(&self, event: &HookEvent) -> HookDecision {
         let arguments_json = event
             .to_command_input_full(&self.command_context)
             .to_string();
         let prompt = self.prompt_template.replace("$ARGUMENTS", &arguments_json);
+        let label = self.label();
 
         let result = tokio::time::timeout(self.timeout, async {
-            self.evaluator.evaluate(&prompt, true).await
+            self.evaluator.evaluate(&prompt, self.is_agent).await
         })
         .await;
 
@@ -1347,20 +1325,20 @@ impl HookHandler for AgentHandler {
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
-                            "Failed to parse agent hook response, treating as Allow"
+                            "Failed to parse {label} hook response, treating as Allow"
                         );
                         HookDecision::Allow
                     }
                 }
             }
             Ok(Err(e)) => {
-                tracing::error!(error = %e, "Agent hook evaluator failed");
+                tracing::error!(error = %e, "{label} hook evaluator failed");
                 HookDecision::Allow
             }
             Err(_) => {
-                tracing::error!("Agent hook timed out");
+                tracing::error!("{label} hook timed out");
                 HookDecision::Block {
-                    reason: "Agent hook timed out".to_string(),
+                    reason: format!("{label} hook timed out"),
                 }
             }
         }
@@ -1552,33 +1530,38 @@ fn build_handler(
         })),
         HookHandlerConfig::Prompt {
             prompt, timeout, ..
-        } => {
-            let eval = evaluator
-                .as_ref()
-                .ok_or(HookConfigError::MissingEvaluator)?
-                .clone();
-            Ok(Arc::new(PromptHandler {
-                prompt_template: prompt.clone(),
-                evaluator: eval,
-                timeout: std::time::Duration::from_secs(*timeout),
-                command_context: command_context.clone(),
-            }))
-        }
+        } => build_evaluator_handler(prompt, *timeout, evaluator, command_context, false),
         HookHandlerConfig::Agent {
             prompt, timeout, ..
-        } => {
-            let eval = evaluator
-                .as_ref()
-                .ok_or(HookConfigError::MissingEvaluator)?
-                .clone();
-            Ok(Arc::new(AgentHandler {
-                prompt_template: prompt.clone(),
-                evaluator: eval,
-                timeout: std::time::Duration::from_secs(*timeout),
-                command_context: command_context.clone(),
-            }))
-        }
+        } => build_evaluator_handler(prompt, *timeout, evaluator, command_context, true),
     }
+}
+
+/// Build the shared [`EvaluatorHandler`] backing both `type: prompt`
+/// (`is_agent=false`) and `type: agent` (`is_agent=true`) hook configs.
+///
+/// Both config variants carry the same `prompt`/`timeout` shape and both
+/// require an evaluator; `is_agent` is the only behavioral difference, so
+/// this is the single construction site for both — extracted so the two
+/// branches of [`build_handler`] cannot drift out of sync.
+fn build_evaluator_handler(
+    prompt: &str,
+    timeout: u64,
+    evaluator: &Option<Arc<dyn HookEvaluator>>,
+    command_context: &HookCommandContext,
+    is_agent: bool,
+) -> Result<Arc<dyn HookHandler>, HookConfigError> {
+    let eval = evaluator
+        .as_ref()
+        .ok_or(HookConfigError::MissingEvaluator)?
+        .clone();
+    Ok(Arc::new(EvaluatorHandler {
+        prompt_template: prompt.to_string(),
+        evaluator: eval,
+        timeout: std::time::Duration::from_secs(timeout),
+        command_context: command_context.clone(),
+        is_agent,
+    }))
 }
 
 impl HookConfig {

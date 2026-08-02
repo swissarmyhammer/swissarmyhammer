@@ -8,8 +8,8 @@
 //!
 //! The [`HookEvaluator`] contract is intentionally narrow: given a prompt and an
 //! `is_agent` flag, return a JSON string of the shape
-//! `{ "ok": bool, "reason"?: string }`. The hook *handlers*
-//! (`PromptHandler` / `AgentHandler` in `agent-client-protocol-extras`) own the
+//! `{ "ok": bool, "reason"?: string }`. The hook *handler*
+//! (`EvaluatorHandler` in `agent-client-protocol-extras`) owns the
 //! timeout, the JSON parsing, and the mapping to a `HookDecision`; this
 //! evaluator's only job is to run the model and hand back that JSON. Per the
 //! handler fallback, anything this evaluator cannot turn into a clean decision
