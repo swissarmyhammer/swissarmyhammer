@@ -89,8 +89,16 @@ comments:
 
     No commit made, no kanban task moved.
   timestamp: 2026-08-01T16:57:39.037447+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kyz4ayg5y3phh5fxg3zrc192
+  text: |
+    ### commit — changed
+    - evidence: 0c8b969b8 fix(error-handling): lowercase error Display messages, no trailing punctuation
+    - 71 files changed, 570 insertions(+), 414 deletions(-); staged confined to crates/swissarmyhammer-tools, crates/mirdan, crates/agent-client-protocol-extras, crates/claude-agent (tools.rs), crates/llama-agent (test fixture), apps/code-context-cli, apps/shelltool-cli, apps/swissarmyhammer-cli, plus .kanban/tasks (^p4mp9n6 update + new cards ^f70h1pr, ^p3qx2hc). No builtin/ files, no .trash pairs.
+    - next: none — commit is local only, not pushed
+  timestamp: 2026-08-01T17:00:52.101173+00:00
+position_column: review
+position_ordinal: '8280'
 title: Lowercase the remaining capitalized MCP error Display messages outside the kanban tool
 ---
 `builtin/validators/rust/rules/error-handling.md` states: Display messages on errors are lowercase, with no trailing punctuation.
