@@ -340,9 +340,9 @@ pub struct FileWork {
     /// A changed file is always inlined whole: it is the file's complete current
     /// contents (empty only for a deletion, which has no current content — the
     /// removal is carried by [`semantic_diff`](FileWork::semantic_diff())). A file
-    /// whose source would exceed the review `batch_size` is never trimmed to a
-    /// slice; [`batch_work_list`] rejects it with a hard error instead, so this is
-    /// never a partial view.
+    /// whose rendered block would exceed the review batch budget is never trimmed
+    /// to a slice; [`batch_work_list`] excludes that (validator, file) pair and
+    /// reports it as a [`SkippedFile`] instead, so this is never a partial view.
     source_slice: String,
     /// The shared `(file, probe)` results.
     probe_results: Vec<ProbeResult>,
@@ -1603,24 +1603,32 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// A changed file [`batch_work_list`] could not pack into any batch because its
-/// inlined source alone exceeds `batch_size`.
+/// A (validator, file) pair [`batch_work_list`] could not pack into any batch
+/// because the file's RENDERED block alone exceeds the batch budget.
 ///
-/// A file is atomic — it is never split across batches — so an oversized file
+/// A file is atomic — it is never split across batches — so an oversized block
 /// cannot be packed at all. Rather than a hard error that would block review of
-/// every OTHER file in the scope, `batch_work_list` excludes it and reports it
-/// here; [`run_review`](crate::review::run_review) carries it through to the
-/// final [`ReviewReport`](crate::review::ReviewReport) as a named "not reviewed,
-/// too large" gap. The fields are private (read through the getters) so the
-/// shape can evolve without a field-level API commitment.
+/// every OTHER file in the scope, `batch_work_list` excludes the pair and
+/// reports it here; [`run_review`](crate::review::run_review) carries it through
+/// to the final [`ReviewReport`](crate::review::ReviewReport) as a named "not
+/// reviewed, too large" gap.
+///
+/// The gap is a **pair**, not a path. A file's rendered block carries the probe
+/// evidence selected for one validator, so the same path can cost kilobytes for
+/// one validator and megabytes for another; dropping the path from the batch
+/// would cost every other validator a file it could easily afford. The fields
+/// are private (read through the getters) so the shape can evolve without a
+/// field-level API commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedFile {
     /// The oversized file's repo-relative path.
     path: String,
-    /// The file's inlined source size, in bytes.
+    /// The validator whose rendering of the file did not fit.
+    validator: String,
+    /// The rendered size of that validator's block for the file, in bytes.
     size: usize,
-    /// The `batch_size` budget it exceeded, in bytes.
-    batch_size: usize,
+    /// The per-batch rendered budget it exceeded, in bytes.
+    budget: usize,
 }
 
 impl SkippedFile {
@@ -1628,11 +1636,12 @@ impl SkippedFile {
     /// (`crate::review::synthesize`'s tests), which asserts on rendering given a
     /// skip list rather than driving the whole packer to produce one.
     #[cfg(test)]
-    pub(crate) fn for_test(path: &str, size: usize, batch_size: usize) -> Self {
+    pub(crate) fn for_test(path: &str, validator: &str, size: usize, budget: usize) -> Self {
         Self {
             path: path.to_string(),
+            validator: validator.to_string(),
             size,
-            batch_size,
+            budget,
         }
     }
 
@@ -1641,28 +1650,56 @@ impl SkippedFile {
         &self.path
     }
 
-    /// The file's inlined source size, in bytes.
+    /// The validator whose rendering of the file did not fit.
+    pub fn validator(&self) -> &str {
+        &self.validator
+    }
+
+    /// The rendered size of that validator's block for the file, in bytes.
     pub fn size(&self) -> usize {
         self.size
     }
 
-    /// The `batch_size` budget it exceeded, in bytes.
-    pub fn batch_size(&self) -> usize {
-        self.batch_size
+    /// The per-batch rendered budget it exceeded, in bytes.
+    pub fn budget(&self) -> usize {
+        self.budget
     }
 }
 
-/// Split a [`WorkList`] into content-budgeted batches at **whole-file**
-/// granularity, so every batch's primed prefix stays inside `batch_size` bytes.
+/// Split a [`WorkList`] into budgeted batches at **whole-file** granularity, so
+/// every prompt a batch sends stays inside `budget` bytes of file content.
 ///
-/// Cramming every changed file's full source into one shared prime overflows the
-/// review model's context on a large diff — every fan-out validator then fails
+/// Cramming every changed file into one shared prime overflows the review
+/// model's context on a large diff — every fan-out validator then fails
 /// uniformly. So the run is split into batches and each batch fans out
-/// independently. The files are packed greedily, in [`WorkList::distinct_files`]
-/// order (the same order the prime renders them): each file is added to the
-/// current batch until adding the next file's inlined source would push the batch
-/// past `batch_size`, at which point a new batch starts. A file is **atomic** — it
-/// is never split across batches.
+/// independently. A file is **atomic**: it is never split across batches.
+///
+/// # The cost function is the budget's unit
+///
+/// `cost` measures what one [`FileWork`] contributes to a prompt, and the
+/// budget is denominated in whatever it returns. The fleet passes
+/// [`rendered_file_block_bytes`](crate::review::fleet::rendered_file_block_bytes),
+/// which renders the block through the very renderer the prompt uses, so the
+/// measured bytes and the sent bytes are the same bytes. Taking it as a
+/// parameter is what keeps this stage (stage 1, deterministic) from having to
+/// know how the fleet stage (stage 2) formats a block, while still budgeting
+/// the real thing rather than a proxy for it.
+///
+/// # Pairs, then paths
+///
+/// The cost is per **(validator, file) pair** — a block carries the probe
+/// evidence selected for that validator, so the same path can cost kilobytes
+/// for one validator and megabytes for another. So:
+///
+/// 1. Any pair whose own cost exceeds `budget` is dropped and reported as a
+///    [`SkippedFile`]. It could not be packed without either splitting the file
+///    (forbidden) or blowing the budget, and dropping the whole PATH would cost
+///    every other validator a file it could easily afford.
+/// 2. The surviving distinct files are packed greedily in
+///    [`WorkList::distinct_files`] order (the order the prime renders them),
+///    each charged the LARGEST surviving cost any validator has for it — the
+///    bound that covers both the shared prime and any one validator's
+///    monolithic fallback.
 ///
 /// Each returned [`WorkList`] carries every validator that has at least one file
 /// in that batch, with the validator's files filtered to the batch (validators
@@ -1670,30 +1707,46 @@ impl SkippedFile {
 /// verbatim so every batch's prime frames the same overall change. A work-list
 /// with no files (no validator matched) yields no batches.
 ///
-/// A single file whose inlined source alone exceeds `batch_size` cannot be
-/// packed without either splitting it (forbidden) or blowing the budget. Rather
-/// than erroring the WHOLE run over one oversized file, it is excluded from
-/// packing and reported in the second return value as a [`SkippedFile`] — every
-/// other file still packs and reviews normally. This never errors; a caller that
-/// wants a hard stop on an oversized file checks the returned skip list itself.
-pub fn batch_work_list(work: &WorkList, batch_size: usize) -> (Vec<WorkList>, Vec<SkippedFile>) {
-    // Pack the distinct files (first-seen order, matching the prime's file set)
-    // into byte-budgeted batches; a file is never split across a batch boundary.
+/// This never errors: a caller that wants a hard stop on an oversized file
+/// checks the returned skip list itself.
+pub fn batch_work_list(
+    work: &WorkList,
+    budget: usize,
+    cost: &dyn Fn(&FileWork) -> usize,
+) -> (Vec<WorkList>, Vec<SkippedFile>) {
+    // Step 1: cost every (validator, file) pair once, dropping the pairs no
+    // batch could ever carry and keeping the largest surviving cost per path.
+    let mut skipped: Vec<SkippedFile> = Vec::new();
+    let mut affordable: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut path_cost: BTreeMap<&str, usize> = BTreeMap::new();
+    for validator in &work.validators {
+        for file in &validator.files {
+            let size = cost(file);
+            if size > budget {
+                skipped.push(SkippedFile {
+                    path: file.path.clone(),
+                    validator: validator.validator_name.clone(),
+                    size,
+                    budget,
+                });
+                continue;
+            }
+            affordable.insert((validator.validator_name.as_str(), file.path.as_str()));
+            let entry = path_cost.entry(file.path.as_str()).or_insert(0);
+            *entry = (*entry).max(size);
+        }
+    }
+
+    // Step 2: pack the surviving distinct files (first-seen order, matching the
+    // prime's file set); a file is never split across a batch boundary.
     let mut batches: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();
     let mut current_bytes = 0usize;
-    let mut skipped: Vec<SkippedFile> = Vec::new();
     for file in work.distinct_files() {
-        let size = file.source_slice.len();
-        if size > batch_size {
-            skipped.push(SkippedFile {
-                path: file.path.clone(),
-                size,
-                batch_size,
-            });
+        let Some(&size) = path_cost.get(file.path.as_str()) else {
             continue;
-        }
-        if !current.is_empty() && current_bytes + size > batch_size {
+        };
+        if !current.is_empty() && current_bytes + size > budget {
             batches.push(std::mem::take(&mut current));
             current_bytes = 0;
         }
@@ -1706,16 +1759,26 @@ pub fn batch_work_list(work: &WorkList, batch_size: usize) -> (Vec<WorkList>, Ve
 
     let batches = batches
         .into_iter()
-        .map(|paths| project_onto_files(work, &paths))
+        .map(|paths| project_onto_files(work, &paths, &affordable))
         .collect();
     (batches, skipped)
 }
 
 /// Project a [`WorkList`] onto a subset of file paths: keep every validator that
 /// has at least one file in `paths`, with its files filtered to `paths` (order
-/// preserved). Validators left with no files are dropped. The change purpose is
-/// carried verbatim so the batch's prime still frames the whole change.
-fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
+/// preserved) AND to the `affordable` (validator, path) pairs. Validators left
+/// with no files are dropped. The change purpose is carried verbatim so the
+/// batch's prime still frames the whole change.
+///
+/// The pair filter is what keeps a dropped pair out of the batch entirely —
+/// including out of [`WorkList::distinct_files`], which the prime renders from
+/// and which would otherwise pick the very [`FileWork`] whose rendering did not
+/// fit.
+fn project_onto_files(
+    work: &WorkList,
+    paths: &[String],
+    affordable: &BTreeSet<(&str, &str)>,
+) -> WorkList {
     let keep: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
     let validators = work
         .validators
@@ -1725,6 +1788,9 @@ fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
                 .files
                 .iter()
                 .filter(|file| keep.contains(file.path.as_str()))
+                .filter(|file| {
+                    affordable.contains(&(validator.validator_name.as_str(), file.path.as_str()))
+                })
                 .cloned()
                 .collect();
             if files.is_empty() {
@@ -2446,6 +2512,18 @@ mod tests {
         }
     }
 
+    /// A cost function that charges a file its raw source bytes.
+    ///
+    /// The packing tests below fix each fixture file's size through
+    /// [`file_sized`], so charging raw bytes keeps their arithmetic legible.
+    /// Production passes
+    /// [`rendered_file_block_bytes`](crate::review::fleet::rendered_file_block_bytes)
+    /// instead — the packer is agnostic to which, which is the point of taking
+    /// the cost as a parameter.
+    fn raw_source_bytes(file: &FileWork) -> usize {
+        file.source_slice.len()
+    }
+
     /// A validator over `(path, byte-size)` files, for [`batch_work_list`] packing
     /// assertions.
     fn validator_sized(name: &str, files: &[(&str, usize)]) -> ValidatorWork {
@@ -2520,7 +2598,7 @@ mod tests {
             )],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(
             batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -2544,7 +2622,7 @@ mod tests {
             validators: vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 32);
+        let (batches, skipped) = batch_work_list(&work, 32, &raw_source_bytes);
 
         assert_eq!(
             batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -2554,7 +2632,12 @@ mod tests {
         assert_eq!(skipped.len(), 1, "exactly the oversized file is skipped");
         assert_eq!(skipped[0].path(), "big.rs", "names the offending file");
         assert_eq!(skipped[0].size(), 100, "names the file's size");
-        assert_eq!(skipped[0].batch_size(), 32, "names the limit");
+        assert_eq!(
+            skipped[0].validator(),
+            "v",
+            "names the validator that could not carry it"
+        );
+        assert_eq!(skipped[0].budget(), 32, "names the limit");
     }
 
     #[test]
@@ -2565,7 +2648,7 @@ mod tests {
             validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
 
         assert_eq!(batches.len(), 1, "a small diff is a single batch");
         assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
@@ -2585,7 +2668,7 @@ mod tests {
             ],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(batches.len(), 2);
         assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
@@ -2607,7 +2690,7 @@ mod tests {
             ],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(batches.len(), 1, "the one distinct file is one batch");
         assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
@@ -2625,7 +2708,7 @@ mod tests {
             change_purpose: "p".to_string(),
             validators: vec![],
         };
-        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
         assert!(batches.is_empty());
         assert!(skipped.is_empty());
     }

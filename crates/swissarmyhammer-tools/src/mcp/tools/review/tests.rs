@@ -956,16 +956,19 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
 }
 
 /// Like [`planted_duplicate_fixture`], plus a second changed file
-/// (`src/huge.rs`, ~2000 bytes) matched by the same "deduplicate" validator but
+/// (`src/huge.rs`, ~12 KB) matched by the same "deduplicate" validator but
 /// carrying no findings of its own. Used to prove an oversized `batch_size`
 /// skip on ONE file does not stop review of the others: the packer excludes
 /// `huge.rs` before fan-out, so the batch (and this same scripted script) only
 /// ever sees `src/lib.rs`.
 fn two_file_fixture_one_oversized(repo: &TestRepo) -> AgentFactory {
     let factory = planted_duplicate_fixture(repo);
-    // Untracked/added in the working-tree diff; large enough to exceed a
-    // 500-byte `batch_size` while `src/lib.rs` (~181 bytes) still fits.
-    repo.write("src/huge.rs", &"// filler line of source text\n".repeat(80));
+    // Untracked/added in the working-tree diff; its RENDERED block is far over
+    // [`OVERSIZE_BATCH_SIZE`] while `src/lib.rs`'s still fits.
+    repo.write(
+        "src/huge.rs",
+        &"// filler line of source text\n".repeat(400),
+    );
     factory
 }
 
@@ -1052,10 +1055,11 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 // for ^3rnvage.
 // ---------------------------------------------------------------------------
 
-/// A `batch_size`, in bytes, well under the ~181-byte planted `src/lib.rs`
-/// fixture (`fn placeholder() {}\n\n<dup body>\n`) but well over zero — small
-/// enough that only an override this small (not the ~384 KiB default) could
-/// make the packer skip it.
+/// A `batch_size`, in bytes, well under the RENDERED block of the planted
+/// `src/lib.rs` fixture (`fn placeholder() {}\n\n<dup body>\n`, ~181 bytes of
+/// source that renders to a couple of KB) but well over zero — small enough
+/// that only an override this small (not the agent-cap default) could make the
+/// packer skip it.
 const TINY_BATCH_SIZE: u64 = 50;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1096,7 +1100,7 @@ async fn review_working_batch_size_override_skips_a_file_the_default_would_revie
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1138,7 +1142,7 @@ async fn review_file_batch_size_override_skips_a_file_the_default_would_review()
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1180,7 +1184,7 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch_size")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1379,6 +1383,13 @@ async fn review_batch_size_zero_skips_every_file() {
 /// does not. The oversized file must not block review of the other — the
 /// small file is still reviewed and confirmed, and the report separately names
 /// the skipped one.
+/// A `batch_size`, in bytes, between the two rendered blocks
+/// [`two_file_fixture_one_oversized`] plants: `src/lib.rs` renders to ~2.4 KB
+/// and clears it, `src/huge.rs` renders to ~30 KB and does not. The budget is
+/// spent in RENDERED bytes, so it is sized against the rendered blocks, never
+/// against the raw source.
+const OVERSIZE_BATCH_SIZE: u64 = 5_000;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(cwd)]
 async fn review_working_an_oversized_file_does_not_block_review_of_the_others() {
@@ -1400,8 +1411,7 @@ async fn review_working_an_oversized_file_does_not_block_review_of_the_others() 
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), json!("review working"));
     args.insert("backend".to_string(), json!("local"));
-    // Clears the ~181-byte small file but not the ~2000-byte huge one.
-    args.insert("batch_size".to_string(), json!(500));
+    args.insert("batch_size".to_string(), json!(OVERSIZE_BATCH_SIZE));
     let result = tool
         .execute(args, &context)
         .await

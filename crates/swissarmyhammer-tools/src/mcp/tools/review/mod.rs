@@ -68,7 +68,7 @@ const BACKEND_PARAM: ParamMeta = ParamMeta::new("backend")
 /// `review` op's parameter list.
 const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
     .description(
-        "Max inlined file content per review batch, in BYTES (default 393216 = 384 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is skipped and reported as \"not reviewed, too large\" in the report — it never blocks review of the rest. Raise it to include larger files, lower it for smaller batches. Must be a non-negative integer; a negative or fractional value is ignored (falls back to the default).",
+        "Max RENDERED file content per review batch, in BYTES. Defaults to the agent's prompt cap, and a larger value is clamped down to it — the batch budget and the cap the agent rejects a prompt against are one number. Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a file whose rendered block alone exceeds it is skipped and reported as \"not reviewed, too large\" in the report — it never blocks review of the rest. Lower it for smaller batches. Must be a non-negative integer; a negative or fractional value is ignored (falls back to the default).",
     )
     .param_type(ParamType::Integer);
 

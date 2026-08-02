@@ -26,6 +26,7 @@
 //!    already writes onto kanban tasks (`builtin/skills/review/SKILL.md` step 8),
 //!    so the existing task-history parsing keeps working.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -34,7 +35,10 @@ use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 
 use crate::error::AvpError;
-use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome, ReviewProgressSender};
+use crate::review::fleet::{
+    prompt_framing_bytes, rendered_file_block_bytes, run_fleet, FleetConfig, FleetOutcome,
+    ReviewProgressSender,
+};
 use crate::review::scope::{batch_work_list, scope_review, Scope, SkippedFile, WorkList};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
@@ -95,8 +99,8 @@ pub struct ReviewCounts {
     /// How many fan-out tasks failed and degraded to zero findings. A non-zero
     /// value means the rendered findings are INCOMPLETE.
     tasks_failed: usize,
-    /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget (see
+    /// How many (validator, file) pairs were excluded from review because the
+    /// file's rendered block alone exceeded the batch budget (see
     /// [`SkippedFile`](crate::review::scope::SkippedFile)). A non-zero value
     /// means the run is a named GAP, not a failure — the markdown names each
     /// skipped file.
@@ -130,9 +134,9 @@ impl ReviewCounts {
         self.tasks_failed
     }
 
-    /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget. A non-zero value means the
-    /// markdown names a "not reviewed, too large" gap for each one.
+    /// How many (validator, file) pairs were excluded from review because the
+    /// file's rendered block alone exceeded the batch budget. A non-zero value
+    /// means the markdown names a "not reviewed, too large" gap for each one.
     pub fn skipped(&self) -> usize {
         self.skipped
     }
@@ -185,9 +189,9 @@ impl ReviewReport {
 /// report states "Nothing in scope to review." so an empty scope cannot be
 /// mistaken for a clean review either.
 ///
-/// `skipped` names every [`SkippedFile`] [`batch_work_list`] excluded because its
-/// inlined source alone exceeded `batch_size`: each is rendered as a named
-/// "not reviewed, too large" gap directly under the header (and any
+/// `skipped` names every [`SkippedFile`] [`batch_work_list`] excluded because
+/// the file's rendered block alone exceeded the batch budget: each is rendered
+/// as a named "not reviewed, too large" gap directly under the header (and any
 /// incomplete-run banner), and their count rides into [`ReviewCounts::skipped`].
 /// This is deliberately never an error — one oversized file must not block
 /// review of every OTHER file in scope.
@@ -213,7 +217,10 @@ pub fn synthesize(
         refuted: counts_refuted,
         tasks_attempted: tally.attempted,
         tasks_failed: tally.failed,
-        skipped: skipped.len(),
+        // Distinct PATHS, not pairs: the reader counts files, and one file that
+        // no validator could carry is one gap however many validators matched
+        // it.
+        skipped: group_skips_by_path(skipped).len(),
         ..ReviewCounts::default()
     };
 
@@ -230,23 +237,26 @@ pub fn synthesize(
         );
     }
 
-    // Name every oversized file as a gap, not a failure: sorted by path so the
+    // Name every oversized file as a gap, not a failure. The skip list is per
+    // (validator, file) pair, but the reader cares about the FILE, so the pairs
+    // are grouped onto one line per path naming the validators that could not
+    // carry it. Both the paths and the validator names are sorted so the
     // rendering is deterministic regardless of scope/scan order.
-    if !skipped.is_empty() {
-        let mut sorted: Vec<&SkippedFile> = skipped.iter().collect();
-        sorted.sort_by(|a, b| a.path().cmp(b.path()));
+    let by_path = group_skips_by_path(skipped);
+    if !by_path.is_empty() {
         let _ = writeln!(
             markdown,
-            "\n> ⚠️ {} file(s) not reviewed — too large for the `batch_size` budget:",
-            sorted.len()
+            "\n> ⚠️ {} file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:",
+            by_path.len()
         );
-        for file in sorted {
+        for (path, group) in &by_path {
             let _ = writeln!(
                 markdown,
-                "> - `{}` — {} bytes, over the {}-byte batch_size (raise `batch_size` or narrow the scope)",
-                file.path(),
-                file.size(),
-                file.batch_size()
+                "> - `{}` — {} rendered bytes, over the {}-byte batch budget; not reviewed by: {} (narrow the scope)",
+                path,
+                group.largest,
+                group.budget,
+                group.validators.join(", ")
             );
         }
     }
@@ -329,6 +339,44 @@ fn render_item(finding: &Finding) -> String {
     format!("- [ ] `{}:{}` — {}", finding.file, finding.line, body)
 }
 
+/// One path's worth of skips, folded from the per-(validator, file)
+/// [`SkippedFile`] entries [`batch_work_list`] returns.
+///
+/// The packer's grain is the pair, because whether a file fits depends on the
+/// probe evidence selected for the validator rendering it. The report's grain
+/// is the FILE, so [`group_skips_by_path`] folds the pairs onto this.
+#[derive(Debug)]
+struct SkipGroup<'a> {
+    /// The largest rendered block any of the path's skipped validators produced.
+    largest: usize,
+    /// The batch budget every one of those blocks exceeded.
+    budget: usize,
+    /// The validators that could not carry the file, sorted.
+    validators: Vec<&'a str>,
+}
+
+/// Fold the per-(validator, file) skip list onto one entry per path, sorted by
+/// path, with each entry's validator list sorted.
+///
+/// Sorting both levels is what makes the rendered gap block deterministic
+/// regardless of scope/scan order.
+fn group_skips_by_path(skipped: &[SkippedFile]) -> BTreeMap<&str, SkipGroup<'_>> {
+    let mut by_path: BTreeMap<&str, SkipGroup<'_>> = BTreeMap::new();
+    for skip in skipped {
+        let group = by_path.entry(skip.path()).or_insert_with(|| SkipGroup {
+            largest: 0,
+            budget: skip.budget(),
+            validators: Vec::new(),
+        });
+        group.largest = group.largest.max(skip.size());
+        group.validators.push(skip.validator());
+    }
+    for group in by_path.values_mut() {
+        group.validators.sort_unstable();
+    }
+    by_path
+}
+
 /// Normalize a fragment into a sentence: trimmed and terminated with `.` unless
 /// it already ends in sentence punctuation.
 fn sentence(text: &str) -> String {
@@ -347,11 +395,13 @@ fn sentence(text: &str) -> String {
 ///
 /// 1. [`scope_review`] — resolve `scope` into the per-validator [`WorkList`]
 ///    (deterministic, LLM-free).
-/// 2. [`batch_work_list`] — split the work-list into content-budgeted batches at
-///    whole-file granularity ([`FleetConfig::batch_size`]) so no single shared
-///    prime overflows the model's context. A small diff is one batch; a large one
-///    is several. A single file larger than `batch_size` is excluded and reported
-///    as a named gap (see [`SkippedFile`]), never a hard error.
+/// 2. [`batch_work_list`] — split the work-list into budgeted batches at
+///    whole-file granularity so no single prompt overflows the agent's prompt
+///    cap. The budget is [`FleetConfig::file_payload_budget`] — the cap less the
+///    run's measured framing — and it is spent in RENDERED bytes. A small diff
+///    is one batch; a large one is several. A (validator, file) pair whose
+///    rendered block alone exceeds the budget is excluded and reported as a
+///    named gap (see [`SkippedFile`]), never a hard error.
 /// 3. For **each batch**, independently: [`run_fleet`] fans every validator out
 ///    across the shared `pool` over that batch's files (its own shared prime,
 ///    forked per validator), then [`verify_findings`] pairs each candidate back
@@ -377,7 +427,8 @@ fn sentence(text: &str) -> String {
 ///
 /// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or when
 /// a matched validator declares an unknown probe. [`batch_work_list`] never
-/// errors: a file too large for `batch_size` is excluded and reported as a named
+/// errors: a file whose rendered block is too large for the batch budget is
+/// excluded and reported as a named
 /// gap instead. Fan-out and verify failures never error either: a failed task
 /// degrades to zero findings (fan-out) or a refute-by-default verdict (verify),
 /// so the report is always produced.
@@ -398,17 +449,26 @@ pub async fn run_review(
     // the run's FIRST events, emitted long before any fleet work exists.
     let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
-    // Stage 2: split the work-list into content-budgeted batches (whole-file
-    // granularity). A single file over `batch_size` is excluded and reported as
-    // a named gap, never a hard error that would block the rest of the scope.
-    let (batches, skipped) = batch_work_list(&work, fleet_config.batch_size());
+    // Stage 2: split the work-list into budgeted batches (whole-file
+    // granularity). The budget is the agent's prompt cap less the run's framing
+    // (change purpose + payload header + the largest validator suffix), and it
+    // is spent in RENDERED bytes — measured by running the fleet's own file
+    // renderer, so the packer's number and the agent's number are the same
+    // bytes. A (validator, file) pair whose rendered block alone exceeds it is
+    // excluded and reported as a named gap, never a hard error that would block
+    // the rest of the scope.
+    let framing = prompt_framing_bytes(&work, loader);
+    let budget = fleet_config.file_payload_budget(framing);
+    let (batches, skipped) = batch_work_list(&work, budget, &rendered_file_block_bytes);
 
     tracing::info!(
         validators = work.validators().len(),
         files = work.distinct_files().count(),
         batches = batches.len(),
         skipped = skipped.len(),
-        batch_size = fleet_config.batch_size(),
+        budget,
+        framing,
+        prompt_cap = crate::review::fleet::AGENT_PROMPT_CAP,
         "review run: scoped work-list ready, batched, fanning out"
     );
 
@@ -635,7 +695,12 @@ mod tests {
         // (nothing packed), but the skip must be a named gap — not the "Nothing
         // in scope" marker, which would misleadingly claim there was nothing to
         // review at all.
-        let skipped = vec![SkippedFile::for_test("src/huge.rs", 500_000, 393_216)];
+        let skipped = vec![SkippedFile::for_test(
+            "src/huge.rs",
+            "duplication",
+            500_000,
+            393_216,
+        )];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
         assert!(
@@ -650,7 +715,7 @@ mod tests {
         );
         assert!(
             report.markdown.contains("393216"),
-            "the batch_size limit must be named: {}",
+            "the batch budget must be named: {}",
             report.markdown
         );
         assert!(
@@ -664,8 +729,8 @@ mod tests {
     #[test]
     fn skipped_files_render_sorted_by_path_regardless_of_input_order() {
         let skipped = vec![
-            SkippedFile::for_test("src/z.rs", 10, 5),
-            SkippedFile::for_test("src/a.rs", 10, 5),
+            SkippedFile::for_test("src/z.rs", "v", 10, 5),
+            SkippedFile::for_test("src/a.rs", "v", 10, 5),
         ];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
@@ -687,7 +752,12 @@ mod tests {
             "`foo` is never called",
             None,
         )];
-        let skipped = vec![SkippedFile::for_test("src/huge.rs", 1_000, 100)];
+        let skipped = vec![SkippedFile::for_test(
+            "src/huge.rs",
+            "duplication",
+            1_000,
+            100,
+        )];
         let report = synthesize(verified, &FleetTally::new(1, 0), &skipped, NOW);
 
         assert!(

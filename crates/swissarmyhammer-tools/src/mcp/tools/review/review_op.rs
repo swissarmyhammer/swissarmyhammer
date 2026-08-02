@@ -335,8 +335,10 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     concurrency: Option<usize>,
-    /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
-    /// `None` defers to [`FleetConfig`]'s default (256 KiB). Applies to every scope.
+    /// The rendered-prompt batch budget in BYTES, from the `batch_size`
+    /// modifier. `None` defers to [`FleetConfig`]'s default, which is the
+    /// agent's prompt cap; any value above that cap is clamped down to it.
+    /// Applies to every scope.
     batch_size: Option<usize>,
 }
 
@@ -521,7 +523,9 @@ async fn run_review_request_inner(
         .into_parts();
 
     // Thread the `batch_size` modifier into the engine config; `None` keeps the
-    // FleetConfig default (256 KiB).
+    // FleetConfig default (the agent's prompt cap). `FleetConfig::new` clamps a
+    // caller-supplied value to that cap, so no modifier can ask for a prompt
+    // the agent would reject.
     let fleet_config = request.batch_size.map(FleetConfig::new).unwrap_or_default();
 
     let report = run_review_over_agent(
@@ -1097,7 +1101,7 @@ pub struct ReviewCountsView {
     /// non-zero value means the rendered findings are INCOMPLETE.
     failed: usize,
     /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// rendered block alone exceeded the batch budget. A non-zero value means the
     /// markdown names each one as a "not reviewed, too large" gap.
     skipped: usize,
 }
@@ -1130,7 +1134,7 @@ impl ReviewCountsView {
     }
 
     /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// rendered block alone exceeded the batch budget. A non-zero value means the
     /// markdown names each one as a "not reviewed, too large" gap.
     pub fn skipped(&self) -> usize {
         self.skipped

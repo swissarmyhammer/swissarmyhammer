@@ -79,8 +79,35 @@ pub mod buffers {
 
 /// Message and token limits
 pub mod messages {
-    /// Maximum prompt length in characters (100K)
-    pub const MAX_PROMPT_LENGTH: usize = 100_000;
+    /// The maximum prompt text one turn may carry, in **bytes** (512 KiB).
+    ///
+    /// This is the workspace's single declaration of the agent prompt cap. It
+    /// is read by three places that MUST agree, and by no others:
+    ///
+    /// 1. [`AgentConfig::max_prompt_length`](crate::config::AgentConfig::max_prompt_length)'s
+    ///    default — the value
+    ///    `ClaudeAgent::validate_prompt_request` rejects a prompt against.
+    /// 2. `swissarmyhammer_agent`'s Claude agent config, which used to carry
+    ///    its own `MAX_PROMPT_LENGTH_BYTES = 5_000_000`.
+    /// 3. The review engine's batch budget
+    ///    (`swissarmyhammer_validators::review::AGENT_PROMPT_CAP`), which packs
+    ///    a batch's RENDERED prompt to stay inside this number.
+    ///
+    /// They were three independent numbers (100_000 / 5_000_000 / a 384 KiB
+    /// raw-source batch budget), so the effective cap depended on which agent
+    /// served the run and the batcher budgeted against a number unrelated to
+    /// either. A review batch packed ~15 MB against a 5 MB cap and every fat
+    /// task came back as a bare `invalid_params` (see `^6jsxjbc`).
+    ///
+    /// # Why 512 KiB
+    ///
+    /// Sized to the 200k-token context window the Claude models expose. At a
+    /// conservative ~3.5 bytes/token for source-heavy prompts, leaving ~25% of
+    /// the window for the reply: `200_000 * 0.75 * 3.5 ≈ 525_000` bytes → 512
+    /// KiB. A cap above that is not a cap at all — the prompt is accepted here
+    /// and then rejected by the model for exceeding its context, which is the
+    /// same silent failure one layer down.
+    pub const MAX_PROMPT_LENGTH: usize = 512 * 1024;
 
     /// Maximum tokens per turn (100K)
     pub const MAX_TOKENS_PER_TURN: usize = 100_000;

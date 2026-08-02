@@ -79,38 +79,51 @@ use crate::validators::{
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// The default review `batch_size` in **bytes** (384 KiB).
+/// The agent prompt cap every review prompt must fit inside, in **bytes**.
 ///
-/// Cramming every changed file's full source into one shared prime overflows the
-/// review model's context on a large diff (every fan-out validator then fails
-/// uniformly), and even when it fits it dilutes attention. So a run is split into
-/// byte-budgeted batches and each batch fans out independently. This budget is a
-/// deliberate, tunable knob — not derived from the model's context window.
+/// Read from [`claude_agent`], never re-declared here. That is the whole point:
+/// the batch budget and the cap the agent rejects a prompt against used to be
+/// separate numbers in separate crates, so the batcher packed roughly 4x what
+/// the agent would accept and every fat batch came back as a bare
+/// `invalid_params` with no message (see `^6jsxjbc`). One declaration means the
+/// two cannot silently disagree again.
 ///
-/// It is sized to clear the largest single source file in a typical change
-/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
-/// tripping the oversize-file error, while a genuinely large multi-file diff
-/// still splits across batches. (32 KiB, then 128 KiB — the previous defaults —
-/// were smaller than many real source files, so default reviews of normal
-/// commits errored.)
+/// A prompt is rejected against the `max_prompt_length` of the agent actually
+/// serving the run. ACP exposes no prompt-length capability to query, so this
+/// compile-time constant is the single source both sides read:
+/// `claude_agent::AgentConfig`'s default is this value, and
+/// `swissarmyhammer_agent` sets its Claude config from the same constant.
 ///
-/// # Why 384 KiB, not 256 KiB
+/// Re-exported from [`crate::validators::AGENT_PROMPT_CAP`], where the
+/// [`AgentPool`] that enforces it lives.
+pub use crate::validators::AGENT_PROMPT_CAP;
+
+/// The default review `batch_size` in **bytes** — the agent's prompt cap.
 ///
-/// [`batch_work_list`](crate::review::scope::batch_work_list) budgets on
-/// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice)'s
-/// raw byte length — the deliberate choice here, over measuring the rendered
-/// prime, so the scope stage (stage 1, deterministic and rendering-agnostic)
-/// never has to know how the fleet stage (stage 2) formats a file block. But
-/// [`render_numbered_source`] (via [`render_file_block`]) now renders each
-/// line as `{line:>6} | {sha:8} {mark} | {text}` — roughly 16 extra bytes
-/// PER LINE (the numbering, sha, and mark columns) on source lines that
-/// average ~35 bytes, so the rendered prime a batch actually sends is
-/// ~1.45x the raw `source_slice` bytes the budget measures. Raising the
-/// default from 256 KiB to 384 KiB (1.5x — comfortably over the measured
-/// 1.45x) keeps a normal commit inside ONE batch under the new format with
-/// the same margin the 256 KiB default gave the old unnumbered one, without
-/// coupling the scope stage to the fleet stage's rendering.
-pub const DEFAULT_BATCH_SIZE: usize = 384 * 1024;
+/// Cramming every changed file's full content into one prompt overflows the
+/// review model on a large diff (every fan-out validator then fails uniformly),
+/// so a run is split into budgeted batches that each fan out independently. The
+/// budget is not an independent knob: it is [`AGENT_PROMPT_CAP`], from which
+/// [`FleetConfig::file_payload_budget`] subtracts the run's measured framing to
+/// get what is left for file blocks.
+///
+/// # The budget measures the RENDERED prompt
+///
+/// [`batch_work_list`](crate::review::scope::batch_work_list) is handed a cost
+/// function and budgets on what it returns. The fleet passes
+/// [`rendered_file_block_bytes`], which renders the file through the very
+/// renderer the prompt uses, so the measured number and the sent number are the
+/// same bytes.
+///
+/// Nothing derived from raw source bytes can work here. [`render_file_block`]
+/// emits each line as `{line:>6} | {sha:8} {mark} | {text}` — about 16 fixed
+/// bytes PER LINE — so expansion is a function of line COUNT, not of byte
+/// count: a file of 4-byte lines renders at ~5x, a file of 200-byte lines at
+/// ~1.08x. A fixed multiplier is therefore most wrong for exactly the files
+/// most likely to overflow. And source is not even the dominant term: a
+/// production `duplication` prompt measured 14.9 MB, of which 14.3 MB was probe
+/// evidence and 0.1 MB was source. Rendering is the only honest measure.
+pub const DEFAULT_BATCH_SIZE: usize = AGENT_PROMPT_CAP;
 
 /// Configuration for a fan-out run.
 ///
@@ -122,25 +135,46 @@ pub const DEFAULT_BATCH_SIZE: usize = 384 * 1024;
 /// out independently, so a large diff no longer overflows the prime.
 #[derive(Debug, Clone, Copy)]
 pub struct FleetConfig {
-    /// The maximum inlined file content, in bytes, one batch's shared prime may
-    /// carry. Whole files are packed greedily up to this budget; a single file
-    /// larger than it is a hard error (never split, never sliced). Read through
+    /// The maximum RENDERED file content, in bytes, one batch's prompts may
+    /// carry. Whole files are packed greedily up to this budget; a
+    /// (validator, file) pair whose own rendered block exceeds it is excluded
+    /// and reported as a named gap (never split, never sliced). Always
+    /// `<= `[`AGENT_PROMPT_CAP`] — [`new`](Self::new) clamps it. Read through
     /// [`batch_size`](Self::batch_size); private so the config can evolve
     /// without a field-level API commitment.
     batch_size: usize,
 }
 
 impl FleetConfig {
-    /// Build a config with an explicit batch budget (bytes of inlined file
-    /// content per batch). [`FleetConfig::default`] uses [`DEFAULT_BATCH_SIZE`].
+    /// Build a config with an explicit batch budget (bytes of rendered file
+    /// content per batch), clamped to [`AGENT_PROMPT_CAP`].
+    ///
+    /// The clamp is load-bearing: `batch_size` is a caller-supplied `review`
+    /// modifier, so without it a caller could ask for a budget the agent
+    /// rejects outright. [`FleetConfig::default`] uses [`DEFAULT_BATCH_SIZE`].
     pub fn new(batch_size: usize) -> Self {
-        Self { batch_size }
+        Self {
+            batch_size: batch_size.min(AGENT_PROMPT_CAP),
+        }
     }
 
-    /// The maximum inlined file content, in bytes, one batch's shared prime may
-    /// carry.
+    /// The maximum rendered file content, in bytes, one batch's prompts may
+    /// carry, before the run's framing is subtracted.
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// The bytes of rendered file blocks one batch may carry, given the run's
+    /// `framing` bytes ([`prompt_framing_bytes`]).
+    ///
+    /// The cap applies to the WHOLE prompt, and a prompt is framing plus file
+    /// blocks, so the packer's budget is the cap minus the framing. Saturates
+    /// at zero: framing that alone exceeds the cap leaves no room for any file,
+    /// and every file is then reported as a named gap rather than underflowing
+    /// into an enormous budget.
+    pub fn file_payload_budget(&self, framing: usize) -> usize {
+        self.batch_size
+            .min(AGENT_PROMPT_CAP.saturating_sub(framing))
     }
 }
 
@@ -1299,12 +1333,75 @@ fn render_focus_files(out: &mut String, files: &[FileWork]) {
     out.push('\n');
 }
 
+/// The header that opens every file payload, in the prime and in the
+/// monolithic fallback alike. Shared by [`render_file_payload`] and
+/// [`prompt_framing_bytes`] so the framing reserve counts the same bytes the
+/// payload writes.
+const FILE_PAYLOAD_HEADER: &str = "# Files under review\n\n";
+
+/// The rendered bytes one file contributes to a prompt.
+///
+/// Measured by running the real [`render_file_block`] and taking the length, so
+/// the number the packer budgets on and the number the agent receives are the
+/// same bytes. This is the cost function
+/// [`batch_work_list`](crate::review::scope::batch_work_list) is handed; see
+/// [`DEFAULT_BATCH_SIZE`] for why nothing derived from
+/// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice) can
+/// stand in for it.
+///
+/// The cost is per **(validator, file) pair**, not per path: a file's block
+/// carries the probe evidence selected for THAT validator, so the same path can
+/// cost kilobytes for one validator and megabytes for another.
+pub fn rendered_file_block_bytes(file: &FileWork) -> usize {
+    let mut out = String::new();
+    render_file_block(&mut out, file);
+    out.len()
+}
+
+/// The bytes of a batch's prompt that are NOT file blocks — an upper bound over
+/// every validator in the run.
+///
+/// A batch sends two prompt shapes, and both are framing plus file blocks:
+///
+/// - the shared prime — change purpose + payload header + blocks + [`PRIME_HANDOFF`];
+/// - the monolithic per-validator fallback — change purpose + payload header +
+///   that validator's blocks + [`render_validator_suffix`].
+///
+/// The suffix (mandate, guidance, focus-file list, every rule body, the output
+/// contract) is by far the larger of the two tails and is what makes this worth
+/// measuring rather than guessing: a validator's rule bodies are authored
+/// Markdown of unbounded size. It is measured against the validator's WHOLE
+/// file list, so it bounds the suffix of any batch that subsets those files.
+///
+/// A validator the `loader` does not know is skipped, exactly as
+/// [`plan_fan_out`] skips it — it never renders a prompt, so it cannot frame
+/// one.
+pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize {
+    let head = CHANGE_PURPOSE_HEADER.len()
+        + work.change_purpose().trim().len()
+        + "\n\n".len()
+        + FILE_PAYLOAD_HEADER.len();
+
+    let tail = work
+        .validators()
+        .iter()
+        .filter_map(|validator| {
+            let ruleset = loader.get_ruleset(validator.validator_name())?;
+            Some(render_validator_suffix(validator, ruleset).len())
+        })
+        .max()
+        .unwrap_or(0)
+        .max(PRIME_HANDOFF.len());
+
+    head + tail
+}
+
 /// Render the file payload — one self-contained block per file (path + semantic
 /// diff + bounded source slice + probe evidence). Used by the run prime (every
 /// distinct file) and the monolithic fallback (one validator's files).
 pub fn render_file_payload(files: &[FileWork]) -> String {
     let mut out = String::new();
-    out.push_str("# Files under review\n\n");
+    out.push_str(FILE_PAYLOAD_HEADER);
     for file in files {
         render_file_block(&mut out, file);
     }
