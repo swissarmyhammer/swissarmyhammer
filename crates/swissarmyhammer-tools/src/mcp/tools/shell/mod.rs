@@ -20,8 +20,10 @@
 //!
 //! Output is streamed through an [`OutputBuffer`](infrastructure::OutputBuffer) that
 //! enforces size limits (10 MB default), detects binary content, and truncates at
-//! line boundaries. All output is stored in [`ShellState`](state::ShellState) for
-//! later retrieval via `get lines` or `grep history`.
+//! line boundaries. The output of a command that exits is stored in
+//! [`ShellState`](state::ShellState) for later retrieval via `get lines` or
+//! `grep history`. A command that the timeout kills stores no output, because
+//! only the completion path writes to the log.
 //!
 //! ## Security
 //!
@@ -64,6 +66,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use swissarmyhammer_common::health::{Doctorable, HealthCheck};
+use swissarmyhammer_directory::{DirectoryConfig, ShellConfig};
 use swissarmyhammer_operations::{
     generate_mcp_schema_full, generate_mcp_schema_wire, Operation, SchemaConfig,
 };
@@ -71,6 +74,40 @@ use swissarmyhammer_shell::config::{parse_shell_config, CompiledShellConfig, BUI
 use tokio::sync::Mutex;
 
 use state::ShellState;
+
+/// Name of the shell tool's config file inside the shell directory
+/// ([`ShellConfig::DIR_NAME`]) — `~/.shell/config.yaml` at user scope and
+/// `.shell/config.yaml` at project scope.
+const SHELL_CONFIG_FILE: &str = "config.yaml";
+
+/// Argument key that names the operation to run.
+const OP_KEY: &str = "op";
+
+/// Message reported when the shell state cannot open its log directory.
+const SHELL_STATE_INIT_FAILED: &str = "Failed to initialize shell state";
+
+/// Name of the host's native tool that this tool supersedes. `init` denies it
+/// per agent, `deinit` allows it again, and the tool category names it.
+const BASH_TOOL_NAME: &str = "Bash";
+
+/// Health check name for the config compiled into the binary.
+const BUILTIN_CONFIG_CHECK: &str = "Builtin config";
+
+/// Health check name for the deny/permit regex compile status.
+const REGEX_PATTERNS_CHECK: &str = "Regex patterns";
+
+/// Health check name for the user-scope config.
+const USER_CONFIG_CHECK: &str = "User config";
+
+/// Health check name for the project-scope config.
+const PROJECT_CONFIG_CHECK: &str = "Project config";
+
+/// Category the shell tool reports for both health checks and lifecycle
+/// results.
+const SHELL_TOOL_CATEGORY: &str = "tools";
+
+/// Operation string the tool runs when the caller sends no `op`.
+const EXECUTE_COMMAND_OP: &str = "execute command";
 
 // Static operation instances for schema generation
 static EXECUTE_CMD: Lazy<execute_command::ExecuteCommand> =
@@ -81,6 +118,13 @@ static KILL_PROC: Lazy<kill_process::KillProcess> = Lazy::new(kill_process::Kill
 static GREP_HIST: Lazy<grep_history::GrepHistory> = Lazy::new(grep_history::GrepHistory::default);
 static GET_LNS: Lazy<get_lines::GetLines> = Lazy::new(get_lines::GetLines::default);
 
+/// Static registry of every operation the `shell` tool supports — `execute
+/// command`, `list processes`, `kill process`, `grep history`, and `get
+/// lines`.
+///
+/// It is the single source of truth for the tool's operation set: schema
+/// generation, [`McpTool::operations`], and the unknown-operation error
+/// message all read it, so adding an operation here is enough for all three.
 pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
         &*EXECUTE_CMD as &dyn Operation,
@@ -92,7 +136,7 @@ pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 });
 
 /// Tool for executing shell commands
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShellExecuteTool {
     state: Arc<Mutex<ShellState>>,
     /// Optional MCP server entry the tool registers during `init`/`deinit`.
@@ -105,15 +149,23 @@ pub struct ShellExecuteTool {
 }
 
 impl Default for ShellExecuteTool {
+    /// Builds the tool with [`ShellExecuteTool::new`], so the default keeps its
+    /// state in a shell directory under the current directory and registers no
+    /// MCP server entry.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl ShellExecuteTool {
-    /// Creates a new instance of the ShellExecuteTool with in-memory state.
+    /// Creates a new instance of the `ShellExecuteTool`.
+    ///
+    /// The state lives in a shell directory ([`ShellConfig::DIR_NAME`]) under
+    /// the current directory, falling back to a temp directory when that
+    /// location is not writable. Command output is appended to a log file
+    /// there, so `get lines` and `grep history` can read it back later.
     pub fn new() -> Self {
-        let state = ShellState::new().expect("Failed to initialize shell state");
+        let state = ShellState::new().expect(SHELL_STATE_INIT_FAILED);
         Self {
             state: Arc::new(Mutex::new(state)),
             mcp_server: None,
@@ -144,8 +196,12 @@ impl ShellExecuteTool {
     /// tests need.
     #[cfg(test)]
     pub(crate) fn new_isolated() -> Self {
-        let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
-        let state = ShellState::with_dir(dir).expect("Failed to initialize shell state");
+        let dir = std::env::temp_dir().join(format!(
+            "{}-test-{}",
+            ShellConfig::DIR_NAME,
+            ulid::Ulid::new()
+        ));
+        let state = ShellState::with_dir(dir).expect(SHELL_STATE_INIT_FAILED);
         Self {
             state: Arc::new(Mutex::new(state)),
             mcp_server: None,
@@ -162,9 +218,12 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
         Ok(c) => c,
         Err(e) => {
             return vec![HealthCheck::error(
-                "Builtin config",
+                BUILTIN_CONFIG_CHECK,
                 format!("Builtin shell config failed to parse: {}", e),
-                Some("This is a binary bug — rebuild swissarmyhammer with a valid builtin/shell/config.yaml".to_string()),
+                Some(format!(
+                    "This is a binary bug — rebuild swissarmyhammer with a valid builtin/shell/{}",
+                    SHELL_CONFIG_FILE
+                )),
                 cat,
             )];
         }
@@ -172,7 +231,7 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
     let deny_count = config.deny.len();
     let permit_count = config.permit.len();
     let mut checks = vec![HealthCheck::ok(
-        "Builtin config",
+        BUILTIN_CONFIG_CHECK,
         format!(
             "Builtin shell config parsed successfully ({} deny patterns, {} permit patterns)",
             deny_count, permit_count
@@ -181,12 +240,12 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
     )];
     checks.push(match CompiledShellConfig::compile(&config) {
         Ok(_) => HealthCheck::ok(
-            "Regex patterns",
+            REGEX_PATTERNS_CHECK,
             "All deny/permit regex patterns compile successfully",
             cat,
         ),
         Err(e) => HealthCheck::error(
-            "Regex patterns",
+            REGEX_PATTERNS_CHECK,
             format!("Pattern '{}' failed to compile: {}", e.pattern, e.source),
             Some(format!(
                 "Fix the invalid regex pattern '{}' in the shell config (reason: {})",
@@ -204,28 +263,28 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
 /// non-applicable); otherwise emits a single "User config" check.
 fn check_user_config(cat: &str) -> Option<HealthCheck> {
     let home = dirs::home_dir()?;
-    let path = home.join(".shell").join("config.yaml");
+    let path = home.join(ShellConfig::DIR_NAME).join(SHELL_CONFIG_FILE);
     if !path.exists() {
         return Some(HealthCheck::ok(
-            "User config",
+            USER_CONFIG_CHECK,
             format!("No user config at {} (optional)", path.display()),
             cat,
         ));
     }
-    Some(check_config_file("User config", &path, cat))
+    Some(check_config_file(USER_CONFIG_CHECK, &path, cat))
 }
 
 /// Check the optional project-level shell config at `.shell/config.yaml`.
 fn check_project_config(cat: &str) -> HealthCheck {
-    let path = std::path::PathBuf::from(".shell").join("config.yaml");
+    let path = std::path::PathBuf::from(ShellConfig::DIR_NAME).join(SHELL_CONFIG_FILE);
     if !path.exists() {
         return HealthCheck::ok(
-            "Project config",
+            PROJECT_CONFIG_CHECK,
             format!("No project config at {} (optional)", path.display()),
             cat,
         );
     }
-    check_config_file("Project config", &path, cat)
+    check_config_file(PROJECT_CONFIG_CHECK, &path, cat)
 }
 
 /// Read a shell config YAML from `path`, parse it, and render a single check.
@@ -290,15 +349,26 @@ fn ensure_project_config(
     reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
 ) -> Result<(), String> {
     use swissarmyhammer_common::reporter::InitEvent;
-    let shell_dir = std::path::PathBuf::from(".shell");
-    let config_path = shell_dir.join("config.yaml");
+    let shell_dir = std::path::PathBuf::from(ShellConfig::DIR_NAME);
+    let config_path = shell_dir.join(SHELL_CONFIG_FILE);
     if config_path.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(&shell_dir)
-        .map_err(|e| format!("failed to create .shell/ directory: {}", e))?;
-    std::fs::write(&config_path, BUILTIN_CONFIG_YAML)
-        .map_err(|e| format!("failed to write .shell/config.yaml: {}", e))?;
+    std::fs::create_dir_all(&shell_dir).map_err(|e| {
+        format!(
+            "failed to create {}/ directory: {}",
+            ShellConfig::DIR_NAME,
+            e
+        )
+    })?;
+    std::fs::write(&config_path, BUILTIN_CONFIG_YAML).map_err(|e| {
+        format!(
+            "failed to write {}/{}: {}",
+            ShellConfig::DIR_NAME,
+            SHELL_CONFIG_FILE,
+            e
+        )
+    })?;
     reporter.emit(&InitEvent::Action {
         verb: "Created".to_string(),
         message: format!("{}", config_path.display()),
@@ -314,7 +384,7 @@ impl Doctorable for ShellExecuteTool {
 
     /// Returns the category for shell health checks.
     fn category(&self) -> &str {
-        "tools"
+        SHELL_TOOL_CATEGORY
     }
 
     /// Run health checks for the shell tool.
@@ -340,6 +410,8 @@ impl Doctorable for ShellExecuteTool {
         checks
     }
 
+    /// Returns whether the shell health checks apply. They always do — the
+    /// builtin config is compiled in, so there is nothing to detect first.
     fn is_applicable(&self) -> bool {
         true
     }
@@ -353,7 +425,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
 
     /// Returns the category for shell lifecycle operations.
     fn category(&self) -> &str {
-        "tools"
+        SHELL_TOOL_CATEGORY
     }
 
     /// Applies in all three scopes — User, Local, and Project.
@@ -397,7 +469,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
             }
         }
 
-        let deny = mirdan::install::deny_tool(*scope, "Bash", reporter);
+        let deny = mirdan::install::deny_tool(*scope, BASH_TOOL_NAME, reporter);
         if let Some(err) = applier_error(&deny) {
             results.push(InitResult::error(component_name, err));
             return results;
@@ -442,7 +514,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
             }
         }
 
-        let allow = mirdan::install::allow_tool(*scope, "Bash", reporter);
+        let allow = mirdan::install::allow_tool(*scope, BASH_TOOL_NAME, reporter);
         if let Some(err) = applier_error(&allow) {
             results.push(InitResult::error(component_name, err));
         }
@@ -466,7 +538,7 @@ fn remove_shell_dir(
     reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
 ) -> Option<String> {
     use swissarmyhammer_common::reporter::InitEvent;
-    let shell_dir = std::path::PathBuf::from(".shell");
+    let shell_dir = std::path::PathBuf::from(ShellConfig::DIR_NAME);
     if !shell_dir.exists() {
         return None;
     }
@@ -478,7 +550,11 @@ fn remove_shell_dir(
             });
             None
         }
-        Err(e) => Some(format!("Failed to remove .shell/ directory: {}", e)),
+        Err(e) => Some(format!(
+            "Failed to remove {}/ directory: {}",
+            ShellConfig::DIR_NAME,
+            e
+        )),
     }
 }
 
@@ -492,22 +568,35 @@ fn shell_schema_config() -> SchemaConfig {
 
 #[async_trait]
 impl McpTool for ShellExecuteTool {
+    /// Returns the wire name of the tool: `"shell"`.
     fn name(&self) -> &'static str {
         "shell"
     }
 
+    /// Returns the agent-facing tool description, read from `description.md`
+    /// at compile time.
     fn description(&self) -> &'static str {
         include_str!("description.md")
     }
 
+    /// Returns the wire schema — a single `op` property, with the heavy
+    /// CLI-facing keys dropped.
     fn schema(&self) -> serde_json::Value {
         generate_mcp_schema_wire(&SHELL_OPERATIONS, shell_schema_config())
     }
 
+    /// Returns the full schema — flat per-operation properties plus the
+    /// CLI-facing operation schemas, groups, and signatures.
     fn schema_full(&self) -> serde_json::Value {
         generate_mcp_schema_full(&SHELL_OPERATIONS, shell_schema_config())
     }
 
+    /// Returns every operation the tool supports, taken from
+    /// [`SHELL_OPERATIONS`].
+    ///
+    /// The registry uses the list to build per-operation CLI subcommands and
+    /// help text. The transmute below only re-states the `'static` lifetime
+    /// that the `Lazy` static already guarantees; it changes no types.
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         let ops: &[&'static dyn Operation] = &SHELL_OPERATIONS;
         // SAFETY: SHELL_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
@@ -519,22 +608,39 @@ impl McpTool for ShellExecuteTool {
         }
     }
 
+    /// Returns the tool category. The virtual shell is an agent capability
+    /// that supersedes a host's native `Bash` tool, so the host denies `Bash`
+    /// wherever it serves this tool.
     fn category(&self) -> ToolCategory {
-        // The virtual shell is an agent capability that supersedes a host's
-        // native `Bash` tool.
-        ToolCategory::Replacement { native: "Bash" }
+        ToolCategory::Replacement {
+            native: BASH_TOOL_NAME,
+        }
     }
 
+    /// Dispatch one shell operation and return its MCP result.
+    ///
+    /// Reads the `op` key to choose the operation, strips `op` from the
+    /// arguments, and hands the rest to the matching operation module. An
+    /// absent or empty `op` runs [`EXECUTE_COMMAND_OP`], which keeps the
+    /// common "just run this command" call short.
+    ///
+    /// Every operation shares the tool's [`ShellState`], so output a command
+    /// writes stays readable by `get lines` and `grep history`.
+    ///
+    /// An `op` that names no operation returns
+    /// [`McpError::invalid_params`] listing every operation in
+    /// [`SHELL_OPERATIONS`]. Errors inside an operation come back from that
+    /// operation, not from here.
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let op_str = arguments.get(OP_KEY).and_then(|v| v.as_str()).unwrap_or("");
         tracing::info!(
             "shell op: {} args: {}",
             if op_str.is_empty() {
-                "execute command"
+                EXECUTE_COMMAND_OP
             } else {
                 op_str
             },
@@ -543,28 +649,25 @@ impl McpTool for ShellExecuteTool {
 
         // Strip op from arguments before parsing
         let mut args = arguments.clone();
-        args.remove("op");
+        args.remove(OP_KEY);
 
         match op_str {
-            "execute command" | "" => {
+            EXECUTE_COMMAND_OP | "" => {
                 execute_command::run(args, self.state.clone(), _context).await
             }
-            "list processes" => {
-                list_processes::execute_list_processes(self.state.clone()).await
-            }
-            "kill process" => {
-                kill_process::execute_kill_process(&args, self.state.clone()).await
-            }
-            "grep history" => {
-                grep_history::execute_grep_history(&args, self.state.clone()).await
-            }
-            "get lines" => {
-                get_lines::execute_get_lines(&args, self.state.clone()).await
-            }
+            "list processes" => list_processes::execute_list_processes(self.state.clone()).await,
+            "kill process" => kill_process::execute_kill_process(&args, self.state.clone()).await,
+            "grep history" => grep_history::execute_grep_history(&args, self.state.clone()).await,
+            "get lines" => get_lines::execute_get_lines(&args, self.state.clone()).await,
             other => Err(McpError::invalid_params(
                 format!(
-                    "unknown operation '{}'. Valid operations: execute command, list processes, kill process, grep history, get lines",
-                    other
+                    "unknown operation '{}'. Valid operations: {}",
+                    other,
+                    SHELL_OPERATIONS
+                        .iter()
+                        .map(|op| op.op_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 None,
             )),
@@ -746,6 +849,18 @@ mod tests {
                 .contains("blocks until the command exits"),
             "the `execute command` operation description must say it blocks \
              until the command exits"
+        );
+    }
+
+    /// `ShellExecuteTool` is a public type that carries state, so it must
+    /// render with `{:?}` like every other public tool type.
+    #[test]
+    fn shell_execute_tool_renders_with_debug() {
+        let tool = ShellExecuteTool::new_isolated();
+        let rendered = format!("{tool:?}");
+        assert!(
+            rendered.contains("ShellExecuteTool"),
+            "Debug output must name the type: {rendered}"
         );
     }
 

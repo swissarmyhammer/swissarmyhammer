@@ -26,10 +26,19 @@ use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 /// available via `get lines`.
 const DEFAULT_TAIL_LINES: usize = 32;
 
+/// Response key that carries the id the caller passes back to `get lines`,
+/// `grep history`, and `kill process`.
+const COMMAND_ID_KEY: &str = "command_id";
+
+/// Response key that carries the command's terminal state.
+const STATUS_KEY: &str = "status";
+
 /// Operation metadata for executing shell commands
 #[derive(Debug, Default)]
 pub struct ExecuteCommand;
 
+/// Parameter metadata the `execute command` operation accepts, in the order
+/// the generated schema and the CLI help list them.
 static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("command")
         .description("The shell command to execute")
@@ -47,15 +56,21 @@ static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
 ];
 
 impl Operation for ExecuteCommand {
+    /// Returns the verb part of the operation: `"execute"`.
     fn verb(&self) -> &'static str {
         "execute"
     }
+    /// Returns the noun part of the operation: `"command"`.
     fn noun(&self) -> &'static str {
         "command"
     }
+    /// Returns a one-line description of the execute command operation,
+    /// including the fact that it blocks until the command exits.
     fn description(&self) -> &'static str {
         "Execute a shell command with timeout and environment control; blocks until the command exits or the timeout kills it"
     }
+    /// Returns the parameter metadata the `execute command` operation accepts:
+    /// `command`, `timeout`, `working_directory`, and `environment`.
     fn parameters(&self) -> &'static [ParamMeta] {
         EXECUTE_COMMAND_PARAMS
     }
@@ -155,7 +170,7 @@ async fn finalize_completed(
             store_command_output(state, cmd_id, &output).await;
             let total_lines = output.stdout.lines().count() + output.stderr.lines().count();
             let mut response = format!(
-                "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
+                "{COMMAND_ID_KEY}: {}\n{STATUS_KEY}: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
                 cmd_id, output.exit_code, total_lines, output.execution_time_ms,
             );
             if let Some(tail) = format_output_tail(state, cmd_id, total_lines).await {
@@ -231,7 +246,7 @@ async fn finalize_timed_out(
 ) -> Result<CallToolResult, McpError> {
     mark_timed_out(state, cmd_id).await;
     Ok(BaseToolImpl::create_success_response(format!(
-        "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
+        "{COMMAND_ID_KEY}: {}\n{STATUS_KEY}: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
         cmd_id, timeout_secs, timeout_secs,
     )))
 }

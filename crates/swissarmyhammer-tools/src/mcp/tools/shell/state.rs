@@ -60,6 +60,7 @@ impl CommandRecord {
 }
 
 /// The virtual shell state — singleton per server process
+#[derive(Debug)]
 pub struct ShellState {
     pub session_id: String,
     commands: Vec<CommandRecord>,
@@ -82,7 +83,9 @@ impl ShellState {
     /// here keeps that from aborting the whole app via
     /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new)'s `expect`.
     pub fn new() -> anyhow::Result<Self> {
-        let preferred = std::env::current_dir().ok().map(|cwd| cwd.join(".shell"));
+        let preferred = std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(ShellConfig::DIR_NAME));
         Self::new_with_preferred(preferred)
     }
 
@@ -101,7 +104,11 @@ impl ShellState {
                 ),
             }
         }
-        Self::with_dir(std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new())))
+        Self::with_dir(std::env::temp_dir().join(format!(
+            "{}-{}",
+            ShellConfig::DIR_NAME,
+            ulid::Ulid::new()
+        )))
     }
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.

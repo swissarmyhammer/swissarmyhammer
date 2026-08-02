@@ -45,6 +45,69 @@ comments:
     - evidence: 5 files — crates/swissarmyhammer-skills/tests/shell_output_guidance.rs (new), crates/swissarmyhammer-tools/src/mcp/tools/shell/description.md, crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, builtin/skills/shell/SKILL.md. `cargo nextest run --workspace` — 15258 tests run: 15258 passed, 2 skipped. `cargo clippy --workspace --all-targets -- -D warnings` — clean. `cargo fmt --all` — clean.
     - next: ready for /review
   timestamp: 2026-08-02T17:38:48.462228+00:00
+- actor: claude-code
+  id: 01kz1tt1j3wc439a2edvceys8m
+  text: |
+    ### review — findings
+    - evidence: 40 findings recorded from `review sha HEAD~1..HEAD` (engine: 42 confirmed, 17 refuted). Two engine findings dropped under the skill rule that bars refactoring test code that already existed: `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:435` and `:985`, both inside the `mod tests` block that starts at line 411 and that this commit did not touch.
+    - text checked against code: the claims hold. `execute_command::run` awaits `run_with_optional_timeout` and returns only after the child exits or the timeout fires, so "blocks until the command exits" is true. `finalize_completed` calls `store_command_output` on the `Ok` arm, so "a command that exits stores its full output" is true; the `Err` arm covers spawn and output-capture failures, not an exited command. `finalize_timed_out` calls only `mark_timed_out`, so "no output is stored" on the timeout path is true.
+    - next: fix the 40 findings. Most are missing doc comments on public trait methods, plus repeated string literals (`.shell`, `config.yaml`, `Bash`, `command_id`, `status`) that need named constants, a missing `Debug` derive on `ShellExecuteTool`, and an operation list hardcoded in the error message at `shell/mod.rs:566`. Remove each cause from the whole file, not only the flagged line.
+  timestamp: 2026-08-02T18:12:04.291098+00:00
+- actor: claude-code
+  id: 01kz1tv9v2zc8cx3c2bj1mxrjj
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 5 files (description.md, execute_command/mod.rs op description, shell/mod.rs test, SKILL.md, new shell_output_guidance.rs)
+    - test: green — cargo nextest run --workspace, 15258 passed, 0 failed, 2 skipped (pre-existing #[ignore] llama-agent real-model tests); clippy clean; fmt clean
+    - commit: cfc469995 docs(shell): state execute command blocks and drop tail/head/grep piping (^mbran97)
+    - review: findings — 40 open. Scope HEAD~1..HEAD. The text claims were judged TRUE against the code (run, finalize_completed, finalize_timed_out). All 40 findings are in production code the commit did not change: missing doc comments on public trait methods, repeated string literals needing named constants (`.shell`, `config.yaml`, `Bash`, `command_id`, `status`, the two health-check names), missing `Debug` derive on `ShellExecuteTool` (shell/mod.rs:95), and a hardcoded operation list in the unknown-operation error (shell/mod.rs:566) that duplicates `SHELL_OPERATIONS`.
+    - next: iteration 2 — /implement works the unchecked findings.
+  timestamp: 2026-08-02T18:12:45.538049+00:00
+- actor: claude-code
+  id: 01kz1x48w93m1kgfje6dfebh85
+  text: |-
+    Worked all 40 review findings. Each finding names ONE example of a cause, so I removed the cause from the whole file.
+
+    What changed, by cause:
+
+    1. Missing doc comments on public trait methods. Added to `Operation::verb/noun/description/parameters` in `execute_command/mod.rs`, and to `Default::default`, `Doctorable::is_applicable`, `McpTool::name/description/schema/schema_full/operations/category/execute` in `shell/mod.rs`. Added a doc comment to the public static `SHELL_OPERATIONS`, and to the private `EXECUTE_COMMAND_PARAMS` static so every module-level item in that file matches. The `pub mod` lines keep no `///`: every one of those modules carries its own `//!` inner doc, which is the pattern the whole `mcp/tools/` tree uses (see `files/mod.rs`).
+
+    2. Repeated string literals. New named constants in `shell/mod.rs`: `SHELL_CONFIG_FILE`, `BASH_TOOL_NAME`, `BUILTIN_CONFIG_CHECK`, `REGEX_PATTERNS_CHECK`, `USER_CONFIG_CHECK`, `PROJECT_CONFIG_CHECK`, `SHELL_TOOL_CATEGORY`, `EXECUTE_COMMAND_OP`, `OP_KEY`, `SHELL_STATE_INIT_FAILED`. New `COMMAND_ID_KEY` and `STATUS_KEY` in `execute_command/mod.rs`, used in both response format strings. The findings named only `Regex patterns` and `User config`, but `Builtin config` and `Project config` repeat for the same reason, so they became constants too; the same holds for the category string `tools`, the argument key `op`, and the `expect` message `Failed to initialize shell state`. The `.shell` and `config.yaml` literals inside `format!` messages now read the constants as well, not only the path joins.
+
+    3. Missing `Debug` derive. `ShellExecuteTool` is now `#[derive(Clone, Debug)]`. The finding said the derive would just work; it did not. `ShellState` had no `Debug`, so the derive did not compile. `ShellState` now derives `Debug` too — every field (`String`, `Vec<CommandRecord>`, `HashMap<usize, u32>`, `PathBuf`) already had it.
+
+    4. Hardcoded operation list in the unknown-operation error. The message now builds the list from `SHELL_OPERATIONS` with `op_string()` joined by `", "`. The text is byte-identical to the old hardcoded string, in the same order, so no test changed meaning.
+
+    TDD record: the `Debug` derive was RED first. `cargo nextest run -p swissarmyhammer-tools shell_execute_tool_renders_with_debug` failed to compile with "`shell::ShellExecuteTool` doesn't implement `std::fmt::Debug`", then passed after the derive. The other 39 findings are doc comments and constant extraction with no behavior change, so the existing suite is the guard; `test_unknown_operation_lists_all_valid_ops` already pins all five operation names in the error text.
+
+    Corrections found by /double-check, all applied:
+
+    - `SHELL_CONFIG_DIR` was a third source of truth for `.shell`. `swissarmyhammer_directory::ShellConfig::DIR_NAME` already holds that value and is what the real config loader and `ShellState` resolve through. Deleted the new const and used `ShellConfig::DIR_NAME` at every `.shell` site in `shell/mod.rs`, plus the two sites in `state.rs` (`cwd.join(...)` and the temp-dir prefix) that still hardcoded it. A private const would have let the health checks drift away from the directory the loader actually reads.
+    - The doc I first wrote on `Default::default` said the tool "carries in-memory state". False: `ShellState::new()` creates a `.shell` directory, writes `.gitignore`, and appends every command's output to a log file on disk. Reworded, and reworded the same wrong phrase on `ShellExecuteTool::new`, which is where it came from.
+    - The module `//!` doc still said "All output is stored in `ShellState`". That contradicts the fact this card pinned: `finalize_timed_out` calls only `mark_timed_out`, so a timed-out command stores nothing. Reworded to split the exit case from the timeout case.
+
+    Not changed, on purpose: the literals inside `mod tests` (`"Bash"`, `"tools"`, `"execute command"`, the health-check names). The review skill bars refactoring tests that already existed, and replacing a test literal with the constant under test makes the assertion compare the constant with itself.
+
+    Verification: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo nextest run --workspace` 15259 tests run, 15259 passed, 2 skipped (pre-existing `#[ignore]` llama-agent real-model tests).
+
+    The documentation text this card added ("blocks until the command exits", "Do not pipe to `tail`", "no output is stored") is untouched in `description.md`, `SKILL.md`, and the operation description string.
+  timestamp: 2026-08-02T18:52:36.617533+00:00
+- actor: claude-code
+  id: 01kz1x4fetxkrj72xpb7ds1hyc
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs. All 40 review findings closed and checked on the card. `cargo nextest run --workspace` — 15259 tests run: 15259 passed, 2 skipped. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo fmt --all` clean.
+    - next: ready for /review
+  timestamp: 2026-08-02T18:52:43.354436+00:00
+- actor: claude-code
+  id: 01kz1xyfntydwygpk6gschz3yp
+  text: |-
+    ### test — green
+    - evidence: `cargo fmt --all --check` clean (0 diffs); `cargo clippy --workspace --all-targets -- -D warnings` clean (0 warnings); `cargo nextest run --workspace` — 15259 passed, 0 failed, 2 skipped (623.06s)
+    - the two shell-tool tests for this task both pass: `swissarmyhammer-skills::shell_output_guidance shell_output_guidance_states_blocking_and_no_tail` and `swissarmyhammer-tools mcp::tools::shell::tests::shell_description_states_blocking_and_no_tail`
+    - the 2 skipped tests are `#[ignore]`d in `crates/llama-agent/tests/integration/kv_prefix_reuse_recurrent.rs` (`sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model` and a second recurrent-model test in the same file). These predate this task (introduced in commit `ae3de36ec`, an unrelated merged PR), are unrelated to the shell tool code under test, and carry an in-code rationale: the test hangs on the shared CI runner from real recurrent-model KV-slot contention under load, though it passes locally (~462s); the underlying selection/reuse logic is covered in CI by model-free unit tests in `queue.rs`. Not touched by this task's diff.
+    - next: none, task can proceed to review
+  timestamp: 2026-08-02T19:06:55.546753+00:00
 position_column: doing
 position_ordinal: '8380'
 title: 'shell tool: say that `execute command` blocks to completion, and stop `| tail` pipelines'
@@ -143,3 +206,46 @@ without that limit sends the agent to read output that was never written.
 
 - Use `/tdd` — write failing tests first, then implement to make them pass.
 #docs #shelltool #tools
+
+## Review Findings (2026-08-02 12:52)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:50` — Public trait method `verb` implementing Operation trait lacks documentation. Add documentation comment for the verb method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:50` — Public trait method `verb()` in `impl Operation` lacks a doc comment. Add doc comment above line 50: `/// Returns the verb part of the operation string (e.g., "execute").`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:53` — Public trait method `noun` implementing Operation trait lacks documentation. Add documentation comment for the noun method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:53` — Public trait method `noun()` in `impl Operation` lacks a doc comment. Add doc comment above line 53: `/// Returns the noun part of the operation string (e.g., "command").`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:56` — Public trait method `description` implementing Operation trait lacks documentation. Add documentation comment for the description method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:59` — Public trait method `parameters` implementing Operation trait lacks documentation. Add documentation comment for the parameters method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:59` — Public trait method `parameters()` in `impl Operation` lacks a doc comment. Add doc comment above line 59: `/// Returns the metadata for operation parameters (command, timeout, etc.).`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:158` — Response format keys 'command_id' and 'status' are hardcoded in this format string and repeated at line 234. Should be named constants so changes occur in one place. Extract constants: `const COMMAND_ID_KEY: &str = "command_id";` and `const STATUS_KEY: &str = "status";` then use them in both format strings (lines 158 and 234).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/execute_command/mod.rs:234` — Response format keys 'command_id' and 'status' are hardcoded in this format string and repeated at line 158. Should be named constants so changes occur in one place. Extract constants: `const COMMAND_ID_KEY: &str = "command_id";` and `const STATUS_KEY: &str = "status";` then use them in both format strings (lines 158 and 234).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:84` — Public static constant `SHELL_OPERATIONS` lacks documentation describing its contents and purpose. Add a /// doc comment explaining that this is the static list of shell operations available to the tool.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:84` — Public static `SHELL_OPERATIONS` lacks a doc comment, violating the requirement that all public items have doc comments. Add doc comment above line 84: `/// Static registry of all supported shell operations (execute, list, kill, grep, get lines).`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:95` — `ShellExecuteTool` is a public type with non-empty representation (state, mcp_server fields) but does not implement or derive `Debug`. Change line 95 to `#[derive(Clone, Debug)]`. Both `Arc<Mutex<ShellState>>` and `Option<(String, McpServerEntry)>` implement Debug, so the derive will succeed.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:108` — Public trait method `default` implementing Default trait lacks documentation. Add documentation comment for the default method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:183` — Health check name 'Regex patterns' is hardcoded here and also appears at line 188 in the same function. Should be a named constant. Define `const REGEX_PATTERNS_CHECK: &str = "Regex patterns";` at function scope or module level and use it in both locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:207` — Filename 'config.yaml' is hardcoded here and also appears at lines 220 and 294. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_FILE: &str = "config.yaml";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:210` — Health check name 'User config' is hardcoded here and also appears at line 215 in the same function. Should be a named constant. Define `const USER_CONFIG_CHECK: &str = "User config";` at function scope or module level and use it in both locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:220` — Directory name '.shell' is hardcoded here and also appears at lines 207, 293, and 469. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_DIR: &str = ".shell";` and use it in all four locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:220` — Filename 'config.yaml' is hardcoded here and also appears at lines 207 and 294. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_FILE: &str = "config.yaml";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:293` — Directory name '.shell' is hardcoded here and also appears at lines 207, 220, and 469. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_DIR: &str = ".shell";` and use it in all four locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:294` — Filename 'config.yaml' is hardcoded here and also appears at lines 207 and 220. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_FILE: &str = "config.yaml";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:343` — Public trait method `is_applicable` implementing Doctorable trait lacks documentation. Add documentation comment for the is_applicable method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:343` — Public method `is_applicable()` in `impl Doctorable` lacks a doc comment. Add doc comment above line 343: `/// Returns whether health checks are applicable for this component.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:400` — Tool name 'Bash' is hardcoded here and also appears at lines 445 and 525. Should be a named constant since this tool's purpose is to replace Bash. Define `const BASH_TOOL_NAME: &str = "Bash";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:445` — Tool name 'Bash' is hardcoded here and also appears at lines 400 and 525. Should be a named constant since this tool's purpose is to replace Bash. Define `const BASH_TOOL_NAME: &str = "Bash";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:469` — Directory name '.shell' is hardcoded here and also appears at lines 207, 220, and 293. Should be a named constant so changes occur in one place. Define `const SHELL_CONFIG_DIR: &str = ".shell";` and use it in all four locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:495` — Public trait method `name` implementing McpTool trait lacks documentation. Add documentation comment for the name method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:499` — Public trait method `description` implementing McpTool trait lacks documentation. Add documentation comment for the description method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:499` — Public method `description()` in `impl McpTool` lacks a doc comment. Add doc comment above line 499: `/// Returns the tool description from description.md for agent guidance.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:503` — Public trait method `schema` implementing McpTool trait lacks documentation. Add documentation comment for the schema method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:503` — Public method `schema()` in `impl McpTool` lacks a doc comment. Add doc comment above line 503: `/// Returns the wire protocol schema with operation definitions.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:507` — Public trait method `schema_full` implementing McpTool trait lacks documentation. Add documentation comment for the schema_full method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:507` — Public method `schema_full()` in `impl McpTool` lacks a doc comment. Add doc comment above line 507: `/// Returns the full schema with CLI-facing keys and operation signatures.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:511` — Complex public trait method `operations` lacks documentation. Add documentation explaining what this method returns and how it's used.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:511` — Public method `operations()` in `impl McpTool` lacks a doc comment. Add doc comment above line 511: `/// Returns the list of supported shell operations.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:522` — Public trait method `category` implementing McpTool trait lacks documentation comment. Add documentation comment (///) for the category method.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:522` — Public method `category()` in `impl McpTool` lacks a doc comment. Add doc comment above line 522: `/// Returns the tool category as a Bash replacement for agent capability routing.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:525` — Tool name 'Bash' is hardcoded here and also appears at lines 400 and 445. Should be a named constant since this tool's purpose is to replace Bash. Define `const BASH_TOOL_NAME: &str = "Bash";` and use it in all three locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:528` — Complex async public method `execute` lacks documentation describing its operation dispatch and error handling. Add documentation explaining how the method dispatches based on the `op` parameter and what each operation path does.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:528` — Public method `execute()` in `impl McpTool` lacks a doc comment. Add doc comment above line 528: `/// Dispatch a shell tool operation and return the MCP result.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:566` — Operation names are hardcoded in the error message, duplicating the known set defined in SHELL_OPERATIONS. If operations are added, renamed, or removed, this string must be manually updated or it becomes incorrect and stale. Generate the operation list in the error message by iterating SHELL_OPERATIONS and collecting op_string() results, e.g., `format!("unknown operation '{}'. Valid operations: {}", other, SHELL_OPERATIONS.iter().map(|o| o.op_string()).collect::<Vec<_>>().join(", "))`.
