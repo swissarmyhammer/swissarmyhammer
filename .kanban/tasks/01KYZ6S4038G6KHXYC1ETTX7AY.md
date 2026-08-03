@@ -3,46 +3,89 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: e180
-title: Merge seven single-rule builtin validators into one hygiene validator set
+title: Merge nine single-rule builtin validators into code-security and code-hygiene
 ---
 ## What
 
-The review fleet makes one agent task for each validator that matches the changed files. Seven builtin validators hold one concern each, and each one costs a full agent turn (~100K-token prime upload plus generation) per review run. In the five review runs on 2026-08-01, these seven produced zero findings: `no-secrets`, `injection`, `command-safety`, `no-commented-code`, `function-length`, `dead-code`, `test-integrity`. Merge them into one `hygiene` validator set so the fleet sends one task instead of seven.
+The review fleet makes one agent task for each validator that matches the changed
+files. Nine builtin validators hold one rule each, so one changed source file
+costs nine agent tasks. Merge them into TWO sets, split by concern.
 
-The source of truth is `builtin/validators/` (deployed to `~/.validators` by `sah init`; see `builtin/validators/README.md` for the precedence rules). A set is a directory with a `VALIDATOR.md` manifest plus a `rules/` directory. Multi-rule sets are the established pattern: `builtin/validators/swift` has 11 rules, `python` has 8, `duplication` has 3.
+The source of truth is `builtin/validators/` (deployed to `~/.validators` by
+`sah init`; see `builtin/validators/README.md` for the precedence rules).
 
-Make these changes:
+Every one of the nine matches `@file_groups/source_code`, so the match globs
+merge without loss. Probes are the only real constraint: `dead-code` needs
+`callers`, and the rest need none.
 
-- Create `builtin/validators/hygiene/VALIDATOR.md`. The manifest needs:
-  - `match.files`: `@file_groups/source_code` PLUS the test-file globs from `builtin/validators/test-integrity/VALIDATOR.md` (the test-cheating rules must still see test files).
-  - `probes: [callers]` — the dead-code rule needs the call-graph evidence probe (see `builtin/validators/dead-code/VALIDATOR.md`).
-- Move these eight rule files unchanged into `builtin/validators/hygiene/rules/`: `no-secrets.md`, `injection.md`, `command-safety.md`, `no-commented-code.md`, `function-length.md`, `dead-code.md`, and from test-integrity: `no-hard-code.md`, `no-test-cheating.md`.
-- Delete the seven retired set directories from `builtin/validators/`.
-- Make the builtin validator refresh remove a retired builtin set from the deployed store (`~/.validators`) — but only when the deployed files are identical to the shipped builtin content. Never remove a set the user changed or added. The deploy code is in `crates/mirdan/src/install.rs`; the embedded set list comes from `crates/mirdan/src/builtin_validators.rs` (`builtin_validators_by_set`).
+## The two sets
 
-Out of scope: `naming` and `magic-numbers` are user-level sets in `~/.validators` only (they do not exist in `builtin/validators/`). Leave them alone.
+**`code-security`** — no probes. Rules:
+
+- `no-secrets.md`
+- `injection.md`
+- `command-safety.md`
+
+**`code-hygiene`** — `probes: [callers]`, which `dead-code` needs. Rules:
+
+- `no-commented-code.md`
+- `function-length.md`
+- `cognitive-complexity.md` (from `complexity`)
+- `missing-docs.md`
+- `data-driven.md`
+- `dead-code.md`
+
+Keep security separate from hygiene. A leaked credential or an injection hole is
+not untidiness, and a set named "hygiene" understates it. Two names, two
+concerns.
+
+## Out of scope — do not touch these
+
+- `test-integrity` — it matches `@file_groups/test_files` as well as source, so
+  it does not merge with a source-only set. Leave it whole.
+- `reuse` (`probes: [similar]`) and `duplication` (`probes: [duplicates]`) —
+  each carries its own probe. Folding either in would force its probe on every
+  rule in the set. Leave them alone.
+- `naming` and `magic-numbers` — user-level sets in `~/.validators` only. They
+  do not exist in `builtin/validators/`.
+- The language sets (`rust`, `python`, `swift`, `dart`, `js-ts`, `numpy`) and
+  `completeness`.
+
+## Changes
+
+- Create `builtin/validators/code-security/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, no probes.
+- Create `builtin/validators/code-hygiene/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, `probes: [callers]`.
+- Move the nine rule files unchanged into the two `rules/` directories.
+- Delete the nine retired set directories from `builtin/validators/`.
+- Make the builtin validator refresh remove a retired builtin set from the
+  deployed store (`~/.validators`), but ONLY when the deployed files are
+  identical to what was shipped. A user-modified set of the same name stays.
 
 ## Subtasks
 
-- [ ] Create `builtin/validators/hygiene/VALIDATOR.md` with the union match globs and `probes: [callers]`
-- [ ] Move the eight rule files into `builtin/validators/hygiene/rules/`
-- [ ] Delete the seven retired set directories
+- [ ] Create `builtin/validators/code-security/VALIDATOR.md`
+- [ ] Create `builtin/validators/code-hygiene/VALIDATOR.md` with `probes: [callers]`
+- [ ] Move the nine rule files into the two new `rules/` directories
+- [ ] Delete the nine retired set directories
 - [ ] Remove retired, unmodified builtin sets from the deployed store on refresh (`crates/mirdan/src/install.rs`)
-- [ ] Update the embed and loader tests (see Tests)
+- [ ] Update the embed and loader tests
 
 ## Acceptance Criteria
 
-- [ ] The validator loader reports a `hygiene` set with 8 rules, `probes: ["callers"]`, and match globs that include both source and test patterns
-- [ ] The loader no longer reports the seven retired set names from the builtin layer
+- [ ] The loader reports `code-security` with 3 rules and no probes
+- [ ] The loader reports `code-hygiene` with 6 rules and `probes: ["callers"]`
+- [ ] The loader no longer reports the nine retired set names from the builtin layer
+- [ ] `test-integrity`, `reuse` and `duplication` still load unchanged
 - [ ] A refresh deploy removes an unmodified retired set from the target store, and keeps a user-modified set of the same name
-- [ ] Review behavior keeps all eight rules: the merged set ships the same rule texts the seven sets shipped
+- [ ] Every one of the nine rule texts ships unchanged — no rule is reworded, weakened or dropped by this merge
 
 ## Tests
 
-- [ ] Update `test_builtin_validators_embed_expected_sets` in `crates/mirdan/src/builtin_validators.rs`: assert `hygiene` is present and the seven retired names are absent
-- [ ] Update the loader tests in `crates/swissarmyhammer-validators/src/builtin/mod.rs` (they read `../../builtin/validators` directly): assert `hygiene` loads with `rule_count == 8` and the `callers` probe
+- [ ] Update `test_builtin_validators_embed_expected_sets` in `crates/mirdan/src/builtin_validators.rs`: assert `code-security` and `code-hygiene` are present and the nine retired names are gone
+- [ ] Update the loader tests in `crates/swissarmyhammer-validators/src/builtin/mod.rs` (they read `../../builtin/validators` directly): assert both new sets, their rule counts, and their probes
 - [ ] New test for the refresh prune in `crates/mirdan/src/install.rs`: deploy the old set, refresh, assert it is gone; deploy a modified copy, refresh, assert it stays
-- [ ] Run `cargo test -p mirdan -p swissarmyhammer-validators` — all tests pass
+- [ ] `cargo test -p mirdan -p swissarmyhammer-validators` passes
 
 ## Workflow
+
 - Use `/tdd` — write failing tests first, then implement to make them pass. #review
