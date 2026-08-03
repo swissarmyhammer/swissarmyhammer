@@ -71,7 +71,7 @@ pub use parser::{
 };
 pub use pool::{
     AgentPool, ForkAttachment, PoolConfig, PoolError, PromptResult, SessionPinGuard, SessionTurn,
-    SessionTurnResult, DEFAULT_MAX_TOKENS,
+    SessionTurnResult, AGENT_PROMPT_CAP, DEFAULT_MAX_TOKENS,
 };
 pub use types::{
     compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator, MatchContext,

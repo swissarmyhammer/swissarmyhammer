@@ -6,13 +6,6 @@
       ],
       "command": "kanban",
       "source": "custom"
-    },
-    "sah": {
-      "args": [
-        "serve"
-      ],
-      "command": "sah",
-      "source": "custom"
     }
   }
 }

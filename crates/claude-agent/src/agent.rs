@@ -821,14 +821,24 @@ impl ClaudeAgent {
                     // Validate image data through base64 processor
                     self.base64_processor
                         .decode_image_data(&image_content.data, &image_content.mime_type)
-                        .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+                        .map_err(|e| {
+                            crate::acp_error::invalid_params(format!(
+                                "prompt image content block ({}) is not decodable: {e}",
+                                image_content.mime_type
+                            ))
+                        })?;
                     has_content = true;
                 }
                 agent_client_protocol::schema::ContentBlock::Audio(audio_content) => {
                     // Validate audio data through base64 processor
                     self.base64_processor
                         .decode_audio_data(&audio_content.data, &audio_content.mime_type)
-                        .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+                        .map_err(|e| {
+                            crate::acp_error::invalid_params(format!(
+                                "prompt audio content block ({}) is not decodable: {e}",
+                                audio_content.mime_type
+                            ))
+                        })?;
                     has_content = true;
                 }
                 agent_client_protocol::schema::ContentBlock::Resource(_resource_content) => {
@@ -841,19 +851,30 @@ impl ClaudeAgent {
                 }
                 _ => {
                     // Unknown content block types are not supported
-                    return Err(agent_client_protocol::Error::invalid_params());
+                    return Err(crate::acp_error::invalid_params(
+                        "prompt carries an unsupported content block type",
+                    ));
                 }
             }
         }
 
         // Check if prompt has any content
         if !has_content {
-            return Err(agent_client_protocol::Error::invalid_params());
+            return Err(crate::acp_error::invalid_params(
+                "prompt carries no content: every content block was empty",
+            ));
         }
 
-        // Check if text portion is too long (configurable limit)
+        // Check if text portion is too long (configurable limit). The message
+        // names both numbers: a caller that hits this cap can only correct it
+        // by knowing how far over it went, and a bare `invalid_params` cost
+        // four separate agents a full diagnosis each (see `^6jsxjbc`).
         if prompt_text.len() > self.config.max_prompt_length {
-            return Err(agent_client_protocol::Error::invalid_params());
+            return Err(crate::acp_error::invalid_params(format!(
+                "prompt text is {} bytes, over the {}-byte max_prompt_length limit",
+                prompt_text.len(),
+                self.config.max_prompt_length
+            )));
         }
 
         Ok(())

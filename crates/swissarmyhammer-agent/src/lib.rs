@@ -90,8 +90,14 @@ use tokio::sync::broadcast;
 // Configuration Constants
 // ============================================================================
 
-/// Maximum prompt length in bytes (5MB for very large source files)
-const MAX_PROMPT_LENGTH_BYTES: usize = 5_000_000;
+/// The maximum prompt text one turn may carry, in bytes.
+///
+/// Re-read from `claude_agent`, never re-declared: this crate used to carry
+/// its own `5_000_000` while `claude-agent` defaulted to `100_000` and the
+/// review batcher budgeted against a third number. The effective cap then
+/// depended on which agent served the run (see `^6jsxjbc`). One declaration
+/// lives in [`claude_agent::constants::sizes::messages::MAX_PROMPT_LENGTH`].
+const MAX_PROMPT_LENGTH_BYTES: usize = claude_agent::constants::sizes::messages::MAX_PROMPT_LENGTH;
 
 /// Hang guard for the post-turn notification drain, in milliseconds.
 ///
@@ -732,8 +738,9 @@ fn claude_agent_config_from_model(
 /// Otherwise only the MCP toolset this app provides (Claude sees these as
 /// `mcp__*`, e.g. `mcp__swissarmyhammer-kanban__question`) is auto-allowed,
 /// leaving everything else subject to the default ask-on-unknown behaviour.
-/// `max_prompt_length` is raised because rule checking may include very large
-/// files.
+/// `max_prompt_length` is set from [`MAX_PROMPT_LENGTH_BYTES`], which is
+/// `claude_agent`'s own constant — the one declaration the agent's rejection
+/// and the review batcher's budget both read.
 fn build_claude_agent_config(
     mcp_config: Option<McpServerConfig>,
     ephemeral: bool,

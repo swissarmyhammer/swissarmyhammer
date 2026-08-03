@@ -470,10 +470,14 @@ mod tests {
     /// (more than one task in flight) while staying small and deterministic.
     const TEST_POOL_WORKERS: usize = 2;
 
-    /// Content budget per fan-out batch, in bytes, for the batching tests. Each
-    /// changed file inlines ~180 bytes of source, so a 250-byte budget forces a
-    /// two-file diff to split across two batches — the boundary these tests pin.
-    const TEST_BATCH_SIZE_BYTES: usize = 250;
+    /// Content budget per fan-out batch, in bytes, for the batching tests.
+    ///
+    /// The budget is spent in RENDERED bytes, and each changed file here
+    /// renders to ~2.4 KB (its ~180 bytes of source plus the numbered-line
+    /// legend, the semantic diff, and the probe-evidence framing), so a 3000
+    /// byte budget fits one file and forces a two-file diff to split across two
+    /// batches — the boundary these tests pin.
+    const TEST_BATCH_SIZE_BYTES: usize = 3000;
 
     /// The caller-formatted timestamp rendered verbatim into the report header.
     const TEST_NOW: &str = "2026-06-05 12:00";
