@@ -12,8 +12,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use swissarmyhammer_config::model::{parse_model_config, ModelManager};
-use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_config::model::ModelManager;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_templating::{PromptResolver, TemplateLibrary};
 
@@ -251,7 +250,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir, None).await
+        Self::new_with_work_dir(library, work_dir).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -260,7 +259,6 @@ impl McpServer {
     ///
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
-    /// * `model_override` - Optional model name to override all use case model assignments
     ///
     /// # Returns
     ///
@@ -268,14 +266,10 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    pub async fn new_with_work_dir(
-        library: TemplateLibrary,
-        work_dir: PathBuf,
-        model_override: Option<String>,
-    ) -> Result<Self> {
+    pub async fn new_with_work_dir(library: TemplateLibrary, work_dir: PathBuf) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
-        let agent_config = Self::resolve_agent_config(model_override)?;
+        let agent_config = Self::resolve_agent_config()?;
 
         let skill_library = Self::init_skill_library().await;
         let agent_library = Self::init_agent_library().await;
@@ -855,55 +849,26 @@ impl McpServer {
         Arc::new(Mutex::new(git_ops))
     }
 
-    /// Resolve agent configuration, with optional model override.
+    /// Resolve the chat configuration for the default scope.
     ///
-    /// If a model override is provided, that model is loaded directly.
-    /// Otherwise, resolves the configured model from the project config,
-    /// falling back to claude-code as default.
-    ///
-    /// # Arguments
-    ///
-    /// * `model_override` - Optional model name to override configured model
+    /// Reads the top-level `model:` from the project config, which sets the
+    /// Claude CLI `--model` switch. An unreadable config falls back to plain
+    /// `claude` rather than failing the server start.
     ///
     /// # Returns
     ///
-    /// * `Result<Arc<swissarmyhammer_config::model::ModelConfig>>` - Agent configuration
-    fn resolve_agent_config(
-        model_override: Option<String>,
-    ) -> Result<Arc<swissarmyhammer_config::model::ModelConfig>> {
-        if let Some(override_model_name) = model_override {
-            tracing::info!("Using model override '{}'", override_model_name);
-
-            let info = ModelManager::find_agent_by_name(&override_model_name).map_err(|e| {
-                SwissArmyHammerError::Other {
-                    message: format!("invalid model override '{}': {}", override_model_name, e),
-                }
-            })?;
-
-            let config =
-                parse_model_config(&info.content).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("invalid model override '{}': {}", override_model_name, e),
-                })?;
-
-            Ok(Arc::new(config))
-        } else {
-            match ModelManager::resolve_agent_config(
-                &swissarmyhammer_config::model::ModelPaths::sah(),
-            ) {
-                Ok(config) => {
-                    tracing::debug!("Resolved model: {:?}", config.executor_type());
-                    Ok(Arc::new(config))
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to resolve model config: {}, using default", e);
-                    // Fall back to loading from template context
-                    let template_context = TemplateContext::load_for_cli().map_err(|e| {
-                        SwissArmyHammerError::Other {
-                            message: format!("failed to load configuration: {}", e),
-                        }
-                    })?;
-                    Ok(Arc::new(template_context.get_agent_config(None)))
-                }
+    /// * `Result<Arc<swissarmyhammer_config::model::ChatModelConfig>>` - Chat configuration
+    fn resolve_agent_config() -> Result<Arc<swissarmyhammer_config::model::ChatModelConfig>> {
+        match ModelManager::resolve_chat_config(&swissarmyhammer_config::model::ModelPaths::sah()) {
+            Ok(config) => {
+                tracing::debug!("Resolved chat model switch: {:?}", config.model);
+                Ok(Arc::new(config))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to resolve chat model config: {}, using default", e);
+                Ok(Arc::new(
+                    swissarmyhammer_config::model::ChatModelConfig::default(),
+                ))
             }
         }
     }
@@ -925,7 +890,7 @@ impl McpServer {
     async fn create_tool_context_and_registry(
         tool_handlers: ToolHandlers,
         git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
-        agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
+        agent_config: Arc<swissarmyhammer_config::model::ChatModelConfig>,
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
@@ -2819,13 +2784,10 @@ mod tests {
         let test_file = tmp.path().join("test.txt");
         std::fs::write(&test_file, "hello world").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2962,13 +2924,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_creates_server() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
 
         // The server should store the working directory
         assert_eq!(server.work_dir, Some(tmp.path().to_path_buf()));
@@ -2978,13 +2937,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_registers_agent_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
 
         // The full tool union is always registered — agent capabilities
         // (files, web, skill, agent) are present regardless of host. Per-client
@@ -3184,13 +3140,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_create_validator_server_shares_work_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -3207,13 +3160,10 @@ mod tests {
         let test_file = tmp.path().join("hello.txt");
         std::fs::write(&test_file, "hi").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 

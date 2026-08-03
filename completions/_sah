@@ -16,7 +16,6 @@ _sah() {
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
 '--format=[Global output format]:FORMAT:(table json yaml)' \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-v[Enable verbose logging]' \
 '--verbose[Enable verbose logging]' \
 '-d[Enable debug logging]' \
@@ -38,7 +37,6 @@ _sah() {
         case $line[1] in
             (serve)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_sah__subcmd__serve_commands" \
@@ -57,7 +55,6 @@ _arguments "${_arguments_options[@]}" : \
 '--port=[Port to bind to (use 0 for random port)]:PORT:_default' \
 '-H+[Host to bind to]:HOST:_default' \
 '--host=[Host to bind to]:HOST:_default' \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -92,7 +89,6 @@ esac
 ;;
 (init)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::target -- Where to install the MCP server configuration:((project\:"Project-level configuration (committed to the repo)"
@@ -102,7 +98,6 @@ user\:"User-wide (global) configuration"))' \
 ;;
 (deinit)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '--remove-directory[Also remove .sah/ project directory]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -113,14 +108,12 @@ user\:"User-wide (global) configuration"))' \
 ;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (completion)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':shell -- Shell to generate completion for:(bash elvish fish powershell zsh)' \
@@ -129,7 +122,6 @@ _arguments "${_arguments_options[@]}" : \
 (validate)
 _arguments "${_arguments_options[@]}" : \
 '--format=[Output format]:FORMAT:(table json yaml)' \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-q[Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary]' \
 '--quiet[Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary]' \
 '--validate-tools[Validate MCP tool schemas for CLI compatibility]' \
@@ -139,7 +131,6 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (tools)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '--global[Write to global config (~/.sah/tools.yaml) instead of project]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -155,7 +146,6 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (enable)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '*::names -- Tool names to enable (omit for all):_default' \
@@ -163,7 +153,6 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (disable)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '*::names -- Tool names to disable (omit for all):_default' \
@@ -203,7 +192,6 @@ esac
 ;;
 (statusline)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_sah__subcmd__statusline_commands" \
@@ -218,7 +206,6 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (config)
 _arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

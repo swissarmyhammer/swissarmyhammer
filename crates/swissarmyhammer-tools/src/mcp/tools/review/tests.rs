@@ -272,7 +272,7 @@ fn extract_text(result: &rmcp::model::CallToolResult) -> String {
 async fn context_at(dir: &Path) -> ToolContext {
     let git_ops = Arc::new(tokio::sync::Mutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+    let agent_config = Arc::new(swissarmyhammer_config::ChatModelConfig::default());
     let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
     ctx.working_dir = Some(dir.to_path_buf());
     ctx
@@ -1020,7 +1020,7 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
     // The production-shaped seam: build the real server (registers the bare
     // review tool), then inject the factories at the wiring layer.
     let server =
-        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf(), None)
+        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf())
             .await
             .expect("server builds");
     server

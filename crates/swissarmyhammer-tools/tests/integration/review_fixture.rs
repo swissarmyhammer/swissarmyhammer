@@ -456,7 +456,7 @@ pub fn mock_embedder_factory() -> EmbedderFactory {
 pub async fn context_at(dir: &Path) -> ToolContext {
     let git_ops = Arc::new(tokio::sync::Mutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+    let agent_config = Arc::new(swissarmyhammer_config::ChatModelConfig::default());
     let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
     ctx.working_dir = Some(dir.to_path_buf());
     ctx

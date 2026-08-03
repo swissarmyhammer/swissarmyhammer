@@ -137,10 +137,27 @@ comments:
     - evidence: `crates/llama-agent/` deleted (114 files). Also deleted: `crates/acp-conformance/.fixtures/llama/`, `.github/workflows/coverage.yml`, `scripts/llama_agent_gap_report.py`, `doc/src/reference/llama-claude-hooks.md`, `apps/swissarmyhammer-cli/src/commands/agent/`, `apps/swissarmyhammer-cli/tests/integration/agent_command.rs`. Modified 45 files across `Cargo.toml`, `Cargo.lock`, `.config/nextest.toml`, `.github/workflows/ci.yml`, `.agents/test/AGENT.md`, `doc/src/SUMMARY.md`, `builtin/skills/{kanban,review}/SKILL.md`, `apps/swissarmyhammer-cli/`, `crates/acp-conformance/`, `crates/swissarmyhammer-tools/`, `crates/claude-agent/`, `crates/agent-client-protocol-extras/`, `crates/swissarmyhammer-validators/`, `crates/swissarmyhammer-{common,diagnostics,skills,kanban}/`. Regenerated `completions/*` and `doc/src/reference/sah-cli.md`. Gate: `cargo fmt --all --check` 0, `cargo clippy --workspace --all-targets -- -D warnings` 0, `cargo nextest run --workspace` 13489 passed / 0 skipped, `-p llama-embedding -p model-loader -p ane-embedding` 295 passed (unchanged from baseline), `-p acp-conformance` 249 passed (302 baseline, minus 52 llama rstest arms and `llama_fixtures_round_trip`).
     - next: `/review`. Cards ^fpavbvr and ^d525k4k filed for discovered work; ^62fqmdk archived as unsatisfiable.
   timestamp: 2026-08-03T01:06:53.929947+00:00
+- actor: claude-code
+  id: 01kz2kvdmryd3f2jxxvq479rpr
+  text: |-
+    ### finish iteration 1 — done
+    - implement: changed — 114 files deleted, 45 modified.
+    - test: green — cargo fmt --all --check clean; cargo clippy --workspace --all-targets -D warnings 0 warnings; cargo nextest run --workspace 13489 passed / 0 failed / 0 skipped.
+    - commit: 5edda8286 refactor(agent): delete crates/llama-agent
+    - review: SKIPPED by user instruction for every card in the drop-llama-agent project this session.
+    - BEYOND THE CARD: the whole `sah agent acp` CLI command went with the crate. `AgentToolsMount`, `InProcessMount`, `AgentServer`, `AcpServer`, `AcpConfig`, and `PermissionPolicy` are defined only in llama-agent, so `build_agent_tools_mount` (moved into the CLI by ^6s0py85) had nowhere to be re-pointed. It cascaded into cli.rs, main.rs, and the `ArgSpec`/`SubcommandSpec` builder machinery that command solely used. `test_build_cli_has_no_agent_command` guards it, verified RED against a re-injected subcommand.
+    - Also deleted as dead: `.github/workflows/coverage.yml` (verified at HEAD: workflow_dispatch only, body entirely `cargo llvm-cov --package llama-agent` + the gap-report script, covering nothing else), `scripts/llama_agent_gap_report.py`, `doc/src/reference/llama-claude-hooks.md`, the `package(llama-agent)` nextest override, `Host::Llama`, 38 `.fixtures/llama/` fixtures.
+    - TEST DROP FULLY ACCOUNTED FOR against a HEAD baseline worktree: 14790 -> 13335 (excluding kanban-app/mirdan-app) = -1455. Per package: llama-agent -1377, acp-conformance -53 (52 `#[case::llama]` arms + `llama_fixtures_round_trip`), swissarmyhammer-cli -21, swissarmyhammer-tools -4. No other package changed.
+    - EMBEDDING STACK VERIFIED INTACT: llama-common, llama-embedding, model-loader, ane-embedding, model-embedding, swissarmyhammer-embedding all byte-for-byte unmodified; both embedding model YAMLs present; subset run 411 passed, matching the HEAD baseline exactly. (The implement agent reported 295 for this; that number was wrong. 411 is the verified figure.)
+    - One test rebuilt rather than deleted: the oversized-file review test read real bytes from a llama-agent source file. No remaining file is large enough (largest is crates/mirdan/src/install.rs at 246,776 bytes), so it now synthesizes one pinned to `fleet::DEFAULT_BATCH_SIZE`. Proved non-vacuous by perturbing the production packer.
+    - Scope-limit conflict, documented and left alone: `crates/llama-common/Cargo.toml:8` still reads `description = "…for the llama-agent workspace"`. The grep criterion wants it gone; the instruction says llama-common is untouchable. Left untouched. Cargo.lock has no llama-agent package and no dependency entry names it.
+    - Cards filed for decisions rather than guessed: ^fpavbvr (orphaned seams — `McpServer::create_agent_tools_server`, `ToolCategory::Agent`, review fleet `WarmKv`, `PoolConfig::local()`) and ^d525k4k (three committed `.skills/` snapshots drifted from `builtin/skills/`). ^62fqmdk archived — every file it named is deleted.
+    - next: card 5, ^hm82t0z — collapse the chat model configuration to a hardcoded Claude executor. Then merge branch `review` into `shell`.
+  timestamp: 2026-08-03T01:29:43.832375+00:00
 depends_on:
 - 01KZ23MX9AB1QX9E4Q26S0PY85
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9380
 project: drop-llama-agent
 title: Delete the llama-agent crate
 ---

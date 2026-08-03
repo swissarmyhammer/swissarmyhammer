@@ -51,7 +51,7 @@ impl CliToolContext {
     /// Create a new CLI tool context with all necessary storage backends
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let current_dir = std::env::current_dir()?;
-        Self::new_with_config(&current_dir, None).await
+        Self::new_with_work_dir(&current_dir).await
     }
 
     /// Create a fully isolated context with no HTTP server and no env var mutation.
@@ -61,12 +61,9 @@ impl CliToolContext {
     pub async fn new_isolated(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mcp_server = McpServer::new_with_work_dir(
-            TemplateLibrary::default(),
-            working_dir.to_path_buf(),
-            None,
-        )
-        .await?;
+        let mcp_server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), working_dir.to_path_buf())
+                .await?;
         mcp_server.initialize().await?;
         let server_arc = Arc::new(mcp_server);
 
@@ -80,24 +77,22 @@ impl CliToolContext {
         })
     }
 
-    /// Create a new CLI tool context with optional model override
+    /// Create a new CLI tool context rooted at a working directory
     ///
     /// # Arguments
     ///
     /// * `working_dir` - The working directory for tool operations
-    /// * `model_override` - Optional model name to use for ALL use cases (runtime override)
     ///
     /// # Returns
     ///
     /// Result containing the initialized CliToolContext or an error
-    pub async fn new_with_config(
+    pub async fn new_with_work_dir(
         working_dir: &std::path::Path,
-        model_override: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Initialize MCP server with model override
-        // The server will create its own tool_context with the correct model configuration
+        // The server creates its own tool_context, which resolves the chat model
+        // configuration from the project config files.
         let mcp_server_handle =
-            Self::initialize_mcp_server(model_override, Some(working_dir.to_path_buf())).await?;
+            Self::initialize_mcp_server(Some(working_dir.to_path_buf())).await?;
 
         let tool_registry = Self::create_tool_registry().await;
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
@@ -115,7 +110,6 @@ impl CliToolContext {
     /// category consumed by the serve boundary, so no host-conditional
     /// registration happens here.
     async fn initialize_mcp_server(
-        model_override: Option<&str>,
         working_dir: Option<std::path::PathBuf>,
     ) -> Result<
         swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
@@ -125,13 +119,9 @@ impl CliToolContext {
 
         std::env::set_var("SAH_CLI_MODE", "1");
 
-        let mcp_server_handle = start_mcp_server_with_options(
-            McpServerMode::Http { port: None },
-            None,
-            model_override.map(|s| s.to_string()),
-            working_dir,
-        )
-        .await?;
+        let mcp_server_handle =
+            start_mcp_server_with_options(McpServerMode::Http { port: None }, None, working_dir)
+                .await?;
 
         tracing::info!(
             "MCP HTTP server ready on port {:?}",
@@ -493,7 +483,7 @@ mod tests {
 
         // The server registry is the reference set. Build it the way the
         // server does, through `register_all_tools`.
-        let server = McpServer::new_with_work_dir(TemplateLibrary::default(), env.temp_dir(), None)
+        let server = McpServer::new_with_work_dir(TemplateLibrary::default(), env.temp_dir())
             .await
             .expect("mcp server");
         let server_names: BTreeSet<String> = server

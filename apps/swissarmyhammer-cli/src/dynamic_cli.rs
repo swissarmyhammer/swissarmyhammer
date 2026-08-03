@@ -1005,13 +1005,6 @@ impl CliBuilder {
             None,
             "Validate all tool schemas and exit",
         ))
-        .arg(
-            Arg::new("model")
-                .long("model")
-                .help("Override model (runtime only, doesn't modify config)")
-                .value_name("MODEL")
-                .global(true),
-        )
     }
 
     /// Add unified tool command with all MCP tools as subcommands

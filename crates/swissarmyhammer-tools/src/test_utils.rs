@@ -4,7 +4,7 @@ use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
 use std::sync::Arc;
 
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -20,7 +20,7 @@ pub mod git_test_helpers;
 pub async fn create_test_context() -> ToolContext {
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ModelConfig::default());
+    let agent_config = Arc::new(ChatModelConfig::default());
 
     let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 

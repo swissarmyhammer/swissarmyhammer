@@ -125,7 +125,6 @@ pub async fn start_test_server_and_client() -> (
     let server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
-        None,
         Some(temp.path().to_path_buf()),
     )
     .await
@@ -166,7 +165,6 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
-            None,
             None,
             Some(temp.path().to_path_buf()),
         )

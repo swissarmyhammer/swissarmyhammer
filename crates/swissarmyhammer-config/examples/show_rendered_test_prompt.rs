@@ -42,5 +42,5 @@ fn main() {
     println!("  • Commands for build, test, check, format");
     println!("  • Clear instructions to NOT use glob patterns");
     println!("\nTo see the actual workflow run:");
-    println!("  cargo run -- --model GLM-4.7 test");
+    println!("  cargo run -- test");
 }

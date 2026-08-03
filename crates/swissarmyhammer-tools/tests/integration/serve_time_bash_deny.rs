@@ -38,7 +38,6 @@ async fn start_isolated_server() -> (McpServerHandle, tempfile::TempDir) {
     let server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
-        None,
         Some(temp.path().to_path_buf()),
     )
     .await

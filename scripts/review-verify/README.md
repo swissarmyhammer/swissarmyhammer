@@ -1,12 +1,12 @@
 # Review verification harness
 
-A committed, repeatable harness that proves a real local-model (qwen) review
-works from this repository alone — no ad-hoc external checkouts.
+A committed, repeatable harness that proves a real review works from this
+repository alone — no ad-hoc external checkouts.
 
 ## Pieces
 
 - `drive.py` — a minimal MCP stdio client. It spawns
-  `sah serve --model qwen --cwd sample/`, performs the MCP handshake
+  `sah serve --cwd sample/`, performs the MCP handshake
   (`initialize`, `notifications/initialized`, `tools/list`), then calls the
   `review` tool with
   `{"op": "review file", "path": "<sample>/src/orders.rs", "backend": "local",
@@ -23,16 +23,16 @@ works from this repository alone — no ad-hoc external checkouts.
 ## Running
 
 1. Build the CLI: `just sah` (the harness invokes `sah` from `PATH`).
-2. Make sure the qwen model is available. Model selection happens via the
-   `--model qwen` flag drive.py passes to `sah serve`.
+2. Make sure the `claude` CLI is installed. The review scope runs
+   `claude --model haiku` unless `.sah/sah.yaml` sets `review.model`.
 3. From the repository root:
 
    ```sh
    python3 scripts/review-verify/drive.py
    ```
 
-   A real local-model review takes minutes. `--timeout <seconds>` adjusts the
-   wait (default 1800).
+   A real review takes minutes. `--timeout <seconds>` adjusts the wait
+   (default 1800).
 
 On first run drive.py `git init`s `sample/` — `sah serve` resolves its `.sah/`
 data directory (logs, code-context index) at the git root of its cwd, and the
@@ -53,10 +53,10 @@ message otherwise:
 3. Zero `Queue is full` lines in `sample/.sah/mcp.<pid>.log` — the agent queue
    never silently dropped a task (the failure mode that turns a review into an
    empty "clean" pass).
-4. At least one `AgentMessage (` line in that log — the local model actually
+4. At least one `AgentMessage (` line in that log — the review agent actually
    produced a reply.
 
-## Self-test (no model required)
+## Self-test (no agent required)
 
 ```sh
 python3 scripts/review-verify/drive.py --self-test

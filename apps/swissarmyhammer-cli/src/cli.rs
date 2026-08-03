@@ -69,7 +69,6 @@ Global arguments can be used with any command to control output and behavior:
   --format      Set output format (table, json, yaml) for commands that support it
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
-  --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
@@ -102,10 +101,6 @@ pub struct Cli {
     /// Global output format
     #[arg(long, value_enum)]
     pub format: Option<OutputFormat>,
-
-    /// Override model for all use cases (runtime only, doesn't modify config)
-    #[arg(long, global = true)]
-    pub model: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

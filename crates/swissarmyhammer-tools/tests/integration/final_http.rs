@@ -16,7 +16,7 @@ async fn test_http_mcp_server_rmcp_client_final() {
     // don't walk/hash the host monorepo during startup.
     let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
     let mode = McpServerMode::Http { port: None };
-    let mut server = start_mcp_server(mode, None, None, Some(temp.path().to_path_buf()))
+    let mut server = start_mcp_server(mode, None, Some(temp.path().to_path_buf()))
         .await
         .unwrap();
 

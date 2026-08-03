@@ -1,15 +1,16 @@
 //! Unified ACP agent creation and execution
 //!
 //! This crate provides a single entry point for creating and using the
-//! claude-agent ACP agent from a model configuration. Claude Code is the only
-//! supported agent executor; any other executor is rejected by name.
+//! claude-agent ACP agent from a chat configuration. Claude Code is the only
+//! chat executor, so the configuration chooses no backend — it carries only the
+//! Claude CLI `--model` switch.
 //!
 //! # Architecture
 //!
 //! ```text
 //! swissarmyhammer-agent
 //!        │
-//!        ├── create_agent(ModelConfig) -> AcpAgentHandle
+//!        ├── create_agent(ChatModelConfig) -> AcpAgentHandle
 //!        ├── execute_prompt(handle, prompt) -> AgentResponse
 //!        └── Types: AcpAgentHandle, AcpError, AgentResponse, etc.
 //!
@@ -59,9 +60,9 @@
 //!
 //! ```ignore
 //! use swissarmyhammer_agent::{create_agent, execute_prompt, McpServerConfig};
-//! use swissarmyhammer_config::model::ModelConfig;
+//! use swissarmyhammer_config::model::ChatModelConfig;
 //!
-//! let config = ModelConfig::load("model.yaml")?;
+//! let config = ChatModelConfig::with_model("haiku");
 //! let mcp = McpServerConfig::from_port(8080);
 //!
 //! let mut handle = create_agent(&config, Some(mcp)).await?;
@@ -81,7 +82,7 @@ use agent_client_protocol_extras::{
 use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
-use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
+use swissarmyhammer_config::model::ChatModelConfig;
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -337,67 +338,44 @@ fn resolve_auto_allow_patterns(auto_allow_all: bool) -> Vec<String> {
 ///
 /// # Example
 /// ```ignore
-/// let config = ModelConfig::load("model.yaml")?;
+/// let config = ChatModelConfig::with_model("haiku");
 /// let handle = create_agent(&config, None).await?;
 /// ```
 pub async fn create_agent(
-    config: &ModelConfig,
+    config: &ChatModelConfig,
     mcp_config: Option<McpServerConfig>,
 ) -> AcpResult<AcpAgentHandle> {
     create_agent_with_options(config, mcp_config, CreateAgentOptions::default()).await
 }
 
-/// Extract the Claude Code CLI switches (`ClaudeCodeConfig.args`) from a
-/// resolved [`ModelConfig`].
-///
-/// Returns the configured `args` when the selected executor is
-/// [`ModelExecutorConfig::ClaudeCode`], otherwise an empty vector. This is the
-/// single source of truth for the ClaudeCode arg lookup so the production spawn
-/// path and its test cannot drift.
-fn claude_code_args(config: &ModelConfig) -> Vec<String> {
-    if let ModelExecutorConfig::ClaudeCode(cfg) = config.executor() {
-        cfg.args.clone()
-    } else {
-        Vec::new()
-    }
-}
-
 /// Create an ACP agent with additional options
 ///
 /// Like `create_agent` but accepts options for ephemeral mode, etc.
+///
+/// Claude Code is the only chat executor, so there is no executor to select.
+/// The one way a chat configuration can be wrong is a blank `--model` switch,
+/// which would spawn `claude --model ""` and fail deep inside the Claude CLI;
+/// that is rejected here with a message naming the setting to fix.
 pub async fn create_agent_with_options(
-    config: &ModelConfig,
+    config: &ChatModelConfig,
     mcp_config: Option<McpServerConfig>,
     options: CreateAgentOptions,
 ) -> AcpResult<AcpAgentHandle> {
-    match config.executor_type() {
-        ModelExecutorType::ClaudeCode => {
-            // Build the spawned config from the resolved `ModelConfig` through the
-            // single production seam (threads `ClaudeCodeConfig.args` into
-            // `claude.extra_args`), then spawn it.
-            let agent_config = claude_agent_config_from_model(config, mcp_config, &options);
-            create_claude_agent(agent_config).await
-        }
-        unsupported => Err(AcpError::ConfigurationError(format!(
-            "unsupported agent executor '{}': claude-code is the only supported agent executor",
-            executor_config_name(unsupported)
-        ))),
+    if config.model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+        return Err(AcpError::ConfigurationError(
+            "chat model switch is blank; set `model` to a Claude CLI --model switch (e.g. `haiku`) or remove it"
+                .to_string(),
+        ));
     }
+
+    // Build the spawned config from the resolved `ChatModelConfig` through the
+    // single production seam (threads the `--model` switch into
+    // `claude.extra_args`), then spawn it.
+    let agent_config = claude_agent_config_from_model(config, mcp_config, &options);
+    create_claude_agent(agent_config).await
 }
 
-/// The executor's configuration name — the kebab-case string a model YAML
-/// writes under `executor.type`, e.g. `ane-embedding`.
-///
-/// Taken from the type's own `Serialize` implementation, so the name an error
-/// reports can never drift from the name the user typed in the configuration.
-fn executor_config_name(executor: ModelExecutorType) -> String {
-    serde_json::to_value(executor)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{executor:?}"))
-}
-
-/// Build the production `review` agent factory from a session's `ModelConfig`.
+/// Build the production `review` agent factory from a session's `ChatModelConfig`.
 ///
 /// This is the cycle-free wiring seam: `swissarmyhammer-tools` defines the
 /// [`AgentFactory`](swissarmyhammer_tools::mcp::tools::review::review_op::AgentFactory)
@@ -417,7 +395,7 @@ fn executor_config_name(executor: ModelExecutorType) -> String {
 /// (e.g. the Claude CLI is not installed) surfaces as the factory's `String`
 /// error, which the tool reports.
 pub fn review_agent_factory(
-    config: Arc<ModelConfig>,
+    config: Arc<ChatModelConfig>,
 ) -> swissarmyhammer_tools::mcp::tools::review::review_op::AgentFactory {
     use swissarmyhammer_tools::mcp::tools::review::review_op::AgentHandle;
 
@@ -676,8 +654,8 @@ async fn dispatch_claude_notification(
 /// Spawn a Claude ACP agent from an already-built `claude_agent::AgentConfig`.
 ///
 /// The config is built once by [`claude_agent_config_from_model`] (the single
-/// production seam that threads the resolved `ModelConfig`'s CLI switches into
-/// `claude.extra_args`); this fn only checks the CLI is available and spawns the
+/// production seam that threads the resolved `ChatModelConfig`'s CLI switches
+/// into `claude.extra_args`); this fn only checks the CLI is available and spawns the
 /// process, so the config-building seam stays pure and unit-testable while the
 /// spawn — which requires the `claude` binary — is the sole untested step.
 async fn create_claude_agent(agent_config: claude_agent::AgentConfig) -> AcpResult<AcpAgentHandle> {
@@ -700,40 +678,32 @@ async fn create_claude_agent(agent_config: claude_agent::AgentConfig) -> AcpResu
     Ok(wrap_claude_into_handle(Arc::new(agent), notification_rx))
 }
 
-/// Build the spawned `claude_agent::AgentConfig` for a resolved [`ModelConfig`].
+/// Build the spawned `claude_agent::AgentConfig` for a resolved
+/// [`ChatModelConfig`].
 ///
-/// This is the single production seam between a resolved `ModelConfig` and the
-/// `claude` process the review/conversational backends spawn: it extracts the
-/// YAML-configured CLI switches ([`claude_code_args`]) — e.g. `["--model",
-/// "haiku"]` for the `claude-code-haiku` review default — and threads them into
+/// This is the single production seam between a resolved `ChatModelConfig` and
+/// the `claude` process the review/conversational backends spawn: it takes the
+/// configured CLI switches ([`ChatModelConfig::claude_args`]) — e.g.
+/// `["--model", "haiku"]` for the review default — and threads them into
 /// `claude.extra_args` via [`build_claude_agent_config`], from where the spawn
 /// path forwards them onto the `claude` command line.
 ///
-/// `create_agent_with_options`' ClaudeCode arm calls this and hands the result to
+/// `create_agent_with_options` calls this and hands the result to
 /// [`create_claude_agent`] (which only checks the CLI and spawns). Keeping it a
 /// pure (no I/O, no spawn) function means a test can drive the real
 /// model-to-spawn-config path without the `claude` binary, with no mock at the
-/// model boundary and no parallel re-composition that could drift from the arm.
+/// model boundary and no parallel re-composition that could drift.
 fn claude_agent_config_from_model(
-    config: &ModelConfig,
+    config: &ChatModelConfig,
     mcp_config: Option<McpServerConfig>,
     options: &CreateAgentOptions,
 ) -> claude_agent::AgentConfig {
-    // Thread the YAML-configured CLI switches (`ClaudeCodeConfig.args`) from the
-    // resolved `ModelConfig` into the Claude agent so the spawn path forwards
-    // them to the `claude` process.
-    // TODO: ClaudeCodeConfig.claude_path is not yet consumed by claude-agent (no
-    // sink exists); wire it once claude-agent grows a custom-binary-path option.
-    let extra_args = claude_code_args(config);
-    // Record the chosen tier BEFORE the subprocess starts: the executor and the
-    // tier-bearing `extra_args` (e.g. `["--model", "haiku"]`) are logged here so
-    // a review run's resolved model is provable in the `.sah` logs even if the
+    let extra_args = config.claude_args();
+    // Record the chosen tier BEFORE the subprocess starts: the tier-bearing
+    // `extra_args` (e.g. `["--model", "haiku"]`) are logged here so a review
+    // run's resolved model is provable in the `.sah` logs even if the
     // subprocess argv line never lands.
-    tracing::info!(
-        "Building claude agent (executor={:?}, extra_args={:?})",
-        config.executor_type(),
-        extra_args
-    );
+    tracing::info!("Building claude agent (extra_args={:?})", extra_args);
     build_claude_agent_config(
         mcp_config,
         options.ephemeral,
@@ -751,7 +721,7 @@ fn claude_agent_config_from_model(
 /// extra-args carry-through. [`create_claude_agent`] calls this and then spawns
 /// `ClaudeAgent::new`.
 ///
-/// `extra_args` are the YAML-configured `ClaudeCodeConfig.args` and are set on
+/// `extra_args` are the configured Claude CLI switches and are set on
 /// `claude.extra_args`, from where the spawn path forwards them to the `claude`
 /// process command line.
 ///
@@ -1635,9 +1605,9 @@ mod tests {
         assert_eq!(plain.claude.tools_override, None);
     }
 
-    /// YAML-configured `ClaudeCodeConfig.args` must be carried through onto the
-    /// nested Claude config as `extra_args`, so the spawn path forwards the
-    /// configured CLI switches to the `claude` process.
+    /// The configured Claude CLI switches must be carried through onto the
+    /// nested Claude config as `extra_args`, so the spawn path forwards them to
+    /// the `claude` process.
     #[test]
     fn test_build_claude_agent_config_threads_extra_args() {
         let result = build_claude_agent_config(
@@ -1653,36 +1623,25 @@ mod tests {
         );
     }
 
-    /// Regression guard: empty `args` must yield empty `extra_args`, preserving
-    /// today's behavior for `claude-code` models with no configured switches.
+    /// Regression guard: no configured switch must yield empty `extra_args`,
+    /// preserving today's behavior for a chat scope that spawns plain `claude`.
     #[test]
     fn test_build_claude_agent_config_empty_extra_args() {
         let result = build_claude_agent_config(None, false, None, false, Vec::new());
         assert!(result.claude.extra_args.is_empty());
     }
 
-    /// The wiring `create_agent_with_options` performs: extract `args` from a
-    /// `ModelConfig`'s `claude-code` executor and thread them through
-    /// `build_claude_agent_config` into `extra_args`. Proves the seam from
-    /// `ModelConfig` to the built `ClaudeConfig` end-to-end (no mocks).
+    /// The wiring `create_agent_with_options` performs: take the switches from a
+    /// `ChatModelConfig` and thread them through `build_claude_agent_config`
+    /// into `extra_args`. Proves the seam from `ChatModelConfig` to the built
+    /// `ClaudeConfig` end-to-end (no mocks).
     #[test]
     fn test_claude_code_config_args_flow_from_model_config() {
-        use swissarmyhammer_config::model::ClaudeCodeConfig;
-
-        let config = ModelConfig {
-            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig {
-                    claude_path: None,
-                    args: vec!["--model".to_string(), "haiku".to_string()],
-                }),
-            }],
-            quiet: false,
-        };
+        let config = ChatModelConfig::with_model("haiku");
 
         // Exercise the exact production extraction helper so flipping it (e.g.
         // to `Vec::new()`) breaks this assertion.
-        let extra_args = claude_code_args(&config);
+        let extra_args = config.claude_args();
         assert_eq!(extra_args, vec!["--model".to_string(), "haiku".to_string()]);
 
         let built = build_claude_agent_config(None, false, None, false, extra_args);
@@ -1693,31 +1652,16 @@ mod tests {
     }
 
     /// Decision-point logging: building the spawned claude config from a resolved
-    /// `ModelConfig` must record the chosen executor and the `extra_args` (the
-    /// tier-bearing `--model haiku`) BEFORE the subprocess starts, so the tier is
-    /// provable in the `.sah` logs even if the subprocess argv line never lands.
+    /// `ChatModelConfig` must record the `extra_args` (the tier-bearing
+    /// `--model haiku`) BEFORE the subprocess starts, so the tier is provable in
+    /// the `.sah` logs even if the subprocess argv line never lands.
     #[traced_test]
     #[test]
-    fn test_claude_agent_config_from_model_logs_executor_and_extra_args() {
-        use swissarmyhammer_config::model::ClaudeCodeConfig;
-
-        let config = ModelConfig {
-            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig {
-                    claude_path: None,
-                    args: vec!["--model".to_string(), "haiku".to_string()],
-                }),
-            }],
-            quiet: false,
-        };
+    fn test_claude_agent_config_from_model_logs_extra_args() {
+        let config = ChatModelConfig::with_model("haiku");
 
         let _ = claude_agent_config_from_model(&config, None, &CreateAgentOptions::default());
 
-        assert!(
-            logs_contain("ClaudeCode"),
-            "must log the resolved executor type"
-        );
         assert!(
             logs_contain("--model"),
             "must log the extra_args including --model"
@@ -1728,20 +1672,19 @@ mod tests {
         );
     }
 
-    /// Real-path proof that the review backend, driven by the review `ModelConfig`
-    /// the RUNTIME RESOLVER produces for a fully-unconfigured scope, spawns
-    /// `claude --model haiku`.
+    /// Real-path proof that the review backend, driven by the review
+    /// `ChatModelConfig` the RUNTIME RESOLVER produces for a fully-unconfigured
+    /// scope, spawns `claude --model haiku`.
     ///
     /// This drives the actual production chain the wired review tool hits, end to
     /// end up to (but not including) the `claude` process spawn:
-    /// 1. `ModelManager::resolve_review_agent_config` — the runtime resolver —
-    ///    resolves the review model for an unconfigured scope (NOT the hardcoded
-    ///    `ModelConfig::claude_code_haiku()` constructor). For a fully
-    ///    unconfigured project this lands on `claude-code-haiku` via
-    ///    `review_agent_name_from`.
+    /// 1. `ModelManager::resolve_review_chat_config` — the runtime resolver —
+    ///    resolves the review model for an unconfigured scope. For a fully
+    ///    unconfigured project this lands on the baked-in `haiku` switch via
+    ///    `review_chat_model_from`.
     /// 2. `review_agent_factory(config)` is the exact factory the server injects
     ///    via `set_review_factories`; its agent build flows through
-    ///    `create_agent` → `create_agent_with_options` (ClaudeCode arm) →
+    ///    `create_agent` → `create_agent_with_options` →
     ///    [`claude_agent_config_from_model`], the single production seam that
     ///    composes the spawned `claude_agent::AgentConfig`.
     /// 3. We assert that production seam carries `extra_args == ["--model",
@@ -1760,17 +1703,12 @@ mod tests {
 
         // The runtime resolver, fed a fully-unconfigured scope (isolated HOME,
         // no project config) — the same path serve/mod.rs' `review_model_config`
-        // exercises via `review_agent_name_from`.
-        let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
+        // exercises via `review_chat_model_from`.
+        let config = ModelManager::resolve_review_chat_config(&ModelPaths::sah())
             .expect("an unconfigured review scope must resolve to the baked-in default");
-        assert_eq!(
-            config.executor_type(),
-            ModelExecutorType::ClaudeCode,
-            "the review default must be a claude-code executor"
-        );
 
-        // The exact production seam `create_agent_with_options`' ClaudeCode arm
-        // (driven by `review_agent_factory`) uses to build the spawned config.
+        // The exact production seam `create_agent_with_options` (driven by
+        // `review_agent_factory`) uses to build the spawned config.
         let spawn = claude_agent_config_from_model(&config, None, &CreateAgentOptions::default());
         assert_eq!(
             spawn.claude.extra_args,
@@ -1781,7 +1719,7 @@ mod tests {
 
     /// Real parity guard: the `local` and `session` backends build a
     /// byte-identical spawned `claude` config for the same resolved review
-    /// `ModelConfig`, because `backend` is NOT an input to the agent build.
+    /// `ChatModelConfig`, because `backend` is NOT an input to the agent build.
     ///
     /// Both backends drive the one agent built by `review_agent_factory` →
     /// `create_agent_with_options` → [`claude_agent_config_from_model`]; only the
@@ -1803,7 +1741,7 @@ mod tests {
         // seam — exactly what each backend's review run would do (the agent is
         // built the same way regardless of backend).
         let resolve_and_build = || {
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
+            let config = ModelManager::resolve_review_chat_config(&ModelPaths::sah())
                 .expect("review scope resolves");
             claude_agent_config_from_model(&config, None, &CreateAgentOptions::default())
         };
@@ -2005,77 +1943,58 @@ mod tests {
         assert!(options.ephemeral);
     }
 
-    /// ClaudeCode is the only agent executor this crate builds. A `claude-code`
-    /// model configuration must reach the Claude backend — never the
-    /// unsupported-executor error.
+    /// A default chat configuration must reach the Claude backend.
     ///
-    /// This drives the production entry point, `create_agent`. Its ClaudeCode
-    /// arm ends in `create_claude_agent`, which is the ONLY producer of
-    /// [`AcpError::AgentNotAvailable`]; accepting that outcome therefore still
-    /// proves the arm ran, and only tolerates a machine with no `claude` binary
-    /// on `PATH`. Any other error means the Claude arm was lost.
+    /// This drives the production entry point, `create_agent`, which ends in
+    /// `create_claude_agent` — the ONLY producer of
+    /// [`AcpError::AgentNotAvailable`]. Accepting that outcome therefore still
+    /// proves the path ran, and only tolerates a machine with no `claude` binary
+    /// on `PATH`. Any other error means the Claude path was lost.
     #[tokio::test]
-    async fn create_agent_routes_a_claude_code_configuration_to_the_claude_backend() {
+    async fn create_agent_routes_a_chat_configuration_to_the_claude_backend() {
         let _env = swissarmyhammer_common::test_utils::IsolatedTestEnvironment::new()
             .expect("isolated env");
 
-        let config = ModelConfig::claude_code();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+        let config = ChatModelConfig::default();
 
         match create_agent(&config, None).await {
             Ok(_handle) => {}
             Err(AcpError::AgentNotAvailable(message)) => {
                 assert!(
                     message.contains("Claude CLI"),
-                    "only the Claude spawn path may reject a claude-code config: {message}"
+                    "only the Claude spawn path may reject a chat config: {message}"
                 );
             }
             Err(other) => {
-                panic!("a claude-code configuration must reach the Claude backend, got: {other}")
+                panic!("a chat configuration must reach the Claude backend, got: {other}")
             }
         }
     }
 
-    /// A model configuration naming any executor other than `claude-code` must
-    /// fail with an error that NAMES the unsupported executor, so the user can
-    /// see which executor in their configuration this crate no longer builds.
+    /// A blank `--model` switch must fail with an error that NAMES the setting to
+    /// fix, rather than spawning `claude --model ""` and failing deep inside the
+    /// Claude CLI.
     ///
-    /// The name in the message is the configuration name (`ane-embedding`), the
-    /// same string the model YAML writes under `executor.type`.
+    /// Claude Code is the only chat executor, so this is the one way a chat
+    /// configuration can be wrong at this seam.
     #[tokio::test]
-    async fn create_agent_rejects_a_non_claude_executor_by_name() {
-        let config = ModelConfig {
-            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::AneEmbedding(
-                    swissarmyhammer_config::model::EmbeddingModelConfig {
-                        source: swissarmyhammer_config::model::ModelSource::HuggingFace {
-                            repo: "org/embed".to_string(),
-                            filename: None,
-                            folder: None,
-                        },
-                        normalize: false,
-                        max_sequence_length: None,
-                    },
-                ),
-            }],
-            quiet: true,
-        };
+    async fn create_agent_rejects_a_blank_model_switch() {
+        let config = ChatModelConfig::with_model("   ");
 
         let Err(error) = create_agent(&config, None).await else {
-            panic!("a non-claude executor must not build an agent");
+            panic!("a blank model switch must not build an agent");
         };
         let message = error.to_string();
         assert!(
-            message.contains("ane-embedding"),
-            "the error must name the unsupported executor: {message}"
+            message.contains("--model"),
+            "the error must name the setting to fix: {message}"
         );
     }
 
-    // Note: the executor selection create_agent() performs is covered by the two
-    // tests above. Driving execute_prompt() end to end needs a live backend, so
-    // that is covered by integration tests in the swissarmyhammer-cli crate where
-    // the Claude CLI is available. The helper functions both use
+    // Note: the configuration handling create_agent() performs is covered by the
+    // two tests above. Driving execute_prompt() end to end needs a live backend,
+    // so that is covered by integration tests in the swissarmyhammer-cli crate
+    // where the Claude CLI is available. The helper functions both use
     // (extract_response_from_metadata, build_agent_response, etc.) are tested
     // throughout this module to ensure correctness of the core logic.
 

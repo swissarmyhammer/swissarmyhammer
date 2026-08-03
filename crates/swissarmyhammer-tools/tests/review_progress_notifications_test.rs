@@ -186,7 +186,6 @@ async fn review_working_emits_progress_notifications_per_pair_when_token_supplie
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
-        None,
         Some(repo.path().to_path_buf()),
     )
     .await

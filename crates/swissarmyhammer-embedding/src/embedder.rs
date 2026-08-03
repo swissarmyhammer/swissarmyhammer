@@ -7,9 +7,7 @@ use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
 use std::future::Future;
 
 use model_loader::{DownloadObserver, ModelSource};
-use swissarmyhammer_config::model::{
-    EmbeddingModelConfig, ModelExecutorConfig, ModelExecutorType, ModelManager,
-};
+use swissarmyhammer_config::model::{EmbeddingModelConfig, ModelExecutorConfig, ModelManager};
 use swissarmyhammer_config::parse_model_config;
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -62,9 +60,6 @@ pub enum EmbedderError {
     /// The model config has no executor that runs on this platform.
     #[error("model '{0}' has no embedding executor for this platform")]
     NoCompatibleExecutor(String),
-    /// The model resolved, but its executor is not an embedding executor.
-    #[error("model '{0}' is not an embedding model (executor type: {1:?})")]
-    NotAnEmbeddingModel(String, ModelExecutorType),
     /// The model config file failed to parse.
     #[error("config parse error: {0}")]
     ConfigParse(String),
@@ -153,8 +148,6 @@ impl Embedder {
     /// * [`EmbedderError::ConfigParse`] — the model config failed to parse
     /// * [`EmbedderError::NoCompatibleExecutor`] — no executor in the config
     ///   runs on this platform
-    /// * [`EmbedderError::NotAnEmbeddingModel`] — the model's executor is
-    ///   not an embedding executor
     /// * [`EmbedderError::Embedding`] — backend construction (model
     ///   resolution/download) failed
     pub async fn from_model_name(name: &str) -> Result<Self, EmbedderError> {
@@ -227,17 +220,6 @@ impl Embedder {
             #[cfg(not(target_os = "macos"))]
             ModelExecutorConfig::AneEmbedding(_) => {
                 return Err(EmbedderError::NoCompatibleExecutor(name.to_string()));
-            }
-            other => {
-                let exec_type = match other {
-                    ModelExecutorConfig::ClaudeCode(_) => ModelExecutorType::ClaudeCode,
-                    ModelExecutorConfig::LlamaAgent(_) => ModelExecutorType::LlamaAgent,
-                    _ => unreachable!(),
-                };
-                return Err(EmbedderError::NotAnEmbeddingModel(
-                    name.to_string(),
-                    exec_type,
-                ));
             }
         };
 
@@ -794,26 +776,6 @@ mod tests {
         });
     }
 
-    /// A known model that is not an embedding model returns `EmbedderError::NotAnEmbeddingModel`.
-    ///
-    /// `claude-code` ships as a `ClaudeCode` executor, so it should trigger this path.
-    #[test]
-    fn from_model_name_non_embedding_model_returns_not_an_embedding_model() {
-        let rt = rt();
-        rt.block_on(async {
-            let result = Embedder::from_model_name("claude-code").await;
-            assert!(
-                matches!(
-                    result,
-                    Err(EmbedderError::NotAnEmbeddingModel(_, _))
-                        | Err(EmbedderError::NoCompatibleExecutor(_))
-                ),
-                "Expected NotAnEmbeddingModel or NoCompatibleExecutor, got: {}",
-                result.err().map(|e| e.to_string()).unwrap_or_default()
-            );
-        });
-    }
-
     // -------------------------------------------------------------------------
     // DEFAULT_MODEL_NAME constant
     // -------------------------------------------------------------------------
@@ -839,12 +801,6 @@ mod tests {
 
         let e = EmbedderError::ConfigParse("bad yaml".to_string());
         assert!(e.to_string().contains("bad yaml"));
-
-        let e = EmbedderError::NotAnEmbeddingModel(
-            "chat-model".to_string(),
-            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode,
-        );
-        assert!(e.to_string().contains("chat-model"));
     }
 
     // -------------------------------------------------------------------------
@@ -883,13 +839,6 @@ mod tests {
         let e = EmbedderError::ConfigParse("test".to_string());
         let dbg = format!("{e:?}");
         assert!(dbg.contains("ConfigParse"));
-
-        let e = EmbedderError::NotAnEmbeddingModel(
-            "test".to_string(),
-            swissarmyhammer_config::model::ModelExecutorType::LlamaAgent,
-        );
-        let dbg = format!("{e:?}");
-        assert!(dbg.contains("NotAnEmbeddingModel"));
 
         let inner = EmbeddingError::model("fail");
         let e: EmbedderError = inner.into();
@@ -1086,55 +1035,6 @@ mod tests {
             "First chunk too large: {}",
             chunks[0].len()
         );
-    }
-
-    // -------------------------------------------------------------------------
-    // from_model_name — LlamaAgent executor triggers NotAnEmbeddingModel
-    // -------------------------------------------------------------------------
-
-    /// A `llama-agent` executor (like `qwen`) is not an embedding model.
-    #[test]
-    fn from_model_name_llama_agent_model_returns_error() {
-        let rt = rt();
-        rt.block_on(async {
-            let result = Embedder::from_model_name("qwen").await;
-            assert!(
-                matches!(
-                    result,
-                    Err(EmbedderError::NotAnEmbeddingModel(_, _))
-                        | Err(EmbedderError::NoCompatibleExecutor(_))
-                ),
-                "Expected NotAnEmbeddingModel or NoCompatibleExecutor for llama-agent, got: {}",
-                result.err().map(|e| e.to_string()).unwrap_or_default()
-            );
-        });
-    }
-
-    /// `EmbedderError::NotAnEmbeddingModel` includes the executor type in its message.
-    #[test]
-    fn embedder_error_not_embedding_includes_executor_type() {
-        let e = EmbedderError::NotAnEmbeddingModel(
-            "my-llm".to_string(),
-            swissarmyhammer_config::model::ModelExecutorType::LlamaAgent,
-        );
-        let msg = e.to_string();
-        assert!(msg.contains("my-llm"), "Should contain model name");
-        assert!(
-            msg.contains("LlamaAgent"),
-            "Should contain executor type, got: {msg}"
-        );
-    }
-
-    /// `EmbedderError::NotAnEmbeddingModel` with ClaudeCode type displays correctly.
-    #[test]
-    fn embedder_error_not_embedding_claude_code_type() {
-        let e = EmbedderError::NotAnEmbeddingModel(
-            "code-model".to_string(),
-            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode,
-        );
-        let msg = e.to_string();
-        assert!(msg.contains("code-model"));
-        assert!(msg.contains("ClaudeCode"), "got: {msg}");
     }
 
     // -------------------------------------------------------------------------

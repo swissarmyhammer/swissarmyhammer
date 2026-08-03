@@ -1262,7 +1262,6 @@ async fn start_board_mcp_server(kanban_path: &Path) -> Option<McpServerHandle> {
     match start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
-        None,
         Some(board_dir.to_path_buf()),
     )
     .await

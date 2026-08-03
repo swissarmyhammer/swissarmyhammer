@@ -131,7 +131,7 @@ _sah() {
 
     case "${cmd}" in
         sah)
-            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor completion validate tools statusline help"
+            opts="-v -d -q -h -V --verbose --debug --quiet --format --help --version serve init deinit doctor completion validate tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -139,10 +139,6 @@ _sah() {
             case "${prev}" in
                 --format)
                     COMPREPLY=($(compgen -W "table json yaml" -- "${cur}"))
-                    return 0
-                    ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -153,16 +149,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__completion)
-            opts="-h --model --help bash elvish fish powershell zsh"
+            opts="-h --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -171,16 +163,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__deinit)
-            opts="-h --remove-directory --model --help project local user"
+            opts="-h --remove-directory --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -189,16 +177,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__doctor)
-            opts="-h --model --help"
+            opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -403,16 +387,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__init)
-            opts="-h --model --help project local user"
+            opts="-h --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -421,16 +401,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__serve)
-            opts="-h --model --help http help"
+            opts="-h --help http help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -481,7 +457,7 @@ _sah() {
             return 0
             ;;
         sah__subcmd__serve__subcmd__http)
-            opts="-p -H -h --port --host --model --help"
+            opts="-p -H -h --port --host --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -503,10 +479,6 @@ _sah() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -515,16 +487,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__statusline)
-            opts="-h --model --help config help"
+            opts="-h --help config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -533,16 +501,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__statusline__subcmd__config)
-            opts="-h --model --help"
+            opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -593,16 +557,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__tools)
-            opts="-h --global --model --help enable disable help"
+            opts="-h --global --help enable disable help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -611,16 +571,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__tools__subcmd__disable)
-            opts="-h --model --help [NAMES]..."
+            opts="-h --help [NAMES]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -629,16 +585,12 @@ _sah() {
             return 0
             ;;
         sah__subcmd__tools__subcmd__enable)
-            opts="-h --model --help [NAMES]..."
+            opts="-h --help [NAMES]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -703,7 +655,7 @@ _sah() {
             return 0
             ;;
         sah__subcmd__validate)
-            opts="-q -h --quiet --format --validate-tools --model --help"
+            opts="-q -h --quiet --format --validate-tools --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -711,10 +663,6 @@ _sah() {
             case "${prev}" in
                 --format)
                     COMPREPLY=($(compgen -W "table json yaml" -- "${cur}"))
-                    return 0
-                    ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)

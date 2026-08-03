@@ -284,34 +284,17 @@ fn handle_cwd_flag(args: &[String]) {
     }
 }
 
-/// Extract --model flag from command-line arguments
-///
-/// This function checks for the --model flag and extracts its value.
-/// Returns None if the flag is not present.
-fn extract_model_flag(args: &[String]) -> Option<String> {
-    args.iter()
-        .position(|arg| arg == "--model")
-        .and_then(|model_index| {
-            args.get(model_index + 1)
-                .map(|model_name| model_name.to_string())
-        })
-}
-
 /// Initialize tool context and registry
 ///
 /// This function initializes the tool context required for MCP tool execution.
 ///
-/// # Arguments
-///
-/// * `model_override` - Optional model name to use for all use cases
-///
 /// # Returns
 ///
 /// Arc to the initialized CliToolContext
-async fn initialize_tool_context(model_override: Option<&str>) -> Arc<CliToolContext> {
+async fn initialize_tool_context() -> Arc<CliToolContext> {
     let current_dir = unwrap_or_exit(std::env::current_dir(), "Failed to get current directory");
     let context = unwrap_or_exit(
-        CliToolContext::new_with_config(&current_dir, model_override).await,
+        CliToolContext::new_with_work_dir(&current_dir).await,
         "Failed to initialize tool context",
     );
     Arc::new(context)
@@ -406,7 +389,7 @@ fn build_and_parse_cli(cli_builder: CliBuilder) -> clap::ArgMatches {
 
 #[tokio::main]
 async fn main() {
-    // Parse CLI early to check for --cwd and --model flags BEFORE doing anything else
+    // Parse CLI early to check for the --cwd flag BEFORE doing anything else
     let args: Vec<String> = std::env::args().collect();
 
     // Show branded banner for top-level help (no subcommand or --help/-h).
@@ -417,14 +400,11 @@ async fn main() {
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
-    // Extract --model flag for global override
-    let model_override = extract_model_flag(&args);
-
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 
-    // Initialize tool context and registry for dynamic CLI with model override
-    let cli_tool_context = initialize_tool_context(model_override.as_deref()).await;
+    // Initialize tool context and registry for the dynamic CLI
+    let cli_tool_context = initialize_tool_context().await;
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);

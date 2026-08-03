@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
@@ -18,7 +18,7 @@ async fn test_code_context_on_real_project() {
     // Set up the context as it would be in real MCP usage
     let git_ops = Arc::new(TokioMutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ModelConfig::default());
+    let agent_config = Arc::new(ChatModelConfig::default());
     let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
     ctx.working_dir = Some(project_root.clone());
 
