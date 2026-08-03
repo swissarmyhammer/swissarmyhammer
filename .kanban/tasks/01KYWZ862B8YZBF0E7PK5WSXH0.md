@@ -163,8 +163,18 @@ comments:
     - next: BLOCKED on /review. The review engine currently fails fat batches with a bare `invalid_params` because the batch budget (393,216) is ~4x the agent prompt cap (100,000) — tracked as ^6jsxjbc. This card stays in `doing` until that lands, because a review run today could not distinguish "clean" from "the engine did not run".
     - follow-ups filed: ^xjyb2qf (non-Rust language coverage), ^8p6kjmw (blame shas drift the prompt between finish-loop iterations), ^mxv793g (ValidatorLoader enumerates in HashMap order), ^7wpd955 (stale doc comments; its budget half was folded into ^6jsxjbc)
   timestamp: 2026-08-02T15:39:14.892279+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz2j2emfa2vgqssbm5j0fd38
+  text: |-
+    ### review — skipped (user override)
+    Review could not run through `review sha` for this or any `.rs`-touching diff right now: it hard-errors with `unknown probe 'complexity'` — the probe this card's own commit (8d7d8f57dd) added to `probes.rs`. The engine's resolved catalog does not match the source at this commit, and separately, an explicit `validators: [...]` filter does not exclude `complexity` from being matched either. Confirmed against a freshly reconnected server matching current HEAD, so this is a real defect, not stale-binary noise.
+
+    User explicitly instructed skipping review for this card and ^6jsxjbc. Moved to `done` on that basis. Implementation evidence stands on its own: 553 tests passed in `cargo nextest run -p swissarmyhammer-sem -p swissarmyhammer-validators`, fmt/clippy clean, the two flagged functions (`collect_line_tags`, `edit_line_markers`) independently re-scored at 5/depth-2 and 12/depth-3 against the pre-flattening source, and determinism is now proven by 25 repeated pure-function scorings plus 10 repeated `run_probes` runs with no model involved.
+
+    Follow-up needed: the `complexity` probe-catalog/validator-selection bug this card's own commit exposed needs its own card.
+  timestamp: 2026-08-03T00:58:37.071644+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9080
 title: complexity validator is nondeterministic on tag_parser.rs — same file, different findings per run
 ---
 The `complexity` validator returns a different finding set on repeated runs over the same unchanged file. Observed on `crates/swissarmyhammer-kanban/src/tag_parser.rs` on 2026-07-31 while working ^tnr56gg.
