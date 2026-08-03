@@ -1,8 +1,8 @@
 //! Prompt visibility utilities for determining which prompts should be exposed as slash commands.
 //!
 //! This module provides a centralized, single source of truth for determining whether
-//! a prompt should be visible to users as a slash command. Both llama-agent and claude-agent
-//! use this module to filter prompts consistently.
+//! a prompt should be visible to users as a slash command. Every agent crate
+//! uses this module to filter prompts consistently.
 //!
 //! # Design
 //!

@@ -232,7 +232,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::{Mutex, RwLock};
@@ -269,12 +269,12 @@ pub struct ToolContext {
     /// available or not initialized. Always check for `None` before use.
     pub git_ops: Arc<Mutex<Option<GitOperations>>>,
 
-    /// Agent configuration for tool operations (root/default agent)
+    /// Chat configuration for tool operations (root/default scope)
     ///
-    /// Provides access to the configured agent executor (ClaudeCode or LlamaAgent)
-    /// and associated settings. Tools that need to execute agent operations should
-    /// use this configuration to create appropriate executor instances.
-    pub agent_config: Arc<ModelConfig>,
+    /// Claude Code is the only chat executor, so this carries no executor
+    /// choice — only the Claude CLI `--model` switch resolved from the project
+    /// config. Tools that execute agent operations build their agent from it.
+    pub agent_config: Arc<ChatModelConfig>,
 
     /// Optional plan sender for task management operations
     ///
@@ -434,7 +434,7 @@ impl ToolContext {
     pub fn new(
         tool_handlers: Arc<ToolHandlers>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        agent_config: Arc<ModelConfig>,
+        agent_config: Arc<ChatModelConfig>,
     ) -> Self {
         Self {
             tool_handlers,
@@ -1324,8 +1324,8 @@ impl ToolRegistry {
     /// the `host` is served per the `(Host, ToolCategory)` policy in
     /// [`Host::serves`](crate::mcp::host::Host::serves). This is how the serve
     /// boundary advertises a per-client tool surface (e.g. Claude gets the
-    /// `Shared` and `Replacement` tools; llama and unknown clients get `Shared`
-    /// only) without maintaining a separate registry per host.
+    /// `Shared` and `Replacement` tools; unknown clients get `Shared` only)
+    /// without maintaining a separate registry per host.
     pub fn list_tools_for_host(&self, host: crate::mcp::host::Host) -> Vec<Tool> {
         self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
     }
@@ -2383,7 +2383,7 @@ mod tests {
         // Create mock storage and handlers for context
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let tool_handlers = Arc::new(ToolHandlers::new());
-        let agent_config = Arc::new(ModelConfig::default());
+        let agent_config = Arc::new(ChatModelConfig::default());
         let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = MockTool {
@@ -3195,13 +3195,12 @@ mod tests {
 
     /// The unified `files` tool is a `Replacement` for the native edit surface,
     /// so the primary per-client serve advertises it to Claude (which gets
-    /// `Shared` + `Replacement`) but not to llama or unknown clients (which get
-    /// `Shared` only and mount their own file tools in-process). Regression for
-    /// the bug where `files` was `Agent`-category and therefore stripped from
-    /// every host — including Claude — leaving Claude with its native edit
-    /// surface denied and no served replacement.
+    /// `Shared` + `Replacement`) but not to unknown clients (which get `Shared`
+    /// only). Regression for the bug where `files` was `Agent`-category and
+    /// therefore stripped from every host — including Claude — leaving Claude
+    /// with its native edit surface denied and no served replacement.
     #[test]
-    fn files_replacement_served_to_claude_not_llama() {
+    fn files_replacement_served_to_claude_not_unknown() {
         use crate::mcp::host::Host;
 
         let mut registry = ToolRegistry::new();
@@ -3220,10 +3219,6 @@ mod tests {
             "Claude must be served the `files` replacement"
         );
         assert!(
-            !names_for(Host::Llama).iter().any(|n| n == "files"),
-            "llama must not be served `files` via the primary serve"
-        );
-        assert!(
             !names_for(Host::Other).iter().any(|n| n == "files"),
             "unknown clients must not be served `files` via the primary serve"
         );
@@ -3238,7 +3233,7 @@ mod tests {
 
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.prompt_library.is_none());
 
@@ -3254,7 +3249,7 @@ mod tests {
 
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.plan_sender.is_none());
 
@@ -3270,7 +3265,7 @@ mod tests {
 
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.tool_registry.is_none());
 
@@ -3283,7 +3278,7 @@ mod tests {
     fn test_tool_context_with_working_dir() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.working_dir.is_none());
 
@@ -3296,7 +3291,7 @@ mod tests {
     fn test_session_root_prefers_working_dir() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
 
         // With a working dir set, session_root returns it verbatim — never the
         // process CWD.
@@ -3310,7 +3305,7 @@ mod tests {
     async fn test_tool_context_set_mcp_server() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         // Initially no server set
@@ -3324,7 +3319,7 @@ mod tests {
     async fn test_call_tool_no_registry_returns_error() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         // No tool registry set — should return internal error
@@ -3344,7 +3339,7 @@ mod tests {
 
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let ctx =
             ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
@@ -3372,7 +3367,7 @@ mod tests {
         });
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let registry = Arc::new(RwLock::new(inner));
         let ctx =
             ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
@@ -3395,7 +3390,7 @@ mod tests {
         });
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let registry = Arc::new(RwLock::new(inner));
         let ctx =
             ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
@@ -3496,7 +3491,7 @@ mod tests {
 
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         // No peer — send_mcp_log should be a no-op and not panic
         send_mcp_log(&ctx, LoggingLevel::Info, "test", "hello".to_string()).await;
@@ -4034,7 +4029,7 @@ mod tests {
     fn test_tool_context_has_unique_session_id() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx1 = ToolContext::new(tool_handlers.clone(), git_ops.clone(), agent_config.clone());
         let ctx2 = ToolContext::new(tool_handlers, git_ops, agent_config);
 
@@ -4050,7 +4045,7 @@ mod tests {
     fn test_tool_context_with_peer_sets_peer() {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
-        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::model::ChatModelConfig::default());
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.peer.is_none());
         // We can't easily create a real Peer, but we verify the initial state

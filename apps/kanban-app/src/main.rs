@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod ai;
 mod cli;
 mod cli_install;
 mod commands;
@@ -84,9 +83,6 @@ fn run_app(app_state: AppState) {
             commands::spatial_drill_in,
             commands::spatial_drill_out,
             commands::generate_jump_codes,
-            ai::models::ai_list_models,
-            ai::models::ai_start_agent,
-            ai::models::ai_set_streaming,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)
@@ -370,8 +366,4 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
     if let Err(e) = state.ui_state.save() {
         tracing::error!(error = %e, "failed to save UIState on exit");
     }
-    // Stop every in-process AI agent endpoint so no loopback WebSocket server
-    // outlives the process. Each `RunningAgent` also aborts its accept loop on
-    // drop, but this drives the teardown deterministically at exit.
-    tauri::async_runtime::block_on(state.running_agents.stop_all());
 }

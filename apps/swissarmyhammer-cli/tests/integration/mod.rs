@@ -2,7 +2,6 @@
 
 // Note: abort_comprehensives and abort_final_integrations tests were removed
 // as they tested the old file-based abort system which has been migrated to JS state.
-mod agent_command;
 mod binary_aliases;
 mod cli_integration;
 mod cli_mcp_integration;
@@ -14,11 +13,7 @@ mod git_repository_error_handlings;
 mod mcp_e2es;
 mod mcp_integration;
 mod mcp_tools_registration;
-mod model_cli_parsings;
-mod model_commands;
-mod model_list_units;
-mod model_performance_edge_casess;
-mod model_use_case_integration;
+mod model_command_removed;
 mod prompt_command_removed;
 mod prompt_context_integrations;
 mod sah_serve_integration;

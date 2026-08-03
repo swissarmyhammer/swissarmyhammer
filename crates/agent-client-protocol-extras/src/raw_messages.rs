@@ -1,8 +1,7 @@
 //! Shared per-session raw JSON-RPC transcript recording for ACP agents.
 //!
-//! This module consolidates what used to be two near-identical
-//! `RawMessageManager` implementations (one in `claude-agent`, one in
-//! `llama-agent`) into a single shared implementation.
+//! This module holds the one `RawMessageManager` implementation every ACP
+//! agent crate shares, so a per-crate copy cannot drift.
 //!
 //! A [`RawMessageManager`] records every raw JSON-RPC frame flowing through an
 //! ACP session to an append-only, line-delimited JSON file. Writes are

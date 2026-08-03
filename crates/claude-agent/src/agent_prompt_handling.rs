@@ -56,8 +56,7 @@ fn estimate_chunk_tokens(text: &str) -> u64 {
 ///
 /// Pulled out of the prompt loop so the parsing logic is unit-testable
 /// without standing up a real `ClaudeAgent` (which spawns a subprocess). The
-/// behavior is pure JSON inspection — no I/O, no async. This mirrors the
-/// twin helper in `llama-agent::acp::server::extract_request_max_tokens`.
+/// behavior is pure JSON inspection — no I/O, no async.
 pub(crate) fn extract_request_max_tokens(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<u64> {

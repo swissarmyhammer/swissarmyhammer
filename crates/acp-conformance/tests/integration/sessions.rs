@@ -6,7 +6,6 @@ use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -34,7 +33,6 @@ async fn test_new_session_minimal(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -62,7 +60,6 @@ async fn test_new_session_with_mcp(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -87,7 +84,6 @@ async fn test_session_ids_unique(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -113,7 +109,6 @@ async fn test_load_nonexistent_session(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -138,7 +133,6 @@ async fn test_set_session_mode(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -166,7 +160,6 @@ async fn test_new_session_includes_modes(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -193,7 +186,6 @@ async fn test_set_session_mode_to_available(
 }
 
 #[rstest]
-// llama agent does not validate mode IDs, so it accepts any mode without error
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -217,7 +209,6 @@ async fn test_set_invalid_session_mode(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -245,7 +236,6 @@ async fn test_mode_state_validation(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]

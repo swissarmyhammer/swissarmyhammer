@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rmcp::model::RawContent;
 use serde_json::{Map, Value};
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
@@ -92,7 +92,7 @@ pub async fn run_operation(
     let context = {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(Mutex::new(None));
-        let agent_config = Arc::new(ModelConfig::default());
+        let agent_config = Arc::new(ChatModelConfig::default());
         let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config)
             .with_progress_token(wiring.token.clone())
             .with_progress_sink(wiring.sink.clone());

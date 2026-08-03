@@ -30,9 +30,7 @@
 //! `swissarmyhammer-tools/tests/integration/semantic_search_e2e.rs` — every test
 //! name starts with `qwen_embedding_` and runs under `#[serial_test::serial]`.
 //! The CI Test job runs `cargo nextest run` on the self-hosted GPU runner, where
-//! these execute; the CPU-forced llama-agent coverage gate
-//! (`.github/workflows/coverage.yml`) only instruments the `llama-agent` crate
-//! and never compiles these. Run them explicitly with:
+//! these execute. Run them explicitly with:
 //!
 //! ```text
 //! cargo test -p swissarmyhammer-kanban --test search_tasks_e2e

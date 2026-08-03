@@ -567,7 +567,7 @@ impl PromptGateController {
 /// How the mock agent answers the session-fork extension surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForkMode {
-    /// Fork/status/pin behave like the llama backend (state + token counts).
+    /// Fork/status/pin behave like a native-KV backend (state + token counts).
     Supported,
     /// `session/fork` is rejected (`fork_parent_state_unavailable`);
     /// status and pin still work.
@@ -837,7 +837,7 @@ impl ScriptedAgent {
     /// Mark one completed turn on the session: it now has saved state. When
     /// `pin_on_save` is set (the prime turn's born-pinned intent, carried in the
     /// prompt's `_meta`), the saved state is born pinned — pinned atomically at
-    /// save time, mirroring the llama backend's `insert_inner(.., true)`. This
+    /// save time, mirroring a native-KV backend's pinned insert. This
     /// is what lets a fleet test assert the primed prefix is born pinned through
     /// the production path, before any separate `session/pin` lands.
     fn complete_turn(&self, session_id: &str, pin_on_save: bool) {

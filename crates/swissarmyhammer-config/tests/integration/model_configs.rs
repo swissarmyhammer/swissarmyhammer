@@ -1,60 +1,33 @@
 use std::{env, fs};
 use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
-use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{
-    parse_model_config, parse_model_description, ModelConfigSource, ModelError, ModelManager,
-    ModelPaths,
+    parse_model_config, parse_model_description, ModelConfigSource, ModelManager,
 };
-use swissarmyhammer_config::{LlamaAgentConfig, ModelConfig, ModelExecutorType};
+use swissarmyhammer_config::ModelExecutorType;
 
 // =============================================================================
 // TEST CONSTANTS
 // =============================================================================
 
-/// Port 0 indicates auto-allocation by the operating system
-const MCP_SERVER_PORT_AUTO: u16 = 0;
-
-/// Default timeout in seconds for MCP server operations
-const MCP_SERVER_TIMEOUT_SECONDS: u64 = 30;
-
-/// Test data value used in nested configuration examples
-const TEST_DATA_VALUE: i32 = 42;
-
 // =============================================================================
 // TEST HELPER FUNCTIONS
 // =============================================================================
 
-/// Generate a test agent YAML configuration with optional description
+/// Generate a test embedding model YAML configuration with optional description
 fn test_agent_yaml(description: &str, agent_type: &str, custom_config: Option<&str>) -> String {
     let config_section = match agent_type {
-        "claude-code" => {
-            if let Some(config) = custom_config {
-                config.to_string()
-            } else {
+        "llama-embedding" | "ane-embedding" => custom_config.map_or_else(
+            || {
                 r#"config:
-    claude_path: /test/claude
-    args: ["--test"]"#
+    source: !HuggingFace
+      repo: "test/model"
+      filename: "test.gguf"
+    normalize: true"#
                     .to_string()
-            }
-        }
-        "llama-agent" => {
-            if let Some(config) = custom_config {
-                config.to_string()
-            } else {
-                format!(
-                    r#"config:
-    model:
-      source: !HuggingFace
-        repo: "test/model"
-        filename: "test.gguf"
-    mcp_server:
-      port: {}
-      timeout_seconds: {}"#,
-                    MCP_SERVER_PORT_AUTO, MCP_SERVER_TIMEOUT_SECONDS
-                )
-            }
-        }
-        _ => panic!("Unsupported agent type: {}", agent_type),
+            },
+            str::to_string,
+        ),
+        _ => panic!("Unsupported executor type: {}", agent_type),
     };
 
     format!(
@@ -144,58 +117,6 @@ impl Drop for TestEnvironment {
     }
 }
 
-/// Helper for config file operations
-struct ConfigFileHelper {
-    project_root: std::path::PathBuf,
-    _dir_guard: CurrentDirGuard,
-}
-
-impl ConfigFileHelper {
-    fn new(project_root: std::path::PathBuf) -> Self {
-        // Create .git marker to prevent config discovery from walking up to real repo
-        fs::create_dir_all(project_root.parent().unwrap()).expect("Failed to create parent dir");
-        let _ = fs::create_dir(project_root.join(".git"));
-        // Directory might already exist, that's fine
-
-        let dir_guard =
-            CurrentDirGuard::new(&project_root).expect("Failed to change to project dir");
-        Self {
-            project_root,
-            _dir_guard: dir_guard,
-        }
-    }
-
-    fn config_path(&self) -> std::path::PathBuf {
-        self.project_root
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("sah.yaml")
-    }
-
-    fn write_config(&self, content: &str) {
-        let path = self.config_path();
-        fs::create_dir_all(path.parent().unwrap()).expect("Failed to create config dir");
-        fs::write(&path, content).expect("Failed to write config");
-    }
-
-    fn read_config(&self) -> String {
-        fs::read_to_string(self.config_path()).expect("Failed to read config")
-    }
-
-    fn config_exists(&self) -> bool {
-        self.config_path().exists()
-    }
-
-    fn config_size(&self) -> u64 {
-        fs::metadata(self.config_path()).unwrap().len()
-    }
-}
-
-impl Drop for ConfigFileHelper {
-    fn drop(&mut self) {
-        // CurrentDirGuard automatically restores the original directory
-    }
-}
-
 fn find_agent<'a>(
     agents: &'a [swissarmyhammer_config::model::ModelInfo],
     name: &str,
@@ -233,64 +154,9 @@ fn assert_agent_description_contains(
     );
 }
 
-fn assert_config_contains_sections(config: &str, sections: &[&str]) {
-    for section in sections {
-        assert!(
-            config.contains(section),
-            "Config should contain section: {}",
-            section
-        );
-    }
-}
-
-fn assert_not_found_error(result: Result<(), ModelError>, expected_name: &str) {
-    assert!(result.is_err(), "Should fail for nonexistent agent");
-    match result {
-        Err(ModelError::NotFound(name)) => {
-            assert_eq!(name, expected_name);
-        }
-        _ => panic!("Should return NotFound error"),
-    }
-}
-
 // =============================================================================
 // BASIC CONFIGURATION TESTS
 // =============================================================================
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agent_config_system_default_is_claude() {
-    let config = ModelConfig::default();
-    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-    assert!(!config.quiet);
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agent_config_factories() {
-    let claude_config = ModelConfig::claude_code();
-    assert_eq!(claude_config.executor_type(), ModelExecutorType::ClaudeCode);
-
-    let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-    assert_eq!(llama_config.executor_type(), ModelExecutorType::LlamaAgent);
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agent_config_serialization() {
-    let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-
-    // Should serialize to YAML correctly
-    let yaml = serde_yaml_ng::to_string(&config).expect("Failed to serialize to YAML");
-    assert!(yaml.contains("type: llama-agent"));
-    assert!(yaml.contains("quiet: false"));
-
-    // Should deserialize from YAML correctly
-    let deserialized: ModelConfig =
-        serde_yaml_ng::from_str(&yaml).expect("Failed to deserialize from YAML");
-    assert_eq!(config.executor_type(), deserialized.executor_type());
-    assert_eq!(config.quiet, deserialized.quiet);
-}
 
 // =============================================================================
 // BUILTIN AGENTS TESTS
@@ -324,11 +190,11 @@ fn test_agent_manager_load_builtin_models_comprehensive() {
         );
     }
 
-    // Verify at least claude-code exists (the reference implementation)
+    // Verify the builtin embedding models are present
     let agent_names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
     assert!(
-        agent_names.contains(&"claude-code"),
-        "Should have claude-code as reference implementation"
+        agent_names.contains(&"qwen-embedding"),
+        "Should have qwen-embedding as a builtin embedding model"
     );
 }
 
@@ -341,23 +207,24 @@ fn test_agent_manager_load_builtin_models_comprehensive() {
 fn test_user_agent_overrides_builtin() {
     let env = TestEnvironment::new();
 
-    let user_claude_override = test_agent_yaml(
-        "User override of Claude Code",
-        "claude-code",
+    let user_override = test_agent_yaml(
+        "User override of the builtin embedding model",
+        "llama-embedding",
         Some(
             r#"config:
-    claude_path: /user/claude
-    args: ["--user-override"]"#,
+    source: !HuggingFace
+      repo: "user/override"
+    normalize: true"#,
         ),
     );
 
-    env.create_user_agent("claude-code", &user_claude_override);
+    env.create_user_agent("qwen-embedding", &user_override);
     env.activate();
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
-    assert_agent_has_source(&agents, "claude-code", ModelConfigSource::User);
-    assert_agent_description_contains(&agents, "claude-code", "User override");
+    assert_agent_has_source(&agents, "qwen-embedding", ModelConfigSource::User);
+    assert_agent_description_contains(&agents, "qwen-embedding", "User override");
 }
 
 #[serial_test::serial(cwd)]
@@ -365,30 +232,27 @@ fn test_user_agent_overrides_builtin() {
 fn test_project_agent_overrides_user() {
     let env = TestEnvironment::new();
 
-    let project_qwen_override = test_agent_yaml(
-        "Project override of Qwen Coder",
-        "llama-agent",
+    let project_override = test_agent_yaml(
+        "Project override of Nomic Embed Code",
+        "ane-embedding",
         Some(
             r#"config:
-    model:
-      source: !HuggingFace
-        repo: "project/custom-qwen"
-        filename: "model.gguf"
-    mcp_server:
-      port: 0
-      timeout_seconds: 30"#,
+    source: !HuggingFace
+      repo: "project/custom-embed"
+      filename: "model.gguf"
+    normalize: true"#,
         ),
     );
 
-    env.create_project_agent("qwen", &project_qwen_override);
+    env.create_project_agent("nomic-embed-code", &project_override);
     env.activate();
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
     // When cwd == git root, both Project and GitRoot scan the same models/ dir;
     // GitRoot runs after Project in the merge order and overwrites, so source is GitRoot.
-    assert_agent_has_source(&agents, "qwen", ModelConfigSource::GitRoot);
-    assert_agent_description_contains(&agents, "qwen", "Project override");
+    assert_agent_has_source(&agents, "nomic-embed-code", ModelConfigSource::GitRoot);
+    assert_agent_description_contains(&agents, "nomic-embed-code", "Project override");
 }
 
 #[serial_test::serial(cwd)]
@@ -398,21 +262,23 @@ fn test_custom_agents_from_each_source() {
 
     let user_custom = test_agent_yaml(
         "User custom agent",
-        "claude-code",
+        "llama-embedding",
         Some(
             r#"config:
-    claude_path: /user/custom
-    args: ["--custom"]"#,
+    source: !HuggingFace
+      repo: "user/custom"
+    normalize: true"#,
         ),
     );
 
     let project_specific = test_agent_yaml(
         "Project specific agent",
-        "claude-code",
+        "llama-embedding",
         Some(
             r#"config:
-    claude_path: /project/specific
-    args: ["--project-mode"]"#,
+    source: !HuggingFace
+      repo: "project/specific"
+    normalize: true"#,
         ),
     );
 
@@ -450,7 +316,7 @@ fn test_gitroot_agent_loading() {
     assert!(git_root.is_some(), "Should be in a git repository");
 
     // Create gitroot agent
-    let gitroot_agent = test_agent_yaml("Test gitroot agent", "claude-code", None);
+    let gitroot_agent = test_agent_yaml("Test gitroot agent", "llama-embedding", None);
     env.create_gitroot_agent("gitroot-test", &gitroot_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -467,11 +333,11 @@ fn test_gitroot_agent_overrides_project() {
     env.activate();
 
     // Create project agent
-    let project_agent = test_agent_yaml("Project version", "claude-code", None);
+    let project_agent = test_agent_yaml("Project version", "llama-embedding", None);
     env.create_project_agent("override-test", &project_agent);
 
     // Create gitroot agent with same name (should override project)
-    let gitroot_agent = test_agent_yaml("GitRoot version", "claude-code", None);
+    let gitroot_agent = test_agent_yaml("GitRoot version", "llama-embedding", None);
     env.create_gitroot_agent("override-test", &gitroot_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -488,11 +354,11 @@ fn test_user_agent_overrides_gitroot() {
     env.activate();
 
     // Create gitroot agent
-    let gitroot_agent = test_agent_yaml("GitRoot version", "claude-code", None);
+    let gitroot_agent = test_agent_yaml("GitRoot version", "llama-embedding", None);
     env.create_gitroot_agent("override-test", &gitroot_agent);
 
     // Create user agent with same name (should override gitroot)
-    let user_agent = test_agent_yaml("User version", "claude-code", None);
+    let user_agent = test_agent_yaml("User version", "llama-embedding", None);
     env.create_user_agent("override-test", &user_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -508,345 +374,26 @@ fn test_full_precedence_hierarchy_with_gitroot() {
     let env = TestEnvironment::new();
     env.activate();
 
-    // Override claude-code at each level to test full precedence
-    let project_agent = test_agent_yaml("Project claude", "claude-code", None);
-    env.create_project_agent("claude-code", &project_agent);
+    // Override qwen-embedding at each level to test full precedence
+    let project_agent = test_agent_yaml("Project model", "llama-embedding", None);
+    env.create_project_agent("qwen-embedding", &project_agent);
 
-    let gitroot_agent = test_agent_yaml("GitRoot claude", "claude-code", None);
-    env.create_gitroot_agent("claude-code", &gitroot_agent);
+    let gitroot_agent = test_agent_yaml("GitRoot model", "llama-embedding", None);
+    env.create_gitroot_agent("qwen-embedding", &gitroot_agent);
 
-    let user_agent = test_agent_yaml("User claude", "claude-code", None);
-    env.create_user_agent("claude-code", &user_agent);
+    let user_agent = test_agent_yaml("User model", "llama-embedding", None);
+    env.create_user_agent("qwen-embedding", &user_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
 
     // User should win (highest precedence)
-    assert_agent_has_source(&agents, "claude-code", ModelConfigSource::User);
-    assert_agent_description_contains(&agents, "claude-code", "User claude");
+    assert_agent_has_source(&agents, "qwen-embedding", ModelConfigSource::User);
+    assert_agent_description_contains(&agents, "qwen-embedding", "User model");
 }
 
 // =============================================================================
 // AGENTS MAP AND USE CASE TESTS
 // =============================================================================
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agents_map_structure_creation() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    // Use agent for root use case
-    ModelManager::use_agent("claude-code", &ModelPaths::sah())
-        .expect("Should use claude-code agent");
-
-    assert!(helper.config_exists(), "Config file should be created");
-
-    let config_content = helper.read_config();
-    assert!(
-        config_content.contains("model:"),
-        "Config should contain model key"
-    );
-    assert!(
-        config_content.contains("claude-code"),
-        "Config should contain model name"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_model_config_set_and_get() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    let agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
-    assert_eq!(agent, Some("claude-code".to_string()));
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_resolve_agent_config() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    let config =
-        ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve config");
-    assert_eq!(
-        config.executor_type(),
-        swissarmyhammer_config::ModelExecutorType::ClaudeCode
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_resolve_agent_config_default_fallback() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    // Don't configure any model - should fall back to default claude-code
-    let config =
-        ModelManager::resolve_agent_config(&ModelPaths::sah()).expect("Should resolve to default");
-    assert_eq!(
-        config.executor_type(),
-        swissarmyhammer_config::ModelExecutorType::ClaudeCode
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_get_agent_no_config() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    let result =
-        ModelManager::get_agent(&ModelPaths::sah()).expect("Should handle no config gracefully");
-    assert_eq!(result, None);
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_model_key_in_config_file() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    let config_content = helper.read_config();
-    assert!(
-        config_content.contains("model: claude-code"),
-        "Should have model key"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_model_preserved_with_other_config_sections() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    let existing_config = r#"# Existing configuration
-prompt:
-  default_template: "greeting"
-
-workflows:
-  - name: "test-workflow"
-    description: "Test workflow"
-
-model: claude-code
-"#;
-
-    helper.write_config(existing_config);
-
-    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should update model");
-
-    let updated_config = helper.read_config();
-    assert!(
-        updated_config.contains("prompt:"),
-        "Should preserve prompt section"
-    );
-    assert!(
-        updated_config.contains("model: qwen"),
-        "Should update model"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_use_agent_writes_model_key() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should use claude-code");
-
-    let config_content = helper.read_config();
-    assert!(config_content.contains("model:"));
-    assert!(config_content.contains("claude-code"));
-
-    let agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
-    assert_eq!(agent, Some("claude-code".to_string()));
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_overwrite_existing_model() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    let initial_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
-    assert_eq!(initial_agent, Some("claude-code".to_string()));
-
-    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should overwrite model");
-
-    let updated_agent =
-        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get updated model");
-    assert_eq!(updated_agent, Some("qwen".to_string()));
-}
-
-// =============================================================================
-// CONFIG FILE OPERATIONS TESTS
-// =============================================================================
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agent_manager_config_file_operations() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    // Test config structure creation
-    let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah())
-        .expect("Should create config structure");
-
-    assert!(
-        config_path.parent().unwrap().exists(),
-        "Config directory should exist"
-    );
-    assert_eq!(
-        config_path.file_name().unwrap(),
-        "sah.yaml",
-        "Should default to YAML format"
-    );
-
-    // Test using an agent (creates config)
-    ModelManager::use_agent("claude-code", &ModelPaths::sah())
-        .expect("Should use claude-code agent");
-
-    assert!(helper.config_exists(), "Config file should be created");
-
-    let config_content = helper.read_config();
-    assert_config_contains_sections(&config_content, &["model:", "claude-code"]);
-
-    // Test updating existing config
-    let original_size = helper.config_size();
-
-    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should update to qwen");
-
-    let updated_content = helper.read_config();
-    assert_config_contains_sections(&updated_content, &["model:", "qwen"]);
-
-    let updated_size = helper.config_size();
-    assert_ne!(
-        original_size, updated_size,
-        "Config file should be modified"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_config_file_sections_preserved() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir.clone());
-
-    let existing_config = format!(
-        r#"# Existing configuration with comments
-prompt:
-  default_template: "greeting"
-
-workflows:
-  - name: "test-workflow"
-    description: "Test workflow"
-
-other_section:
-  preserved_value: "should not be lost"
-  nested:
-    data: {}
-"#,
-        TEST_DATA_VALUE
-    );
-
-    helper.write_config(&existing_config);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should update agent config");
-
-    let updated_config = helper.read_config();
-
-    assert_config_contains_sections(
-        &updated_config,
-        &[
-            "prompt:",
-            "default_template",
-            "workflows:",
-            "test-workflow",
-            "other_section:",
-            "preserved_value",
-            "nested:",
-        ],
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_config_models_section_updated() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir.clone());
-
-    let existing_config = r#"existing_agent:
-  old_config: "will be replaced"
-"#;
-
-    helper.write_config(existing_config);
-
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should update agent config");
-
-    let updated_config = helper.read_config();
-
-    assert_config_contains_sections(&updated_config, &["model:"]);
-}
-
-// =============================================================================
-// ERROR HANDLING TESTS
-// =============================================================================
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_agent_manager_error_handling_comprehensive() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir.clone());
-
-    // Test agent not found error
-    let result = ModelManager::use_agent(
-        "definitely-nonexistent-agent-name-12345",
-        &ModelPaths::sah(),
-    );
-    assert_not_found_error(result, "definitely-nonexistent-agent-name-12345");
-
-    // Test find_agent_by_name with nonexistent
-    let find_result = ModelManager::find_agent_by_name("another-nonexistent-agent");
-    assert!(
-        find_result.is_err(),
-        "Should fail to find nonexistent agent"
-    );
-
-    match find_result {
-        Err(ModelError::NotFound(name)) => {
-            assert_eq!(name, "another-nonexistent-agent");
-        }
-        _ => panic!("Should return NotFound error for find"),
-    }
-
-    // Test successful agent lookup
-    let found_agent = ModelManager::find_agent_by_name("claude-code")
-        .expect("Should find builtin claude-code agent");
-    assert_eq!(found_agent.name, "claude-code");
-    assert_eq!(found_agent.source, ModelConfigSource::Builtin);
-}
 
 // =============================================================================
 // INVALID FILE HANDLING TESTS
@@ -857,7 +404,7 @@ fn test_agent_manager_error_handling_comprehensive() {
 fn test_valid_agent_loads_successfully() {
     let env = TestEnvironment::new();
 
-    let valid_agent = test_agent_yaml("Valid test agent", "claude-code", None);
+    let valid_agent = test_agent_yaml("Valid test agent", "llama-embedding", None);
     env.create_user_agent("valid-agent", &valid_agent);
     env.activate();
 
@@ -958,7 +505,7 @@ version: "1.0"
 author: "Test Author"
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -975,7 +522,7 @@ fn test_agent_description_comment_based() {
     let content = r#"# Description: Comment-based description
 # Additional comment
 executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -991,7 +538,7 @@ description: "YAML takes precedence"
 ---
 # Description: This should be ignored
 executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -1003,7 +550,7 @@ quiet: false"#;
 #[test]
 fn test_agent_description_no_description() {
     let content = r#"executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -1018,7 +565,7 @@ fn test_agent_description_empty_description() {
 description: ""
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -1033,7 +580,7 @@ fn test_agent_description_whitespace_trimmed() {
 description: "  Trimmed description  "
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config: {}
 quiet: false"#;
 
@@ -1053,37 +600,33 @@ description: "Test agent with frontmatter"
 version: "1.0"
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config:
-    claude_path: /test/claude
-    args: ["--test"]
+    source: !HuggingFace
+      repo: "test/model"
+    normalize: true
 quiet: true"#;
 
     let config = parse_model_config(content).expect("Should parse config with frontmatter");
-    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+    assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
     assert!(config.quiet);
 }
 
 #[serial_test::serial(cwd)]
 #[test]
 fn test_agent_config_parsing_pure_config() {
-    let content = format!(
-        r#"executor:
-  type: llama-agent
+    let content = r#"executor:
+  type: ane-embedding
   config:
-    model:
-      source: !HuggingFace
-        repo: "test/model"
-        filename: "test.gguf"
-    mcp_server:
-      port: {}
-      timeout_seconds: {}
-quiet: false"#,
-        MCP_SERVER_PORT_AUTO, MCP_SERVER_TIMEOUT_SECONDS
-    );
+    source: !HuggingFace
+      repo: "test/model"
+      filename: "test.gguf"
+    normalize: true
+    max_sequence_length: 256
+quiet: false"#;
 
-    let config = parse_model_config(&content).expect("Should parse pure config");
-    assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
+    let config = parse_model_config(content).expect("Should parse pure config");
+    assert_eq!(config.executor_type(), ModelExecutorType::AneEmbedding);
     assert!(!config.quiet);
 }
 
@@ -1093,12 +636,14 @@ fn test_agent_config_parsing_with_comments() {
     let content = r#"# Description: Test agent with comments
 # Version: 1.0
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: "test/model"
 quiet: false"#;
 
     let config = parse_model_config(content).expect("Should parse config with comments");
-    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+    assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
     assert!(!config.quiet);
 }
 
@@ -1171,181 +716,6 @@ fn test_agent_manager_directory_loading_edge_cases() {
 }
 
 // =============================================================================
-// GLOBAL --AGENT FLAG OVERRIDE TESTS
-// =============================================================================
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_global_agent_flag_override_concept() {
-    // This test verifies the concept that a runtime --agent flag can override
-    // the configured model without modifying the config file.
-    //
-    // The actual override happens in the CLI/MCP integration layer, but we test
-    // the model config system's ability to support this pattern.
-
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let _helper = ConfigFileHelper::new(temp_dir);
-
-    // Setup: Configure model
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    // Verify initial state
-    let configured_agent =
-        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
-    assert_eq!(configured_agent, Some("claude-code".to_string()));
-
-    // The runtime override would happen in the CLI layer by:
-    // 1. Reading the --agent flag value
-    // 2. Loading that agent's ModelConfig once
-    // 3. Using that config without writing to config file
-    //
-    // This test verifies that we can load any agent's config for runtime override
-    let override_agent_info =
-        ModelManager::find_agent_by_name("qwen").expect("Should find override agent");
-    let override_config = parse_model_config(&override_agent_info.content)
-        .expect("Should parse override agent config");
-
-    // Verify the override config is valid and can be used
-    assert_eq!(
-        override_config.executor_type(),
-        swissarmyhammer_config::ModelExecutorType::LlamaAgent
-    );
-
-    // Verify that the config file was NOT modified
-    // (the override is runtime-only)
-    let still_claude = ModelManager::get_agent(&ModelPaths::sah())
-        .expect("Should still get configured agent from config");
-    assert_eq!(
-        still_claude,
-        Some("claude-code".to_string()),
-        "Config file should remain unchanged"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_global_agent_override_with_nonexistent_agent() {
-    // Test that attempting to override with a nonexistent agent fails gracefully
-    let result = ModelManager::find_agent_by_name("definitely-nonexistent-agent-12345");
-
-    assert!(result.is_err(), "Should fail for nonexistent agent");
-    match result {
-        Err(ModelError::NotFound(name)) => {
-            assert_eq!(name, "definitely-nonexistent-agent-12345");
-        }
-        _ => panic!("Should return NotFound error"),
-    }
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_global_agent_override_preserves_config_file() {
-    // Verify that using an agent for override doesn't modify the config file
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let helper = ConfigFileHelper::new(temp_dir);
-
-    // Setup initial config
-    ModelManager::use_agent("claude-code", &ModelPaths::sah()).expect("Should configure model");
-
-    let initial_config = helper.read_config();
-    let initial_size = helper.config_size();
-
-    // Simulate what the CLI would do for --agent override:
-    // 1. Load the override agent's config
-    let override_agent_info =
-        ModelManager::find_agent_by_name("qwen-embedding").expect("Should find override agent");
-    let _override_config =
-        parse_model_config(&override_agent_info.content).expect("Should parse override config");
-
-    // 2. Use that config for all operations (happens in CLI layer)
-    // 3. Verify config file was NOT modified
-
-    let current_config = helper.read_config();
-    let current_size = helper.config_size();
-
-    assert_eq!(
-        initial_size, current_size,
-        "Config file size should not change"
-    );
-    assert_eq!(
-        initial_config, current_config,
-        "Config file content should not change"
-    );
-
-    // Verify the stored model assignment is unchanged
-    let configured_agent =
-        ModelManager::get_agent(&ModelPaths::sah()).expect("Should get configured agent");
-    assert_eq!(
-        configured_agent,
-        Some("claude-code".to_string()),
-        "Model should still be claude-code"
-    );
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_global_agent_override_all_builtin_agents() {
-    // Test that all builtin agents can be used as runtime overrides
-    let builtin_agents = ModelManager::load_builtin_models().expect("Should load builtin agents");
-
-    assert!(!builtin_agents.is_empty(), "Should have builtin agents");
-
-    // Verify each builtin agent can be loaded and parsed for override
-    for agent in builtin_agents {
-        let agent_info = ModelManager::find_agent_by_name(&agent.name)
-            .unwrap_or_else(|_| panic!("Should find agent '{}'", agent.name));
-
-        let config = parse_model_config(&agent_info.content)
-            .unwrap_or_else(|_| panic!("Should parse agent '{}' config", agent.name));
-
-        // Verify the config is valid for runtime use
-        match config.executor_type() {
-            swissarmyhammer_config::ModelExecutorType::ClaudeCode
-            | swissarmyhammer_config::ModelExecutorType::LlamaAgent
-            | swissarmyhammer_config::ModelExecutorType::LlamaEmbedding
-            | swissarmyhammer_config::ModelExecutorType::AneEmbedding => {
-                // Valid executor type
-            }
-        }
-    }
-}
-
-#[serial_test::serial(cwd)]
-#[test]
-fn test_global_agent_override_with_custom_user_agent() {
-    // Test that custom user agents can be used as runtime overrides
-    let env = TestEnvironment::new();
-
-    let custom_agent = test_agent_yaml(
-        "Custom user agent for override",
-        "claude-code",
-        Some(
-            r#"config:
-    claude_path: /custom/claude
-    args: ["--override-mode"]"#,
-        ),
-    );
-
-    env.create_user_agent("custom-override", &custom_agent);
-    env.activate();
-
-    // Verify the custom agent can be loaded for override
-    let agent_info =
-        ModelManager::find_agent_by_name("custom-override").expect("Should find custom user agent");
-
-    assert_eq!(agent_info.source, ModelConfigSource::User);
-
-    let config = parse_model_config(&agent_info.content).expect("Should parse custom agent config");
-
-    assert_eq!(
-        config.executor_type(),
-        swissarmyhammer_config::ModelExecutorType::ClaudeCode
-    );
-}
-
-// =============================================================================
 // LOAD_GITROOT_MODELS TESTS
 // =============================================================================
 
@@ -1356,8 +726,8 @@ fn test_load_gitroot_models_in_git_repo_with_agents() {
     env.activate();
 
     // Create gitroot agents
-    let agent1 = test_agent_yaml("First gitroot agent", "claude-code", None);
-    let agent2 = test_agent_yaml("Second gitroot agent", "llama-agent", None);
+    let agent1 = test_agent_yaml("First gitroot agent", "llama-embedding", None);
+    let agent2 = test_agent_yaml("Second gitroot agent", "ane-embedding", None);
     env.create_gitroot_agent("gitroot-agent-1", &agent1);
     env.create_gitroot_agent("gitroot-agent-2", &agent2);
 
@@ -1441,7 +811,7 @@ fn test_load_gitroot_models_with_invalid_agents() {
     env.activate();
 
     // Create valid and invalid gitroot agents
-    let valid_agent = test_agent_yaml("Valid gitroot agent", "claude-code", None);
+    let valid_agent = test_agent_yaml("Valid gitroot agent", "llama-embedding", None);
     let invalid_agent = "invalid: yaml: content: [unclosed bracket";
 
     let gitroot_dir = env.gitroot_agents_dir();
@@ -1470,7 +840,7 @@ fn test_load_gitroot_models_with_non_yaml_files() {
     env.activate();
 
     // Create gitroot agent and non-yaml files
-    let agent = test_agent_yaml("Gitroot agent", "claude-code", None);
+    let agent = test_agent_yaml("Gitroot agent", "llama-embedding", None);
 
     let gitroot_dir = env.gitroot_agents_dir();
     fs::create_dir_all(&gitroot_dir).expect("Failed to create gitroot models dir");
@@ -1505,7 +875,7 @@ fn test_load_gitroot_models_git_root_detection() {
     env::set_current_dir(&subdir).expect("Failed to change to subdirectory");
 
     // Create gitroot agent
-    let agent = test_agent_yaml("Gitroot agent from subdir", "claude-code", None);
+    let agent = test_agent_yaml("Gitroot agent from subdir", "llama-embedding", None);
     env.create_gitroot_agent("subdir-test", &agent);
 
     // Should still find gitroot models even from subdirectory

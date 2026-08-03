@@ -26,8 +26,8 @@
 //! authoritative stream a real handle exposes — for a
 //! `swissarmyhammer_agent::AcpAgentHandle`, `notification_rx` is a `resubscribe()`
 //! of the backend's broadcast channel, the same channel
-//! `wrap_claude_into_handle`/`wrap_llama_into_handle` bridge onto the connection
-//! via `forward_session_notifications`. Because that bridge re-emits the very same
+//! `wrap_claude_into_handle` bridges onto the connection via
+//! `forward_session_notifications`. Because that bridge re-emits the very same
 //! notifications onto the connection, the driver must NOT also forward what the
 //! connection re-emits — doing so delivers every streamed chunk twice and
 //! [`collect_response_content`](claude_agent::collect_response_content) would
@@ -503,7 +503,7 @@ mod tests {
     // ---- scripted ACP agent (shared harness) ------------------------------
     //
     // The scripted ACP agent lives in `crate::review::test_support`. Drive
-    // tests run it shaped like a real backend (Claude/Llama): the agent
+    // tests run it shaped like a real backend: the agent
     // publishes every `session/update` onto its backend broadcast channel
     // (`notify_tx`), and the driver consumes a `subscribe()` of that channel as
     // `notification_rx` — the same authoritative stream production collects

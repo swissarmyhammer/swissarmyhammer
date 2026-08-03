@@ -899,9 +899,9 @@ mod collect_response_content_tests {
     /// level as well as the return value.
     ///
     /// Captures through a scoped (thread-local) subscriber rather than
-    /// `#[tracing_test::traced_test]`, following `llama_agent::gpu_lock`: the
-    /// runtime here is single-threaded, so every event is emitted on the test
-    /// thread and the capture is deterministic.
+    /// `#[tracing_test::traced_test]`: the runtime here is single-threaded, so
+    /// every event is emitted on the test thread and the capture is
+    /// deterministic.
     #[tokio::test]
     async fn a_turn_that_streams_no_text_is_an_empty_reply_not_an_error() {
         let capture = swissarmyhammer_common::test_utils::CaptureWriter::default();

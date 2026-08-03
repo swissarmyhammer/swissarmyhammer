@@ -574,8 +574,45 @@ fn test_build_cli_basic_structure() {
     // Verify core subcommands exist
     // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
     // This test uses an empty registry, so rule won't appear here
-    let expected_commands = ["serve", "doctor", "validate", "model"];
+    let expected_commands = ["serve", "doctor", "validate", "statusline"];
     assert_commands_exist(&cli, &expected_commands);
+}
+
+/// The `agent` command was removed with the `llama-agent` crate: `sah agent acp`
+/// started a local-model ACP server that no longer exists.
+///
+/// Guards the tree the real binary parses. `main.rs` builds its command tree
+/// via `CliBuilder`, not from the `cli.rs` clap derive, so without this
+/// assertion an `agent` subcommand could be reintroduced into
+/// `add_content_commands` and every other test would stay green.
+#[test]
+fn test_build_cli_has_no_agent_command() {
+    let (_registry, cli) = create_test_cli_with_defaults();
+
+    let names: Vec<&str> = cli.get_subcommands().map(|c| c.get_name()).collect();
+    assert!(
+        !names.contains(&"agent"),
+        "the built CLI still offers an `agent` subcommand: {names:?}"
+    );
+}
+
+/// The `model` command was removed when Claude became the only chat executor.
+///
+/// This guards the tree the real binary actually parses. `main.rs` builds its
+/// command tree here, via `CliBuilder`, not from the `cli.rs` clap derive, and
+/// the two are free to disagree. The sibling regression tests in
+/// `tests/integration/model_command_removed.rs` drive the derive tree, so
+/// without this assertion a `model` subcommand could be reintroduced into
+/// `add_content_commands` and every other test would stay green.
+#[test]
+fn test_build_cli_has_no_model_command() {
+    let (_registry, cli) = create_test_cli_with_defaults();
+
+    let names: Vec<&str> = cli.get_subcommands().map(|c| c.get_name()).collect();
+    assert!(
+        !names.contains(&"model"),
+        "the built CLI still offers a `model` subcommand: {names:?}"
+    );
 }
 
 #[test]
@@ -1008,7 +1045,6 @@ fn test_arg_spec_new() {
     assert_eq!(spec.help, "Help text");
     assert!(spec.long.is_none());
     assert!(spec.short.is_none());
-    assert!(!spec.required);
     assert!(!spec.hide);
 }
 
@@ -1017,8 +1053,6 @@ fn test_arg_spec_builder_chain() {
     let spec = ArgSpec::new("port", "Port number")
         .long("port")
         .short('p')
-        .required(true)
-        .value_name("PORT")
         .default_value("8080".to_string())
         .value_parser(ArgSpecValueParser::U16)
         .action(ArgSpecAction::Set);
@@ -1026,8 +1060,6 @@ fn test_arg_spec_builder_chain() {
     assert_eq!(spec.name, "port");
     assert_eq!(spec.long, Some("port"));
     assert_eq!(spec.short, Some('p'));
-    assert!(spec.required);
-    assert_eq!(spec.value_name, Some("PORT"));
     assert_eq!(spec.default_value, Some("8080".to_string()));
 }
 
@@ -1041,72 +1073,12 @@ fn test_arg_spec_build_set_true() {
 }
 
 #[test]
-fn test_arg_spec_build_append() {
-    let spec = ArgSpec::new("files", "Input files")
-        .long("file")
-        .action(ArgSpecAction::Append);
-    let arg = spec.build();
-    assert_eq!(arg.get_id().as_str(), "files");
-}
-
-#[test]
 fn test_arg_spec_build_with_value_parser_strings() {
     let spec = ArgSpec::new("format", "Format")
         .long("format")
         .value_parser(ArgSpecValueParser::Strings(vec!["json", "yaml", "table"]));
     let arg = spec.build();
     assert_eq!(arg.get_id().as_str(), "format");
-}
-
-#[test]
-fn test_arg_spec_build_with_value_parser_u64() {
-    let spec = ArgSpec::new("size", "Size")
-        .long("size")
-        .value_parser(ArgSpecValueParser::U64);
-    let arg = spec.build();
-    assert_eq!(arg.get_id().as_str(), "size");
-}
-
-#[test]
-fn test_arg_spec_build_with_value_parser_usize() {
-    let spec = ArgSpec::new("count", "Count")
-        .long("count")
-        .value_parser(ArgSpecValueParser::Usize);
-    let arg = spec.build();
-    assert_eq!(arg.get_id().as_str(), "count");
-}
-
-// --- Tests for SubcommandSpec ---
-
-#[test]
-fn test_subcommand_spec_new() {
-    let spec = SubcommandSpec::new("test", "About test");
-    assert_eq!(spec.name, "test");
-    assert_eq!(spec.about, "About test");
-    assert!(spec.long_about.is_none());
-    assert!(spec.args.is_empty());
-}
-
-#[test]
-fn test_subcommand_spec_build() {
-    let spec = SubcommandSpec::new("sub", "About sub")
-        .long_about("Long about sub")
-        .args(vec![ArgSpec::new("arg1", "Arg 1").long("arg1")]);
-    let cmd = spec.build();
-    assert_eq!(cmd.get_name(), "sub");
-    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "arg1"));
-}
-
-#[test]
-fn test_subcommand_spec_clone() {
-    let spec = SubcommandSpec::new("test", "About")
-        .long_about("Long about")
-        .args(vec![ArgSpec::new("a", "help")]);
-    let cloned = spec.clone();
-    assert_eq!(cloned.name, "test");
-    assert_eq!(cloned.about, "About");
-    assert_eq!(cloned.long_about, Some("Long about"));
-    assert_eq!(cloned.args.len(), 1);
 }
 
 // --- Tests for CliBuilder static command builders ---
@@ -1150,24 +1122,6 @@ fn test_build_validate_command() {
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "format"));
 }
 
-#[test]
-fn test_build_model_command() {
-    let cmd = CliBuilder::build_model_command();
-    assert_eq!(cmd.get_name(), "model");
-    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
-    assert!(subcmd_names.contains(&"show"));
-    assert!(subcmd_names.contains(&"list"));
-    assert!(subcmd_names.contains(&"use"));
-}
-
-#[test]
-fn test_build_agent_command() {
-    let cmd = CliBuilder::build_agent_command();
-    assert_eq!(cmd.get_name(), "agent");
-    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
-    assert!(subcmd_names.contains(&"acp"));
-}
-
 // --- Tests for CliBuilder methods ---
 
 #[test]
@@ -1178,16 +1132,6 @@ fn test_cli_builder_build_args_from_specs() {
     ];
     let args = CliBuilder::build_args_from_specs(&specs);
     assert_eq!(args.len(), 2);
-}
-
-#[test]
-fn test_cli_builder_build_subcommands_from_specs() {
-    let specs = vec![
-        SubcommandSpec::new("sub1", "About 1"),
-        SubcommandSpec::new("sub2", "About 2"),
-    ];
-    let cmds = CliBuilder::build_subcommands_from_specs(&specs);
-    assert_eq!(cmds.len(), 2);
 }
 
 #[test]

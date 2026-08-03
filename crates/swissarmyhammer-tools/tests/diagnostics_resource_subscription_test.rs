@@ -78,7 +78,6 @@ async fn subscribing_then_pushing_a_cache_update_emits_resources_updated() {
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
-        None,
         Some(project.path().to_path_buf()),
     )
     .await

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verification harness for a local-model review run.
+"""Verification harness for a review run.
 
-A minimal MCP stdio client that spawns `sah serve --model qwen --cwd
+A minimal MCP stdio client that spawns `sah serve --cwd
 scripts/review-verify/sample`, performs the MCP handshake (sequencing each
 step on the actual prior response, not on timers), calls the `review` tool
 with backend=local over the seeded sample crate, and asserts a
@@ -22,7 +22,7 @@ Exits 0 only when every assertion holds; nonzero with a clear message
 otherwise. See README.md alongside this script for setup (build `sah` first).
 
 `--self-test` exercises the assertion logic against synthetic fixtures without
-spawning a server or a model.
+spawning a server or an agent.
 """
 
 import argparse
@@ -285,7 +285,7 @@ def check_server_log(log_text):
 
     Covers assertions 3 and 4: zero "Queue is full" lines (the silent-drop
     symptom that turns a review into an empty clean pass) and at least one
-    "AgentMessage (" reply line proving the local model actually answered.
+    "AgentMessage (" reply line proving the review agent actually answered.
     Returns a list of human-readable failure strings.
     """
     failures = []
@@ -301,7 +301,7 @@ def check_server_log(log_text):
     if agent_replies == 0:
         failures.append(
             f'no "{AGENT_MESSAGE_MARKER}" reply lines in the server log — '
-            "the local model never produced a reply"
+            "the review agent never produced a reply"
         )
     return failures
 
@@ -510,7 +510,7 @@ def run_review(timeout):
     ensure_sample_git_repo()
 
     proc = subprocess.Popen(
-        ["sah", "serve", "--model", "qwen", "--cwd", str(SAMPLE_DIR)],
+        ["sah", "serve", "--cwd", str(SAMPLE_DIR)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         cwd=str(SAMPLE_DIR),

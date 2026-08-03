@@ -42,7 +42,7 @@ async fn test_mcp_server_creation() {
     let _guard = DirGuard(original_dir);
 
     let library = TemplateLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -140,7 +140,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
     let library = TemplateLibrary::new();
-    let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -211,7 +211,7 @@ async fn test_reload_prompts_detects_no_changes() {
 
     // Create server and load prompts
     let library = TemplateLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -267,7 +267,7 @@ async fn test_reload_prompts_detects_content_changes() {
 
     // Create server and load prompts
     let library = TemplateLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -319,7 +319,7 @@ async fn test_reload_prompts_detects_new_prompts() {
 
     // Create server and load prompts
     let library = TemplateLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -381,7 +381,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
 
     // Create server and load prompts
     let library = TemplateLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 

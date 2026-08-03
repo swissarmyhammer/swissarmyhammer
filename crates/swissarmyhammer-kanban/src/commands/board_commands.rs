@@ -1,9 +1,9 @@
 //! Board-level command implementations.
 //!
 //! `update.board` is the dispatch-layer wrapper around the
-//! [`crate::board::UpdateBoard`] operation. Without this wrapper the AI panel
-//! (and any future board-metadata editor) would dispatch `update.board` and
-//! the command registry would reject it as unknown, dropping every write —
+//! [`crate::board::UpdateBoard`] operation. Without this wrapper a
+//! board-metadata editor would dispatch `update.board` and the command
+//! registry would reject it as unknown, dropping every write —
 //! exactly the regression fixed by task `01KSNJ6AE18EQYDC2WSYFSSAY1`.
 //!
 //! The command intentionally mirrors `UpdateBoard`'s tri-state field shape:

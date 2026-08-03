@@ -93,7 +93,7 @@ impl std::fmt::Debug for AgentHandle {
 ///
 /// The review tool resolves its agent through this seam rather than constructing
 /// one inline: the production server injects a factory that builds the configured
-/// backend (Claude / Llama) from the session's `ModelConfig`, while tests inject a
+/// Claude backend from the session's `ChatModelConfig`, while tests inject a
 /// scripted ACP agent. The factory is async and fallible — a backend that fails
 /// to start surfaces as a tool error.
 pub type AgentFactory = Arc<
@@ -1727,7 +1727,7 @@ mod tests {
     fn bare_context() -> ToolContext {
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
         let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new());
-        let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::ChatModelConfig::default());
         ToolContext::new(tool_handlers, git_ops, agent_config)
     }
 
@@ -1961,7 +1961,7 @@ mod tests {
     /// count, never which agent/model runs.
     ///
     /// The review pipeline drives a single agent built by `agent_factory()` from
-    /// the resolved review `ModelConfig` (default `claude-code-haiku`), shared
+    /// the resolved review `ChatModelConfig` (default `--model haiku`), shared
     /// across every pool worker. `backend` reaches only `pool_config_for`, so a
     /// `local` and a `session` run over the same config resolve the SAME model —
     /// the two backends differ exclusively in worker count and AIMD, never in the

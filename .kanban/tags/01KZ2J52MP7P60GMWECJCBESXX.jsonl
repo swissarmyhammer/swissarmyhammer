@@ -1,0 +1,1 @@
+{"id":"01KZ2J52MT2DFGDKTR6B2D71X8","timestamp":"2026-08-03T01:00:03.098857Z","op":"create","item_id":"01KZ2J52MP7P60GMWECJCBESXX","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: fbca04\n+tag_name: skills\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: fbca04\n-tag_name: skills\n","transaction_id":null}

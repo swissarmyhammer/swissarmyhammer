@@ -211,7 +211,7 @@ async fn review_progress_is_received_by_a_real_client_over_a_byte_stream_transpo
     //    embedder through the production injection seam.
     let (gate, mut controller) = PromptGate::new();
     let server =
-        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf(), None)
+        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf())
             .await
             .expect("server builds");
     server
@@ -612,10 +612,9 @@ async fn ungated_review_server(repo_path: &std::path::Path) -> McpServer {
     let (gate, controller) = PromptGate::new();
     controller.release();
 
-    let server =
-        McpServer::new_with_work_dir(TemplateLibrary::default(), repo_path.to_path_buf(), None)
-            .await
-            .expect("server builds");
+    let server = McpServer::new_with_work_dir(TemplateLibrary::default(), repo_path.to_path_buf())
+        .await
+        .expect("server builds");
     server
         .set_review_factories(
             scripted_factory(gated_planted_agent(gate)),

@@ -8,7 +8,7 @@ async fn test_proxy_filters_tool_discovery() {
     // Create real SwissArmyHammer MCP server with all tools
     let library = TemplateLibrary::default();
     let work_dir = tempfile::tempdir().unwrap();
-    let server = McpServer::new_with_work_dir(library, work_dir.path().to_path_buf(), None)
+    let server = McpServer::new_with_work_dir(library, work_dir.path().to_path_buf())
         .await
         .unwrap();
     server.initialize().await.unwrap();
@@ -29,7 +29,7 @@ async fn test_proxy_filters_tool_discovery() {
     // Start HTTP server for the upstream MCP server
     let upstream_handle = {
         use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-        start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
+        start_mcp_server(McpServerMode::Http { port: None }, None, None)
             .await
             .unwrap()
     };

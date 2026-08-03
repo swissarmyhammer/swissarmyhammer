@@ -6,7 +6,7 @@
 //! and metadata preservation.
 //!
 //! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
-//! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
+//! agent layer (claude-agent), not at the MCP tool layer.
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use encoding_rs::{Encoding, UTF_8};

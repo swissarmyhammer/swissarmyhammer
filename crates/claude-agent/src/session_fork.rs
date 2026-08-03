@@ -2,9 +2,8 @@
 //! conversation and the claude CLI's persisted transcript.
 //!
 //! This module implements claude-agent's side of the backend-agnostic
-//! extension contract in [`agent_client_protocol_extras::session_fork`] — the
-//! same three `ext_method`s llama-agent serves, so the validators-pool client
-//! drives either backend through one code path:
+//! extension contract in [`agent_client_protocol_extras::session_fork`], so the
+//! validators-pool client drives any backend through one code path:
 //!
 //! - `session/fork` ([`ClaudeAgent::fork_session`]) — clone the parent's
 //!   in-memory [`Session`](crate::session::Session) under a fresh ULID and
