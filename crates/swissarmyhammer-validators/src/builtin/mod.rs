@@ -74,35 +74,44 @@ mod tests {
     // Focused review validators (split out from the monolithic code-quality set)
     // ========================================================================
 
-    /// The probe-bearing focused validators and the catalog probe each one
-    /// declares. Probe names must be real catalog entries (`duplicates` /
-    /// `similar` / `callers` / `complexity`); never `search_symbol` or
-    /// `get_blastradius`.
-    const PROBE_VALIDATORS: &[(&str, &str)] = &[
-        ("duplication", "duplicates"),
-        ("reuse", "similar"),
-        ("dead-code", "callers"),
-        ("complexity", "complexity"),
-    ];
+    /// The probe-bearing focused validators that kept their own dedicated
+    /// probe and stayed standalone (folding either into a merged set would
+    /// force its probe onto every other rule in that set). Probe names must be
+    /// real catalog entries (`duplicates` / `similar` / `callers` /
+    /// `complexity`); never `search_symbol` or `get_blastradius`.
+    const PROBE_VALIDATORS: &[(&str, &str)] =
+        &[("duplication", "duplicates"), ("reuse", "similar")];
 
-    /// In-file focused validators that declare NO probes — every judgment is made
-    /// by reading the diff, with no engine-run code_context probe.
-    const IN_FILE_VALIDATORS: &[&str] = &[
-        "data-driven",
-        "function-length",
-        "no-commented-code",
-        "missing-docs",
-    ];
+    /// The two sets the nine single-rule builtin validators were merged into:
+    /// `code-security` (no probes) and `code-hygiene` (`probes: [callers,
+    /// complexity]`, needed by the `dead-code` and `cognitive-complexity` rules
+    /// bundled inside it). See [`test_code_security_loads_with_three_rules_and_no_probes`]
+    /// and [`test_code_hygiene_loads_with_six_rules_and_callers_and_complexity_probes`].
+    const MERGED_VALIDATORS: &[&str] = &["code-security", "code-hygiene"];
 
-    /// The focused review-time safety/integrity validators migrated from the old
-    /// multi-rule `security-rules` and `test-integrity` sets. Each is in-file
-    /// (no probes), with no `trigger`.
-    const SAFETY_VALIDATORS: &[&str] = &[
+    /// The nine single-rule builtin validators retired by the code-security /
+    /// code-hygiene merge. The loader must no longer report any of these as a
+    /// standalone RuleSet from the builtin layer.
+    const RETIRED_VALIDATOR_NAMES: &[&str] = &[
         "no-secrets",
         "injection",
         "command-safety",
-        "test-integrity",
+        "no-commented-code",
+        "function-length",
+        "complexity",
+        "missing-docs",
+        "data-driven",
+        "dead-code",
     ];
+
+    /// The focused review-time integrity validator migrated from the old
+    /// multi-rule `security-rules` and `test-integrity` sets. In-file (no
+    /// probes), with no `trigger`. Its `no-secrets` / `injection` /
+    /// `command-safety` siblings were later merged into `code-security`
+    /// (see [`MERGED_VALIDATORS`]); `test-integrity` also matches
+    /// `@file_groups/test_files`, so it cannot merge with a source-only set and
+    /// stayed whole.
+    const SAFETY_VALIDATORS: &[&str] = &["test-integrity"];
 
     /// Language-scoped review validators migrated from the skill's
     /// `references/*_REVIEW.md` files. Each entry is
@@ -153,27 +162,6 @@ mod tests {
     }
 
     #[test]
-    fn test_in_file_validators_declare_no_probes() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        for name in IN_FILE_VALIDATORS {
-            let ruleset = loader
-                .get_ruleset(name)
-                .unwrap_or_else(|| panic!("in-file validator '{name}' should be loaded"));
-            assert!(
-                ruleset.manifest.probes.is_empty(),
-                "in-file validator '{name}' must declare no probes, got: {:?}",
-                ruleset.manifest.probes
-            );
-            assert!(
-                !ruleset.rules.is_empty(),
-                "{name} should have at least one rule"
-            );
-        }
-    }
-
-    #[test]
     fn test_focused_validators_have_clean_manifest_frontmatter() {
         use crate::validators::parser::check_manifest_frontmatter;
 
@@ -182,7 +170,7 @@ mod tests {
         let names = PROBE_VALIDATORS
             .iter()
             .map(|(name, _)| *name)
-            .chain(IN_FILE_VALIDATORS.iter().copied());
+            .chain(MERGED_VALIDATORS.iter().copied());
 
         for name in names {
             let dir = base.join(name);
@@ -195,6 +183,164 @@ mod tests {
                 "{name} VALIDATOR.md should have no stray frontmatter (e.g. `trigger`), got: {issues:?}"
             );
         }
+    }
+
+    // ========================================================================
+    // The code-security / code-hygiene merge
+    // ========================================================================
+
+    /// `code-security` carries exactly the three merged security rules and
+    /// declares no probes — each of `no-secrets`, `injection`, and
+    /// `command-safety` was already an in-file judgment.
+    #[test]
+    fn test_code_security_loads_with_three_rules_and_no_probes() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-security")
+            .expect("code-security should be loaded");
+
+        assert!(
+            ruleset.manifest.probes.is_empty(),
+            "code-security must declare no probes, got: {:?}",
+            ruleset.manifest.probes
+        );
+
+        let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            ruleset.rules.len(),
+            3,
+            "code-security should carry exactly 3 rules, got: {rule_names:?}"
+        );
+        for expected in ["no-secrets", "injection", "command-safety"] {
+            assert!(
+                rule_names.contains(&expected),
+                "code-security should carry the {expected} rule, got: {rule_names:?}"
+            );
+        }
+    }
+
+    /// `code-hygiene` carries exactly the six merged hygiene rules and
+    /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
+    /// `complexity` for `cognitive-complexity` (the rest are in-file
+    /// judgments that need no probe).
+    #[test]
+    fn test_code_hygiene_loads_with_six_rules_and_callers_and_complexity_probes() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-hygiene")
+            .expect("code-hygiene should be loaded");
+
+        assert_eq!(
+            ruleset.manifest.probes,
+            vec!["callers".to_string(), "complexity".to_string()],
+            "code-hygiene should declare exactly [callers, complexity], got: {:?}",
+            ruleset.manifest.probes
+        );
+        for declared in &ruleset.manifest.probes {
+            assert!(
+                crate::review::probe_exists(declared),
+                "code-hygiene declares probe '{declared}' which is not in the catalog"
+            );
+        }
+
+        let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            ruleset.rules.len(),
+            6,
+            "code-hygiene should carry exactly 6 rules, got: {rule_names:?}"
+        );
+        for expected in [
+            "no-commented-code",
+            "function-length",
+            "cognitive-complexity",
+            "missing-docs",
+            "data-driven",
+            "dead-code",
+        ] {
+            assert!(
+                rule_names.contains(&expected),
+                "code-hygiene should carry the {expected} rule, got: {rule_names:?}"
+            );
+        }
+    }
+
+    /// The nine single-rule sets folded into code-security/code-hygiene must
+    /// no longer load standalone from the builtin layer.
+    #[test]
+    fn test_retired_single_rule_validators_no_longer_load() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        for retired in RETIRED_VALIDATOR_NAMES {
+            assert!(
+                loader.get_ruleset(retired).is_none(),
+                "the retired `{retired}` set must no longer load standalone from the builtin \
+                 layer; its rule was merged into code-security or code-hygiene"
+            );
+        }
+    }
+
+    /// Both merged sets are file-triggered over source code, exactly like the
+    /// nine single-rule sets they replaced.
+    #[test]
+    fn test_code_security_and_code_hygiene_match_expected_paths() {
+        use crate::validators::types::MatchContext;
+
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        for name in MERGED_VALIDATORS {
+            let ruleset = loader
+                .get_ruleset(name)
+                .unwrap_or_else(|| panic!("{name} should be loaded"));
+
+            let yes = MatchContext::new().with_file("src/app.py");
+            assert!(
+                ruleset.matches(&yes),
+                "{name} should match a changed source file 'src/app.py'"
+            );
+
+            let no = MatchContext::new().with_file("README.md");
+            assert!(
+                !ruleset.matches(&no),
+                "{name} should NOT match a non-source file 'README.md'"
+            );
+        }
+    }
+
+    /// The merge must not disturb the three sets that were deliberately left
+    /// out of it: `test-integrity` (also matches `@file_groups/test_files`),
+    /// and `reuse`/`duplication` (each carries its own dedicated probe).
+    #[test]
+    fn test_test_integrity_reuse_and_duplication_are_unaffected_by_the_merge() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let test_integrity = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should still load unchanged");
+        assert!(test_integrity.manifest.probes.is_empty());
+        assert_eq!(
+            test_integrity.rules.len(),
+            2,
+            "test-integrity should still carry its no-hard-code + no-test-cheating rules"
+        );
+
+        let reuse = loader
+            .get_ruleset("reuse")
+            .expect("reuse should still load unchanged");
+        assert_eq!(reuse.manifest.probes, vec!["similar".to_string()]);
+        assert_eq!(reuse.rules.len(), 1);
+
+        let duplication = loader
+            .get_ruleset("duplication")
+            .expect("duplication should still load unchanged");
+        assert_eq!(duplication.manifest.probes, vec!["duplicates".to_string()]);
+        assert_eq!(duplication.rules.len(), 3);
     }
 
     // ========================================================================
@@ -213,7 +359,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("safety validator '{name}' should be loaded"));
             assert_eq!(ruleset.name(), *name);
 
-            // All four are in-file judgments — no engine probes.
+            // An in-file judgment — no engine probes.
             assert!(
                 ruleset.manifest.probes.is_empty(),
                 "safety validator '{name}' must declare no probes, got: {:?}",
@@ -367,24 +513,20 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        for (name, heading) in [
-            ("duplication", "Duplication Validator"),
-            ("data-driven", "Data-Driven Validator"),
-        ] {
-            let ruleset = loader
-                .get_ruleset(name)
-                .unwrap_or_else(|| panic!("{name} should be loaded"));
-            assert!(
-                !ruleset.manifest_body().is_empty(),
-                "{name} should carry a non-empty VALIDATOR.md body, got: {:?}",
-                ruleset.manifest_body()
-            );
-            assert!(
-                ruleset.manifest_body().contains(heading),
-                "{name} VALIDATOR.md body should carry its {heading:?} heading, got: {:?}",
-                ruleset.manifest_body()
-            );
-        }
+        let (name, heading) = ("duplication", "Duplication Validator");
+        let ruleset = loader
+            .get_ruleset(name)
+            .unwrap_or_else(|| panic!("{name} should be loaded"));
+        assert!(
+            !ruleset.manifest_body().is_empty(),
+            "{name} should carry a non-empty VALIDATOR.md body, got: {:?}",
+            ruleset.manifest_body()
+        );
+        assert!(
+            ruleset.manifest_body().contains(heading),
+            "{name} VALIDATOR.md body should carry its {heading:?} heading, got: {:?}",
+            ruleset.manifest_body()
+        );
     }
 
     #[test]
@@ -400,11 +542,13 @@ mod tests {
             loader.ruleset_count()
         );
 
-        // Check for expected RuleSets. The monolithic security-rules set was
-        // split into the focused no-secrets + injection validators.
+        // Check for expected RuleSets. The nine single-rule sets (no-secrets,
+        // injection, command-safety, no-commented-code, function-length,
+        // complexity, missing-docs, data-driven, dead-code) were merged into
+        // code-security / code-hygiene.
         assert!(
-            loader.get_ruleset("no-secrets").is_some(),
-            "Should have the focused no-secrets validator"
+            loader.get_ruleset("code-security").is_some(),
+            "Should have the merged code-security validator"
         );
         // The monolithic code-quality set was split into focused validators.
         assert!(
@@ -414,43 +558,19 @@ mod tests {
     }
 
     #[test]
-    fn test_no_secrets_and_injection_rulesets_load() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        // The old multi-rule security-rules set was split into two focused
-        // blocker validators, each carrying its single rule.
-        let no_secrets = loader
-            .get_ruleset("no-secrets")
-            .expect("no-secrets RuleSet should exist");
-        assert_eq!(no_secrets.name(), "no-secrets");
-        assert!(
-            no_secrets.rules.iter().any(|r| r.name == "no-secrets"),
-            "no-secrets validator should carry the no-secrets rule"
-        );
-
-        let injection = loader
-            .get_ruleset("injection")
-            .expect("injection RuleSet should exist");
-        assert_eq!(injection.name(), "injection");
-        assert!(
-            injection.rules.iter().any(|r| r.name == "injection"),
-            "injection validator should carry the injection rule"
-        );
-    }
-
-    #[test]
     fn test_rehomed_quality_validators_load() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        // The nine code-quality concerns were re-homed/split into ten focused,
-        // one-concern validators. Each loads as its own RuleSet with at least
-        // one rule.
+        // The nine code-quality concerns were re-homed/split into focused
+        // validators; two (duplication, reuse) kept their own probe and
+        // stayed standalone, and the other seven were merged into
+        // code-security/code-hygiene. Each loads as its own RuleSet with at
+        // least one rule.
         let focused = PROBE_VALIDATORS
             .iter()
             .map(|(name, _)| *name)
-            .chain(IN_FILE_VALIDATORS.iter().copied());
+            .chain(MERGED_VALIDATORS.iter().copied());
         for name in focused {
             let ruleset = loader
                 .get_ruleset(name)
@@ -480,20 +600,20 @@ mod tests {
     }
 
     #[test]
-    fn test_no_secrets_expands_file_groups() {
+    fn test_code_security_expands_file_groups() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
         let ruleset = loader
-            .get_ruleset("no-secrets")
-            .expect("no-secrets should be loaded");
+            .get_ruleset("code-security")
+            .expect("code-security should be loaded");
 
         // The @file_groups/source_code should have been expanded in the manifest
         let match_criteria = ruleset
             .manifest
             .match_criteria
             .as_ref()
-            .expect("no-secrets should have match criteria");
+            .expect("code-security should have match criteria");
 
         // Should have actual file patterns, not the @reference
         assert!(
@@ -572,7 +692,7 @@ mod tests {
         let focused = PROBE_VALIDATORS
             .iter()
             .map(|(name, _)| *name)
-            .chain(IN_FILE_VALIDATORS.iter().copied());
+            .chain(MERGED_VALIDATORS.iter().copied());
         for name in focused {
             let ruleset = loader
                 .get_ruleset(name)
@@ -616,7 +736,7 @@ mod tests {
         let focused = PROBE_VALIDATORS
             .iter()
             .map(|(name, _)| *name)
-            .chain(IN_FILE_VALIDATORS.iter().copied());
+            .chain(MERGED_VALIDATORS.iter().copied());
         for name in focused {
             let ruleset = loader
                 .get_ruleset(name)

@@ -45,10 +45,13 @@ use tokio::sync::broadcast;
 // The planted source.
 //
 // Every file is `.rs`, so it matches all the builtin source-code validators
-// (`duplication`, `reuse`, `data-driven`, `dead-code`, `no-secrets`, `rust`). The
-// defects are spread across four files (≤ the default fan-out batch size of 4) so
-// each validator's files fit one batch — one fan-out task per validator, so the
-// scripted agent fires each validator response exactly once.
+// (`duplication`, `reuse`, `code-hygiene` (data-driven + dead-code), `code-security`
+// (no-secrets), `rust`). The defects are spread across four files (≤ the default
+// fan-out batch size) so each validator's files fit one batch — one fan-out task per
+// validator, so the scripted agent fires each validator response exactly once. Since
+// `code-hygiene` bundles the data-driven and dead-code rules into ONE validator, its
+// one fan-out task must return all three of those rules' findings in a single
+// response (see the `code-hygiene` entry in `fanout_rules`).
 // ---------------------------------------------------------------------------
 
 /// Path to the planted `payments.rs` — the diff file carrying the duplication,
@@ -58,10 +61,11 @@ pub const FILE_PAYMENTS: &str = "src/payments.rs";
 /// util the reuse validator flags (item 2).
 pub const FILE_REUSE: &str = "src/util_reuse.rs";
 /// Path to the planted `orphan.rs` — the diff file holding the truly-dead
-/// function the dead-code validator flags (item 4).
+/// function the `code-hygiene` validator's dead-code rule flags (item 4).
 pub const FILE_ORPHAN: &str = "src/orphan.rs";
 /// Path to the planted `live.rs` — the diff file holding the function the
-/// dead-code guard wrongly suspects is dead (the guard red herring, item 7).
+/// `code-hygiene` validator's dead-code rule (via the `callers` guard) wrongly
+/// suspects is dead (the guard red herring, item 7).
 pub const FILE_LIVE: &str = "src/live.rs";
 
 /// An existing indexed file whose function the duplicate (item 1) copies. It is
@@ -263,6 +267,23 @@ fn two_findings(a: (&str, u32, &str, &str), b: (&str, u32, &str, &str)) -> Strin
     format!("```json\n{array}\n```")
 }
 
+/// Three findings in one array — for `code-hygiene`, which now bundles the
+/// data-driven and dead-code rules into one validator, so its one fan-out task
+/// (one prompt, one response) must emit the data-driven finding AND both
+/// dead-code findings (the real orphan plus the guard red herring) together.
+fn three_findings(
+    a: (&str, u32, &str, &str),
+    b: (&str, u32, &str, &str),
+    c: (&str, u32, &str, &str),
+) -> String {
+    let array = json!([
+        finding_obj(a.0, a.1, a.2, a.3),
+        finding_obj(b.0, b.1, b.2, b.3),
+        finding_obj(c.0, c.1, c.2, c.3),
+    ]);
+    format!("```json\n{array}\n```")
+}
+
 /// A confirming verify verdict.
 fn confirm() -> String {
     "```json\n{\"confirmed\": true, \"reason\": \"substantiated by the evidence\"}\n```".to_string()
@@ -297,8 +318,14 @@ pub const CLAIM_RUST_IDIOM: &str =
     "fee_for_tier returns a bare f64 where a typed Money would be safer";
 
 /// The fan-out rules: one entry per (validator, file), each emitting that
-/// validator's planted finding(s). `dead-code` and `rust` each emit two findings
-/// in one batch — a real finding plus a red herring the later stages refute.
+/// validator's planted finding(s). `rust` emits two findings in one batch — a
+/// real finding plus a red herring the later stages refute. `code-hygiene`
+/// bundles the former `data-driven` and `dead-code` single-rule validators, so
+/// its one fan-out task (one prompt covering every source file in the batch)
+/// emits all three of their findings together: the data-driven finding plus
+/// both dead-code findings (the real orphan and the guard red herring).
+/// `code-security` bundles the former `no-secrets` validator (among others
+/// that have no planted defect here), so it emits just the secret finding.
 fn fanout_rules() -> Vec<Rule> {
     vec![
         fanout(
@@ -312,21 +339,15 @@ fn fanout_rules() -> Vec<Rule> {
             &finding(FILE_REUSE, 3, "warning", CLAIM_REUSE),
         ),
         fanout(
-            "data-driven",
-            FILE_PAYMENTS,
-            &finding(FILE_PAYMENTS, 16, "warning", CLAIM_DATA),
-        ),
-        fanout(
-            "no-secrets",
+            "code-security",
             FILE_PAYMENTS,
             &finding(FILE_PAYMENTS, 5, "blocker", CLAIM_SECRET),
         ),
-        // dead-code flags BOTH the real orphan (item 4) and the red-herring it
-        // wrongly believes is dead (item 7). One fan-out task, two findings.
         fanout(
-            "dead-code",
-            FILE_ORPHAN,
-            &two_findings(
+            "code-hygiene",
+            FILE_PAYMENTS,
+            &three_findings(
+                (FILE_PAYMENTS, 16, "warning", CLAIM_DATA),
                 (FILE_ORPHAN, 3, "blocker", CLAIM_DEAD_ORPHAN),
                 (FILE_LIVE, 3, "blocker", CLAIM_GUARD_HERRING),
             ),

@@ -1,91 +1,93 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e180
+comments:
+- actor: claude-code
+  id: 01kz40fw3g2t97e9p3481s2cj5
+  text: |-
+    Found a true conflict before writing code. The task text says code-hygiene must declare exactly `probes: [\"callers\"]` (stated twice: in the set description and as an acceptance criterion). But the `cognitive-complexity.md` rule being folded into code-hygiene depends on its own `complexity` probe (added in commit 8d7d8f57d, the day before this task's last update) for deterministic tree-sitter-computed numbers. Probes are declared once per validator SET in VALIDATOR.md (`crates/swissarmyhammer-validators/src/review/scope.rs` reads `manifest.probes` per set, not per rule) and drive which probe evidence renders for every rule in that set. Declaring only `callers` on code-hygiene would silently stop the complexity probe from firing for the merged rule, reverting it to ungrounded LLM counting -- the exact nondeterminism 8d7d8f57d was written to remove.
+
+    Asked the user directly (not guessing): answer was (A) -- declare `probes: [callers, complexity]` on code-hygiene, keeping the complexity rule's real evidence mechanism intact even though it deviates from the literal `[\"callers\"]` acceptance-criterion text. Proceeding with probes: [callers, complexity] for code-hygiene. Updating the acceptance criteria text below to match this resolution.
+  timestamp: 2026-08-03T14:29:51.344087+00:00
+- actor: claude-code
+  id: 01kz43azts6r6r9bzrp0mby57j
+  text: |-
+    ### implement — changed
+
+    Files touched:
+    - `builtin/validators/code-security/VALIDATOR.md` (new) — `match.files: [@file_groups/source_code]`, no probes
+    - `builtin/validators/code-hygiene/VALIDATOR.md` (new) — `match.files: [@file_groups/source_code]`, `probes: [callers, complexity]` (see resolved-conflict note in the description)
+    - `builtin/validators/code-security/rules/{no-secrets,injection,command-safety}.md` — `git mv`'d unchanged from the retired sets
+    - `builtin/validators/code-hygiene/rules/{no-commented-code,function-length,cognitive-complexity,missing-docs,data-driven,dead-code}.md` — `git mv`'d unchanged from the retired sets
+    - Deleted the nine retired set directories: `no-secrets`, `injection`, `command-safety`, `no-commented-code`, `function-length`, `complexity`, `missing-docs`, `data-driven`, `dead-code`
+    - `builtin/validators/README.md` — swapped the stale `no-secrets/` example for `code-security/`
+    - `crates/mirdan/retired-validators/<name>/...` (new, 9 dirs) — byte-for-byte snapshot of each retired set's shipped content, kept outside `builtin/validators/` so neither the RuleSet loader nor the builtin embed ever picks it up as a live/installable set
+    - `crates/mirdan/src/retired_validators.rs` (new) — `RETIRED_VALIDATOR_SETS` table (`include_str!` of the snapshot files) + `prune_unmodified_retired_sets(store_root)`: removes a retired set directory only when every file matches the snapshot byte-for-byte (no extra/missing/edited files); leaves anything else untouched
+    - `crates/mirdan/src/lib.rs` — registered `pub mod retired_validators;`
+    - `crates/mirdan/src/install.rs` — wired `prune_unmodified_retired_sets` into `install_profile_validators` (runs on every refresh/init); fixed three existing tests that referenced the now-retired `dead-code`/`no-secrets` names (`init_profile_materializes_builtin_validators_to_home_store`, `init_profile_validators_idempotent_refreshes_builtin_preserves_user`, `init_profile_writes_store_readme_and_deinit_removes_it`) to use `code-hygiene`/`code-security`; added new test `init_profile_refresh_prunes_unmodified_retired_set_but_keeps_user_modified_copy`
+    - `crates/mirdan/src/builtin_validators.rs` — updated `test_builtin_validators_embed_expected_sets` to assert `code-security`/`code-hygiene`/`duplication`/`reuse`/`test-integrity` present and the nine retired names absent
+    - `crates/swissarmyhammer-validators/src/builtin/mod.rs` — trimmed `PROBE_VALIDATORS`/`SAFETY_VALIDATORS` to the sets that stayed standalone, added `MERGED_VALIDATORS`/`RETIRED_VALIDATOR_NAMES`, added `test_code_security_loads_with_three_rules_and_no_probes`, `test_code_hygiene_loads_with_six_rules_and_callers_and_complexity_probes`, `test_retired_single_rule_validators_no_longer_load`, `test_code_security_and_code_hygiene_match_expected_paths`, `test_test_integrity_reuse_and_duplication_are_unaffected_by_the_merge`; fixed every other test that referenced a retired name (`test_load_builtins`, `test_rehomed_quality_validators_load`, `test_no_secrets_expands_file_groups` → `test_code_security_expands_file_groups`, the two `IN_FILE_VALIDATORS` chain call sites) or removed the now-vacuous `test_in_file_validators_declare_no_probes`; deleted `data-driven` from `test_builtin_rulesets_carry_their_validator_md_body` since its body no longer stands alone
+
+    Conflict found and resolved before writing code (full record in the earlier comment + description): the card said code-hygiene needs only `probes: [callers]`, but the `cognitive-complexity` rule bundled into it needs its own `complexity` probe (added same day in 8d7d8f57d) to stay deterministic. Asked the user directly; kept both probes. Updated the card's description and acceptance criteria to match.
+
+    Verified byte-identity of all nine moved rule files via `diff` against the `cp`-made snapshot taken before the `git mv`.
+
+    Evidence: `cargo test -p mirdan -p swissarmyhammer-validators` → 412 passed (mirdan) + 362 passed (swissarmyhammer-validators) + 2 doctests, 0 failed. `cargo fmt --all` clean. `cargo clippy -p mirdan -p swissarmyhammer-validators --all-targets -- -D warnings` clean.
+
+    next: /review
+  timestamp: 2026-08-03T15:19:37.049993+00:00
+- actor: claude-code
+  id: 01kz493wrtsrhkrmdh4zsmst8p
+  text: |-
+    ### finish iteration 1 — findings (pre-commit, found by orchestrator's own verification)
+    The implementer's scoped test run (`cargo test -p mirdan -p swissarmyhammer-validators`) passed clean, but it explicitly skipped the card's own required broader check (`cargo nextest run -E 'rdeps(swissarmyhammer-validators) or rdeps(mirdan)'`) based on its own judgment that the change was "additive." I ran that check myself and it surfaces 3 real regressions in `swissarmyhammer-tools`, a crate the implementer's scope never touched:
+
+    1. `swissarmyhammer-tools::tools_tests integration::review_e2e::review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings` (review_e2e.rs:88) — asserts the report text contains `"dead-code"` by name. The rule still fires (the finding text for `src/payments.rs:16`/`util_reuse.rs:3` is present and correct), but the validator is now named `code-hygiene`, not `dead-code`.
+    2. `swissarmyhammer-tools::tools_tests integration::review_e2e::review_e2e_sha_range_confirms_the_same_defects` (review_e2e.rs:165) — same cause, same fix.
+    3. `swissarmyhammer-tools::review_progress_stdio_test::review_progress_is_received_by_a_real_client_over_a_byte_stream_transport` — times out at 70s. Confirmed this is a REAL regression, not pre-existing or flaky: stashed the ^ettx7ay diff, ran this test alone against the clean merged tree — it passes in 10.4s. With the diff restored it times out. Root cause is likely that `code-hygiene` now bundles 6 rules (including the `complexity` probe) into one validator task, so that single fleet task takes much longer than any of the 9 original single-rule tasks did, and this test's fixed wait budget doesn't account for it.
+
+    Also confirmed independently: `mcp::tools::review::tests::review_file_reviews_the_real_llama_agent_acp_server_file_under_the_default_budget`, which failed on the FIRST rdeps run (before the origin merge), is gone from the second run — it referenced the now-deleted `llama-agent` crate (merged in from origin PR #69, unrelated to this task) and no longer applies.
+
+    Also: the `review` tag was found dropped from this task's frontmatter after the first implement pass (present in `filter_tags` as `READY` only, `tags: []`). Restored it. Cause not diagnosed — flagging in case it recurs on other update-task calls.
+
+    - test: red — 3 real failures on `rdeps(swissarmyhammer-validators) or rdeps(mirdan)`, confirmed not pre-existing
+    - next: step 2 — /implement fixes all 3, and this time DOES run the card's own required broader check rather than skipping it
+  timestamp: 2026-08-03T17:00:35.994810+00:00
+- actor: claude-code
+  id: 01kz49qmm4kcb521enk4f5ftyk
+  text: |-
+    ### implement — changed
+
+    Fixed the 3 real regressions the prior finish-iteration surfaced via `rdeps(swissarmyhammer-validators) or rdeps(mirdan)`. All 3 traced to ONE root cause, not three separate ones.
+
+    **Root cause**: `crates/swissarmyhammer-tools/tests/integration/review_fixture.rs`'s `fanout_rules()` scripts the fake ACP agent to answer by matching the literal `# Validator: <name>` header the production fleet puts in each fan-out prompt (`VALIDATOR_HEADER` in `crates/swissarmyhammer-validators/src/review/fleet.rs`, built from `validator.validator_name()` — the validator SET's name, one task per SET, not per rule). The fixture still scripted responses keyed to the nine retired single-rule names (`no-secrets`, `data-driven`, `dead-code`). After the merge, the production fleet now sends `# Validator: code-security` / `# Validator: code-hygiene`, so those three fan-out rules never matched, fell through to the scripted agent's default `[]` response, and the secret/data-driven/dead-code findings (and, downstream, their verify verdicts) never fired.
+
+    - Findings 1 and 2 (`review_e2e.rs`) showed up as missing findings in the rendered report (`report_has_claim` false for `CLAIM_SECRET`/`CLAIM_DATA`/`CLAIM_DEAD_ORPHAN`), not as a literal-string mismatch on `"dead-code"` as first hypothesized — the actual failure was `item 5 secret` (line 88) because `no-secrets` never fired. Same root cause hits the sha-range test (line 165/167).
+    - Finding 3 (`review_progress_stdio_test.rs`) was NOT a batching/complexity-probe latency issue. The "6-rules-in-one-task is slower" hypothesis was wrong: fan-out tasks are cheap fixture-agent lookups, not the source of the 70 s stall. The real cause: the test's step 8 (`wait_until("streamed review findings + verdicts...", ...)` ) blocks on `has_verdict(&logs, CLAIM_SECRET, true)`, which can never become true while the `no-secrets`→`code-security` fanout rule never matches (no finding → no verify prompt → no verdict ever streams), so the wait spins until `WAIT_DEADLINE` (60 s) and the test fails loudly around ~70 s wall clock including setup. No timeout change was needed or made.
+
+    **Fix**: rewrote `fanout_rules()` in `review_fixture.rs` to key on the new set names. `no-secrets`'s finding moved under a `fanout("code-security", ...)` entry (unchanged, single finding — the only planted code-security defect in this fixture). `data-driven` and `dead-code` were merged into ONE `fanout("code-hygiene", ...)` entry, since `code-hygiene` is one fan-out task per batch and the scripted-agent harness matches the FIRST rule whose needles are all present in one prompt (not a merge of multiple matching rules) — so one task needs one response carrying all three findings (the data-driven finding plus both dead-code findings: the real orphan and the guard red herring). Added a `three_findings()` helper alongside the existing `finding()`/`two_findings()` to build that combined JSON array. Updated the surrounding doc comments (module banner, `FILE_ORPHAN`/`FILE_LIVE` doc comments) to reflect the new validator names. No rule text, VALIDATOR.md, or production code touched — the fix is entirely in the test fixture that scripts the fake agent.
+
+    Files touched:
+    - `crates/swissarmyhammer-tools/tests/integration/review_fixture.rs` — `fanout_rules()` rewritten to use `code-security`/`code-hygiene` instead of the retired `no-secrets`/`data-driven`/`dead-code` names; added `three_findings()` helper; updated doc comments.
+
+    No production code, VALIDATOR.md, or rule-text files changed by this pass.
+
+    Evidence:
+    - `cargo test -p swissarmyhammer-tools --test tools_tests` → 162 passed, 0 failed (includes both previously-red `review_e2e` tests).
+    - `cargo test -p swissarmyhammer-tools --test review_progress_stdio_test` → 3 passed, 0 failed, finished in 10.57s (was timing out at ~70s; now matches the ~10.4s baseline the diagnosis comment recorded for the pre-merge tree).
+    - `cargo test -p swissarmyhammer-tools --test review_progress_notifications_test --test review_global_subscriber` → 2 passed, 0 failed.
+    - `cargo test -p mirdan -p swissarmyhammer-validators` → 412 passed (mirdan) + 362 passed (swissarmyhammer-validators) + 2 doctests, 0 failed.
+    - `cargo fmt --all -- --check` → clean, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` → clean, 0 warnings.
+    - **The card's own required broader check**: `cargo nextest run -E 'rdeps(swissarmyhammer-validators) or rdeps(mirdan)'` → `Summary [73.591s] 3545 tests run: 3545 passed (5 slow, 1 leaky), 0 skipped`. Zero failures. Full wall time 1m28s (matches the note that llama-agent's removal — unrelated origin PR #69 — collapsed this from the ~2000s it took on the first finish pass).
+
+    Subtasks/acceptance criteria in the description are unchanged — this pass fixed a test fixture regression, not the merge itself, and every item there was already checked and remains accurate.
+
+    next: /review
+  timestamp: 2026-08-03T17:11:23.012268+00:00
+position_column: doing
+position_ordinal: '8280'
 title: Merge nine single-rule builtin validators into code-security and code-hygiene
 ---
-## What
-
-The review fleet makes one agent task for each validator that matches the changed
-files. Nine builtin validators hold one rule each, so one changed source file
-costs nine agent tasks. Merge them into TWO sets, split by concern.
-
-The source of truth is `builtin/validators/` (deployed to `~/.validators` by
-`sah init`; see `builtin/validators/README.md` for the precedence rules).
-
-Every one of the nine matches `@file_groups/source_code`, so the match globs
-merge without loss. Probes are the only real constraint: `dead-code` needs
-`callers`, and the rest need none.
-
-## The two sets
-
-**`code-security`** — no probes. Rules:
-
-- `no-secrets.md`
-- `injection.md`
-- `command-safety.md`
-
-**`code-hygiene`** — `probes: [callers]`, which `dead-code` needs. Rules:
-
-- `no-commented-code.md`
-- `function-length.md`
-- `cognitive-complexity.md` (from `complexity`)
-- `missing-docs.md`
-- `data-driven.md`
-- `dead-code.md`
-
-Keep security separate from hygiene. A leaked credential or an injection hole is
-not untidiness, and a set named "hygiene" understates it. Two names, two
-concerns.
-
-## Out of scope — do not touch these
-
-- `test-integrity` — it matches `@file_groups/test_files` as well as source, so
-  it does not merge with a source-only set. Leave it whole.
-- `reuse` (`probes: [similar]`) and `duplication` (`probes: [duplicates]`) —
-  each carries its own probe. Folding either in would force its probe on every
-  rule in the set. Leave them alone.
-- `naming` and `magic-numbers` — user-level sets in `~/.validators` only. They
-  do not exist in `builtin/validators/`.
-- The language sets (`rust`, `python`, `swift`, `dart`, `js-ts`, `numpy`) and
-  `completeness`.
-
-## Changes
-
-- Create `builtin/validators/code-security/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, no probes.
-- Create `builtin/validators/code-hygiene/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, `probes: [callers]`.
-- Move the nine rule files unchanged into the two `rules/` directories.
-- Delete the nine retired set directories from `builtin/validators/`.
-- Make the builtin validator refresh remove a retired builtin set from the
-  deployed store (`~/.validators`), but ONLY when the deployed files are
-  identical to what was shipped. A user-modified set of the same name stays.
-
-## Subtasks
-
-- [ ] Create `builtin/validators/code-security/VALIDATOR.md`
-- [ ] Create `builtin/validators/code-hygiene/VALIDATOR.md` with `probes: [callers]`
-- [ ] Move the nine rule files into the two new `rules/` directories
-- [ ] Delete the nine retired set directories
-- [ ] Remove retired, unmodified builtin sets from the deployed store on refresh (`crates/mirdan/src/install.rs`)
-- [ ] Update the embed and loader tests
-
-## Acceptance Criteria
-
-- [ ] The loader reports `code-security` with 3 rules and no probes
-- [ ] The loader reports `code-hygiene` with 6 rules and `probes: ["callers"]`
-- [ ] The loader no longer reports the nine retired set names from the builtin layer
-- [ ] `test-integrity`, `reuse` and `duplication` still load unchanged
-- [ ] A refresh deploy removes an unmodified retired set from the target store, and keeps a user-modified set of the same name
-- [ ] Every one of the nine rule texts ships unchanged — no rule is reworded, weakened or dropped by this merge
-
-## Tests
-
-- [ ] Update `test_builtin_validators_embed_expected_sets` in `crates/mirdan/src/builtin_validators.rs`: assert `code-security` and `code-hygiene` are present and the nine retired names are gone
-- [ ] Update the loader tests in `crates/swissarmyhammer-validators/src/builtin/mod.rs` (they read `../../builtin/validators` directly): assert both new sets, their rule counts, and their probes
-- [ ] New test for the refresh prune in `crates/mirdan/src/install.rs`: deploy the old set, refresh, assert it is gone; deploy a modified copy, refresh, assert it stays
-- [ ] `cargo test -p mirdan -p swissarmyhammer-validators` passes
-
-## Workflow
-
-- Use `/tdd` — write failing tests first, then implement to make them pass. #review
+## What\n\nThe review fleet makes one agent task for each validator that matches the changed\nfiles. Nine builtin validators hold one rule each, so one changed source file\ncosts nine agent tasks. Merge them into TWO sets, split by concern.\n\nThe source of truth is `builtin/validators/` (deployed to `~/.validators` by\n`sah init`; see `builtin/validators/README.md` for the precedence rules).\n\nEvery one of the nine matches `@file_groups/source_code`, so the match globs\nmerge without loss.\n\n**RESOLVED CONFLICT (see comments for full record):** the original text below\nsaid code-hygiene needs only the `callers` probe. That is wrong: the\n`cognitive-complexity` rule (from `complexity`) declares its own `complexity`\nprobe (added in 8d7d8f57d, computes deterministic tree-sitter numbers), and\nprobes are declared once per validator SET, not per rule\n(`crates/swissarmyhammer-validators/src/review/scope.rs` reads\n`manifest.probes` for the whole set). Dropping `complexity` would silently kill\nthat rule's evidence mechanism and reintroduce the LLM nondeterminism\n8d7d8f57d removed. Asked the user; answer was to keep both probes.\n**`code-hygiene` therefore declares `probes: [callers, complexity]`, not just\n`[callers]`.**\n\n## The two sets\n\n**`code-security`** — no probes. Rules:\n\n- `no-secrets.md`\n- `injection.md`\n- `command-safety.md`\n\n**`code-hygiene`** — `probes: [callers, complexity]` — `callers` for\n`dead-code`, `complexity` for `cognitive-complexity`. Rules:\n\n- `no-commented-code.md`\n- `function-length.md`\n- `cognitive-complexity.md` (from `complexity`)\n- `missing-docs.md`\n- `data-driven.md`\n- `dead-code.md`\n\nKeep security separate from hygiene. A leaked credential or an injection hole is\nnot untidiness, and a set named \"hygiene\" understates it. Two names, two\nconcerns.\n\n## Out of scope — do not touch these\n\n- `test-integrity` — it matches `@file_groups/test_files` as well as source, so\n  it does not merge with a source-only set. Leave it whole.\n- `reuse` (`probes: [similar]`) and `duplication` (`probes: [duplicates]`) —\n  each carries its own probe. Folding either in would force its probe on every\n  rule in the set. Leave them alone.\n- `naming` and `magic-numbers` — user-level sets in `~/.validators` only. They\n  do not exist in `builtin/validators/`.\n- The language sets (`rust`, `python`, `swift`, `dart`, `js-ts`, `numpy`) and\n  `completeness`.\n\n## Changes\n\n- Create `builtin/validators/code-security/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, no probes.\n- Create `builtin/validators/code-hygiene/VALIDATOR.md`, `match.files: [@file_groups/source_code]`, `probes: [callers, complexity]`.\n- Move the nine rule files unchanged into the two `rules/` directories.\n- Delete the nine retired set directories from `builtin/validators/`.\n- Make the builtin validator refresh remove a retired builtin set from the\n  deployed store (`~/.validators`), but ONLY when the deployed files are\n  identical to what was shipped. A user-modified set of the same name stays.\n\n## Subtasks\n\n- [x] Create `builtin/validators/code-security/VALIDATOR.md`\n- [x] Create `builtin/validators/code-hygiene/VALIDATOR.md` with `probes: [callers, complexity]`\n- [x] Move the nine rule files into the two new `rules/` directories\n- [x] Delete the nine retired set directories\n- [x] Remove retired, unmodified builtin sets from the deployed store on refresh (`crates/mirdan/src/install.rs`)\n- [x] Update the embed and loader tests\n\n## Acceptance Criteria\n\n- [x] The loader reports `code-security` with 3 rules and no probes\n- [x] The loader reports `code-hygiene` with 6 rules and `probes: [\"callers\", \"complexity\"]`\n- [x] The loader no longer reports the nine retired set names from the builtin layer\n- [x] `test-integrity`, `reuse` and `duplication` still load unchanged\n- [x] A refresh deploy removes an unmodified retired set from the target store, and keeps a user-modified set of the same name\n- [x] Every one of the nine rule texts ships unchanged — no rule is reworded, weakened or dropped by this merge\n\n## Tests\n\n- [x] Update `test_builtin_validators_embed_expected_sets` in `crates/mirdan/src/builtin_validators.rs`: assert `code-security` and `code-hygiene` are present and the nine retired names are gone\n- [x] Update the loader tests in `crates/swissarmyhammer-validators/src/builtin/mod.rs` (they read `../../builtin/validators` directly): assert both new sets, their rule counts, and their probes\n- [x] New test for the refresh prune in `crates/mirdan/src/install.rs`: deploy the old set, refresh, assert it is gone; deploy a modified copy, refresh, assert it stays\n- [x] `cargo test -p mirdan -p swissarmyhammer-validators` passes\n\n## Workflow\n\n- Use `/tdd` — write failing tests first, then implement to make them pass. #review
+#review

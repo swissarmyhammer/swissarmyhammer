@@ -34,6 +34,7 @@ pub mod outdated;
 pub mod package_type;
 pub mod publish;
 pub mod registry;
+pub mod retired_validators;
 pub mod search;
 pub mod settings;
 pub mod status;

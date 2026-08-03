@@ -65,12 +65,39 @@ mod tests {
     #[test]
     fn test_builtin_validators_embed_expected_sets() {
         let sets = builtin_validators_by_set();
-        // The monolithic security-rules set was split into the focused
-        // no-secrets / injection / command-safety validators.
-        for expected in ["duplication", "no-secrets", "test-integrity"] {
+        // The nine single-rule sets (no-secrets, injection, command-safety,
+        // no-commented-code, function-length, complexity, missing-docs,
+        // data-driven, dead-code) were merged into code-security and
+        // code-hygiene. duplication/reuse/test-integrity keep their own probe
+        // (or test-file match) and were left whole.
+        for expected in [
+            "code-security",
+            "code-hygiene",
+            "duplication",
+            "reuse",
+            "test-integrity",
+        ] {
             assert!(
                 sets.contains_key(expected),
                 "embedded builtins must include the `{expected}` set, got: {:?}",
+                sets.keys().collect::<Vec<_>>()
+            );
+        }
+
+        for retired in [
+            "no-secrets",
+            "injection",
+            "command-safety",
+            "no-commented-code",
+            "function-length",
+            "complexity",
+            "missing-docs",
+            "data-driven",
+            "dead-code",
+        ] {
+            assert!(
+                !sets.contains_key(retired),
+                "embedded builtins must no longer include the retired `{retired}` set, got: {:?}",
                 sets.keys().collect::<Vec<_>>()
             );
         }
