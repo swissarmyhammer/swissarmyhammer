@@ -4,7 +4,7 @@
 
 use llama_agent::acp::permissions::PermissionPolicy;
 use llama_agent::acp::{AcpConfig, AcpServer, GracefulShutdownTimeout};
-use llama_agent::{AgentAPI, AgentConfig, AgentServer};
+use llama_agent::{AgentAPI, AgentConfig, AgentServer, AgentToolsMount};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,11 +72,10 @@ pub async fn handle_command(
         }
     };
 
-    // Build the always-on Agent-tools mount through the single cycle-free seam
-    // in `swissarmyhammer-agent`, then hand it to the ACP server so the llama
-    // agent is fully tooled (files, web, skill, subagent, shell) even with no
-    // external MCP servers configured.
-    let agent_tools_mount = match swissarmyhammer_agent::build_agent_tools_mount().await {
+    // Build the always-on Agent-tools mount and hand it to the ACP server so the
+    // llama agent is fully tooled (files, web, skill, subagent, shell) even with
+    // no external MCP servers configured.
+    let agent_tools_mount = match build_agent_tools_mount().await {
         Ok(mount) => mount,
         Err(e) => {
             eprintln!("Failed to build agent-tools mount: {}", e);
@@ -101,6 +100,28 @@ pub async fn handle_command(
             crate::exit_codes::EXIT_ERROR
         }
     }
+}
+
+/// Build the always-on Agent-tools mount handed to every llama-agent session.
+///
+/// Builds the full SAH [`McpServer`](swissarmyhammer_tools::McpServer), derives
+/// the agent-tools-only filtered server via
+/// [`create_agent_tools_server`](swissarmyhammer_tools::McpServer::create_agent_tools_server)
+/// (`compose_per_client = false`, so it serves its registry verbatim — files,
+/// web, skill, subagent, shell), and wraps it in a
+/// [`llama_agent::InProcessMount`]. The mount is an rmcp-only value from
+/// llama-agent's perspective, so no `tools -> llama-agent` edge is introduced.
+async fn build_agent_tools_mount() -> Result<Arc<dyn AgentToolsMount>, Box<dyn std::error::Error>> {
+    use swissarmyhammer_templating::TemplateLibrary;
+    use swissarmyhammer_tools::McpServer;
+
+    let server = McpServer::new(TemplateLibrary::default())
+        .await
+        .map_err(|e| format!("failed to build agent-tools server: {e}"))?;
+    let agent_tools_server = server.create_agent_tools_server();
+    Ok(Arc::new(llama_agent::InProcessMount::new(
+        agent_tools_server,
+    )))
 }
 
 async fn load_acp_config(

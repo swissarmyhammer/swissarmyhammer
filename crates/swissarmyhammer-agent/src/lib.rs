@@ -1,7 +1,8 @@
 //! Unified ACP agent creation and execution
 //!
-//! This crate provides a single entry point for creating and using ACP agents
-//! (claude-agent and llama-agent) based on model configuration.
+//! This crate provides a single entry point for creating and using the
+//! claude-agent ACP agent from a model configuration. Claude Code is the only
+//! supported agent executor; any other executor is rejected by name.
 //!
 //! # Architecture
 //!
@@ -29,7 +30,7 @@
 //! This crate provides a simplified interface for one-shot prompt execution and does
 //! not implement session loading. Each call to `execute_prompt` creates a new session.
 //! Session loading (`load_session`) is a capability of the underlying ACP agents
-//! (claude-agent, llama-agent), not this utility wrapper.
+//! (claude-agent), not this utility wrapper.
 //!
 //! For applications that need session persistence and history replay, use the
 //! underlying agent implementations directly via the typed
@@ -69,24 +70,20 @@
 //! ```
 
 use agent_client_protocol::schema::{
-    self, ClientCapabilities, ClientNotification, ClientRequest, ContentBlock,
-    FileSystemCapabilities, InitializeRequest, NewSessionRequest, PromptRequest, PromptResponse,
-    SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    StopReason, TextContent,
+    ClientCapabilities, ClientNotification, ClientRequest, ContentBlock, FileSystemCapabilities,
+    InitializeRequest, NewSessionRequest, PromptRequest, PromptResponse, SessionId, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionModeRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder};
 use agent_client_protocol_extras::{
     is_turn_complete, trace_notifications, TolerantResponseRouter, TracingAgent,
 };
-use llama_agent::types::AgentAPI;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
 use thiserror::Error;
 use tokio::sync::broadcast;
-use tokio::sync::Mutex as AsyncMutex;
 
 // ============================================================================
 // Configuration Constants
@@ -94,30 +91,6 @@ use tokio::sync::Mutex as AsyncMutex;
 
 /// Maximum prompt length in bytes (5MB for very large source files)
 const MAX_PROMPT_LENGTH_BYTES: usize = 5_000_000;
-
-/// Default maximum retry attempts for model operations
-const DEFAULT_MAX_RETRIES: u32 = 2;
-
-/// Initial delay in milliseconds before first retry
-const DEFAULT_INITIAL_RETRY_DELAY_MS: u64 = 100;
-
-/// Multiplier applied to delay between successive retries
-const DEFAULT_BACKOFF_MULTIPLIER: f64 = 1.5;
-
-/// Maximum delay in milliseconds between retries
-const DEFAULT_MAX_RETRY_DELAY_MS: u64 = 1000;
-
-/// Default number of threads for model inference
-const DEFAULT_NUM_THREADS: i32 = 4;
-
-/// Default number of threads for batch processing
-const DEFAULT_BATCH_THREADS: i32 = 4;
-
-/// Keep-alive interval in seconds for SSE connections
-const SSE_KEEP_ALIVE_SECONDS: u64 = 30;
-
-/// Maximum size of the request queue
-const DEFAULT_MAX_QUEUE_SIZE: usize = 100;
 
 /// Hang guard for the post-turn notification drain, in milliseconds.
 ///
@@ -291,9 +264,9 @@ impl McpServerConfig {
 /// middleware (e.g. `RecordingAgent`) on top before connecting.
 ///
 /// [`notification_rx`](Self::notification_rx) carries the broadcast
-/// channel fed by the underlying backend (`claude_agent::ClaudeAgent` or
-/// `llama_agent::AcpServer`) when its inherent `prompt`/`new_session`
-/// methods stream `SessionNotification`s. The `Agent.builder()` inside
+/// channel fed by the underlying backend (`claude_agent::ClaudeAgent`)
+/// when its inherent `prompt`/`new_session` methods stream
+/// `SessionNotification`s. The `Agent.builder()` inside
 /// this crate also bridges that broadcast onto the JSON-RPC
 /// `cx.send_notification` channel so consumers that prefer to capture
 /// notifications via `Client.builder().on_receive_notification(...)` can
@@ -405,21 +378,23 @@ pub async fn create_agent_with_options(
             let agent_config = claude_agent_config_from_model(config, mcp_config, &options);
             create_claude_agent(agent_config).await
         }
-        ModelExecutorType::LlamaAgent => {
-            let llama_config = match config.executor() {
-                ModelExecutorConfig::LlamaAgent(cfg) => cfg.clone(),
-                _ => {
-                    return Err(AcpError::ConfigurationError(
-                        "Expected LlamaAgent configuration".to_string(),
-                    ))
-                }
-            };
-            create_llama_agent(llama_config, mcp_config).await
-        }
-        ModelExecutorType::LlamaEmbedding | ModelExecutorType::AneEmbedding => Err(
-            AcpError::ConfigurationError("Embedding models cannot be used as agents".to_string()),
-        ),
+        unsupported => Err(AcpError::ConfigurationError(format!(
+            "unsupported agent executor '{}': claude-code is the only supported agent executor",
+            executor_config_name(unsupported)
+        ))),
     }
+}
+
+/// The executor's configuration name — the kebab-case string a model YAML
+/// writes under `executor.type`, e.g. `ane-embedding`.
+///
+/// Taken from the type's own `Serialize` implementation, so the name an error
+/// reports can never drift from the name the user typed in the configuration.
+fn executor_config_name(executor: ModelExecutorType) -> String {
+    serde_json::to_value(executor)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{executor:?}"))
 }
 
 /// Build the production `review` agent factory from a session's `ModelConfig`.
@@ -532,64 +507,6 @@ fn wrap_claude_into_handle(
 
     let traced = TracingAgent::new(builder, "Claude");
     let traced_rx = trace_notifications("Claude".to_string(), notification_rx);
-
-    AcpAgentHandle {
-        agent: DynConnectTo::new(traced),
-        notification_rx: traced_rx,
-    }
-}
-
-/// Mirror of [`wrap_claude_into_handle`] for `llama_agent::AcpServer`.
-fn wrap_llama_into_handle(
-    agent: Arc<llama_agent::AcpServer>,
-    notification_rx: broadcast::Receiver<SessionNotification>,
-) -> AcpAgentHandle {
-    let bridge_rx = notification_rx.resubscribe();
-
-    let builder = Agent
-        .builder()
-        .name("llama-agent")
-        // A nested agent→client request whose awaiter was dropped (abandoned
-        // turn) must fail that turn only, not this connection's dispatch loop.
-        .with_handler(TolerantResponseRouter)
-        .on_receive_request(
-            {
-                let agent = Arc::clone(&agent);
-                async move |req: ClientRequest, responder: Responder<serde_json::Value>, _cx| {
-                    dispatch_llama_request(&agent, req, responder).await
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_notification(
-            {
-                let agent = Arc::clone(&agent);
-                async move |notif: ClientNotification, _cx| {
-                    dispatch_llama_notification(&agent, notif).await;
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .with_spawned({
-            let agent = Arc::clone(&agent);
-            move |cx: ConnectionTo<Client>| async move {
-                // Publish the live connection as the elicitation endpoint so
-                // per-session MCP client handlers can relay `elicitation/create`
-                // to the connected client. Production uses this wrapper (not
-                // `AcpServer::start_with_streams`), so without this the endpoint
-                // stays `None` and elicitations decline. Mirror the
-                // publish/clear lifecycle `start_with_streams` performs.
-                agent.publish_client_connection(cx.clone()).await;
-                tracing::info!("Published ACP client connection as llama elicitation endpoint");
-                let result = forward_session_notifications(bridge_rx, cx).await;
-                agent.clear_client_connection().await;
-                result
-            }
-        });
-
-    let traced = TracingAgent::new(builder, "Llama");
-    let traced_rx = trace_notifications("Llama".to_string(), notification_rx);
 
     AcpAgentHandle {
         agent: DynConnectTo::new(traced),
@@ -756,77 +673,6 @@ async fn dispatch_claude_notification(
     }
 }
 
-/// Demultiplex an incoming `ClientRequest` onto `AcpServer`'s inherent
-/// methods.
-async fn dispatch_llama_request(
-    agent: &Arc<llama_agent::AcpServer>,
-    request: ClientRequest,
-    responder: Responder<serde_json::Value>,
-) -> Result<(), agent_client_protocol::Error> {
-    match request {
-        ClientRequest::InitializeRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.initialize(req).await),
-        ClientRequest::AuthenticateRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.authenticate(req).await),
-        ClientRequest::NewSessionRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.new_session(req).await),
-        ClientRequest::LoadSessionRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.load_session(req).await),
-        ClientRequest::SetSessionModeRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.set_session_mode(req).await),
-        ClientRequest::PromptRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.prompt(req).await),
-        ClientRequest::ExtMethodRequest(req) => {
-            let result = agent.ext_method(req).await.and_then(|ext_response| {
-                serde_json::from_str::<serde_json::Value>(ext_response.0.get())
-                    .map_err(|_| agent_client_protocol::Error::internal_error())
-            });
-            responder.respond_with_result(result)
-        }
-        other => {
-            tracing::warn!(
-                "Unsupported ClientRequest variant for llama-agent: {}",
-                other.method()
-            );
-            responder
-                .cast::<serde_json::Value>()
-                .respond_with_error(agent_client_protocol::Error::method_not_found())
-        }
-    }
-}
-
-/// Demultiplex an incoming `ClientNotification` onto `AcpServer`'s
-/// inherent methods.
-async fn dispatch_llama_notification(
-    agent: &Arc<llama_agent::AcpServer>,
-    notification: ClientNotification,
-) {
-    match notification {
-        ClientNotification::CancelNotification(n) => {
-            if let Err(e) = agent.cancel(n).await {
-                tracing::error!("cancel notification handler failed: {}", e);
-            }
-        }
-        ClientNotification::ExtNotification(n) => {
-            if let Err(e) = agent.ext_notification(n).await {
-                tracing::error!("ext notification handler failed: {}", e);
-            }
-        }
-        other => {
-            tracing::debug!(
-                "Ignoring unsupported ClientNotification variant: {}",
-                other.method()
-            );
-        }
-    }
-}
-
 /// Spawn a Claude ACP agent from an already-built `claude_agent::AgentConfig`.
 ///
 /// The config is built once by [`claude_agent_config_from_model`] (the single
@@ -953,398 +799,6 @@ fn build_claude_agent_config(
     agent_config.claude.tools_override = tools_override;
     agent_config.claude.extra_args = extra_args;
     agent_config
-}
-
-/// Convert swissarmyhammer model source to llama-agent model source
-fn convert_model_source(
-    source: &swissarmyhammer_config::model::ModelSource,
-) -> llama_agent::types::ModelSource {
-    match source {
-        swissarmyhammer_config::model::ModelSource::Local { filename, folder } => {
-            llama_agent::types::ModelSource::Local {
-                folder: folder.clone().unwrap_or_else(|| {
-                    filename
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."))
-                        .to_path_buf()
-                }),
-                filename: filename
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string()),
-            }
-        }
-        swissarmyhammer_config::model::ModelSource::HuggingFace {
-            repo,
-            filename,
-            folder,
-        } => llama_agent::types::ModelSource::HuggingFace {
-            repo: repo.clone(),
-            filename: if folder.is_some() {
-                None
-            } else {
-                filename.clone()
-            },
-            folder: folder.clone(),
-        },
-    }
-}
-
-/// Build llama-agent ModelConfig from swissarmyhammer config
-fn build_llama_model_config(
-    llama_config: &swissarmyhammer_config::model::LlamaAgentConfig,
-) -> llama_agent::types::ModelConfig {
-    let model_source = convert_model_source(&llama_config.model.source);
-    llama_agent::types::ModelConfig {
-        source: model_source,
-        batch_size: llama_config.model.batch_size,
-        use_hf_params: llama_config.model.use_hf_params,
-        retry_config: llama_agent::types::RetryConfig {
-            max_retries: DEFAULT_MAX_RETRIES,
-            initial_delay_ms: DEFAULT_INITIAL_RETRY_DELAY_MS,
-            backoff_multiplier: DEFAULT_BACKOFF_MULTIPLIER,
-            max_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
-        },
-        debug: false,
-        n_seq_max: 1,
-        n_threads: DEFAULT_NUM_THREADS,
-        n_threads_batch: DEFAULT_BATCH_THREADS,
-    }
-}
-
-/// Build MCP server configuration for llama-agent
-fn build_llama_mcp_servers(
-    mcp_config: Option<&McpServerConfig>,
-    timeout_seconds: u64,
-) -> Vec<llama_agent::types::MCPServerConfig> {
-    match mcp_config {
-        Some(mcp) => vec![llama_agent::types::MCPServerConfig::Http(
-            llama_agent::types::HttpServerConfig {
-                name: "swissarmyhammer".to_string(),
-                url: mcp.url.clone(),
-                timeout_secs: Some(timeout_seconds),
-                sse_keep_alive_secs: Some(SSE_KEEP_ALIVE_SECONDS),
-                stateful_mode: false,
-            },
-        )],
-        None => vec![],
-    }
-}
-
-/// Convert llama-agent MCP servers to ACP format
-fn convert_mcp_servers_to_acp(
-    mcp_servers: &[llama_agent::types::MCPServerConfig],
-) -> Vec<schema::McpServer> {
-    mcp_servers
-        .iter()
-        .map(|server| match server {
-            llama_agent::types::MCPServerConfig::Http(http_config) => schema::McpServer::Http(
-                schema::McpServerHttp::new(http_config.name.clone(), http_config.url.clone()),
-            ),
-            llama_agent::types::MCPServerConfig::InProcess(process_config) => {
-                let mut stdio_server = schema::McpServerStdio::new(
-                    process_config.name.clone(),
-                    &process_config.command,
-                );
-                stdio_server.args = process_config.args.clone();
-                schema::McpServer::Stdio(stdio_server)
-            }
-        })
-        .collect()
-}
-
-/// Process-wide cache of initialized [`llama_agent::AgentServer`]s keyed by a
-/// stable identifier of the model + queue config they were built from.
-///
-/// **Why this exists.** Loading a 35B-class GGUF into memory takes seconds and
-/// hundreds of MB to tens of GB of RAM. The kanban app opens one
-/// `AgentWebSocketServer` per board and rebuilds the agent on every accepted
-/// connection — that meant two boards (or a reconnect on the same board) using
-/// the same Qwen config loaded the model TWICE, doubling RAM and serializing
-/// CPU. The fix is the whole point of ACP: one shared agent, many sessions.
-///
-/// The cache holds `Arc<AgentServer>` indefinitely for the process lifetime.
-/// We never evict: a user typically picks one or two local models and sticks
-/// with them, and dropping a cached entry would tear down its loaded weights
-/// the moment no connection holds an `Arc` clone. Selecting a different model
-/// just adds a new entry; the prior one stays warm in case the user switches
-/// back. Mirrors how the OS file cache keeps recently-used pages even when no
-/// process currently holds them open.
-///
-/// Each ACP connection still gets its own [`llama_agent::AcpServer`] wrapper
-/// so notification broadcast and session lifecycle stay per-connection — only
-/// the underlying [`AgentServer`] (model + queue + KV cache) is shared.
-type LlamaAgentCache = AsyncMutex<HashMap<LlamaAgentKey, Arc<llama_agent::AgentServer>>>;
-
-static LLAMA_AGENT_CACHE: OnceLock<LlamaAgentCache> = OnceLock::new();
-
-fn llama_agent_cache() -> &'static LlamaAgentCache {
-    LLAMA_AGENT_CACHE.get_or_init(|| AsyncMutex::new(HashMap::new()))
-}
-
-/// Stable identity for a [`llama_agent::AgentServer`] derived from its
-/// loaded-model identity plus knobs that affect what gets loaded into RAM.
-///
-/// Two configs with the same key share a cached `AgentServer`. MCP server
-/// list and queue size are deliberately NOT part of the key: MCP clients live
-/// on each connection's session, and queue sizing only governs admission
-/// control — none of those touch the model state.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-struct LlamaAgentKey {
-    model_source: String,
-    batch_size: u32,
-    use_hf_params: bool,
-}
-
-impl LlamaAgentKey {
-    fn from_model_config(model: &llama_agent::types::ModelConfig) -> Self {
-        let model_source = match &model.source {
-            llama_agent::types::ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => format!(
-                "hf:{}|{}|{}",
-                repo,
-                filename.as_deref().unwrap_or(""),
-                folder.as_deref().unwrap_or("")
-            ),
-            llama_agent::types::ModelSource::Local { folder, filename } => format!(
-                "local:{}|{}",
-                folder.display(),
-                filename.as_deref().unwrap_or("")
-            ),
-        };
-        Self {
-            model_source,
-            batch_size: model.batch_size,
-            use_hf_params: model.use_hf_params,
-        }
-    }
-}
-
-/// Create a Llama ACP agent.
-///
-/// Shares the heavyweight `AgentServer` (which owns the loaded model and the
-/// inference queue) across all connections that use the same model config —
-/// see [`LLAMA_AGENT_CACHE`]. Each call still returns a freshly-wrapped
-/// `AcpServer` so the per-connection notification stream and session map stay
-/// isolated, but the model itself is loaded into memory once per process per
-/// distinct config.
-async fn create_llama_agent(
-    llama_config: swissarmyhammer_config::model::LlamaAgentConfig,
-    mcp_config: Option<McpServerConfig>,
-) -> AcpResult<AcpAgentHandle> {
-    let model_config = build_llama_model_config(&llama_config);
-    let mcp_servers =
-        build_llama_mcp_servers(mcp_config.as_ref(), llama_config.mcp_server.timeout_seconds);
-    let acp_mcp_servers = convert_mcp_servers_to_acp(&mcp_servers);
-
-    let agent_server = get_or_init_llama_agent_server(model_config, mcp_servers).await?;
-
-    // Create ACP server configuration with MCP servers
-    let acp_config = llama_agent::AcpConfig {
-        default_mcp_servers: acp_mcp_servers,
-        ..Default::default()
-    };
-
-    // Build the always-on Agent-tools mount. This is the tier that legally sees
-    // both `swissarmyhammer-tools` and `llama-agent`; it constructs the
-    // agent-tools MCP server here and hands llama-agent an rmcp-only mount, so
-    // the dependency edge stays one-way (`swissarmyhammer-agent` → both) with no
-    // cycle. Every session llama-agent creates mounts a fresh in-process
-    // connection from it, so the agent is fully tooled even with zero external
-    // MCP servers.
-    let agent_tools_mount = build_agent_tools_mount().await?;
-
-    // Create the ACP server (its inherent methods serve as the per-method
-    // handlers wired into `Agent.builder()` by `wrap_llama_into_handle`).
-    // Each connection gets its own AcpServer so notifications and session
-    // lifecycle are per-connection — but the AgentServer Arc is shared with
-    // every other connection on the same model config.
-    let (acp_server, notification_rx) =
-        llama_agent::AcpServer::new(agent_server, acp_config, agent_tools_mount);
-
-    Ok(wrap_llama_into_handle(
-        Arc::new(acp_server),
-        notification_rx,
-    ))
-}
-
-/// Build the always-on Agent-tools mount handed to every llama-agent session.
-///
-/// This is the cycle-free seam: `swissarmyhammer-agent` is the only tier that
-/// depends on *both* `swissarmyhammer-tools` and `llama-agent`. It builds the
-/// full SAH [`McpServer`](swissarmyhammer_tools::McpServer), derives the
-/// agent-tools-only filtered server via
-/// [`create_agent_tools_server`](swissarmyhammer_tools::McpServer::create_agent_tools_server)
-/// (`compose_per_client = false`, so it serves its registry verbatim — files,
-/// web, skill, subagent, shell), and wraps it in a
-/// [`llama_agent::InProcessMount`]. The mount is an rmcp-only value from
-/// llama-agent's perspective; the tools crate is named only here, above both
-/// siblings, so no `tools → llama-agent` runtime edge is introduced.
-///
-/// This is also the entry point any other tier that constructs a llama-agent
-/// ACP server directly (e.g. the `sah agent acp` CLI command) must use, so the
-/// tools-crate dependency and the duplex wiring live in exactly one place.
-///
-/// # Errors
-///
-/// Returns [`AcpError::InitializationError`] if the underlying SAH
-/// [`McpServer`](swissarmyhammer_tools::McpServer) cannot be constructed.
-pub async fn build_agent_tools_mount() -> AcpResult<Arc<dyn llama_agent::AgentToolsMount>> {
-    use swissarmyhammer_templating::TemplateLibrary;
-    use swissarmyhammer_tools::McpServer;
-
-    let server = McpServer::new(TemplateLibrary::default())
-        .await
-        .map_err(|e| {
-            AcpError::InitializationError(format!("failed to build agent-tools server: {e}"))
-        })?;
-
-    let agent_tools_server = server.create_agent_tools_server();
-    Ok(Arc::new(llama_agent::InProcessMount::new(
-        agent_tools_server,
-    )))
-}
-
-/// Run a shared-server initialization future on the process-lifetime llama
-/// server runtime (see [`llama_server_runtime`]) and await its result.
-///
-/// This is the seam that decouples the shared [`llama_agent::AgentServer`]'s
-/// background tasks from the caller's runtime. `AgentServer::initialize`
-/// spawns long-lived tasks (the request-queue workers, MCP clients) onto the
-/// ambient runtime; callers like the review pipeline run on a throwaway
-/// current-thread runtime that is dropped when the call ends, which would
-/// abort those tasks and leave the cached server permanently failing with
-/// `Queue is shutting down`. Running the initialization here pins everything
-/// it spawns to a runtime that lives as long as the process — exactly as long
-/// as the cache that shares the server.
-async fn init_on_server_runtime<T, F>(init: F) -> AcpResult<T>
-where
-    T: Send + 'static,
-    F: std::future::Future<Output = T> + Send + 'static,
-{
-    llama_server_runtime().spawn(init).await.map_err(|e| {
-        AcpError::InitializationError(format!(
-            "llama agent server initialization task failed: {e}"
-        ))
-    })
-}
-
-/// The process-lifetime runtime that owns every shared llama
-/// [`llama_agent::AgentServer`]'s background tasks.
-///
-/// The shared servers are cached for the whole process ([`LLAMA_AGENT_CACHE`]),
-/// so the tasks they spawn (queue workers, MCP clients) must live on a runtime
-/// with the same lifetime — never on whichever caller happened to initialize
-/// the server first. Multi-thread is required: tasks on a current-thread
-/// runtime only make progress while something `block_on`s it.
-fn llama_server_runtime() -> &'static tokio::runtime::Runtime {
-    static LLAMA_SERVER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    LLAMA_SERVER_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("llama-agent-server")
-            .enable_all()
-            .build()
-            .expect("failed to build the llama agent server runtime")
-    })
-}
-
-/// Look up a **healthy** cached server for `key`, or (re)build one via `build`
-/// and cache it.
-///
-/// A cached entry whose `is_healthy` check fails — e.g. an `AgentServer`
-/// whose queue workers died — is evicted and rebuilt instead of being handed
-/// out as a corpse forever; this is the self-healing backstop for the shared
-/// llama server cache.
-///
-/// The cache guard is held across the (potentially seconds-long) `build` so a
-/// second concurrent call for the same key waits on the first one's load
-/// instead of racing to load it twice. With typical usage (one or two local
-/// models) this lock is rarely contended.
-///
-/// Generic over the server type so the cache policy is unit-testable without
-/// loading a model.
-async fn get_or_rebuild_cached<S, F, Fut>(
-    cache: &AsyncMutex<HashMap<LlamaAgentKey, Arc<S>>>,
-    key: LlamaAgentKey,
-    is_healthy: impl Fn(&S) -> bool,
-    build: F,
-) -> AcpResult<Arc<S>>
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = AcpResult<Arc<S>>>,
-{
-    let mut guard = cache.lock().await;
-    if let Some(existing) = guard.get(&key) {
-        if is_healthy(existing) {
-            tracing::info!(
-                model_source = %key.model_source,
-                "reusing cached llama AgentServer (shared across connections)"
-            );
-            return Ok(existing.clone());
-        }
-        tracing::warn!(
-            model_source = %key.model_source,
-            "cached llama AgentServer is unhealthy (queue closed); evicting and rebuilding"
-        );
-        guard.remove(&key);
-    }
-
-    let built = build().await?;
-    guard.insert(key, built.clone());
-    Ok(built)
-}
-
-/// Look up an already-initialized [`llama_agent::AgentServer`] for this model
-/// config in the process cache, or build and insert one.
-///
-/// The server's background tasks are pinned to the process-lifetime
-/// [`llama_server_runtime`] (via [`init_on_server_runtime`]) so they survive
-/// the caller's runtime, and an unhealthy cached server (dead queue) is
-/// rebuilt instead of reused (via [`get_or_rebuild_cached`]).
-async fn get_or_init_llama_agent_server(
-    model_config: llama_agent::types::ModelConfig,
-    mcp_servers: Vec<llama_agent::types::MCPServerConfig>,
-) -> AcpResult<Arc<llama_agent::AgentServer>> {
-    let key = LlamaAgentKey::from_model_config(&model_config);
-    let model_source = key.model_source.clone();
-    get_or_rebuild_cached(
-        llama_agent_cache(),
-        key,
-        llama_agent::AgentServer::is_healthy,
-        move || async move {
-            tracing::info!(
-                model_source = %model_source,
-                "initializing new llama AgentServer (first connection for this model)"
-            );
-
-            let agent_config = llama_agent::types::AgentConfig {
-                model: model_config,
-                queue_config: llama_agent::types::QueueConfig {
-                    max_queue_size: DEFAULT_MAX_QUEUE_SIZE,
-                    worker_threads: 1,
-                },
-                session_config: llama_agent::types::SessionConfig::default(),
-                mcp_servers,
-                parallel_execution_config: llama_agent::types::ParallelConfig::default(),
-                tool_execution_config: llama_agent::types::ToolExecutionConfig::default(),
-            };
-
-            let agent_server =
-                init_on_server_runtime(llama_agent::AgentServer::initialize(agent_config))
-                    .await?
-                    .map_err(|e| {
-                        AcpError::InitializationError(format!(
-                            "Failed to initialize Llama agent server: {}",
-                            e
-                        ))
-                    })?;
-            Ok(Arc::new(agent_server))
-        },
-    )
-    .await
 }
 
 /// Execute a prompt using an ACP agent
@@ -1627,19 +1081,14 @@ fn extract_text_from_notification<'a>(
 
 /// Extract response content from agent metadata.
 ///
-/// Tries claude_response first (claude-agent), then llama_response (llama-agent).
-/// Returns empty string if neither is found.
+/// Reads `claude_response` (claude-agent). Returns the empty string when it is
+/// absent.
 fn extract_response_from_metadata(metadata: &Option<serde_json::Value>) -> String {
     let Some(meta) = metadata.as_ref() else {
         return String::new();
     };
 
-    // Try claude_response first, then llama_response
-    let response_value = meta
-        .get("claude_response")
-        .or_else(|| meta.get("llama_response"));
-
-    response_value
+    meta.get("claude_response")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_default()
@@ -1900,278 +1349,9 @@ impl agent_client_protocol::ConnectTo<Client> for NoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema;
     use agent_client_protocol_extras::turn_complete_notification;
     use tracing_test::traced_test;
-
-    /// A stand-in for `AgentServer` in cache-policy tests: carries a fixed
-    /// health flag plus a generation marker so a rebuild is observable.
-    struct FakeServer {
-        healthy: bool,
-        generation: usize,
-    }
-
-    fn test_key(name: &str) -> LlamaAgentKey {
-        LlamaAgentKey {
-            model_source: format!("test:{name}"),
-            batch_size: 0,
-            use_hf_params: false,
-        }
-    }
-
-    /// A healthy cached server is reused as-is: the builder must NOT run.
-    #[tokio::test]
-    async fn cache_reuses_healthy_server() {
-        let cache = AsyncMutex::new(HashMap::new());
-        let key = test_key("reuse");
-        cache.lock().await.insert(
-            key.clone(),
-            Arc::new(FakeServer {
-                healthy: true,
-                generation: 0,
-            }),
-        );
-
-        let server = get_or_rebuild_cached(
-            &cache,
-            key,
-            |s: &FakeServer| s.healthy,
-            || async { panic!("builder must not run for a healthy cached server") },
-        )
-        .await
-        .expect("healthy cached server must be returned");
-
-        assert_eq!(server.generation, 0, "must hand back the cached instance");
-    }
-
-    /// The self-healing backstop: a cached server whose health check fails
-    /// (in production: an `AgentServer` whose queue workers died) must be
-    /// evicted and rebuilt, and the rebuilt instance must replace it in the
-    /// cache — never hand out the corpse again.
-    #[tokio::test]
-    async fn cache_rebuilds_unhealthy_server() {
-        let cache = AsyncMutex::new(HashMap::new());
-        let key = test_key("rebuild");
-        cache.lock().await.insert(
-            key.clone(),
-            Arc::new(FakeServer {
-                healthy: false,
-                generation: 0,
-            }),
-        );
-
-        let server = get_or_rebuild_cached(
-            &cache,
-            key.clone(),
-            |s: &FakeServer| s.healthy,
-            || async {
-                Ok(Arc::new(FakeServer {
-                    healthy: true,
-                    generation: 1,
-                }))
-            },
-        )
-        .await
-        .expect("an unhealthy cached server must be rebuilt");
-        assert_eq!(server.generation, 1, "must return the rebuilt instance");
-
-        // The rebuilt instance must now be the cached one.
-        let again = get_or_rebuild_cached(
-            &cache,
-            key,
-            |s: &FakeServer| s.healthy,
-            || async { panic!("builder must not run again once the rebuilt server is cached") },
-        )
-        .await
-        .expect("rebuilt server must be served from the cache");
-        assert_eq!(again.generation, 1);
-    }
-
-    /// The root cause of the `Queue is shutting down` cascade: the shared
-    /// server's background tasks were spawned on the caller's throwaway
-    /// runtime, so they died when that runtime was dropped at the end of the
-    /// first review call. Anything spawned during initialization run through
-    /// `init_on_server_runtime` must keep running after the calling runtime
-    /// is gone.
-    #[tokio::test]
-    async fn server_init_tasks_survive_caller_runtime_drop() {
-        let (ping_tx, mut ping_rx) =
-            tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
-
-        // Simulate the per-review current-thread runtime that initializes the
-        // shared server and is then dropped (review_op / execute_prompt shape).
-        let caller = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test runtime");
-            rt.block_on(async move {
-                init_on_server_runtime(async move {
-                    // Like `AgentServer::initialize`: spawn a long-lived
-                    // background task (the queue worker stand-in).
-                    tokio::spawn(async move {
-                        while let Some(reply) = ping_rx.recv().await {
-                            let _ = reply.send(());
-                        }
-                    });
-                })
-                .await
-            })
-            .expect("init must succeed");
-            // `rt` dropped here — the per-review runtime teardown.
-        });
-        caller.join().expect("caller thread must not panic");
-
-        // The background task must still answer after its spawning runtime died.
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        ping_tx
-            .send(reply_tx)
-            .expect("background task must still hold its receiver");
-        tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
-            .await
-            .expect("background task must survive the caller runtime drop")
-            .expect("background task must answer the ping");
-    }
-
-    /// Two model configs that differ only in MCP/queue config (which DON'T
-    /// affect what gets loaded into RAM) must produce the same cache key —
-    /// otherwise opening two boards with the same Qwen model still loads
-    /// the model twice. This is the regression: pre-fix, every connection
-    /// loaded a fresh `AgentServer` so a 35B model lived in memory once per
-    /// open board.
-    #[test]
-    fn llama_agent_key_ignores_non_model_fields() {
-        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
-
-        fn config(source: ModelSource, batch: u32, hf_params: bool) -> ModelConfig {
-            ModelConfig {
-                source,
-                batch_size: batch,
-                use_hf_params: hf_params,
-                retry_config: RetryConfig {
-                    max_retries: 1,
-                    initial_delay_ms: 1,
-                    backoff_multiplier: 1.0,
-                    max_delay_ms: 1,
-                },
-                debug: false,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-            }
-        }
-
-        let qwen = ModelSource::HuggingFace {
-            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
-            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
-            folder: None,
-        };
-        let key_a = LlamaAgentKey::from_model_config(&config(qwen.clone(), 512, true));
-        let key_b = LlamaAgentKey::from_model_config(&config(qwen.clone(), 512, true));
-        assert_eq!(
-            key_a, key_b,
-            "two identical Qwen configs must share a cache key"
-        );
-    }
-
-    /// Different model sources must produce different keys — sharing them
-    /// would hand a Qwen-loaded server to a caller asking for Claude
-    /// (or another HF model).
-    #[test]
-    fn llama_agent_key_separates_distinct_models() {
-        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
-
-        fn config(source: ModelSource) -> ModelConfig {
-            ModelConfig {
-                source,
-                batch_size: 512,
-                use_hf_params: true,
-                retry_config: RetryConfig {
-                    max_retries: 1,
-                    initial_delay_ms: 1,
-                    backoff_multiplier: 1.0,
-                    max_delay_ms: 1,
-                },
-                debug: false,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-            }
-        }
-
-        let qwen_key = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
-            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
-            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
-            folder: None,
-        }));
-        let smaller_key = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
-            repo: "unsloth/Qwen3.5-0.8B-MTP-GGUF".into(),
-            filename: Some("Qwen3.5-0.8B-Q8.gguf".into()),
-            folder: None,
-        }));
-        assert_ne!(
-            qwen_key, smaller_key,
-            "different HF repos must NOT share a cached AgentServer"
-        );
-
-        // batch_size affects KV-cache sizing inside the loaded model so it
-        // is part of the key.
-        let qwen_b256 = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
-            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
-            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
-            folder: None,
-        }));
-        let mut other = config(ModelSource::HuggingFace {
-            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
-            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
-            folder: None,
-        });
-        other.batch_size = 1024;
-        let qwen_b1024 = LlamaAgentKey::from_model_config(&other);
-        assert_ne!(
-            qwen_b256, qwen_b1024,
-            "different batch sizes change loaded-context dimensions; must NOT share"
-        );
-    }
-
-    /// Local-folder model sources must also key cleanly.
-    #[test]
-    fn llama_agent_key_handles_local_sources() {
-        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
-        use std::path::PathBuf;
-
-        let base = ModelConfig {
-            source: ModelSource::Local {
-                folder: PathBuf::from("/models/qwen"),
-                filename: Some("model.gguf".to_string()),
-            },
-            batch_size: 512,
-            use_hf_params: false,
-            retry_config: RetryConfig {
-                max_retries: 1,
-                initial_delay_ms: 1,
-                backoff_multiplier: 1.0,
-                max_delay_ms: 1,
-            },
-            debug: false,
-            n_seq_max: 1,
-            n_threads: 1,
-            n_threads_batch: 1,
-        };
-        let key_a = LlamaAgentKey::from_model_config(&base);
-        let key_b = LlamaAgentKey::from_model_config(&base);
-        assert_eq!(key_a, key_b, "identical local sources share a cache key");
-
-        let mut different = base.clone();
-        different.source = ModelSource::Local {
-            folder: PathBuf::from("/models/other"),
-            filename: Some("model.gguf".to_string()),
-        };
-        assert_ne!(
-            key_a,
-            LlamaAgentKey::from_model_config(&different),
-            "different local folders must NOT share"
-        );
-    }
 
     #[test]
     fn test_agent_response_success() {
@@ -2318,15 +1498,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_response_from_metadata_llama() {
-        let metadata = Some(serde_json::json!({
-            "llama_response": "Hello from Llama"
-        }));
-        let result = extract_response_from_metadata(&metadata);
-        assert_eq!(result, "Hello from Llama");
-    }
-
-    #[test]
     fn test_extract_response_from_metadata_none() {
         let result = extract_response_from_metadata(&None);
         assert_eq!(result, "");
@@ -2337,17 +1508,6 @@ mod tests {
         let metadata = Some(serde_json::json!({}));
         let result = extract_response_from_metadata(&metadata);
         assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_extract_response_from_metadata_prefers_claude() {
-        // When both are present, claude_response should be preferred (it's checked first)
-        let metadata = Some(serde_json::json!({
-            "claude_response": "Claude wins",
-            "llama_response": "Llama loses"
-        }));
-        let result = extract_response_from_metadata(&metadata);
-        assert_eq!(result, "Claude wins");
     }
 
     /// The kanban Claude wiring must carry the `mcp__*` auto-allow pattern on
@@ -2845,280 +2005,79 @@ mod tests {
         assert!(options.ephemeral);
     }
 
-    // Note: Tests for create_agent() and execute_prompt() require external agent installations
-    // (Claude CLI or Llama model). These functions are tested through integration tests
-    // in the swissarmyhammer-cli crate where the agents are available in the test environment.
-    // The helper functions they use (extract_response_from_metadata,
-    // build_agent_response, etc.) are tested above to ensure correctness of the core logic.
+    /// ClaudeCode is the only agent executor this crate builds. A `claude-code`
+    /// model configuration must reach the Claude backend — never the
+    /// unsupported-executor error.
+    ///
+    /// This drives the production entry point, `create_agent`. Its ClaudeCode
+    /// arm ends in `create_claude_agent`, which is the ONLY producer of
+    /// [`AcpError::AgentNotAvailable`]; accepting that outcome therefore still
+    /// proves the arm ran, and only tolerates a machine with no `claude` binary
+    /// on `PATH`. Any other error means the Claude arm was lost.
+    #[tokio::test]
+    async fn create_agent_routes_a_claude_code_configuration_to_the_claude_backend() {
+        let _env = swissarmyhammer_common::test_utils::IsolatedTestEnvironment::new()
+            .expect("isolated env");
 
-    // ========================================================================
-    // convert_model_source tests
-    // ========================================================================
+        let config = ModelConfig::claude_code();
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
-    #[test]
-    fn test_convert_model_source_local_with_folder() {
-        let source = swissarmyhammer_config::model::ModelSource::Local {
-            filename: std::path::PathBuf::from("/models/my-model.gguf"),
-            folder: Some(std::path::PathBuf::from("/models")),
-        };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::Local { folder, filename } => {
-                assert_eq!(folder, std::path::PathBuf::from("/models"));
-                assert_eq!(filename, Some("my-model.gguf".to_string()));
+        match create_agent(&config, None).await {
+            Ok(_handle) => {}
+            Err(AcpError::AgentNotAvailable(message)) => {
+                assert!(
+                    message.contains("Claude CLI"),
+                    "only the Claude spawn path may reject a claude-code config: {message}"
+                );
             }
-            _ => panic!("Expected Local variant"),
+            Err(other) => {
+                panic!("a claude-code configuration must reach the Claude backend, got: {other}")
+            }
         }
     }
 
-    #[test]
-    fn test_convert_model_source_local_without_folder() {
-        let source = swissarmyhammer_config::model::ModelSource::Local {
-            filename: std::path::PathBuf::from("/models/my-model.gguf"),
-            folder: None,
+    /// A model configuration naming any executor other than `claude-code` must
+    /// fail with an error that NAMES the unsupported executor, so the user can
+    /// see which executor in their configuration this crate no longer builds.
+    ///
+    /// The name in the message is the configuration name (`ane-embedding`), the
+    /// same string the model YAML writes under `executor.type`.
+    #[tokio::test]
+    async fn create_agent_rejects_a_non_claude_executor_by_name() {
+        let config = ModelConfig {
+            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::AneEmbedding(
+                    swissarmyhammer_config::model::EmbeddingModelConfig {
+                        source: swissarmyhammer_config::model::ModelSource::HuggingFace {
+                            repo: "org/embed".to_string(),
+                            filename: None,
+                            folder: None,
+                        },
+                        normalize: false,
+                        max_sequence_length: None,
+                    },
+                ),
+            }],
+            quiet: true,
         };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::Local { folder, filename } => {
-                assert_eq!(folder, std::path::PathBuf::from("/models"));
-                assert_eq!(filename, Some("my-model.gguf".to_string()));
-            }
-            _ => panic!("Expected Local variant"),
-        }
-    }
 
-    #[test]
-    fn test_convert_model_source_local_bare_filename() {
-        // When filename has no parent directory component, parent() returns Some("")
-        let source = swissarmyhammer_config::model::ModelSource::Local {
-            filename: std::path::PathBuf::from("model.gguf"),
-            folder: None,
+        let Err(error) = create_agent(&config, None).await else {
+            panic!("a non-claude executor must not build an agent");
         };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::Local { folder, filename } => {
-                // "model.gguf".parent() returns Some(""), not None
-                assert_eq!(folder, std::path::PathBuf::from(""));
-                assert_eq!(filename, Some("model.gguf".to_string()));
-            }
-            _ => panic!("Expected Local variant"),
-        }
-    }
-
-    #[test]
-    fn test_convert_model_source_huggingface_with_filename() {
-        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
-            repo: "TheBloke/Llama-2-7B-GGUF".to_string(),
-            filename: Some("llama-2-7b.Q4_K_M.gguf".to_string()),
-            folder: None,
-        };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => {
-                assert_eq!(repo, "TheBloke/Llama-2-7B-GGUF");
-                assert_eq!(filename, Some("llama-2-7b.Q4_K_M.gguf".to_string()));
-                assert_eq!(folder, None);
-            }
-            _ => panic!("Expected HuggingFace variant"),
-        }
-    }
-
-    #[test]
-    fn test_convert_model_source_huggingface_with_folder() {
-        // When folder is Some, filename should be None regardless of input
-        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
-            repo: "org/model".to_string(),
-            filename: Some("model.gguf".to_string()),
-            folder: Some("subfolder".to_string()),
-        };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => {
-                assert_eq!(repo, "org/model");
-                assert_eq!(filename, None);
-                assert_eq!(folder, Some("subfolder".to_string()));
-            }
-            _ => panic!("Expected HuggingFace variant"),
-        }
-    }
-
-    #[test]
-    fn test_convert_model_source_huggingface_no_filename_no_folder() {
-        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
-            repo: "org/model".to_string(),
-            filename: None,
-            folder: None,
-        };
-        let converted = convert_model_source(&source);
-        match converted {
-            llama_agent::types::ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => {
-                assert_eq!(repo, "org/model");
-                assert_eq!(filename, None);
-                assert_eq!(folder, None);
-            }
-            _ => panic!("Expected HuggingFace variant"),
-        }
-    }
-
-    // ========================================================================
-    // build_llama_model_config tests
-    // ========================================================================
-
-    #[test]
-    fn test_build_llama_model_config_defaults() {
-        let llama_config = swissarmyhammer_config::model::LlamaAgentConfig::default();
-        let model_config = build_llama_model_config(&llama_config);
-
-        assert_eq!(model_config.retry_config.max_retries, DEFAULT_MAX_RETRIES);
-        assert_eq!(
-            model_config.retry_config.initial_delay_ms,
-            DEFAULT_INITIAL_RETRY_DELAY_MS
-        );
+        let message = error.to_string();
         assert!(
-            (model_config.retry_config.backoff_multiplier - DEFAULT_BACKOFF_MULTIPLIER).abs()
-                < f64::EPSILON
+            message.contains("ane-embedding"),
+            "the error must name the unsupported executor: {message}"
         );
-        assert_eq!(
-            model_config.retry_config.max_delay_ms,
-            DEFAULT_MAX_RETRY_DELAY_MS
-        );
-        assert!(!model_config.debug);
-        assert_eq!(model_config.n_seq_max, 1);
-        assert_eq!(model_config.n_threads, DEFAULT_NUM_THREADS);
-        assert_eq!(model_config.n_threads_batch, DEFAULT_BATCH_THREADS);
     }
 
-    #[test]
-    fn test_build_llama_model_config_preserves_model_params() {
-        let mut llama_config = swissarmyhammer_config::model::LlamaAgentConfig::default();
-        llama_config.model.batch_size = 128;
-        llama_config.model.use_hf_params = true;
-
-        let model_config = build_llama_model_config(&llama_config);
-        assert_eq!(model_config.batch_size, 128);
-        assert!(model_config.use_hf_params);
-    }
-
-    // ========================================================================
-    // build_llama_mcp_servers tests
-    // ========================================================================
-
-    #[test]
-    fn test_build_llama_mcp_servers_with_config() {
-        let mcp = McpServerConfig::from_port(9090);
-        let servers = build_llama_mcp_servers(Some(&mcp), 120);
-
-        assert_eq!(servers.len(), 1);
-        match &servers[0] {
-            llama_agent::types::MCPServerConfig::Http(http) => {
-                assert_eq!(http.name, "swissarmyhammer");
-                assert_eq!(http.url, "http://localhost:9090/mcp");
-                assert_eq!(http.timeout_secs, Some(120));
-                assert_eq!(http.sse_keep_alive_secs, Some(SSE_KEEP_ALIVE_SECONDS));
-                assert!(!http.stateful_mode);
-            }
-            _ => panic!("Expected Http variant"),
-        }
-    }
-
-    #[test]
-    fn test_build_llama_mcp_servers_without_config() {
-        let servers = build_llama_mcp_servers(None, 60);
-        assert!(servers.is_empty());
-    }
-
-    // ========================================================================
-    // convert_mcp_servers_to_acp tests
-    // ========================================================================
-
-    #[test]
-    fn test_convert_mcp_servers_to_acp_http() {
-        let servers = vec![llama_agent::types::MCPServerConfig::Http(
-            llama_agent::types::HttpServerConfig {
-                name: "test-http".to_string(),
-                url: "http://localhost:8080/mcp".to_string(),
-                timeout_secs: Some(30),
-                sse_keep_alive_secs: Some(15),
-                stateful_mode: false,
-            },
-        )];
-        let acp_servers = convert_mcp_servers_to_acp(&servers);
-
-        assert_eq!(acp_servers.len(), 1);
-        match &acp_servers[0] {
-            schema::McpServer::Http(http) => {
-                assert_eq!(http.name, "test-http");
-                assert_eq!(http.url, "http://localhost:8080/mcp");
-            }
-            other => panic!("Expected Http variant, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_convert_mcp_servers_to_acp_in_process() {
-        let servers = vec![llama_agent::types::MCPServerConfig::InProcess(
-            llama_agent::types::ProcessServerConfig {
-                name: "test-stdio".to_string(),
-                command: "echo".to_string(),
-                args: vec!["hello".to_string(), "world".to_string()],
-                timeout_secs: None,
-            },
-        )];
-        let acp_servers = convert_mcp_servers_to_acp(&servers);
-
-        assert_eq!(acp_servers.len(), 1);
-        match &acp_servers[0] {
-            schema::McpServer::Stdio(stdio) => {
-                assert_eq!(stdio.name, "test-stdio");
-                assert_eq!(stdio.args, vec!["hello".to_string(), "world".to_string()]);
-            }
-            other => panic!("Expected Stdio variant, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_convert_mcp_servers_to_acp_empty() {
-        let servers: Vec<llama_agent::types::MCPServerConfig> = vec![];
-        let acp_servers = convert_mcp_servers_to_acp(&servers);
-        assert!(acp_servers.is_empty());
-    }
-
-    #[test]
-    fn test_convert_mcp_servers_to_acp_mixed() {
-        let servers = vec![
-            llama_agent::types::MCPServerConfig::Http(llama_agent::types::HttpServerConfig {
-                name: "http-server".to_string(),
-                url: "http://localhost:8080/mcp".to_string(),
-                timeout_secs: None,
-                sse_keep_alive_secs: None,
-                stateful_mode: false,
-            }),
-            llama_agent::types::MCPServerConfig::InProcess(
-                llama_agent::types::ProcessServerConfig {
-                    name: "stdio-server".to_string(),
-                    command: "node".to_string(),
-                    args: vec!["server.js".to_string()],
-                    timeout_secs: None,
-                },
-            ),
-        ];
-        let acp_servers = convert_mcp_servers_to_acp(&servers);
-        assert_eq!(acp_servers.len(), 2);
-        assert!(matches!(&acp_servers[0], schema::McpServer::Http(_)));
-        assert!(matches!(&acp_servers[1], schema::McpServer::Stdio(_)));
-    }
+    // Note: the executor selection create_agent() performs is covered by the two
+    // tests above. Driving execute_prompt() end to end needs a live backend, so
+    // that is covered by integration tests in the swissarmyhammer-cli crate where
+    // the Claude CLI is available. The helper functions both use
+    // (extract_response_from_metadata, build_agent_response, etc.) are tested
+    // throughout this module to ensure correctness of the core logic.
 
     // ========================================================================
     // extract_text_from_notification tests
@@ -3219,18 +2178,6 @@ mod tests {
         assert!(response.metadata.is_some());
         let metadata = response.metadata.unwrap();
         assert_eq!(metadata.get("key").and_then(|v| v.as_str()), Some("value"));
-    }
-
-    #[test]
-    fn test_build_agent_response_empty_text_uses_metadata() {
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            "llama_response".to_string(),
-            serde_json::json!("From llama metadata"),
-        );
-        let prompt_result = PromptResponse::new(StopReason::EndTurn).meta(meta);
-        let response = build_agent_response(prompt_result, "".to_string(), 0);
-        assert_eq!(response.content, "From llama metadata");
     }
 
     #[test]
@@ -3681,24 +2628,6 @@ mod tests {
     #[test]
     fn test_constants_have_sane_values() {
         assert_ne!(MAX_PROMPT_LENGTH_BYTES, 0);
-        assert_ne!(DEFAULT_MAX_RETRIES, 0);
-        assert_ne!(DEFAULT_INITIAL_RETRY_DELAY_MS, 0);
-        // Backoff multiplier must exceed 1.0
-        let multiplier = DEFAULT_BACKOFF_MULTIPLIER;
-        assert!(
-            multiplier > 1.0,
-            "backoff multiplier must be > 1.0, got {multiplier}"
-        );
-        // Max retry delay must be >= initial
-        let (max_delay, init_delay) = (DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_INITIAL_RETRY_DELAY_MS);
-        assert!(
-            max_delay >= init_delay,
-            "max retry delay must be >= initial, got {max_delay} < {init_delay}"
-        );
-        assert_ne!(DEFAULT_NUM_THREADS, 0);
-        assert_ne!(DEFAULT_BATCH_THREADS, 0);
-        assert_ne!(SSE_KEEP_ALIVE_SECONDS, 0);
-        assert_ne!(DEFAULT_MAX_QUEUE_SIZE, 0);
         assert_ne!(NOTIFICATION_DRAIN_BACKSTOP_MS, 0);
     }
 
@@ -4039,17 +2968,6 @@ mod tests {
              (via set_client) so outbound elicitation/permission requests reach the client"
         );
     }
-
-    // The llama mirror of this wiring fix is tested in the `llama-agent`
-    // crate itself (see `crates/llama-agent/src/acp/server.rs` ->
-    // `publish_client_connection_installs_and_clears_elicitation_endpoint`).
-    // A full `AcpServer` is built there from the in-crate `ModelManager` /
-    // `RequestQueue` internals (which are `pub(crate)` and unreachable from
-    // this crate) without loading a GGUF model, the same convention the other
-    // `AcpServer` protocol tests use. Reconstructing that here would mean
-    // depending on llama-agent internals just to stand up the server, so the
-    // wiring methods `publish_client_connection` / `clear_client_connection`
-    // are exercised where they live instead.
 
     /// Regression test for the prompt-deadlock fix in [`dispatch_claude_request`].
     ///

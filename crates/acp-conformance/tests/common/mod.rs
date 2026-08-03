@@ -248,11 +248,11 @@ async fn create_agent() -> Result<Box<dyn AgentWithFixture>> {
 //
 // In ACP 0.11 backends are not implemented as `impl Agent for ...` types —
 // callers wire them up by registering typed handlers on
-// `Agent.builder()`. The two adapters below mirror the production wiring
-// in `swissarmyhammer-agent` (`wrap_claude_into_handle`,
-// `wrap_llama_into_handle`) and are kept local to the conformance crate
-// so it doesn't gain a hard dependency on `swissarmyhammer-agent` (or its
-// LLM stack) just for these tests.
+// `Agent.builder()`. The Claude adapter below mirrors the production wiring
+// in `swissarmyhammer-agent` (`wrap_claude_into_handle`); the llama adapter
+// is local to the conformance crate and has no production counterpart. Both
+// are kept here so the crate doesn't gain a hard dependency on
+// `swissarmyhammer-agent` (or its LLM stack) just for these tests.
 
 /// `ConnectTo<Client>` adapter that drives `claude_agent::ClaudeAgent`'s
 /// inherent methods through an `Agent.builder()` topology.
@@ -410,7 +410,7 @@ async fn dispatch_claude_notification(
 }
 
 /// Demultiplex an incoming `ClientRequest` onto `AcpServer`'s inherent
-/// methods. Mirrors `swissarmyhammer-agent::dispatch_llama_request`.
+/// methods.
 async fn dispatch_llama_request(
     agent: &Arc<llama_agent::AcpServer>,
     request: ClientRequest,
