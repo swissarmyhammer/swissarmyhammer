@@ -825,6 +825,111 @@ mod tests {
         );
     }
 
+    /// Regression guard for `^1hmd9yy`: a real `.sah` log measured 127 of 129
+    /// forked review-fleet spawns with NO `--model` flag, because the fork
+    /// path's `SpawnConfig.extra_args` was empty. `^j9rwjtx` fixed the root
+    /// cause (`build_fork_spawn_config` now reads `parent.extra_args`), and
+    /// `test_fork_spawn_config_carries_extra_args` above pins that unit in
+    /// isolation — but it sets `Session.extra_args` directly via
+    /// `update_session`, bypassing the real `session/new` capture
+    /// ([`ClaudeAgent::store_extra_args_in_session`]), and it stops at the
+    /// `SpawnConfig`, never checking the assembled argv.
+    ///
+    /// This test drives the ACTUAL chain the review fan-out's `AgentPool`
+    /// exercises over ACP — `session/new` (which is what captures the
+    /// agent's *configured* `extra_args` onto the session in the first
+    /// place) followed by the real `session/fork` extension
+    /// ([`ClaudeAgent::fork_session`]) — then feeds the resulting
+    /// [`SpawnConfig`] into
+    /// [`ClaudeProcess::build_base_command`](crate::claude_process::ClaudeProcess::build_base_command)
+    /// to assert on the literal argv a forked spawn would receive. The one
+    /// line this cannot drive through real code is setting
+    /// `SpawnConfig.attachment` to `Fork` — production does that in
+    /// [`crate::claude::ClaudeClient::fork_process`], immediately before
+    /// handing the config to `ClaudeProcess::spawn`, which this test avoids
+    /// only because doing so would require a real `claude` binary on `PATH`.
+    #[tokio::test]
+    #[serial]
+    async fn test_review_fanout_chain_carries_model_tier_to_forked_argv() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = headless_config(false);
+        config.claude.extra_args = vec!["--model".to_string(), "haiku".to_string()];
+        let (agent, _rx) = ClaudeAgent::new(config).await.expect("headless agent");
+
+        // The real `session/new` path: this is what captures the agent's
+        // configured `extra_args` onto the session
+        // (`ClaudeAgent::store_extra_args_in_session`), exactly as the review
+        // fan-out's primed prefix session is created by `AgentPool::submit_primed`.
+        let request =
+            agent_client_protocol::schema::NewSessionRequest::new(cwd.path().to_path_buf());
+        let parent_id = agent
+            .create_new_session_internal(&request)
+            .await
+            .expect("session creation must succeed");
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.add_message(Message::new(
+                    MessageRole::User,
+                    "the corpus under review".to_string(),
+                ));
+                session.add_message(Message::new(
+                    MessageRole::Assistant,
+                    "understood".to_string(),
+                ));
+            })
+            .expect("prime parent session");
+
+        // The real `session/fork` extension the review fan-out calls once per
+        // validator (`AgentPool::submit_forked`).
+        let response = agent
+            .fork_session(SessionForkRequest {
+                parent_session_id: parent_id.to_string(),
+            })
+            .await
+            .expect("fork of a primed parent must succeed");
+        let child_id: SessionId = response.session_id.parse().expect("child ULID");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+        let mut spawn_config = agent.build_fork_spawn_config(&parent, child_id);
+        // Mirrors `ClaudeClient::fork_process`, the one step this test cannot
+        // drive through real code without a `claude` binary on `PATH`.
+        spawn_config.attachment =
+            crate::claude_process::ConversationAttachment::Fork { parent: parent.id };
+
+        let command = crate::claude_process::ClaudeProcess::build_base_command(
+            &spawn_config.session_id.to_uuid_string(),
+            &spawn_config.attachment,
+            &spawn_config.extra_args,
+        );
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+
+        let model_pos = args.iter().position(|a| a == "--model").unwrap_or_else(|| {
+            panic!(
+                "the review fan-out's real session/new -> session/fork chain must carry \
+                 the configured --model through to the forked child's argv, got: {args:?}"
+            )
+        });
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku, got args: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--fork-session"),
+            "the argv must still carry the fork shape, got: {args:?}"
+        );
+    }
+
     /// The fork extension surface is reachable through `ext_method` under the
     /// shared method names — the route a real ACP client takes.
     #[tokio::test]

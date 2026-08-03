@@ -489,7 +489,13 @@ impl ClaudeProcess {
     /// `--session-id <uuid>`, a reattach via `--resume <uuid>`, or a fork via
     /// `--resume <parent-uuid> --fork-session --session-id <uuid>` that clones
     /// the parent's persisted transcript onto this session's own UUID.
-    fn build_base_command(
+    ///
+    /// `pub(crate)` (rather than private) so
+    /// `crate::session_fork`'s tests can drive the real
+    /// `session/new` → `session/fork` → [`SpawnConfig`] chain all the way to
+    /// the assembled argv without a real `claude` binary — see
+    /// `crate::session_fork::tests::test_review_fanout_chain_carries_model_tier_to_forked_argv`.
+    pub(crate) fn build_base_command(
         claude_session_uuid: &str,
         attachment: &ConversationAttachment,
         extra_args: &[String],
@@ -1502,6 +1508,47 @@ mod tests {
             "fork must pass --fork-session, got args: {args:?}"
         );
         assert_eq!(arg_value(&args, "--session-id"), Some("child-uuid"));
+    }
+
+    /// Regression guard for `^1hmd9yy`: 127 of 129 forked review-fleet spawns
+    /// measured from a real `.sah` log carried NO `--model` flag, because the
+    /// fork path's `extra_args` was empty at the time. `extra_args` is now
+    /// threaded to the fork spawn path (`^j9rwjtx`), but nothing asserted the
+    /// argv itself for the `Fork` attachment shape carrying a configured
+    /// tier — every existing `extra_args` argv test used
+    /// `ConversationAttachment::New`, and the existing `Fork` argv test used
+    /// empty `extra_args`. This closes that gap directly: a `Fork` attachment
+    /// with a non-empty `extra_args` must carry BOTH the fork shape
+    /// (`--resume`/`--fork-session`/`--session-id`) AND the caller-supplied
+    /// `--model`, immediately followed by its value.
+    #[test]
+    fn test_base_command_fork_attachment_carries_extra_args() {
+        let parent = SessionId::new();
+        let command = ClaudeProcess::build_base_command(
+            "child-uuid",
+            &ConversationAttachment::Fork { parent },
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        let args = command_args(&command);
+
+        assert_eq!(
+            arg_value(&args, "--resume"),
+            Some(parent.to_uuid_string().as_str())
+        );
+        assert!(
+            args.iter().any(|a| a == "--fork-session"),
+            "fork must still pass --fork-session, got args: {args:?}"
+        );
+        assert_eq!(arg_value(&args, "--session-id"), Some("child-uuid"));
+
+        let model_pos = args.iter().position(|a| a == "--model").unwrap_or_else(|| {
+            panic!("a forked spawn's extra_args must carry --model, got args: {args:?}")
+        });
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku on a forked spawn, got args: {args:?}"
+        );
     }
 
     /// A `SpawnConfig` built without an explicit attachment begins a fresh
