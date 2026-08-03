@@ -115,10 +115,85 @@ comments:
 
     next: /review
   timestamp: 2026-08-03T21:28:26.612132+00:00
+- actor: claude-code
+  id: 01kz4rj7q6twa1mcytxs5p1f41
+  text: |-
+    ### finish iteration 2 — changed
+    - implement: changed — fixed session_fork.rs:276 finding: extra_args now captured on Session at creation (store_extra_args_in_session, mirrors store_system_prompt_in_session) and carried from parent in build_fork_spawn_config, instead of read from live agent config at fork time. TDD: new test confirmed RED as a compile failure (no extra_args field yet) before adding it, GREEN after.
+    - test: green — cargo test -p claude-agent --lib 759 passed; fmt clean; clippy clean; full rdeps(claude-agent) or rdeps(swissarmyhammer-validators) run for real: 4398 passed, 0 skipped, 0 failed
+    - commit: d2927bfb0
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T21:30:34.598117+00:00
+- actor: claude-code
+  id: 01kz4sp99r1gmesnawqcjqscmh
+  text: |-
+    ### review — findings
+    - evidence: `review sha d2927bfb0~1..d2927bfb0` ran successfully (33 findings, 33 confirmed, 12 refuted per engine counts). Blame-checked every reported line against `d2927bfb0`'s hunks: 31 findings (all in `crates/claude-agent/src/agent.rs` and `crates/claude-agent/src/session.rs`) fell outside every hunk this commit touched — pre-existing code, dropped. 2 findings land inside the hunk this commit added: `crates/claude-agent/src/agent.rs:1495`, the new `store_extra_args_in_session` function, which duplicates the error-handling/update-session pattern of `store_system_prompt_in_session` (and `store_mcp_servers_in_session`).
+    - next: implementer extracts a shared helper (e.g. `persist_session_field`/`store_in_session`) parameterized by a field-setting closure, used by `store_extra_args_in_session` and `store_system_prompt_in_session`, then re-review.
+    task: ^j9rwjtx
+  timestamp: 2026-08-03T21:50:15.864133+00:00
+- actor: claude-code
+  id: 01kz4ss3p8n8hr2hh3k518m0jd
+  text: |-
+    ### finish iteration 3 — findings
+    - review: findings — engine ran successfully (33 raw, 31 blame-checked out as pre-existing). 2 survive, both same root cause: the new store_extra_args_in_session (agent.rs:1495) duplicates the update_session/map-error pattern already in store_system_prompt_in_session (agent.rs:1470) AND store_mcp_servers_in_session (agent.rs:1425) — three near-identical implementations.
+    - next: /implement — extract one shared helper (e.g. persist_session_field<F>(&self, session_id, setter: F)) and have all three store_* functions call it
+  timestamp: 2026-08-03T21:51:48.424558+00:00
+- actor: claude-code
+  id: 01kz4t1nbftx1q564wjjy2nhv1
+  text: |-
+    ### implement — changed
+
+    Fixed both open review findings in one root-cause fix: three near-identical
+    functions in `crates/claude-agent/src/agent.rs` each called
+    `self.session_manager.update_session(session_id, closure)` to set one field,
+    then mapped the error to `agent_client_protocol::Error::internal_error()`.
+
+    Extracted a single private helper:
+
+    ```rust
+    fn persist_session_field<F>(
+        &self,
+        session_id: &crate::session::SessionId,
+        setter: F,
+    ) -> Result<(), agent_client_protocol::Error>
+    where
+        F: FnOnce(&mut crate::session::Session),
+    {
+        self.session_manager
+            .update_session(session_id, setter)
+            .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+    ```
+
+    All three `store_*_in_session` functions are now thin wrappers over this
+    helper:
+    - `store_mcp_servers_in_session` — builds the `Vec<String>` of serialized
+      servers first, then calls `persist_session_field` with a closure that
+      assigns it.
+    - `store_system_prompt_in_session` — calls `persist_session_field` with a
+      closure that sets `session.system_prompt = Some(system_prompt)`.
+    - `store_extra_args_in_session` — clones `self.config.claude.extra_args`
+      first, then calls `persist_session_field` with a closure that assigns it.
+
+    No caller of any `store_*_in_session` function changed signature or call
+    site; only the internal implementation is deduplicated.
+
+    Evidence:
+    - `cargo test -p claude-agent --lib`: 759 passed, 0 failed.
+    - `cargo fmt --all`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo nextest run -E 'rdeps(claude-agent) or rdeps(swissarmyhammer-validators)'`: **4398 tests run: 4398 passed (1 slow), 0 skipped.**
+
+    Checked off both findings in the newest `## Review Findings (2026-08-03 16:30)` section.
+
+    next: /review
+  timestamp: 2026-08-03T21:56:28.655120+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Review fleet forks are 100% cold — warm prefix reuse never fires, not just degraded
 ---
+
 # Symptom
 
 Reported from a live review run's MCP log: 77 occurrences of
@@ -248,5 +323,20 @@ unmodified by this diff) and are dropped per instruction. 1 finding lands
 inside a hunk this commit added and is recorded below.
 
 - [x] `crates/claude-agent/src/session_fork.rs:276` — The module documentation (lines 35–46) states that forked children must be spawned with the identical `--system-prompt` and `--model` the parent used to maintain cache coherence. However, `system_prompt` is carried from the parent (line 273) while `extra_args` (model) is taken from the current agent's config (line 276). If the parent was originally created by an agent with different `extra_args`, the fork will use a different model than the parent, breaking the prompt cache promise documented on line 46. Either (a) add an `extra_args` field to Session struct and carry it from the parent in `build_fork_spawn_config`, mirroring the `system_prompt` pattern, or (b) update the documentation to clarify that `extra_args` intentionally comes from the current agent config and document the implicit assumption that agent config remains stable between parent creation and fork.
+
+#bug #review
+
+## Review Findings (2026-08-03 16:30)
+
+Scope: `review sha d2927bfb0~1..d2927bfb0`. Engine reported 33 findings; each
+reported line was blame-checked against `d2927bfb0`'s hunks. 31 fell outside
+every hunk this commit touched (pre-existing code in `agent.rs` and
+`session.rs`, unmodified by this diff) and are dropped per instruction. 2
+findings land inside the hunk this commit added — the new
+`store_extra_args_in_session` function at `agent.rs:1495` — and are recorded
+below.
+
+- [x] `crates/claude-agent/src/agent.rs:1495` — store_extra_args_in_session (lines 1495–1505) duplicates store_system_prompt_in_session (lines 1470–1480). Both functions follow identical structure: call self.session_manager.update_session with a closure that modifies one session field, then map errors to internal_error. The core logic repeats verbatim; they differ only in which field is set (system_prompt vs extra_args) and how the value is sourced (parameter vs self.config clone). This duplication creates drift risk: a change to error handling or the session_manager call pattern in one will not propagate to the other. Extract a shared helper function parameterized by a closure that sets the field: fn persist_session_field<F>(&self, session_id: &SessionId, f: F) -> Result<(), Error> where F: FnOnce(&mut Session). Both store_* functions then become one-liners calling this helper.
+- [x] `crates/claude-agent/src/agent.rs:1495` — The new function store_extra_args_in_session reimplements the same error-handling pattern used in store_system_prompt_in_session (line 1470) and store_mcp_servers_in_session (line 1425). All three functions follow the pattern: call self.session_manager.update_session() with a closure, then map errors to internal_error(). Rather than duplicate this pattern, a generic helper function should extract the common structure (self.session_manager.update_session() + error mapping) and let each caller provide only its field-setting logic. Extract a generic helper: fn store_in_session<F>(&self, session_id: &crate::session::SessionId, setter: F) -> Result<(), agent_client_protocol::Error> where F: FnOnce(&mut Session). Then both store_extra_args_in_session and store_system_prompt_in_session call it with only the field-setting closure, eliminating the duplicate error mapping code.
 
 #bug #review

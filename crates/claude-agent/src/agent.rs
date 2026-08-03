@@ -1421,22 +1421,39 @@ impl ClaudeAgent {
         tracing::debug!("Registered RawMessageManager for session {}", session_ulid);
     }
 
+    /// Update one field on the live session, mapping any session-manager
+    /// error to an ACP internal error.
+    ///
+    /// Shared by every `store_*_in_session` method below: each one only
+    /// differs in which [`Session`](crate::session::Session) field it sets
+    /// and how the value is sourced, so the `update_session` call plus error
+    /// mapping lives here once instead of being repeated per field.
+    fn persist_session_field<F>(
+        &self,
+        session_id: &crate::session::SessionId,
+        setter: F,
+    ) -> Result<(), agent_client_protocol::Error>
+    where
+        F: FnOnce(&mut crate::session::Session),
+    {
+        self.session_manager
+            .update_session(session_id, setter)
+            .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+
     /// Store MCP server configs in session.
     pub(crate) fn store_mcp_servers_in_session(
         &self,
         session_id: &crate::session::SessionId,
         mcp_servers: &[agent_client_protocol::schema::McpServer],
     ) -> Result<(), agent_client_protocol::Error> {
-        self.session_manager
-            .update_session(session_id, |session| {
-                session.mcp_servers = mcp_servers
-                    .iter()
-                    .map(|server| {
-                        serde_json::to_string(server).unwrap_or_else(|_| format!("{:?}", server))
-                    })
-                    .collect();
-            })
-            .map_err(|_e| agent_client_protocol::Error::internal_error())
+        let mcp_servers: Vec<String> = mcp_servers
+            .iter()
+            .map(|server| serde_json::to_string(server).unwrap_or_else(|_| format!("{:?}", server)))
+            .collect();
+        self.persist_session_field(session_id, |session| {
+            session.mcp_servers = mcp_servers;
+        })
     }
 
     /// Extract the optional `system_prompt` from `request.meta`.
@@ -1472,11 +1489,9 @@ impl ClaudeAgent {
         session_id: &crate::session::SessionId,
         system_prompt: String,
     ) -> Result<(), agent_client_protocol::Error> {
-        self.session_manager
-            .update_session(session_id, |session| {
-                session.system_prompt = Some(system_prompt);
-            })
-            .map_err(|_e| agent_client_protocol::Error::internal_error())
+        self.persist_session_field(session_id, |session| {
+            session.system_prompt = Some(system_prompt);
+        })
     }
 
     /// Persist the agent's currently configured `extra_args` onto the live
@@ -1497,11 +1512,9 @@ impl ClaudeAgent {
         session_id: &crate::session::SessionId,
     ) -> Result<(), agent_client_protocol::Error> {
         let extra_args = self.config.claude.extra_args.clone();
-        self.session_manager
-            .update_session(session_id, |session| {
-                session.extra_args = extra_args;
-            })
-            .map_err(|_e| agent_client_protocol::Error::internal_error())
+        self.persist_session_field(session_id, |session| {
+            session.extra_args = extra_args;
+        })
     }
 
     /// Connect the MCP servers supplied in a `session/new` request.
