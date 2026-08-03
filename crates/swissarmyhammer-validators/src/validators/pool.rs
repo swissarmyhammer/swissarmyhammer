@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 const MIN_WORKERS: usize = 1;
 
 /// Maximum worker count for the remote backend default.
-const MAX_REMOTE_WORKERS: usize = 8;
+const MAX_REMOTE_WORKERS: usize = 16;
 
 /// Default per-call cap on generation tokens for a single `submit` prompt.
 pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
@@ -1601,8 +1601,13 @@ mod tests {
     fn test_pool_config_remote_clamps_workers() {
         assert_eq!(PoolConfig::remote(4).workers, 4);
         assert_eq!(
+            PoolConfig::remote(16).workers,
+            16,
+            "remote default must allow up to the raised ceiling"
+        );
+        assert_eq!(
             PoolConfig::remote(100).workers,
-            8,
+            16,
             "remote default must clamp to the friendly ceiling"
         );
         assert_eq!(

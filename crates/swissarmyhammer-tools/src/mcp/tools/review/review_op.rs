@@ -297,7 +297,7 @@ fn pool_config_for(backend: Option<&str>, concurrency: Option<usize>) -> PoolCon
 
 /// Default remote worker count when `backend` is `session`/absent and no
 /// `review.concurrency` override is supplied.
-const DEFAULT_REMOTE_WORKERS: usize = 4;
+const DEFAULT_REMOTE_WORKERS: usize = 16;
 
 /// Process-global cap on concurrent review pipelines.
 ///
