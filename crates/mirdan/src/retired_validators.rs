@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use crate::store;
 
 /// One file within a retired validator set's shipped snapshot.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetiredFile {
     /// Path relative to the set directory (e.g. `"VALIDATOR.md"`,
     /// `"rules/dead-code.md"`).
@@ -39,7 +39,7 @@ pub struct RetiredFile {
 }
 
 /// A retired builtin validator set: its name plus every file it shipped.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetiredSet {
     /// The set's directory name (e.g. `"dead-code"`).
     pub name: &'static str,
