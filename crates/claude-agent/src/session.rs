@@ -222,6 +222,20 @@ pub struct Session {
     /// source of truth for [`SessionRecord::title`](agent_client_protocol_extras::SessionRecord).
     #[serde(default)]
     pub title: Option<String>,
+    /// The `--system-prompt` this session's Claude CLI process was spawned
+    /// with (from `session/new`'s `request.meta.system_prompt`), if any.
+    ///
+    /// Persisted here — not just handed to the spawned process and forgotten —
+    /// so `session/fork` ([`crate::session_fork::ClaudeAgent::fork_session`])
+    /// can replay the identical `--system-prompt` on the forked child's own
+    /// CLI process. This is load-bearing for Anthropic's prompt cache: the
+    /// CLI reconstructs a forked session's API request from its OWN current
+    /// invocation flags, not from whatever flags spawned the parent, so a
+    /// fork spawned with a different (or absent) system prompt silently
+    /// diverges the request prefix and the cache never matches the parent's
+    /// entry — see the fuller explanation in `session_fork`'s module doc.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 impl Session {
@@ -257,6 +271,7 @@ impl Session {
             turn_token_count: 0,
             current_mode: None,
             title: None,
+            system_prompt: None,
         }
     }
 
@@ -826,6 +841,11 @@ mod tests {
         assert!(session.context.is_empty());
         assert!(session.client_capabilities.is_none());
         assert!(session.mcp_servers.is_empty());
+        assert_eq!(
+            session.system_prompt, None,
+            "a freshly created session carries no system prompt until session/new's \
+             request.meta persists one"
+        );
     }
 
     #[test]

@@ -1358,6 +1358,15 @@ impl ClaudeAgent {
             self.store_mcp_servers_in_session(&session_id, &request.mcp_servers)?;
         }
 
+        // Persist the per-session system prompt (if any) onto the live
+        // session so a later `session/fork` can replay it on the forked CLI
+        // process — required for Anthropic's prompt cache to recognize the
+        // fork's request as sharing the parent's prefix. See
+        // `crate::session_fork`'s "Prefix caching" module doc.
+        if let Some(system_prompt) = Self::extract_system_prompt_meta(request) {
+            self.store_system_prompt_in_session(&session_id, system_prompt)?;
+        }
+
         // Register per-session notification channel
         self.notification_sender
             .register_session(&session_id.to_string());
@@ -1420,6 +1429,46 @@ impl ClaudeAgent {
                         serde_json::to_string(server).unwrap_or_else(|_| format!("{:?}", server))
                     })
                     .collect();
+            })
+            .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+
+    /// Extract the optional `system_prompt` from `request.meta`.
+    ///
+    /// There is no first-class ACP field for a per-session system prompt, so
+    /// [`swissarmyhammer_agent::create_session_via_connection`] (and any other
+    /// caller wanting a custom persona) carries it as `meta.system_prompt` on
+    /// `session/new`. Shared by [`Self::build_session_spawn_config`] (which
+    /// feeds it to the freshly spawned process) and
+    /// [`Self::create_new_session_internal`] (which persists it onto the live
+    /// [`Session`](crate::session::Session) so a later `session/fork` can
+    /// replay it — see `crate::session_fork`'s "Prefix caching" module doc for
+    /// why that replay is required, not cosmetic).
+    fn extract_system_prompt_meta(request: &NewSessionRequest) -> Option<String> {
+        request
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("system_prompt"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Persist `system_prompt` onto the live session.
+    ///
+    /// This is the write half of [`Self::extract_system_prompt_meta`]'s
+    /// contract: a session's `system_prompt` must be resolvable later, from
+    /// nothing but the live [`Session`](crate::session::Session), by
+    /// `session/fork` — the fork spawns a BRAND NEW CLI process for the
+    /// child, so it cannot rely on the parent's already-spawned process still
+    /// holding the flags it started with.
+    pub(crate) fn store_system_prompt_in_session(
+        &self,
+        session_id: &crate::session::SessionId,
+        system_prompt: String,
+    ) -> Result<(), agent_client_protocol::Error> {
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.system_prompt = Some(system_prompt);
             })
             .map_err(|_e| agent_client_protocol::Error::internal_error())
     }
@@ -1499,13 +1548,7 @@ impl ClaudeAgent {
     ) -> crate::claude_process::SpawnConfig {
         use crate::claude_process::SpawnConfig;
 
-        // Extract system_prompt from session metadata if present
-        let system_prompt = request
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get("system_prompt"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let system_prompt = Self::extract_system_prompt_meta(request);
 
         // Union: static build-time servers first, then per-session servers
         // converted from ACP. Order is preserved so a duplicate name in
@@ -2999,6 +3042,81 @@ mod tests {
             spawn_config.mcp_servers.is_empty(),
             "With no static or per-session MCP servers, SpawnConfig.mcp_servers must be empty"
         );
+    }
+
+    /// `session/new` with a `system_prompt` in `request.meta` must persist it
+    /// onto the live [`Session`](crate::session::Session), not just hand it to
+    /// the spawned process and forget it. A later `session/fork`
+    /// ([`crate::session_fork::ClaudeAgent::build_fork_spawn_config`]) reads
+    /// this field to replay the identical `--system-prompt` on the forked
+    /// child's own CLI process — required for Anthropic's prompt cache to
+    /// recognize the fork's request as sharing the parent's prefix (see
+    /// `crate::session_fork`'s "Prefix caching" module doc).
+    #[tokio::test]
+    async fn test_create_new_session_internal_persists_system_prompt_from_meta() {
+        let config = AgentConfig {
+            spawn_claude_on_new_session: false,
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "system_prompt".to_string(),
+            serde_json::json!("You are a strict senior code reviewer."),
+        );
+        let request = NewSessionRequest::new(cwd).meta(meta);
+
+        let session_id = agent
+            .create_new_session_internal(&request)
+            .await
+            .expect("session creation must succeed");
+
+        let session = agent
+            .session_manager
+            .get_session(&session_id)
+            .expect("lookup")
+            .expect("session must exist");
+
+        assert_eq!(
+            session.system_prompt.as_deref(),
+            Some("You are a strict senior code reviewer."),
+            "the live session must persist request.meta's system_prompt so a later \
+             fork can replay it"
+        );
+    }
+
+    /// With no `system_prompt` in `request.meta`, the live session's
+    /// `system_prompt` stays `None` (the empty case, mirroring
+    /// `test_build_session_spawn_config_empty_when_no_servers`).
+    #[tokio::test]
+    async fn test_create_new_session_internal_leaves_system_prompt_none_without_meta() {
+        let config = AgentConfig {
+            spawn_claude_on_new_session: false,
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let request = NewSessionRequest::new(cwd);
+
+        let session_id = agent
+            .create_new_session_internal(&request)
+            .await
+            .expect("session creation must succeed");
+
+        let session = agent
+            .session_manager
+            .get_session(&session_id)
+            .expect("lookup")
+            .expect("session must exist");
+
+        assert_eq!(session.system_prompt, None);
     }
 
     /// A `ClaudeAgent` built from an `AgentConfig` carrying an `mcp__*`
