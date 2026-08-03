@@ -6,7 +6,6 @@ use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -33,7 +32,6 @@ async fn test_read_text_file_capability_check(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -60,7 +58,6 @@ async fn test_write_text_file_capability_check(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -87,7 +84,6 @@ async fn test_read_text_file_basic(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -114,7 +110,6 @@ async fn test_read_text_file_with_range(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -141,7 +136,6 @@ async fn test_write_text_file_basic(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -168,7 +162,6 @@ async fn test_write_text_file_creates_new(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]

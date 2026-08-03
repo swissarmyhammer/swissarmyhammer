@@ -781,7 +781,7 @@ pub async fn unpin_prefix_session(guard: SessionPinGuard) {
 /// How a turn reused the shared file-context prefix, classified from the two
 /// reuse signals the two backends report.
 ///
-/// The native KV (llama/qwen) backend reports reuse as a fork attaching the
+/// A backend with a native KV cache reports reuse as a fork attaching the
 /// parent's saved generation state with a prefix token count
 /// ([`ForkAttachment::prefix_tokens`]); the claude backend's fork attaches no
 /// token counts and instead reports Anthropic prompt-cache reads/writes on the
@@ -790,7 +790,7 @@ pub async fn unpin_prefix_session(guard: SessionPinGuard) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefixReuse {
     /// A native KV fork attached the parent's saved state, reusing
-    /// `reused_tokens` prompt tokens (the llama/qwen warm path).
+    /// `reused_tokens` prompt tokens (the native-KV warm path).
     WarmKv {
         /// Prompt tokens the attached parent state covered.
         reused_tokens: u64,
@@ -815,7 +815,7 @@ pub enum PrefixReuse {
 ///
 /// Precedence:
 /// 1. A native KV fork with a prefix token count → [`PrefixReuse::WarmKv`]
-///    (the llama/qwen path, whose `fork.prefix_tokens` is authoritative).
+///    (the native-KV path, whose `fork.prefix_tokens` is authoritative).
 /// 2. Otherwise a claude turn reporting `cache_read_input_tokens > 0` →
 ///    [`PrefixReuse::WarmCache`] (the hosted prefix cache served it warm).
 /// 3. Otherwise [`PrefixReuse::Cold`] — a cold write (`cache_creation_input_tokens

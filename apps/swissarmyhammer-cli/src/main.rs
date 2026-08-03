@@ -29,8 +29,9 @@ static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 
 /// Perform graceful shutdown before process exit
 ///
-/// This ensures the global LlamaAgent executor is properly shut down before
-/// process termination, preventing Metal device cleanup assertion failures on macOS.
+/// Kept as the single seam for pre-exit teardown. The agent lifecycle in
+/// `swissarmyhammer-agent` now cleans up on its own, so this only latches the
+/// idempotency flag.
 ///
 /// This function safely handles both cases: when called from within a tokio runtime
 /// (e.g., during tests) and when called from outside a runtime (e.g., normal execution).
@@ -283,34 +284,17 @@ fn handle_cwd_flag(args: &[String]) {
     }
 }
 
-/// Extract --model flag from command-line arguments
-///
-/// This function checks for the --model flag and extracts its value.
-/// Returns None if the flag is not present.
-fn extract_model_flag(args: &[String]) -> Option<String> {
-    args.iter()
-        .position(|arg| arg == "--model")
-        .and_then(|model_index| {
-            args.get(model_index + 1)
-                .map(|model_name| model_name.to_string())
-        })
-}
-
 /// Initialize tool context and registry
 ///
 /// This function initializes the tool context required for MCP tool execution.
 ///
-/// # Arguments
-///
-/// * `model_override` - Optional model name to use for all use cases
-///
 /// # Returns
 ///
 /// Arc to the initialized CliToolContext
-async fn initialize_tool_context(model_override: Option<&str>) -> Arc<CliToolContext> {
+async fn initialize_tool_context() -> Arc<CliToolContext> {
     let current_dir = unwrap_or_exit(std::env::current_dir(), "Failed to get current directory");
     let context = unwrap_or_exit(
-        CliToolContext::new_with_config(&current_dir, model_override).await,
+        CliToolContext::new_with_work_dir(&current_dir).await,
         "Failed to initialize tool context",
     );
     Arc::new(context)
@@ -405,7 +389,7 @@ fn build_and_parse_cli(cli_builder: CliBuilder) -> clap::ArgMatches {
 
 #[tokio::main]
 async fn main() {
-    // Parse CLI early to check for --cwd and --model flags BEFORE doing anything else
+    // Parse CLI early to check for the --cwd flag BEFORE doing anything else
     let args: Vec<String> = std::env::args().collect();
 
     // Show branded banner for top-level help (no subcommand or --help/-h).
@@ -416,14 +400,11 @@ async fn main() {
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
-    // Extract --model flag for global override
-    let model_override = extract_model_flag(&args);
-
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 
-    // Initialize tool context and registry for dynamic CLI with model override
-    let cli_tool_context = initialize_tool_context(model_override.as_deref()).await;
+    // Initialize tool context and registry for the dynamic CLI
+    let cli_tool_context = initialize_tool_context().await;
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
@@ -434,9 +415,8 @@ async fn main() {
     // Handle dynamic command dispatch
     let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
 
-    // Shutdown global LlamaAgent executor before exit to prevent Metal cleanup crashes
-    // Note: Agent shutdown is now handled automatically by the agent lifecycle
-    // The swissarmyhammer-agent crate manages cleanup internally
+    // Note: agent teardown is handled automatically by the agent lifecycle;
+    // the swissarmyhammer-agent crate manages cleanup internally.
     let _ = SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst);
 
     process::exit(exit_code);
@@ -589,8 +569,6 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
-        Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
-        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
         Some(("tools", sub_matches)) => handle_tools_command(sub_matches),
         Some(("completion", sub_matches)) => {
@@ -1308,91 +1286,6 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     commands::validate::handle_command(validate_tools, cli_context).await
 }
 
-/// Parse output format from clap matches with fallback
-///
-/// This helper function extracts the output format from clap matches,
-/// providing a consistent fallback to Table format.
-///
-/// # Arguments
-/// * `matches` - The clap ArgMatches to extract from
-///
-/// # Returns
-/// The parsed OutputFormat, defaulting to Table if not found or invalid
-fn parse_output_format(matches: &clap::ArgMatches) -> crate::cli::OutputFormat {
-    use crate::cli::OutputFormat;
-    use std::str::FromStr;
-
-    matches
-        .get_one::<String>("format")
-        .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
-        .unwrap_or(OutputFormat::Table)
-}
-
-async fn handle_model_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::ModelSubcommand;
-
-    let subcommand = match matches.subcommand() {
-        Some(("list", sub_matches)) => {
-            let format = parse_output_format(sub_matches);
-            Some(ModelSubcommand::List { format })
-        }
-        Some(("show", sub_matches)) => {
-            let format = parse_output_format(sub_matches);
-            Some(ModelSubcommand::Show { format })
-        }
-        Some(("use", sub_matches)) => {
-            let name = sub_matches.get_one::<String>("name").cloned().unwrap();
-            let for_purpose = sub_matches.get_one::<String>("for").cloned();
-            Some(ModelSubcommand::Use { name, for_purpose })
-        }
-        // Default to show when no subcommand is provided
-        None => None,
-        _ => return report_error_and_exit("Unknown model subcommand"),
-    };
-
-    commands::model::handle_command(subcommand, context).await
-}
-
-async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::AgentSubcommand;
-
-    let subcommand = match matches.subcommand() {
-        Some(("acp", sub_matches)) => {
-            let config = sub_matches.get_one::<std::path::PathBuf>("config").cloned();
-            let permission_policy = sub_matches.get_one::<String>("permission_policy").cloned();
-            let allow_path = sub_matches
-                .get_many::<std::path::PathBuf>("allow_path")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let block_path = sub_matches
-                .get_many::<std::path::PathBuf>("block_path")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let max_file_size = sub_matches.get_one::<u64>("max_file_size").copied();
-            let terminal_buffer_size = sub_matches
-                .get_one::<usize>("terminal_buffer_size")
-                .copied();
-            let graceful_shutdown_timeout = sub_matches
-                .get_one::<u64>("graceful_shutdown_timeout")
-                .copied();
-
-            Some(AgentSubcommand::Acp {
-                config,
-                permission_policy,
-                allow_path,
-                block_path,
-                max_file_size,
-                terminal_buffer_size,
-                graceful_shutdown_timeout,
-            })
-        }
-        None => None,
-        _ => return report_error_and_exit("Unknown agent subcommand"),
-    };
-
-    commands::agent::handle_command(subcommand, context).await
-}
-
 #[cfg(test)]
 mod tests_stdin_merge {
     use super::*;
@@ -1496,9 +1389,12 @@ mod tests_relax_required_tool_args {
     use super::relax_required_tool_args;
     use clap::{Arg, Command};
 
-    /// `sah tool ralph ralph check --session_id <required>` beside a static
-    /// `model use --name <required>` command: the required argument sits three
-    /// levels below `tool`, and the static command must keep its own check.
+    /// `sah tool ralph ralph check --session_id <required>` beside a synthetic
+    /// static `static child --name <required>` command: the required argument
+    /// sits three levels below `tool`, and the static command must keep its own
+    /// check. Relaxation keys off `STDIN_ARGS_SUBCOMMAND` alone, so the static
+    /// branch stands for any command outside the `tool` tree; the real command
+    /// tree is covered by `stdin_args_subcommand_names_a_real_command` below.
     fn cli() -> Command {
         Command::new("sah")
             .subcommand(
@@ -1511,11 +1407,9 @@ mod tests_relax_required_tool_args {
                     ),
                 ),
             )
-            .subcommand(
-                Command::new("model").subcommand(
-                    Command::new("use").arg(Arg::new("name").long("name").required(true)),
-                ),
-            )
+            .subcommand(Command::new("static").subcommand(
+                Command::new("child").arg(Arg::new("name").long("name").required(true)),
+            ))
     }
 
     const HOOK_ARGV: [&str; 5] = ["sah", "tool", "ralph", "ralph", "check"];
@@ -1585,8 +1479,8 @@ mod tests_relax_required_tool_args {
     #[test]
     fn relaxing_leaves_static_commands_strict() {
         let err = relax_required_tool_args(cli())
-            .try_get_matches_from(["sah", "model", "use"])
-            .expect_err("model use --name stays required");
+            .try_get_matches_from(["sah", "static", "child"])
+            .expect_err("static child --name stays required");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 }

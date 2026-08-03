@@ -138,7 +138,6 @@ mod tests {
         let upstream_handle = start_mcp_server(
             McpServerMode::Http { port: None },
             None,
-            None,
             Some(temp.path().to_path_buf()),
         )
         .await

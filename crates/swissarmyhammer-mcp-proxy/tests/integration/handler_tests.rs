@@ -66,7 +66,7 @@ fn run_upstream_forever(url_tx: std::sync::mpsc::Sender<String>) {
         .build()
         .expect("build upstream runtime");
     rt.block_on(async move {
-        let handle = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
+        let handle = start_mcp_server(McpServerMode::Http { port: None }, None, None)
             .await
             .expect("failed to start upstream MCP server");
         let port = handle.info().port.expect("upstream has no port");

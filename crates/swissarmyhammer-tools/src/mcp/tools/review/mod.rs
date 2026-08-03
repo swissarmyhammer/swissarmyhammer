@@ -619,7 +619,7 @@ pub fn register_review_tools(registry: &mut ToolRegistry) {
 /// tool already registered under the `review` name.
 ///
 /// The wiring layer (a crate that may depend on `swissarmyhammer-agent`) builds
-/// the production [`AgentFactory`] from the session's `ModelConfig` and calls
+/// the production [`AgentFactory`] from the session's `ChatModelConfig` and calls
 /// this to swap the loader-only default for a tool whose three `review` ops can
 /// drive the engine. `embedder_factory` is `None` to keep the loaded platform
 /// embedder default; `concurrency` pins the pool worker count

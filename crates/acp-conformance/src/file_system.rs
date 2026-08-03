@@ -590,7 +590,7 @@ mod tests {
     /// For the no-capability scenarios the mock's default
     /// [`MockAgent::ext_method`] returns `method_not_found`, which satisfies
     /// the "agent rejected" expectation. The real recording flow against
-    /// `claude-agent` / `llama-agent` uses the production agents' own typed
+    /// `claude-agent` uses the production agent's own typed
     /// handlers — not this mock — so the mock only needs to make
     /// `initialize` and `new_session` succeed for the production helpers to
     /// reach the SDK's rejection path. The happy-path filesystem unit tests

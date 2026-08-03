@@ -31,7 +31,7 @@ static GREP_HISTORY_PARAMS: &[ParamMeta] = &[
         .description("Filter to a specific command's output (optional)")
         .param_type(ParamType::Integer),
     ParamMeta::new("limit")
-        .description("Maximum number of results (default: 50)")
+        .description("Maximum number of results (default: 10)")
         .param_type(ParamType::Integer),
 ];
 
@@ -314,6 +314,23 @@ mod tests {
             text.contains("line 99"),
             "Should find regex match: {}",
             text
+        );
+    }
+
+    /// The advertised default must be the limit `ShellState::grep` really
+    /// applies. The schema previously said 50 while the code capped at 10, so
+    /// an agent believed it had seen 50 of N matches when it had seen 10.
+    #[test]
+    fn test_limit_parameter_advertises_the_real_default() {
+        let limit = super::GREP_HISTORY_PARAMS
+            .iter()
+            .find(|p| p.name == "limit")
+            .expect("grep history must take a limit parameter");
+        let advertised = format!("(default: {})", super::super::state::DEFAULT_GREP_LIMIT);
+        assert!(
+            limit.description.contains(&advertised),
+            "limit description {:?} must advertise {advertised}",
+            limit.description
         );
     }
 }

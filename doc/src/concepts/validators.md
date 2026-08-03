@@ -73,23 +73,17 @@ The review tool reads two optional keys from `.sah/sah.yaml`, both under a `revi
 
 | Config key | What it controls | When unset |
 |------------|------------------|------------|
-| `review.model` | The model the review tool runs its validator agents with. | The global default model (top-level `model:`) is used. |
+| `review.model` | The Claude CLI `--model` switch the review tool runs its validator agents with. | The global default (top-level `model:`) is used; when that is also unset, `haiku`. |
 | `review.concurrency` | The number of validator agents run in parallel. Must be a positive integer. | The platform default concurrency is used. |
 
-Set the review model with the `model use` command rather than editing the file by hand:
-
-```bash
-sah model use qwen --for review
-```
-
-This writes `review.model: qwen` and leaves the global default (`model:`) untouched, so only the review tool switches models. Omit `--for review` to set the global default that every tool — including review — falls back to.
+Claude Code is the only chat executor, so both keys hold a Claude CLI `--model` switch — `haiku`, `sonnet`, `opus`, or a full model id. Set `review.model` in `.sah/sah.yaml` to switch only the review tool; the global default (`model:`) stays untouched. Set the top-level `model:` instead to change the default that every tool — including review — falls back to. A fully unconfigured review scope runs `claude --model haiku`.
 
 A configured `.sah/sah.yaml` looks like:
 
 ```yaml
-model: claude-code      # global default for all tools
+model: sonnet           # global default for all tools
 review:
-  model: qwen           # review tool overrides the global default
+  model: haiku          # review tool overrides the global default
   concurrency: 4        # run 4 validator agents in parallel
 ```
 

@@ -6,7 +6,6 @@ use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -34,7 +33,6 @@ async fn test_basic_prompt_response(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -62,7 +60,6 @@ async fn test_prompt_completion(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -90,7 +87,6 @@ async fn test_stop_reasons(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -120,7 +116,6 @@ async fn test_cancellation(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -149,7 +144,6 @@ async fn test_multiple_prompts(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -173,7 +167,6 @@ async fn test_streaming_capability(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]

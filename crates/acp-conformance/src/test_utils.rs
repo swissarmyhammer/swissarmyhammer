@@ -201,8 +201,8 @@ impl<M: MockAgent + 'static> ConnectTo<Client> for MockAgentAdapter<M> {
 ///
 /// Each per-method dispatch is offloaded to `cx.spawn` so the SDK's event
 /// loop can keep dispatching new incoming requests while a slow handler is
-/// awaiting (matching the production agents in `llama-agent` and
-/// `claude-agent`). `ClientRequest` is `#[non_exhaustive]`, so unmodelled
+/// awaiting (matching the production agent in `claude-agent`).
+/// `ClientRequest` is `#[non_exhaustive]`, so unmodelled
 /// variants fall through to method-not-found rather than silent acceptance.
 fn dispatch_mock_request<M: MockAgent + 'static>(
     mock: &Arc<M>,

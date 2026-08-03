@@ -1,165 +1,99 @@
-//! Agent configuration types and infrastructure
+//! Model configuration types and infrastructure
 //!
-//! This module provides comprehensive agent management for SwissArmyHammer, enabling
-//! dynamic switching between different AI execution environments and configurations.
+//! This module holds two independent kinds of model configuration.
 //!
-//! # Overview
+//! # Chat models
 //!
-//! Agents in SwissArmyHammer represent different AI execution contexts, from cloud-based
-//! Claude Code integration to local model execution with LlamaAgent. The agent system
-//! provides a flexible, hierarchical configuration approach that allows users to:
+//! Claude Code is the only chat executor, so the chat scope chooses no
+//! executor. [`ChatModelConfig`] carries a single setting: the value of the
+//! Claude CLI `--model` switch. `None` spawns plain `claude`, which applies the
+//! Claude CLI's own default.
 //!
-//! - Switch between different AI models and execution environments
-//! - Customize agent behavior per project or globally
-//! - Override built-in configurations with user-defined alternatives
-//! - Manage complex multi-model workflows
-//!
-//! # Agent Architecture
-//!
-//! The system supports multiple executor types:
-//!
-//! - **Claude Code**: Shell execution using Claude Code CLI (default)
-//! - **LlamaAgent**: In-process execution with local models via llama.cpp
-//!
-//! ## Hierarchical Discovery
-//!
-//! Agents are loaded from multiple sources with precedence:
-//!
-//! 1. **Built-in agents** (lowest precedence) - Embedded in binary
-//! 2. **Project agents** (medium precedence) - `./agents/*.yaml`
-//! 3. **User agents** (highest precedence) - `~/.models/*.yaml`
-//!
-//! Higher precedence agents override lower ones by name, enabling customization
-//! while preserving defaults.
-//!
-//! # Configuration Format
-//!
-//! Agent configurations use YAML format with optional frontmatter:
+//! The switch is read from the project config file (`.sah/sah.yaml`):
 //!
 //! ```yaml
-//! ---
-//! description: "Custom Claude Code agent with project-specific settings"
-//! ---
-//! executor:
-//!   type: claude-code
-//!   config:
-//!     claude_path: /usr/local/bin/claude
-//!     args: ["--project-mode"]
-//! quiet: false
+//! model: sonnet      # the default chat scope
+//! review:
+//!   model: haiku     # the review scope only
 //! ```
 //!
-//! # Quick Start
-//!
-//! ## Basic Agent Management
+//! Precedence for the review scope is `review.model` -> the top-level `model:`
+//! -> the baked-in [`REVIEW_DEFAULT_CLAUDE_MODEL`]. The default scope reads the
+//! top-level `model:` alone. [`ModelManager::resolve_chat_config`] and
+//! [`ModelManager::resolve_review_chat_config`] are the only resolvers, so the
+//! switch a tool reports can never disagree with the switch it runs.
 //!
 //! ```no_run
-//! use swissarmyhammer_config::model::ModelManager;
+//! use swissarmyhammer_config::model::{ModelManager, ModelPaths};
 //!
-//! // List all available agents
-//! let agents = ModelManager::list_agents()?;
-//! for agent in agents {
-//!     println!("{}: {:?} - {}",
-//!         agent.name,
-//!         agent.source,
-//!         agent.description.unwrap_or_default()
-//!     );
-//! }
-//!
-//! // Find specific agent
-//! let claude_agent = ModelManager::find_agent_by_name("claude-code")?;
-//! println!("Found: {}", claude_agent.name);
-//!
-//! // Apply agent to project
-//! use swissarmyhammer_config::model::ModelPaths;
-//! ModelManager::use_agent("claude-code", &ModelPaths::sah())?;
+//! let review = ModelManager::resolve_review_chat_config(&ModelPaths::sah())?;
+//! assert_eq!(review.claude_args(), vec!["--model".to_string(), "haiku".to_string()]);
 //! # Ok::<(), swissarmyhammer_config::model::ModelError>(())
 //! ```
 //!
-//! ## Creating Custom Agents
+//! # Embedding models
 //!
-//! Create a project-specific agent in `./agents/my-agent.yaml`:
+//! Embedding models are declared in YAML files and loaded by name. Each file
+//! names an executor: `llama-embedding` (llama.cpp GGUF) or `ane-embedding`
+//! (Apple Neural Engine). A file may list several, and the first one compatible
+//! with the running platform wins.
 //!
 //! ```yaml
 //! ---
-//! description: "Custom agent for data analysis tasks"
+//! description: "Qwen3 Embedding 0.6B: Compact semantic embedding model"
 //! ---
-//! executor:
-//!   type: llama-agent
-//!   config:
-//!     model:
-//!       source:
-//!         HuggingFace:
-//!           repo: "microsoft/DialoGPT-medium"
-//!           filename: "model.gguf"
-//!     mcp_server:
-//!       port: 8080
-//!       timeout_seconds: 300
 //! quiet: false
+//! executors:
+//!   - platform: macos-arm64
+//!     executor:
+//!       type: ane-embedding
+//!       config:
+//!         source: !HuggingFace
+//!           repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
+//!         normalize: true
+//!   - executor:
+//!       type: llama-embedding
+//!       config:
+//!         source: !HuggingFace
+//!           repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+//!           filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+//!         normalize: true
 //! ```
 //!
-//! ## Configuration Loading
+//! ## Hierarchical discovery
+//!
+//! Embedding models are loaded from several sources, in increasing precedence:
+//!
+//! 1. **Built-in models** - embedded in the binary
+//! 2. **Git-root models** - `<git root>/.sah/models/*.yaml`
+//! 3. **Project models** - `./.sah/models/*.yaml`
+//! 4. **User models** - `~/.sah/models/*.yaml`
+//!
+//! A model of higher precedence replaces a lower one of the same name, so a
+//! user can customize a built-in model without editing the binary.
 //!
 //! ```no_run
-//! use swissarmyhammer_config::model::{parse_model_config, parse_model_description};
+//! use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 //!
-//! let agent_content = std::fs::read_to_string("./agents/my-agent.yaml")?;
-//!
-//! // Extract description
-//! let description = parse_model_description(&agent_content);
-//! println!("Description: {:?}", description);
-//!
-//! // Parse configuration
-//! let config = parse_model_config(&agent_content)?;
+//! let info = ModelManager::find_agent_by_name("qwen-embedding")?;
+//! let config = parse_model_config(&info.content)?;
 //! println!("Executor: {:?}", config.executor_type());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Built-in Agents
-//!
-//! SwissArmyHammer includes these built-in agents:
-//!
-//! ## claude-code
-//!
-//! Default integration with Claude Code CLI:
-//! ```yaml
-//! executor:
-//!   type: claude-code
-//!   config:
-//!     claude_path: null  # Use system PATH
-//!     args: []
-//! quiet: false
-//! ```
-//!
-//! ## qwen
-//!
-//! Local execution with Qwen3-Coder model:
-//! ```yaml
-//! executor:
-//!   type: llama-agent
-//!   config:
-//!     model:
-//!       source:
-//!         HuggingFace:
-//!           repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
-//!           filename: "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
-//! ```
-//!
-//! # Error Handling
-//!
-//! The agent system provides comprehensive error handling:
+//! # Error handling
 //!
 //! ```no_run
-//! use swissarmyhammer_config::model::{ModelManager, ModelError};
+//! use swissarmyhammer_config::model::{ModelError, ModelManager};
 //!
 //! match ModelManager::find_agent_by_name("nonexistent") {
-//!     Ok(agent) => println!("Found: {}", agent.name),
+//!     Ok(model) => println!("Found: {}", model.name),
 //!     Err(ModelError::NotFound(name)) => {
-//!         eprintln!("Agent '{}' not found", name);
-//!         // Show available agents as suggestion
-//!         let agents = ModelManager::list_agents()?;
-//!         eprintln!("Available agents:");
-//!         for agent in agents {
-//!             eprintln!("  - {}", agent.name);
+//!         eprintln!("Model '{}' not found", name);
+//!         let models = ModelManager::list_agents()?;
+//!         eprintln!("Available models:");
+//!         for model in models {
+//!             eprintln!("  - {}", model.name);
 //!         }
 //!     },
 //!     Err(e) => eprintln!("Error: {}", e),
@@ -174,13 +108,14 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
-/// Built-in agent name used as the baked-in default for the review scope.
+/// Claude CLI `--model` switch used as the baked-in default for the review
+/// scope.
 ///
-/// When nothing is configured for `review.model`, the review scope resolves to
-/// this agent (a `claude-code` executor pinned to the Haiku model) rather than
-/// the plain `claude-code` default used by the global scope. This is the single
-/// source of truth for the name — do not scatter the literal.
-pub const REVIEW_DEFAULT_AGENT: &str = "claude-code-haiku";
+/// When nothing is configured for `review.model`, the review scope runs
+/// `claude --model haiku` — a cheaper and faster Claude than the plain `claude`
+/// the default scope runs. This is the single source of truth for the value —
+/// do not scatter the literal.
+pub const REVIEW_DEFAULT_CLAUDE_MODEL: &str = "haiku";
 
 /// Configurable paths for model config file location.
 ///
@@ -212,20 +147,37 @@ impl ModelPaths {
     }
 }
 
-/// Which configured model a write or read targets.
+/// Configuration for the chat agent.
 ///
-/// The config supports a global default model (`model:` at the top level) and
-/// purpose-specific overrides (currently only the `review` tool, stored under
-/// `review.model:`). `ModelTarget` selects which of these a `ModelManager`
-/// operation reads or writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelTarget {
-    /// The global default model, written as the top-level `model:` scalar.
-    Default,
-    /// The review-tool model, written under the `review:` mapping as
-    /// `review.model:`. Other keys in the `review:` mapping (e.g.
-    /// `concurrency`) are preserved.
-    Review,
+/// Claude Code is the only chat executor, so this carries no executor choice.
+/// The one setting is the value of the Claude CLI `--model` switch: `Some("haiku")`
+/// spawns `claude --model haiku`, and `None` spawns plain `claude`, which applies
+/// the Claude CLI's own default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatModelConfig {
+    /// Value of the Claude CLI `--model` switch, e.g. `haiku`, `sonnet`, `opus`,
+    /// or a full model id. `None` spawns `claude` with no `--model`.
+    pub model: Option<String>,
+}
+
+impl ChatModelConfig {
+    /// Configuration that spawns `claude --model <model>`.
+    pub fn with_model(model: impl Into<String>) -> Self {
+        Self {
+            model: Some(model.into()),
+        }
+    }
+
+    /// The Claude CLI switches a spawned `claude` process receives.
+    ///
+    /// This is the single source of truth for the switch lookup, so the value a
+    /// tool reports and the value the process receives cannot drift.
+    pub fn claude_args(&self) -> Vec<String> {
+        match &self.model {
+            Some(model) => vec!["--model".to_string(), model.clone()],
+            None => Vec::new(),
+        }
+    }
 }
 
 /// Runtime platform for executor selection
@@ -269,18 +221,13 @@ impl Platform {
     }
 }
 
-/// Model executor type enumeration
+/// Embedding model executor type enumeration
 ///
-/// Defines the available model executor types with system default being Claude Code
-/// for maximum compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+/// Only embedding models declare an executor. The chat scope has none — Claude
+/// Code is the only chat executor, configured by [`ChatModelConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelExecutorType {
-    /// Shell out to Claude Code CLI (system default)
-    #[default]
-    ClaudeCode,
-    /// Use local LlamaAgent with in-process execution
-    LlamaAgent,
     /// Use local embedding model for semantic search via llama.cpp
     LlamaEmbedding,
     /// Use Apple Neural Engine for embedding inference
@@ -311,11 +258,11 @@ pub struct ExecutorEntry {
     pub executor: ModelExecutorConfig,
 }
 
-/// Complete model configuration with executor-specific settings
+/// Complete embedding model configuration with executor-specific settings
 ///
-/// Supports both the legacy singular `executor:` format (backward-compatible) and
-/// the new `executors:` list format with platform-based selection. The first
-/// compatible executor in the list is selected at runtime.
+/// Supports both the singular `executor:` format and the `executors:` list
+/// format with platform-based selection. The first compatible executor in the
+/// list is selected at runtime.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelConfig {
     /// Ordered list of executor entries; first compatible match wins.
@@ -386,46 +333,17 @@ impl<'de> serde::Deserialize<'de> for ModelConfig {
     }
 }
 
-/// Tagged union of agent executor configurations
+/// Tagged union of embedding executor configurations
 ///
 /// Uses serde's tagged representation to ensure type safety and proper
 /// serialization of executor-specific configuration data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ModelExecutorConfig {
-    #[serde(rename = "claude-code")]
-    ClaudeCode(ClaudeCodeConfig),
-    #[serde(rename = "llama-agent")]
-    LlamaAgent(LlamaAgentConfig),
     #[serde(rename = "llama-embedding")]
     LlamaEmbedding(EmbeddingModelConfig),
     #[serde(rename = "ane-embedding")]
     AneEmbedding(EmbeddingModelConfig),
-}
-
-/// Configuration for Claude Code CLI execution
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ClaudeCodeConfig {
-    /// Optional custom Claude Code CLI path
-    pub claude_path: Option<PathBuf>,
-    /// Additional CLI arguments
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-/// Configuration for LlamaAgent in-process execution
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LlamaAgentConfig {
-    /// Model configuration
-    #[serde(default)]
-    pub model: LlmModelConfig,
-    /// MCP server configuration
-    #[serde(default)]
-    pub mcp_server: McpServerConfig,
-
-    /// Repetition detection configuration
-    #[serde(default)]
-    pub repetition_detection: RepetitionDetectionConfig,
 }
 
 /// Configuration for embedding model execution
@@ -443,70 +361,6 @@ pub struct EmbeddingModelConfig {
     pub max_sequence_length: Option<usize>,
 }
 
-/// Configuration for repetition detection in model responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepetitionDetectionConfig {
-    /// Enable repetition detection (default: true)
-    #[serde(default = "default_repetition_enabled")]
-    pub enabled: bool,
-    /// Repetition penalty factor (default: 1.1, higher = more penalty)
-    #[serde(default = "default_repetition_penalty")]
-    pub repetition_penalty: f64,
-    /// Repetition threshold - max allowed repetitive tokens before blocking (default: 50)
-    #[serde(default = "default_repetition_threshold")]
-    pub repetition_threshold: usize,
-    /// Window size for repetition detection (default: 64)
-    #[serde(default = "default_repetition_window")]
-    pub repetition_window: usize,
-}
-
-// Macro to generate default value functions with consistent pattern
-macro_rules! serde_default {
-    ($fn_name:ident, $type:ty, $value:expr) => {
-        fn $fn_name() -> $type {
-            $value
-        }
-    };
-}
-
-serde_default!(
-    default_repetition_enabled,
-    bool,
-    crate::DEFAULT_REPETITION_ENABLED
-);
-serde_default!(
-    default_repetition_penalty,
-    f64,
-    crate::DEFAULT_REPETITION_PENALTY
-);
-serde_default!(
-    default_repetition_threshold,
-    usize,
-    crate::DEFAULT_REPETITION_THRESHOLD
-);
-serde_default!(
-    default_repetition_window,
-    usize,
-    crate::DEFAULT_REPETITION_WINDOW
-);
-serde_default!(default_batch_size, u32, crate::DEFAULT_BATCH_SIZE);
-serde_default!(default_use_hf_params, bool, crate::DEFAULT_USE_HF_PARAMS);
-
-/// LLM model configuration for LlamaAgent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmModelConfig {
-    pub source: ModelSource,
-    /// Batch size for model inference
-    #[serde(default = "default_batch_size")]
-    pub batch_size: u32,
-    /// Whether to use HuggingFace parameters
-    #[serde(default = "default_use_hf_params")]
-    pub use_hf_params: bool,
-    /// Enable debug mode
-    #[serde(default)]
-    pub debug: bool,
-}
-
 /// Model source specification
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ModelSource {
@@ -521,63 +375,6 @@ pub enum ModelSource {
         #[serde(skip_serializing_if = "Option::is_none")]
         folder: Option<PathBuf>,
     },
-}
-
-/// MCP server configuration for LlamaAgent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServerConfig {
-    /// Port for in-process MCP server (0 = random)
-    pub port: u16,
-    /// Timeout for MCP requests
-    pub timeout_seconds: u64,
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        // System default is always Claude Code
-        Self {
-            executors: vec![ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
-            }],
-            quiet: crate::DEFAULT_QUIET_MODE,
-        }
-    }
-}
-
-impl Default for LlmModelConfig {
-    fn default() -> Self {
-        Self {
-            source: ModelSource::HuggingFace {
-                repo: crate::DEFAULT_LLM_MODEL_REPO.to_string(),
-                filename: Some(crate::DEFAULT_LLM_MODEL_FILENAME.to_string()),
-                folder: None,
-            },
-            batch_size: default_batch_size(),
-            use_hf_params: default_use_hf_params(),
-            debug: crate::DEFAULT_DEBUG_MODE,
-        }
-    }
-}
-
-impl Default for McpServerConfig {
-    fn default() -> Self {
-        Self {
-            port: crate::DEFAULT_MCP_PORT,
-            timeout_seconds: crate::DEFAULT_MCP_TIMEOUT_SECONDS,
-        }
-    }
-}
-
-impl Default for RepetitionDetectionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_repetition_enabled(),
-            repetition_penalty: default_repetition_penalty(),
-            repetition_threshold: default_repetition_threshold(),
-            repetition_window: default_repetition_window(),
-        }
-    }
 }
 
 impl ModelConfig {
@@ -605,87 +402,9 @@ impl ModelConfig {
     /// Get the executor type from the configuration
     pub fn executor_type(&self) -> ModelExecutorType {
         match self.executor() {
-            ModelExecutorConfig::ClaudeCode(_) => ModelExecutorType::ClaudeCode,
-            ModelExecutorConfig::LlamaAgent(_) => ModelExecutorType::LlamaAgent,
             ModelExecutorConfig::LlamaEmbedding(_) => ModelExecutorType::LlamaEmbedding,
             ModelExecutorConfig::AneEmbedding(_) => ModelExecutorType::AneEmbedding,
         }
-    }
-
-    /// Create configuration for Claude Code execution
-    pub fn claude_code() -> Self {
-        Self {
-            executors: vec![ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
-            }],
-            quiet: crate::DEFAULT_QUIET_MODE,
-        }
-    }
-
-    /// Create configuration for the baked-in review default ([`REVIEW_DEFAULT_AGENT`]).
-    ///
-    /// Resolves the `claude-code-haiku` built-in agent by name and parses its
-    /// config (a `claude-code` executor with `args: ["--model", "haiku"]`). This
-    /// is the review scope's fallback when no `review.model` is configured.
-    ///
-    /// # Returns
-    /// * `Result<ModelConfig, ModelError>` - The resolved Haiku review config,
-    ///   or an error if the built-in cannot be found or parsed.
-    pub fn claude_code_haiku() -> Result<Self, ModelError> {
-        let agent_info = ModelManager::find_agent_by_name(REVIEW_DEFAULT_AGENT)?;
-        Ok(parse_model_config(&agent_info.content)?)
-    }
-
-    /// Create configuration for LlamaAgent execution
-    pub fn llama_agent(config: LlamaAgentConfig) -> Self {
-        Self {
-            executors: vec![ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::LlamaAgent(config),
-            }],
-            quiet: crate::DEFAULT_QUIET_MODE,
-        }
-    }
-}
-
-impl LlamaAgentConfig {
-    /// Configuration optimized for testing with small, fast models
-    ///
-    /// Uses Qwen2.5-1.5B with Q4_K_M quantization which provides:
-    /// - Fast model loading (~3-5 seconds)
-    /// - Quick inference for simple prompts
-    /// - Good quality responses for testing
-    pub fn for_testing() -> Self {
-        Self {
-            model: LlmModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: crate::DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
-                    filename: Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
-                    folder: None,
-                },
-                batch_size: crate::DEFAULT_TEST_BATCH_SIZE,
-                use_hf_params: crate::DEFAULT_USE_HF_PARAMS,
-                debug: crate::DEFAULT_DEBUG_MODE,
-            },
-            mcp_server: McpServerConfig {
-                port: crate::DEFAULT_MCP_PORT,
-                timeout_seconds: crate::DEFAULT_TEST_MCP_TIMEOUT_SECONDS,
-            },
-
-            repetition_detection: RepetitionDetectionConfig {
-                enabled: crate::DEFAULT_REPETITION_ENABLED,
-                repetition_penalty: crate::DEFAULT_TEST_REPETITION_PENALTY,
-                repetition_threshold: crate::DEFAULT_TEST_REPETITION_THRESHOLD,
-                repetition_window: crate::DEFAULT_TEST_REPETITION_WINDOW,
-            },
-        }
-    }
-
-    /// Alias for `for_testing()` - kept for backwards compatibility
-    #[deprecated(since = "0.1.0", note = "Use `for_testing()` instead")]
-    pub fn for_small_model() -> Self {
-        Self::for_testing()
     }
 }
 
@@ -785,12 +504,6 @@ pub struct ModelInfo {
     pub source: ModelConfigSource,
     /// Optional description extracted from configuration
     pub description: Option<String>,
-    /// Tags extracted from the configuration's YAML front matter.
-    ///
-    /// Controls where a model surfaces — e.g. the kanban AI panel only offers
-    /// models tagged `kanban`. Empty when the configuration declares no tags.
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 /// Parse model description from configuration content
@@ -808,42 +521,6 @@ pub fn parse_model_description(content: &str) -> Option<String> {
 
     // Fall back to comment format
     extract_comment_field(content, "# Description:")
-}
-
-/// Parse model tags from configuration content
-///
-/// Extracts a `tags:` value from the YAML front matter (the `---`…`---`
-/// block). Flow form (`tags: [kanban, cli]`), block-sequence form
-/// (`tags:\n  - kanban\n  - cli`), and a lone scalar (`tags: kanban`, treated as
-/// a single-element list) are all supported. Content with no front matter or no
-/// `tags:` key yields an empty `Vec`.
-pub fn parse_model_tags(content: &str) -> Vec<String> {
-    let content = content.trim();
-    extract_yaml_frontmatter_list(content, "tags").unwrap_or_default()
-}
-
-/// Extract a list-valued field from YAML frontmatter as a list of strings
-///
-/// Accepts both the sequence form (`field: [a, b]` or a block sequence) and a
-/// lone scalar (`field: a`), which is treated as a single-element list. A scalar
-/// is the least-surprising fallback: writing `tags: kanban` instead of
-/// `tags: [kanban]` should still tag the model rather than silently drop it.
-fn extract_yaml_frontmatter_list(content: &str, field: &str) -> Option<Vec<String>> {
-    let stripped = content.strip_prefix("---")?;
-    let end_pos = stripped.find("---")?;
-    let front_matter = &stripped[..end_pos];
-
-    let yaml_value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(front_matter).ok()?;
-    let value = yaml_value.get(field)?;
-    match value.as_sequence() {
-        Some(seq) => Some(
-            seq.iter()
-                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-                .collect(),
-        ),
-        // A scalar string value is treated as a single-element list.
-        None => value.as_str().map(|s| vec![s.trim().to_string()]),
-    }
 }
 
 /// Extract a field from YAML frontmatter
@@ -1140,13 +817,11 @@ impl ModelManager {
 
         for (name, content) in builtin_models {
             let description = parse_model_description(content);
-            let tags = parse_model_tags(content);
             models.push(ModelInfo {
                 name: name.to_string(),
                 content: content.to_string(),
                 source: ModelConfigSource::Builtin,
                 description,
-                tags,
             });
         }
 
@@ -1440,7 +1115,6 @@ impl ModelManager {
         })?;
 
         let description = parse_model_description(content);
-        let tags = parse_model_tags(content);
         tracing::trace!(
             "Successfully loaded model '{}' from {} (description: {:?})",
             model_name,
@@ -1453,7 +1127,6 @@ impl ModelManager {
             content: content.to_string(),
             source: source.clone(),
             description,
-            tags,
         })
     }
 
@@ -1556,8 +1229,8 @@ impl ModelManager {
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let agent = ModelManager::find_agent_by_name("claude-code")?;
-    /// println!("Found agent: {} from {:?}", agent.name, agent.source);
+    /// let model = ModelManager::find_agent_by_name("qwen-embedding")?;
+    /// println!("Found model: {} from {:?}", model.name, model.source);
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn find_agent_by_name(agent_name: &str) -> Result<ModelInfo, ModelError> {
@@ -1785,14 +1458,43 @@ impl ModelManager {
         }
     }
 
-    /// Get configured model name from config
+    /// Read the configured Claude CLI `--model` switch for the default chat
+    /// scope.
     ///
-    /// Reads the config file and returns the model name configured.
-    /// Returns None if no model configured.
+    /// Reads the top-level `model:` key. Returns `None` when it is unset, which
+    /// spawns plain `claude`.
     ///
     /// # Returns
-    /// * `Result<Option<String>, ModelError>` - Model name if configured, None otherwise
-    pub fn get_agent(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
+    /// * `Result<Option<String>, ModelError>` - The switch if configured, `None` otherwise
+    pub fn get_chat_model(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
+        Self::read_model_key(paths, |config| config.get("model"))
+    }
+
+    /// Read the configured Claude CLI `--model` switch for the review scope.
+    ///
+    /// Reads the nested `review.model` key. Returns `None` when it is unset. A
+    /// top-level `model:` is not read by this method — see
+    /// [`review_chat_model_from`](Self::review_chat_model_from) for the
+    /// precedence that combines the two.
+    ///
+    /// # Returns
+    /// * `Result<Option<String>, ModelError>` - The switch if configured, `None` otherwise
+    pub fn get_review_chat_model(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
+        Self::read_model_key(paths, |config| {
+            config.get("review").and_then(|review| review.get("model"))
+        })
+    }
+
+    /// Read one string-valued key out of the project config file.
+    ///
+    /// Shared by [`get_chat_model`](Self::get_chat_model) and
+    /// [`get_review_chat_model`](Self::get_review_chat_model) so both scopes
+    /// read the file the same way and cannot disagree about a missing file, an
+    /// absent key, or a non-string value.
+    fn read_model_key(
+        paths: &ModelPaths,
+        select: impl Fn(&serde_yaml_ng::Value) -> Option<&serde_yaml_ng::Value>,
+    ) -> Result<Option<String>, ModelError> {
         let config_path = Self::ensure_config_structure(paths)?;
 
         if !config_path.exists() {
@@ -1802,484 +1504,105 @@ impl ModelManager {
         let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
         let config_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content)?;
 
-        // Read model key
-        if let Some(model_name) = config_value.get("model") {
-            if let Some(name_str) = model_name.as_str() {
-                return Ok(Some(name_str.to_string()));
-            }
-        }
-
-        Ok(None)
+        Ok(select(&config_value)
+            .and_then(|value| value.as_str())
+            .map(str::to_string))
     }
 
-    /// Resolve complete agent configuration
+    /// Resolve the chat configuration for the default scope.
     ///
-    /// Returns the ModelConfig with fallback:
-    /// 1. Configured model (if set)
-    /// 2. Default claude-code agent
+    /// The top-level `model:` sets the Claude CLI `--model` switch; when it is
+    /// unset the spawned `claude` carries no `--model` and applies its own
+    /// default.
     ///
     /// # Returns
-    /// * `Result<ModelConfig, ModelError>` - Resolved agent configuration
+    /// * `Result<ChatModelConfig, ModelError>` - The resolved chat configuration
     ///
     /// # Examples
     /// ```no_run
-    /// use swissarmyhammer_config::model::ModelManager;
+    /// use swissarmyhammer_config::model::{ModelManager, ModelPaths};
     ///
-    /// use swissarmyhammer_config::model::ModelPaths;
-    /// let config = ModelManager::resolve_agent_config(&ModelPaths::sah())?;
-    /// println!("Using agent: {:?}", config.executor_type());
+    /// let config = ModelManager::resolve_chat_config(&ModelPaths::sah())?;
+    /// println!("claude args: {:?}", config.claude_args());
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
-    pub fn resolve_agent_config(paths: &ModelPaths) -> Result<ModelConfig, ModelError> {
-        let agent_name = Self::get_agent(paths)?;
-
-        if let Some(name) = agent_name {
-            let agent_info = Self::find_agent_by_name(&name)?;
-            return Ok(parse_model_config(&agent_info.content)?);
-        }
-
-        tracing::debug!("No model configured, using default (claude-code)");
-        Ok(ModelConfig::claude_code())
+    pub fn resolve_chat_config(paths: &ModelPaths) -> Result<ChatModelConfig, ModelError> {
+        let model = Self::get_chat_model(paths)?;
+        Self::chat_config_from_switch(model, "model")
     }
 
-    /// Get the configured review-tool model name from config
+    /// Apply the review-scope precedence to already-read config values.
     ///
-    /// Reads the config file and returns the model name configured under
-    /// `review.model`. Returns `None` if no review model is configured. A
-    /// top-level `model:` is not read by this method.
-    ///
-    /// # Returns
-    /// * `Result<Option<String>, ModelError>` - Review model name if configured, None otherwise
-    pub fn get_review_agent(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
-        let config_path = Self::ensure_config_structure(paths)?;
-
-        if !config_path.exists() {
-            return Ok(None);
-        }
-
-        let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
-        let config_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content)?;
-
-        // Read review.model (nested)
-        if let Some(model_name) = config_value
-            .get("review")
-            .and_then(|review| review.get("model"))
-            .and_then(|name| name.as_str())
-        {
-            return Ok(Some(model_name.to_string()));
-        }
-
-        Ok(None)
-    }
-
-    /// Apply the review-scope model precedence to already-read config values.
-    ///
-    /// This is the single source of truth for *which model the review scope
-    /// uses*, given the two relevant config keys. Precedence:
+    /// This is the single source of truth for *which Claude model the review
+    /// scope uses*, given the two relevant config keys. Precedence:
     /// 1. `review_model` (an explicit `review.model`) — wins, review only.
     /// 2. `default_model` (an explicit top-level `model:`) — if the user set an
     ///    overall model they mean it everywhere, including review.
-    /// 3. The baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`) — the
-    ///    review scope's factory default, used only when *nothing* is configured.
+    /// 3. The baked-in [`REVIEW_DEFAULT_CLAUDE_MODEL`] (`haiku`) — the review
+    ///    scope's factory default, used only when *nothing* is configured.
     ///
-    /// Kept as a pure function so every resolution path (the `sah model`
-    /// display, the serve-time review factory wiring, and
-    /// [`resolve_review_agent_name`]) shares the exact same rule and cannot
-    /// disagree, regardless of where each reads the raw config from.
-    pub fn review_agent_name_from(
+    /// Kept as a pure function so every resolution path shares the exact same
+    /// rule and cannot disagree, regardless of where each reads the raw config
+    /// from.
+    pub fn review_chat_model_from(
         review_model: Option<String>,
         default_model: Option<String>,
     ) -> String {
         review_model
             .or(default_model)
-            .unwrap_or_else(|| REVIEW_DEFAULT_AGENT.to_string())
+            .unwrap_or_else(|| REVIEW_DEFAULT_CLAUDE_MODEL.to_string())
     }
 
-    /// Resolve the effective review-tool model *name* from config files.
+    /// Resolve the effective Claude CLI `--model` switch for the review scope.
     ///
     /// Reads `review.model` and the top-level `model:` and applies
-    /// [`review_agent_name_from`]: explicit `review.model` → explicit overall
-    /// `model:` → the baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`).
+    /// [`review_chat_model_from`](Self::review_chat_model_from).
     ///
-    /// So `sah model set <x>` (an overall default) also drives the review scope,
-    /// while a `review.model` override applies to review alone. Only a fully
-    /// unconfigured project falls through to `claude-code-haiku`.
+    /// This is what a diagnostic reports, and
+    /// [`resolve_review_chat_config`](Self::resolve_review_chat_config) builds
+    /// the spawned configuration from the same value — so the switch reported
+    /// is always the switch run.
     ///
     /// # Returns
-    /// * `Result<String, ModelError>` - The effective review model name
-    pub fn resolve_review_agent_name(paths: &ModelPaths) -> Result<String, ModelError> {
-        Ok(Self::review_agent_name_from(
-            Self::get_review_agent(paths)?,
-            Self::get_agent(paths)?,
+    /// * `Result<String, ModelError>` - The effective Claude CLI `--model` switch
+    pub fn resolve_review_chat_model(paths: &ModelPaths) -> Result<String, ModelError> {
+        Ok(Self::review_chat_model_from(
+            Self::get_review_chat_model(paths)?,
+            Self::get_chat_model(paths)?,
         ))
     }
 
-    /// Resolve complete review-tool agent configuration
+    /// Resolve the chat configuration for the review scope.
     ///
-    /// Resolves the effective review model name via
-    /// [`resolve_review_agent_name`] (explicit `review.model` → explicit overall
-    /// `model:` → baked-in [`REVIEW_DEFAULT_AGENT`]) and parses its config. If
-    /// that name cannot be resolved or parsed, logs a warning and falls back to
-    /// the global default via [`resolve_agent_config`].
-    ///
-    /// Unlike [`resolve_agent_config`], an *unconfigured* review scope defaults
-    /// to `claude-code-haiku` (a cheaper/faster Claude) rather than plain
-    /// `claude-code` — but an explicit overall `model:` still drives review.
+    /// Unlike [`resolve_chat_config`](Self::resolve_chat_config), an
+    /// *unconfigured* review scope defaults to
+    /// [`REVIEW_DEFAULT_CLAUDE_MODEL`] (a cheaper and faster Claude) rather
+    /// than the Claude CLI's own default — but an explicit overall `model:`
+    /// still drives review.
     ///
     /// # Returns
-    /// * `Result<ModelConfig, ModelError>` - Resolved review agent configuration
-    pub fn resolve_review_agent_config(paths: &ModelPaths) -> Result<ModelConfig, ModelError> {
-        let name = Self::resolve_review_agent_name(paths)?;
-
-        match Self::find_agent_by_name(&name)
-            .and_then(|info| Ok(parse_model_config(&info.content)?))
-        {
-            Ok(config) => Ok(config),
-            Err(e) => {
-                tracing::warn!(
-                    "review model '{}' could not be resolved ({}); falling back to the global default",
-                    name,
-                    e
-                );
-                Self::resolve_agent_config(paths)
-            }
-        }
+    /// * `Result<ChatModelConfig, ModelError>` - The resolved review configuration
+    pub fn resolve_review_chat_config(paths: &ModelPaths) -> Result<ChatModelConfig, ModelError> {
+        let model = Self::resolve_review_chat_model(paths)?;
+        Self::chat_config_from_switch(Some(model), "review.model")
     }
 
-    /// Apply a model configuration to the project
+    /// Build a [`ChatModelConfig`] from a configured switch, rejecting a blank
+    /// one.
     ///
-    /// Finds the specified model by name, loads or creates the project configuration file,
-    /// and sets the model key. Preserves all other sections in existing configuration files.
-    ///
-    /// # Arguments
-    /// * `agent_name` - Name of the model to apply
-    ///
-    /// # Returns
-    /// * `Result<(), ModelError>` - Success or error details
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use swissarmyhammer_config::model::ModelManager;
-    ///
-    /// use swissarmyhammer_config::model::ModelPaths;
-    /// ModelManager::use_agent("claude-code", &ModelPaths::sah())?;
-    /// ModelManager::use_agent("qwen", &ModelPaths::sah())?;
-    /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
-    /// ```
-    pub fn use_agent(agent_name: &str, paths: &ModelPaths) -> Result<(), ModelError> {
-        Self::use_agent_for(agent_name, ModelTarget::Default, paths)
-    }
-
-    /// Apply a model configuration to the project for a specific target
-    ///
-    /// Like [`use_agent`], but selects which configured model is written via
-    /// `target`. `ModelTarget::Default` writes the top-level `model:` scalar;
-    /// `ModelTarget::Review` writes `model` inside the `review:` mapping,
-    /// creating it if absent and preserving any existing keys (e.g.
-    /// `concurrency`).
-    ///
-    /// Runs the same name-security and agent-existence validation as
-    /// [`use_agent`] regardless of target.
-    ///
-    /// # Arguments
-    /// * `agent_name` - Name of the model to apply
-    /// * `target` - Which configured model to write
-    /// * `paths` - Config file location
-    ///
-    /// # Returns
-    /// * `Result<(), ModelError>` - Success or error details
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use swissarmyhammer_config::model::{ModelManager, ModelTarget, ModelPaths};
-    ///
-    /// ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah())?;
-    /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
-    /// ```
-    pub fn use_agent_for(
-        agent_name: &str,
-        target: ModelTarget,
-        paths: &ModelPaths,
-    ) -> Result<(), ModelError> {
-        // Security: Validate agent name to prevent injection
-        Self::validate_agent_name_security(agent_name)?;
-
-        tracing::info!(
-            "Attempting to set {:?} model to '{}' (user request)",
-            target,
-            agent_name
-        );
-
-        Self::validate_agent(agent_name)?;
-        let config_path = Self::ensure_config_structure(paths)?;
-
-        let validated_config_path = Self::validate_config_file_path(&config_path)?;
-
-        let mut config_value = Self::load_or_create_config(&validated_config_path)?;
-
-        Self::update_config_with_agent(&mut config_value, agent_name, target)?;
-        Self::save_config(&validated_config_path, &config_value)?;
-
-        tracing::info!(
-            "Successfully set {:?} model to '{}' in {}",
-            target,
-            agent_name,
-            validated_config_path.display()
-        );
-
-        Ok(())
-    }
-
-    /// Validate agent name for security (prevent injection attacks)
-    fn validate_agent_name_security(agent_name: &str) -> Result<(), ModelError> {
-        // Check for empty name
-        if agent_name.trim().is_empty() {
-            tracing::warn!("Agent name is empty");
-            return Err(ModelError::ConfigError(
-                "Agent name cannot be empty".to_string(),
-            ));
+    /// A blank switch would spawn `claude --model ""`, which fails deep inside
+    /// the Claude CLI with no hint of where the value came from. `key` names the
+    /// config setting so the error points at the line to fix.
+    fn chat_config_from_switch(
+        model: Option<String>,
+        key: &str,
+    ) -> Result<ChatModelConfig, ModelError> {
+        match model {
+            Some(model) if model.trim().is_empty() => Err(ModelError::ConfigError(format!(
+                "`{key}` is blank; set it to a Claude CLI --model switch (e.g. `haiku`) or remove it"
+            ))),
+            model => Ok(ChatModelConfig { model }),
         }
-
-        // Check name length to prevent buffer overflow issues
-        const MAX_AGENT_NAME_LENGTH: usize = 256;
-        if agent_name.len() > MAX_AGENT_NAME_LENGTH {
-            tracing::warn!(
-                "Agent name too long ({} characters, maximum {}): {}",
-                agent_name.len(),
-                MAX_AGENT_NAME_LENGTH,
-                agent_name
-            );
-            return Err(ModelError::ConfigError(format!(
-                "Agent name too long ({} characters, maximum {})",
-                agent_name.len(),
-                MAX_AGENT_NAME_LENGTH
-            )));
-        }
-
-        // Check for null bytes
-        if agent_name.contains('\0') {
-            tracing::warn!("Agent name contains null byte: {}", agent_name);
-            return Err(ModelError::ConfigError(
-                "Agent name contains invalid null byte".to_string(),
-            ));
-        }
-
-        // Check for path traversal patterns in agent name
-        let suspicious_patterns = ["../", "..\\", "/", "\\"];
-        for pattern in &suspicious_patterns {
-            if agent_name.contains(pattern) {
-                tracing::warn!(
-                    "Agent name contains suspicious pattern '{}': {}",
-                    pattern,
-                    agent_name
-                );
-                return Err(ModelError::ConfigError(format!(
-                    "Agent name contains invalid pattern: {}",
-                    pattern
-                )));
-            }
-        }
-
-        // Check for control characters
-        if agent_name.chars().any(|c| c.is_control()) {
-            tracing::warn!("Agent name contains control characters: {}", agent_name);
-            return Err(ModelError::ConfigError(
-                "Agent name contains invalid control characters".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validate that agent exists and is parseable
-    fn validate_agent(agent_name: &str) -> Result<(), ModelError> {
-        let agent_info = Self::find_agent_by_name(agent_name)?;
-        let _agent_config = parse_model_config(&agent_info.content)?;
-        Ok(())
-    }
-
-    /// Load existing config or create empty one
-    ///
-    /// # Security
-    ///
-    /// - Validates file permissions before reading
-    /// - Checks file size to prevent resource exhaustion
-    /// - Audit logs file access
-    fn load_or_create_config(config_path: &Path) -> Result<serde_yaml_ng::Value, ModelError> {
-        if config_path.exists() {
-            // Security: Check file permissions
-            Self::check_file_readable(config_path)?;
-
-            // Security: Check file size to prevent resource exhaustion
-            const MAX_CONFIG_SIZE: u64 = 10 * 1024 * 1024; // 10MB
-            let metadata = std::fs::metadata(config_path).map_err(ModelError::IoError)?;
-            if metadata.len() > MAX_CONFIG_SIZE {
-                tracing::error!(
-                    "Config file too large ({} bytes, maximum {}): {}",
-                    metadata.len(),
-                    MAX_CONFIG_SIZE,
-                    config_path.display()
-                );
-                return Err(ModelError::ConfigError(format!(
-                    "Config file too large ({} bytes, maximum {})",
-                    metadata.len(),
-                    MAX_CONFIG_SIZE
-                )));
-            }
-
-            // Security: Audit log config file access
-            tracing::debug!("Reading config file: {}", config_path.display());
-
-            let content = std::fs::read_to_string(config_path).map_err(|e| {
-                tracing::error!(
-                    "Failed to read config file {}: {}",
-                    config_path.display(),
-                    e
-                );
-                ModelError::IoError(e)
-            })?;
-
-            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content)
-                .unwrap_or(serde_yaml_ng::Value::Mapping(Default::default()));
-            // Empty YAML files parse as Null, not Mapping — normalize to empty mapping
-            if value.is_null() {
-                Ok(serde_yaml_ng::Value::Mapping(Default::default()))
-            } else {
-                Ok(value)
-            }
-        } else {
-            tracing::debug!(
-                "Config file does not exist, creating new: {}",
-                config_path.display()
-            );
-            Ok(serde_yaml_ng::Value::Mapping(Default::default()))
-        }
-    }
-
-    /// Check if a file is readable
-    fn check_file_readable(path: &Path) -> Result<(), ModelError> {
-        match std::fs::metadata(path) {
-            Ok(metadata) => {
-                if !metadata.is_file() {
-                    tracing::error!("Path is not a file: {}", path.display());
-                    return Err(ModelError::InvalidPath(path.to_path_buf()));
-                }
-                // On Unix, check read permission
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = metadata.permissions().mode();
-                    let has_read = (mode & 0o400) != 0; // Owner read permission
-                    if !has_read {
-                        tracing::error!("File is not readable: {}", path.display());
-                        return Err(ModelError::IoError(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            format!("File is not readable: {}", path.display()),
-                        )));
-                    }
-                }
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Cannot access file {}: {}", path.display(), e);
-                Err(ModelError::IoError(e))
-            }
-        }
-    }
-
-    /// Update config with agent for the given target
-    ///
-    /// `ModelTarget::Default` sets the top-level `model:` scalar.
-    /// `ModelTarget::Review` sets `model` inside the `review:` mapping, creating
-    /// the `review:` mapping if absent and preserving its other keys.
-    fn update_config_with_agent(
-        config: &mut serde_yaml_ng::Value,
-        agent_name: &str,
-        target: ModelTarget,
-    ) -> Result<(), ModelError> {
-        let Some(map) = config.as_mapping_mut() else {
-            return Ok(());
-        };
-
-        let model_value = serde_yaml_ng::Value::String(agent_name.to_string());
-
-        match target {
-            ModelTarget::Default => {
-                map.insert(
-                    serde_yaml_ng::Value::String("model".to_string()),
-                    model_value,
-                );
-            }
-            ModelTarget::Review => {
-                let review_key = serde_yaml_ng::Value::String("review".to_string());
-                // Reuse the existing review mapping (preserving keys like
-                // `concurrency`); replace any non-mapping or absent value with a
-                // fresh mapping.
-                let review_entry = map
-                    .entry(review_key)
-                    .or_insert_with(|| serde_yaml_ng::Value::Mapping(Default::default()));
-                if !review_entry.is_mapping() {
-                    *review_entry = serde_yaml_ng::Value::Mapping(Default::default());
-                }
-                if let Some(review_map) = review_entry.as_mapping_mut() {
-                    review_map.insert(
-                        serde_yaml_ng::Value::String("model".to_string()),
-                        model_value,
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Save config to file
-    ///
-    /// # Security
-    ///
-    /// - Validates file path before writing
-    /// - Checks parent directory permissions
-    /// - Uses atomic write operation when possible
-    /// - Audit logs file modifications
-    fn save_config(config_path: &Path, config: &serde_yaml_ng::Value) -> Result<(), ModelError> {
-        // Security: Validate the parent directory is writable
-        if let Some(parent) = config_path.parent() {
-            Self::check_directory_writable(parent)?;
-        }
-
-        // Security: Audit log config write
-        tracing::info!("Writing config to file: {}", config_path.display());
-
-        let config_yaml = serde_yaml_ng::to_string(config)?;
-
-        // Security: Check serialized config size before writing
-        const MAX_CONFIG_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        if config_yaml.len() > MAX_CONFIG_SIZE {
-            tracing::error!(
-                "Config too large to write ({} bytes, maximum {})",
-                config_yaml.len(),
-                MAX_CONFIG_SIZE
-            );
-            return Err(ModelError::ConfigError(format!(
-                "Config too large ({} bytes, maximum {})",
-                config_yaml.len(),
-                MAX_CONFIG_SIZE
-            )));
-        }
-
-        std::fs::write(config_path, config_yaml).map_err(|e| {
-            tracing::error!(
-                "Failed to write config file {}: {}",
-                config_path.display(),
-                e
-            );
-            ModelError::IoError(e)
-        })?;
-
-        // Security: Audit log successful write
-        tracing::info!("Successfully wrote config to: {}", config_path.display());
-
-        Ok(())
     }
 }
 
@@ -2288,128 +1611,33 @@ mod tests {
     use super::*;
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-    // Set up a temporary config test environment with directory change
-    // Returns (temp_dir, config_path, guard)
-    fn setup_config_test_env(
-        config_filename: &str,
-        initial_content: Option<&str>,
-    ) -> (tempfile::TempDir, std::path::PathBuf, CurrentDirGuard) {
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        // Create a .git directory to prevent config discovery from walking up to the real repo
-        std::fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
-        let guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
-
-        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        std::fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
-
-        let config_path = sah_dir.join(config_filename);
-        if let Some(content) = initial_content {
-            std::fs::write(&config_path, content).expect("Failed to write config file");
-        }
-
-        (temp_dir, config_path, guard)
-    }
-
-    #[test]
-    fn test_system_default_is_claude() {
-        let config = ModelConfig::default();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-        assert!(!config.quiet);
-    }
-
-    #[test]
-    fn test_agent_executor_type_default() {
-        let executor_type = ModelExecutorType::default();
-        assert_eq!(executor_type, ModelExecutorType::ClaudeCode);
-    }
-
-    #[test]
-    fn test_claude_code_config_default() {
-        let config = ClaudeCodeConfig::default();
-        assert!(config.claude_path.is_none());
-        assert!(config.args.is_empty());
-    }
-
-    #[test]
-    fn test_llama_agent_config_default() {
-        let config = LlamaAgentConfig::default();
-        match config.model.source {
-            ModelSource::HuggingFace { repo, filename, .. } => {
-                assert!(
-                    repo.starts_with("unsloth/Qwen3"),
-                    "Expected Qwen3 model, got {}",
-                    repo
-                );
-                assert!(
-                    filename
-                        .as_ref()
-                        .map(|f| f.contains("Qwen3"))
-                        .unwrap_or(false),
-                    "Expected Qwen3 filename, got {:?}",
-                    filename
-                );
-            }
-            ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
-        }
-        assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 15 * 60);
-    }
-
-    #[test]
-    fn test_llama_agent_config_for_testing() {
-        let config = LlamaAgentConfig::for_testing();
-        match config.model.source {
-            ModelSource::HuggingFace { repo, filename, .. } => {
-                assert_eq!(repo, crate::DEFAULT_TEST_LLM_MODEL_REPO);
-                assert_eq!(
-                    filename,
-                    Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string())
-                );
-            }
-            ModelSource::Local { .. } => panic!("Testing config should be HuggingFace"),
-        }
-        assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
-    }
-
-    #[test]
-    fn test_agent_config_claude_code_factory() {
-        let config = ModelConfig::claude_code();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-        assert!(!config.quiet);
-
-        match config.executor() {
-            ModelExecutorConfig::ClaudeCode(claude_config) => {
-                assert!(claude_config.claude_path.is_none());
-                assert!(claude_config.args.is_empty());
-            }
-            _ => panic!("Should be Claude Code config"),
-        }
-    }
-
-    #[test]
-    fn test_agent_config_llama_agent_factory() {
-        let llama_config = LlamaAgentConfig::for_testing();
-        let config = ModelConfig::llama_agent(llama_config.clone());
-
-        assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
-        assert!(!config.quiet);
-
-        match config.executor() {
-            ModelExecutorConfig::LlamaAgent(agent_config) => {
-                assert_eq!(agent_config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
-            }
-            _ => panic!("Should be LlamaAgent config"),
+    /// A minimal `llama-embedding` model configuration, the shape every model
+    /// YAML now takes.
+    fn embedding_model_config() -> ModelConfig {
+        ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "test/embed".to_string(),
+                        filename: Some("test.gguf".to_string()),
+                        folder: None,
+                    },
+                    normalize: true,
+                    max_sequence_length: None,
+                }),
+            }],
+            quiet: false,
         }
     }
 
     #[test]
     fn test_configuration_serialization_yaml() {
-        let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let config = embedding_model_config();
 
         // Should serialize to YAML correctly
         let yaml = serde_yaml_ng::to_string(&config).expect("Failed to serialize to YAML");
-        assert!(yaml.contains("type: llama-agent"));
+        assert!(yaml.contains("type: llama-embedding"));
         assert!(yaml.contains("quiet: false"));
 
         // Should deserialize from YAML correctly
@@ -2421,11 +1649,11 @@ mod tests {
 
     #[test]
     fn test_configuration_serialization_json() {
-        let config = ModelConfig::claude_code();
+        let config = embedding_model_config();
 
         // Should serialize to JSON correctly
         let json = serde_json::to_string(&config).expect("Failed to serialize to JSON");
-        assert!(json.contains("\"type\":\"claude-code\""));
+        assert!(json.contains("\"type\":\"llama-embedding\""));
         assert!(json.contains("\"quiet\":false"));
 
         // Should deserialize from JSON correctly
@@ -2659,7 +1887,6 @@ mod tests {
             content: "agent: config".to_string(),
             source: ModelConfigSource::Builtin,
             description: Some("Test agent description".to_string()),
-            tags: vec![],
         };
 
         assert_eq!(agent_info.name, "test-agent");
@@ -2678,7 +1905,6 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
-            tags: vec![],
         };
 
         let agent2 = ModelInfo {
@@ -2686,7 +1912,6 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
-            tags: vec![],
         };
 
         let agent3 = ModelInfo {
@@ -2694,7 +1919,6 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
-            tags: vec![],
         };
 
         assert_eq!(agent1, agent2);
@@ -2705,10 +1929,9 @@ mod tests {
     fn test_agent_info_serialization() {
         let agent_info = ModelInfo {
             name: "test-agent".to_string(),
-            content: "executor:\n  type: claude-code\n  config: {}\nquiet: false".to_string(),
+            content: "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false".to_string(),
             source: ModelConfigSource::User,
             description: Some("A test agent".to_string()),
-            tags: vec![],
         };
 
         let json = serde_json::to_string(&agent_info).expect("Failed to serialize ModelInfo");
@@ -2724,8 +1947,10 @@ mod tests {
 description: "This is a test agent"
 other_field: value
 ---
-type: claude-code
-config: {}"#;
+type: llama-embedding
+config:
+  source: !HuggingFace
+    repo: test/embed"#;
 
         let description = parse_model_description(content);
         assert_eq!(description, Some("This is a test agent".to_string()));
@@ -2734,8 +1959,10 @@ config: {}"#;
     #[test]
     fn test_parse_model_description_comment_format() {
         let content = r#"# Description: This is a comment-based description
-type: claude-code
-config: {}"#;
+type: llama-embedding
+config:
+  source: !HuggingFace
+    repo: test/embed"#;
 
         let description = parse_model_description(content);
         assert_eq!(
@@ -2747,8 +1974,10 @@ config: {}"#;
     #[test]
     fn test_parse_model_description_no_description() {
         let content = r#"executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2762,8 +1991,10 @@ description: ""
 other_field: value
 ---
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2774,8 +2005,10 @@ quiet: false"#;
     fn test_parse_model_description_empty_comment_description() {
         let content = r#"# Description:
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2789,8 +2022,10 @@ description: "YAML description"
 ---
 # Description: Comment description
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2804,8 +2039,10 @@ invalid: yaml: content: [unclosed
 ---
 # Description: Fallback comment description
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2830,109 +2067,14 @@ description: "  Padded description  "
     }
 
     #[test]
-    fn test_parse_model_tags_list_form() {
-        let content = r#"---
-tags: [kanban, cli]
----
-executor:
-  type: claude-code
-  config: {}"#;
-
-        let tags = parse_model_tags(content);
-        assert_eq!(tags, vec!["kanban".to_string(), "cli".to_string()]);
-    }
-
-    #[test]
-    fn test_parse_model_tags_block_sequence_form() {
-        let content = r#"---
-description: "A model"
-tags:
-  - kanban
-  - cli
----
-executor:
-  type: claude-code
-  config: {}"#;
-
-        let tags = parse_model_tags(content);
-        assert_eq!(tags, vec!["kanban".to_string(), "cli".to_string()]);
-    }
-
-    #[test]
-    fn test_parse_model_tags_scalar_form() {
-        let content = r#"---
-tags: kanban
----
-executor:
-  type: claude-code
-  config: {}"#;
-
-        let tags = parse_model_tags(content);
-        assert_eq!(tags, vec!["kanban".to_string()]);
-    }
-
-    #[test]
-    fn test_parse_model_tags_missing_frontmatter() {
-        let content = r#"executor:
-  type: claude-code
-  config: {}
-quiet: false"#;
-
-        assert!(parse_model_tags(content).is_empty());
-    }
-
-    #[test]
-    fn test_parse_model_tags_no_tags_key() {
-        let content = r#"---
-description: "A model without tags"
----
-executor:
-  type: claude-code
-  config: {}"#;
-
-        assert!(parse_model_tags(content).is_empty());
-    }
-
-    #[test]
-    fn test_load_builtin_models_kanban_tag_membership() {
-        let models = ModelManager::load_builtin_models().expect("builtin models must load");
-
-        // `claude-code` and `qwen` are the kanban-tagged chat models that
-        // surface in the kanban panel.
-        for name in ["claude-code", "qwen"] {
-            let model = models
-                .iter()
-                .find(|m| m.name == name)
-                .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
-            assert!(
-                model.tags.iter().any(|t| t == "kanban"),
-                "`{name}` must carry the `kanban` tag, got {:?}",
-                model.tags
-            );
-        }
-
-        // The embedding model and the other untagged llama chat variants must
-        // not carry the `kanban` tag — they should not surface in the panel.
-        for name in ["qwen-embedding", "qwen-0.6b-test", "qwen-0.8b-mtp-test"] {
-            let model = models
-                .iter()
-                .find(|m| m.name == name)
-                .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
-            assert!(
-                !model.tags.iter().any(|t| t == "kanban"),
-                "`{name}` must not carry the `kanban` tag, got {:?}",
-                model.tags
-            );
-        }
-    }
-
-    #[test]
     fn test_parse_model_description_multiline_comment() {
         let content = r#"# Description: First line
 # This is additional content
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let description = parse_model_description(content);
@@ -2945,8 +2087,10 @@ quiet: false"#;
 description: "Test agent"
 ---
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
 
         let config = parse_model_config(content);
@@ -2959,10 +2103,12 @@ quiet: false"#;
     fn test_parse_agent_config_comment_format() {
         let content = r#"# Description: Test agent 2
 executor:
-  type: claude-code
+  type: llama-embedding
   config:
-    claude_path: /test/path
-    args: ["--test"]
+    source: !HuggingFace
+      repo: test/embed
+      filename: test.gguf
+    normalize: true
 quiet: false"#;
 
         let config = parse_model_config(content);
@@ -2974,8 +2120,10 @@ quiet: false"#;
     #[test]
     fn test_parse_agent_config_pure_yaml() {
         let content = r#"executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: true"#;
 
         let config = parse_model_config(content);
@@ -3004,52 +2152,13 @@ quiet: true"#;
         // Check for known builtin agents
         let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
         assert!(
-            agent_names.contains(&"claude-code"),
-            "Should contain claude-code agent"
-        );
-        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
-    }
-
-    #[test]
-    fn test_builtin_models_contains_claude_code_haiku() {
-        let agents = ModelManager::load_builtin_models().expect("Failed to load builtin models");
-        let claude_haiku = agents
-            .iter()
-            .find(|a| a.name == "claude-code-haiku")
-            .expect("Should contain claude-code-haiku builtin model");
-
-        assert_eq!(claude_haiku.source, ModelConfigSource::Builtin);
-        assert_eq!(
-            claude_haiku.description.as_deref(),
-            Some("Claude Code (Haiku): faster/cheaper Claude, must be installed separately")
+            agent_names.contains(&"nomic-embed-code"),
+            "Should contain the nomic-embed-code embedding model"
         );
         assert!(
-            claude_haiku.tags.iter().any(|t| t == "kanban"),
-            "claude-code-haiku should carry the kanban tag"
+            agent_names.contains(&"qwen-embedding"),
+            "Should contain the qwen-embedding embedding model"
         );
-    }
-
-    #[test]
-    fn test_claude_code_haiku_parses_with_model_args() {
-        let agents = ModelManager::load_builtin_models().expect("Failed to load builtin models");
-        let claude_haiku = agents
-            .iter()
-            .find(|a| a.name == "claude-code-haiku")
-            .expect("Should contain claude-code-haiku builtin model");
-
-        let config =
-            parse_model_config(&claude_haiku.content).expect("claude-code-haiku should parse");
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-
-        match config.executor() {
-            ModelExecutorConfig::ClaudeCode(claude_config) => {
-                assert_eq!(
-                    claude_config.args,
-                    vec!["--model".to_string(), "haiku".to_string()]
-                );
-            }
-            _ => panic!("Should be Claude Code config"),
-        }
     }
 
     #[test]
@@ -3080,18 +2189,22 @@ quiet: true"#;
 description: "Test agent 1"
 ---
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
         fs::write(temp_path.join("test-agent-1.yaml"), agent1_content)
             .expect("Failed to write test agent 1");
 
         let agent2_content = r#"# Description: Test agent 2
 executor:
-  type: claude-code
+  type: llama-embedding
   config:
-    claude_path: /test/path
-    args: ["--test"]
+    source: !HuggingFace
+      repo: test/embed
+      filename: test.gguf
+    normalize: true
 quiet: false"#;
         fs::write(temp_path.join("test-agent-2.yaml"), agent2_content)
             .expect("Failed to write test agent 2");
@@ -3223,10 +2336,13 @@ quiet: false"#;
         // Should contain known builtin agents unless overridden
         let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
         assert!(
-            agent_names.contains(&"claude-code"),
-            "Should contain claude-code agent"
+            agent_names.contains(&"nomic-embed-code"),
+            "Should contain the nomic-embed-code embedding model"
         );
-        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
+        assert!(
+            agent_names.contains(&"qwen-embedding"),
+            "Should contain the qwen-embedding embedding model"
+        );
     }
 
     #[test]
@@ -3237,51 +2353,53 @@ quiet: false"#;
         let temp_project_dir = tempfile::TempDir::new().expect("Failed to create temp project dir");
         let temp_user_dir = tempfile::TempDir::new().expect("Failed to create temp user dir");
 
-        // Create project agent that overrides a builtin agent
-        let project_claude_content = r#"---
-description: "Project-overridden Claude Code agent"
+        // Create project model that overrides a builtin model
+        let project_override_content = r#"---
+description: "Project-overridden embedding model"
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config:
-    claude_path: /custom/claude
-    args: ["--project-mode"]
+    source: !HuggingFace
+      repo: project/embed
 quiet: true"#;
 
         let project_agents_dir = temp_project_dir.path().join("models");
         fs::create_dir_all(&project_agents_dir).expect("Failed to create project agents dir");
         fs::write(
-            project_agents_dir.join("claude-code.yaml"),
-            project_claude_content,
+            project_agents_dir.join("qwen-embedding.yaml"),
+            project_override_content,
         )
-        .expect("Failed to write project claude-code agent");
+        .expect("Failed to write project qwen-embedding model");
 
-        // Create user agent that overrides the project agent
-        let user_claude_content = r#"---
-description: "User-overridden Claude Code agent"
+        // Create user model that overrides the project model
+        let user_override_content = r#"---
+description: "User-overridden embedding model"
 ---
 executor:
-  type: claude-code
+  type: llama-embedding
   config:
-    claude_path: /user/claude
-    args: ["--user-mode"]
+    source: !HuggingFace
+      repo: user/embed
 quiet: false"#;
 
         let user_agents_dir = temp_user_dir.path().join("models");
         fs::create_dir_all(&user_agents_dir).expect("Failed to create user agents dir");
         fs::write(
-            user_agents_dir.join("claude-code.yaml"),
-            user_claude_content,
+            user_agents_dir.join("qwen-embedding.yaml"),
+            user_override_content,
         )
-        .expect("Failed to write user claude-code agent");
+        .expect("Failed to write user qwen-embedding model");
 
-        // Create a unique project agent
+        // Create a unique project model
         let unique_project_content = r#"---
 description: "Unique project agent"
 ---
 executor:
-  type: llama-agent
-  config: {}
+  type: ane-embedding
+  config:
+    source: !HuggingFace
+      repo: project/unique
 quiet: false"#;
         fs::write(
             project_agents_dir.join("unique-project.yaml"),
@@ -3305,16 +2423,16 @@ quiet: false"#;
         assert_eq!(project_agents.len(), 2, "Should load 2 project agents");
 
         // Verify project agents
-        let claude_agent = project_agents.iter().find(|a| a.name == "claude-code");
+        let override_agent = project_agents.iter().find(|a| a.name == "qwen-embedding");
         assert!(
-            claude_agent.is_some(),
-            "Should find overridden claude-code agent"
+            override_agent.is_some(),
+            "Should find overridden qwen-embedding model"
         );
-        let claude_agent = claude_agent.unwrap();
-        assert_eq!(claude_agent.source, ModelConfigSource::Project);
+        let override_agent = override_agent.unwrap();
+        assert_eq!(override_agent.source, ModelConfigSource::Project);
         assert_eq!(
-            claude_agent.description,
-            Some("Project-overridden Claude Code agent".to_string())
+            override_agent.description,
+            Some("Project-overridden embedding model".to_string())
         );
 
         let unique_agent = project_agents.iter().find(|a| a.name == "unique-project");
@@ -3334,12 +2452,12 @@ quiet: false"#;
         let user_agents = user_agents.unwrap();
         assert_eq!(user_agents.len(), 1, "Should load 1 user agent");
 
-        let user_claude = &user_agents[0];
-        assert_eq!(user_claude.name, "claude-code");
-        assert_eq!(user_claude.source, ModelConfigSource::User);
+        let user_override = &user_agents[0];
+        assert_eq!(user_override.name, "qwen-embedding");
+        assert_eq!(user_override.source, ModelConfigSource::User);
         assert_eq!(
-            user_claude.description,
-            Some("User-overridden Claude Code agent".to_string())
+            user_override.description,
+            Some("User-overridden embedding model".to_string())
         );
     }
 
@@ -3374,8 +2492,10 @@ quiet: not-a-boolean"#;
 description: "Valid agent 1"
 ---
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
         fs::write(temp_path.join("valid-agent-1.yaml"), valid_content1)
             .expect("Failed to write valid agent 1");
@@ -3384,10 +2504,10 @@ quiet: false"#;
 description: "Valid agent 2"
 ---
 executor:
-  type: claude-code
+  type: ane-embedding
   config:
-    claude_path: /test/path2
-    args: ["--test2"]
+    source: !HuggingFace
+      repo: test/ane
 quiet: true"#;
         fs::write(temp_path.join("valid-agent-2.yaml"), valid_content2)
             .expect("Failed to write valid agent 2");
@@ -3470,8 +2590,10 @@ quiet: true"#;
 
         // Create one valid YAML agent
         let valid_content = r#"executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false"#;
         fs::write(temp_path.join("real-agent.yaml"), valid_content)
             .expect("Failed to write valid agent");
@@ -3490,11 +2612,11 @@ quiet: false"#;
 
     #[test]
     fn test_agent_manager_find_agent_by_name_existing() {
-        let result = ModelManager::find_agent_by_name("claude-code");
-        assert!(result.is_ok(), "Should find existing claude-code agent");
+        let result = ModelManager::find_agent_by_name("qwen-embedding");
+        assert!(result.is_ok(), "Should find existing qwen-embedding model");
 
         let agent = result.unwrap();
-        assert_eq!(agent.name, "claude-code");
+        assert_eq!(agent.name, "qwen-embedding");
         assert_eq!(agent.source, ModelConfigSource::Builtin);
         assert!(!agent.content.is_empty());
     }
@@ -3519,11 +2641,11 @@ quiet: false"#;
     fn test_agent_manager_find_agent_by_name_precedence() {
         // This test will pass the existing agent names from builtin agents
         // Test with known builtin agent
-        let result = ModelManager::find_agent_by_name("qwen");
-        assert!(result.is_ok(), "Should find qwen agent");
+        let result = ModelManager::find_agent_by_name("nomic-embed-code");
+        assert!(result.is_ok(), "Should find nomic-embed-code model");
 
         let agent = result.unwrap();
-        assert_eq!(agent.name, "qwen");
+        assert_eq!(agent.name, "nomic-embed-code");
         // Should be builtin unless overridden by project or user agents
         assert_eq!(agent.source, ModelConfigSource::Builtin);
     }
@@ -3741,118 +2863,6 @@ quiet: false"#;
     }
 
     #[test]
-    fn test_agent_manager_use_agent_creates_new_config() {
-        use std::fs;
-        let (temp_dir, _config_path, _guard) = setup_config_test_env("sah.yaml", None);
-
-        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
-        assert!(result.is_ok(), "Should successfully use claude-code agent");
-
-        let config_path = temp_dir
-            .path()
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("sah.yaml");
-        assert!(config_path.exists(), "Should create config file");
-
-        let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
-        assert!(
-            config_content.contains("model:"),
-            "Should contain model key"
-        );
-        assert!(
-            config_content.contains("claude-code"),
-            "Should contain model name"
-        );
-    }
-
-    #[test]
-    fn test_agent_manager_use_agent_updates_existing_config() {
-        use std::fs;
-        let existing_config = r#"# Existing config
-other_section:
-  value: "preserved"
-  number: 42
-"#;
-        let (_temp_dir, config_path, _guard) =
-            setup_config_test_env("sah.yaml", Some(existing_config));
-
-        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
-        if let Err(e) = &result {
-            panic!("Failed to use claude-code agent: {:?}", e);
-        }
-        assert!(result.is_ok(), "Should successfully update existing config");
-
-        let updated_config =
-            fs::read_to_string(&config_path).expect("Failed to read updated config");
-        assert!(
-            updated_config.contains("other_section:"),
-            "Should preserve existing sections"
-        );
-        assert!(
-            updated_config.contains("value: preserved"),
-            "Should preserve existing values"
-        );
-        assert!(updated_config.contains("model:"), "Should add model key");
-        assert!(
-            updated_config.contains("claude-code"),
-            "Should contain model name"
-        );
-    }
-
-    #[test]
-    fn test_agent_manager_use_agent_replaces_existing_agent() {
-        use std::fs;
-        let existing_config = r#"# Config with existing model
-other_section:
-  value: "preserved"
-model: qwen
-"#;
-        let (_temp_dir, config_path, _guard) =
-            setup_config_test_env("sah.yaml", Some(existing_config));
-
-        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
-        assert!(result.is_ok(), "Should successfully replace existing model");
-
-        let updated_config =
-            fs::read_to_string(&config_path).expect("Failed to read updated config");
-        assert!(
-            updated_config.contains("other_section:"),
-            "Should preserve other sections"
-        );
-        assert!(
-            updated_config.contains("value: preserved"),
-            "Should preserve existing values"
-        );
-        assert!(updated_config.contains("model:"), "Should have model key");
-        assert!(
-            updated_config.contains("claude-code"),
-            "Should contain new model name"
-        );
-        assert!(!updated_config.contains("qwen"), "Should replace old model");
-    }
-
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_agent_manager_use_agent_not_found() {
-        use std::fs;
-
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        // Create a .git directory to prevent config discovery from walking up to the real repo
-        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
-        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
-
-        let result = ModelManager::use_agent("non-existent-agent", &ModelPaths::sah());
-        assert!(result.is_err(), "Should fail for non-existent agent");
-
-        match result {
-            Err(ModelError::NotFound(name)) => {
-                assert_eq!(name, "non-existent-agent");
-            }
-            _ => panic!("Should return NotFound error"),
-        }
-    }
-
-    #[test]
     fn test_model_error_not_found_is_error() {
         let error = ModelError::NotFound("test-agent".to_string());
         assert_eq!(error.severity(), ErrorSeverity::Error);
@@ -3887,36 +2897,6 @@ model: qwen
         assert_eq!(error.severity(), ErrorSeverity::Critical);
     }
 
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_resolve_agent_fallback() {
-        use std::fs;
-
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
-        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
-
-        // Test 1: No config - should return default claude-code
-        let result = ModelManager::resolve_agent_config(&ModelPaths::sah());
-        assert!(
-            result.is_ok(),
-            "Should resolve to default agent when no config exists"
-        );
-        let config = result.unwrap();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-
-        // Test 2: Config with model set
-        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
-        let config_path = sah_dir.join("sah.yaml");
-        fs::write(&config_path, "model: claude-code\n").expect("Failed to write config");
-
-        let result = ModelManager::resolve_agent_config(&ModelPaths::sah());
-        assert!(result.is_ok(), "Should resolve configured model");
-        let config = result.unwrap();
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-    }
-
     // Model Resolution Tests
     mod model_resolution_tests {
         use super::*;
@@ -3930,476 +2910,24 @@ model: qwen
 
         #[test]
         #[serial_test::serial(cwd)]
-        fn test_resolve_with_configured_model() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            ModelManager::use_agent("claude-code", &ModelPaths::sah()).unwrap();
-
-            let agent = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
-            assert!(matches!(
-                agent.executor_type(),
-                ModelExecutorType::ClaudeCode
-            ));
-        }
-
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_fallback_to_default_when_nothing_configured() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let agent = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
-            assert!(matches!(
-                agent.executor_type(),
-                ModelExecutorType::ClaudeCode
-            ));
-        }
-
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_get_agent_no_config() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let agent = ModelManager::get_agent(&ModelPaths::sah()).unwrap();
-            assert_eq!(agent, None);
-        }
-
-        #[test]
-        #[serial_test::serial(cwd)]
         fn test_model_config_format() {
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
             let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "model: claude-code\n").unwrap();
+            std::fs::write(&config_path, "model: sonnet\n").unwrap();
 
             assert_eq!(
-                ModelManager::get_agent(&ModelPaths::sah())
+                ModelManager::get_chat_model(&ModelPaths::sah())
                     .unwrap()
                     .unwrap(),
-                "claude-code"
-            );
-        }
-
-        // Test get_agent returns None when config file exists but has no model key.
-        // Covers the Ok(None) return on line 1728 where the config is parsed
-        // but contains no "model" entry.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_get_agent_config_exists_without_model_key() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            // Write a valid YAML config that has other keys but no "model" key
-            std::fs::write(&config_path, "quiet: true\n").unwrap();
-
-            let result = ModelManager::get_agent(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                result, None,
-                "Should return None when config has no model key"
-            );
-        }
-
-        // Test resolve_agent_config falls back to claude-code when config exists
-        // but has no model key. Covers the default fallback on line 1754/1758.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_agent_config_falls_back_when_no_model_key() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            // Write a config file that exists but has no model key
-            std::fs::write(&config_path, "quiet: true\n").unwrap();
-
-            let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                config.executor_type(),
-                ModelExecutorType::ClaudeCode,
-                "Should fall back to claude-code when config has no model key"
+                "sonnet"
             );
         }
 
         // ====================================================================
         // Review-specific model target tests
         // ====================================================================
-
-        // use_agent_for with ModelTarget::Review writes review.model and leaves a
-        // pre-existing top-level `model:` and `review.concurrency` intact.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_use_agent_for_review_preserves_existing_keys() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(
-                &config_path,
-                "model: claude-code\nreview:\n  concurrency: 4\n",
-            )
-            .unwrap();
-
-            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
-
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
-
-            // Top-level model: preserved
-            assert_eq!(
-                value.get("model").and_then(|v| v.as_str()),
-                Some("claude-code"),
-                "Top-level model: must be preserved"
-            );
-            // review.model written
-            let review = value.get("review").expect("review mapping must exist");
-            assert_eq!(
-                review.get("model").and_then(|v| v.as_str()),
-                Some("qwen"),
-                "review.model must be set"
-            );
-            // review.concurrency preserved
-            assert_eq!(
-                review.get("concurrency").and_then(|v| v.as_u64()),
-                Some(4),
-                "review.concurrency must be preserved"
-            );
-        }
-
-        // use_agent_for with ModelTarget::Review creates the review: mapping when
-        // it is absent.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_use_agent_for_review_creates_review_mapping() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "model: claude-code\n").unwrap();
-
-            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
-
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
-            assert_eq!(
-                value
-                    .get("review")
-                    .and_then(|r| r.get("model"))
-                    .and_then(|v| v.as_str()),
-                Some("qwen"),
-                "review.model must be set even when review: was absent"
-            );
-        }
-
-        // use_agent_for with ModelTarget::Default behaves like use_agent: writes
-        // the top-level model: scalar.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_use_agent_for_default_writes_top_level_model() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-
-            ModelManager::use_agent_for("qwen", ModelTarget::Default, &ModelPaths::sah()).unwrap();
-
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
-            assert_eq!(
-                value.get("model").and_then(|v| v.as_str()),
-                Some("qwen"),
-                "Default target must write top-level model:"
-            );
-            assert!(
-                value.get("review").is_none(),
-                "Default target must not create a review: mapping"
-            );
-        }
-
-        // get_review_agent returns None on a fresh/empty config and Some(name)
-        // after a review write.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_get_review_agent_none_then_some() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            assert_eq!(
-                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
-                None,
-                "Fresh config must have no review model"
-            );
-
-            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
-
-            assert_eq!(
-                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
-                Some("qwen".to_string()),
-                "get_review_agent must return the review model after a write"
-            );
-        }
-
-        // get_review_agent returns None when a top-level model: is set but no
-        // review.model exists.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_get_review_agent_none_when_only_global_set() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "model: claude-code\n").unwrap();
-
-            assert_eq!(
-                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
-                None,
-                "A global model: must not be read as the review model"
-            );
-        }
-
-        // resolve_review_agent_config returns the review-specific model when set.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_uses_review_model() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            // Global is llama (qwen); review explicitly claude-code.
-            std::fs::write(&config_path, "model: qwen\nreview:\n  model: claude-code\n").unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                config.executor_type(),
-                ModelExecutorType::ClaudeCode,
-                "Should resolve the review-specific model, not the global one"
-            );
-        }
-
-        // When an overall model: is set but review.model is not, the review
-        // scope follows the overall model (NOT the baked-in haiku default):
-        // "if I set an overall model I mean it".
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_falls_back_to_global() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "model: claude-code\n").unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-            match config.executor() {
-                ModelExecutorConfig::ClaudeCode(claude_config) => {
-                    assert!(
-                        claude_config.args.is_empty(),
-                        "review must follow the overall model: (plain claude-code, no --model haiku), got {:?}",
-                        claude_config.args
-                    );
-                }
-                _ => panic!("Should be Claude Code config"),
-            }
-        }
-
-        // An overall model: of a llama agent drives the review scope too when no
-        // review.model is set.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_inherits_overall_llama() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "model: qwen-0.6b-test\n").unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                config.executor_type(),
-                ModelExecutorType::LlamaAgent,
-                "an overall llama model: must drive review when review.model is unset"
-            );
-        }
-
-        // The pure precedence rule: review.model -> overall model: -> haiku.
-        #[test]
-        fn test_review_agent_name_from_precedence() {
-            assert_eq!(
-                ModelManager::review_agent_name_from(Some("rev".into()), Some("def".into())),
-                "rev",
-                "explicit review.model wins"
-            );
-            assert_eq!(
-                ModelManager::review_agent_name_from(None, Some("def".into())),
-                "def",
-                "overall model: drives review when review.model is unset"
-            );
-            assert_eq!(
-                ModelManager::review_agent_name_from(None, None),
-                REVIEW_DEFAULT_AGENT,
-                "fully unconfigured review falls to the baked-in claude-code-haiku"
-            );
-        }
-
-        // resolve_review_agent_config falls back to the baked-in
-        // claude-code-haiku default when neither a review model nor a global
-        // model is set. This is the review scope's special default; it differs
-        // from the plain `claude-code` default of resolve_agent_config.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_falls_back_to_haiku_default() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                config.executor_type(),
-                ModelExecutorType::ClaudeCode,
-                "Review scope should fall back to a claude-code executor"
-            );
-            match config.executor() {
-                ModelExecutorConfig::ClaudeCode(claude_config) => {
-                    assert_eq!(
-                        claude_config.args,
-                        vec!["--model".to_string(), "haiku".to_string()],
-                        "Review scope default must be claude-code-haiku (--model haiku)"
-                    );
-                }
-                _ => panic!("Should be Claude Code config"),
-            }
-        }
-
-        // An explicitly configured review.model overrides the baked-in
-        // claude-code-haiku default: plain claude-code carries no --model haiku.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_explicit_overrides_haiku_default() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "review:\n  model: claude-code\n").unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-            match config.executor() {
-                ModelExecutorConfig::ClaudeCode(claude_config) => {
-                    assert!(
-                        claude_config.args.is_empty(),
-                        "Explicit review.model: claude-code must win (no --model haiku), got {:?}",
-                        claude_config.args
-                    );
-                }
-                _ => panic!("Should be Claude Code config"),
-            }
-        }
-
-        // resolve_review_agent_name is the single source of truth for the
-        // effective review model name: unset -> baked-in REVIEW_DEFAULT_AGENT.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_name_unset_returns_default() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let name = ModelManager::resolve_review_agent_name(&ModelPaths::sah()).unwrap();
-            assert_eq!(
-                name, REVIEW_DEFAULT_AGENT,
-                "unset review.model must resolve to the baked-in default name"
-            );
-        }
-
-        // resolve_review_agent_name returns the configured review.model verbatim
-        // when one is set.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_name_uses_configured() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "review:\n  model: claude-code\n").unwrap();
-
-            let name = ModelManager::resolve_review_agent_name(&ModelPaths::sah()).unwrap();
-            assert_eq!(name, "claude-code", "configured review.model must win");
-        }
-
-        // An explicitly configured but unresolvable review.model warns and falls
-        // back to the global default rather than erroring (matching the serve
-        // wiring's behavior — the paths must agree).
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_invalid_name_falls_back() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
-            std::fs::write(&config_path, "review:\n  model: no-such-model-xyz\n").unwrap();
-
-            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
-                .expect("invalid review.model should warn and fall back, not error");
-            assert_eq!(
-                config.executor_type(),
-                ModelExecutorType::ClaudeCode,
-                "fallback should land on the global default (claude-code)"
-            );
-        }
-
-        // The plain default scope (resolve_agent_config, non-review) is still
-        // claude-code with empty args — unchanged by the review-scope default.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_resolve_agent_config_default_scope_is_plain_claude_code() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
-            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-            match config.executor() {
-                ModelExecutorConfig::ClaudeCode(claude_config) => {
-                    assert!(
-                        claude_config.args.is_empty(),
-                        "Default (non-review) scope must stay plain claude-code, got {:?}",
-                        claude_config.args
-                    );
-                }
-                _ => panic!("Should be Claude Code config"),
-            }
-        }
-
-        // Security validation rejects empty and path-traversal names via
-        // use_agent_for, exactly as use_agent does.
-        #[test]
-        #[serial_test::serial(cwd)]
-        fn test_use_agent_for_rejects_unsafe_names() {
-            let temp_dir = setup_test_env();
-            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
-
-            let empty = ModelManager::use_agent_for("", ModelTarget::Review, &ModelPaths::sah());
-            match empty {
-                Err(ModelError::ConfigError(msg)) => {
-                    assert!(msg.contains("empty"), "Error should mention empty");
-                }
-                other => panic!("Expected ConfigError for empty name, got {:?}", other),
-            }
-
-            let traversal = ModelManager::use_agent_for(
-                "../malicious",
-                ModelTarget::Review,
-                &ModelPaths::sah(),
-            );
-            match traversal {
-                Err(ModelError::ConfigError(msg)) => {
-                    assert!(
-                        msg.contains("invalid pattern"),
-                        "Error should mention invalid pattern"
-                    );
-                }
-                other => panic!("Expected ConfigError for path traversal, got {:?}", other),
-            }
-        }
     }
 
     // ========================================================================
@@ -4875,10 +3403,10 @@ quiet: false
         // Reading an existing file should return its content
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
         let file_path = temp_dir.path().join("test.yaml");
-        std::fs::write(&file_path, "executor:\n  type: claude-code\n").expect("write");
+        std::fs::write(&file_path, "executor:\n  type: llama-embedding\n").expect("write");
 
         let content = ModelManager::read_model_content(&file_path).expect("should read");
-        assert!(content.contains("claude-code"));
+        assert!(content.contains("llama-embedding"));
     }
 
     #[test]
@@ -4889,7 +3417,7 @@ quiet: false
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
         // Valid model file
-        let valid_content = "executor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        let valid_content = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
         fs::write(temp_dir.path().join("good-model.yaml"), valid_content).expect("write valid");
 
         // Invalid YAML model file (parseable YAML but invalid ModelConfig)
@@ -4919,7 +3447,7 @@ quiet: false
         use std::fs;
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
-        let content = "executor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        let content = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
         fs::write(temp_dir.path().join("model-a.yaml"), content).expect("write a");
         fs::write(temp_dir.path().join("model-b.yaml"), content).expect("write b");
 
@@ -4992,11 +3520,11 @@ quiet: false
         let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
         // Valid model with description
-        let content_with_desc = "---\ndescription: \"My custom model\"\n---\nexecutor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        let content_with_desc = "---\ndescription: \"My custom model\"\n---\nexecutor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
         fs::write(temp_dir.path().join("custom.yaml"), content_with_desc).expect("write");
 
         // Valid model without description
-        let content_no_desc = "executor:\n  type: claude-code\n  config: {}\nquiet: true\n";
+        let content_no_desc = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n";
         fs::write(temp_dir.path().join("plain.yaml"), content_no_desc).expect("write");
 
         // Invalid model
@@ -5029,577 +3557,11 @@ quiet: false
     // validate_agent_name_security tests
     // ========================================================================
 
-    #[test]
-    fn test_validate_agent_name_security_empty_name() {
-        let result = ModelManager::validate_agent_name_security("");
-        assert!(result.is_err(), "Empty name should be rejected");
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(msg.contains("empty"), "Error should mention empty: {}", msg);
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_whitespace_only_name() {
-        let result = ModelManager::validate_agent_name_security("   ");
-        assert!(
-            result.is_err(),
-            "Whitespace-only name should be rejected as empty"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(msg.contains("empty"), "Error should mention empty");
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_too_long_name() {
-        let long_name = "a".repeat(257);
-        let result = ModelManager::validate_agent_name_security(&long_name);
-        assert!(
-            result.is_err(),
-            "Name exceeding 256 chars should be rejected"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("too long"),
-                    "Error should mention too long: {}",
-                    msg
-                );
-                assert!(
-                    msg.contains("257"),
-                    "Error should mention actual length: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_max_length_is_ok() {
-        // Exactly 256 chars should pass the security validation
-        let max_name = "a".repeat(256);
-        let result = ModelManager::validate_agent_name_security(&max_name);
-        assert!(
-            result.is_ok(),
-            "Name at exactly 256 chars should pass security validation"
-        );
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_null_bytes() {
-        let result = ModelManager::validate_agent_name_security("agent\0name");
-        assert!(result.is_err(), "Name with null byte should be rejected");
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("null byte"),
-                    "Error should mention null byte: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_path_traversal_dotdot_slash() {
-        let result = ModelManager::validate_agent_name_security("../etc/passwd");
-        assert!(
-            result.is_err(),
-            "Name with ../ path traversal should be rejected"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("invalid pattern"),
-                    "Error should mention invalid pattern: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_path_traversal_backslash() {
-        let result = ModelManager::validate_agent_name_security("..\\windows\\system32");
-        assert!(
-            result.is_err(),
-            "Name with ..\\\\ path traversal should be rejected"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("invalid pattern"),
-                    "Error should mention invalid pattern"
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_forward_slash() {
-        let result = ModelManager::validate_agent_name_security("some/agent");
-        assert!(
-            result.is_err(),
-            "Name with forward slash should be rejected"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("invalid pattern"),
-                    "Error should mention invalid pattern"
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_backslash() {
-        let result = ModelManager::validate_agent_name_security("some\\agent");
-        assert!(result.is_err(), "Name with backslash should be rejected");
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("invalid pattern"),
-                    "Error should mention invalid pattern"
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_control_characters() {
-        let result = ModelManager::validate_agent_name_security("agent\x07name");
-        assert!(
-            result.is_err(),
-            "Name with control characters should be rejected"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("control characters"),
-                    "Error should mention control characters: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_tab_character() {
-        let result = ModelManager::validate_agent_name_security("agent\tname");
-        assert!(
-            result.is_err(),
-            "Name with tab character should be rejected as control char"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("control characters"),
-                    "Error should mention control characters"
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_newline_character() {
-        let result = ModelManager::validate_agent_name_security("agent\nname");
-        assert!(
-            result.is_err(),
-            "Name with newline should be rejected as control char"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("control characters"),
-                    "Error should mention control characters"
-                );
-            }
-            other => panic!("Expected ConfigError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_valid_name() {
-        let result = ModelManager::validate_agent_name_security("claude-code");
-        assert!(
-            result.is_ok(),
-            "Valid agent name should pass security check"
-        );
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_valid_name_with_dots() {
-        let result = ModelManager::validate_agent_name_security("my.agent.v2");
-        assert!(
-            result.is_ok(),
-            "Agent name with dots (no traversal) should pass"
-        );
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_valid_name_with_underscores() {
-        let result = ModelManager::validate_agent_name_security("my_custom_agent");
-        assert!(result.is_ok(), "Agent name with underscores should pass");
-    }
-
     // ========================================================================
     // use_agent security integration tests
     // ========================================================================
 
-    #[test]
-    fn test_use_agent_rejects_empty_name() {
-        let result = ModelManager::use_agent("", &ModelPaths::sah());
-        assert!(result.is_err(), "use_agent should reject empty agent name");
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(msg.contains("empty"), "Error should mention empty");
-            }
-            other => panic!("Expected ConfigError for empty name, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_use_agent_rejects_path_traversal() {
-        let result = ModelManager::use_agent("../malicious", &ModelPaths::sah());
-        assert!(
-            result.is_err(),
-            "use_agent should reject path traversal in agent name"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("invalid pattern"),
-                    "Error should mention invalid pattern"
-                );
-            }
-            other => panic!("Expected ConfigError for path traversal, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_use_agent_rejects_null_byte() {
-        let result = ModelManager::use_agent("agent\0name", &ModelPaths::sah());
-        assert!(
-            result.is_err(),
-            "use_agent should reject agent name with null byte"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(msg.contains("null byte"), "Error should mention null byte");
-            }
-            other => panic!("Expected ConfigError for null byte, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_use_agent_rejects_control_chars() {
-        let result = ModelManager::use_agent("agent\x07name", &ModelPaths::sah());
-        assert!(
-            result.is_err(),
-            "use_agent should reject agent name with control characters"
-        );
-        match result {
-            Err(ModelError::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("control characters"),
-                    "Error should mention control characters"
-                );
-            }
-            other => panic!(
-                "Expected ConfigError for control characters, got {:?}",
-                other
-            ),
-        }
-    }
-
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_use_agent_valid_name_writes_config() {
-        use std::fs;
-
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
-        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
-
-        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
-        assert!(
-            result.is_ok(),
-            "use_agent should succeed for valid agent name: {:?}",
-            result
-        );
-
-        // Verify config file was written
-        let config_path = temp_dir
-            .path()
-            .join(SwissarmyhammerDirectory::dir_name())
-            .join("sah.yaml");
-        assert!(config_path.exists(), "Config file should be created");
-
-        let content = fs::read_to_string(&config_path).expect("Failed to read config");
-        assert!(
-            content.contains("claude-code"),
-            "Config should contain agent name"
-        );
-    }
-
     // ---- Tests for load_or_create_config, save_config, check_file_readable, update_config_with_agent ----
-
-    #[test]
-    fn test_load_or_create_config_nonexistent_returns_empty_mapping() {
-        // When the config file does not exist, load_or_create_config should return
-        // an empty YAML mapping (not an error).
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("nonexistent.yaml");
-
-        let result = ModelManager::load_or_create_config(&config_path);
-        assert!(result.is_ok(), "Should succeed for nonexistent file");
-        let value = result.unwrap();
-        assert!(value.is_mapping(), "Should return a mapping");
-        assert!(
-            value.as_mapping().unwrap().is_empty(),
-            "Mapping should be empty"
-        );
-    }
-
-    #[test]
-    fn test_load_or_create_config_valid_yaml() {
-        // Loading a valid YAML config file should parse it correctly.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("config.yaml");
-        std::fs::write(&config_path, "model: claude-code\nquiet: true\n")
-            .expect("Failed to write config");
-
-        let result = ModelManager::load_or_create_config(&config_path);
-        assert!(result.is_ok(), "Should parse valid YAML");
-        let value = result.unwrap();
-        assert!(value.is_mapping());
-        let map = value.as_mapping().unwrap();
-        assert_eq!(
-            map.get(serde_yaml_ng::Value::String("model".to_string())),
-            Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_load_or_create_config_empty_yaml_returns_empty_mapping() {
-        // An empty YAML file parses as Null; load_or_create_config should normalize
-        // that to an empty mapping.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("empty.yaml");
-        std::fs::write(&config_path, "").expect("Failed to write empty file");
-
-        let result = ModelManager::load_or_create_config(&config_path);
-        assert!(result.is_ok(), "Should succeed for empty YAML");
-        let value = result.unwrap();
-        assert!(
-            value.is_mapping(),
-            "Null YAML should be normalized to empty mapping"
-        );
-        assert!(value.as_mapping().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_load_or_create_config_file_too_large() {
-        // Files exceeding 10MB should be rejected with a ConfigError.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("huge.yaml");
-
-        // Write a file just over 10MB
-        let oversized = vec![b'a'; 10 * 1024 * 1024 + 1];
-        std::fs::write(&config_path, &oversized).expect("Failed to write large file");
-
-        let result = ModelManager::load_or_create_config(&config_path);
-        assert!(result.is_err(), "Should reject oversized config file");
-        let err = result.unwrap_err();
-        match &err {
-            ModelError::ConfigError(msg) => {
-                assert!(
-                    msg.contains("too large"),
-                    "Error should mention 'too large', got: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected ConfigError, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_check_file_readable_not_a_file() {
-        // Passing a directory path (not a file) should return InvalidPath.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-
-        let result = ModelManager::check_file_readable(temp_dir.path());
-        assert!(result.is_err(), "Directory should not be readable as file");
-        match result.unwrap_err() {
-            ModelError::InvalidPath(p) => {
-                assert_eq!(p, temp_dir.path());
-            }
-            other => panic!("Expected InvalidPath, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_check_file_readable_nonexistent_path() {
-        // A nonexistent path should return IoError.
-        let result = ModelManager::check_file_readable(Path::new("/tmp/nonexistent_sah_test_file"));
-        assert!(result.is_err(), "Nonexistent path should fail");
-        match result.unwrap_err() {
-            ModelError::IoError(_) => {}
-            other => panic!("Expected IoError, got: {:?}", other),
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_check_file_readable_no_read_permission() {
-        // On Unix, a file without owner-read permission should be rejected.
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let file_path = temp_dir.path().join("unreadable.yaml");
-        std::fs::write(&file_path, "key: value").expect("Failed to write file");
-
-        // Remove all read permissions (write-only)
-        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o200))
-            .expect("Failed to set permissions");
-
-        let result = ModelManager::check_file_readable(&file_path);
-        assert!(result.is_err(), "File without read permission should fail");
-        match result.unwrap_err() {
-            ModelError::IoError(e) => {
-                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
-            }
-            other => panic!("Expected IoError(PermissionDenied), got: {:?}", other),
-        }
-
-        // Restore permissions so temp_dir cleanup works
-        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
-            .expect("Failed to restore permissions");
-    }
-
-    #[test]
-    fn test_check_file_readable_valid_file() {
-        // A normal readable file should pass check_file_readable.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let file_path = temp_dir.path().join("readable.yaml");
-        std::fs::write(&file_path, "key: value").expect("Failed to write file");
-
-        let result = ModelManager::check_file_readable(&file_path);
-        assert!(result.is_ok(), "Readable file should pass: {:?}", result);
-    }
-
-    #[test]
-    fn test_update_config_with_agent() {
-        // update_config_with_agent should insert a "model" key into the mapping.
-        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        let result = ModelManager::update_config_with_agent(
-            &mut config,
-            "llama-agent",
-            ModelTarget::Default,
-        );
-        assert!(result.is_ok());
-
-        let map = config.as_mapping().unwrap();
-        assert_eq!(
-            map.get(serde_yaml_ng::Value::String("model".to_string())),
-            Some(&serde_yaml_ng::Value::String("llama-agent".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_update_config_with_agent_overwrites_existing() {
-        // Calling update_config_with_agent twice should overwrite the previous value.
-        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        ModelManager::update_config_with_agent(&mut config, "first-agent", ModelTarget::Default)
-            .unwrap();
-        ModelManager::update_config_with_agent(&mut config, "second-agent", ModelTarget::Default)
-            .unwrap();
-
-        let map = config.as_mapping().unwrap();
-        assert_eq!(
-            map.get(serde_yaml_ng::Value::String("model".to_string())),
-            Some(&serde_yaml_ng::Value::String("second-agent".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_save_config_round_trip() {
-        // Saving a config and then loading it should produce the same value.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("roundtrip.yaml");
-
-        let mut mapping = serde_yaml_ng::Mapping::new();
-        mapping.insert(
-            serde_yaml_ng::Value::String("model".to_string()),
-            serde_yaml_ng::Value::String("claude-code".to_string()),
-        );
-        mapping.insert(
-            serde_yaml_ng::Value::String("quiet".to_string()),
-            serde_yaml_ng::Value::Bool(true),
-        );
-        let config = serde_yaml_ng::Value::Mapping(mapping);
-
-        // Save
-        let save_result = ModelManager::save_config(&config_path, &config);
-        assert!(save_result.is_ok(), "save_config failed: {:?}", save_result);
-
-        // Load back
-        let loaded = ModelManager::load_or_create_config(&config_path);
-        assert!(loaded.is_ok(), "load_or_create_config failed: {:?}", loaded);
-        let loaded_value = loaded.unwrap();
-
-        let loaded_map = loaded_value.as_mapping().unwrap();
-        assert_eq!(
-            loaded_map.get(serde_yaml_ng::Value::String("model".to_string())),
-            Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
-        );
-        assert_eq!(
-            loaded_map.get(serde_yaml_ng::Value::String("quiet".to_string())),
-            Some(&serde_yaml_ng::Value::Bool(true))
-        );
-    }
-
-    #[test]
-    fn test_save_config_creates_file() {
-        // save_config should create a new file if it does not exist.
-        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let config_path = temp_dir.path().join("new_config.yaml");
-
-        assert!(!config_path.exists());
-        let config = serde_yaml_ng::Value::Mapping(Default::default());
-        let result = ModelManager::save_config(&config_path, &config);
-        assert!(
-            result.is_ok(),
-            "save_config should create file: {:?}",
-            result
-        );
-        assert!(config_path.exists(), "File should exist after save");
-    }
-
-    #[test]
-    fn test_save_config_write_error_bad_parent() {
-        // Attempting to save to a path with nonexistent parent should fail.
-        let config_path = Path::new("/tmp/nonexistent_sah_parent_dir/sub/config.yaml");
-
-        let config = serde_yaml_ng::Value::Mapping(Default::default());
-        let result = ModelManager::save_config(config_path, &config);
-        assert!(result.is_err(), "Should fail with bad parent directory");
-    }
 
     // ========================================================================
     // ensure_config_structure additional coverage tests
@@ -5623,7 +3585,7 @@ quiet: false
         let existing_config = sah_dir.join("sah.yaml");
         fs::write(
             &existing_config,
-            "executor:\n  type: claude-code\n  config: {}\nquiet: false\n",
+            "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
         )
         .expect("Failed to write existing yaml config");
 
@@ -5703,7 +3665,7 @@ quiet: false
         let existing_config = avp_dir.join("avp.yaml");
         fs::write(
             &existing_config,
-            "executor:\n  type: claude-code\n  config: {}\nquiet: true\n",
+            "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n",
         )
         .expect("Failed to write avp config");
 
@@ -5805,7 +3767,7 @@ quiet: false
 
         fs::write(
             sah_dir.join("sah.yaml"),
-            "executor:\n  type: claude-code\n  config: {}\nquiet: false\n",
+            "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
         )
         .expect("Failed to write yaml config");
         fs::write(sah_dir.join("sah.toml"), "[existing]\nvalue = true\n")
@@ -5819,20 +3781,6 @@ quiet: false
             config_path.file_name(),
             Some(std::ffi::OsStr::new("sah.yaml")),
             "Should prefer YAML config over TOML"
-        );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_for_small_model_deprecated_alias() {
-        // Exercises the deprecated `for_small_model()` alias for coverage.
-        let config = LlamaAgentConfig::for_small_model();
-        let testing_config = LlamaAgentConfig::for_testing();
-        // Both should produce equivalent configurations
-        assert_eq!(config.model.batch_size, testing_config.model.batch_size);
-        assert_eq!(
-            config.mcp_server.timeout_seconds,
-            testing_config.mcp_server.timeout_seconds
         );
     }
 
@@ -5873,11 +3821,15 @@ quiet: false
 executors:
   - platform: macos-arm64
     executor:
-      type: claude-code
-      config: {}
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: test/embed
   - executor:
-      type: claude-code
-      config: {}
+      type: llama-embedding
+      config:
+        source: !HuggingFace
+          repo: test/embed
 quiet: true
 "#;
         let config: ModelConfig =
@@ -5893,15 +3845,17 @@ quiet: true
         // Exercises the `_: IgnoredAny` path in the custom deserializer.
         let yaml = r#"
 executor:
-  type: claude-code
-  config: {}
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
 quiet: false
 unknown_field: "should be ignored"
 another_unknown: 42
 "#;
         let config: ModelConfig =
             serde_yaml_ng::from_str(yaml).expect("Should parse despite unknown fields");
-        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
         assert!(!config.quiet);
     }
 
@@ -5913,7 +3867,7 @@ another_unknown: 42
             executors: vec![ExecutorEntry {
                 // Use a platform that definitely doesn't match current
                 platform: Some(Platform::LinuxX86_64),
-                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+                executor: embedding_model_config().executors.remove(0).executor,
             }],
             quiet: false,
         };
@@ -5944,20 +3898,6 @@ another_unknown: 42
     fn test_platform_current() {
         // Exercises `Platform::current()` — just verifies it doesn't panic.
         let _current = Platform::current();
-    }
-
-    #[test]
-    fn test_repetition_detection_config_default() {
-        let config = RepetitionDetectionConfig::default();
-        assert!(config.enabled);
-        assert!(
-            (config.repetition_penalty - crate::DEFAULT_REPETITION_PENALTY).abs() < f64::EPSILON
-        );
-        assert_eq!(
-            config.repetition_threshold,
-            crate::DEFAULT_REPETITION_THRESHOLD
-        );
-        assert_eq!(config.repetition_window, crate::DEFAULT_REPETITION_WINDOW);
     }
 
     #[test]
@@ -6014,12 +3954,6 @@ max_sequence_length: 512
     #[test]
     fn test_executor_type_all_variants() {
         // Exercises `executor_type()` for all executor types.
-        let claude = ModelConfig::claude_code();
-        assert_eq!(claude.executor_type(), ModelExecutorType::ClaudeCode);
-
-        let llama = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-        assert_eq!(llama.executor_type(), ModelExecutorType::LlamaAgent);
-
         // Test LlamaEmbedding
         let embedding_config = ModelConfig {
             executors: vec![ExecutorEntry {
@@ -6119,23 +4053,6 @@ max_sequence_length: 512
     }
 
     #[test]
-    fn test_check_file_readable_nonexistent() {
-        let result = ModelManager::check_file_readable(Path::new("/nonexistent/file.yaml"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_check_file_readable_directory() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
-        let result = ModelManager::check_file_readable(temp_dir.path());
-        assert!(
-            result.is_err(),
-            "Directory should not be readable as a file"
-        );
-    }
-
-    #[test]
     fn test_validate_config_file_path_empty() {
         let result = ModelManager::validate_config_file_path(Path::new(""));
         assert!(result.is_err());
@@ -6181,78 +4098,6 @@ max_sequence_length: 512
     }
 
     #[test]
-    fn test_load_or_create_config_nonexistent() {
-        let result = ModelManager::load_or_create_config(Path::new("/nonexistent/config.yaml"));
-        assert!(result.is_ok());
-        let value = result.unwrap();
-        assert!(
-            value.is_mapping(),
-            "Should return empty mapping for nonexistent file"
-        );
-    }
-
-    #[test]
-    fn test_load_or_create_config_empty_yaml() {
-        /// Exercises the branch where YAML content parses to null.
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("empty.yaml");
-        std::fs::write(&file, "").unwrap();
-        let result = ModelManager::load_or_create_config(&file);
-        assert!(result.is_ok());
-        let value = result.unwrap();
-        assert!(
-            value.is_mapping(),
-            "Null YAML should be normalized to empty mapping"
-        );
-    }
-
-    #[test]
-    fn test_load_or_create_config_valid_yaml_coverage() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("valid.yaml");
-        std::fs::write(&file, "model: claude-code\n").unwrap();
-        let result = ModelManager::load_or_create_config(&file);
-        assert!(result.is_ok());
-        let value = result.unwrap();
-        assert!(value.is_mapping());
-    }
-
-    #[test]
-    fn test_update_config_with_agent_coverage() {
-        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        ModelManager::update_config_with_agent(&mut config, "test-agent", ModelTarget::Default)
-            .unwrap();
-        let map = config.as_mapping().unwrap();
-        let model_key = serde_yaml_ng::Value::String("model".to_string());
-        assert_eq!(
-            map.get(&model_key),
-            Some(&serde_yaml_ng::Value::String("test-agent".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_save_config_and_round_trip() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("out.yaml");
-
-        let mut mapping = serde_yaml_ng::Mapping::new();
-        mapping.insert(
-            serde_yaml_ng::Value::String("model".to_string()),
-            serde_yaml_ng::Value::String("claude-code".to_string()),
-        );
-        let config = serde_yaml_ng::Value::Mapping(mapping);
-
-        ModelManager::save_config(&file, &config).unwrap();
-        assert!(file.exists());
-
-        let content = std::fs::read_to_string(&file).unwrap();
-        assert!(content.contains("claude-code"));
-    }
-
-    #[test]
     fn test_check_directory_writable_valid() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
@@ -6293,43 +4138,6 @@ max_sequence_length: 512
     }
 
     #[test]
-    fn test_validate_agent_name_security_valid() {
-        assert!(ModelManager::validate_agent_name_security("claude-code").is_ok());
-        assert!(ModelManager::validate_agent_name_security("my-agent-v2").is_ok());
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_empty() {
-        assert!(ModelManager::validate_agent_name_security("").is_err());
-        assert!(ModelManager::validate_agent_name_security("   ").is_err());
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_too_long() {
-        let long_name = "a".repeat(257);
-        assert!(ModelManager::validate_agent_name_security(&long_name).is_err());
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_null_byte() {
-        assert!(ModelManager::validate_agent_name_security("test\0agent").is_err());
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_path_traversal() {
-        assert!(ModelManager::validate_agent_name_security("../etc/passwd").is_err());
-        assert!(ModelManager::validate_agent_name_security("..\\windows").is_err());
-        assert!(ModelManager::validate_agent_name_security("test/slash").is_err());
-        assert!(ModelManager::validate_agent_name_security("test\\backslash").is_err());
-    }
-
-    #[test]
-    fn test_validate_agent_name_security_control_chars() {
-        assert!(ModelManager::validate_agent_name_security("test\nagent").is_err());
-        assert!(ModelManager::validate_agent_name_security("test\tagent").is_err());
-    }
-
-    #[test]
     fn test_model_config_source_debug_variants() {
         assert_eq!(format!("{:?}", ModelConfigSource::GitRoot), "GitRoot");
     }
@@ -6340,5 +4148,200 @@ max_sequence_length: 512
         assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Builtin);
         assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Project);
         assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::User);
+    }
+}
+
+// ============================================================================
+// Hardcoded-Claude chat model configuration
+// ============================================================================
+
+/// Claude Code is the only chat executor, so the chat scope carries no executor
+/// choice — only the Claude CLI `--model` switch. These tests pin both halves of
+/// that collapse: the review scope still reaches Haiku through the new
+/// configuration field, and the embedding model YAMLs still resolve through
+/// `ModelManager` (the loader must not be collapsed out from under them).
+#[cfg(test)]
+mod chat_model_config_tests {
+    use super::*;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    /// A temporary directory with a `.git` marker, so config discovery stops
+    /// there instead of walking up into the real repository.
+    fn isolated_project() -> tempfile::TempDir {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::create_dir(temp_dir.path().join(".git")).expect(".git marker");
+        temp_dir
+    }
+
+    /// Write `.sah/sah.yaml` with the given content in the current project.
+    fn write_sah_config(content: &str) {
+        let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+        std::fs::write(&config_path, content).unwrap();
+    }
+
+    /// The embedding stack loads its models by name through `ModelManager`.
+    /// Collapsing the chat side must leave that path intact: both embedding
+    /// YAMLs still resolve, still parse, and still select an embedding executor.
+    #[test]
+    fn embedding_models_still_resolve_through_model_manager() {
+        for name in ["nomic-embed-code", "qwen-embedding"] {
+            let info = ModelManager::find_agent_by_name(name)
+                .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must resolve: {e}"));
+            let config = parse_model_config(&info.content)
+                .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must parse: {e}"));
+            let executor = config
+                .select_executor()
+                .unwrap_or_else(|| panic!("`{name}` must offer an executor for this platform"));
+            assert!(
+                matches!(
+                    executor,
+                    ModelExecutorConfig::LlamaEmbedding(_) | ModelExecutorConfig::AneEmbedding(_)
+                ),
+                "`{name}` must select an embedding executor, got {executor:?}"
+            );
+        }
+    }
+
+    /// `builtin/models/` is now an embedding-only library. A leftover chat YAML
+    /// would resurrect the model-name lookup this card removed.
+    #[test]
+    fn builtin_models_are_all_embedding_models() {
+        let models = ModelManager::load_builtin_models().expect("builtin models load");
+        let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["nomic-embed-code", "qwen-embedding"],
+            "builtin/models/ must hold only the embedding models"
+        );
+    }
+
+    /// An unconfigured review scope runs `claude --model haiku`, chosen through
+    /// the configuration field rather than a model-name lookup.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn unconfigured_review_scope_resolves_to_the_haiku_switch() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let config = ModelManager::resolve_review_chat_config(&ModelPaths::sah()).unwrap();
+        assert_eq!(
+            config.model.as_deref(),
+            Some(REVIEW_DEFAULT_CLAUDE_MODEL),
+            "an unconfigured review scope must pick the baked-in Haiku switch"
+        );
+        assert_eq!(
+            config.claude_args(),
+            vec!["--model".to_string(), "haiku".to_string()],
+            "the review scope must spawn `claude --model haiku`"
+        );
+    }
+
+    /// `sah doctor`-style reporting and the spawned process read the same
+    /// resolver, so the model reported can never disagree with the model run.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn reported_review_model_matches_the_switch_that_is_run() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+        write_sah_config("review:\n  model: opus\n");
+
+        let reported = ModelManager::resolve_review_chat_model(&ModelPaths::sah()).unwrap();
+        let run = ModelManager::resolve_review_chat_config(&ModelPaths::sah()).unwrap();
+        assert_eq!(reported, "opus");
+        assert_eq!(
+            run.claude_args(),
+            vec!["--model".to_string(), reported],
+            "the reported model must be the one the spawned claude receives"
+        );
+    }
+
+    /// Precedence is `review.model` → top-level `model:` → the baked-in Haiku
+    /// switch. Only the meaning of the value changed: it is now the Claude CLI
+    /// `--model` switch, not the name of a model YAML.
+    #[test]
+    fn review_chat_model_precedence() {
+        assert_eq!(
+            ModelManager::review_chat_model_from(Some("opus".into()), Some("sonnet".into())),
+            "opus",
+            "an explicit review.model wins"
+        );
+        assert_eq!(
+            ModelManager::review_chat_model_from(None, Some("sonnet".into())),
+            "sonnet",
+            "an overall model: drives review when review.model is unset"
+        );
+        assert_eq!(
+            ModelManager::review_chat_model_from(None, None),
+            REVIEW_DEFAULT_CLAUDE_MODEL,
+            "a fully unconfigured review scope falls to the baked-in Haiku switch"
+        );
+    }
+
+    /// The default (non-review) chat scope stays plain `claude` with no
+    /// `--model`, so the Claude CLI's own default applies.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn unconfigured_default_scope_spawns_plain_claude() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let config = ModelManager::resolve_chat_config(&ModelPaths::sah()).unwrap();
+        assert!(config.model.is_none(), "no switch is configured");
+        assert!(
+            config.claude_args().is_empty(),
+            "plain claude carries no --model switch"
+        );
+    }
+
+    /// A top-level `model:` drives the default scope too.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn configured_default_scope_uses_the_configured_switch() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+        write_sah_config("model: sonnet\n");
+
+        let config = ModelManager::resolve_chat_config(&ModelPaths::sah()).unwrap();
+        assert_eq!(
+            config.claude_args(),
+            vec!["--model".to_string(), "sonnet".to_string()]
+        );
+    }
+
+    /// A non-string `model:` (e.g. a number) is ignored rather than coerced, so
+    /// a mistyped config falls back to the default instead of spawning
+    /// `claude --model 3`.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn non_string_model_value_is_ignored() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+        write_sah_config("model: 3\n");
+
+        let config = ModelManager::resolve_chat_config(&ModelPaths::sah()).unwrap();
+        assert!(
+            config.model.is_none(),
+            "a non-string model: must be ignored, got {:?}",
+            config.model
+        );
+    }
+
+    /// A blank switch is a configuration error, not a `claude --model ""` spawn.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn blank_switch_is_a_configuration_error() {
+        let temp_dir = isolated_project();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+        write_sah_config("review:\n  model: \"   \"\n");
+
+        match ModelManager::resolve_review_chat_config(&ModelPaths::sah()) {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("model"),
+                    "the error must name the offending setting, got: {msg}"
+                );
+            }
+            other => panic!("expected a ConfigError for a blank model switch, got {other:?}"),
+        }
     }
 }

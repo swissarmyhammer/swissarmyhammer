@@ -71,14 +71,6 @@ pub struct DynamicSourcesInputs<'a> {
     /// Pre-gathered live windows — caller-supplied because live window
     /// state only exists in the GUI runtime (see module docs).
     pub windows: Vec<WindowInfo>,
-    /// Selectable AI models — caller-supplied for the same reason as
-    /// `windows`: the model set is discovered by `swissarmyhammer-config`'s
-    /// `ModelManager`, which the pure-domain kanban crate does not depend
-    /// on. The GUI runtime enumerates the models (via `ai_list_models`)
-    /// and passes the projected list in here so the `ai.models` options
-    /// resolver can fill the `ai.model` command's model picker. Headless
-    /// tests fabricate the list (often empty).
-    pub ai_models: Vec<crate::commands::options_resolvers::AiModelInfo>,
 }
 
 /// Hand-rolled `Debug` impl because [`UIState`] is not `Debug` (it owns
@@ -134,7 +126,6 @@ pub async fn build_dynamic_sources(inputs: DynamicSourcesInputs<'_>) -> DynamicS
         boards,
         windows: inputs.windows,
         perspectives,
-        ai_models: inputs.ai_models,
     }
 }
 

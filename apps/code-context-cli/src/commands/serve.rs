@@ -11,7 +11,7 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
@@ -33,7 +33,7 @@ impl CodeContextServer {
         let context = ToolContext::new(
             Arc::new(ToolHandlers::new()),
             Arc::new(Mutex::new(None)),
-            Arc::new(ModelConfig::default()),
+            Arc::new(ChatModelConfig::default()),
         );
         Self {
             tool: CodeContextTool::new(),

@@ -18,12 +18,6 @@ brew install swissarmyhammer/tap/swissarmyhammer
 * [`swissarmyhammer doctor`↴](#swissarmyhammer-doctor)
 * [`swissarmyhammer completion`↴](#swissarmyhammer-completion)
 * [`swissarmyhammer validate`↴](#swissarmyhammer-validate)
-* [`swissarmyhammer model`↴](#swissarmyhammer-model)
-* [`swissarmyhammer model list`↴](#swissarmyhammer-model-list)
-* [`swissarmyhammer model show`↴](#swissarmyhammer-model-show)
-* [`swissarmyhammer model use`↴](#swissarmyhammer-model-use)
-* [`swissarmyhammer agent`↴](#swissarmyhammer-agent)
-* [`swissarmyhammer agent acp`↴](#swissarmyhammer-agent-acp)
 * [`swissarmyhammer tools`↴](#swissarmyhammer-tools)
 * [`swissarmyhammer tools enable`↴](#swissarmyhammer-tools-enable)
 * [`swissarmyhammer tools disable`↴](#swissarmyhammer-tools-disable)
@@ -42,14 +36,11 @@ Global arguments can be used with any command to control output and behavior:
   --format      Set output format (table, json, yaml) for commands that support it
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
-  --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
   init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
-  agent         Manage and interact with the Agent Client Protocol server
-  model         Manage and interact with models
   validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
@@ -57,8 +48,6 @@ Example usage:
   swissarmyhammer serve                           # Run as MCP server
   swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer model list                      # List available models
-  swissarmyhammer agent acp                       # Start the ACP server
 
 
 **Usage:** `swissarmyhammer [OPTIONS] [COMMAND]`
@@ -71,8 +60,6 @@ Example usage:
 * `doctor` — Diagnose configuration and setup issues
 * `completion` — Generate shell completion scripts
 * `validate` — Validate skills and workflows for syntax and best practices
-* `model` — Manage and interact with models
-* `agent` — Manage and interact with Agent Client Protocol server
 * `tools` — Manage tool enable/disable state
 * `statusline` — Render statusline from Claude Code JSON (stdin) or dump config
 
@@ -85,7 +72,6 @@ Example usage:
 
   Possible values: `table`, `json`, `yaml`
 
-* `--model <MODEL>` — Override model for all use cases (runtime only, doesn't modify config)
 
 
 
@@ -115,7 +101,7 @@ Example:
 ## `swissarmyhammer serve http`
 
 
-Start HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+Start HTTP MCP server for web clients, debugging, and ACP agent integration.
 The server exposes MCP tools through HTTP endpoints and provides:
 
 - RESTful MCP protocol implementation
@@ -636,273 +622,6 @@ complete, and ready for reliable operation.
   Possible values: `table`, `json`, `yaml`
 
 * `--validate-tools` — Validate MCP tool schemas for CLI compatibility
-
-
-
-## `swissarmyhammer model`
-
-Manage and interact with models in the SwissArmyHammer system.
-
-Models provide specialized AI execution environments and configurations for specific
-development workflows. They enable you to switch between different AI models, 
-execution contexts, and toolchains based on your project's needs.
-
-MODEL DISCOVERY AND PRECEDENCE
-
-Models are loaded from multiple sources with hierarchical precedence:
-• Built-in models (lowest precedence) - Embedded in the binary
-• Project models (medium precedence) - ./models/*.yaml in your project
-• User models (highest precedence) - ~/.models/*.yaml
-
-Higher precedence models override lower ones by name. This allows you to
-customize built-in models or create project-specific variants.
-
-BUILT-IN MODELS
-
-The system includes these built-in models:
-• claude-code    - Default Claude Code integration with shell execution
-• qwen-coder     - Local Qwen3-Coder model with in-process execution
-
-COMMANDS
-
-The model system provides two main commands:
-• list - Display all available models from all sources with descriptions
-• use - Apply a model configuration to the current project
-
-When you 'use' a model, it creates or updates .sah/sah.yaml in your
-project with the model's configuration. This configures how SwissArmyHammer 
-executes AI workflows in your project.
-
-By default 'use' sets the global default model. Pass '--for <purpose>' to scope
-the model to a single tool instead. The only supported purpose today is
-'review': 'sah model use <name> --for review' writes review.model and runs the
-review tool's validator agents with that model, leaving the global default
-untouched. When review.model is unset, the review tool uses the global default.
-
-COMMON WORKFLOWS
-
-1. Explore available models:
-   sah model list
-
-2. Apply a model to your project:
-   sah model use claude-code
-
-3. Switch to a different model:
-   sah model use qwen-coder
-
-4. View detailed model information:
-   sah --verbose model list
-
-Use global arguments to control output:
-  --verbose         Show detailed information and descriptions
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode with comprehensive tracing
-  --quiet           Suppress output except errors
-
-Examples:
-  sah model list                           # List all available models
-  sah --verbose model list                 # Show detailed information and descriptions
-  sah --format=json model list             # Output as structured JSON
-  sah model use claude-code                # Apply Claude Code model to project
-  sah model use qwen-coder                 # Switch to local Qwen3-Coder model
-  sah --debug model use custom-model       # Apply model with debug output
-
-CUSTOMIZATION
-
-Create custom models by adding .yaml files to:
-• ./models/ (project-specific models)
-• ~/.models/ (user-wide models)
-
-Custom models can override built-in models by using the same name, or
-provide entirely new configurations for specialized workflows.
-
-**Usage:** `swissarmyhammer model [COMMAND]`
-
-###### **Subcommands:**
-
-* `list` — List available models
-* `show` — Show current model configuration
-* `use` — Use a specific model
-
-
-
-## `swissarmyhammer model list`
-
-
-List all available models from built-in, project, and user sources.
-
-Models are discovered with hierarchical precedence where user models override
-project models, which override built-in models. This command shows all available
-models with their sources and descriptions.
-
-Built-in models are embedded in the binary and provide default configurations
-for common workflows. Project models (./models/*.yaml) allow customization for
-specific projects. User models (~/.models/*.yaml) provide
-personal configurations that apply across all projects.
-
-Output includes:
-• Model name and source (built-in, project, or user)
-• Description when available
-• Current model status (if one is applied to the project)
-
-Examples:
-  sah model list                           # List all models in table format
-  sah model list --format json            # Output as JSON for processing
-  sah --verbose model list                 # Include detailed descriptions
-  sah --quiet model list                   # Only show model names
-
-
-**Usage:** `swissarmyhammer model list [OPTIONS]`
-
-###### **Options:**
-
-* `--format <FORMAT>` — Output format
-
-  Default value: `table`
-
-  Possible values: `table`, `json`, `yaml`
-
-
-
-
-## `swissarmyhammer model show`
-
-
-Display the current model configured for this project.
-
-Shows the model name, source, and description. If no model is explicitly
-configured, the default (claude-code) is used.
-
-Examples:
-  sah model show                           # Show current model
-  sah model                               # Same as 'show' (default)
-
-
-**Usage:** `swissarmyhammer model show [OPTIONS]`
-
-###### **Options:**
-
-* `--format <FORMAT>` — Output format
-
-  Default value: `table`
-
-  Possible values: `table`, `json`, `yaml`
-
-
-
-
-## `swissarmyhammer model use`
-
-
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-By default the model is applied as the global default (top-level `model:`).
-Use `--for <purpose>` to scope the model to a specific tool instead; the value
-is written under that purpose's mapping (e.g. `--for review` writes
-`review.model:`) and leaves the global default untouched.
-
-`--for review` sets the model the review tool runs its validator agents with.
-When `review.model` is unset, the review tool uses the global default model.
-
-Examples:
-  sah model use claude-code                # Apply Claude Code as the default model
-  sah model use qwen                       # Apply the Qwen model as the default
-  sah model use qwen --for review          # Set the review-tool model only
-
-
-**Usage:** `swissarmyhammer model use [OPTIONS] <name>`
-
-###### **Arguments:**
-
-* `<name>` — Model name to apply to the project
-
-###### **Options:**
-
-* `--for <PURPOSE>` — Purpose to scope the model to (e.g. `review`). Absent sets the global default model
-
-
-
-## `swissarmyhammer agent`
-
-
-Manage and interact with Agent Client Protocol (ACP) server.
-
-The agent command provides integration with ACP-compatible code editors,
-enabling local LLaMA models to be used as coding assistants in editors
-like Zed and JetBrains IDEs.
-
-Subcommands:
-  acp     Start ACP server over stdio for editor integration
-
-Examples:
-  sah agent acp                        # Start ACP server (stdio)
-  sah agent acp --config config.yaml  # Start with custom config
-
-
-**Usage:** `swissarmyhammer agent [COMMAND]`
-
-###### **Subcommands:**
-
-* `acp` — Start ACP server over stdio
-
-
-
-## `swissarmyhammer agent acp`
-
-
-Start Agent Client Protocol (ACP) server for code editor integration.
-
-The ACP server enables SwissArmyHammer to work with ACP-compatible code editors
-like Zed and JetBrains IDEs. The server communicates over stdin/stdout using
-JSON-RPC 2.0 protocol.
-
-Features:
-• Local LLaMA model execution for coding assistance
-• Session management with conversation history
-• File system operations (read/write)
-• Terminal execution
-• Tool integration via MCP servers
-• Permission-based security model
-
-Examples:
-  sah agent acp                        # Start with default config
-  sah agent acp --config acp.yaml      # Start with custom config
-  sah agent acp --permission-policy auto-approve-reads
-  sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh
-  sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152
-
-Configuration:
-Options can be specified via:
-1. Command-line flags (highest priority)
-2. Configuration file (--config)
-3. Default values (lowest priority)
-
-Command-line flags override configuration file settings.
-
-For editor configuration:
-• Zed: Add to agents section in settings
-• JetBrains: Install ACP plugin and configure
-
-
-**Usage:** `swissarmyhammer agent acp [OPTIONS]`
-
-###### **Options:**
-
-* `-c`, `--config <CONFIG>` — Path to ACP configuration file (optional)
-* `--permission-policy <POLICY>` — Permission policy: always-ask, auto-approve-reads
-* `--allow-path <PATH>` — Allowed filesystem paths (can be specified multiple times)
-* `--block-path <PATH>` — Blocked filesystem paths (can be specified multiple times)
-* `--max-file-size <BYTES>` — Maximum file size for read operations in bytes
-* `--terminal-buffer-size <BYTES>` — Terminal output buffer size in bytes
-* `--graceful-shutdown-timeout <SECONDS>` — Graceful shutdown timeout in seconds
 
 
 

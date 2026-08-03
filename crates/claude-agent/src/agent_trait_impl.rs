@@ -74,9 +74,9 @@ impl ClaudeAgent {
     /// and returns the agent's advertised capabilities. Per the ACP
     /// specification it never hard-fails on a protocol-version mismatch — the
     /// negotiated version is returned and the client decides whether to
-    /// proceed. There is no request-body validation beyond negotiation, and
-    /// `llama-agent` follows the identical convention. Authentication methods
-    /// are intentionally empty — see the architectural note in the body.
+    /// proceed. There is no request-body validation beyond negotiation.
+    /// Authentication methods are intentionally empty — see the architectural
+    /// note in the body.
     pub async fn initialize(
         &self,
         request: InitializeRequest,
@@ -163,9 +163,8 @@ impl ClaudeAgent {
     /// when the command set changes during a session (e.g. an MCP server
     /// connects and exposes prompts, via `refresh_commands_for_all_sessions`).
     /// An unsolicited update at `session/new` advertised only two
-    /// non-dispatchable placeholder commands, and llama-agent emits nothing
-    /// here; suppressing it makes both agents emit the same (empty) command
-    /// stream on `session/new`.
+    /// non-dispatchable placeholder commands, so it is suppressed: a client
+    /// sees an empty command stream on `session/new`.
     pub async fn new_session(
         &self,
         request: NewSessionRequest,
@@ -286,8 +285,8 @@ impl ClaudeAgent {
     /// underlying Claude process so the next prompt runs under the new mode.
     ///
     /// A `SessionUpdate::CurrentModeUpdate` notification is emitted on every
-    /// successful call — exactly as llama-agent does — so a client tracking
-    /// session mode observes the same notification stream from both agents.
+    /// successful call, so a client tracking session mode observes one
+    /// notification stream regardless of what changed underneath.
     /// The process replacement is an internal, claude-specific concern gated on
     /// whether the mode actually changed; the client-facing notification is
     /// not.
@@ -590,9 +589,8 @@ impl ClaudeAgent {
     ///
     /// A method that matches no handler is rejected with `method_not_found`
     /// (`-32601`) rather than answered with a success response. Reporting an
-    /// unknown method as an error is the correct JSON-RPC behavior and matches
-    /// `llama-agent`, so a client probing an unsupported extension observes
-    /// the same failure from either agent.
+    /// unknown method as an error is the correct JSON-RPC behavior, so a client
+    /// probing an unsupported extension observes a real failure.
     pub async fn ext_method(
         &self,
         request: ExtRequest,
@@ -746,7 +744,7 @@ impl ClaudeAgent {
 
     /// Handle the `session/fork` extension method (see
     /// [`crate::session_fork`]). No capability gate: the fork surface is an
-    /// agent-defined extension, matching llama-agent.
+    /// agent-defined extension.
     async fn handle_ext_session_fork(
         &self,
         request: &ExtRequest,
@@ -785,8 +783,7 @@ impl ClaudeAgent {
     ///
     /// Rejects the call with `method_not_found` (`-32601`). An extension method
     /// the agent does not implement is genuinely "not found", so a JSON-RPC
-    /// error — not a success response — is the correct answer. `llama-agent`
-    /// rejects unknown extension methods the same way.
+    /// error — not a success response — is the correct answer.
     fn handle_ext_unknown(
         &self,
         request: &ExtRequest,

@@ -1,7 +1,7 @@
 //! SwissArmyHammer Skills
 //!
 //! Core crate for parsing, validating, resolving, and storing Agent Skills.
-//! Used by both the MCP server (llama-agent) and CLI (init/doctor).
+//! Used by both the MCP server and the CLI (init/doctor).
 //!
 //! ## Overview
 //!

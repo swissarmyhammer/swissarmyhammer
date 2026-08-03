@@ -34,8 +34,8 @@ impl ContentCapabilityError {
     ///
     /// Built through [`crate::acp_error::invalid_params`] so the code (`-32602`,
     /// Invalid params) is named rather than a raw integer. The structured `data`
-    /// shape matches llama-agent's `ContentCapabilityError::to_acp_error`, so a
-    /// client sees an identical error contract from both agents.
+    /// shape is the one every SAH agent emits for this failure class, so a
+    /// client sees one error contract no matter which agent answered.
     pub fn to_acp_error(&self) -> agent_client_protocol::Error {
         match self {
             ContentCapabilityError::UnsupportedContentType {
@@ -78,7 +78,7 @@ impl ContentCapabilityError {
     ///
     /// Used to embed each nested violation inside a `MultipleViolations`
     /// payload. The shape (`code` / `message` / `data`) mirrors a full JSON-RPC
-    /// error object and matches llama-agent's `to_acp_error_data`.
+    /// error object.
     fn to_acp_error_data(&self) -> Value {
         let acp = self.to_acp_error();
         json!({

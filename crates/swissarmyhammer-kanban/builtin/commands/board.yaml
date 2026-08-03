@@ -1,10 +1,10 @@
 # Board-metadata commands.
 #
 # `update.board` is the dispatch-layer wrapper around the headless
-# `crate::board::UpdateBoard` operation. The AI panel (and any future
-# board-metadata editor) dispatches this command with whichever of `name`,
-# `description`, and `model` it needs to change; the Rust impl forwards each
-# present arg onto the operation so untouched fields survive.
+# `crate::board::UpdateBoard` operation. A board-metadata editor dispatches
+# this command with whichever of `name`, `description`, and `model` it needs
+# to change; the Rust impl forwards each present arg onto the operation so
+# untouched fields survive.
 #
 # The command is not user-visible — there is no palette entry, keybinding, or
 # context-menu surface. Frontend callers reach it through

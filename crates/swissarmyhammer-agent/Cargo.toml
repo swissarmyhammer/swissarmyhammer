@@ -13,10 +13,8 @@ description = "Unified ACP agent creation and execution for SwissArmyHammer"
 agent-client-protocol.workspace = true
 agent-client-protocol-extras = { workspace = true }
 claude-agent = { workspace = true }
-llama-agent = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-config = { workspace = true }
-swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-tools = { workspace = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time"] }

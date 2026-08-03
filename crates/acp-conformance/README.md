@@ -78,30 +78,6 @@ cargo test -p acp-conformance -- --nocapture
 
 ## Test Results Summary
 
-**Total Tests:** 11 (1 lib + 4 mock + 6 llama-agent)
-**Passing:** 11/11 ✅
-**Failing:** 0
-**Ignored:** 2 (old process-spawn stubs)
-
-### llama-agent
-
-✅ **6/6 initialization tests passing**
-
-- ✅ test_llama_minimal_initialization
-- ✅ test_llama_full_capabilities
-- ✅ test_llama_protocol_version
-- ✅ test_llama_minimal_client_caps
-- ✅ test_llama_initialize_idempotent
-- ✅ test_llama_with_client_info
-
-**Capabilities Detected:**
-- ✓ Session loading supported
-- ✓ Image content
-- ✓ Audio content
-- ✓ Embedded context
-- ✓ HTTP transport (MCP)
-- ✗ SSE transport (not supported)
-
 ### claude-agent
 
 ⚠️ **Cannot test - breaking API changes**
@@ -141,7 +117,6 @@ Simple mock implementation used for testing the test framework itself.
                │
 ┌──────────────┴──────────────────────┐
 │  Agent Implementations               │
-│  - llama-agent::acp::AcpServer       │
 │  - claude-agent::ClaudeAgent         │
 │    (served via swissarmyhammer-agent)│
 └─────────────────────────────────────┘
@@ -152,7 +127,7 @@ Simple mock implementation used for testing the test framework itself.
 1. **Stream-Based Testing**: Tests create bidirectional streams (using `piper::pipe`) to connect the client and agent without requiring process spawning
 2. **In-Process Testing**: Agents run in the same process for faster, more reliable testing
 3. **LocalSet Execution**: Uses tokio LocalSet for non-Send futures required by the ACP protocol
-4. **Serial Execution**: Tests run serially to avoid llama.cpp backend conflicts
+4. **Serial Execution**: Tests run serially so a recording run never races another agent fixture
 
 ## Protocol Compliance Validation
 

@@ -580,7 +580,6 @@ impl Drop for McpServerHandle {
 ///
 /// * `mode` - The transport mode (stdio or HTTP)
 /// * `library` - Optional prompt library (creates new if None)
-/// * `model_override` - Optional model name to override all use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
 ///
 /// # Returns
@@ -589,10 +588,9 @@ impl Drop for McpServerHandle {
 pub async fn start_mcp_server(
     mode: McpServerMode,
     library: Option<TemplateLibrary>,
-    model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
-    start_mcp_server_with_options(mode, library, model_override, working_dir).await
+    start_mcp_server_with_options(mode, library, working_dir).await
 }
 
 /// Start unified MCP server.
@@ -607,7 +605,6 @@ pub async fn start_mcp_server(
 ///
 /// * `mode` - The transport mode (stdio or HTTP)
 /// * `library` - Optional prompt library (creates new if None)
-/// * `model_override` - Optional model name to override all use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
 ///
 /// # Returns
@@ -616,7 +613,6 @@ pub async fn start_mcp_server(
 pub async fn start_mcp_server_with_options(
     mode: McpServerMode,
     library: Option<TemplateLibrary>,
-    model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
@@ -626,10 +622,8 @@ pub async fn start_mcp_server_with_options(
         configure_mcp_logging(None);
     }
     match mode {
-        McpServerMode::Stdio => start_stdio_server(library, model_override, working_dir).await,
-        McpServerMode::Http { port } => {
-            start_http_server(port, library, model_override, working_dir).await
-        }
+        McpServerMode::Stdio => start_stdio_server(library, working_dir).await,
+        McpServerMode::Http { port } => start_http_server(port, library, working_dir).await,
     }
 }
 
@@ -668,7 +662,6 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
 /// # Arguments
 /// * `library` - Optional prompt library (creates default if None)
 /// * `port` - Server port to set in tool context
-/// * `model_override` - Optional model name to override use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
 ///
 /// # Returns
@@ -676,13 +669,12 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
 async fn initialize_mcp_server(
     library: Option<TemplateLibrary>,
     port: u16,
-    model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<Arc<McpServer>> {
     let library = library.unwrap_or_default();
     let work_dir = working_dir
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
-    let server = McpServer::new_with_work_dir(library, work_dir, model_override).await?;
+    let server = McpServer::new_with_work_dir(library, work_dir).await?;
     server.initialize().await?;
     server.set_server_port(port).await;
 
@@ -998,7 +990,6 @@ fn spawn_http_server_for_stdio(
 /// 2. HTTP server on random localhost port for workflows to execute Claude prompts
 async fn start_stdio_server(
     library: Option<TemplateLibrary>,
-    model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
     tracing::info!("Starting unified MCP server in stdio mode");
@@ -1007,14 +998,13 @@ async fn start_stdio_server(
     let work_dir = working_dir
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
-    let temp_server =
-        McpServer::new_with_work_dir(library, work_dir, model_override.clone()).await?;
+    let temp_server = McpServer::new_with_work_dir(library, work_dir).await?;
     let temp_server_arc = Arc::new(temp_server);
 
     let (http_port, router, http_listener, stats) =
         setup_http_server_for_stdio(temp_server_arc).await?;
 
-    let server_arc = initialize_mcp_server(None, http_port, model_override, working_dir).await?;
+    let server_arc = initialize_mcp_server(None, http_port, working_dir).await?;
     tracing::debug!("Set MCP server self-reference in tool context (stdio)");
     tracing::info!(
         "Set MCP server port {} in tool context for workflows",
@@ -1133,7 +1123,6 @@ async fn resolve_http_port(port: Option<u16>) -> Result<u16> {
 async fn start_http_server(
     port: Option<u16>,
     library: Option<TemplateLibrary>,
-    model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
     tracing::debug!("start_http_server called with port: {}", Pretty(&port));
@@ -1141,8 +1130,7 @@ async fn start_http_server(
     let actual_port = resolve_http_port(port).await?;
 
     tracing::debug!("Creating MCP server");
-    let server_arc =
-        initialize_mcp_server(library, actual_port, model_override, working_dir).await?;
+    let server_arc = initialize_mcp_server(library, actual_port, working_dir).await?;
     tracing::debug!("MCP server initialized");
 
     let stats = ServerStats::new();
@@ -1443,7 +1431,7 @@ mod tests {
     async fn test_http_server_creation_and_info() {
         tracing::info!("test_http_server_creation_and_info");
         let mode = McpServerMode::Http { port: Some(18080) }; // Fixed port to avoid random port issues
-        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Verify we got a valid port and URL format
         assert_eq!(server.port().unwrap(), 18080);
@@ -1458,7 +1446,7 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_server_info_structure() {
         let mode = McpServerMode::Http { port: Some(18081) };
-        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Test info structure
         let info = server.info();
@@ -1483,7 +1471,7 @@ mod tests {
         let custom_library = TemplateLibrary::default();
 
         let mode = McpServerMode::Http { port: None };
-        let mut server = start_mcp_server(mode, Some(custom_library), None, None)
+        let mut server = start_mcp_server(mode, Some(custom_library), None)
             .await
             .unwrap();
 
@@ -1498,14 +1486,14 @@ mod tests {
     async fn test_http_server_port_in_use_error() {
         // First, start a server on a specific port
         let mode1 = McpServerMode::Http { port: Some(18082) };
-        let mut server1 = start_mcp_server(mode1, None, None, None).await.unwrap();
+        let mut server1 = start_mcp_server(mode1, None, None).await.unwrap();
 
         // Verify first server is running
         assert_eq!(server1.port().unwrap(), 18082);
 
         // Try to start another server on the same port - should fail
         let mode2 = McpServerMode::Http { port: Some(18082) };
-        let result = start_mcp_server(mode2, None, None, None).await;
+        let result = start_mcp_server(mode2, None, None).await;
 
         // Should get an error about port being in use
         assert!(
@@ -1529,7 +1517,7 @@ mod tests {
     async fn test_http_server_invalid_port() {
         // Test with invalid port (port 1 requires root privileges)
         let mode = McpServerMode::Http { port: Some(1) };
-        let result = start_mcp_server(mode, None, None, None).await;
+        let result = start_mcp_server(mode, None, None).await;
 
         // Should get an error about permission denied
         assert!(
@@ -1552,7 +1540,7 @@ mod tests {
     async fn test_server_shutdown_idempotency() {
         // Test that calling shutdown multiple times doesn't panic
         let mode = McpServerMode::Http { port: None };
-        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // First shutdown should work
         server.shutdown().await.unwrap();
@@ -1568,9 +1556,7 @@ mod tests {
     async fn test_server_info_consistency() {
         // Test that server info remains consistent
         let mode = McpServerMode::Http { port: Some(18083) };
-        let mut server = start_mcp_server(mode.clone(), None, None, None)
-            .await
-            .unwrap();
+        let mut server = start_mcp_server(mode.clone(), None, None).await.unwrap();
 
         let info1 = server.info();
         let info2 = server.info();
@@ -1600,7 +1586,7 @@ mod tests {
     async fn test_stdio_server_task_completion() {
         // Test that stdio server task handle is stored and can be awaited
         let mode = McpServerMode::Stdio;
-        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Server should have a task handle for stdio mode
         assert!(
@@ -1811,39 +1797,11 @@ mod tests {
         // Test the default start_mcp_server_with_options path binds the
         // requested port. The server registers the full tool union.
         let mode = McpServerMode::Http { port: Some(18084) };
-        let mut server = start_mcp_server_with_options(mode, None, None, None)
+        let mut server = start_mcp_server_with_options(mode, None, None)
             .await
             .unwrap();
         assert_eq!(server.port().unwrap(), 18084);
         server.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_start_mcp_server_with_options_invalid_model_override_returns_error() {
-        // Test that an invalid model override returns an error rather than silently ignoring it.
-        // This exercises the model_override code path in start_mcp_server_with_options.
-        let mode = McpServerMode::Http { port: Some(18086) };
-        let result = start_mcp_server_with_options(
-            mode,
-            None,
-            Some("nonexistent-model-that-does-not-exist".to_string()),
-            None,
-        )
-        .await;
-        assert!(
-            result.is_err(),
-            "Should return an error for an unknown model override"
-        );
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("model")
-                || err_msg.contains("Model")
-                || err_msg.contains("invalid")
-                || err_msg.contains("Invalid"),
-            "Error should mention model. Got: {}",
-            err_msg
-        );
     }
 
     #[tokio::test]
@@ -1854,7 +1812,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let mode = McpServerMode::Http { port: Some(18087) };
         let mut server =
-            start_mcp_server_with_options(mode, None, None, Some(temp_dir.path().to_path_buf()))
+            start_mcp_server_with_options(mode, None, Some(temp_dir.path().to_path_buf()))
                 .await
                 .unwrap();
         assert!(server.port().unwrap() > 0);
@@ -1868,7 +1826,7 @@ mod tests {
         // When SAH_CLI_MODE is set, configure_mcp_logging should be skipped
         std::env::set_var("SAH_CLI_MODE", "1");
         let mode = McpServerMode::Http { port: Some(18088) };
-        let result = start_mcp_server_with_options(mode, None, None, None).await;
+        let result = start_mcp_server_with_options(mode, None, None).await;
         std::env::remove_var("SAH_CLI_MODE");
         let mut server = result.unwrap();
         assert_eq!(server.port().unwrap(), 18088);
@@ -1881,7 +1839,7 @@ mod tests {
     async fn test_server_handle_server_accessor() {
         // Test that server() returns the MCP server instance
         let mode = McpServerMode::Http { port: Some(18089) };
-        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
         let server_instance = server.server();
         assert!(
             server_instance.is_some(),
@@ -1926,7 +1884,6 @@ mod tests {
         // stays minimal regardless.
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
-            None,
             None,
             Some(temp.path().to_path_buf()),
         )

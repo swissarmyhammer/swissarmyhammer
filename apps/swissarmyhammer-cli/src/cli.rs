@@ -69,14 +69,11 @@ Global arguments can be used with any command to control output and behavior:
   --format      Set output format (table, json, yaml) for commands that support it
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
-  --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
   init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
-  agent         Manage and interact with the Agent Client Protocol server
-  model         Manage and interact with models
   validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
@@ -84,8 +81,6 @@ Example usage:
   swissarmyhammer serve                           # Run as MCP server
   swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer model list                      # List available models
-  swissarmyhammer agent acp                       # Start the ACP server
 ")]
 pub struct Cli {
     #[command(subcommand)]
@@ -106,10 +101,6 @@ pub struct Cli {
     /// Global output format
     #[arg(long, value_enum)]
     pub format: Option<OutputFormat>,
-
-    /// Override model for all use cases (runtime only, doesn't modify config)
-    #[arg(long, global = true)]
-    pub model: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -222,20 +213,6 @@ Examples:
         validate_tools: bool,
     },
 
-    /// Manage and interact with models
-    #[command(long_about = include_str!("commands/model/description.md"))]
-    Model {
-        #[command(subcommand)]
-        subcommand: Option<ModelSubcommand>,
-    },
-
-    /// Manage and interact with Agent Client Protocol server
-    #[command(long_about = include_str!("commands/agent/description.md"))]
-    Agent {
-        #[command(subcommand)]
-        subcommand: Option<AgentSubcommand>,
-    },
-
     /// Manage tool enable/disable state
     #[command(long_about = "
 Manage which MCP tools are enabled or disabled.
@@ -286,7 +263,7 @@ Examples:
 pub enum ServeSubcommand {
     /// Start HTTP MCP server
     #[command(long_about = "
-Start HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+Start HTTP MCP server for web clients, debugging, and ACP agent integration.
 The server exposes MCP tools through HTTP endpoints and provides:
 
 - RESTful MCP protocol implementation
@@ -306,167 +283,6 @@ Example:
         /// Host to bind to
         #[arg(long, short = 'H', default_value = "127.0.0.1")]
         host: String,
-    },
-}
-
-/// Long help text for `sah model use`.
-///
-/// Single source of truth: the static clap derive
-/// (`ModelSubcommand::Use`) and the runtime command tree
-/// (`crate::dynamic_cli`) both reference this constant so the two cannot
-/// drift apart. It lives in `cli.rs` because this module is the one
-/// `build.rs` compiles standalone (via `#[path = "src/cli.rs"]`), so the
-/// constant must be reachable without pulling in `dynamic_cli`.
-pub const MODEL_USE_LONG_ABOUT: &str = "
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-By default the model is applied as the global default (top-level `model:`).
-Use `--for <purpose>` to scope the model to a specific tool instead; the value
-is written under that purpose's mapping (e.g. `--for review` writes
-`review.model:`) and leaves the global default untouched.
-
-`--for review` sets the model the review tool runs its validator agents with.
-When `review.model` is unset, the review tool uses the global default model.
-
-Examples:
-  sah model use claude-code                # Apply Claude Code as the default model
-  sah model use qwen                       # Apply the Qwen model as the default
-  sah model use qwen --for review          # Set the review-tool model only
-";
-
-#[derive(Subcommand, Debug)]
-pub enum ModelSubcommand {
-    /// List available models
-    #[command(long_about = "
-List all available models from built-in, project, and user sources.
-
-Models are discovered with hierarchical precedence where user models override
-project models, which override built-in models. This command shows all available
-models with their sources and descriptions.
-
-Built-in models are embedded in the binary and provide default configurations
-for common workflows. Project models (./models/*.yaml) allow customization for
-specific projects. User models (~/.models/*.yaml) provide
-personal configurations that apply across all projects.
-
-Output includes:
-• Model name and source (built-in, project, or user)
-• Description when available
-• Current model status (if one is applied to the project)
-
-Examples:
-  sah model list                           # List all models in table format
-  sah model list --format json            # Output as JSON for processing
-  sah --verbose model list                 # Include detailed descriptions
-  sah --quiet model list                   # Only show model names
-")]
-    List {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-    },
-    /// Show current model configuration
-    #[command(long_about = "
-Display the current model configured for this project.
-
-Shows the model name, source, and description. If no model is explicitly
-configured, the default (claude-code) is used.
-
-Examples:
-  sah model show                           # Show current model
-  sah model                               # Same as 'show' (default)
-")]
-    Show {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-    },
-    /// Use a specific model
-    #[command(long_about = MODEL_USE_LONG_ABOUT)]
-    Use {
-        /// Model name to apply to the project
-        #[arg(id = "name")]
-        name: String,
-        /// Purpose to scope the model to (e.g. `review`). Absent sets the
-        /// global default model.
-        #[arg(long = "for", id = "for", value_name = "PURPOSE")]
-        for_purpose: Option<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum AgentSubcommand {
-    /// Start ACP server over stdio
-    #[command(long_about = "
-Start Agent Client Protocol (ACP) server for code editor integration.
-
-The ACP server enables SwissArmyHammer to work with ACP-compatible code editors
-like Zed and JetBrains IDEs. The server communicates over stdin/stdout using
-JSON-RPC 2.0 protocol.
-
-Features:
-• Local LLaMA model execution for coding assistance
-• Session management with conversation history
-• File system operations (read/write)
-• Terminal execution
-• Tool integration via MCP servers
-• Permission-based security model
-
-Examples:
-  sah agent acp                        # Start with default config
-  sah agent acp --config acp.yaml      # Start with custom config
-  sah agent acp --permission-policy auto-approve-reads
-  sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh
-  sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152
-
-Configuration:
-Options can be specified via:
-1. Command-line flags (highest priority)
-2. Configuration file (--config)
-3. Default values (lowest priority)
-
-Command-line flags override configuration file settings.
-
-For editor configuration:
-• Zed: Add to agents section in settings
-• JetBrains: Install ACP plugin and configure
-")]
-    Acp {
-        /// Path to ACP configuration file (optional)
-        #[arg(short, long)]
-        config: Option<std::path::PathBuf>,
-
-        /// Permission policy: always-ask, auto-approve-reads
-        #[arg(long, value_name = "POLICY")]
-        permission_policy: Option<String>,
-
-        /// Allowed filesystem paths (can be specified multiple times)
-        #[arg(long, value_name = "PATH")]
-        allow_path: Vec<std::path::PathBuf>,
-
-        /// Blocked filesystem paths (can be specified multiple times)
-        #[arg(long, value_name = "PATH")]
-        block_path: Vec<std::path::PathBuf>,
-
-        /// Maximum file size for read operations in bytes
-        #[arg(long, value_name = "BYTES")]
-        max_file_size: Option<u64>,
-
-        /// Terminal output buffer size in bytes
-        #[arg(long, value_name = "BYTES")]
-        terminal_buffer_size: Option<usize>,
-
-        /// Graceful shutdown timeout in seconds
-        #[arg(long, value_name = "SECONDS")]
-        graceful_shutdown_timeout: Option<u64>,
     },
 }
 

@@ -164,8 +164,8 @@ async fn test_search_skill_no_matches() {
 async fn test_skill_tool_registered_but_not_advertised_to_unknown_host() {
     // The full server registers the complete tool union, but `tools/list`
     // composes the advertised set per connecting client. `skill` is an
-    // `Agent`-category tool, which SAH never advertises (off-the-shelf agents
-    // provide it natively, llama mounts its own). The default `test-client` is
+    // `Agent`-category tool, which SAH never advertises to any host
+    // (off-the-shelf agents provide it natively). The default `test-client` is
     // an unknown host, so `skill` is absent from its `tools/list` — yet it
     // remains registered and *callable* (see `test_get_verb_backward_compat`,
     // which invokes it successfully).
