@@ -1367,6 +1367,12 @@ impl ClaudeAgent {
             self.store_system_prompt_in_session(&session_id, system_prompt)?;
         }
 
+        // Persist the agent's currently configured `extra_args` (carries
+        // `--model`) onto the live session, for the same reason: a later
+        // `session/fork` must replay the PARENT's captured `extra_args`, not
+        // whatever the agent's live config holds at fork time.
+        self.store_extra_args_in_session(&session_id)?;
+
         // Register per-session notification channel
         self.notification_sender
             .register_session(&session_id.to_string());
@@ -1469,6 +1475,31 @@ impl ClaudeAgent {
         self.session_manager
             .update_session(session_id, |session| {
                 session.system_prompt = Some(system_prompt);
+            })
+            .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+
+    /// Persist the agent's currently configured `extra_args` onto the live
+    /// session.
+    ///
+    /// Mirrors [`Self::store_system_prompt_in_session`]: unlike
+    /// `system_prompt`, which comes from `request.meta` and may be absent,
+    /// `extra_args` always comes from `self.config.claude.extra_args` at the
+    /// moment the session is created, so it is captured unconditionally.
+    /// `session/fork` reads this captured value back from the parent
+    /// [`Session`](crate::session::Session) rather than the agent's live
+    /// config, so a config change between the parent's creation and a later
+    /// fork cannot silently spawn the fork with a different `--model` than
+    /// the parent used — see `crate::session_fork`'s "Prefix caching" module
+    /// doc.
+    pub(crate) fn store_extra_args_in_session(
+        &self,
+        session_id: &crate::session::SessionId,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let extra_args = self.config.claude.extra_args.clone();
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.extra_args = extra_args;
             })
             .map_err(|_e| agent_client_protocol::Error::internal_error())
     }

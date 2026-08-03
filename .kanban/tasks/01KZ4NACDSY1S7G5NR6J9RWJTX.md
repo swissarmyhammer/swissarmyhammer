@@ -66,6 +66,55 @@ comments:
 
     next: /review
   timestamp: 2026-08-03T21:00:28.093722+00:00
+- actor: claude-code
+  id: 01kz4q0s468038e6gx55n03z1h
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — root cause proven empirically, not guessed: ran the real `claude` CLI directly comparing cache_read_input_tokens across three fork scenarios (matching spawn args = real cache hit ~54K tokens; missing system prompt replay = 0 hit or spurious collision; identical system prompt replayed = exact hit ~46K tokens). The bug: session_fork.rs's fork spawn config never carried the parent's system_prompt or extra_args forward — the claude CLI reconstructs a forked child's API request from its OWN current invocation flags plus replayed history, not the parent's original --system-prompt/--model. Review-fleet sessions spawn with a custom persona system prompt, so every fork silently used a DIFFERENT prompt than its parent, producing a non-matching tokenized prefix. Fix: Session gained system_prompt: Option<String> (persisted per session in agent.rs), build_fork_spawn_config (extracted, testable) now sets .system_prompt(parent.system_prompt.clone()) and .extra_args(...). No change needed to classify_reuse/parse_cache_usage (already correct) or to ^b4x8dgh's cache-window claim (now actually realized, not stale). Filed ^bayecq8 for the identical omission in session_resume.rs::restore (out of scope here).
+    - test: green — cargo test -p claude-agent --lib 758 passed; clippy clean; fmt clean; full rdeps(claude-agent) or rdeps(swissarmyhammer-validators) run for real: 4397 passed, 0 skipped, 0 failed
+    - commit: 0c3947a9d
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T21:03:34.022457+00:00
+- actor: claude-code
+  id: 01kz4qy9tn31qg74fxmesyckd4
+  text: |-
+    ### review — findings
+    - evidence: `review sha 0c3947a9d~1..0c3947a9d` ran successfully (19 findings, 19 confirmed, 12 refuted per engine counts). Blame-checked every reported line against `0c3947a9d`'s hunks: 18 findings (all in `crates/claude-agent/src/agent.rs` and `crates/claude-agent/src/session.rs`) fell outside every hunk this commit touched — pre-existing code, dropped. 1 finding lands inside a hunk this commit added: `crates/claude-agent/src/session_fork.rs:276` — `build_fork_spawn_config` takes `extra_args` from `self.config.claude.extra_args` (current agent config) rather than carrying it from the parent session, contradicting the module doc's claim (lines 35-46) that the fork uses "the identical `--system-prompt` and `--model` the parent used."
+    - next: implementer resolves the finding (add `extra_args` to `Session` and carry it from parent, or correct the doc to state the actual behavior and its stability assumption), then re-review.
+    task: ^j9rwjtx
+  timestamp: 2026-08-03T21:19:41.397251+00:00
+- actor: claude-code
+  id: 01kz4qzx8pgadmdtd83rez0tmh
+  text: |-
+    ### finish iteration 1 — findings
+    - review: findings — engine ran successfully (19 raw, 18 blame-checked out as pre-existing in agent.rs/session.rs). 1 genuine finding: session_fork.rs:276 — the module doc says forks must replay the parent's identical --system-prompt AND --model, and system_prompt is correctly carried from the parent session, but extra_args (which carries --model) is read from the CURRENT agent config, not captured from the parent at session-creation time. If agent config changes between parent creation and fork, the fork gets a different model than its parent, breaking the exact cache match this whole fix is for.
+    - next: /implement — add extra_args: Vec<String> to Session, capture it at creation, carry it in build_fork_spawn_config mirroring system_prompt (not the doc-only fallback)
+  timestamp: 2026-08-03T21:20:34.070323+00:00
+- actor: claude-code
+  id: 01kz4reaqmwvcr80gqfrcd4nw4
+  text: |-
+    ### implement — changed
+
+    Resolved the sole open review finding: `crates/claude-agent/src/session_fork.rs`'s `build_fork_spawn_config` read `extra_args` from the CURRENT agent's live `self.config.claude.extra_args`, not captured from the parent session at creation time — so a config change between parent creation and fork could silently spawn the fork with a different `--model` than its parent, breaking the exact prefix match this whole card's fix exists to guarantee.
+
+    TDD: wrote `test_fork_spawn_config_carries_parent_extra_args_not_live_config` in `session_fork.rs` first — it sets the agent's live config to `--model opus`, sets the parent session's captured `extra_args` to `--model sonnet` directly via `update_session` (simulating a config reload after parent creation), and asserts the fork's spawn config carries `sonnet` (the parent's), not `opus` (the live config's). Confirmed RED first: with `Session` lacking an `extra_args` field, the test failed to compile with `error[E0609]: no field extra_args on type &mut session::Session` — the correct RED (missing feature), not a typo. Then implemented and confirmed GREEN.
+
+    Changes, mirroring the `system_prompt` pattern from the previous commit on this task:
+    - `crates/claude-agent/src/session.rs`: added `Session.extra_args: Vec<String>` (`#[serde(default)]`), set to `Vec::new()` in `Session::new`. Added a default-empty assertion to `test_session_creation`.
+    - `crates/claude-agent/src/agent.rs`: added `ClaudeAgent::store_extra_args_in_session`, mirroring `store_system_prompt_in_session` — captures `self.config.claude.extra_args.clone()` at session-creation time. `create_new_session_internal` now calls it unconditionally (unlike `system_prompt`, which is conditional on `request.meta`, `extra_args` always comes from agent config, so it is always captured).
+    - `crates/claude-agent/src/session_fork.rs`: `build_fork_spawn_config` now reads `.extra_args(parent.extra_args.clone())` instead of `self.config.claude.extra_args.clone()`. Updated the module's "Prefix caching" doc and the method's doc comment to state that BOTH `system_prompt` and `extra_args` are captured on the parent at creation time and never read from live config at fork time — replacing the doc's prior claim (which was only true for `system_prompt` after the last commit, not `extra_args`).
+    - Updated the pre-existing `test_fork_spawn_config_carries_extra_args` test: it previously relied on `primed_parent`'s session (created via `session_manager.create_session` directly, bypassing `create_new_session_internal`) picking up the agent's live config `extra_args` — which no longer happens now that the fork reads `parent.extra_args`. Changed it to set `session.extra_args` directly via `update_session`, mirroring `test_fork_spawn_config_carries_parent_system_prompt`'s existing pattern.
+
+    Evidence:
+    - `cargo test -p claude-agent --lib`: 759 passed, 0 failed (up from 758; net +1 new test, existing test count preserved after the mirrored rewrite).
+    - `cargo fmt --all`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo nextest run -E 'rdeps(claude-agent) or rdeps(swissarmyhammer-validators)'`: **4398 tests run: 4398 passed (1 slow), 0 skipped.**
+
+    Checked off the finding in `## Review Findings`.
+
+    next: /review
+  timestamp: 2026-08-03T21:28:26.612132+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Review fleet forks are 100% cold — warm prefix reuse never fires, not just degraded
@@ -189,3 +238,15 @@ would make that rationale true.
   passes.
 
 #review #bug
+
+## Review Findings (2026-08-03 16:04)
+
+Scope: `review sha 0c3947a9d~1..0c3947a9d`. Engine reported 19 findings; each
+reported line was blame-checked against `0c3947a9d`. 18 fell outside every
+hunk this commit touched (pre-existing code in `agent.rs` and `session.rs`,
+unmodified by this diff) and are dropped per instruction. 1 finding lands
+inside a hunk this commit added and is recorded below.
+
+- [x] `crates/claude-agent/src/session_fork.rs:276` — The module documentation (lines 35–46) states that forked children must be spawned with the identical `--system-prompt` and `--model` the parent used to maintain cache coherence. However, `system_prompt` is carried from the parent (line 273) while `extra_args` (model) is taken from the current agent's config (line 276). If the parent was originally created by an agent with different `extra_args`, the fork will use a different model than the parent, breaking the prompt cache promise documented on line 46. Either (a) add an `extra_args` field to Session struct and carry it from the parent in `build_fork_spawn_config`, mirroring the `system_prompt` pattern, or (b) update the documentation to clarify that `extra_args` intentionally comes from the current agent config and document the implicit assumption that agent config remains stable between parent creation and fork.
+
+#bug #review
