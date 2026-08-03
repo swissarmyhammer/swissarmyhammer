@@ -36,5 +36,4 @@ regeneration, not a hand edit smuggled into an unrelated diff.
 
 - [ ] No tracked file under any `.skills/` directory mentions `llama-agent`.
 - [ ] The deployed copies match their `builtin/skills/` sources byte for byte
-      (whatever the deploy step produces), with no hand edits.
-#cleanup #llama-agent #skills
+      (whatever the deploy step produces), with no hand edits. #bug #cleanup #llama-agent #skills

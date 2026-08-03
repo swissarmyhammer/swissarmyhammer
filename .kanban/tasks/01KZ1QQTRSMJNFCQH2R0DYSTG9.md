@@ -39,5 +39,4 @@ on a temp dir, or a crate-public test constructor.
 
 - [ ] `cargo nextest run -p swissarmyhammer-tools` leaves no `.shell` directory
       in `crates/swissarmyhammer-tools/`.
-- [ ] No test in the crate calls `ShellExecuteTool::new()`.
-#tools #shelltool #test-hygiene
+- [ ] No test in the crate calls `ShellExecuteTool::new()`. #bug #shelltool #test-hygiene #tools

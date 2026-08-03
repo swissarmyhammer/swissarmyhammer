@@ -72,5 +72,4 @@ that reaches no host are the same question.
 
 - [ ] Run `cargo nextest run -p swissarmyhammer-tools` — the per-client
       composition tests still pass.
-- [ ] Run `cargo nextest run --workspace`.
-#llama-agent #cleanup
+- [ ] Run `cargo nextest run --workspace`. #bug #cleanup #llama-agent

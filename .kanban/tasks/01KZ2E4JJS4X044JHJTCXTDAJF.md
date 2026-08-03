@@ -44,4 +44,4 @@ regeneration got wrong.
 
 ## Workflow
 
-- Documentation only, no code. The proof is reading the regenerated file. #cleanup #llama-agent #docs
+- Documentation only, no code. The proof is reading the regenerated file. #bug #cleanup #docs #llama-agent

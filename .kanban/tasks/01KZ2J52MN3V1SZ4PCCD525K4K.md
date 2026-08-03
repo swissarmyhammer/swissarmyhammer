@@ -54,5 +54,4 @@ again.
 ## Tests
 
 - [ ] Run `cargo nextest run -p swissarmyhammer-skills`.
-- [ ] Run `cargo nextest run --workspace`.
-#cleanup #docs #skills
+- [ ] Run `cargo nextest run --workspace`. #bug #cleanup #docs #skills
