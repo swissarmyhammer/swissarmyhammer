@@ -107,8 +107,8 @@ pub use session_fork::{
 ///
 /// The ACP `PromptRequest` schema has no first-class `max_tokens` field, so
 /// the cap rides the protocol's extensibility `_meta` map under this key. It
-/// is a cross-crate wire contract — the validators pool produces it, the
-/// claude and llama agents honor it — so the key is named here, alongside the
+/// is a cross-crate wire contract — the validators pool produces it, the agents
+/// honor it — so the key is named here, alongside the
 /// session-extension method names, and changes in exactly one place.
 pub const MAX_TOKENS_META_KEY: &str = "max_tokens";
 
@@ -122,8 +122,8 @@ pub const MAX_TOKENS_META_KEY: &str = "max_tokens";
 /// [`MAX_TOKENS_META_KEY`], the ACP `PromptRequest` schema has no first-class
 /// field for this, so the intent rides the protocol's extensibility `_meta` map
 /// under this key. It is a cross-crate wire contract — the validators pool
-/// produces it on the prime turn, the llama agent honors it by saving the
-/// prefix born pinned, and an agent without a KV cache (claude) ignores it,
+/// produces it on the prime turn, an agent with a KV cache honors it by saving
+/// the prefix born pinned, and an agent without one (claude) ignores it,
 /// consistent with its existing pin=no-op contract. The value is a boolean
 /// (`true` to pin on save); absent or non-`true` means the default unpinned
 /// save.

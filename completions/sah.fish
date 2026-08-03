@@ -39,7 +39,6 @@ complete -c sah -n "__fish_sah_needs_command" -f -a "deinit" -d 'Remove sah from
 complete -c sah -n "__fish_sah_needs_command" -f -a "doctor" -d 'Diagnose configuration and setup issues'
 complete -c sah -n "__fish_sah_needs_command" -f -a "completion" -d 'Generate shell completion scripts'
 complete -c sah -n "__fish_sah_needs_command" -f -a "validate" -d 'Validate skills and workflows for syntax and best practices'
-complete -c sah -n "__fish_sah_needs_command" -f -a "agent" -d 'Manage and interact with Agent Client Protocol server'
 complete -c sah -n "__fish_sah_needs_command" -f -a "tools" -d 'Manage tool enable/disable state'
 complete -c sah -n "__fish_sah_needs_command" -f -a "statusline" -d 'Render statusline from Claude Code JSON (stdin) or dump config'
 complete -c sah -n "__fish_sah_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
@@ -69,21 +68,6 @@ complete -c sah -n "__fish_sah_using_subcommand validate" -l model -d 'Override 
 complete -c sah -n "__fish_sah_using_subcommand validate" -s q -l quiet -d 'Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary'
 complete -c sah -n "__fish_sah_using_subcommand validate" -l validate-tools -d 'Validate MCP tool schemas for CLI compatibility'
 complete -c sah -n "__fish_sah_using_subcommand validate" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c sah -n "__fish_sah_using_subcommand agent; and not __fish_seen_subcommand_from acp help" -l model -d 'Override model for all use cases (runtime only, doesn\'t modify config)' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and not __fish_seen_subcommand_from acp help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c sah -n "__fish_sah_using_subcommand agent; and not __fish_seen_subcommand_from acp help" -f -a "acp" -d 'Start ACP server over stdio'
-complete -c sah -n "__fish_sah_using_subcommand agent; and not __fish_seen_subcommand_from acp help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -s c -l config -d 'Path to ACP configuration file (optional)' -r -F
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l permission-policy -d 'Permission policy: always-ask, auto-approve-reads' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l allow-path -d 'Allowed filesystem paths (can be specified multiple times)' -r -F
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l block-path -d 'Blocked filesystem paths (can be specified multiple times)' -r -F
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l max-file-size -d 'Maximum file size for read operations in bytes' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l terminal-buffer-size -d 'Terminal output buffer size in bytes' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l graceful-shutdown-timeout -d 'Graceful shutdown timeout in seconds' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -l model -d 'Override model for all use cases (runtime only, doesn\'t modify config)' -r
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from acp" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from help" -f -a "acp" -d 'Start ACP server over stdio'
-complete -c sah -n "__fish_sah_using_subcommand agent; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c sah -n "__fish_sah_using_subcommand tools; and not __fish_seen_subcommand_from enable disable help" -l model -d 'Override model for all use cases (runtime only, doesn\'t modify config)' -r
 complete -c sah -n "__fish_sah_using_subcommand tools; and not __fish_seen_subcommand_from enable disable help" -l global -d 'Write to global config (~/.sah/tools.yaml) instead of project'
 complete -c sah -n "__fish_sah_using_subcommand tools; and not __fish_seen_subcommand_from enable disable help" -s h -l help -d 'Print help (see more with \'--help\')'
@@ -105,18 +89,16 @@ complete -c sah -n "__fish_sah_using_subcommand statusline; and __fish_seen_subc
 complete -c sah -n "__fish_sah_using_subcommand statusline; and __fish_seen_subcommand_from config" -s h -l help -d 'Print help'
 complete -c sah -n "__fish_sah_using_subcommand statusline; and __fish_seen_subcommand_from help" -f -a "config" -d 'Dump the full annotated builtin config to stdout'
 complete -c sah -n "__fish_sah_using_subcommand statusline; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "serve" -d 'Run as MCP server (default when invoked via stdio)'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "init" -d 'Set up sah for all detected AI coding agents (skills + MCP)'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "deinit" -d 'Remove sah from all detected AI coding agents (skills + MCP)'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "doctor" -d 'Diagnose configuration and setup issues'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "completion" -d 'Generate shell completion scripts'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "validate" -d 'Validate skills and workflows for syntax and best practices'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "agent" -d 'Manage and interact with Agent Client Protocol server'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "tools" -d 'Manage tool enable/disable state'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "statusline" -d 'Render statusline from Claude Code JSON (stdin) or dump config'
-complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate agent tools statusline help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "serve" -d 'Run as MCP server (default when invoked via stdio)'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "init" -d 'Set up sah for all detected AI coding agents (skills + MCP)'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "deinit" -d 'Remove sah from all detected AI coding agents (skills + MCP)'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "doctor" -d 'Diagnose configuration and setup issues'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "completion" -d 'Generate shell completion scripts'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "validate" -d 'Validate skills and workflows for syntax and best practices'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "tools" -d 'Manage tool enable/disable state'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "statusline" -d 'Render statusline from Claude Code JSON (stdin) or dump config'
+complete -c sah -n "__fish_sah_using_subcommand help; and not __fish_seen_subcommand_from serve init deinit doctor completion validate tools statusline help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c sah -n "__fish_sah_using_subcommand help; and __fish_seen_subcommand_from serve" -f -a "http" -d 'Start HTTP MCP server'
-complete -c sah -n "__fish_sah_using_subcommand help; and __fish_seen_subcommand_from agent" -f -a "acp" -d 'Start ACP server over stdio'
 complete -c sah -n "__fish_sah_using_subcommand help; and __fish_seen_subcommand_from tools" -f -a "enable" -d 'Enable tools (all if no names given)'
 complete -c sah -n "__fish_sah_using_subcommand help; and __fish_seen_subcommand_from tools" -f -a "disable" -d 'Disable tools (all if no names given)'
 complete -c sah -n "__fish_sah_using_subcommand help; and __fish_seen_subcommand_from statusline" -f -a "config" -d 'Dump the full annotated builtin config to stdout'

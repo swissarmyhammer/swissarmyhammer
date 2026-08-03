@@ -2214,8 +2214,8 @@ impl ClaudeAgent {
 
         // Detached task: title generation must not block the prompt response.
         // The derivation itself is cheap, but running it off the turn's
-        // critical path keeps the emission behaviour identical to llama-agent's
-        // model-backed generation.
+        // critical path keeps the emission behaviour identical to an agent that
+        // asks a model for the title.
         tokio::spawn(async move {
             Self::apply_session_title(&session_manager, &notification_sender, &session_id, title)
                 .await;

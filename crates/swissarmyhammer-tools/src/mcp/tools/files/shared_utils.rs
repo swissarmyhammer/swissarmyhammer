@@ -6,7 +6,7 @@
 //! file tools suite.
 //!
 //! Note: This is an MCP utilities module, not an ACP operation. ACP capability
-//! checking happens at the agent layer (claude-agent, llama-agent), not at the
+//! checking happens at the agent layer (claude-agent), not at the
 //! MCP tool utilities layer.
 //!
 //! ## Security & Validation

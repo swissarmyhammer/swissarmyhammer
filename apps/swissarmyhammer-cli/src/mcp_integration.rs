@@ -28,7 +28,7 @@ use tokio::sync::RwLock;
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
     tool_registry: Arc<RwLock<ToolRegistry>>,
-    /// MCP server handle (must be kept alive for LlamaAgent to work)
+    /// MCP server handle (must be kept alive for connected clients to work)
     mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
     /// In-process server for isolated execution (no HTTP, no env var mutation)
     server: Option<Arc<McpServer>>,

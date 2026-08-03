@@ -1381,7 +1381,7 @@ async fn prefix_is_primed_once_per_run_and_validators_fork_suffix_only() {
     );
 
     // Observability: each fork task logs the warm reuse and token count,
-    // classified as a warm KV fork (the native llama/qwen path).
+    // classified as a warm KV fork (the native-KV path).
     assert!(logs_contain("fleet task prefix reuse"));
     assert!(logs_contain("reuse=\"warm KV fork\""));
     assert!(logs_contain(&format!(
@@ -2159,7 +2159,7 @@ async fn validator_missing_from_loader_is_skipped_not_panicked() {
 // ---- classify_reuse --------------------------------------------------
 
 /// A native KV fork that attached its parent's saved state with a token
-/// count classifies as `WarmKv` carrying that count — the llama/qwen path.
+/// count classifies as `WarmKv` carrying that count — the native-KV path.
 #[test]
 fn test_classify_reuse_kv_fork_is_warm_kv() {
     let fork = Some(ForkAttachment {

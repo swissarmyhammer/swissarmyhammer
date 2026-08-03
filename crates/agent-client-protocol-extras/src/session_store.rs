@@ -346,9 +346,8 @@ fn sessions_cursor(page: &[SessionInfo]) -> Option<String> {
 /// `session/load` additionally replays [`SessionRecord::updates`] to the
 /// client after `restore` returns.
 ///
-/// Per-agent implementations live in later cards — for example, the Claude
-/// backend shells out to `claude --resume`, and the llama backend re-renders
-/// the conversation through its chat template.
+/// Each agent supplies its own implementation — the Claude backend, for
+/// example, shells out to `claude --resume`.
 #[async_trait::async_trait]
 pub trait ResumeStrategy: Send + Sync {
     /// Restore the agent's generation state from `record`.

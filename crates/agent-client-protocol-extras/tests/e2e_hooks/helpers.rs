@@ -446,9 +446,9 @@ pub(crate) async fn fire_post_tool_use_failure<A>(
 /// Build a HookCommandContext with typical test values for AVP validation.
 ///
 /// `avp_schema_tests.rs` is the only consumer; that module is currently
-/// disabled while `avp-common` is unbuildable under ACP 0.11 (it depends
-/// on `claude-agent` and `llama-agent`, which sibling tasks haven't yet
-/// migrated). Once the sibling tasks land, re-enable that module and this
+/// disabled while `avp-common` is unbuildable under ACP 0.11 (it depends on
+/// `claude-agent`, which sibling tasks haven't yet migrated). Once the sibling
+/// tasks land, re-enable that module and this
 /// helper will be reached again — keep it here so the migration path is
 /// a one-line `mod avp_schema_tests;` add in `main.rs`.
 #[allow(dead_code)]

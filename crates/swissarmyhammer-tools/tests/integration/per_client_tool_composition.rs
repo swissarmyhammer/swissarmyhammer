@@ -10,9 +10,8 @@
 //! - A **Claude** client is advertised `Shared` + `Replacement` tools — `shell`
 //!   and `files` are present, but `Agent`-category tools (web/skill/agent) are
 //!   not.
-//! - A **llama** client is advertised `Shared` only — no `Replacement`, no
-//!   `Agent` tools.
-//! - An **unknown** client gets the conservative default: `Shared` only.
+//! - An **unknown** client gets the conservative default: `Shared` only — no
+//!   `Replacement`, no `Agent` tools.
 //!
 //! The reference pattern is `rmcp_stdio_working.rs`: an in-process HTTP MCP
 //! server bound in an isolated tempdir, driven by a real rmcp client.
@@ -112,21 +111,6 @@ async fn claude_client_gets_shared_plus_shell_not_agent_tools() {
     assert_all_present(&names, SHARED_TOOLS, "claude");
     assert_all_present(&names, REPLACEMENT_TOOLS, "claude");
     assert_none_present(&names, AGENT_TOOLS, "claude");
-
-    server.shutdown().await.expect("Failed to shutdown server");
-}
-
-/// A llama client (`"llama_agent_notifying_client"`) is advertised `Shared`
-/// only: no `Replacement` tools (it mounts its own), no `Agent` tools.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn llama_client_gets_shared_only() {
-    let (mut server, _temp) = start_isolated_server().await;
-
-    let names = advertised_tools(&server, "llama_agent_notifying_client").await;
-
-    assert_all_present(&names, SHARED_TOOLS, "llama");
-    assert_none_present(&names, REPLACEMENT_TOOLS, "llama");
-    assert_none_present(&names, AGENT_TOOLS, "llama");
 
     server.shutdown().await.expect("Failed to shutdown server");
 }

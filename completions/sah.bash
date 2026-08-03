@@ -16,9 +16,6 @@ _sah() {
             ",$1")
                 cmd="sah"
                 ;;
-            sah,agent)
-                cmd="sah__subcmd__agent"
-                ;;
             sah,completion)
                 cmd="sah__subcmd__completion"
                 ;;
@@ -46,21 +43,6 @@ _sah() {
             sah,validate)
                 cmd="sah__subcmd__validate"
                 ;;
-            sah__subcmd__agent,acp)
-                cmd="sah__subcmd__agent__subcmd__acp"
-                ;;
-            sah__subcmd__agent,help)
-                cmd="sah__subcmd__agent__subcmd__help"
-                ;;
-            sah__subcmd__agent__subcmd__help,acp)
-                cmd="sah__subcmd__agent__subcmd__help__subcmd__acp"
-                ;;
-            sah__subcmd__agent__subcmd__help,help)
-                cmd="sah__subcmd__agent__subcmd__help__subcmd__help"
-                ;;
-            sah__subcmd__help,agent)
-                cmd="sah__subcmd__help__subcmd__agent"
-                ;;
             sah__subcmd__help,completion)
                 cmd="sah__subcmd__help__subcmd__completion"
                 ;;
@@ -87,9 +69,6 @@ _sah() {
                 ;;
             sah__subcmd__help,validate)
                 cmd="sah__subcmd__help__subcmd__validate"
-                ;;
-            sah__subcmd__help__subcmd__agent,acp)
-                cmd="sah__subcmd__help__subcmd__agent__subcmd__acp"
                 ;;
             sah__subcmd__help__subcmd__serve,http)
                 cmd="sah__subcmd__help__subcmd__serve__subcmd__http"
@@ -152,7 +131,7 @@ _sah() {
 
     case "${cmd}" in
         sah)
-            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor completion validate agent tools statusline help"
+            opts="-v -d -q -h -V --verbose --debug --quiet --format --model --help --version serve init deinit doctor completion validate tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -166,116 +145,6 @@ _sah() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__agent)
-            opts="-h --model --help acp help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__agent__subcmd__acp)
-            opts="-c -h --config --permission-policy --allow-path --block-path --max-file-size --terminal-buffer-size --graceful-shutdown-timeout --model --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --config)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                -c)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --permission-policy)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --allow-path)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --block-path)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --max-file-size)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --terminal-buffer-size)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --graceful-shutdown-timeout)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --model)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__agent__subcmd__help)
-            opts="acp help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__agent__subcmd__help__subcmd__acp)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__agent__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;
@@ -338,36 +207,8 @@ _sah() {
             return 0
             ;;
         sah__subcmd__help)
-            opts="serve init deinit doctor completion validate agent tools statusline help"
+            opts="serve init deinit doctor completion validate tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__agent)
-            opts="acp"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        sah__subcmd__help__subcmd__agent__subcmd__acp)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

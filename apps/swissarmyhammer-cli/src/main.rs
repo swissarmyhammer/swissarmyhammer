@@ -29,8 +29,9 @@ static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 
 /// Perform graceful shutdown before process exit
 ///
-/// This ensures the global LlamaAgent executor is properly shut down before
-/// process termination, preventing Metal device cleanup assertion failures on macOS.
+/// Kept as the single seam for pre-exit teardown. The agent lifecycle in
+/// `swissarmyhammer-agent` now cleans up on its own, so this only latches the
+/// idempotency flag.
 ///
 /// This function safely handles both cases: when called from within a tokio runtime
 /// (e.g., during tests) and when called from outside a runtime (e.g., normal execution).
@@ -434,9 +435,8 @@ async fn main() {
     // Handle dynamic command dispatch
     let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
 
-    // Shutdown global LlamaAgent executor before exit to prevent Metal cleanup crashes
-    // Note: Agent shutdown is now handled automatically by the agent lifecycle
-    // The swissarmyhammer-agent crate manages cleanup internally
+    // Note: agent teardown is handled automatically by the agent lifecycle;
+    // the swissarmyhammer-agent crate manages cleanup internally.
     let _ = SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst);
 
     process::exit(exit_code);
@@ -589,7 +589,6 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
-        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
         Some(("tools", sub_matches)) => handle_tools_command(sub_matches),
         Some(("completion", sub_matches)) => {
@@ -1305,46 +1304,6 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     let validate_tools = matches.get_flag("validate-tools");
 
     commands::validate::handle_command(validate_tools, cli_context).await
-}
-
-async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::AgentSubcommand;
-
-    let subcommand = match matches.subcommand() {
-        Some(("acp", sub_matches)) => {
-            let config = sub_matches.get_one::<std::path::PathBuf>("config").cloned();
-            let permission_policy = sub_matches.get_one::<String>("permission_policy").cloned();
-            let allow_path = sub_matches
-                .get_many::<std::path::PathBuf>("allow_path")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let block_path = sub_matches
-                .get_many::<std::path::PathBuf>("block_path")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let max_file_size = sub_matches.get_one::<u64>("max_file_size").copied();
-            let terminal_buffer_size = sub_matches
-                .get_one::<usize>("terminal_buffer_size")
-                .copied();
-            let graceful_shutdown_timeout = sub_matches
-                .get_one::<u64>("graceful_shutdown_timeout")
-                .copied();
-
-            Some(AgentSubcommand::Acp {
-                config,
-                permission_policy,
-                allow_path,
-                block_path,
-                max_file_size,
-                terminal_buffer_size,
-                graceful_shutdown_timeout,
-            })
-        }
-        None => None,
-        _ => return report_error_and_exit("Unknown agent subcommand"),
-    };
-
-    commands::agent::handle_command(subcommand, context).await
 }
 
 #[cfg(test)]

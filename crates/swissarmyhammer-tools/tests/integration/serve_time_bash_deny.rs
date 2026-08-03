@@ -3,8 +3,8 @@
 //! When a **Claude** client connects to the SAH MCP server, the serve path
 //! writes a deny for the native host tool(s) the served `Replacement` tools
 //! supersede (today `shell` replaces `"Bash"`) into Claude's local settings, so
-//! the served tool truly replaces the native rather than competing with it. A
-//! llama or unknown client triggers no deny.
+//! the served tool truly replaces the native rather than competing with it. An
+//! unknown client triggers no deny.
 //!
 //! These tests drive the real rmcp `initialize` handshake (an in-process HTTP
 //! server + a real rmcp client, mirroring `per_client_tool_composition.rs`)
@@ -93,26 +93,6 @@ async fn claude_client_triggers_bash_deny() {
     assert!(
         !temp.path().join(".claude/settings.json").exists(),
         "Local-scope deny must not write the committed settings.json"
-    );
-
-    server.shutdown().await.expect("Failed to shutdown server");
-}
-
-/// A llama client connecting at serve time triggers no deny — it mounts its own
-/// shell and has no native `Bash` to suppress.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial(mirdan_env)]
-async fn llama_client_triggers_no_deny() {
-    let (mut server, temp) = start_isolated_server().await;
-    let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
-
-    handshake_as(&server, "llama_agent_notifying_client").await;
-
-    let local_settings = temp.path().join(".claude/settings.local.json");
-    assert!(
-        deny_list(&local_settings).is_empty(),
-        "llama connect must not write any deny; found: {:?}",
-        deny_list(&local_settings)
     );
 
     server.shutdown().await.expect("Failed to shutdown server");

@@ -195,7 +195,6 @@ struct ArgSpec {
     short: Option<char>,
     help: &'static str,
     action: ArgSpecAction,
-    value_name: Option<&'static str>,
     default_value: Option<String>,
     value_parser: Option<ArgSpecValueParser>,
     hide: bool,
@@ -206,7 +205,6 @@ struct ArgSpec {
 enum ArgSpecAction {
     Set,
     SetTrue,
-    Append,
 }
 
 /// Value parser type for argument specification
@@ -214,8 +212,6 @@ enum ArgSpecAction {
 enum ArgSpecValueParser {
     Strings(Vec<&'static str>),
     U16,
-    U64,
-    Usize,
 }
 
 impl ArgSpec {
@@ -227,7 +223,6 @@ impl ArgSpec {
             short: None,
             help,
             action: ArgSpecAction::Set,
-            value_name: None,
             default_value: None,
             value_parser: None,
             hide: false,
@@ -249,12 +244,6 @@ impl ArgSpec {
     /// Set the action type
     fn action(mut self, action: ArgSpecAction) -> Self {
         self.action = action;
-        self
-    }
-
-    /// Set the value name
-    fn value_name(mut self, value_name: &'static str) -> Self {
-        self.value_name = Some(value_name);
         self
     }
 
@@ -288,12 +277,7 @@ impl ArgSpec {
         arg = match self.action {
             ArgSpecAction::Set => arg,
             ArgSpecAction::SetTrue => arg.action(ArgAction::SetTrue),
-            ArgSpecAction::Append => arg.action(ArgAction::Append),
         };
-
-        if let Some(value_name) = self.value_name {
-            arg = arg.value_name(value_name);
-        }
 
         if let Some(default_value) = self.default_value {
             arg = arg.default_value(intern_string(default_value));
@@ -305,8 +289,6 @@ impl ArgSpec {
                     arg.value_parser(clap::builder::PossibleValuesParser::new(values))
                 }
                 ArgSpecValueParser::U16 => arg.value_parser(clap::value_parser!(u16)),
-                ArgSpecValueParser::U64 => arg.value_parser(clap::value_parser!(u64)),
-                ArgSpecValueParser::Usize => arg.value_parser(clap::value_parser!(usize)),
             };
         }
 
@@ -315,53 +297,6 @@ impl ArgSpec {
         }
 
         arg
-    }
-}
-
-/// Specification for building a subcommand declaratively
-struct SubcommandSpec {
-    name: &'static str,
-    about: &'static str,
-    long_about: Option<&'static str>,
-    args: Vec<ArgSpec>,
-}
-
-impl SubcommandSpec {
-    /// Create a new subcommand specification
-    fn new(name: &'static str, about: &'static str) -> Self {
-        Self {
-            name,
-            about,
-            long_about: None,
-            args: Vec::new(),
-        }
-    }
-
-    /// Set the long about text
-    fn long_about(mut self, long_about: &'static str) -> Self {
-        self.long_about = Some(long_about);
-        self
-    }
-
-    /// Set the argument specifications
-    fn args(mut self, args: Vec<ArgSpec>) -> Self {
-        self.args = args;
-        self
-    }
-
-    /// Build a clap Command from this specification
-    fn build(self) -> Command {
-        let mut cmd = Command::new(self.name).about(self.about);
-
-        if let Some(long_about) = self.long_about {
-            cmd = cmd.long_about(long_about);
-        }
-
-        for arg_spec in self.args {
-            cmd = cmd.arg(arg_spec.build());
-        }
-
-        cmd
     }
 }
 
@@ -607,24 +542,6 @@ impl CliBuilder {
         }
         cmd
     }
-
-    /// Build subcommands from declarative specifications
-    ///
-    /// Consolidates the pattern of building multiple similar subcommands
-    fn build_subcommands_from_specs(specs: &[SubcommandSpec]) -> Vec<Command> {
-        specs.iter().map(|spec| spec.clone().build()).collect()
-    }
-}
-
-impl Clone for SubcommandSpec {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name,
-            about: self.about,
-            long_about: self.long_about,
-            args: self.args.clone(),
-        }
-    }
 }
 
 // Documentation constants for commands
@@ -632,7 +549,7 @@ const BASE_CLI_LONG_ABOUT: &str = "
 SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into two types:
-- Static commands (serve, init, deinit, doctor, validate, agent)
+- Static commands (serve, init, deinit, doctor, validate, statusline)
 - Tool commands (git, kanban, shell, web, js, questions)
 
 Examples:
@@ -655,7 +572,7 @@ Example:
 ";
 
 const SERVE_HTTP_LONG_ABOUT: &str = "
-Starts an HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+Starts an HTTP MCP server for web clients, debugging, and ACP agent integration.
 The server exposes MCP tools through HTTP endpoints and provides:
 
 - RESTful MCP protocol implementation
@@ -1538,7 +1455,7 @@ impl CliBuilder {
     ///
     /// Commands are organized into semantic groups for maintainability:
     /// - Server commands: serve, init, deinit, doctor, validate
-    /// - Content commands: agent
+    /// - Content commands: statusline, completion
     fn add_static_commands(cli: Command) -> Command {
         let cli = Self::add_server_commands(cli);
         Self::add_content_commands(cli)
@@ -1553,126 +1470,13 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (agent, statusline, completion).
+    /// Add content management commands (statusline, completion).
     fn add_content_commands(cli: Command) -> Command {
-        cli.subcommand(Self::build_agent_command())
-            .subcommand(Self::build_statusline_command())
+        cli.subcommand(Self::build_statusline_command())
             // The completion subcommand (builder + script-rendering dispatch) is
             // shared with the other workspace CLIs via the cli-completions crate;
             // the long_about template is parameterised on the binary name.
             .subcommand(swissarmyhammer_cli_completions::lifecycle::completion_subcommand("sah"))
-    }
-
-    /// Build the agent command with ACP subcommand
-    ///
-    /// Creates the agent command for managing Agent Client Protocol (ACP) server integration.
-    ///
-    /// # Returns
-    ///
-    /// A configured `Command` for agent management
-    pub fn build_agent_command() -> Command {
-        let config_arg = ArgSpec::new("config", "Path to ACP configuration file")
-            .long("config")
-            .short('c')
-            .value_name("FILE");
-
-        let permission_policy_arg = ArgSpec::new(
-            "permission_policy",
-            "Permission policy: always-ask, auto-approve-reads",
-        )
-        .long("permission-policy")
-        .value_name("POLICY");
-
-        let allow_path_arg = ArgSpec::new(
-            "allow_path",
-            "Allowed filesystem paths (can be specified multiple times)",
-        )
-        .long("allow-path")
-        .value_name("PATH")
-        .action(ArgSpecAction::Append);
-
-        let block_path_arg = ArgSpec::new(
-            "block_path",
-            "Blocked filesystem paths (can be specified multiple times)",
-        )
-        .long("block-path")
-        .value_name("PATH")
-        .action(ArgSpecAction::Append);
-
-        let max_file_size_arg = ArgSpec::new(
-            "max_file_size",
-            "Maximum file size for read operations in bytes",
-        )
-        .long("max-file-size")
-        .value_name("BYTES")
-        .value_parser(ArgSpecValueParser::U64);
-
-        let terminal_buffer_size_arg = ArgSpec::new(
-            "terminal_buffer_size",
-            "Terminal output buffer size in bytes",
-        )
-        .long("terminal-buffer-size")
-        .value_name("BYTES")
-        .value_parser(ArgSpecValueParser::Usize);
-
-        let graceful_shutdown_timeout_arg = ArgSpec::new(
-            "graceful_shutdown_timeout",
-            "Graceful shutdown timeout in seconds",
-        )
-        .long("graceful-shutdown-timeout")
-        .value_name("SECONDS")
-        .value_parser(ArgSpecValueParser::U64);
-
-        let subcommand_specs =
-            vec![
-                SubcommandSpec::new("acp", "Start ACP server over stdio for editor integration")
-                    .long_about(
-                        "Start Agent Client Protocol (ACP) server for code editor integration.\n\n\
-             The ACP server enables SwissArmyHammer to work with ACP-compatible code editors\n\
-             like Zed and JetBrains IDEs. The server communicates over stdin/stdout using\n\
-             JSON-RPC 2.0 protocol.\n\n\
-             Features:\n\
-             • Local LLaMA model execution for coding assistance\n\
-             • Session management with conversation history\n\
-             • File system operations (read/write)\n\
-             • Terminal execution\n\
-             • Tool integration via MCP servers\n\
-             • Permission-based security model\n\n\
-             Examples:\n\
-               sah agent acp                        # Start with default config\n\
-               sah agent acp --config acp.yaml      # Start with custom config\n\
-               sah agent acp --permission-policy auto-approve-reads\n\
-               sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh\n\
-               sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152\n\n\
-             Configuration:\n\
-             Options can be specified via:\n\
-             1. Command-line flags (highest priority)\n\
-             2. Configuration file (--config)\n\
-             3. Default values (lowest priority)\n\n\
-             Command-line flags override configuration file settings.\n\n\
-             For editor configuration:\n\
-             • Zed: Add to agents section in settings\n\
-             • JetBrains: Install ACP plugin and configure",
-                    )
-                    .args(vec![
-                        config_arg,
-                        permission_policy_arg,
-                        allow_path_arg,
-                        block_path_arg,
-                        max_file_size_arg,
-                        terminal_buffer_size_arg,
-                        graceful_shutdown_timeout_arg,
-                    ]),
-            ];
-
-        Self::build_command_with_subcommands(
-            CommandConfig {
-                name: "agent",
-                about: "Manage and interact with Agent Client Protocol server",
-                long_about: crate::commands::agent::DESCRIPTION,
-            },
-            Self::build_subcommands_from_specs(&subcommand_specs),
-        )
     }
 
     /// Build the statusline command with config subcommand

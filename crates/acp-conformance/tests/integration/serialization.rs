@@ -456,7 +456,7 @@ mod plan_serialization {
 // Fixture wire-format compatibility
 // =============================================================================
 //
-// The task acceptance criteria call out: "Verify `.fixtures/{llama,claude}/*.json`
+// The task acceptance criteria call out: "Verify `.fixtures/claude/*.json`
 // still deserialize." The schema crate jumped between minor versions and the
 // `RecordedSession` shape was rebuilt for ACP 0.11; this module replays every
 // recorded fixture under `acp-conformance/.fixtures/` through
@@ -510,16 +510,6 @@ mod fixture_replay {
         assert!(
             failures.is_empty(),
             "Some claude fixtures failed to deserialise as RecordedSession: {:#?}",
-            failures
-        );
-    }
-
-    #[test]
-    fn llama_fixtures_round_trip() {
-        let failures = replay_fixtures(local_fixture_dir("llama"));
-        assert!(
-            failures.is_empty(),
-            "Some llama fixtures failed to deserialise as RecordedSession: {:#?}",
             failures
         );
     }

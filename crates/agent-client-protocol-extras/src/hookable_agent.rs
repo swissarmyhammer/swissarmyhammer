@@ -54,13 +54,13 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 /// `_meta` key under which an ACP `ToolCall` / `ToolCallUpdate` carries the
-/// **bare** llama-agent tool name (e.g. `fs_read`, `shell`,
+/// **bare** agent-side tool name (e.g. `fs_read`, `shell`,
 /// `mcp__<server>__<tool>`).
 ///
 /// The human-readable `ToolCall.title` may be decorated as
 /// `"<name>: <description>"` for display, so hook matchers must never test
-/// against it. Producers (see `llama-agent`'s `tool_call_to_acp`) write the
-/// un-decorated name here; [`notification_to_events`] reads it so
+/// against it. A producing agent writes the un-decorated name here when it
+/// converts a tool call to ACP; [`notification_to_events`] reads it so
 /// `PreToolUse` / `PostToolUse` / `PostToolUseFailure` events carry the bare
 /// name into matcher evaluation.
 pub const TOOL_NAME_META_KEY: &str = "tool_name";

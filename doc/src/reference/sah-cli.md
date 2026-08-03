@@ -18,8 +18,6 @@ brew install swissarmyhammer/tap/swissarmyhammer
 * [`swissarmyhammer doctor`↴](#swissarmyhammer-doctor)
 * [`swissarmyhammer completion`↴](#swissarmyhammer-completion)
 * [`swissarmyhammer validate`↴](#swissarmyhammer-validate)
-* [`swissarmyhammer agent`↴](#swissarmyhammer-agent)
-* [`swissarmyhammer agent acp`↴](#swissarmyhammer-agent-acp)
 * [`swissarmyhammer tools`↴](#swissarmyhammer-tools)
 * [`swissarmyhammer tools enable`↴](#swissarmyhammer-tools-enable)
 * [`swissarmyhammer tools disable`↴](#swissarmyhammer-tools-disable)
@@ -44,7 +42,6 @@ Main commands:
   serve         Run as MCP server (default when invoked via stdio)
   init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
-  agent         Manage and interact with the Agent Client Protocol server
   validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
@@ -52,7 +49,6 @@ Example usage:
   swissarmyhammer serve                           # Run as MCP server
   swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer agent acp                       # Start the ACP server
 
 
 **Usage:** `swissarmyhammer [OPTIONS] [COMMAND]`
@@ -65,7 +61,6 @@ Example usage:
 * `doctor` — Diagnose configuration and setup issues
 * `completion` — Generate shell completion scripts
 * `validate` — Validate skills and workflows for syntax and best practices
-* `agent` — Manage and interact with Agent Client Protocol server
 * `tools` — Manage tool enable/disable state
 * `statusline` — Render statusline from Claude Code JSON (stdin) or dump config
 
@@ -108,7 +103,7 @@ Example:
 ## `swissarmyhammer serve http`
 
 
-Start HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+Start HTTP MCP server for web clients, debugging, and ACP agent integration.
 The server exposes MCP tools through HTTP endpoints and provides:
 
 - RESTful MCP protocol implementation
@@ -629,82 +624,6 @@ complete, and ready for reliable operation.
   Possible values: `table`, `json`, `yaml`
 
 * `--validate-tools` — Validate MCP tool schemas for CLI compatibility
-
-
-
-## `swissarmyhammer agent`
-
-
-Manage and interact with Agent Client Protocol (ACP) server.
-
-The agent command provides integration with ACP-compatible code editors,
-enabling local LLaMA models to be used as coding assistants in editors
-like Zed and JetBrains IDEs.
-
-Subcommands:
-  acp     Start ACP server over stdio for editor integration
-
-Examples:
-  sah agent acp                        # Start ACP server (stdio)
-  sah agent acp --config config.yaml  # Start with custom config
-
-
-**Usage:** `swissarmyhammer agent [COMMAND]`
-
-###### **Subcommands:**
-
-* `acp` — Start ACP server over stdio
-
-
-
-## `swissarmyhammer agent acp`
-
-
-Start Agent Client Protocol (ACP) server for code editor integration.
-
-The ACP server enables SwissArmyHammer to work with ACP-compatible code editors
-like Zed and JetBrains IDEs. The server communicates over stdin/stdout using
-JSON-RPC 2.0 protocol.
-
-Features:
-• Local LLaMA model execution for coding assistance
-• Session management with conversation history
-• File system operations (read/write)
-• Terminal execution
-• Tool integration via MCP servers
-• Permission-based security model
-
-Examples:
-  sah agent acp                        # Start with default config
-  sah agent acp --config acp.yaml      # Start with custom config
-  sah agent acp --permission-policy auto-approve-reads
-  sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh
-  sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152
-
-Configuration:
-Options can be specified via:
-1. Command-line flags (highest priority)
-2. Configuration file (--config)
-3. Default values (lowest priority)
-
-Command-line flags override configuration file settings.
-
-For editor configuration:
-• Zed: Add to agents section in settings
-• JetBrains: Install ACP plugin and configure
-
-
-**Usage:** `swissarmyhammer agent acp [OPTIONS]`
-
-###### **Options:**
-
-* `-c`, `--config <CONFIG>` — Path to ACP configuration file (optional)
-* `--permission-policy <POLICY>` — Permission policy: always-ask, auto-approve-reads
-* `--allow-path <PATH>` — Allowed filesystem paths (can be specified multiple times)
-* `--block-path <PATH>` — Blocked filesystem paths (can be specified multiple times)
-* `--max-file-size <BYTES>` — Maximum file size for read operations in bytes
-* `--terminal-buffer-size <BYTES>` — Terminal output buffer size in bytes
-* `--graceful-shutdown-timeout <SECONDS>` — Graceful shutdown timeout in seconds
 
 
 

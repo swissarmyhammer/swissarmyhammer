@@ -4,8 +4,8 @@
 //! ACP has no first-class "fork" method, so agents expose forking through the
 //! protocol's extension mechanism (`ext_method`). This module is the shared
 //! wire contract both ends speak — the validators-pool client on one side and
-//! the agents (llama-agent today, claude-agent next) on the other — so the
-//! request/response shapes live here rather than being duplicated per agent.
+//! the agents on the other — so the request/response shapes live here rather
+//! than being duplicated per agent.
 //!
 //! Three extension methods make up the contract:
 //!
@@ -60,8 +60,8 @@ pub const SESSION_NOT_FOUND: &str = "session_not_found";
 /// The machine-readable error kind carried in a session-scoped ACP error's
 /// `data.error` field.
 ///
-/// Both agents (`llama-agent`, `claude-agent`) build their session errors
-/// through one uniform `{sessionId, error: <kind>}` payload. Passing the kind
+/// Agents build their session errors through one uniform
+/// `{sessionId, error: <kind>}` payload. Passing the kind
 /// as this enum instead of a bare `&str` keeps the set of legal kinds closed
 /// and named at every call site, so a typo or a positional argument swap is a
 /// compile error rather than a silently wrong wire value. Each variant maps to

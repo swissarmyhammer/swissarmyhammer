@@ -5,7 +5,7 @@
 //! this agent does not support, the agent answers with its own latest
 //! supported version and the client decides whether to proceed. There is no
 //! request-body validation beyond this: `initialize` is a light, non-fatal
-//! handshake, and `llama-agent` follows the identical convention.
+//! handshake.
 
 use agent_client_protocol::schema::ProtocolVersion;
 
@@ -23,8 +23,6 @@ impl crate::agent::ClaudeAgent {
     /// Defined as an associated function (no `&self`): negotiation depends only
     /// on the client's requested version and the static
     /// [`Self::SUPPORTED_PROTOCOL_VERSIONS`] list, never on instance state.
-    /// `llama-agent` carries the identical `pub(crate)` associated-function
-    /// signature so the "one convention" claim holds at the signature level.
     ///
     /// # Arguments
     /// * `client_requested_version` - The protocol version requested by the client.

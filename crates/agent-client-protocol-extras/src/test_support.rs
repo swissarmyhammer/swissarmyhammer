@@ -4,8 +4,8 @@
 //! The store resolves its directory under `$XDG_STATE_HOME`, so every test
 //! that persists or lists session records must isolate that directory. This
 //! module hosts the one canonical [`StateDirGuard`] for the whole workspace —
-//! downstream agent crates (claude-agent, llama-agent) re-export it instead
-//! of carrying per-crate copies that would drift.
+//! downstream agent crates (claude-agent) re-export it instead of carrying
+//! per-crate copies that would drift.
 //!
 //! Compiled for this crate's own unit tests, and exported to downstream
 //! crates' tests via the `test-support` cargo feature (the same pattern

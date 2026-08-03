@@ -14,9 +14,9 @@
 //!   take the JSON-RPC code from the named [`agent_client_protocol::ErrorCode`]
 //!   constant while letting the caller supply a descriptive message and
 //!   structured `data`.
-//! * **Consistency across both agents.** `llama-agent` carries an identical
-//!   `acp_error` module, so the same failure class produces the same error
-//!   code and shape from either agent.
+//! * **One shape per failure class.** Every error leaves through these
+//!   helpers, so the same failure class always produces the same code and the
+//!   same `data` shape.
 
 use agent_client_protocol::{Error, ErrorCode};
 use agent_client_protocol_extras::SessionErrorKind;
@@ -74,15 +74,12 @@ pub fn internal_error(message: impl Into<String>) -> Error {
 ///
 /// This is the single canonical builder for that shape — the core
 /// "session not found" error and the session-fork extension errors
-/// ([`SessionErrorKind`]) are all expressed through it, keeping the wire shape
-/// identical to llama-agent's so clients treat both backends the same. Logs the
-/// failure as a warning.
+/// ([`SessionErrorKind`]) are all expressed through it, so the wire shape is
+/// the same for every session-scoped failure. Logs the failure as a warning.
 ///
 /// `kind` is the typed [`SessionErrorKind`] rather than a bare string so the
 /// set of legal `data.error` values stays closed and named — a swap of the
-/// `kind`/`message` arguments no longer compiles. llama-agent's
-/// `session_fork::extension_error` takes the identical typed kind, keeping the
-/// two backends in lockstep.
+/// `kind`/`message` arguments no longer compiles.
 #[must_use]
 pub fn session_error(
     session_id: &str,

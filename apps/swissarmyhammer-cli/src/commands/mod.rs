@@ -5,7 +5,6 @@
 //! - Help text from description.md files
 //! - Following MCP tool patterns for documentation
 
-pub mod agent;
 pub mod doctor;
 pub mod install;
 pub mod profile;

@@ -60,9 +60,8 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
 /// The reported name flows into the server's `initialize` handshake, where it
 /// drives the per-client served-set composition (see
 /// [`crate::mcp::host::Host`]). Tests that assert host-specific `tools/list`
-/// behavior (Claude vs llama vs unknown) use this to connect under the name a
-/// real host would report — e.g. `"claude-code"` or
-/// `"llama_agent_notifying_client"`.
+/// behavior (Claude vs unknown) use this to connect under the name a real host
+/// would report — e.g. `"claude-code"`.
 ///
 /// # Arguments
 /// * `server_url` - The base URL of the MCP HTTP server

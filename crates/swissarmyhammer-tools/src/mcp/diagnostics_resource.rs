@@ -123,9 +123,9 @@ impl DiagnosticsResources {
     ///
     /// This is the watcher-push courtesy channel: when the leader's file watcher
     /// detects a native edit, it tells the host a change was seen. For a foreign
-    /// host it is a plain MCP `notifications/message`; in llama-agent the same
-    /// notification relays through `NotifyingClientHandler::relay_logging_message`
-    /// into an ACP `SessionUpdate`. Fire-and-forget: no peer or a transport error
+    /// host it is a plain MCP `notifications/message`; a host that relays MCP
+    /// logging into ACP turns the same notification into a `SessionUpdate`.
+    /// Fire-and-forget: no peer or a transport error
     /// is logged and swallowed so the watcher's re-diagnose path is never blocked.
     pub async fn notify_host_log(&self, message: String) {
         let peer = self.peer.read().await.clone();

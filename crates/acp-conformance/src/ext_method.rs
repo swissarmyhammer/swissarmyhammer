@@ -22,7 +22,7 @@
 //! `fs/read_text_file`).
 //!
 //! Conformance scenario callers pass the canonical bare method (matching
-//! how `claude-agent` and `llama-agent` switch on it inside their typed
+//! how `claude-agent` switches on it inside its typed
 //! `dispatch_*_request` handlers). This helper prepends `_` when
 //! constructing the outgoing [`ExtRequest`] so the SDK's parse layer routes
 //! the request correctly. Without the prefix the SDK rejects the request
@@ -44,8 +44,7 @@ use std::sync::Arc;
 /// [`agent_client_protocol::ClientRequest::parse_message`] routes it as an
 /// extension method on the receiver side. The receiver strips the `_` back
 /// off so its typed handler sees the canonical bare name — matching the
-/// production switch tables in `claude-agent::Server::dispatch_ext_request`
-/// and `llama-agent::AcpServer::dispatch_ext_request`.
+/// production switch table in `claude-agent::Server::dispatch_ext_request`.
 ///
 /// Returns the wire-shaped [`ExtResponse`] so existing conformance scenario
 /// code can keep parsing the response as `Arc<RawValue>` JSON.

@@ -1187,40 +1187,48 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
     assert_eq!(parsed["counts"]["findings"], json!(0));
 }
 
-/// `crates/llama-agent/src/acp/server.rs` — the concrete file this task
-/// (^3rnvage) named: too large for the OLD 256 KiB default, but the raised
-/// 384 KiB default (^k12rn64) now covers it. Reads its REAL bytes from this
-/// workspace so the size assertions are genuine, then drives an actual
-/// `review file` run over them through the registered tool — proof this file
-/// is reviewable through a normal route (the default budget), not a claim.
+/// A source file larger than the OLD 256 KiB default batch size but inside the
+/// raised 384 KiB default (^k12rn64) must review through a normal route — the
+/// default budget, no explicit `batch_size`. Regression for ^3rnvage, where an
+/// oversized real file was skipped instead of reviewed.
+///
+/// The oversized file is generated rather than read off disk: no file in this
+/// workspace exceeds the old default any more, so a real fixture cannot state
+/// the size premise. The size is what the batcher acts on, and the run below
+/// drives the actual registered `review` tool over a real git repo.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(cwd)]
-async fn review_file_reviews_the_real_llama_agent_acp_server_file_under_the_default_budget() {
+async fn review_file_reviews_an_oversized_source_file_under_the_default_budget() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
-    let real_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../llama-agent/src/acp/server.rs");
-    let real_content = std::fs::read_to_string(&real_path).unwrap_or_else(|e| {
-        panic!("crates/llama-agent/src/acp/server.rs must exist in this workspace: {e}")
-    });
     const OLD_DEFAULT_BATCH_SIZE: usize = 262_144;
-    const CURRENT_DEFAULT_BATCH_SIZE: usize = 393_216;
+    let current_default = swissarmyhammer_validators::review::fleet::DEFAULT_BATCH_SIZE;
+    assert!(
+        OLD_DEFAULT_BATCH_SIZE < current_default,
+        "this test only means something while the default budget is above the \
+         old 256 KiB one it replaced (current: {current_default})"
+    );
+
+    // One `pub fn` per line, repeated until the file sits between the two
+    // defaults. Real Rust so the validator fan-out treats it as a `*.rs` file.
+    let line = "pub fn generated_filler_function_for_the_oversized_review_fixture() {}\n";
+    let target_len = OLD_DEFAULT_BATCH_SIZE + (current_default - OLD_DEFAULT_BATCH_SIZE) / 2;
+    let real_content = line.repeat(target_len / line.len() + 1);
     assert!(
         real_content.len() > OLD_DEFAULT_BATCH_SIZE,
-        "fixture assumption stale: this file no longer exceeds the old 256 KiB \
-         default ({} bytes) — the ^3rnvage regression this test guards no longer applies",
+        "the fixture must exceed the old 256 KiB default ({} bytes)",
         real_content.len()
     );
     assert!(
-        real_content.len() < CURRENT_DEFAULT_BATCH_SIZE,
-        "fixture assumption stale: this file no longer fits the current 384 KiB \
-         default ({} bytes) — pass `batch_size` explicitly or update this test",
+        real_content.len() < current_default,
+        "the fixture must fit the current default ({} bytes)",
         real_content.len()
     );
 
     let repo = TestRepo::new();
     repo.write("src/lib.rs", "pub fn placeholder() {}\n");
     repo.commit("initial");
-    // Untracked/added: the whole real file becomes this run's `review file` scope.
+    // Untracked/added: the whole oversized file becomes this run's `review file` scope.
     repo.write("src/server.rs", &real_content);
     write_ruleset(&repo.path().join(".validators"), "rust-rules", "*.rs", &[]);
     on_disk_index_conn(repo.path()); // creates the schema; no rows needed here.
@@ -1244,9 +1252,10 @@ async fn review_file_reviews_the_real_llama_agent_acp_server_file_under_the_defa
     args.insert("op".to_string(), json!("review file"));
     args.insert("path".to_string(), json!("src/server.rs"));
     args.insert("backend".to_string(), json!("local"));
-    let result = tool.execute(args, &context).await.expect(
-        "the real acp/server.rs file must be reviewable under the current default batch_size",
-    );
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("an oversized source file must be reviewable under the current default batch_size");
     let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
 
     assert_eq!(

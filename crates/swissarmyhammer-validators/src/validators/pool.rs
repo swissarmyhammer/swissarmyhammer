@@ -9,7 +9,7 @@
 //! ## Worker count is the only concurrency control
 //!
 //! Worker count is legitimate and physical, not arbitrary:
-//! - **local Llama backend → 1 worker** (one in-process model/GPU).
+//! - **a local in-process model backend → 1 worker** (one model/GPU).
 //! - **remote/Claude-API backend → N workers**, default from config. The
 //!   [`PoolConfig::aimd`] flag is reserved for adapting that count to discover
 //!   the API ceiling, but the adaptive logic is not yet wired up (see the field
@@ -232,7 +232,7 @@ pub struct SessionTurn {
     pub fork: Option<ForkAttachment>,
     /// Per-turn Anthropic prompt-cache usage, parsed from the prompt response's
     /// `_meta` (`cache_usage` key) when the backend reported it. `None` for
-    /// backends that report no cache metrics (e.g. the native KV/llama path,
+    /// backends that report no cache metrics (e.g. the native KV path,
     /// which signals reuse via [`ForkAttachment::prefix_tokens`] instead). On
     /// the claude backend this is the only signal of warm (cache read) vs cold
     /// (cache write) prefix reuse, since the fork attaches no token counts.
@@ -526,8 +526,8 @@ impl Drop for AgentPool {
 ///
 /// The normal path calls [`SessionPinGuard::release`] to unpin inline and
 /// observe the result; `Drop` is the cancellation backstop. `Drop` is
-/// synchronous and the unpin is an async request, so — mirroring llama-agent's
-/// `ActiveRequestGuard` — the drop path spawns the unpin onto the runtime.
+/// synchronous and the unpin is an async request, so the drop path spawns the
+/// unpin onto the runtime.
 pub struct SessionPinGuard {
     /// `Some` until the pin is released (explicitly or by `Drop`).
     agent: Option<ConnectionTo<Agent>>,
@@ -1407,7 +1407,7 @@ mod tests {
 
     /// Holds every `prompt` behind a shared gate (a [`tokio::sync::Semaphore`])
     /// so the test controls exactly how many prompts may decode at once — the
-    /// shape of the single-GPU llama backend, where a `prompt` request is sent
+    /// shape of a single-GPU in-process backend, where a `prompt` request is sent
     /// to the agent but blocks behind the GpuLock until earlier decodes finish.
     /// A gated prompt streams nothing while it waits, then emits one
     /// `agent_message_chunk` and completes once it acquires a permit.

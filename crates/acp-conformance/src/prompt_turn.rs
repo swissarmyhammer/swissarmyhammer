@@ -4,11 +4,6 @@
 //!
 //! ## Test Model Requirements
 //!
-//! **llama-agent tests** require the Qwen3-0.6B model to be downloaded from HuggingFace:
-//! - Repo: `unsloth/Qwen3-0.6B-GGUF`
-//! - File: `Qwen3-0.6B-IQ4_NL.gguf`
-//! - The model will auto-download on first test run (~600MB)
-//!
 //! **claude-agent tests** use playback fixtures and don't require model downloads.
 //!
 //! ## Requirements Tested

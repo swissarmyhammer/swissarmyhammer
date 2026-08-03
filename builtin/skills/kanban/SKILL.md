@@ -16,7 +16,7 @@ Execute the tasks from the board.
 
 ## Use Kanban for All Task Tracking
 
-The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any other task tool** — only `kanban`. This is the single source of truth across Claude Code and llama-agent sessions.
+The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any other task tool** — only `kanban`. This is the single source of truth across every agent session.
 
 **Subtasks are GFM checklists** (`- [ ]` / `- [x]`) inside the task's `description`. There is no separate subtask API — include them when creating the task, or `update task` to modify the description.
 

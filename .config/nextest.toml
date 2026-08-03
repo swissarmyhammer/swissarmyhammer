@@ -120,22 +120,6 @@ test-group = "llama-embedding-serial"
 # Warn every 30s, kill after 10 periods (5 minutes)
 slow-timeout = { period = "30s", terminate-after = 10 }
 
-# llama-agent shares the same global-backend constraint as llama-embedding:
-# only one ModelManager::new can initialize the llama.cpp backend per process.
-# Running these tests serially prevents "Backend already initialized" races and
-# lets each test assert real behavior instead of returning early on a race.
-[[profile.default.overrides]]
-filter = "package(llama-agent)"
-test-group = "llama-embedding-serial"
-slow-timeout = { period = "30s", terminate-after = 10 }
-# Bounded retry for the same reason as the kanban / swissarmyhammer-agent
-# real-model overrides above: llama-agent's real-model integration tests
-# (e.g. acp_agentic_loop) drive the nondeterministic qwen-0.6B chat model
-# through the live ACP loop; under CI GPU contention a tool-calling turn can slow
-# past the test's own hang guard (`must not hang: Elapsed`) even while the model
-# answers. Re-run lands green when contention eases; it does not mask a defect.
-retries = 2
-
 # Serialise the swissarmyhammer-entity tests that start a live FSEvents watcher
 # (see the `fsevents-watcher` group above for the why). Only these four tests
 # open a real `EntityWatcher`; the rest of the watcher module exercises the

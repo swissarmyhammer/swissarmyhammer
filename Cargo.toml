@@ -19,7 +19,6 @@ members = [
     "crates/swissarmyhammer-mcp-proxy",
     "crates/swissarmyhammer-js",
     "crates/markdowndown",
-    "crates/llama-agent",
     "crates/llama-common",
     "crates/llama-embedding",
     "crates/model-loader",
@@ -230,7 +229,7 @@ hyper = "1.9"
 # Web fetch dependencies
 markdowndown = { path = "crates/markdowndown" }
 
-# Llama-agent dependencies
+# llama.cpp bindings and the local embedding stack built on them
 #
 # Tracks the fork's `main` (no `rev` pin) — Cargo.lock records the exact
 # resolved commit, so builds are still reproducible while routine fork fixes
@@ -245,7 +244,6 @@ llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", feature
 # build. Needed to name the `llama_flash_attn_type` enum constants when setting
 # the flash-attention policy on the context.
 llama-cpp-sys-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs" }
-llama-agent = { path = "crates/llama-agent" }
 llama-common = { path = "crates/llama-common" }
 llama-embedding = { path = "crates/llama-embedding" }
 model-loader = { path = "crates/model-loader" }

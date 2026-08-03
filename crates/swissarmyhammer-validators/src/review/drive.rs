@@ -499,7 +499,7 @@ mod tests {
     // ---- scripted ACP agent (shared harness) ------------------------------
     //
     // The scripted ACP agent lives in `crate::review::test_support`. Drive
-    // tests run it shaped like a real backend (Claude/Llama): the agent
+    // tests run it shaped like a real backend: the agent
     // publishes every `session/update` onto its backend broadcast channel
     // (`notify_tx`), and the driver consumes a `subscribe()` of that channel as
     // `notification_rx` — the same authoritative stream production collects

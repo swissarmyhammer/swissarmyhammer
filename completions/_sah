@@ -137,64 +137,6 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(agent)
-_arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__subcmd__agent_commands" \
-"*::: :->agent" \
-&& ret=0
-
-    case $state in
-    (agent)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sah-agent-command-$line[1]:"
-        case $line[1] in
-            (acp)
-_arguments "${_arguments_options[@]}" : \
-'-c+[Path to ACP configuration file (optional)]:CONFIG:_files' \
-'--config=[Path to ACP configuration file (optional)]:CONFIG:_files' \
-'--permission-policy=[Permission policy\: always-ask, auto-approve-reads]:POLICY:_default' \
-'*--allow-path=[Allowed filesystem paths (can be specified multiple times)]:PATH:_files' \
-'*--block-path=[Blocked filesystem paths (can be specified multiple times)]:PATH:_files' \
-'--max-file-size=[Maximum file size for read operations in bytes]:BYTES:_default' \
-'--terminal-buffer-size=[Terminal output buffer size in bytes]:BYTES:_default' \
-'--graceful-shutdown-timeout=[Graceful shutdown timeout in seconds]:SECONDS:_default' \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_sah__subcmd__agent__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sah-agent-help-command-$line[1]:"
-        case $line[1] in
-            (acp)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
 (tools)
 _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
@@ -361,26 +303,6 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(agent)
-_arguments "${_arguments_options[@]}" : \
-":: :_sah__subcmd__help__subcmd__agent_commands" \
-"*::: :->agent" \
-&& ret=0
-
-    case $state in
-    (agent)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sah-help-agent-command-$line[1]:"
-        case $line[1] in
-            (acp)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
 (tools)
 _arguments "${_arguments_options[@]}" : \
 ":: :_sah__subcmd__help__subcmd__tools_commands" \
@@ -447,43 +369,11 @@ _sah_commands() {
 'doctor:Diagnose configuration and setup issues' \
 'completion:Generate shell completion scripts' \
 'validate:Validate skills and workflows for syntax and best practices' \
-'agent:Manage and interact with Agent Client Protocol server' \
 'tools:Manage tool enable/disable state' \
 'statusline:Render statusline from Claude Code JSON (stdin) or dump config' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__agent_commands] )) ||
-_sah__subcmd__agent_commands() {
-    local commands; commands=(
-'acp:Start ACP server over stdio' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'sah agent commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__agent__subcmd__acp_commands] )) ||
-_sah__subcmd__agent__subcmd__acp_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah agent acp commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__agent__subcmd__help_commands] )) ||
-_sah__subcmd__agent__subcmd__help_commands() {
-    local commands; commands=(
-'acp:Start ACP server over stdio' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'sah agent help commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__agent__subcmd__help__subcmd__acp_commands] )) ||
-_sah__subcmd__agent__subcmd__help__subcmd__acp_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah agent help acp commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__agent__subcmd__help__subcmd__help_commands] )) ||
-_sah__subcmd__agent__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah agent help help commands' commands "$@"
 }
 (( $+functions[_sah__subcmd__completion_commands] )) ||
 _sah__subcmd__completion_commands() {
@@ -509,24 +399,11 @@ _sah__subcmd__help_commands() {
 'doctor:Diagnose configuration and setup issues' \
 'completion:Generate shell completion scripts' \
 'validate:Validate skills and workflows for syntax and best practices' \
-'agent:Manage and interact with Agent Client Protocol server' \
 'tools:Manage tool enable/disable state' \
 'statusline:Render statusline from Claude Code JSON (stdin) or dump config' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah help commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__help__subcmd__agent_commands] )) ||
-_sah__subcmd__help__subcmd__agent_commands() {
-    local commands; commands=(
-'acp:Start ACP server over stdio' \
-    )
-    _describe -t commands 'sah help agent commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__help__subcmd__agent__subcmd__acp_commands] )) ||
-_sah__subcmd__help__subcmd__agent__subcmd__acp_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah help agent acp commands' commands "$@"
 }
 (( $+functions[_sah__subcmd__help__subcmd__completion_commands] )) ||
 _sah__subcmd__help__subcmd__completion_commands() {

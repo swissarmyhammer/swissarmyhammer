@@ -48,9 +48,8 @@ use crate::language::is_diagnosable;
 ///
 /// The diagnostics crate stays free of any MCP/rmcp dependency by taking this
 /// abstract callback; the `swissarmyhammer-tools` server wires it to a plain MCP
-/// `notifications/message` (`peer.notify_logging_message`), which in llama-agent
-/// relays through the existing
-/// `NotifyingClientHandler::relay_logging_message` into an ACP `SessionUpdate`.
+/// `notifications/message` (`peer.notify_logging_message`). A host that relays
+/// MCP logging into ACP turns the same notification into a `SessionUpdate`.
 pub type WatcherNotifier = Arc<dyn Fn(&Path) + Send + Sync>;
 
 /// One language server's session plus the file extensions it handles.

@@ -100,7 +100,7 @@ pub struct McpServer {
     ///
     /// `true` for the full server: each connection's `tools/list` is filtered by
     /// the client's [`Host`](super::host::Host) identity and each tool's
-    /// `category()` (Claude → `Shared` + `Replacement`; llama/unknown → `Shared`
+    /// `category()` (Claude → `Shared` + `Replacement`; unknown → `Shared`
     /// only). `false` for the registries that are pre-scoped and must be served
     /// verbatim:
     /// - the validator server, whose minimal registry is already exactly the
@@ -1072,9 +1072,9 @@ impl McpServer {
     /// libraries, etc.) but has a separate `ToolRegistry` containing only the
     /// tools a base agent needs to be useful: the `Agent`-category tools
     /// (the unified `files` tool — read/write/edit/glob/grep — web, skill,
-    /// subagent) plus the shell `Replacement` tool. This is the set
-    /// `llama-agent` mounts in-process as its own built-ins, so the agent is
-    /// fully tooled even when handed zero external MCP servers.
+    /// subagent) plus the shell `Replacement` tool. This is the set an ACP agent
+    /// with no native tools mounts in-process as its own built-ins, so the agent
+    /// is fully tooled even when handed zero external MCP servers.
     ///
     /// Files are served through the single unified `files` tool (CLI-style `op`
     /// dispatch), which keeps `write`/`edit` for the agent. The by-name split
@@ -1085,8 +1085,9 @@ impl McpServer {
     /// The full server filters its advertised tools per connecting client via
     /// [`Host::serves`](super::host::Host::serves), which returns `false` for
     /// every `Agent`-category tool for *every* host (off-the-shelf agents
-    /// provide those natively; llama mounts its own). Serving this instance with
-    /// per-client composition would therefore advertise **zero** tools to llama.
+    /// provide those natively; an agent without them mounts this set itself).
+    /// Serving this instance with per-client composition would therefore
+    /// advertise **zero** tools to such an agent.
     /// This registry is already exactly the set to serve, so it is served
     /// verbatim — `compose_per_client` is `false`, just like the validator
     /// server.
@@ -1100,9 +1101,9 @@ impl McpServer {
         // glob/grep for the agent.
         register_file_tools(&mut agent_registry);
         register_web_tools(&mut agent_registry);
-        // Shell is the `Replacement{native:"Bash"}` tool; llama always gets its
-        // shell from this mount (and only here), satisfying the "shell appears
-        // exactly once" invariant.
+        // Shell is the `Replacement{native:"Bash"}` tool; an agent mounting this
+        // set gets its shell from here (and only here), satisfying the "shell
+        // appears exactly once" invariant.
         register_shell_tools(&mut agent_registry);
         register_agent_tools(
             &mut agent_registry,
@@ -1143,8 +1144,8 @@ impl McpServer {
             // This registry IS the set to serve; serve it verbatim rather than
             // re-filtering by host/category (which strips all `Agent` tools).
             compose_per_client: false,
-            // Non-primary instance (the llama mount): never fires the serve-time
-            // deny (gated on `compose_per_client`, and llama is not Claude).
+            // Non-primary instance (the in-process agent-tools mount): never
+            // fires the serve-time deny (gated on `compose_per_client`).
             bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -1163,9 +1164,9 @@ impl McpServer {
     ///
     /// Gates:
     /// - **Primary serve only.** Skips when `compose_per_client` is `false` (the
-    ///   validator and llama-mount instances), which never advertise the
+    ///   validator and agent-tools-mount instances), which never advertise the
     ///   `Replacement` tools and so must not write denies.
-    /// - **Claude only.** llama and unknown clients keep their native tools;
+    /// - **Claude only.** Unknown clients keep their native tools;
     ///   re-allowing is left to `deinit`, not self-corrected here.
     /// - **Once.** Latches on first Claude connection so repeated `initialize`s
     ///   don't rewrite settings; the underlying deny is idempotent regardless.
@@ -1180,7 +1181,7 @@ impl McpServer {
         use swissarmyhammer_common::reporter::TracingReporter;
 
         // Only the primary per-client serve instance suppresses natives; the
-        // validator and llama-mount instances serve pre-scoped registries and
+        // validator and agent-tools-mount instances serve pre-scoped registries and
         // must never write agent settings.
         if !self.compose_per_client {
             return;
@@ -2298,8 +2299,8 @@ impl ServerHandler for McpServer {
         // Compose the advertised set per connecting client. The full server
         // filters by the client's host identity (from the `initialize`
         // handshake's client `Implementation`) and each tool's `category()`:
-        // Claude gets `Shared` + `Replacement`; llama and unknown clients get
-        // `Shared` only. The validator server (`compose_per_client == false`)
+        // Claude gets `Shared` + `Replacement`; unknown clients get `Shared`
+        // only. The validator server (`compose_per_client == false`)
         // serves its already-scoped registry verbatim.
         let host = connecting_host_from_context(&context);
         let tools = if self.compose_per_client {

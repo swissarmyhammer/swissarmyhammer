@@ -1324,8 +1324,8 @@ impl ToolRegistry {
     /// the `host` is served per the `(Host, ToolCategory)` policy in
     /// [`Host::serves`](crate::mcp::host::Host::serves). This is how the serve
     /// boundary advertises a per-client tool surface (e.g. Claude gets the
-    /// `Shared` and `Replacement` tools; llama and unknown clients get `Shared`
-    /// only) without maintaining a separate registry per host.
+    /// `Shared` and `Replacement` tools; unknown clients get `Shared` only)
+    /// without maintaining a separate registry per host.
     pub fn list_tools_for_host(&self, host: crate::mcp::host::Host) -> Vec<Tool> {
         self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
     }
@@ -3195,13 +3195,12 @@ mod tests {
 
     /// The unified `files` tool is a `Replacement` for the native edit surface,
     /// so the primary per-client serve advertises it to Claude (which gets
-    /// `Shared` + `Replacement`) but not to llama or unknown clients (which get
-    /// `Shared` only and mount their own file tools in-process). Regression for
-    /// the bug where `files` was `Agent`-category and therefore stripped from
-    /// every host — including Claude — leaving Claude with its native edit
-    /// surface denied and no served replacement.
+    /// `Shared` + `Replacement`) but not to unknown clients (which get `Shared`
+    /// only). Regression for the bug where `files` was `Agent`-category and
+    /// therefore stripped from every host — including Claude — leaving Claude
+    /// with its native edit surface denied and no served replacement.
     #[test]
-    fn files_replacement_served_to_claude_not_llama() {
+    fn files_replacement_served_to_claude_not_unknown() {
         use crate::mcp::host::Host;
 
         let mut registry = ToolRegistry::new();
@@ -3218,10 +3217,6 @@ mod tests {
         assert!(
             names_for(Host::Claude).iter().any(|n| n == "files"),
             "Claude must be served the `files` replacement"
-        );
-        assert!(
-            !names_for(Host::Llama).iter().any(|n| n == "files"),
-            "llama must not be served `files` via the primary serve"
         );
         assert!(
             !names_for(Host::Other).iter().any(|n| n == "files"),

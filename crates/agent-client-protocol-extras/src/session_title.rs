@@ -32,11 +32,11 @@
 //!
 //! - **claude-agent** derives the title from the first user prompt (the claude
 //!   CLI exposes no session summary to borrow).
-//! - **llama-agent** asks its own model for a short title and falls back to the
-//!   first-user-message heuristic when a model call is unavailable.
+//! - An agent that can ask its own model for a short title uses that, and falls
+//!   back to the first-user-message heuristic when a model call is unavailable.
 //!
-//! Both fall through to [`title_from_first_user_message`], which is the single
-//! shared implementation of the heuristic so the fallback is identical.
+//! Both paths fall through to [`title_from_first_user_message`], which is the
+//! single shared implementation of the heuristic so the fallback is identical.
 
 /// Maximum length, in characters, of a session title.
 ///
@@ -48,7 +48,7 @@ pub const SESSION_TITLE_MAX_CHARS: usize = 80;
 ///
 /// This is the shared heuristic fallback: it collapses internal whitespace,
 /// trims, and truncates to [`SESSION_TITLE_MAX_CHARS`] characters. It is used
-/// directly by claude-agent and as the fallback by llama-agent when a model
+/// directly by claude-agent, and as the fallback by any agent whose model
 /// title call is unavailable.
 ///
 /// Returns `None` when `text` has no non-whitespace content — a session with
