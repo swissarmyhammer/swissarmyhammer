@@ -149,11 +149,11 @@ impl WorkList {
     /// Assemble a work-list from the review-level intent and the per-validator
     /// work entries.
     pub fn new(
-        change_purpose: String,
+        change_purpose: impl Into<String>,
         validators: impl IntoIterator<Item = ValidatorWork>,
     ) -> Self {
         Self {
-            change_purpose,
+            change_purpose: change_purpose.into(),
             validators: validators.into_iter().collect(),
         }
     }
@@ -297,24 +297,27 @@ impl ValidatorWork {
     /// The two name lists are separate types ([`RuleNames`], [`ProbeNames`]) so
     /// no call site can transpose them.
     pub fn new(
-        validator_name: String,
+        validator_name: impl Into<String>,
         rules: RuleNames,
         probes: ProbeNames,
-        files: Vec<FileWork>,
+        files: impl IntoIterator<Item = FileWork>,
     ) -> Self {
         Self {
-            validator_name,
+            validator_name: validator_name.into(),
             rules,
             probes,
-            files,
+            files: files.into_iter().collect(),
             shared_probe_results: Vec::new(),
         }
     }
 
     /// Attach the validator's batch-scoped shared probe evidence, computed
     /// once for the whole validator rather than once per file it matched.
-    pub fn with_shared_probe_results(mut self, shared_probe_results: Vec<ProbeResult>) -> Self {
-        self.shared_probe_results = shared_probe_results;
+    pub fn with_shared_probe_results(
+        mut self,
+        shared_probe_results: impl IntoIterator<Item = ProbeResult>,
+    ) -> Self {
+        self.shared_probe_results = shared_probe_results.into_iter().collect();
         self
     }
 
@@ -429,17 +432,17 @@ impl FileWork {
     /// annotations attached (use [`with_line_annotations`](Self::with_line_annotations)
     /// when they matter — the production `scope_review` path always does).
     pub fn new(
-        path: String,
+        path: impl Into<String>,
         semantic_diff: impl IntoIterator<Item = SemanticChange>,
         changed_symbols: impl IntoIterator<Item = String>,
-        source_slice: String,
+        source_slice: impl Into<String>,
         probe_results: impl IntoIterator<Item = ProbeResult>,
     ) -> Self {
         Self {
-            path,
+            path: path.into(),
             semantic_diff: semantic_diff.into_iter().collect(),
             changed_symbols: changed_symbols.into_iter().collect(),
-            source_slice,
+            source_slice: source_slice.into(),
             probe_results: probe_results.into_iter().collect(),
             line_annotations: Vec::new(),
         }
