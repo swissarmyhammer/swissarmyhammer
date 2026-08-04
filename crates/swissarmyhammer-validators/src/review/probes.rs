@@ -998,11 +998,14 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
     #[tokio::test]
     async fn complexity_reports_not_computed_for_an_unmapped_language() {
         // Never a silent zero: an unmapped language must still produce a row, so
-        // the guard cannot read "no mapping" as "no complexity". Go carries no
-        // `ComplexitySpec` row (its test-marking convention is name/parameter
-        // based, not attribute based, so it cannot yet share the generic
-        // attribute-driven `is_test` mechanism the mapped languages use).
-        let result = complexity_probe("src/app.go", "func f() {}\n").await;
+        // the guard cannot read "no mapping" as "no complexity". Bash carries no
+        // `ComplexitySpec` row: it has no attribute/annotation grammar construct
+        // at all, and its one real-world test convention — bats-core's
+        // `# @test "description"` comment marker — is unstructured free text
+        // inside a generic `comment` node, indistinguishable by kind from an
+        // ordinary doc comment or license header, so treating any comment as a
+        // potential test marker would be unsafe and overbroad.
+        let result = complexity_probe("src/app.sh", "f() {\n  echo 1\n}\n").await;
 
         assert_eq!(result.rows.len(), 1, "not-computed is itself a row");
         assert_eq!(
