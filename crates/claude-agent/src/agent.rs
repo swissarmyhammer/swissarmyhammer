@@ -1447,6 +1447,33 @@ impl ClaudeAgent {
             .map_err(|_e| agent_client_protocol::Error::internal_error())
     }
 
+    /// Persist one caller-supplied `value` into exactly one
+    /// [`Session`](crate::session::Session) field, via
+    /// [`Self::persist_session_field`].
+    ///
+    /// Every `store_*_in_session` method (see
+    /// [`Self::store_extra_args_in_session`],
+    /// [`Self::store_skip_init_trigger_in_session`]) has the identical shape:
+    /// read one value out of `self.config.claude`, then write it into exactly
+    /// one `Session` field. This helper is that shape, generic over the
+    /// value's type and the field it lands in — `persist_session_field`
+    /// still owns the actual `update_session` call and error mapping, this
+    /// layer only removes the need for a new one-line wrapper each time a
+    /// config-driven spawn field is added. A third such field reuses this
+    /// helper directly: `self.store_config_field_in_session(session_id,
+    /// value, |session, value| session.new_field = value)`.
+    fn store_config_field_in_session<T, F>(
+        &self,
+        session_id: &crate::session::SessionId,
+        value: T,
+        setter: F,
+    ) -> Result<(), agent_client_protocol::Error>
+    where
+        F: FnOnce(&mut crate::session::Session, T),
+    {
+        self.persist_session_field(session_id, |session| setter(session, value))
+    }
+
     /// Store MCP server configs in session.
     pub(crate) fn store_mcp_servers_in_session(
         &self,
@@ -1518,8 +1545,8 @@ impl ClaudeAgent {
         session_id: &crate::session::SessionId,
     ) -> Result<(), agent_client_protocol::Error> {
         let extra_args = self.config.claude.extra_args.clone();
-        self.persist_session_field(session_id, |session| {
-            session.extra_args = extra_args;
+        self.store_config_field_in_session(session_id, extra_args, |session, value| {
+            session.extra_args = value;
         })
     }
 
@@ -1535,13 +1562,24 @@ impl ClaudeAgent {
     /// fork cannot silently restore the "hi" init trigger for a review
     /// session's fork — see `crate::session_fork`'s "Prefix caching" module
     /// doc.
+    ///
+    /// Nothing in this file reads `Session::skip_init_trigger` back — the
+    /// only reader is `crate::session_fork::build_fork_spawn_config`, via
+    /// `parent.skip_init_trigger`. The round trip (write here, read there) is
+    /// proven by
+    /// `session_fork::tests::test_fork_spawn_config_carries_parent_skip_init_trigger_not_live_config`:
+    /// it sets `skip_init_trigger` on a session through the same
+    /// `SessionManager::update_session` primitive this function delegates to
+    /// (via [`Self::persist_session_field`]), then calls `get_session` and
+    /// confirms the forked spawn config carries the persisted value rather
+    /// than the live config's. No duplicate test is added in this file.
     pub(crate) fn store_skip_init_trigger_in_session(
         &self,
         session_id: &crate::session::SessionId,
     ) -> Result<(), agent_client_protocol::Error> {
         let skip_init_trigger = self.config.claude.skip_init_trigger;
-        self.persist_session_field(session_id, |session| {
-            session.skip_init_trigger = skip_init_trigger;
+        self.store_config_field_in_session(session_id, skip_init_trigger, |session, value| {
+            session.skip_init_trigger = value;
         })
     }
 
