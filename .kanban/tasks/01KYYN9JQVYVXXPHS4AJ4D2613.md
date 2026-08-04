@@ -61,8 +61,29 @@ comments:
 
     This suggests a cheap, high-value guard independent of the root cause: **when the reviewed delta contains no executable lines, no finding about code structure can be in scope.** Asserting that alone would have caught this occurrence outright.
   timestamp: 2026-08-01T14:40:00.890638+00:00
-position_column: todo
-position_ordinal: d880
+- actor: claude-code
+  id: 01kz561ytbv9p04jfwfd01ggys
+  text: |-
+    ### implement — changed
+
+    **Empirical finding: the original symptom (line-number drift) is FIXED by ^k12rn64.** Did not assume from the diff — re-ran `review sha 42e32c3a3~1..42e32c3a3` (the exact commit this task's own evidence table is built from). All 4 confirmed findings this run cite exact-correct lines, checked by hand against the real file: `io.rs:493` = `"unnamed".to_string()`, `io.rs:1156` = `for i in 0..5 {`, `io.rs:1233` = `for _ in 0..16 {`, `store.rs:217` = `fn flatten_into(...)`. Zero drift, on the same file class (io.rs/store.rs) the original bug report used.
+
+    **Separated a second, real issue that the original report conflated with the first**: those same 4 findings, while line-accurate, all sit OUTSIDE every diff hunk `42e32c3a3` touched — i.e. all 4 are pre-existing/untouched-code findings. Traced this to `OUTPUT_CONTRACT` in `crates/swissarmyhammer-validators/src/review/fleet.rs`, which explicitly makes the WHOLE file the review boundary and puts pre-existing instances in scope by design (commit `7449c0c99`, predating this task, pinned by tests in `fleet/tests.rs`). This is a true conflict with acceptance criterion 2 ("review sha reports only on code the range actually changed") — recorded as a blocker on the task description, not resolved. No validator edit made.
+
+    **Closed the test gap (criterion 3)**: added `a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol` to `crates/swissarmyhammer-validators/src/review/scope.rs` — a real two-commit `Scope::Sha` history (190 untouched filler lines, then one edited line) proving the edited line's number/blame/mark survive correctly at depth and that a finding citing it round-trips unchanged through parse → verify → synthesize to the final report. Closes the gap the existing small-fixture test (`a_findings_line_number_survives_from_the_prime_to_the_report`, 4-line file) didn't cover at the scale this task specifically asked for ("many edits above the changed region").
+
+    **Verification**:
+    - `cargo nextest run -p swissarmyhammer-validators`: 363 passed, 0 failed, 0 skipped.
+    - `cargo fmt --all -- --check`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'`: 3068 passed (1 slow), 0 failed, 0 skipped.
+
+    **Files touched**: `crates/swissarmyhammer-validators/src/review/scope.rs` (one new test).
+
+    next: /review — but flag the blocker on criterion 2 for a human decision before treating the task as closeable; reviewing agent should not add scope-filtering code to satisfy it.
+  timestamp: 2026-08-04T01:26:21.259353+00:00
+position_column: doing
+position_ordinal: '8280'
 title: Review engine reports findings against a stale revision — cited line numbers do not resolve
 ---
 `review sha HEAD~1..HEAD` returned 13 confirmed findings whose cited line numbers point at unrelated code in the current tree. Observed 2026-08-01 reviewing commit `42e32c3a3` for ^fpcbeth.
@@ -99,6 +120,18 @@ Related but distinct: ^k5wsxh0 (same validator returns different finding sets ac
 
 ## Acceptance
 
-- Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows.
-- `review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.
-- Add a regression test that reviews a known commit and asserts the reported lines resolve to the expected symbols. #bug #review
+- [x] Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows. — VERIFIED FIXED by ^k12rn64 (numbered/blamed prime). Empirical proof: re-ran `review sha` on this task's own cited commit `42e32c3a3` (the `io.rs`/`store.rs` commit the evidence table above is built from). All 4 confirmed findings this time cite exact-correct lines — checked by hand against the real file at that commit (`io.rs:493` = `"unnamed".to_string()`, `io.rs:1156` = `for i in 0..5 {`, `io.rs:1233` = `for _ in 0..16 {`, `store.rs:217` = `fn flatten_into(...)`). Zero drift, on the same file class the original report used.
+- [ ] `review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off. — TRUE CONFLICT, NOT RESOLVED. See blocker note below. Do not resolve by editing the validator contract; a human must decide.
+- [x] Add a regression test that reviews a known commit and asserts the reported lines resolve to the expected symbols. — CLOSED. New test `a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol` in `crates/swissarmyhammer-validators/src/review/scope.rs`, using a real two-commit `Scope::Sha` history with 190 untouched lines above the edited line. #bug #review
+
+## Blocker: true conflict on the scoping criterion (2026-08-04)
+
+The second acceptance criterion fights a documented, tested, shipped contract. Not resolved. Recorded per the true-conflict process — no validator edit made, no scope filter added.
+
+**The contract**: `OUTPUT_CONTRACT` in `crates/swissarmyhammer-validators/src/review/fleet.rs` states outright: "The review boundary is the WHOLE current file, not the changed lines... Pre-existing instances of a rule... are in scope and must be reported now." This is not incidental wording — it is the deliberate result of commit `7449c0c99` ("feat(review): sweep whole file in find-stage + bounded completeness re-scan"), dated before this task was filed, and it is pinned by dedicated tests in `fleet/tests.rs` that assert on this exact wording ("the contract must put pre-existing instances in scope", "the contract must state the diff is NOT the review boundary").
+
+**Empirical confirmation the conflict is real, not just textual**: re-running `review sha 42e32c3a3~1..42e32c3a3` today (see the closed criterion above) returned 4 confirmed findings. Checking their line numbers against the commit's actual diff hunks: `io.rs:493`, `io.rs:1156`, `io.rs:1233`, and `store.rs:217` all sit OUTSIDE every hunk this commit touched. Every citation is numerically exact (criterion 1 is fixed) AND every one is on pre-existing code the commit did not touch (criterion 2, as stated, is not met) — because the engine is doing exactly what the contract tells it to do.
+
+**Why this is a true conflict, not a bug to fix**: this task's own history shows the SAME finish loop already treats whole-file, pre-existing findings as expected and handles them by hand-checking blame per finding, every round (see task `^k12rn64`'s own review comments: 5 of 6, then 1 of 1, findings dropped as pre-existing on each pass, by design). Adding a scope filter now (e.g. dropping any finding on an untouched line) would directly contradict a shipped, tested feature and would need a person to decide whether `review sha` should stop doing whole-file sweeps, or whether this criterion should be dropped/reworded. Not decided here.
+
+**Next**: a human decides whether to (a) drop/reword this acceptance criterion to match the shipped whole-file-sweep design, or (b) change the whole-file-sweep design (touches `OUTPUT_CONTRACT` and its pinned tests, a real product decision with a real cost to the completeness the sweep was built for).

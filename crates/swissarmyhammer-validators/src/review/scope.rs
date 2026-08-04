@@ -2321,6 +2321,149 @@ mod tests {
         );
     }
 
+    /// Regression test for ^j4d2613: a real, known two-commit history through
+    /// `Scope::Sha`, on a file with many untouched lines ABOVE the one edited
+    /// line — the exact shape the bug report cited ("a commit that touches a
+    /// file with many edits above the changed region, since that is where
+    /// drift shows"). The old, unnumbered render made the model COUNT lines,
+    /// and the miscount grew with depth; this proves the edited line's number,
+    /// blame sha, and touched mark survive correctly at depth, and that a
+    /// finding citing that number round-trips, unchanged, all the way to the
+    /// final report — closing the gap the earlier small fixture tests (e.g.
+    /// [`a_findings_line_number_survives_from_the_prime_to_the_report`]) do
+    /// not cover at scale.
+    #[tokio::test]
+    async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol() {
+        const LINES_ABOVE: usize = 190;
+
+        let repo = TestRepo::new();
+        let filler = || -> String {
+            (0..LINES_ABOVE)
+                .map(|i| format!("fn filler_{i}() {{}}\n"))
+                .collect()
+        };
+
+        let mut before = filler();
+        before.push_str("fn target() { old_body(); }\n");
+        repo.write("src/big.rs", &before);
+        let first_sha = repo.commit("first");
+
+        let mut after = filler();
+        after.push_str("fn target() { new_body(); }\n");
+        repo.write("src/big.rs", &after);
+        let second_sha = repo.commit("second");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Sha(format!("{first_sha}..{second_sha}")),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/big.rs"))
+            .expect("src/big.rs must be under review");
+
+        // 1-based line number of the edited `target` function: LINES_ABOVE
+        // filler lines precede it.
+        let changed_line = LINES_ABOVE + 1;
+        let annotations = file.line_annotations();
+        assert_eq!(
+            annotations.len(),
+            changed_line,
+            "one annotation per source line"
+        );
+
+        // Every filler line above the change keeps the FIRST commit's blame
+        // and stays unmarked — the large untouched block must not shift or
+        // misattribute the edited line below it.
+        for (i, annotation) in annotations.iter().take(LINES_ABOVE).enumerate() {
+            assert_eq!(
+                annotation.sha(),
+                &first_sha[..8],
+                "line {} sits above the change and must keep the first commit's blame",
+                i + 1
+            );
+            assert!(
+                !annotation.touched(),
+                "line {} must not be marked touched",
+                i + 1
+            );
+        }
+
+        // The edited line itself blames to the SECOND commit and is touched.
+        let changed = &annotations[changed_line - 1];
+        assert_eq!(
+            changed.sha(),
+            &second_sha[..8],
+            "the edited line must blame to the commit that edited it, not one of the {LINES_ABOVE} untouched lines above it"
+        );
+        assert!(changed.touched(), "the edited line must be marked touched");
+
+        // The exact numbered line the model would read for the edited
+        // function — pulled from the REAL render, not hand-typed, so this
+        // test fails if the numbering ever drifts at depth.
+        let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+        let expected_printed_line = format!(
+            "{changed_line:>6} | {} + | fn target() {{ new_body(); }}",
+            &second_sha[..8]
+        );
+        assert!(
+            rendered.contains(&expected_printed_line),
+            "rendered block must number the edited line at {changed_line} with the second commit's sha and a `+` mark, got:\n{rendered}"
+        );
+
+        // The model "reads" that number off the render and cites it in its
+        // findings JSON — simulated via the real parse path, on a file large
+        // enough that a counting-based miscite would show up as drift.
+        let agent_response = crate::review::test_support::findings_json(
+            "src/big.rs",
+            changed_line as u32,
+            "no-dead-code",
+            "`target` calls `new_body`, which is unused",
+        );
+        let findings = crate::review::types::parse_findings(&agent_response).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].line,
+            changed_line as u32,
+            "the parsed finding must keep the exact line the model cited, {LINES_ABOVE} lines of untouched content notwithstanding"
+        );
+
+        // Verify + synthesize: the line must reach the final report unchanged,
+        // still resolving to the same `target` symbol the diff actually
+        // touched.
+        let verified = vec![crate::review::types::VerifiedFinding {
+            finding: findings[0].clone(),
+            confirmed: true,
+            reason: "confirmed".to_string(),
+            decided_by: None,
+        }];
+        let report = crate::review::synthesize::synthesize(
+            verified,
+            &crate::review::synthesize::FleetTally::new(1, 0),
+            &[],
+            "2026-08-03 12:00",
+        );
+        let expected_citation = format!("`src/big.rs:{changed_line}`");
+        assert!(
+            report.markdown().contains(&expected_citation),
+            "the final report must cite the SAME line the model read off the prime, {LINES_ABOVE} lines deep: {}",
+            report.markdown()
+        );
+    }
+
     /// Measures (does not tightly pin — wall-clock is inherently machine-
     /// dependent) the blame overhead `scope_review` now pays on a
     /// representative "normal commit": 8 changed files of ~150 lines each,
