@@ -221,8 +221,28 @@ comments:
     - evidence: cargo nextest run --workspace — 13498 tests run: 13498 passed (5 slow), 0 failed, 0 skipped. cargo clippy --workspace --all-targets --all-features -- -D warnings — clean, 0 warnings.
     - next: no fix was needed. Build is clean.
   timestamp: 2026-08-04T17:32:45.478478+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz6xcf95ym8mztq45y81091y
+  text: |-
+    ### commit — changed
+    - evidence: 8739fed67 fix(tool_config): change read_layer_mtimes to take Option<&Path>
+    - next: none
+  timestamp: 2026-08-04T17:33:17.477715+00:00
+- actor: claude-code
+  id: 01kz6xj70b1gcawqtyegd7esb2
+  text: '### review — clean\n- evidence: review sha HEAD~1..HEAD (8739fed67) returned 1 finding at tool_config.rs:519, targeting pre-existing test code (test_watcher_detects_file_change) unmodified by this commit — dropped per the review skill''s test-refactor exception. 0 findings remain against this checkpoint''s delta; all prior Review Findings sections already fully checked.\n- next: task moved to done'
+  timestamp: 2026-08-04T17:36:25.611670+00:00
+- actor: claude-code
+  id: 01kz6xk2t7g4saq94gqbm8dawz
+  text: |-
+    ### finish iteration 4 — clean
+    - implement: changed — tool_config.rs read_layer_mtimes signature (&Option<PathBuf> → Option<&Path>), call sites updated
+    - test: green — cargo nextest run --workspace, 13498 passed; clippy clean
+    - commit: 8739fed67
+    - review: clean — 0 findings against this checkpoint's delta; task moved to done
+  timestamp: 2026-08-04T17:36:54.087974+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa580
 title: 'shell tests: stop `ShellExecuteTool::new()` in tests from making a `.shell` dir in the crate directory'
 ---
 ## What

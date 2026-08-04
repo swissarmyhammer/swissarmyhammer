@@ -513,8 +513,7 @@ The hook runs `sah tool ralph ralph check --` and strict-parses its stdout, so t
 
 ### Patterns
 
-- **Dual-Backend, Single Protocol**: Cloud and local LLM agents are interchangeable because both speak ACP. Consumers go through `swissarmyhammer-agent::create_agent` and never know which backend runs.
-- **ACP as Protocol**: Agent interop uses the Agent Communication Protocol, not ad-hoc APIs. In ACP 0.12, backends are built by registering handlers on `Agent.builder()` and wiring them to a transport with `connect_with(...)` — there is no `impl Agent for MyBackend` trait to implement. The conformance test suite validates any new backend.
+- **ACP as Protocol**: Agent interop uses the Agent Communication Protocol, not ad-hoc APIs. Consumers go through `swissarmyhammer-agent::create_agent` and only ever receive an `AcpAgentHandle` — the ACP transport, not the concrete `claude-agent` implementation, is the contract. In ACP 0.12, backends are built by registering handlers on `Agent.builder()` and wiring them to a transport with `connect_with(...)` — there is no `impl Agent for MyBackend` trait to implement. The conformance test suite validates any new backend.
 - **Metadata, Not Inference**: The subagent system provides persona/instructions to the host agent. It does not spawn LLM processes.
 - **Platform-Aware Embedding**: The embedding facade selects the best backend (ANE on Apple Silicon, llama.cpp elsewhere) automatically.
 
