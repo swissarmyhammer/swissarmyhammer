@@ -932,11 +932,12 @@ struct ResolvedScope {
     after_content: BTreeMap<String, String>,
     change_purpose: String,
     /// The commit blame's history walk is bounded to, mirroring `git blame
-    /// <blame_at> -- path`. `None` blames against HEAD — the right anchor for
-    /// a scope whose content may carry uncommitted edits (working tree,
-    /// single file, glob). [`Scope::Sha`] sets this to the range's "to"
-    /// commit so a bounded historical review never attributes a line to a
-    /// commit past that point.
+    /// <blame_at> -- path`. [`Scope::Working`], [`Scope::File`], and
+    /// [`Scope::Glob`] set this to [`working_tree_blame_anchor`]'s merge-base
+    /// pin (a stable anchor for the life of a branch), falling back to `None`
+    /// (blame against HEAD) only when no such anchor exists. [`Scope::Sha`]
+    /// sets this to the range's "to" commit so a bounded historical review
+    /// never attributes a line to a commit past that point.
     blame_at: Option<git2::Oid>,
 }
 
@@ -1274,9 +1275,16 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
             BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
         builder.push(FilePath::new(path), FileVersions { before, after });
     }
-    // No blame anchor: the working tree may carry uncommitted edits, so blame
-    // must be bound to HEAD (`None`) and layered against the live content.
-    Ok(builder.finish(files, auto_purpose("working-tree changes"), None))
+    // Blame anchor: pinned to the branch's merge-base with main/master (see
+    // `working_tree_blame_anchor`) so the sha column means the same thing on
+    // every run for the life of this branch, rather than drifting with every
+    // intervening commit. `None` when no stable anchor exists (falls back to
+    // HEAD, the pre-existing behavior).
+    Ok(builder.finish(
+        files,
+        auto_purpose("working-tree changes"),
+        working_tree_blame_anchor(&repo),
+    ))
 }
 
 /// Resolve a commit/range scope, reusing the git tool's range semantics
@@ -1320,12 +1328,12 @@ fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError>
 
     let mut builder = FileChangeBuilder::new();
     builder.push(FilePath::new(path), FileVersions { before, after });
-    // No blame anchor: the working-tree read above may carry uncommitted
-    // edits, so blame is bound to HEAD (`None`), same as `resolve_working`.
+    // Blame anchor: same stable merge-base pin as `resolve_working` — see
+    // `working_tree_blame_anchor`.
     Ok(builder.finish(
         vec![path.to_string()],
         auto_purpose(&format!("review of {path}")),
-        None,
+        working_tree_blame_anchor(&repo),
     ))
 }
 
@@ -1358,18 +1366,58 @@ fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpErr
             },
         );
     }
-    // No blame anchor: matched files are read from the working tree, so
-    // blame is bound to HEAD (`None`) and layered against the live content.
+    // Blame anchor: same stable merge-base pin as `resolve_working` — see
+    // `working_tree_blame_anchor`.
     Ok(builder.finish(
         files,
         auto_purpose(&format!("files matching {pattern}")),
-        None,
+        working_tree_blame_anchor(&repo),
     ))
 }
 
 /// Wrap a one-line auto summary as the review-level change purpose.
 fn auto_purpose(what: &str) -> String {
     format!("Auto summary: reviewing {what}.")
+}
+
+/// The stable blame anchor for a working-tree-backed scope ([`Scope::Working`],
+/// [`Scope::File`], [`Scope::Glob`]): the merge-base between `HEAD` and the
+/// detected `main`/`master` branch.
+///
+/// Those three scopes read the file's LIVE working-tree content, which can
+/// change shape (dirty → committed, tracked → staged) between two runs
+/// without the underlying finding changing at all — a `/finish`-style loop
+/// commits between iterations (`git add -A && git commit`), which sweeps up
+/// every dirty file, not just the one whose finding it resolved. Binding
+/// blame to `HEAD` (as `None` does) means every such commit — even one that
+/// never touches the file under review — moves the anchor forward, so the
+/// SAME still-open, byte-identical line flips from `worktree` to a real
+/// commit sha the moment ANY intervening commit lands.
+///
+/// The merge-base with `main`/`master` does not move for the life of a
+/// feature/task branch (main only moves if someone advances it, which a
+/// `/finish` loop never does): every commit the loop makes lands strictly
+/// AFTER this anchor, so blame bounded here never sees them — a line that
+/// is `worktree` on the branch's first review stays `worktree` on every
+/// later review, for as long as it postdates the anchor, regardless of how
+/// many intervening commits happen. The column then answers one fixed
+/// question all session long: "did this line exist before this unit of work
+/// started?" — never "what does HEAD say right now?"
+///
+/// Falls back to `None` (blame against `HEAD`, the pre-existing behavior)
+/// when no `main`/`master` branch exists, `HEAD` cannot be resolved, or the
+/// two share no common ancestor — including the case of reviewing directly
+/// ON `main` itself, where the merge-base IS `HEAD` and this degrades
+/// transparently to the old per-run behavior. Blame attribution is always
+/// best-effort, never load-bearing for the review itself.
+fn working_tree_blame_anchor(repo: &GitOperations) -> Option<git2::Oid> {
+    let main_branch = repo.main_branch().ok()?;
+    let head_oid = resolve_oid(repo, &GitRefSpec::head())?;
+    let main_oid = resolve_oid(repo, &GitRefSpec::new(main_branch))?;
+    repo.repository()
+        .inner()
+        .merge_base(head_oid, main_oid)
+        .ok()
 }
 
 /// Resolve a refspec to its commit [`git2::Oid`] via libgit2, `None` when
@@ -2191,6 +2239,88 @@ mod tests {
         assert!(
             annotations[0].touched(),
             "every line of a brand-new file is touched by this review"
+        );
+    }
+
+    /// Regression test for ^8p6kjmw: the `/finish` loop's commit step commits
+    /// EVERY dirty file together (`git add -A && git commit`), not just the
+    /// one file whose finding it actually resolved. That sweeps up a
+    /// STILL-UNRESOLVED dirty line in some OTHER file right along with it —
+    /// the exact "intervening commit of unrelated files" the task describes.
+    ///
+    /// Here `src/lib.rs` line 2 (`BETA-DIRTY`) is a still-open, unresolved
+    /// finding: its BYTES never change across the two runs. Between the runs,
+    /// a commit lands that (a) genuinely fixes `src/lib.rs` line 4 and (b)
+    /// incidentally sweeps up line 2's untouched dirty edit too, because
+    /// `commit_only` — like a real `git add -A` — stages the WHOLE file, not
+    /// individual lines. A third, freshly dirty line 1 keeps the file in
+    /// `review working` scope for run 2, isolating the assertion to line 2
+    /// alone: with `blame_at: None` (binding to HEAD), line 2 flips from
+    /// `worktree` (run 1) to a real committed sha (run 2) even though nothing
+    /// about that specific finding changed — the prompt drift the task
+    /// reports. Pinning the blame anchor to the branch's merge-base with
+    /// `main` (fixed for the whole session, since `main` never moves here)
+    /// closes this: the sweep commit postdates the anchor, so it stays
+    /// invisible to blame and line 2 keeps reading `worktree` in both runs.
+    #[tokio::test]
+    async fn working_scope_sha_is_stable_across_a_sweep_commit_of_an_unresolved_line() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "alpha\nbeta\ngamma\ndelta\n");
+        repo.commit("initial");
+        repo.rename_current_branch_to("main");
+        repo.checkout_new_branch("task");
+
+        // A still-open, unresolved dirty edit to line 2 — this exact edit
+        // survives, byte-for-byte, across both runs.
+        repo.write("src/lib.rs", "alpha\nBETA-DIRTY\ngamma\ndelta\n");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work1 = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let file1 = work1
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must be under review");
+        let line2_run1 = file1.line_annotations()[1].sha().to_string();
+        assert_eq!(
+            line2_run1, "worktree",
+            "line 2's still-open dirty edit must show worktree before the sweep commit"
+        );
+
+        // A second, DIFFERENT finding on line 4 gets genuinely fixed and
+        // committed — but the commit step stages the WHOLE file, sweeping up
+        // line 2's still-unresolved edit right along with it.
+        repo.write("src/lib.rs", "alpha\nBETA-DIRTY\ngamma\nDELTA-FIXED\n");
+        repo.commit_only(&["src/lib.rs"], "fix line 4's finding");
+
+        // A THIRD, freshly dirty line keeps the file in `review working`
+        // scope for run 2, without touching line 2 at all.
+        repo.write(
+            "src/lib.rs",
+            "ALPHA-DIRTY\nBETA-DIRTY\ngamma\nDELTA-FIXED\n",
+        );
+
+        let work2 = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let file2 = work2
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must still be under review (line 1 is freshly dirty)");
+        let line2_run2 = file2.line_annotations()[1].sha().to_string();
+
+        assert_eq!(
+            line2_run1, line2_run2,
+            "line 2's sha must not drift across the sweep commit: it is the SAME \
+             unresolved finding, byte-for-byte, in both runs — run1={line2_run1:?} run2={line2_run2:?}"
         );
     }
 
