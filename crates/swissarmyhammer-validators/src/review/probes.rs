@@ -291,16 +291,16 @@ pub struct FileChange {
 
 impl FileChange {
     /// Build a change set from its entities, with no file sources.
-    pub fn new(entities: Vec<ChangeEntry>) -> Self {
+    pub fn new(entities: impl IntoIterator<Item = ChangeEntry>) -> Self {
         Self {
-            entities,
+            entities: entities.into_iter().collect(),
             sources: BTreeMap::new(),
         }
     }
 
     /// The same change set with the current source of each file attached.
-    pub fn with_sources(mut self, sources: BTreeMap<String, String>) -> Self {
-        self.sources = sources;
+    pub fn with_sources(mut self, sources: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.sources = sources.into_iter().collect();
         self
     }
 }
