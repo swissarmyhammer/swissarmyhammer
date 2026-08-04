@@ -184,9 +184,13 @@ impl ChatModelConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Platform {
+    /// macOS ARM64 (Apple Silicon) platform.
     MacosArm64,
+    /// macOS x86_64 (Intel) platform.
     MacosX86_64,
+    /// Linux x86_64 platform.
     LinuxX86_64,
+    /// Linux ARM64 (aarch64) platform.
     LinuxAarch64,
 }
 
@@ -362,16 +366,23 @@ pub struct EmbeddingModelConfig {
 }
 
 /// Model source specification
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelSource {
+    /// HuggingFace model source with repository and optional filename.
     HuggingFace {
+        /// Repository identifier (e.g., 'owner/repo' on HuggingFace).
         repo: String,
+        /// Optional filename within the repository.
         filename: Option<String>,
+        /// Optional folder path within the repository.
         #[serde(skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
     },
+    /// Local filesystem model source.
     Local {
+        /// Path to the model file on the local filesystem.
         filename: PathBuf,
+        /// Optional folder path prefix for the model.
         #[serde(skip_serializing_if = "Option::is_none")]
         folder: Option<PathBuf>,
     },
@@ -494,7 +505,7 @@ impl Severity for ModelError {
 ///
 /// Holds complete metadata for a model configuration including its source,
 /// content, and optional description for discovery and management operations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelInfo {
     /// Model name (typically filename without extension)
     pub name: String,
