@@ -1,7 +1,6 @@
 use crate::discovery::ConfigurationDiscovery;
 use crate::env_vars::EnvVarSubstitution;
 use crate::error::{ConfigurationError, ConfigurationResult};
-use crate::model::ModelConfig;
 use crate::provider::{
     CliProvider, ConfigurationProvider, DefaultProvider, EnvProvider, FileProvider,
 };
@@ -536,141 +535,20 @@ impl TemplateContext {
         context.insert("_template_vars".to_string(), Value::Object(merged_vars));
     }
 
-    /// Try to get config from a key, checking both flat and nested access
-    fn try_get_config(&self, key: &str) -> Option<ModelConfig> {
-        // Try flat key access first (for programmatically set configs)
-        if let Some(config) = self.variables.get(key) {
-            if let Ok(agent_config) = serde_json::from_value::<ModelConfig>(config.clone()) {
-                return Some(agent_config);
-            }
-        }
-        // Try nested access (for file-loaded configs)
-        if let Some(config) = self.get(key) {
-            if let Ok(agent_config) = serde_json::from_value::<ModelConfig>(config.clone()) {
-                return Some(agent_config);
-            }
-        }
-        None
-    }
-
-    /// Get agent configuration with hierarchical fallback
-    ///
-    /// Priority: workflow-specific → repo default → system default (Claude)
-    ///
-    /// # Arguments
-    /// * `workflow_name` - Optional workflow name to look for specific configuration
-    ///
-    /// # Returns
-    /// * `ModelConfig` - The agent configuration with proper fallback
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer_config::{TemplateContext, ModelConfig, ModelExecutorType};
-    /// use serde_json::json;
-    ///
-    /// let mut context = TemplateContext::new();
-    ///
-    /// // System default (Claude Code)
-    /// let config = context.get_agent_config(None);
-    /// assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-    /// ```
-    pub fn get_agent_config(&self, workflow_name: Option<&str>) -> ModelConfig {
-        // 1. Check workflow-specific config
-        if let Some(workflow) = workflow_name {
-            if let Some(config) = self.try_get_config(&format!("agent.configs.{}", workflow)) {
-                return config;
-            }
-        }
-
-        // 2. Check repo default config
-        if let Some(config) = self.try_get_config("agent.default") {
-            return config;
-        }
-
-        // 3. Check for config directly under "agent" key (sah.yaml format)
-        if let Some(config) = self.try_get_config("agent") {
-            return config;
-        }
-
-        // 4. Fall back to system default (Claude Code)
-        ModelConfig::default()
-    }
-
-    /// Try to extract a ModelConfig from a Value
-    fn try_extract_config(value: &Value) -> Option<ModelConfig> {
-        serde_json::from_value::<ModelConfig>(value.clone()).ok()
-    }
-
-    /// Get all available agent configurations
-    ///
-    /// Returns a map of all available agent configurations, including the default
-    /// configuration (if set) and all named workflow-specific configurations.
-    /// Supports both nested access (file-loaded configs) and flat key access
-    /// (programmatically set configs).
-    ///
-    /// # Returns
-    /// * `HashMap<String, ModelConfig>` - Map of configuration names to agent configs
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer_config::{TemplateContext, ModelConfig, LlamaAgentConfig};
-    /// use serde_json::json;
-    ///
-    /// let mut context = TemplateContext::new();
-    /// context.set("agent.default".to_string(),
-    ///     serde_json::to_value(ModelConfig::llama_agent(LlamaAgentConfig::default())).unwrap());
-    ///
-    /// let configs = context.get_all_agent_configs();
-    /// assert!(configs.contains_key("default"));
-    /// ```
-    pub fn get_all_agent_configs(&self) -> HashMap<String, ModelConfig> {
-        let mut configs = HashMap::new();
-
-        // Add default config if available
-        if let Some(config) = self.try_get_config("agent.default") {
-            configs.insert("default".to_string(), config);
-        }
-
-        // Look for flat keys that start with "agent.configs." (programmatically set)
-        for (key, value) in &self.variables {
-            if let Some(workflow_name) = key.strip_prefix("agent.configs.") {
-                if let Some(agent_config) = Self::try_extract_config(value) {
-                    configs.insert(workflow_name.to_string(), agent_config);
-                }
-            }
-        }
-
-        // Add named configs from nested object (file-loaded), only if not already present
-        if let Some(Value::Object(agent_configs)) = self.get("agent.configs") {
-            for (workflow_name, config_value) in agent_configs {
-                configs
-                    .entry(workflow_name.clone())
-                    .or_insert_with(|| Self::try_extract_config(config_value).unwrap_or_default());
-            }
-        }
-
-        configs
-    }
-
     /// Provide a simple default model name for template (prompt) rendering.
     ///
-    /// PROMPT-RENDERING ONLY — never agent/model SELECTION. This is the value of
+    /// PROMPT-RENDERING ONLY — never chat model SELECTION. This is the value of
     /// the `{{ model }}` Liquid variable when a prompt references it and nothing
-    /// else set it; it is NOT how an executor is chosen. Agent selection reads
-    /// the config files via [`crate::model::ModelManager`] (e.g.
-    /// `resolve_agent_config` / `resolve_review_agent_config`), which correctly
-    /// return `None`/defaults when unset. Consuming this `"claude"` default for
-    /// selection silently defeated the `claude-code-haiku` review fallback — do
-    /// not reintroduce that coupling.
+    /// else set it. Chat model selection reads the config files via
+    /// [`crate::model::ModelManager`] (`resolve_chat_config` /
+    /// `resolve_review_chat_config`), which apply their own defaults when the
+    /// config says nothing. Consuming this `"claude"` default for selection
+    /// silently defeated the Haiku review default — do not reintroduce that
+    /// coupling.
     ///
-    /// Returns "claude" as the default. The model name should be set via:
-    /// - The --model CLI flag
-    /// - The sah config file
-    /// - The flow context
-    ///
-    /// This function only provides a fallback when no model is specified.
+    /// Returns "claude" as the default. A prompt or a flow context may set the
+    /// `model` variable itself; this function only fills the gap when neither
+    /// does.
     fn resolve_model_name(&self) -> String {
         "claude".to_string()
     }
@@ -680,7 +558,7 @@ impl TemplateContext {
     /// PROMPT-RENDERING ONLY. Injects the [`Self::resolve_model_name`] default
     /// (`"claude"`) so `{{ model }}` always renders. This makes the `model`
     /// template variable non-`None` in production, so it must NOT be consulted
-    /// for agent/model selection — selection reads the config files via
+    /// for chat model selection — selection reads the config files via
     /// [`crate::model::ModelManager`].
     fn set_model_variable(&mut self) {
         if self.get("model").is_none() {
@@ -840,19 +718,15 @@ impl TemplateContext {
     ///
     /// This method sets default template variables including:
     ///
-    /// - `model`: The model name based on the configured agent
+    /// - `model`: The `{{ model }}` prompt-rendering default
     /// - `working_directory`: The fully qualified current working directory
     /// - `cwd`: Alias for the current working directory
     /// - `project_types`: Detected project types from the current directory
     /// - `unique_project_types`: Deduplicated list of project type names
     /// - `available_skills`: Available agent skills from the skill library
     ///
-    /// Model names are determined as follows:
-    ///
-    /// - ClaudeCode: "claude"
-    /// - LlamaAgent with HuggingFace model: the repository name
-    /// - LlamaAgent with Local model: the filename
-    /// - Unknown/Default: "claude"
+    /// The `model` variable is a prompt-rendering default of `"claude"`, set
+    /// only when nothing else has set it. It never selects a chat model.
     pub fn set_default_variables(&mut self) {
         self.set_model_variable();
         self.set_working_directory_variables();
@@ -1124,66 +998,6 @@ version = "1.0.0"
     }
 
     #[test]
-    fn test_get_agent_config_direct_agent_key() {
-        use crate::model::{
-            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
-            ModelSource,
-        };
-
-        let mut context = TemplateContext::new();
-
-        // Set up agent config directly under the "agent" key (sah.yaml style)
-        let agent_config = ModelConfig::llama_agent(LlamaAgentConfig {
-            model: LlmModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
-                    filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
-                    folder: None,
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: false,
-            },
-            mcp_server: McpServerConfig {
-                port: 0,
-                timeout_seconds: 30,
-            },
-            repetition_detection: Default::default(),
-        });
-
-        context.set(
-            "agent".to_string(),
-            serde_json::to_value(&agent_config).unwrap(),
-        );
-
-        // Test that get_agent_config finds the config under the direct "agent" key
-        let retrieved_config = context.get_agent_config(None);
-
-        // Verify it's the correct config type and not the default
-        match retrieved_config.executor() {
-            ModelExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
-                ModelSource::HuggingFace { repo, filename, .. } => {
-                    assert!(
-                        repo.starts_with("unsloth/Qwen3"),
-                        "Expected Qwen3 model, got {}",
-                        repo
-                    );
-                    assert!(
-                        filename
-                            .as_ref()
-                            .map(|f| f.contains("Qwen3"))
-                            .unwrap_or(false),
-                        "Expected Qwen3 filename, got {:?}",
-                        filename
-                    );
-                }
-                _ => panic!("Expected HuggingFace model source"),
-            },
-            _ => panic!("Expected LlamaAgent executor"),
-        }
-    }
-
-    #[test]
     fn test_to_liquid_context() {
         let mut context = TemplateContext::new();
         context.set("string_var".to_string(), json!("hello"));
@@ -1353,19 +1167,12 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
-    fn test_set_default_variables_claude_code() {
+    fn test_set_default_variables_sets_model_and_working_directory() {
         let mut context = TemplateContext::new();
 
-        // Set Claude Code agent config
-        context.set(
-            "agent".to_string(),
-            serde_json::to_value(ModelConfig::claude_code()).unwrap(),
-        );
-
-        // Set default variables
         context.set_default_variables();
 
-        // Should set model to "claude"
+        // Should set model to the prompt-rendering default
         assert_eq!(context.get("model"), Some(&json!("claude")));
 
         // Should set working directory variables
@@ -1379,8 +1186,8 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     fn test_set_default_variables_model_defaults_to_claude() {
         // Model variable should default to "claude" when not explicitly set.
-        // The model name should be set via --model flag or sah config,
-        // not derived from agent configuration.
+        // The variable is a prompt-rendering default; it is never derived
+        // from the chat model configuration.
         let mut context = TemplateContext::new();
 
         // Set default variables without any model pre-set
@@ -1400,14 +1207,14 @@ Generated for {{app.name}} by liquid templating engine.
         // it should not be overwritten
         let mut context = TemplateContext::new();
 
-        // Pre-set model to a custom value (as would happen with --model flag)
-        context.set("model".to_string(), json!("qwen"));
+        // Pre-set model to a custom value, as a flow context would
+        context.set("model".to_string(), json!("my-model"));
 
         // Set default variables
         context.set_default_variables();
 
         // Should keep the pre-set model value
-        assert_eq!(context.get("model"), Some(&json!("qwen")));
+        assert_eq!(context.get("model"), Some(&json!("my-model")));
 
         // Should still set working directory variables
         assert!(context.get("working_directory").is_some());
@@ -1786,98 +1593,6 @@ config_only = "config_only_value"
 
         let ctx = result.unwrap();
         assert_eq!(ctx.get("simple_key"), Some(&json!("plain_value")));
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_collects_all_three_sources() {
-        use crate::model::ModelConfig;
-
-        let mut context = TemplateContext::new();
-
-        // Source 1: agent.default
-        let default_config = ModelConfig::default();
-        context.set(
-            "agent.default".to_string(),
-            serde_json::to_value(&default_config).unwrap(),
-        );
-
-        // Source 2: flat key agent.configs.workflow1 (programmatically set)
-        let workflow1_config = ModelConfig::default();
-        context.set(
-            "agent.configs.workflow1".to_string(),
-            serde_json::to_value(&workflow1_config).unwrap(),
-        );
-
-        // Source 3: nested object agent.configs with a sub-key
-        let workflow2_config = ModelConfig::default();
-        context.set(
-            "agent".to_string(),
-            json!({
-                "configs": {
-                    "workflow2": serde_json::to_value(&workflow2_config).unwrap()
-                }
-            }),
-        );
-
-        let configs = context.get_all_agent_configs();
-
-        // All three sources should be collected
-        assert!(
-            configs.contains_key("default"),
-            "Expected 'default' from agent.default"
-        );
-        assert!(
-            configs.contains_key("workflow1"),
-            "Expected 'workflow1' from flat key agent.configs.workflow1"
-        );
-        assert!(
-            configs.contains_key("workflow2"),
-            "Expected 'workflow2' from nested object agent.configs"
-        );
-        assert_eq!(configs.len(), 3);
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_flat_key_takes_precedence_over_nested() {
-        use crate::model::{LlamaAgentConfig, ModelConfig};
-
-        let mut context = TemplateContext::new();
-
-        // Set flat key for "overlap" — this should win
-        let flat_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
-        context.set(
-            "agent.configs.overlap".to_string(),
-            serde_json::to_value(&flat_config).unwrap(),
-        );
-
-        // Set nested object also containing "overlap" — should be ignored
-        let nested_config = ModelConfig::default();
-        context.set(
-            "agent".to_string(),
-            json!({
-                "configs": {
-                    "overlap": serde_json::to_value(&nested_config).unwrap()
-                }
-            }),
-        );
-
-        let configs = context.get_all_agent_configs();
-
-        assert_eq!(configs.len(), 1);
-        assert!(configs.contains_key("overlap"));
-        // The flat key was a LlamaAgent config; if nested had won it would be ClaudeCode
-        assert_eq!(
-            configs["overlap"].executor_type(),
-            crate::model::ModelExecutorType::LlamaAgent,
-            "Flat key should take precedence over nested object"
-        );
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_empty_context() {
-        let context = TemplateContext::new();
-        let configs = context.get_all_agent_configs();
-        assert!(configs.is_empty(), "Empty context should yield no configs");
     }
 
     #[test]
@@ -2267,108 +1982,6 @@ config_only = "config_only_value"
 
         // Trying to navigate through a string should return None
         assert_eq!(context.get("flat.nested"), None);
-    }
-
-    #[test]
-    fn test_get_agent_config_system_default() {
-        // Exercises the default fallback path of `get_agent_config`.
-        let context = TemplateContext::new();
-        let config = context.get_agent_config(None);
-        assert_eq!(
-            config.executor_type(),
-            crate::model::ModelExecutorType::ClaudeCode
-        );
-    }
-
-    #[test]
-    fn test_get_agent_config_with_workflow_name() {
-        // Exercises the workflow-specific path of `get_agent_config`.
-        let mut context = TemplateContext::new();
-        let llama_config =
-            crate::model::ModelConfig::llama_agent(crate::model::LlamaAgentConfig::for_testing());
-        context.set(
-            "agent.configs.my-workflow".to_string(),
-            serde_json::to_value(&llama_config).unwrap(),
-        );
-
-        let config = context.get_agent_config(Some("my-workflow"));
-        assert_eq!(
-            config.executor_type(),
-            crate::model::ModelExecutorType::LlamaAgent
-        );
-
-        // Non-existent workflow should fall to default
-        let config = context.get_agent_config(Some("nonexistent"));
-        assert_eq!(
-            config.executor_type(),
-            crate::model::ModelExecutorType::ClaudeCode
-        );
-    }
-
-    #[test]
-    fn test_get_agent_config_from_agent_key() {
-        // Exercises the `agent` key path in `get_agent_config`.
-        let mut context = TemplateContext::new();
-        let claude_config = crate::model::ModelConfig::claude_code();
-        context.set(
-            "agent".to_string(),
-            serde_json::to_value(&claude_config).unwrap(),
-        );
-
-        let config = context.get_agent_config(None);
-        assert_eq!(
-            config.executor_type(),
-            crate::model::ModelExecutorType::ClaudeCode
-        );
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_empty() {
-        let context = TemplateContext::new();
-        let configs = context.get_all_agent_configs();
-        assert!(configs.is_empty());
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_with_default() {
-        let mut context = TemplateContext::new();
-        let config = crate::model::ModelConfig::claude_code();
-        context.set(
-            "agent.default".to_string(),
-            serde_json::to_value(&config).unwrap(),
-        );
-
-        let configs = context.get_all_agent_configs();
-        assert!(configs.contains_key("default"));
-    }
-
-    #[test]
-    fn test_get_all_agent_configs_with_flat_workflow_keys() {
-        // Exercises the flat key scanning path in `get_all_agent_configs`.
-        let mut context = TemplateContext::new();
-        let config = crate::model::ModelConfig::claude_code();
-        context.set(
-            "agent.configs.workflow1".to_string(),
-            serde_json::to_value(&config).unwrap(),
-        );
-
-        let configs = context.get_all_agent_configs();
-        assert!(configs.contains_key("workflow1"));
-    }
-
-    #[test]
-    fn test_try_get_config_invalid_value() {
-        // Exercises the path where `try_get_config` can't deserialize.
-        let mut context = TemplateContext::new();
-        context.set("agent.default".to_string(), json!("not_a_config_object"));
-
-        // Should not find a valid config from an invalid value
-        let config = context.get_agent_config(None);
-        // Falls back to system default
-        assert_eq!(
-            config.executor_type(),
-            crate::model::ModelExecutorType::ClaudeCode
-        );
     }
 
     #[test]

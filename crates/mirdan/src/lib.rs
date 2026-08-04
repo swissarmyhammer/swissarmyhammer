@@ -34,6 +34,11 @@ pub mod outdated;
 pub mod package_type;
 pub mod publish;
 pub mod registry;
+/// Shipped-content snapshot of the retired builtin validator sets (the nine
+/// single-rule sets merged into `code-security` and `code-hygiene`). Used by
+/// the refresh-prune mechanism in [`install`] to remove a retired set from a
+/// deployed store only when the user never modified it.
+pub mod retired_validators;
 pub mod search;
 pub mod settings;
 pub mod status;

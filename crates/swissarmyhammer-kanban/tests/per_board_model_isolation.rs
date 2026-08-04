@@ -1,7 +1,7 @@
 //! End-to-end regression test for the per-board model contract.
 //!
 //! Two independent `.kanban` directories must each remember their own
-//! AI-panel model id without leaking state through any shared/global
+//! chat-agent model id without leaking state through any shared/global
 //! location. This is the disk-round-trip companion to the unit tests in
 //! `src/board/update.rs`, which only exercise a single context.
 //!
@@ -52,18 +52,18 @@ async fn test_per_board_model_isolation() {
 
     // Set a different chat-capable model on each board.
     UpdateBoard::new()
-        .with_model("claude-code")
+        .with_model("haiku")
         .execute(&ctx_a)
         .await
         .into_result()
-        .expect("setting `claude-code` on board A must succeed");
+        .expect("setting `haiku` on board A must succeed");
 
     UpdateBoard::new()
-        .with_model("qwen")
+        .with_model("sonnet")
         .execute(&ctx_b)
         .await
         .into_result()
-        .expect("setting `qwen` on board B must succeed");
+        .expect("setting `sonnet` on board B must succeed");
 
     // Each board's raw YAML must contain only its own model id.
     let yaml_a = std::fs::read_to_string(temp_a.path().join(".kanban/boards/board.yaml"))
@@ -72,21 +72,21 @@ async fn test_per_board_model_isolation() {
         .expect("board B's board.yaml must exist after UpdateBoard");
 
     assert!(
-        yaml_a.contains("model: claude-code"),
-        "board A's yaml must contain `model: claude-code`, got:\n{yaml_a}"
+        yaml_a.contains("model: haiku"),
+        "board A's yaml must contain `model: haiku`, got:\n{yaml_a}"
     );
     assert!(
-        !yaml_a.contains("qwen"),
-        "board A's yaml must NOT contain `qwen` (leaked from board B), got:\n{yaml_a}"
+        !yaml_a.contains("sonnet"),
+        "board A's yaml must NOT contain `sonnet` (leaked from board B), got:\n{yaml_a}"
     );
 
     assert!(
-        yaml_b.contains("model: qwen"),
-        "board B's yaml must contain `model: qwen`, got:\n{yaml_b}"
+        yaml_b.contains("model: sonnet"),
+        "board B's yaml must contain `model: sonnet`, got:\n{yaml_b}"
     );
     assert!(
-        !yaml_b.contains("claude-code"),
-        "board B's yaml must NOT contain `claude-code` (leaked from board A), got:\n{yaml_b}"
+        !yaml_b.contains("haiku"),
+        "board B's yaml must NOT contain `haiku` (leaked from board A), got:\n{yaml_b}"
     );
 
     // GetBoard must read each context's own model id back from disk.
@@ -102,11 +102,11 @@ async fn test_per_board_model_isolation() {
         .expect("GetBoard on context B must succeed");
 
     assert_eq!(
-        board_a["model"], "claude-code",
-        "GetBoard on context A must report `claude-code`"
+        board_a["model"], "haiku",
+        "GetBoard on context A must report `haiku`"
     );
     assert_eq!(
-        board_b["model"], "qwen",
-        "GetBoard on context B must report `qwen`"
+        board_b["model"], "sonnet",
+        "GetBoard on context B must report `sonnet`"
     );
 }

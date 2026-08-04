@@ -399,7 +399,7 @@ async fn update_board_via_command_dispatch_persists_model() {
     let engine = TestEngine::new().await;
 
     let mut args = HashMap::new();
-    args.insert("model".to_string(), json!("claude-code"));
+    args.insert("model".to_string(), json!("haiku"));
 
     engine
         .dispatch("update.board", &[], None, args)
@@ -414,8 +414,8 @@ async fn update_board_via_command_dispatch_persists_model() {
         .expect("board entity must exist");
     assert_eq!(
         board.get_str("model"),
-        Some("claude-code"),
-        "board entity must carry `model: claude-code` after `update.board`",
+        Some("haiku"),
+        "board entity must carry `model: haiku` after `update.board`",
     );
 }
 

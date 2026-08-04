@@ -1,0 +1,1 @@
+{"id":"01KZ4PT2RV0VJHY6GFQZA3DPY9","timestamp":"2026-08-03T20:59:54.523990Z","op":"create","item_id":"01KZ4PT2RS5BHYCMMR3VE1HWRZ","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '008672'\n+tag_name: claude-agent\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '008672'\n-tag_name: claude-agent\n","transaction_id":null}

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
-use swissarmyhammer_config::ModelConfig;
+use swissarmyhammer_config::ChatModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
@@ -40,7 +40,7 @@ fn context_rooted_at(working_dir: &std::path::Path) -> ToolContext {
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ModelConfig::default());
+    let agent_config = Arc::new(ChatModelConfig::default());
     ToolContext::new(tool_handlers, git_ops, agent_config)
         .with_working_dir(working_dir.to_path_buf())
 }

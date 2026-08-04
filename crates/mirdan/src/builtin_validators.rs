@@ -65,13 +65,75 @@ mod tests {
     #[test]
     fn test_builtin_validators_embed_expected_sets() {
         let sets = builtin_validators_by_set();
-        // The monolithic security-rules set was split into the focused
-        // no-secrets / injection / command-safety validators.
-        for expected in ["duplication", "no-secrets", "test-integrity"] {
+        // The nine single-rule sets (no-secrets, injection, command-safety,
+        // no-commented-code, function-length, complexity, missing-docs,
+        // data-driven, dead-code) were merged into code-security and
+        // code-hygiene. duplication/reuse/test-integrity keep their own probe
+        // (or test-file match) and were left whole.
+        for expected in [
+            "code-security",
+            "code-hygiene",
+            "duplication",
+            "reuse",
+            "test-integrity",
+        ] {
             assert!(
                 sets.contains_key(expected),
                 "embedded builtins must include the `{expected}` set, got: {:?}",
                 sets.keys().collect::<Vec<_>>()
+            );
+        }
+
+        for retired in [
+            "no-secrets",
+            "injection",
+            "command-safety",
+            "no-commented-code",
+            "function-length",
+            "complexity",
+            "missing-docs",
+            "data-driven",
+            "dead-code",
+        ] {
+            assert!(
+                !sets.contains_key(retired),
+                "embedded builtins must no longer include the retired `{retired}` set, got: {:?}",
+                sets.keys().collect::<Vec<_>>()
+            );
+        }
+
+        let code_security_files = &sets["code-security"];
+        for expected_rule in ["no-secrets.md", "injection.md", "command-safety.md"] {
+            assert!(
+                code_security_files
+                    .iter()
+                    .any(|(name, _)| *name == format!("code-security/rules/{expected_rule}")),
+                "code-security must embed the moved rule `rules/{expected_rule}`, got: {:?}",
+                code_security_files
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let code_hygiene_files = &sets["code-hygiene"];
+        for expected_rule in [
+            "no-commented-code.md",
+            "function-length.md",
+            "cognitive-complexity.md",
+            "missing-docs.md",
+            "data-driven.md",
+            "dead-code.md",
+        ] {
+            assert!(
+                code_hygiene_files
+                    .iter()
+                    .any(|(name, _)| *name == format!("code-hygiene/rules/{expected_rule}")),
+                "code-hygiene must embed the moved rule `rules/{expected_rule}`, got: {:?}",
+                code_hygiene_files
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
             );
         }
     }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use rmcp::model::RawContent;
 use serde_json::{Map, Value};
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
@@ -37,7 +37,7 @@ pub async fn run_operation(arguments: Map<String, Value>) -> i32 {
     let context = ToolContext::new(
         Arc::new(ToolHandlers::new()),
         Arc::new(Mutex::new(None)),
-        Arc::new(ModelConfig::default()),
+        Arc::new(ChatModelConfig::default()),
     );
 
     let result = match tool.execute(arguments, &context).await {

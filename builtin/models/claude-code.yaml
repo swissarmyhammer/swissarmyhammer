@@ -1,8 +1,0 @@
----
-description: "Claude Code: must be installed separately"
-tags: [kanban]
----
-quiet: false
-executor:
-  type: claude-code
-  config: {}

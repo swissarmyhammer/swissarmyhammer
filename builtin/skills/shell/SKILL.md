@@ -10,19 +10,36 @@ metadata:
 
 # Shell
 
-Virtual shell with persistent history, process management, and searchable output. Every command's output is stored for later retrieval.
+Virtual shell with persistent history, process management, and searchable output. Every command that exits stores its full output for later retrieval.
 
 **Always use this skill for shell commands** — never the built-in Bash tool. The persistent history and process management are only available here.
 
-This lets you:
-- skip `| tail` / `| grep` pipelines — just run, then grep/get_lines
-- run multiple greps without re-executing
+## How output works
+
+`execute command` blocks until the command exits or the timeout kills it. There
+is no partial or streaming result. When the command exits, the response shows
+the last lines of the output, and the full output stays in the history.
+
+Do not pipe to `tail`, `head`, or `grep`. The shell keeps the full output
+already, and a pipeline throws it away. Run the bare command. Then read the
+output with `get lines`, or search it with `grep history`. You can search the
+same output many times without a re-run.
+
+When the timeout kills the command, no output is stored. `get lines` and
+`grep history` find nothing for that command. Raise `timeout` and run the
+command again.
+
+| Instead of | Run | Then |
+|------------|-----|------|
+| `cargo build 2>&1 \| tail -60` | `cargo build` | `get lines` on the last lines |
+| `cargo test 2>&1 \| grep error` | `cargo test` | `grep history` for `error` |
 
 ## Operations
 
 ### execute command
 
-Run a command. Output is stored regardless of truncation.
+Run a command. A command that exits stores its full output, even when the
+response is truncated to the last lines.
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -87,3 +104,5 @@ Regex for wildcards or character classes:
 ## Timeout
 
 Set `timeout` for commands that might hang (network, prompts), long builds where you want a safety net, or tailing/watching.
+
+A timeout is a loss, not a safe stop. The kill discards the output, so nothing is stored for that command. Set the timeout high enough for the command to finish.

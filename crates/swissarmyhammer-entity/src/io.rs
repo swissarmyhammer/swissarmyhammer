@@ -30,6 +30,10 @@ use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 /// with benchmark evidence.
 const READ_ENTITY_DIR_CONCURRENCY: usize = 64;
 
+/// Prefix for atomic-write temp files. Dotted so directory scans that filter
+/// by entity extension (see [`read_entity_dir`]) never see them.
+const TEMP_FILE_PREFIX: &str = ".tmp_";
+
 /// Get the file extension for an entity type.
 pub fn entity_extension(entity_def: &EntityDef) -> &'static str {
     if entity_def.body_field.is_some() {
@@ -102,9 +106,9 @@ pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) 
     }
 
     let content = if let Some(ref body_field) = entity_def.body_field {
-        format_frontmatter_body(entity, body_field)?
+        format_frontmatter_body(entity, body_field, path)?
     } else {
-        format_plain_yaml(entity)?
+        format_plain_yaml(entity, path)?
     };
 
     // Use a ULID-based temp filename to avoid collisions with concurrent writers.
@@ -112,16 +116,36 @@ pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) 
     let temp_path = path
         .parent()
         .expect("entity path must have a parent directory")
-        .join(format!(".tmp_{}", Ulid::new()));
+        .join(format!("{TEMP_FILE_PREFIX}{}", Ulid::new()));
     fs::write(&temp_path, content.as_bytes()).await?;
 
     // If rename fails, clean up the temp file before propagating the error.
-    if let Err(e) = fs::rename(&temp_path, path).await {
-        let _ = fs::remove_file(&temp_path).await;
+    rename_or_cleanup(&temp_path, path).await
+}
+
+/// Rename `temp_path` to `dest`, cleaning up the temp file if the rename fails.
+///
+/// Shared by every atomic-write path (write via temp file + rename): the
+/// temp file must not linger once the rename step itself has failed.
+async fn rename_or_cleanup(temp_path: &Path, dest: &Path) -> Result<()> {
+    if let Err(e) = fs::rename(temp_path, dest).await {
+        let _ = fs::remove_file(temp_path).await;
         return Err(e.into());
     }
-
     Ok(())
+}
+
+/// Rename `src` to `dest`, treating a missing source as success.
+///
+/// Shared by the trash/restore moves: a source that's already gone (removed
+/// by an earlier attempt, or never created) is not an error — it's the
+/// TOCTOU-safe way to make the move idempotent.
+async fn rename_ignore_not_found(src: &Path, dest: &Path) -> Result<()> {
+    match fs::rename(src, dest).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Read all entities from a directory.
@@ -231,11 +255,7 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     {
         let filename = path.file_name().expect("entity path must have a filename");
         let dest = trash_dir.join(filename);
-        match fs::rename(path, &dest).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+        rename_ignore_not_found(path, &dest).await?;
     }
 
     // Move changelog (try-rename, ignore NotFound to avoid TOCTOU race)
@@ -245,11 +265,7 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
             .file_name()
             .expect("changelog path must have a filename");
         let log_dest = trash_dir.join(log_filename);
-        match fs::rename(&log_path, &log_dest).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+        rename_ignore_not_found(&log_path, &log_dest).await?;
     }
 
     Ok(())
@@ -287,11 +303,7 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
             .file_name()
             .expect("changelog path must have a filename");
         let log_src = trash_dir.join(log_filename);
-        match fs::rename(&log_src, &log_path).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+        rename_ignore_not_found(&log_src, &log_path).await?;
     }
 
     Ok(())
@@ -425,7 +437,11 @@ fn parse_plain_yaml(
 /// [`split_frontmatter_body`] reads it back as frontmatter content rather than
 /// as the closing delimiter. `format_writes_exactly_two_delimiter_lines` pins
 /// that over the value shapes that push the emitter between those two styles.
-fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Result<String> {
+fn format_frontmatter_body(
+    entity: &Entity,
+    body_field: impl AsRef<str>,
+    path: &Path,
+) -> Result<String> {
     let body_field = body_field.as_ref();
     let body = entity.get_str(body_field).unwrap_or("").to_string();
 
@@ -440,7 +456,7 @@ fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Resu
     let frontmatter_value = Value::Object(frontmatter_map);
     let frontmatter_yaml =
         serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
-            path: PathBuf::from("<serialization>"),
+            path: path.to_path_buf(),
             source: e,
         })?;
 
@@ -448,7 +464,7 @@ fn format_frontmatter_body(entity: &Entity, body_field: impl AsRef<str>) -> Resu
 }
 
 /// Format an entity as plain YAML.
-fn format_plain_yaml(entity: &Entity) -> Result<String> {
+fn format_plain_yaml(entity: &Entity, path: &Path) -> Result<String> {
     let map_value = Value::Object(
         entity
             .fields
@@ -457,7 +473,7 @@ fn format_plain_yaml(entity: &Entity) -> Result<String> {
             .collect(),
     );
     serde_yaml_ng::to_string(&map_value).map_err(|e| EntityError::Yaml {
-        path: PathBuf::from("<serialization>"),
+        path: path.to_path_buf(),
         source: e,
     })
 }
@@ -540,14 +556,11 @@ pub async fn copy_attachment(
     fs::create_dir_all(&dest_dir).await?;
 
     let dest = dest_dir.join(&stored_name);
-    let temp_path = dest_dir.join(format!(".tmp_{}", Ulid::new()));
+    let temp_path = dest_dir.join(format!("{TEMP_FILE_PREFIX}{}", Ulid::new()));
 
     // Copy to temp file, then atomic rename
     fs::copy(source, &temp_path).await?;
-    if let Err(e) = fs::rename(&temp_path, &dest).await {
-        let _ = fs::remove_file(&temp_path).await;
-        return Err(e.into());
-    }
+    rename_or_cleanup(&temp_path, &dest).await?;
 
     Ok(stored_name)
 }
@@ -560,11 +573,7 @@ pub async fn trash_attachment(filename: &str, entity_type_dir: &Path) -> Result<
     let trash = attachments_trash_dir(entity_type_dir);
     fs::create_dir_all(&trash).await?;
     let dest = trash.join(filename);
-    match fs::rename(&src, &dest).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    rename_ignore_not_found(&src, &dest).await
 }
 
 /// Derive attachment metadata from a stored filename.
@@ -792,7 +801,7 @@ mod tests {
             Value::String("This is the body.\nWith multiple lines.".into()),
         );
 
-        let content = format_frontmatter_body(&entity, "body").unwrap();
+        let content = format_frontmatter_body(&entity, "body", Path::new("test.md")).unwrap();
 
         let parsed =
             parse_frontmatter_body(&content, "task", "01ABC", "body", Path::new("test.md"))
@@ -840,7 +849,7 @@ mod tests {
     /// Assert `entity` survives `format_frontmatter_body` +
     /// `parse_frontmatter_body` with every field it went in with.
     fn assert_frontmatter_round_trip(entity: &Entity) {
-        let content = format_frontmatter_body(entity, "body").unwrap();
+        let content = format_frontmatter_body(entity, "body", Path::new("test.md")).unwrap();
         let parsed =
             parse_frontmatter_body(&content, "task", &entity.id, "body", Path::new("test.md"))
                 .unwrap();
@@ -895,7 +904,7 @@ mod tests {
         );
         entity.set("body", Value::String("Card description.\n".into()));
 
-        let content = format_frontmatter_body(&entity, "body").unwrap();
+        let content = format_frontmatter_body(&entity, "body", Path::new("test.md")).unwrap();
         let parsed =
             parse_frontmatter_body(&content, "task", "01ABC", "body", Path::new("test.md"))
                 .unwrap();
@@ -942,7 +951,7 @@ mod tests {
         for comment in comments {
             let entity = task_with_comment(FPCBETH_ORIGINAL_TITLE, comment);
 
-            let content = format_frontmatter_body(&entity, "body").unwrap();
+            let content = format_frontmatter_body(&entity, "body", Path::new("test.md")).unwrap();
 
             let delimiter_lines = content.lines().filter(|line| *line == "---").count();
             assert_eq!(
@@ -994,7 +1003,7 @@ mod tests {
         entity.set("tag_name", Value::String("bug".into()));
         entity.set("color", Value::String("ff0000".into()));
 
-        let content = format_plain_yaml(&entity).unwrap();
+        let content = format_plain_yaml(&entity, Path::new("test.yaml")).unwrap();
 
         let parsed = parse_plain_yaml(&content, "tag", "bug", Path::new("test.yaml")).unwrap();
 
@@ -1018,7 +1027,7 @@ mod tests {
         let mut entity = Entity::new("task", "01ABC");
         entity.set("title", Value::String("No body".into()));
 
-        let content = format_frontmatter_body(&entity, "body").unwrap();
+        let content = format_frontmatter_body(&entity, "body", Path::new("test.md")).unwrap();
         assert!(content.starts_with("---\n"));
         assert!(content.contains("title:"));
         // Body should be empty but format should be valid

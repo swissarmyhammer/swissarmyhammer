@@ -222,6 +222,51 @@ pub struct Session {
     /// source of truth for [`SessionRecord::title`](agent_client_protocol_extras::SessionRecord).
     #[serde(default)]
     pub title: Option<String>,
+    /// The `--system-prompt` this session's Claude CLI process was spawned
+    /// with (from `session/new`'s `request.meta.system_prompt`), if any.
+    ///
+    /// Persisted here — not just handed to the spawned process and forgotten —
+    /// so `session/fork` ([`crate::session_fork::ClaudeAgent::fork_session`])
+    /// can replay the identical `--system-prompt` on the forked child's own
+    /// CLI process. This is load-bearing for Anthropic's prompt cache: the
+    /// CLI reconstructs a forked session's API request from its OWN current
+    /// invocation flags, not from whatever flags spawned the parent, so a
+    /// fork spawned with a different (or absent) system prompt silently
+    /// diverges the request prefix and the cache never matches the parent's
+    /// entry — see the fuller explanation in `session_fork`'s module doc.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// The `--model`-carrying `extra_args` this session's Claude CLI process
+    /// was spawned with, captured from
+    /// [`crate::config::ClaudeConfig::extra_args`] at `session/new` time.
+    ///
+    /// Persisted here for the same reason as [`Session::system_prompt`]:
+    /// `session/fork` ([`crate::session_fork::ClaudeAgent::fork_session`])
+    /// spawns the forked child's CLI process from THIS session's captured
+    /// flags, not from whatever `extra_args` the agent's live config holds
+    /// at fork time. Reading the live config instead would let a config
+    /// reload (or any other config change) between this session's creation
+    /// and a later fork silently spawn the fork with a different `--model`
+    /// than the parent used — a different tokenized prefix Anthropic's
+    /// prompt cache never matches. See `session_fork`'s "Prefix caching"
+    /// module doc for the fuller explanation.
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    /// Whether this session's Claude CLI process was spawned with the "hi"
+    /// init-trigger turn suppressed, captured from
+    /// [`crate::config::ClaudeConfig::skip_init_trigger`] at `session/new`
+    /// time.
+    ///
+    /// Persisted here for the same reason as [`Session::extra_args`]:
+    /// `session/fork` ([`crate::session_fork::ClaudeAgent::fork_session`])
+    /// spawns the forked child's CLI process from THIS session's captured
+    /// value, not from whatever `skip_init_trigger` the agent's live config
+    /// holds at fork time. A review session is spawned with
+    /// `skip_init_trigger: true`; reading the live config instead would let
+    /// a config change between this session's creation and a later fork
+    /// silently spawn the fork with the "hi" trigger restored.
+    #[serde(default)]
+    pub skip_init_trigger: bool,
 }
 
 impl Session {
@@ -257,6 +302,9 @@ impl Session {
             turn_token_count: 0,
             current_mode: None,
             title: None,
+            system_prompt: None,
+            extra_args: Vec::new(),
+            skip_init_trigger: false,
         }
     }
 
@@ -826,6 +874,16 @@ mod tests {
         assert!(session.context.is_empty());
         assert!(session.client_capabilities.is_none());
         assert!(session.mcp_servers.is_empty());
+        assert_eq!(
+            session.system_prompt, None,
+            "a freshly created session carries no system prompt until session/new's \
+             request.meta persists one"
+        );
+        assert!(
+            session.extra_args.is_empty(),
+            "a freshly created session carries no extra_args until session/new \
+             captures the agent's configured extra_args onto it"
+        );
     }
 
     #[test]

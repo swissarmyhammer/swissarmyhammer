@@ -93,7 +93,7 @@ impl std::fmt::Debug for AgentHandle {
 ///
 /// The review tool resolves its agent through this seam rather than constructing
 /// one inline: the production server injects a factory that builds the configured
-/// backend (Claude / Llama) from the session's `ModelConfig`, while tests inject a
+/// Claude backend from the session's `ChatModelConfig`, while tests inject a
 /// scripted ACP agent. The factory is async and fallible — a backend that fails
 /// to start surfaces as a tool error.
 pub type AgentFactory = Arc<
@@ -297,7 +297,7 @@ fn pool_config_for(backend: Option<&str>, concurrency: Option<usize>) -> PoolCon
 
 /// Default remote worker count when `backend` is `session`/absent and no
 /// `review.concurrency` override is supplied.
-const DEFAULT_REMOTE_WORKERS: usize = 4;
+const DEFAULT_REMOTE_WORKERS: usize = 16;
 
 /// Process-global cap on concurrent review pipelines.
 ///
@@ -335,8 +335,10 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     concurrency: Option<usize>,
-    /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
-    /// `None` defers to [`FleetConfig`]'s default (256 KiB). Applies to every scope.
+    /// The rendered-prompt batch budget in BYTES, from the `batch_size`
+    /// modifier. `None` defers to [`FleetConfig`]'s default, which is the
+    /// agent's prompt cap; any value above that cap is clamped down to it.
+    /// Applies to every scope.
     batch_size: Option<usize>,
 }
 
@@ -521,7 +523,9 @@ async fn run_review_request_inner(
         .into_parts();
 
     // Thread the `batch_size` modifier into the engine config; `None` keeps the
-    // FleetConfig default (256 KiB).
+    // FleetConfig default (the agent's prompt cap). `FleetConfig::new` clamps a
+    // caller-supplied value to that cap, so no modifier can ask for a prompt
+    // the agent would reject.
     let fleet_config = request.batch_size.map(FleetConfig::new).unwrap_or_default();
 
     let report = run_review_over_agent(
@@ -1097,7 +1101,7 @@ pub struct ReviewCountsView {
     /// non-zero value means the rendered findings are INCOMPLETE.
     failed: usize,
     /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// rendered block alone exceeded the batch budget. A non-zero value means the
     /// markdown names each one as a "not reviewed, too large" gap.
     skipped: usize,
 }
@@ -1130,7 +1134,7 @@ impl ReviewCountsView {
     }
 
     /// How many changed files were excluded from review because their inlined
-    /// source alone exceeded the `batch_size` budget. A non-zero value means the
+    /// rendered block alone exceeded the batch budget. A non-zero value means the
     /// markdown names each one as a "not reviewed, too large" gap.
     pub fn skipped(&self) -> usize {
         self.skipped
@@ -1723,7 +1727,7 @@ mod tests {
     fn bare_context() -> ToolContext {
         let git_ops = Arc::new(tokio::sync::Mutex::new(None));
         let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new());
-        let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+        let agent_config = Arc::new(swissarmyhammer_config::ChatModelConfig::default());
         ToolContext::new(tool_handlers, git_ops, agent_config)
     }
 
@@ -1957,7 +1961,7 @@ mod tests {
     /// count, never which agent/model runs.
     ///
     /// The review pipeline drives a single agent built by `agent_factory()` from
-    /// the resolved review `ModelConfig` (default `claude-code-haiku`), shared
+    /// the resolved review `ChatModelConfig` (default `--model haiku`), shared
     /// across every pool worker. `backend` reaches only `pool_config_for`, so a
     /// `local` and a `session` run over the same config resolve the SAME model —
     /// the two backends differ exclusively in worker count and AIMD, never in the

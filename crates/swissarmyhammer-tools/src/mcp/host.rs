@@ -28,9 +28,6 @@ pub enum Host {
     /// read/write/edit, web, etc.) and a native `Bash`; SAH serves it the
     /// `Shared` tools plus `Replacement` tools (which supersede a native).
     Claude,
-    /// The llama-agent host. Mounts its agent + replacement tools as its own
-    /// in-memory built-ins, so SAH serves it `Shared` tools only.
-    Llama,
     /// Any other / unknown client. Conservative default: `Shared` only.
     Other,
 }
@@ -38,10 +35,9 @@ pub enum Host {
 /// Substring patterns that identify a host from a client `Implementation` name.
 ///
 /// Matched case-insensitively as substrings so version- or transport-specific
-/// suffixes (e.g. `llama_agent_notifying_client`) still resolve. Order does not
-/// matter because the recognized substrings are disjoint. Data-driven so adding
-/// a host means adding a row here, not a new control-flow branch.
-const HOST_PATTERNS: &[(&str, Host)] = &[("claude", Host::Claude), ("llama", Host::Llama)];
+/// suffixes (e.g. `claude-code-1.2.3`) still resolve. Data-driven so adding a
+/// host means adding a row here, not a new control-flow branch.
+const HOST_PATTERNS: &[(&str, Host)] = &[("claude", Host::Claude)];
 
 impl Host {
     /// Map a client `Implementation` to a [`Host`] identity.
@@ -50,8 +46,7 @@ impl Host {
     /// [`HOST_PATTERNS`]. An unrecognized name (or the absence of client info)
     /// resolves to [`Host::Other`], the conservative default.
     ///
-    /// Known names: Claude Code reports `"claude-code"`; llama-agent reports
-    /// `"llama_agent_notifying_client"`.
+    /// Known names: Claude Code reports `"claude-code"`.
     pub fn from_client_info(client_info: &Implementation) -> Self {
         let name = client_info.name.to_ascii_lowercase();
         HOST_PATTERNS
@@ -66,17 +61,17 @@ impl Host {
     /// The single source of truth for the per-client served-set rule, expressed
     /// as a function of `(Host, ToolCategory)`:
     ///
-    /// | category               | Claude | Llama | Other |
-    /// |------------------------|--------|-------|-------|
-    /// | [`ToolCategory::Shared`]      | yes | yes | yes |
-    /// | [`ToolCategory::Agent`]       | no  | no  | no  |
-    /// | [`ToolCategory::Replacement`] | yes | no  | no  |
+    /// | category               | Claude | Other |
+    /// |------------------------|--------|-------|
+    /// | [`ToolCategory::Shared`]      | yes | yes |
+    /// | [`ToolCategory::Agent`]       | no  | no  |
+    /// | [`ToolCategory::Replacement`] | yes | no  |
     ///
     /// `Shared` tools are domain capabilities every host gets. `Agent` tools are
-    /// base agent capabilities SAH never serves (off-the-shelf agents provide
-    /// them natively, and llama mounts its own). `Replacement` tools supersede a
-    /// named native host tool and are served only to Claude, where they reach
-    /// the native host exactly once.
+    /// base agent capabilities SAH never serves — off-the-shelf agents provide
+    /// them natively. `Replacement` tools supersede a named native host tool and
+    /// are served only to Claude, where they reach the native host exactly
+    /// once.
     pub fn serves(self, category: ToolCategory) -> bool {
         match category {
             ToolCategory::Shared => true,
@@ -103,14 +98,6 @@ mod tests {
     }
 
     #[test]
-    fn llama_agent_client_maps_to_llama() {
-        assert_eq!(
-            Host::from_client_info(&impl_named("llama_agent_notifying_client")),
-            Host::Llama
-        );
-    }
-
-    #[test]
     fn unknown_client_maps_to_other() {
         assert_eq!(
             Host::from_client_info(&impl_named("some-random-mcp-client")),
@@ -124,7 +111,10 @@ mod tests {
             Host::from_client_info(&impl_named("Claude-Code")),
             Host::Claude
         );
-        assert_eq!(Host::from_client_info(&impl_named("LLAMA")), Host::Llama);
+        assert_eq!(
+            Host::from_client_info(&impl_named("CLAUDE_CODE_CLI")),
+            Host::Claude
+        );
     }
 
     #[test]
@@ -133,14 +123,6 @@ mod tests {
         assert!(claude.serves(ToolCategory::Shared));
         assert!(!claude.serves(ToolCategory::Agent));
         assert!(claude.serves(ToolCategory::Replacement { native: "Bash" }));
-    }
-
-    #[test]
-    fn llama_serves_shared_only() {
-        let llama = Host::Llama;
-        assert!(llama.serves(ToolCategory::Shared));
-        assert!(!llama.serves(ToolCategory::Agent));
-        assert!(!llama.serves(ToolCategory::Replacement { native: "Bash" }));
     }
 
     #[test]

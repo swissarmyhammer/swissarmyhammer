@@ -33,7 +33,6 @@ async-trait.workspace = true
 tracing-subscriber.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
-llama-agent = { workspace = true }
 claude-agent = { workspace = true }
 futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }

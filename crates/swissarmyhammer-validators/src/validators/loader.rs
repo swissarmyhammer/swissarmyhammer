@@ -16,7 +16,7 @@
 //! The loader supports `@path/to/file` references in validator frontmatter that
 //! expand to YAML file contents. See [`YamlExpander`] for details.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use swissarmyhammer_directory::{
@@ -50,7 +50,16 @@ pub struct ValidatorLoader {
     /// Map of validator names to validators (legacy format).
     validators: HashMap<String, Validator>,
     /// Map of RuleSet names to RuleSets (new format).
-    rulesets: HashMap<String, RuleSet>,
+    ///
+    /// A `BTreeMap`, not a `HashMap`: this backs `list_rulesets`,
+    /// `list_ruleset_names`, and `matching_rulesets`, and callers of those
+    /// accessors (the `list validators` MCP op, `match_rules`) need stable,
+    /// deterministic enumeration order — not one that varies per process and
+    /// per map instance the way `HashMap`'s random seed would produce. Every
+    /// operation this loader performs on `rulesets` (`insert`, `get`, `retain`,
+    /// `len`, `values`/`keys` iteration) is identical on both map types, so
+    /// there is no behavior cost to the switch.
+    rulesets: BTreeMap<String, RuleSet>,
     /// YAML expander for `@` include references.
     expander: YamlExpander<ValidatorsConfig>,
     /// RuleSet directories that failed to parse and were skipped, retained so a
@@ -85,7 +94,7 @@ impl ValidatorLoader {
     pub fn new() -> Self {
         Self {
             validators: HashMap::new(),
-            rulesets: HashMap::new(),
+            rulesets: BTreeMap::new(),
             expander: YamlExpander::new(),
             load_failures: Vec::new(),
         }
@@ -95,7 +104,7 @@ impl ValidatorLoader {
     pub fn with_expander(expander: YamlExpander<ValidatorsConfig>) -> Self {
         Self {
             validators: HashMap::new(),
-            rulesets: HashMap::new(),
+            rulesets: BTreeMap::new(),
             expander,
             load_failures: Vec::new(),
         }
@@ -666,6 +675,87 @@ mod tests {
         let shared = loader.get_ruleset("shared").expect("shared ruleset");
         assert_eq!(shared.source, ValidatorSource::Project);
         assert_eq!(shared.description(), "Project version");
+    }
+
+    #[test]
+    fn list_ruleset_names_returns_sorted_order() {
+        let dir = TempDir::new().unwrap();
+        // Insert in reverse-alphabetical order so a sort is actually exercised.
+        let names = [
+            "zebra", "yankee", "xray", "whiskey", "victor", "uniform", "tango",
+        ];
+        for name in names {
+            write_ruleset(dir.path(), name, "desc");
+        }
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_rulesets_directory(dir.path(), ValidatorSource::Project)
+            .unwrap();
+
+        let mut expected: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(loader.list_ruleset_names(), expected);
+    }
+
+    #[test]
+    fn two_independently_built_loaders_enumerate_rulesets_in_the_same_order() {
+        // ~21 rulesets: with a randomly seeded HashMap, two independently built
+        // maps agreeing on iteration order by chance is not a real risk, so this
+        // is a meaningful assertion rather than a tautology.
+        let dir = TempDir::new().unwrap();
+        let names: Vec<String> = (0..21).map(|i| format!("ruleset-{i:02}")).collect();
+        for name in &names {
+            write_ruleset(dir.path(), name, "desc");
+        }
+
+        let mut loader_a = ValidatorLoader::new();
+        loader_a
+            .load_rulesets_directory(dir.path(), ValidatorSource::Project)
+            .unwrap();
+
+        let mut loader_b = ValidatorLoader::new();
+        loader_b
+            .load_rulesets_directory(dir.path(), ValidatorSource::Project)
+            .unwrap();
+
+        assert_eq!(
+            loader_a.list_ruleset_names(),
+            loader_b.list_ruleset_names(),
+            "two independently built loaders over the same RuleSet set must \
+             enumerate names in the same order"
+        );
+
+        assert_eq!(
+            loader_a
+                .list_rulesets()
+                .iter()
+                .map(|rs| rs.name().to_string())
+                .collect::<Vec<_>>(),
+            loader_b
+                .list_rulesets()
+                .iter()
+                .map(|rs| rs.name().to_string())
+                .collect::<Vec<_>>(),
+            "list_rulesets must enumerate in the same order across independently \
+             built loaders"
+        );
+
+        let ctx = MatchContext::new();
+        assert_eq!(
+            loader_a
+                .matching_rulesets(&ctx)
+                .iter()
+                .map(|rs| rs.name().to_string())
+                .collect::<Vec<_>>(),
+            loader_b
+                .matching_rulesets(&ctx)
+                .iter()
+                .map(|rs| rs.name().to_string())
+                .collect::<Vec<_>>(),
+            "matching_rulesets must enumerate in the same order across \
+             independently built loaders"
+        );
     }
 
     #[test]

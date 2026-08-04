@@ -6,7 +6,6 @@ use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -33,7 +32,6 @@ async fn test_terminal_capability_check(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -57,7 +55,6 @@ async fn test_terminal_create(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -81,7 +78,6 @@ async fn test_terminal_output(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -105,7 +101,6 @@ async fn test_terminal_wait_for_exit(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -129,7 +124,6 @@ async fn test_terminal_kill(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
@@ -153,7 +147,6 @@ async fn test_terminal_release(
 }
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]

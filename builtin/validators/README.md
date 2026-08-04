@@ -6,7 +6,7 @@ and maintained by `sah init`.
 ## What's here
 
 Each subdirectory is one **validator set** — a named bundle of code-review rules
-(for example `rust/`, `naming/`, `no-secrets/`). A set is a folder with a
+(for example `rust/`, `naming/`, `code-security/`). A set is a folder with a
 `VALIDATOR.md` (the set manifest) plus a `rules/` directory of rule files. The
 review engine reads this directory directly — validators are **not** symlinked
 into agent directories.

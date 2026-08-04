@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 
 use super::infrastructure::{ShellError, ShellExecuteRequest};
 use super::process::{execute_with_guard, spawn_shell_command};
-use super::state::ShellState;
+use super::state::{CommandStatus, ShellState};
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 
@@ -26,10 +26,21 @@ use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 /// available via `get lines`.
 const DEFAULT_TAIL_LINES: usize = 32;
 
+/// Response key that carries the id the caller passes back to `get lines`,
+/// `grep history`, and `kill process`.
+const COMMAND_ID_KEY: &str = "command_id";
+
+/// Response key that carries the command's terminal state. The value is always
+/// a [`CommandStatus`] rendered through its `Display` impl, so the response and
+/// `list processes` never disagree on a status name.
+const STATUS_KEY: &str = "status";
+
 /// Operation metadata for executing shell commands
 #[derive(Debug, Default)]
 pub struct ExecuteCommand;
 
+/// Parameter metadata the `execute command` operation accepts, in the order
+/// the generated schema and the CLI help list them.
 static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("command")
         .description("The shell command to execute")
@@ -47,15 +58,21 @@ static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
 ];
 
 impl Operation for ExecuteCommand {
+    /// Returns the verb part of the operation: `"execute"`.
     fn verb(&self) -> &'static str {
         "execute"
     }
+    /// Returns the noun part of the operation: `"command"`.
     fn noun(&self) -> &'static str {
         "command"
     }
+    /// Returns a one-line description of the execute command operation,
+    /// including the fact that it blocks until the command exits.
     fn description(&self) -> &'static str {
-        "Execute a shell command with timeout and environment control"
+        "Execute a shell command with timeout and environment control; blocks until the command exits or the timeout kills it"
     }
+    /// Returns the parameter metadata the `execute command` operation accepts:
+    /// `command`, `timeout`, `working_directory`, and `environment`.
     fn parameters(&self) -> &'static [ParamMeta] {
         EXECUTE_COMMAND_PARAMS
     }
@@ -124,7 +141,7 @@ async fn prepare_command(
 
     let cmd_id = {
         let mut guard = state.lock().await;
-        guard.start_command(request.command.clone())
+        guard.start_command(request.command.as_str())
     };
 
     let (mut process_guard, work_dir) = spawn_shell_command(
@@ -155,8 +172,12 @@ async fn finalize_completed(
             store_command_output(state, cmd_id, &output).await;
             let total_lines = output.stdout.lines().count() + output.stderr.lines().count();
             let mut response = format!(
-                "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
-                cmd_id, output.exit_code, total_lines, output.execution_time_ms,
+                "{COMMAND_ID_KEY}: {}\n{STATUS_KEY}: {}\nexit_code: {}\nlines: {}\nduration: {}ms",
+                cmd_id,
+                CommandStatus::Completed,
+                output.exit_code,
+                total_lines,
+                output.execution_time_ms,
             );
             if let Some(tail) = format_output_tail(state, cmd_id, total_lines).await {
                 response.push_str("\n\n");
@@ -231,8 +252,11 @@ async fn finalize_timed_out(
 ) -> Result<CallToolResult, McpError> {
     mark_timed_out(state, cmd_id).await;
     Ok(BaseToolImpl::create_success_response(format!(
-        "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
-        cmd_id, timeout_secs, timeout_secs,
+        "{COMMAND_ID_KEY}: {}\n{STATUS_KEY}: {}\ntimeout: {}s\nCommand timed out after {} seconds.",
+        cmd_id,
+        CommandStatus::TimedOut,
+        timeout_secs,
+        timeout_secs,
     )))
 }
 
@@ -284,7 +308,7 @@ async fn store_command_output(
 /// Split `text` into lines and append them to shell state for `cmd_id`.
 /// `stream_name` is used only for log messages ("stdout" / "stderr").
 async fn append_stream(state: &mut ShellState, cmd_id: usize, text: &str, stream_name: &str) {
-    let lines: Vec<String> = text.lines().map(String::from).collect();
+    let lines: Vec<&str> = text.lines().collect();
     if let Err(e) = state.append_lines(cmd_id, &lines).await {
         tracing::warn!(
             "Failed to store {} for command {}: {}",
@@ -850,6 +874,35 @@ mod tests {
         assert!(
             !text.contains("last 3 of"),
             "Short output must not use truncation wording. Got:\n{text}"
+        );
+    }
+
+    /// The timeout response must name the `timed_out` status on the wire.
+    /// `finalize_timed_out` renders it through the `CommandStatus` Display
+    /// impl, and this literal is the independent oracle for that wire text.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_execute_response_reports_timed_out_status() {
+        let mut args = serde_json::Map::new();
+        args.insert("command".to_string(), serde_json::json!("sleep 30"));
+        args.insert("timeout".to_string(), serde_json::json!(1));
+        args.insert("working_directory".to_string(), serde_json::json!("/tmp"));
+
+        let call_result = TestCommandBuilder::new("unused")
+            .with_custom_args(args)
+            .execute()
+            .await
+            .expect("a timed-out command still returns a success response");
+        assert_eq!(call_result.is_error, Some(false));
+
+        let text = extract_text(&call_result);
+        assert!(
+            text.contains("status: timed_out"),
+            "Expected timed_out status. Got:\n{text}"
+        );
+        assert!(
+            text.contains("timeout: 1s"),
+            "Expected the timeout to be reported. Got:\n{text}"
         );
     }
 

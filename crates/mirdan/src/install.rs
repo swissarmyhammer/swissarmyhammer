@@ -1231,6 +1231,20 @@ fn install_profile_validators(
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
 
+    // A set merged or deleted out of the current builtin lineup (e.g. the nine
+    // single-rule sets folded into code-security/code-hygiene) never
+    // re-materializes, so a stale copy the user never touched would otherwise
+    // sit in the store forever. Prune it here, on every refresh, before
+    // installing the currently-selected sets; a user-modified copy of the same
+    // name is left untouched (see `retired_validators`).
+    let pruned = crate::retired_validators::prune_unmodified_retired_sets(&target_root);
+    if !pruned.is_empty() {
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("retired validator set(s): {}", pruned.join(", ")),
+        });
+    }
+
     let selected = selector.select(&available);
     let mut materialized: Vec<String> = Vec::new();
     for set in &selected {
@@ -3608,10 +3622,10 @@ mod tests {
         );
 
         let validators_root = env.home_path().join(".validators");
-        // Every embedded builtin set is materialized with its manifest. The old
-        // multi-rule security-rules set was split into focused validators
-        // (no-secrets / injection / command-safety).
-        for set in ["dead-code", "no-secrets", "test-integrity"] {
+        // Every embedded builtin set is materialized with its manifest. The nine
+        // single-rule sets (no-secrets, injection, command-safety, etc.) were
+        // merged into the focused code-security / code-hygiene sets.
+        for set in ["code-hygiene", "code-security", "test-integrity"] {
             let manifest = validators_root.join(set).join("VALIDATOR.md");
             assert!(
                 manifest.is_file(),
@@ -3620,16 +3634,16 @@ mod tests {
         }
 
         // A nested rule file is materialized and matches the embedded content.
-        let rule = validators_root.join("dead-code/rules/dead-code.md");
+        let rule = validators_root.join("code-hygiene/rules/dead-code.md");
         assert!(
             rule.is_file(),
             "nested rule file must materialize: {rule:?}"
         );
         let embedded = crate::builtin_validators::get_builtin_validators()
             .into_iter()
-            .find(|(name, _)| *name == "dead-code/rules/dead-code.md")
+            .find(|(name, _)| *name == "code-hygiene/rules/dead-code.md")
             .map(|(_, content)| content)
-            .expect("embedded builtin must include dead-code/rules/dead-code.md");
+            .expect("embedded builtin must include code-hygiene/rules/dead-code.md");
         assert_eq!(
             std::fs::read_to_string(&rule).unwrap(),
             embedded,
@@ -3653,11 +3667,11 @@ mod tests {
 
         // 1. Hand-edit a builtin-deployed file (simulating a user tampering with
         //    the read-only reference copy).
-        let tampered = validators_root.join("dead-code/VALIDATOR.md");
+        let tampered = validators_root.join("code-hygiene/VALIDATOR.md");
         std::fs::write(&tampered, "TAMPERED").unwrap();
 
         // 2. Add a user-authored validator *inside* a builtin set dir.
-        let user_file_in_builtin = validators_root.join("dead-code/rules/my-rule.md");
+        let user_file_in_builtin = validators_root.join("code-hygiene/rules/my-rule.md");
         std::fs::write(&user_file_in_builtin, "USER RULE").unwrap();
 
         // 3. Add an entirely user-created set.
@@ -3678,9 +3692,9 @@ mod tests {
         // The tampered builtin file is restored to the embedded content.
         let embedded_manifest = crate::builtin_validators::get_builtin_validators()
             .into_iter()
-            .find(|(name, _)| *name == "dead-code/VALIDATOR.md")
+            .find(|(name, _)| *name == "code-hygiene/VALIDATOR.md")
             .map(|(_, content)| content)
-            .expect("embedded builtin must include dead-code/VALIDATOR.md");
+            .expect("embedded builtin must include code-hygiene/VALIDATOR.md");
         assert_eq!(
             std::fs::read_to_string(&tampered).unwrap(),
             embedded_manifest,
@@ -3699,6 +3713,69 @@ mod tests {
             std::fs::read_to_string(&user_set_manifest).unwrap(),
             "USER SET",
             "a user-created set must never be touched"
+        );
+    }
+
+    /// A refresh (re-running `init_profile`) prunes a retired builtin set from
+    /// the deployed store when its files are byte-identical to what was
+    /// shipped before it was retired, but leaves a user-modified copy of the
+    /// same retired set alone.
+    #[test]
+    #[serial(cwd)]
+    fn init_profile_refresh_prunes_unmodified_retired_set_but_keeps_user_modified_copy() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let reporter = NullReporter;
+        let validators_root = env.home_path().join(".validators");
+
+        // Deploy the OLD (pre-merge) `no-secrets` set exactly as it shipped,
+        // simulating a store populated by a binary from before the merge.
+        let no_secrets_set = crate::retired_validators::RETIRED_VALIDATOR_SETS
+            .iter()
+            .find(|s| s.name == "no-secrets")
+            .expect("no-secrets is a retired set");
+        for file in no_secrets_set.files {
+            let dest = validators_root.join("no-secrets").join(file.relative_path);
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, file.content).unwrap();
+        }
+
+        // Deploy a user-MODIFIED copy of a different retired set (`injection`).
+        let injection_set = crate::retired_validators::RETIRED_VALIDATOR_SETS
+            .iter()
+            .find(|s| s.name == "injection")
+            .expect("injection is a retired set");
+        for file in injection_set.files {
+            let dest = validators_root.join("injection").join(file.relative_path);
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, file.content).unwrap();
+        }
+        let injection_manifest = validators_root.join("injection/VALIDATOR.md");
+        std::fs::write(&injection_manifest, "USER MODIFIED THIS FILE").unwrap();
+
+        // Run the refresh.
+        let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "refresh must not error: {results:?}"
+        );
+
+        // The unmodified retired `no-secrets` set is gone entirely.
+        assert!(
+            !validators_root.join("no-secrets").exists(),
+            "an unmodified retired set must be pruned by refresh"
+        );
+
+        // The user-modified retired `injection` set survives, edit intact.
+        assert!(
+            validators_root.join("injection").is_dir(),
+            "a user-modified retired set must survive refresh"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&injection_manifest).unwrap(),
+            "USER MODIFIED THIS FILE",
+            "the user's edit to a retired set must be preserved exactly"
         );
     }
 
@@ -3730,7 +3807,7 @@ mod tests {
         // child and the real builtin sets still materialize alongside it.
         assert!(readme.is_file() && !readme.is_dir());
         assert!(
-            validators_root.join("dead-code/VALIDATOR.md").is_file(),
+            validators_root.join("code-hygiene/VALIDATOR.md").is_file(),
             "real builtin sets must materialize beside the README"
         );
 

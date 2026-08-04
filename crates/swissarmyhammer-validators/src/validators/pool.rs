@@ -9,7 +9,7 @@
 //! ## Worker count is the only concurrency control
 //!
 //! Worker count is legitimate and physical, not arbitrary:
-//! - **local Llama backend → 1 worker** (one in-process model/GPU).
+//! - **a local in-process model backend → 1 worker** (one model/GPU).
 //! - **remote/Claude-API backend → N workers**, default from config. The
 //!   [`PoolConfig::aimd`] flag is reserved for adapting that count to discover
 //!   the API ceiling, but the adaptive logic is not yet wired up (see the field
@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 const MIN_WORKERS: usize = 1;
 
 /// Maximum worker count for the remote backend default.
-const MAX_REMOTE_WORKERS: usize = 8;
+const MAX_REMOTE_WORKERS: usize = 16;
 
 /// Default per-call cap on generation tokens for a single `submit` prompt.
 pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
@@ -163,6 +163,19 @@ impl PoolConfig {
     }
 }
 
+/// The agent prompt cap every submitted prompt must fit inside, in **bytes**.
+///
+/// Read from [`claude_agent`], never re-declared: this is the same constant the
+/// agent's own `max_prompt_length` defaults to and the same one
+/// `swissarmyhammer_agent` configures its Claude backend with. The review
+/// engine budgets its batches against it
+/// (`crate::review::AGENT_PROMPT_CAP` re-exports this), and [`AgentPool`]
+/// enforces it at submission, so the budget and the rejection cannot disagree.
+///
+/// ACP exposes no prompt-length capability to query at runtime, so a shared
+/// compile-time constant is the single source both sides read.
+pub const AGENT_PROMPT_CAP: usize = claude_agent::constants::sizes::messages::MAX_PROMPT_LENGTH;
+
 /// Failure of a single submitted prompt.
 ///
 /// The two liveness-abandonment modes are typed variants so callers can tell
@@ -208,6 +221,20 @@ pub enum PoolError {
         /// The failure the agent reported (or the transport surfaced).
         message: String,
     },
+    /// The prompt was longer than the agent will accept, so it was never sent.
+    ///
+    /// The engine budgets every batch's rendered prompt against
+    /// [`AGENT_PROMPT_CAP`], so reaching this means the budgeting itself is
+    /// wrong. It is a typed, self-describing refusal rather than a send that
+    /// comes back as a bare `invalid_params` — that failure mode is exactly
+    /// what `^6jsxjbc` was filed for.
+    #[error("prompt is {length} bytes, over the agent's {limit}-byte prompt cap; not sent")]
+    PromptTooLong {
+        /// The prompt's actual length in bytes.
+        length: usize,
+        /// The cap it exceeded, in bytes.
+        limit: usize,
+    },
     /// The agent connection itself failed the turn.
     #[error(transparent)]
     Agent(#[from] claude_agent::AgentError),
@@ -232,7 +259,7 @@ pub struct SessionTurn {
     pub fork: Option<ForkAttachment>,
     /// Per-turn Anthropic prompt-cache usage, parsed from the prompt response's
     /// `_meta` (`cache_usage` key) when the backend reported it. `None` for
-    /// backends that report no cache metrics (e.g. the native KV/llama path,
+    /// backends that report no cache metrics (e.g. the native KV path,
     /// which signals reuse via [`ForkAttachment::prefix_tokens`] instead). On
     /// the claude backend this is the only signal of warm (cache read) vs cold
     /// (cache write) prefix reuse, since the fork attaches no token counts.
@@ -433,7 +460,25 @@ impl AgentPool {
 
     /// Enqueue one job, delivering a shutdown error instead of hanging the
     /// submitter's future when the pool's workers are all gone.
+    ///
+    /// A prompt over [`AGENT_PROMPT_CAP`] is refused here rather than sent: the
+    /// agent would reject it anyway, and its rejection is a bare
+    /// `invalid_params` the caller cannot act on. This is the single choke
+    /// point every submission API funnels through, so fan-out AND verify turns
+    /// are both covered.
     fn enqueue(&self, job: Job) {
+        if job.prompt.len() > AGENT_PROMPT_CAP {
+            tracing::error!(
+                length = job.prompt.len(),
+                limit = AGENT_PROMPT_CAP,
+                "prompt exceeds the agent's prompt cap; refusing it instead of sending it"
+            );
+            job.respond_to.deliver(Err(PoolError::PromptTooLong {
+                length: job.prompt.len(),
+                limit: AGENT_PROMPT_CAP,
+            }));
+            return;
+        }
         if let Err(returned) = self.tx.send(job) {
             returned
                 .0
@@ -526,8 +571,8 @@ impl Drop for AgentPool {
 ///
 /// The normal path calls [`SessionPinGuard::release`] to unpin inline and
 /// observe the result; `Drop` is the cancellation backstop. `Drop` is
-/// synchronous and the unpin is an async request, so — mirroring llama-agent's
-/// `ActiveRequestGuard` — the drop path spawns the unpin onto the runtime.
+/// synchronous and the unpin is an async request, so the drop path spawns the
+/// unpin onto the runtime.
 pub struct SessionPinGuard {
     /// `Some` until the pin is released (explicitly or by `Drop`).
     agent: Option<ConnectionTo<Agent>>,
@@ -1407,7 +1452,7 @@ mod tests {
 
     /// Holds every `prompt` behind a shared gate (a [`tokio::sync::Semaphore`])
     /// so the test controls exactly how many prompts may decode at once — the
-    /// shape of the single-GPU llama backend, where a `prompt` request is sent
+    /// shape of a single-GPU in-process backend, where a `prompt` request is sent
     /// to the agent but blocks behind the GpuLock until earlier decodes finish.
     /// A gated prompt streams nothing while it waits, then emits one
     /// `agent_message_chunk` and completes once it acquires a permit.
@@ -1556,8 +1601,13 @@ mod tests {
     fn test_pool_config_remote_clamps_workers() {
         assert_eq!(PoolConfig::remote(4).workers, 4);
         assert_eq!(
+            PoolConfig::remote(16).workers,
+            16,
+            "remote default must allow up to the raised ceiling"
+        );
+        assert_eq!(
             PoolConfig::remote(100).workers,
-            8,
+            16,
             "remote default must clamp to the friendly ceiling"
         );
         assert_eq!(
@@ -2051,6 +2101,39 @@ mod tests {
                 vec![false, true],
                 "only the primed turn carries the pin-on-save intent in _meta",
             );
+        })
+        .await;
+    }
+
+    /// A prompt over the agent's cap is refused at submission, naming both
+    /// numbers, instead of being sent and coming back as a bare
+    /// `invalid_params` the caller cannot act on.
+    ///
+    /// `PassingAgent` answers every prompt with `Ok`, so an `Err` here can only
+    /// come from the pre-flight — which is also what proves the prompt never
+    /// reached the agent.
+    #[tokio::test]
+    async fn test_pool_refuses_a_prompt_over_the_agent_cap_before_sending_it() {
+        let agent = Arc::new(PassingAgent::new());
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let over_by_one = AGENT_PROMPT_CAP + 1;
+            let error = pool
+                .submit("x".repeat(over_by_one))
+                .await
+                .expect("result")
+                .expect_err("a prompt over the cap must not be sent");
+
+            match error {
+                PoolError::PromptTooLong { length, limit } => {
+                    assert_eq!(length, over_by_one, "the error names the actual length");
+                    assert_eq!(limit, AGENT_PROMPT_CAP, "the error names the limit");
+                }
+                other => panic!("expected PromptTooLong, got {other:?}"),
+            }
         })
         .await;
     }

@@ -153,6 +153,29 @@ impl TestRepo {
             .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
             .unwrap();
         index.write().unwrap();
+        self.commit_from_index(&mut index, message)
+    }
+
+    /// Stage ONLY `paths` (each confined the same way [`write`](Self::write)
+    /// confines a target) and commit, returning the commit sha. Any OTHER
+    /// working-tree modification — e.g. a dirty, uncommitted edit to a
+    /// different file — is left untouched in the index, so this produces a
+    /// real "unrelated commit" a test can use to prove that file's blame/diff
+    /// state is undisturbed by history moving elsewhere.
+    pub fn commit_only(&self, paths: &[&str], message: &str) -> String {
+        let mut index = self.repo.index().unwrap();
+        for path in paths {
+            index.add_path(&confine_relative(path)).unwrap();
+        }
+        index.write().unwrap();
+        self.commit_from_index(&mut index, message)
+    }
+
+    /// Write `index`'s current tree as a new commit on `HEAD`, returning the
+    /// commit sha. The shared tail of [`commit`](Self::commit) and
+    /// [`commit_only`](Self::commit_only), which differ only in what they
+    /// stage beforehand.
+    fn commit_from_index(&self, index: &mut git2::Index, message: &str) -> String {
         let tree_id = index.write_tree().unwrap();
         let tree = self.repo.find_tree(tree_id).unwrap();
         let sig = git2::Signature::now("Test", "test@example.com").unwrap();
@@ -163,6 +186,35 @@ impl TestRepo {
             .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
             .unwrap();
         oid.to_string()
+    }
+
+    /// Rename the branch HEAD currently points to, to `name` — must be called
+    /// after at least one commit exists. Pins the default branch's name to a
+    /// known value (e.g. `main`) regardless of the machine's
+    /// `init.defaultBranch` config, so a test asserting against a specific
+    /// branch name is deterministic.
+    pub fn rename_current_branch_to(&self, name: &str) {
+        let head = self.repo.head().unwrap();
+        let current = head.shorthand().unwrap_or("").to_string();
+        if current == name {
+            return;
+        }
+        let commit = head.peel_to_commit().unwrap();
+        self.repo.branch(name, &commit, false).unwrap();
+        self.repo.set_head(&format!("refs/heads/{name}")).unwrap();
+        if let Ok(mut old) = self.repo.find_branch(&current, git2::BranchType::Local) {
+            old.delete().ok();
+        }
+    }
+
+    /// Create a new branch at the current `HEAD` and switch to it (`git
+    /// checkout -b name`) — the task/feature branch a `/finish`-style loop
+    /// commits onto, separate from whatever `main`/`master` stays fixed at.
+    pub fn checkout_new_branch(&self, name: &str) {
+        let head = self.repo.head().unwrap();
+        let commit = head.peel_to_commit().unwrap();
+        self.repo.branch(name, &commit, false).unwrap();
+        self.repo.set_head(&format!("refs/heads/{name}")).unwrap();
     }
 }
 
@@ -567,7 +619,7 @@ impl PromptGateController {
 /// How the mock agent answers the session-fork extension surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForkMode {
-    /// Fork/status/pin behave like the llama backend (state + token counts).
+    /// Fork/status/pin behave like a native-KV backend (state + token counts).
     Supported,
     /// `session/fork` is rejected (`fork_parent_state_unavailable`);
     /// status and pin still work.
@@ -837,7 +889,7 @@ impl ScriptedAgent {
     /// Mark one completed turn on the session: it now has saved state. When
     /// `pin_on_save` is set (the prime turn's born-pinned intent, carried in the
     /// prompt's `_meta`), the saved state is born pinned — pinned atomically at
-    /// save time, mirroring the llama backend's `insert_inner(.., true)`. This
+    /// save time, mirroring a native-KV backend's pinned insert. This
     /// is what lets a fleet test assert the primed prefix is born pinned through
     /// the production path, before any separate `session/pin` lands.
     fn complete_turn(&self, session_id: &str, pin_on_save: bool) {

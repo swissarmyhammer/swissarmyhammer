@@ -10,7 +10,7 @@
 //! error rather than decoded.
 //!
 //! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
-//! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
+//! agent layer (claude-agent), not at the MCP tool layer.
 //!
 //! ## Features
 //!

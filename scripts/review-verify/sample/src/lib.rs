@@ -1,4 +1,4 @@
-//! Seeded sample crate for the local-model review verification harness.
+//! Seeded sample crate for the review verification harness.
 //!
 //! Every module contains *planted, intentional* findings — duplicated
 //! function bodies and repeated bare numeric literals — so that a working

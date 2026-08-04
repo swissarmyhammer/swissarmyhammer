@@ -2,9 +2,8 @@
 //! conversation and the claude CLI's persisted transcript.
 //!
 //! This module implements claude-agent's side of the backend-agnostic
-//! extension contract in [`agent_client_protocol_extras::session_fork`] — the
-//! same three `ext_method`s llama-agent serves, so the validators-pool client
-//! drives either backend through one code path:
+//! extension contract in [`agent_client_protocol_extras::session_fork`], so the
+//! validators-pool client drives any backend through one code path:
 //!
 //! - `session/fork` ([`ClaudeAgent::fork_session`]) — clone the parent's
 //!   in-memory [`Session`](crate::session::Session) under a fresh ULID and
@@ -26,10 +25,37 @@
 //! # Prefix caching
 //!
 //! A fork replays the identical conversation prefix, so Anthropic's
-//! server-side prompt caching covers the shared prefix automatically.
+//! server-side prompt caching CAN cover the shared prefix automatically —
 //! claude-agent delegates all API request construction to the claude CLI
 //! (which manages prompt caching itself); no custom caching layer exists or
-//! is needed here.
+//! is needed here. But "can" is conditional: Anthropic's cache requires an
+//! EXACT match of the tokenized request prefix, and the claude CLI builds a
+//! forked session's request from its OWN current invocation flags — the
+//! conversation history it replays comes from the parent's persisted
+//! transcript, but the **system prompt and model** come from whatever flags
+//! THIS spawn was given, not from whatever flags spawned the parent. So
+//! [`spawn_forked_process`](ClaudeAgent::spawn_forked_process) must launch the
+//! child with the identical `--system-prompt` and `--model` (via
+//! `extra_args`) the parent used, via
+//! [`build_fork_spawn_config`](ClaudeAgent::build_fork_spawn_config) reading
+//! [`Session::system_prompt`] and [`Session::extra_args`] — both carried on
+//! the parent [`Session`](crate::session::Session), captured at `session/new`
+//! time (`system_prompt` from `request.meta.system_prompt`, `extra_args` from
+//! [`crate::config::ClaudeConfig::extra_args`] as it stood at that moment),
+//! and inherited by [`clone_child_session`]'s full-session clone. Both are
+//! read from the PARENT's captured fields, never from the agent's live
+//! config at fork time: if the agent's config changed between the parent's
+//! creation and the fork (a config reload, or a different agent config live
+//! by fork time), reading the live config would silently spawn the fork with
+//! a different `--model` than its parent, breaking the exact prefix match
+//! this mechanism exists to guarantee. Confirmed empirically: forking a
+//! primed session WITHOUT replaying its `--system-prompt` reports
+//! `cache_read_input_tokens: 0` (or, worse, a nonsensical warm hit against
+//! some unrelated cached prefix that happens to collide) every time; forking
+//! it WITH the identical `--system-prompt`/`--model` reports a full cache
+//! read of the parent's prefix. This was the root cause of `^j9rwjtx` (review
+//! fleet forks reporting 100% cold reuse) — not a CLI or Anthropic
+//! limitation.
 
 use agent_client_protocol_extras::{
     SessionErrorKind, SessionForkRequest, SessionForkResponse, SessionPinRequest,
@@ -226,6 +252,43 @@ impl ClaudeAgent {
         Ok(parent)
     }
 
+    /// Build the [`SpawnConfig`](crate::claude_process::SpawnConfig) for the
+    /// child session's claude CLI process forked from `parent`'s transcript.
+    ///
+    /// Carries `system_prompt` from [`Session::system_prompt`] and
+    /// `extra_args` from [`Session::extra_args`] — both captured on the
+    /// PARENT session at the moment it was created, not read from the
+    /// agent's live config at fork time. This is not cosmetic parity: the
+    /// claude CLI builds a forked session's API request from THIS spawn's
+    /// own flags, not from whatever flags spawned the parent, so a fork
+    /// missing either one — or picking up a live config value that has
+    /// since diverged from what the parent actually used — silently
+    /// diverges the request prefix and Anthropic's prompt cache never
+    /// matches the parent's entry. See the module's "Prefix caching" doc for
+    /// the empirical evidence.
+    ///
+    /// Pure (no I/O) so it is unit-testable without spawning a subprocess,
+    /// mirroring [`ClaudeAgent::build_session_spawn_config`](crate::agent::ClaudeAgent::build_session_spawn_config).
+    fn build_fork_spawn_config(
+        &self,
+        parent: &Session,
+        child_id: SessionId,
+    ) -> crate::claude_process::SpawnConfig {
+        crate::claude_process::SpawnConfig::builder()
+            .session_id(child_id)
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                child_id.to_string(),
+            ))
+            .cwd(parent.cwd.clone())
+            .mcp_servers(self.config.mcp_servers.clone())
+            .system_prompt(parent.system_prompt.clone())
+            .ephemeral(self.config.claude.ephemeral)
+            .tools_override(self.config.claude.tools_override.clone())
+            .extra_args(parent.extra_args.clone())
+            .skip_init_trigger(parent.skip_init_trigger)
+            .build()
+    }
+
     /// Spawn the child session's claude CLI process forked from the parent's
     /// transcript, mirroring the spawn configuration the resume path uses.
     async fn spawn_forked_process(
@@ -233,16 +296,7 @@ impl ClaudeAgent {
         parent: &Session,
         child_id: SessionId,
     ) -> std::result::Result<(), ForkAttachError> {
-        let spawn_config = crate::claude_process::SpawnConfig::builder()
-            .session_id(child_id)
-            .acp_session_id(agent_client_protocol::schema::SessionId::new(
-                child_id.to_string(),
-            ))
-            .cwd(parent.cwd.clone())
-            .mcp_servers(self.config.mcp_servers.clone())
-            .ephemeral(self.config.claude.ephemeral)
-            .tools_override(self.config.claude.tools_override.clone())
-            .build();
+        let spawn_config = self.build_fork_spawn_config(parent, child_id);
 
         self.claude_client
             .fork_process(parent.id, spawn_config)
@@ -647,6 +701,273 @@ mod tests {
         assert!(
             !masquerades,
             "a spawn failure must never masquerade as a parent-state condition: {error:?}"
+        );
+    }
+
+    /// A forked child's spawn config must carry the parent's `system_prompt`,
+    /// or the CLI builds the child's API request with a DIFFERENT system
+    /// prompt than the parent's — a different tokenized prefix Anthropic's
+    /// prompt cache will never recognize as the parent's, no matter how
+    /// identical the replayed conversation history is. Verified empirically
+    /// against a real forked `claude` CLI session while investigating
+    /// `^j9rwjtx`: omitting `--system-prompt` on the fork reported
+    /// `cache_read_input_tokens: 0` every time (or a nonsensical hit against
+    /// an unrelated cached prefix); replaying it reported a full cache read
+    /// of the parent's prefix.
+    #[tokio::test]
+    #[serial]
+    async fn test_fork_spawn_config_carries_parent_system_prompt() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let (agent, _rx) = build_agent(false).await;
+        let parent_id = primed_parent(&agent, cwd.path());
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.system_prompt = Some("You are a strict senior code reviewer.".to_string());
+            })
+            .expect("set parent system prompt");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+
+        let spawn_config = agent.build_fork_spawn_config(&parent, SessionId::new());
+
+        assert_eq!(
+            spawn_config.system_prompt.as_deref(),
+            Some("You are a strict senior code reviewer."),
+            "a forked child must be spawned with the parent's system prompt, or \
+             Anthropic's prompt cache never matches the parent's prefix"
+        );
+    }
+
+    /// A forked child's spawn config must also carry the parent session's
+    /// captured `extra_args` (e.g. `--model <tier>`) — the same reasoning as
+    /// the system prompt: a model mismatch between parent and fork changes
+    /// the request the CLI builds and breaks the cache just as thoroughly.
+    #[tokio::test]
+    #[serial]
+    async fn test_fork_spawn_config_carries_extra_args() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let (agent, _rx) = build_agent(false).await;
+        let parent_id = primed_parent(&agent, cwd.path());
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.extra_args = vec!["--model".to_string(), "sonnet".to_string()];
+            })
+            .expect("set parent extra_args");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+
+        let spawn_config = agent.build_fork_spawn_config(&parent, SessionId::new());
+
+        assert_eq!(
+            spawn_config.extra_args,
+            vec!["--model".to_string(), "sonnet".to_string()],
+            "a forked child must carry the parent session's captured extra \
+             CLI args (e.g. --model), or the CLI resolves a different model \
+             for the fork than the parent used"
+        );
+    }
+
+    /// A forked child's spawn config must carry the parent's OWN `extra_args`
+    /// as captured at the parent's `session/new` time — not whatever
+    /// `extra_args` the current live agent config happens to hold at fork
+    /// time. If agent config changes between the parent's creation and the
+    /// fork (a config reload, or a different agent config live by fork
+    /// time), reading the live config would spawn the fork with a different
+    /// `--model` than its parent, breaking the exact prefix match
+    /// Anthropic's prompt cache requires — the same failure mode
+    /// `test_fork_spawn_config_carries_parent_system_prompt` guards for
+    /// `system_prompt`.
+    #[tokio::test]
+    #[serial]
+    async fn test_fork_spawn_config_carries_parent_extra_args_not_live_config() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = headless_config(false);
+        // The agent's CURRENT live config carries a different --model than
+        // the parent session was originally created with, simulating a
+        // config reload (or a different agent config live by fork time).
+        config.claude.extra_args = vec!["--model".to_string(), "opus".to_string()];
+        let (agent, _rx) = ClaudeAgent::new(config).await.expect("headless agent");
+        let parent_id = primed_parent(&agent, cwd.path());
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.extra_args = vec!["--model".to_string(), "sonnet".to_string()];
+            })
+            .expect("set parent extra_args");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+
+        let spawn_config = agent.build_fork_spawn_config(&parent, SessionId::new());
+
+        assert_eq!(
+            spawn_config.extra_args,
+            vec!["--model".to_string(), "sonnet".to_string()],
+            "a forked child must carry the PARENT's captured extra_args, not \
+             whatever the live agent config holds at fork time, or a config \
+             change between parent creation and fork silently changes the \
+             fork's model and breaks the cache match"
+        );
+    }
+
+    /// A forked child's spawn config must carry the parent's OWN
+    /// `skip_init_trigger` as captured at the parent's `session/new` time —
+    /// not whatever `skip_init_trigger` the current live agent config
+    /// happens to hold at fork time. This is the same gap class
+    /// `test_fork_spawn_config_carries_parent_extra_args_not_live_config`
+    /// guards for `extra_args`: a review session is created with
+    /// `skip_init_trigger: true`, and a forked child of that review session
+    /// must NOT silently pick up `false` from a live config that has since
+    /// diverged (or belongs to a different agent instance by fork time).
+    #[tokio::test]
+    #[serial]
+    async fn test_fork_spawn_config_carries_parent_skip_init_trigger_not_live_config() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = headless_config(false);
+        // The agent's CURRENT live config has `skip_init_trigger: false`,
+        // simulating a config reload (or a different agent config live by
+        // fork time) that diverges from what the parent session captured.
+        config.claude.skip_init_trigger = false;
+        let (agent, _rx) = ClaudeAgent::new(config).await.expect("headless agent");
+        let parent_id = primed_parent(&agent, cwd.path());
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.skip_init_trigger = true;
+            })
+            .expect("set parent skip_init_trigger");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+
+        let spawn_config = agent.build_fork_spawn_config(&parent, SessionId::new());
+
+        assert!(
+            spawn_config.skip_init_trigger,
+            "a forked child must carry the PARENT's captured skip_init_trigger, \
+             not whatever the live agent config holds at fork time, or a fork of \
+             a review session silently restores the \"hi\" init trigger"
+        );
+    }
+
+    /// Regression guard for `^1hmd9yy`: a real `.sah` log measured 127 of 129
+    /// forked review-fleet spawns with NO `--model` flag, because the fork
+    /// path's `SpawnConfig.extra_args` was empty. `^j9rwjtx` fixed the root
+    /// cause (`build_fork_spawn_config` now reads `parent.extra_args`), and
+    /// `test_fork_spawn_config_carries_extra_args` above pins that unit in
+    /// isolation — but it sets `Session.extra_args` directly via
+    /// `update_session`, bypassing the real `session/new` capture
+    /// ([`ClaudeAgent::store_extra_args_in_session`]), and it stops at the
+    /// `SpawnConfig`, never checking the assembled argv.
+    ///
+    /// This test drives the ACTUAL chain the review fan-out's `AgentPool`
+    /// exercises over ACP — `session/new` (which is what captures the
+    /// agent's *configured* `extra_args` onto the session in the first
+    /// place) followed by the real `session/fork` extension
+    /// ([`ClaudeAgent::fork_session`]) — then feeds the resulting
+    /// [`SpawnConfig`] into
+    /// [`ClaudeProcess::build_base_command`](crate::claude_process::ClaudeProcess::build_base_command)
+    /// to assert on the literal argv a forked spawn would receive. The one
+    /// line this cannot drive through real code is setting
+    /// `SpawnConfig.attachment` to `Fork` — production does that in
+    /// [`crate::claude::ClaudeClient::fork_process`], immediately before
+    /// handing the config to `ClaudeProcess::spawn`, which this test avoids
+    /// only because doing so would require a real `claude` binary on `PATH`.
+    #[tokio::test]
+    #[serial]
+    async fn test_review_fanout_chain_carries_model_tier_to_forked_argv() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = headless_config(false);
+        config.claude.extra_args = vec!["--model".to_string(), "haiku".to_string()];
+        let (agent, _rx) = ClaudeAgent::new(config).await.expect("headless agent");
+
+        // The real `session/new` path: this is what captures the agent's
+        // configured `extra_args` onto the session
+        // (`ClaudeAgent::store_extra_args_in_session`), exactly as the review
+        // fan-out's primed prefix session is created by `AgentPool::submit_primed`.
+        let request =
+            agent_client_protocol::schema::NewSessionRequest::new(cwd.path().to_path_buf());
+        let parent_id = agent
+            .create_new_session_internal(&request)
+            .await
+            .expect("session creation must succeed");
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.add_message(Message::new(
+                    MessageRole::User,
+                    "the corpus under review".to_string(),
+                ));
+                session.add_message(Message::new(
+                    MessageRole::Assistant,
+                    "understood".to_string(),
+                ));
+            })
+            .expect("prime parent session");
+
+        // The real `session/fork` extension the review fan-out calls once per
+        // validator (`AgentPool::submit_forked`).
+        let response = agent
+            .fork_session(SessionForkRequest {
+                parent_session_id: parent_id.to_string(),
+            })
+            .await
+            .expect("fork of a primed parent must succeed");
+        let child_id: SessionId = response.session_id.parse().expect("child ULID");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+        let mut spawn_config = agent.build_fork_spawn_config(&parent, child_id);
+        // Mirrors `ClaudeClient::fork_process`, the one step this test cannot
+        // drive through real code without a `claude` binary on `PATH`.
+        spawn_config.attachment =
+            crate::claude_process::ConversationAttachment::Fork { parent: parent.id };
+
+        let command = crate::claude_process::ClaudeProcess::build_base_command(
+            &spawn_config.session_id.to_uuid_string(),
+            &spawn_config.attachment,
+            &spawn_config.extra_args,
+        );
+        let args = crate::test_support::command_args(&command);
+
+        let model_pos = args.iter().position(|a| a == "--model").unwrap_or_else(|| {
+            panic!(
+                "the review fan-out's real session/new -> session/fork chain must carry \
+                 the configured --model through to the forked child's argv, got: {args:?}"
+            )
+        });
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku, got args: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--fork-session"),
+            "the argv must still carry the fork shape, got: {args:?}"
         );
     }
 

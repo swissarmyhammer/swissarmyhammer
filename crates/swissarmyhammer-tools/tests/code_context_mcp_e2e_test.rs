@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::ChatModelConfig;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
@@ -17,7 +17,7 @@ use tokio::sync::Mutex as TokioMutex;
 fn make_context(working_dir: PathBuf) -> ToolContext {
     let git_ops = Arc::new(TokioMutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ModelConfig::default());
+    let agent_config = Arc::new(ChatModelConfig::default());
     let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
     ctx.working_dir = Some(working_dir);
     ctx

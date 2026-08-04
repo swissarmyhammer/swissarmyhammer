@@ -5,7 +5,7 @@
 
 use serde_json::json;
 use std::sync::Arc;
-use swissarmyhammer_config::ModelConfig;
+use swissarmyhammer_config::ChatModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
@@ -16,7 +16,7 @@ async fn create_test_context() -> ToolContext {
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ModelConfig::default());
+    let agent_config = Arc::new(ChatModelConfig::default());
 
     ToolContext::new(tool_handlers, git_ops, agent_config)
 }

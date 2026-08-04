@@ -65,7 +65,7 @@ use agent_client_protocol::schema::{
 /// `SessionNotification` `_meta` key marking the end of a turn's notification
 /// stream.
 ///
-/// A cross-crate wire contract: the claude and llama agents emit it, the
+/// A cross-crate wire contract: the agents emit it, the
 /// per-turn notification collectors consume it. The value is the boolean
 /// `true`; absent or non-`true` means an ordinary notification.
 pub const TURN_COMPLETE_META_KEY: &str = "turn_complete";

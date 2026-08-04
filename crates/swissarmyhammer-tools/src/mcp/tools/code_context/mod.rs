@@ -3353,7 +3353,7 @@ mod tests {
 
     use std::path::PathBuf;
     use std::sync::Arc;
-    use swissarmyhammer_config::model::ModelConfig;
+    use swissarmyhammer_config::model::ChatModelConfig;
     use tokio::sync::Mutex as TokioMutex;
 
     /// Build a ToolContext rooted at the given directory.
@@ -3361,7 +3361,7 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         let git_ops = Arc::new(TokioMutex::new(None));
         let tool_handlers = Arc::new(ToolHandlers::new());
-        let agent_config = Arc::new(ModelConfig::default());
+        let agent_config = Arc::new(ChatModelConfig::default());
         let mut ctx =
             crate::mcp::tool_registry::ToolContext::new(tool_handlers, git_ops, agent_config);
         ctx.working_dir = Some(dir);

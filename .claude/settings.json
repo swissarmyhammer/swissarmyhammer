@@ -1,12 +1,5 @@
 {
   "permissions": {
-    "deny": [
-      "Edit",
-      "Write"
-    ]
-  },
-  "statusLine": {
-    "command": "sah statusline",
-    "type": "command"
+    "deny": []
   }
 }

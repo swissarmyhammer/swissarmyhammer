@@ -6,7 +6,6 @@ use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(common::llama_agent_factory())]
 #[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]

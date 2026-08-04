@@ -174,12 +174,49 @@ impl WorkList {
     /// file set from. First-seen order keeps the rendered prime byte-stable
     /// across calls.
     pub fn distinct_files(&self) -> impl Iterator<Item = &FileWork> {
-        let mut seen = std::collections::BTreeSet::new();
-        self.validators
-            .iter()
-            .flat_map(|validator| validator.files.iter())
-            .filter(move |file| seen.insert(file.path.clone()))
+        dedup_by_key(
+            self.validators
+                .iter()
+                .flat_map(|validator| validator.files.iter()),
+            |file| file.path.clone(),
+        )
     }
+
+    /// The batch-scoped shared probe evidence — currently just the
+    /// `<changed-set>` `duplicates` comparison — carried by any validator in
+    /// this work-list, deduped by `(probe name, target)` in first-seen
+    /// (validator-order) order.
+    ///
+    /// This evidence spans the WHOLE change under review, not any single
+    /// file, so [`ValidatorWork::shared_probe_results`] carries it ONCE per
+    /// validator rather than once per file that validator matched. When two
+    /// or more validators both declare the same probe, this dedup is what
+    /// keeps the fan-out prime ([`render_run_prime`](crate::review::fleet::render_run_prime))
+    /// from rendering the identical shared block twice — the same discipline
+    /// [`distinct_files`](Self::distinct_files) applies to per-file content.
+    pub fn shared_probe_results(&self) -> Vec<ProbeResult> {
+        dedup_by_key(
+            self.validators
+                .iter()
+                .flat_map(|validator| validator.shared_probe_results.iter()),
+            |result| (result.name.clone(), result.target.clone()),
+        )
+        .cloned()
+        .collect()
+    }
+}
+
+/// Filter `items` down to the first occurrence of each `key`, in `items`'
+/// order — the "yield each distinct key once" discipline shared by
+/// [`WorkList::distinct_files`] (keyed by path) and
+/// [`WorkList::shared_probe_results`] (keyed by `(probe name, target)`), so
+/// the dedup mechanics live in exactly one place.
+fn dedup_by_key<T, K: Ord>(
+    items: impl Iterator<Item = T>,
+    mut key: impl FnMut(&T) -> K,
+) -> impl Iterator<Item = T> {
+    let mut seen = BTreeSet::new();
+    items.filter(move |item| seen.insert(key(item)))
 }
 
 /// The rule names inside a validator — what a review fork applies to a file.
@@ -240,10 +277,19 @@ pub struct ValidatorWork {
     probes: ProbeNames,
     /// The files this validator must review.
     files: Vec<FileWork>,
+    /// The validator's batch-scoped shared probe evidence (currently just the
+    /// `<changed-set>` `duplicates` comparison, when this validator declared
+    /// `duplicates`) — computed and attached ONCE per validator, never once
+    /// per file it matched. See
+    /// [`shared_probe_results`](Self::shared_probe_results).
+    shared_probe_results: Vec<ProbeResult>,
 }
 
 impl ValidatorWork {
-    /// Assemble one validator's slice of the work-list.
+    /// Assemble one validator's slice of the work-list, with no shared probe
+    /// evidence attached (use
+    /// [`with_shared_probe_results`](Self::with_shared_probe_results) when it
+    /// matters — the production `scope_review` path always does).
     ///
     /// The two name lists are separate types ([`RuleNames`], [`ProbeNames`]) so
     /// no call site can transpose them.
@@ -258,7 +304,15 @@ impl ValidatorWork {
             rules,
             probes,
             files,
+            shared_probe_results: Vec::new(),
         }
+    }
+
+    /// Attach the validator's batch-scoped shared probe evidence, computed
+    /// once for the whole validator rather than once per file it matched.
+    pub fn with_shared_probe_results(mut self, shared_probe_results: Vec<ProbeResult>) -> Self {
+        self.shared_probe_results = shared_probe_results;
+        self
     }
 
     /// The validator (RuleSet) name.
@@ -279,6 +333,19 @@ impl ValidatorWork {
     /// The files this validator must review.
     pub fn files(&self) -> &[FileWork] {
         &self.files
+    }
+
+    /// The validator's batch-scoped shared probe evidence — currently just
+    /// the `<changed-set>` `duplicates` comparison, when this validator
+    /// declared `duplicates`.
+    ///
+    /// This evidence spans the WHOLE change under review, not any single
+    /// file, so it is carried ONCE here rather than cloned onto every
+    /// [`FileWork`] the validator matched — see
+    /// [`render_shared_probe_evidence`](crate::review::fleet::render_shared_probe_evidence)
+    /// for where it renders: once per prompt, never once per file.
+    pub fn shared_probe_results(&self) -> &[ProbeResult] {
+        &self.shared_probe_results
     }
 }
 
@@ -340,9 +407,9 @@ pub struct FileWork {
     /// A changed file is always inlined whole: it is the file's complete current
     /// contents (empty only for a deletion, which has no current content — the
     /// removal is carried by [`semantic_diff`](FileWork::semantic_diff())). A file
-    /// whose source would exceed the review `batch_size` is never trimmed to a
-    /// slice; [`batch_work_list`] rejects it with a hard error instead, so this is
-    /// never a partial view.
+    /// whose rendered block would exceed the review batch budget is never trimmed
+    /// to a slice; [`batch_work_list`] excludes that (validator, file) pair and
+    /// reports it as a [`SkippedFile`] instead, so this is never a partial view.
     source_slice: String,
     /// The shared `(file, probe)` results.
     probe_results: Vec<ProbeResult>,
@@ -399,7 +466,8 @@ impl FileWork {
 
     /// The file's **complete** current source, inlined in full into the review
     /// payload so the model never needs to `read_file` the changed file (see
-    /// the field's invariants on wholeness and the `batch_size` hard error).
+    /// the field's invariants on wholeness and how [`batch_work_list`] excludes
+    /// an oversized file as a [`SkippedFile`] gap instead of trimming it).
     pub fn source_slice(&self) -> &str {
         &self.source_slice
     }
@@ -495,6 +563,8 @@ pub async fn scope_review(
     let probe_cache = run_probe_cache(
         &matched.validators,
         &grouped.change_entities,
+        &matched.matched_files,
+        &resolved.after_content,
         conn,
         embedder,
     )
@@ -653,7 +723,9 @@ fn compute_line_marks(before: Option<&str>, after: &str) -> BTreeSet<u32> {
 /// single match on the diff result. A hunk or line that fails to resolve (an
 /// out-of-range index, or a `+` line with no new-side line number) is
 /// skipped rather than treated as an error — partial hunk data still marks
-/// every line it CAN resolve.
+/// every line it CAN resolve. The per-line resolution itself is factored into
+/// [`added_line_number`] so this function stays two loops deep instead of
+/// nesting a let-else inside a let-else inside an if inside an if-let.
 fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
     let mut marks = BTreeSet::new();
     for hunk_idx in 0..patch.num_hunks() {
@@ -661,17 +733,26 @@ fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
             continue;
         };
         for line_idx in 0..lines {
-            let Ok(line) = patch.line_in_hunk(hunk_idx, line_idx) else {
-                continue;
-            };
-            if line.origin() == '+' {
-                if let Some(new_lineno) = line.new_lineno() {
-                    marks.insert(new_lineno);
-                }
+            if let Some(new_lineno) = added_line_number(patch, hunk_idx, line_idx) {
+                marks.insert(new_lineno);
             }
         }
     }
     marks
+}
+
+/// The new-side line number `hunk_idx`/`line_idx` maps to, when that line is
+/// an added (`+`) line with a resolvable new-side line number.
+///
+/// `None` for any line that fails to resolve (an out-of-range index), is not
+/// an added line, or has no new-side line number — [`collect_added_lines`]
+/// treats every `None` identically: skip it, never an error.
+fn added_line_number(patch: &git2::Patch<'_>, hunk_idx: usize, line_idx: usize) -> Option<u32> {
+    let line = patch.line_in_hunk(hunk_idx, line_idx).ok()?;
+    if line.origin() != '+' {
+        return None;
+    }
+    line.new_lineno()
 }
 
 /// Blame every matched file's current content ONCE for the whole review run
@@ -804,8 +885,9 @@ fn compute_per_file_facts(
         // The changed file is always inlined in FULL: the model re-reads any file
         // it is not given whole, and those round-trips dominate review wall-clock.
         // A deletion has no current content, so its source is empty (the removal
-        // is carried by the semantic diff). A file too large for the review
-        // `batch_size` is never trimmed here — [`batch_work_list`] rejects it.
+        // is carried by the semantic diff). A file whose rendered block would
+        // exceed the batch budget is never trimmed here either — [`batch_work_list`]
+        // excludes it and reports it as a [`SkippedFile`] gap instead.
         let source_slice = after_content.get(file).cloned().unwrap_or_default();
         per_file.insert(
             file.clone(),
@@ -852,11 +934,13 @@ fn assemble_validator_work(
                 })
                 .collect();
             files.sort_by(|a, b| a.path.cmp(&b.path));
+            let shared_probe_results = select_shared_probe_results(probe_cache, &mv.probes);
             ValidatorWork {
                 validator_name: mv.name,
                 rules: mv.rules,
                 probes: mv.probes,
                 files,
+                shared_probe_results,
             }
         })
         .collect();
@@ -930,11 +1014,12 @@ struct ResolvedScope {
     after_content: BTreeMap<String, String>,
     change_purpose: String,
     /// The commit blame's history walk is bounded to, mirroring `git blame
-    /// <blame_at> -- path`. `None` blames against HEAD — the right anchor for
-    /// a scope whose content may carry uncommitted edits (working tree,
-    /// single file, glob). [`Scope::Sha`] sets this to the range's "to"
-    /// commit so a bounded historical review never attributes a line to a
-    /// commit past that point.
+    /// <blame_at> -- path`. [`Scope::Working`], [`Scope::File`], and
+    /// [`Scope::Glob`] set this to [`working_tree_blame_anchor`]'s merge-base
+    /// pin (a stable anchor for the life of a branch), falling back to `None`
+    /// (blame against HEAD) only when no such anchor exists. [`Scope::Sha`]
+    /// sets this to the range's "to" commit so a bounded historical review
+    /// never attributes a line to a commit past that point.
     blame_at: Option<git2::Oid>,
 }
 
@@ -1272,9 +1357,16 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
             BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
         builder.push(FilePath::new(path), FileVersions { before, after });
     }
-    // No blame anchor: the working tree may carry uncommitted edits, so blame
-    // must be bound to HEAD (`None`) and layered against the live content.
-    Ok(builder.finish(files, auto_purpose("working-tree changes"), None))
+    // Blame anchor: pinned to the branch's merge-base with main/master (see
+    // `working_tree_blame_anchor`) so the sha column means the same thing on
+    // every run for the life of this branch, rather than drifting with every
+    // intervening commit. `None` when no stable anchor exists (falls back to
+    // HEAD, the pre-existing behavior).
+    Ok(builder.finish(
+        files,
+        auto_purpose("working-tree changes"),
+        working_tree_blame_anchor(&repo),
+    ))
 }
 
 /// Resolve a commit/range scope, reusing the git tool's range semantics
@@ -1318,12 +1410,12 @@ fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError>
 
     let mut builder = FileChangeBuilder::new();
     builder.push(FilePath::new(path), FileVersions { before, after });
-    // No blame anchor: the working-tree read above may carry uncommitted
-    // edits, so blame is bound to HEAD (`None`), same as `resolve_working`.
+    // Blame anchor: same stable merge-base pin as `resolve_working` — see
+    // `working_tree_blame_anchor`.
     Ok(builder.finish(
         vec![path.to_string()],
         auto_purpose(&format!("review of {path}")),
-        None,
+        working_tree_blame_anchor(&repo),
     ))
 }
 
@@ -1356,18 +1448,58 @@ fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpErr
             },
         );
     }
-    // No blame anchor: matched files are read from the working tree, so
-    // blame is bound to HEAD (`None`) and layered against the live content.
+    // Blame anchor: same stable merge-base pin as `resolve_working` — see
+    // `working_tree_blame_anchor`.
     Ok(builder.finish(
         files,
         auto_purpose(&format!("files matching {pattern}")),
-        None,
+        working_tree_blame_anchor(&repo),
     ))
 }
 
 /// Wrap a one-line auto summary as the review-level change purpose.
 fn auto_purpose(what: &str) -> String {
     format!("Auto summary: reviewing {what}.")
+}
+
+/// The stable blame anchor for a working-tree-backed scope ([`Scope::Working`],
+/// [`Scope::File`], [`Scope::Glob`]): the merge-base between `HEAD` and the
+/// detected `main`/`master` branch.
+///
+/// Those three scopes read the file's LIVE working-tree content, which can
+/// change shape (dirty → committed, tracked → staged) between two runs
+/// without the underlying finding changing at all — a `/finish`-style loop
+/// commits between iterations (`git add -A && git commit`), which sweeps up
+/// every dirty file, not just the one whose finding it resolved. Binding
+/// blame to `HEAD` (as `None` does) means every such commit — even one that
+/// never touches the file under review — moves the anchor forward, so the
+/// SAME still-open, byte-identical line flips from `worktree` to a real
+/// commit sha the moment ANY intervening commit lands.
+///
+/// The merge-base with `main`/`master` does not move for the life of a
+/// feature/task branch (main only moves if someone advances it, which a
+/// `/finish` loop never does): every commit the loop makes lands strictly
+/// AFTER this anchor, so blame bounded here never sees them — a line that
+/// is `worktree` on the branch's first review stays `worktree` on every
+/// later review, for as long as it postdates the anchor, regardless of how
+/// many intervening commits happen. The column then answers one fixed
+/// question all session long: "did this line exist before this unit of work
+/// started?" — never "what does HEAD say right now?"
+///
+/// Falls back to `None` (blame against `HEAD`, the pre-existing behavior)
+/// when no `main`/`master` branch exists, `HEAD` cannot be resolved, or the
+/// two share no common ancestor — including the case of reviewing directly
+/// ON `main` itself, where the merge-base IS `HEAD` and this degrades
+/// transparently to the old per-run behavior. Blame attribution is always
+/// best-effort, never load-bearing for the review itself.
+fn working_tree_blame_anchor(repo: &GitOperations) -> Option<git2::Oid> {
+    let main_branch = repo.main_branch().ok()?;
+    let head_oid = resolve_oid(repo, &GitRefSpec::head())?;
+    let main_oid = resolve_oid(repo, &GitRefSpec::new(main_branch))?;
+    repo.repository()
+        .inner()
+        .merge_base(head_oid, main_oid)
+        .ok()
 }
 
 /// Resolve a refspec to its commit [`git2::Oid`] via libgit2, `None` when
@@ -1515,9 +1647,15 @@ impl FileChangeBuilder {
 
 /// Build the shared probe-result cache from a single [`run_probes`] call over the
 /// whole change set with the union of every validator's declared probes.
+///
+/// Entity-bound probes read `change_entities`; file-bound probes (`complexity`)
+/// read the current source of every matched file, so they measure the whole
+/// review boundary rather than only the entities the diff touched.
 async fn run_probe_cache(
     validators: &BTreeMap<String, MatchedValidator>,
     change_entities: &[ChangeEntry],
+    matched_files: &BTreeSet<String>,
+    after_content: &BTreeMap<String, String>,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
 ) -> Result<Vec<ProbeResult>, AvpError> {
@@ -1525,13 +1663,44 @@ async fn run_probe_cache(
         .values()
         .flat_map(|mv| mv.probes.as_slice().iter().cloned())
         .collect();
-    if union.is_empty() || change_entities.is_empty() {
+    let sources: BTreeMap<String, String> = matched_files
+        .iter()
+        .filter_map(|file| {
+            after_content
+                .get(file)
+                .map(|content| (file.clone(), content.clone()))
+        })
+        .collect();
+    // A file-bound probe still has work when the diff produced no entities, so
+    // an empty entity list alone must not short-circuit the whole cache.
+    if union.is_empty() || (change_entities.is_empty() && sources.is_empty()) {
         return Ok(Vec::new());
     }
     let names: Vec<String> = union.into_iter().collect();
-    let change = ProbeChange::new(change_entities.to_vec());
+    let change = ProbeChange::new(change_entities.to_vec()).with_sources(sources);
     let results = run_probes(&names, &change, conn, embedder).await?;
     Ok(results.results)
+}
+
+/// Select the probes results in `cache` that the validator's declared
+/// `probes` pulls, further narrowed to whichever results `matches` accepts.
+///
+/// The shared filter chain — declared-probe-name, then a caller-supplied
+/// predicate, then clone-and-collect — behind [`select_probe_results`] (file-
+/// scoped, by [`probe_result_for_file`]) and [`select_shared_probe_results`]
+/// (batch-scoped, by the `<changed-set>` target), so the two selection paths
+/// cannot drift apart on anything but their predicate.
+fn select_probe_results_by(
+    cache: &[ProbeResult],
+    probes: &ProbeNames,
+    matches: impl Fn(&ProbeResult) -> bool,
+) -> Vec<ProbeResult> {
+    cache
+        .iter()
+        .filter(|r| probes.as_slice().contains(&r.name))
+        .filter(|r| matches(r))
+        .cloned()
+        .collect()
 }
 
 /// Select the probe results that belong to `file` and the validator's declared
@@ -1550,28 +1719,41 @@ fn select_probe_results(
     changed_symbols: &[String],
     probes: &ProbeNames,
 ) -> Vec<ProbeResult> {
-    cache
-        .iter()
-        .filter(|r| probes.as_slice().contains(&r.name))
-        .filter(|r| probe_result_for_file(r, file, changed_symbols))
-        .cloned()
-        .collect()
+    select_probe_results_by(cache, probes, |r| {
+        probe_result_for_file(r, file, changed_symbols)
+    })
 }
 
 /// Whether a probe result's bound subject relates to `file`.
 ///
-/// Probe targets come in three shapes and each resolves to its file differently:
+/// Probe targets come in two shapes and each resolves to its file differently:
 /// - **file path** (`duplicates` per-file) matches the path directly;
-/// - **`<changed-set>`** (`duplicates` cross-file) is shared evidence and attaches
-///   to every file that participated in the change;
 /// - **symbol name** (`callers` / `similar`) resolves via the semantic diff's
 ///   `entity_name → file_path` mapping: it attaches to the file whose changed
 ///   entity bears that name (`changed_symbols` is that mapping, pre-filtered to
 ///   this file).
+///
+/// **`<changed-set>`** (`duplicates` cross-file) is deliberately NOT one of
+/// these shapes: it is batch-scoped shared evidence spanning the WHOLE change,
+/// not any single file, so it never attaches to a [`FileWork`] here. Cloning
+/// it onto every file's `probe_results` used to multiply its bytes by the
+/// batch's file count for zero additional information (^t7f5fqf); it is
+/// selected once per validator instead, by
+/// [`select_shared_probe_results`], and carried on
+/// [`ValidatorWork::shared_probe_results`].
 fn probe_result_for_file(result: &ProbeResult, file: &str, changed_symbols: &[String]) -> bool {
-    result.target == file
-        || result.target == "<changed-set>"
-        || changed_symbols.iter().any(|s| s == &result.target)
+    result.target == file || changed_symbols.iter().any(|s| s == &result.target)
+}
+
+/// Select the batch-scoped shared probe results (currently just the
+/// `<changed-set>` `duplicates` comparison) a validator's declared `probes`
+/// pulls from the shared single-run cache.
+///
+/// Computed ONCE per validator — never once per file — because this evidence
+/// spans the WHOLE change under review rather than any one file
+/// (see [`probe_result_for_file`] for why `<changed-set>` is excluded there).
+fn select_shared_probe_results(cache: &[ProbeResult], probes: &ProbeNames) -> Vec<ProbeResult> {
+    select_probe_results_by(cache, probes, |r| r.target == "<changed-set>")
 }
 
 /// The deduped, sorted names of the symbols changed by `entities`.
@@ -1585,24 +1767,32 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// A changed file [`batch_work_list`] could not pack into any batch because its
-/// inlined source alone exceeds `batch_size`.
+/// A (validator, file) pair [`batch_work_list`] could not pack into any batch
+/// because the file's RENDERED block alone exceeds the batch budget.
 ///
-/// A file is atomic — it is never split across batches — so an oversized file
+/// A file is atomic — it is never split across batches — so an oversized block
 /// cannot be packed at all. Rather than a hard error that would block review of
-/// every OTHER file in the scope, `batch_work_list` excludes it and reports it
-/// here; [`run_review`](crate::review::run_review) carries it through to the
-/// final [`ReviewReport`](crate::review::ReviewReport) as a named "not reviewed,
-/// too large" gap. The fields are private (read through the getters) so the
-/// shape can evolve without a field-level API commitment.
+/// every OTHER file in the scope, `batch_work_list` excludes the pair and
+/// reports it here; [`run_review`](crate::review::run_review) carries it through
+/// to the final [`ReviewReport`](crate::review::ReviewReport) as a named "not
+/// reviewed, too large" gap.
+///
+/// The gap is a **pair**, not a path. A file's rendered block carries the probe
+/// evidence selected for one validator, so the same path can cost kilobytes for
+/// one validator and megabytes for another; dropping the path from the batch
+/// would cost every other validator a file it could easily afford. The fields
+/// are private (read through the getters) so the shape can evolve without a
+/// field-level API commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedFile {
     /// The oversized file's repo-relative path.
     path: String,
-    /// The file's inlined source size, in bytes.
+    /// The validator whose rendering of the file did not fit.
+    validator: String,
+    /// The rendered size of that validator's block for the file, in bytes.
     size: usize,
-    /// The `batch_size` budget it exceeded, in bytes.
-    batch_size: usize,
+    /// The per-batch rendered budget it exceeded, in bytes.
+    budget: usize,
 }
 
 impl SkippedFile {
@@ -1610,11 +1800,12 @@ impl SkippedFile {
     /// (`crate::review::synthesize`'s tests), which asserts on rendering given a
     /// skip list rather than driving the whole packer to produce one.
     #[cfg(test)]
-    pub(crate) fn for_test(path: &str, size: usize, batch_size: usize) -> Self {
+    pub(crate) fn for_test(path: &str, validator: &str, size: usize, budget: usize) -> Self {
         Self {
             path: path.to_string(),
+            validator: validator.to_string(),
             size,
-            batch_size,
+            budget,
         }
     }
 
@@ -1623,28 +1814,56 @@ impl SkippedFile {
         &self.path
     }
 
-    /// The file's inlined source size, in bytes.
+    /// The validator whose rendering of the file did not fit.
+    pub fn validator(&self) -> &str {
+        &self.validator
+    }
+
+    /// The rendered size of that validator's block for the file, in bytes.
     pub fn size(&self) -> usize {
         self.size
     }
 
-    /// The `batch_size` budget it exceeded, in bytes.
-    pub fn batch_size(&self) -> usize {
-        self.batch_size
+    /// The per-batch rendered budget it exceeded, in bytes.
+    pub fn budget(&self) -> usize {
+        self.budget
     }
 }
 
-/// Split a [`WorkList`] into content-budgeted batches at **whole-file**
-/// granularity, so every batch's primed prefix stays inside `batch_size` bytes.
+/// Split a [`WorkList`] into budgeted batches at **whole-file** granularity, so
+/// every prompt a batch sends stays inside `budget` bytes of file content.
 ///
-/// Cramming every changed file's full source into one shared prime overflows the
-/// review model's context on a large diff — every fan-out validator then fails
+/// Cramming every changed file into one shared prime overflows the review
+/// model's context on a large diff — every fan-out validator then fails
 /// uniformly. So the run is split into batches and each batch fans out
-/// independently. The files are packed greedily, in [`WorkList::distinct_files`]
-/// order (the same order the prime renders them): each file is added to the
-/// current batch until adding the next file's inlined source would push the batch
-/// past `batch_size`, at which point a new batch starts. A file is **atomic** — it
-/// is never split across batches.
+/// independently. A file is **atomic**: it is never split across batches.
+///
+/// # The cost function is the budget's unit
+///
+/// `cost` measures what one [`FileWork`] contributes to a prompt, and the
+/// budget is denominated in whatever it returns. The fleet passes
+/// [`rendered_file_block_bytes`](crate::review::fleet::rendered_file_block_bytes),
+/// which renders the block through the very renderer the prompt uses, so the
+/// measured bytes and the sent bytes are the same bytes. Taking it as a
+/// parameter is what keeps this stage (stage 1, deterministic) from having to
+/// know how the fleet stage (stage 2) formats a block, while still budgeting
+/// the real thing rather than a proxy for it.
+///
+/// # Pairs, then paths
+///
+/// The cost is per **(validator, file) pair** — a block carries the probe
+/// evidence selected for that validator, so the same path can cost kilobytes
+/// for one validator and megabytes for another. So:
+///
+/// 1. Any pair whose own cost exceeds `budget` is dropped and reported as a
+///    [`SkippedFile`]. It could not be packed without either splitting the file
+///    (forbidden) or blowing the budget, and dropping the whole PATH would cost
+///    every other validator a file it could easily afford.
+/// 2. The surviving distinct files are packed greedily in
+///    [`WorkList::distinct_files`] order (the order the prime renders them),
+///    each charged the LARGEST surviving cost any validator has for it — the
+///    bound that covers both the shared prime and any one validator's
+///    monolithic fallback.
 ///
 /// Each returned [`WorkList`] carries every validator that has at least one file
 /// in that batch, with the validator's files filtered to the batch (validators
@@ -1652,30 +1871,46 @@ impl SkippedFile {
 /// verbatim so every batch's prime frames the same overall change. A work-list
 /// with no files (no validator matched) yields no batches.
 ///
-/// A single file whose inlined source alone exceeds `batch_size` cannot be
-/// packed without either splitting it (forbidden) or blowing the budget. Rather
-/// than erroring the WHOLE run over one oversized file, it is excluded from
-/// packing and reported in the second return value as a [`SkippedFile`] — every
-/// other file still packs and reviews normally. This never errors; a caller that
-/// wants a hard stop on an oversized file checks the returned skip list itself.
-pub fn batch_work_list(work: &WorkList, batch_size: usize) -> (Vec<WorkList>, Vec<SkippedFile>) {
-    // Pack the distinct files (first-seen order, matching the prime's file set)
-    // into byte-budgeted batches; a file is never split across a batch boundary.
+/// This never errors: a caller that wants a hard stop on an oversized file
+/// checks the returned skip list itself.
+pub fn batch_work_list(
+    work: &WorkList,
+    budget: usize,
+    cost: &dyn Fn(&FileWork) -> usize,
+) -> (Vec<WorkList>, Vec<SkippedFile>) {
+    // Step 1: cost every (validator, file) pair once, dropping the pairs no
+    // batch could ever carry and keeping the largest surviving cost per path.
+    let mut skipped: Vec<SkippedFile> = Vec::new();
+    let mut affordable: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut path_cost: BTreeMap<&str, usize> = BTreeMap::new();
+    for validator in &work.validators {
+        for file in &validator.files {
+            let size = cost(file);
+            if size > budget {
+                skipped.push(SkippedFile {
+                    path: file.path.clone(),
+                    validator: validator.validator_name.clone(),
+                    size,
+                    budget,
+                });
+                continue;
+            }
+            affordable.insert((validator.validator_name.as_str(), file.path.as_str()));
+            let entry = path_cost.entry(file.path.as_str()).or_insert(0);
+            *entry = (*entry).max(size);
+        }
+    }
+
+    // Step 2: pack the surviving distinct files (first-seen order, matching the
+    // prime's file set); a file is never split across a batch boundary.
     let mut batches: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();
     let mut current_bytes = 0usize;
-    let mut skipped: Vec<SkippedFile> = Vec::new();
     for file in work.distinct_files() {
-        let size = file.source_slice.len();
-        if size > batch_size {
-            skipped.push(SkippedFile {
-                path: file.path.clone(),
-                size,
-                batch_size,
-            });
+        let Some(&size) = path_cost.get(file.path.as_str()) else {
             continue;
-        }
-        if !current.is_empty() && current_bytes + size > batch_size {
+        };
+        if !current.is_empty() && current_bytes + size > budget {
             batches.push(std::mem::take(&mut current));
             current_bytes = 0;
         }
@@ -1688,16 +1923,26 @@ pub fn batch_work_list(work: &WorkList, batch_size: usize) -> (Vec<WorkList>, Ve
 
     let batches = batches
         .into_iter()
-        .map(|paths| project_onto_files(work, &paths))
+        .map(|paths| project_onto_files(work, &paths, &affordable))
         .collect();
     (batches, skipped)
 }
 
 /// Project a [`WorkList`] onto a subset of file paths: keep every validator that
 /// has at least one file in `paths`, with its files filtered to `paths` (order
-/// preserved). Validators left with no files are dropped. The change purpose is
-/// carried verbatim so the batch's prime still frames the whole change.
-fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
+/// preserved) AND to the `affordable` (validator, path) pairs. Validators left
+/// with no files are dropped. The change purpose is carried verbatim so the
+/// batch's prime still frames the whole change.
+///
+/// The pair filter is what keeps a dropped pair out of the batch entirely —
+/// including out of [`WorkList::distinct_files`], which the prime renders from
+/// and which would otherwise pick the very [`FileWork`] whose rendering did not
+/// fit.
+fn project_onto_files(
+    work: &WorkList,
+    paths: &[String],
+    affordable: &BTreeSet<(&str, &str)>,
+) -> WorkList {
     let keep: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
     let validators = work
         .validators
@@ -1707,6 +1952,9 @@ fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
                 .files
                 .iter()
                 .filter(|file| keep.contains(file.path.as_str()))
+                .filter(|file| {
+                    affordable.contains(&(validator.validator_name.as_str(), file.path.as_str()))
+                })
                 .cloned()
                 .collect();
             if files.is_empty() {
@@ -1717,6 +1965,11 @@ fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
                 rules: validator.rules.clone(),
                 probes: validator.probes.clone(),
                 files,
+                // Carried verbatim, never re-filtered by `paths`: this
+                // evidence is batch-scoped (spans the WHOLE change), not
+                // file-scoped, so it does not shrink when a batch subsets the
+                // work-list's files.
+                shared_probe_results: validator.shared_probe_results.clone(),
             })
         })
         .collect();
@@ -1954,6 +2207,29 @@ mod tests {
             "duplicates probe_results should carry the existing.rs hit, got: {:?}",
             file.probe_results
         );
+
+        // ^t7f5fqf: the batch-scoped `<changed-set>` result is carried on the
+        // VALIDATOR now (once), never cloned onto the file's own
+        // `probe_results` — through the REAL `scope_review` path, not just
+        // the isolated selection helpers.
+        assert!(
+            !file
+                .probe_results
+                .iter()
+                .any(|r| r.target == "<changed-set>"),
+            "the shared <changed-set> result must not attach to the file's own \
+             probe_results; it is carried once on the validator instead, got: {:?}",
+            file.probe_results
+        );
+        assert!(
+            validator
+                .shared_probe_results()
+                .iter()
+                .any(|r| r.name == "duplicates" && r.target == "<changed-set>"),
+            "the validator's shared_probe_results must carry the changed-set \
+             duplicates comparison, got: {:?}",
+            validator.shared_probe_results()
+        );
     }
 
     // ---- scope_review: line annotations (blame + change marks) ------------
@@ -2110,6 +2386,88 @@ mod tests {
         );
     }
 
+    /// Regression test for ^8p6kjmw: the `/finish` loop's commit step commits
+    /// EVERY dirty file together (`git add -A && git commit`), not just the
+    /// one file whose finding it actually resolved. That sweeps up a
+    /// STILL-UNRESOLVED dirty line in some OTHER file right along with it —
+    /// the exact "intervening commit of unrelated files" the task describes.
+    ///
+    /// Here `src/lib.rs` line 2 (`BETA-DIRTY`) is a still-open, unresolved
+    /// finding: its BYTES never change across the two runs. Between the runs,
+    /// a commit lands that (a) genuinely fixes `src/lib.rs` line 4 and (b)
+    /// incidentally sweeps up line 2's untouched dirty edit too, because
+    /// `commit_only` — like a real `git add -A` — stages the WHOLE file, not
+    /// individual lines. A third, freshly dirty line 1 keeps the file in
+    /// `review working` scope for run 2, isolating the assertion to line 2
+    /// alone: with `blame_at: None` (binding to HEAD), line 2 flips from
+    /// `worktree` (run 1) to a real committed sha (run 2) even though nothing
+    /// about that specific finding changed — the prompt drift the task
+    /// reports. Pinning the blame anchor to the branch's merge-base with
+    /// `main` (fixed for the whole session, since `main` never moves here)
+    /// closes this: the sweep commit postdates the anchor, so it stays
+    /// invisible to blame and line 2 keeps reading `worktree` in both runs.
+    #[tokio::test]
+    async fn working_scope_sha_is_stable_across_a_sweep_commit_of_an_unresolved_line() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "alpha\nbeta\ngamma\ndelta\n");
+        repo.commit("initial");
+        repo.rename_current_branch_to("main");
+        repo.checkout_new_branch("task");
+
+        // A still-open, unresolved dirty edit to line 2 — this exact edit
+        // survives, byte-for-byte, across both runs.
+        repo.write("src/lib.rs", "alpha\nBETA-DIRTY\ngamma\ndelta\n");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work1 = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let file1 = work1
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must be under review");
+        let line2_run1 = file1.line_annotations()[1].sha().to_string();
+        assert_eq!(
+            line2_run1, "worktree",
+            "line 2's still-open dirty edit must show worktree before the sweep commit"
+        );
+
+        // A second, DIFFERENT finding on line 4 gets genuinely fixed and
+        // committed — but the commit step stages the WHOLE file, sweeping up
+        // line 2's still-unresolved edit right along with it.
+        repo.write("src/lib.rs", "alpha\nBETA-DIRTY\ngamma\nDELTA-FIXED\n");
+        repo.commit_only(&["src/lib.rs"], "fix line 4's finding");
+
+        // A THIRD, freshly dirty line keeps the file in `review working`
+        // scope for run 2, without touching line 2 at all.
+        repo.write(
+            "src/lib.rs",
+            "ALPHA-DIRTY\nBETA-DIRTY\ngamma\nDELTA-FIXED\n",
+        );
+
+        let work2 = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let file2 = work2
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+            .expect("src/lib.rs must still be under review (line 1 is freshly dirty)");
+        let line2_run2 = file2.line_annotations()[1].sha().to_string();
+
+        assert_eq!(
+            line2_run1, line2_run2,
+            "line 2's sha must not drift across the sweep commit: it is the SAME \
+             unresolved finding, byte-for-byte, in both runs — run1={line2_run1:?} run2={line2_run2:?}"
+        );
+    }
+
     /// A blame failure for any other reason (here: the repo handle itself
     /// cannot be opened) must never abort the review: every affected line
     /// degrades to the `????????` sentinel and `compute_line_annotations`
@@ -2233,6 +2591,149 @@ mod tests {
         assert!(
             report.markdown().contains("`src/lib.rs:3`"),
             "the final report must cite the SAME line the model read off the prime: {}",
+            report.markdown()
+        );
+    }
+
+    /// Regression test for ^j4d2613: a real, known two-commit history through
+    /// `Scope::Sha`, on a file with many untouched lines ABOVE the one edited
+    /// line — the exact shape the bug report cited ("a commit that touches a
+    /// file with many edits above the changed region, since that is where
+    /// drift shows"). The old, unnumbered render made the model COUNT lines,
+    /// and the miscount grew with depth; this proves the edited line's number,
+    /// blame sha, and touched mark survive correctly at depth, and that a
+    /// finding citing that number round-trips, unchanged, all the way to the
+    /// final report — closing the gap the earlier small fixture tests (e.g.
+    /// [`a_findings_line_number_survives_from_the_prime_to_the_report`]) do
+    /// not cover at scale.
+    #[tokio::test]
+    async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol() {
+        const LINES_ABOVE: usize = 190;
+
+        let repo = TestRepo::new();
+        let filler = || -> String {
+            (0..LINES_ABOVE)
+                .map(|i| format!("fn filler_{i}() {{}}\n"))
+                .collect()
+        };
+
+        let mut before = filler();
+        before.push_str("fn target() { old_body(); }\n");
+        repo.write("src/big.rs", &before);
+        let first_sha = repo.commit("first");
+
+        let mut after = filler();
+        after.push_str("fn target() { new_body(); }\n");
+        repo.write("src/big.rs", &after);
+        let second_sha = repo.commit("second");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Sha(format!("{first_sha}..{second_sha}")),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let file = work
+            .validators()
+            .iter()
+            .find(|v| v.validator_name() == "rust")
+            .and_then(|v| v.files().iter().find(|f| f.path() == "src/big.rs"))
+            .expect("src/big.rs must be under review");
+
+        // 1-based line number of the edited `target` function: LINES_ABOVE
+        // filler lines precede it.
+        let changed_line = LINES_ABOVE + 1;
+        let annotations = file.line_annotations();
+        assert_eq!(
+            annotations.len(),
+            changed_line,
+            "one annotation per source line"
+        );
+
+        // Every filler line above the change keeps the FIRST commit's blame
+        // and stays unmarked — the large untouched block must not shift or
+        // misattribute the edited line below it.
+        for (i, annotation) in annotations.iter().take(LINES_ABOVE).enumerate() {
+            assert_eq!(
+                annotation.sha(),
+                &first_sha[..8],
+                "line {} sits above the change and must keep the first commit's blame",
+                i + 1
+            );
+            assert!(
+                !annotation.touched(),
+                "line {} must not be marked touched",
+                i + 1
+            );
+        }
+
+        // The edited line itself blames to the SECOND commit and is touched.
+        let changed = &annotations[changed_line - 1];
+        assert_eq!(
+            changed.sha(),
+            &second_sha[..8],
+            "the edited line must blame to the commit that edited it, not one of the {LINES_ABOVE} untouched lines above it"
+        );
+        assert!(changed.touched(), "the edited line must be marked touched");
+
+        // The exact numbered line the model would read for the edited
+        // function — pulled from the REAL render, not hand-typed, so this
+        // test fails if the numbering ever drifts at depth.
+        let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+        let expected_printed_line = format!(
+            "{changed_line:>6} | {} + | fn target() {{ new_body(); }}",
+            &second_sha[..8]
+        );
+        assert!(
+            rendered.contains(&expected_printed_line),
+            "rendered block must number the edited line at {changed_line} with the second commit's sha and a `+` mark, got:\n{rendered}"
+        );
+
+        // The model "reads" that number off the render and cites it in its
+        // findings JSON — simulated via the real parse path, on a file large
+        // enough that a counting-based miscite would show up as drift.
+        let agent_response = crate::review::test_support::findings_json(
+            "src/big.rs",
+            changed_line as u32,
+            "no-dead-code",
+            "`target` calls `new_body`, which is unused",
+        );
+        let findings = crate::review::types::parse_findings(&agent_response).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].line,
+            changed_line as u32,
+            "the parsed finding must keep the exact line the model cited, {LINES_ABOVE} lines of untouched content notwithstanding"
+        );
+
+        // Verify + synthesize: the line must reach the final report unchanged,
+        // still resolving to the same `target` symbol the diff actually
+        // touched.
+        let verified = vec![crate::review::types::VerifiedFinding {
+            finding: findings[0].clone(),
+            confirmed: true,
+            reason: "confirmed".to_string(),
+            decided_by: None,
+        }];
+        let report = crate::review::synthesize::synthesize(
+            verified,
+            &crate::review::synthesize::FleetTally::new(1, 0),
+            &[],
+            "2026-08-03 12:00",
+        );
+        let expected_citation = format!("`src/big.rs:{changed_line}`");
+        assert!(
+            report.markdown().contains(&expected_citation),
+            "the final report must cite the SAME line the model read off the prime, {LINES_ABOVE} lines deep: {}",
             report.markdown()
         );
     }
@@ -2425,7 +2926,20 @@ mod tests {
             rules: RuleNames::new([format!("{name}-rule")]),
             probes: ProbeNames::default(),
             files: paths.iter().map(|p| file_at(p)).collect(),
+            shared_probe_results: vec![],
         }
+    }
+
+    /// A cost function that charges a file its raw source bytes.
+    ///
+    /// The packing tests below fix each fixture file's size through
+    /// [`file_sized`], so charging raw bytes keeps their arithmetic legible.
+    /// Production passes
+    /// [`rendered_file_block_bytes`](crate::review::fleet::rendered_file_block_bytes)
+    /// instead — the packer is agnostic to which, which is the point of taking
+    /// the cost as a parameter.
+    fn raw_source_bytes(file: &FileWork) -> usize {
+        file.source_slice.len()
     }
 
     /// A validator over `(path, byte-size)` files, for [`batch_work_list`] packing
@@ -2436,6 +2950,7 @@ mod tests {
             rules: RuleNames::new([format!("{name}-rule")]),
             probes: ProbeNames::default(),
             files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
+            shared_probe_results: vec![],
         }
     }
 
@@ -2502,7 +3017,7 @@ mod tests {
             )],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(
             batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -2526,7 +3041,7 @@ mod tests {
             validators: vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 32);
+        let (batches, skipped) = batch_work_list(&work, 32, &raw_source_bytes);
 
         assert_eq!(
             batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -2536,7 +3051,12 @@ mod tests {
         assert_eq!(skipped.len(), 1, "exactly the oversized file is skipped");
         assert_eq!(skipped[0].path(), "big.rs", "names the offending file");
         assert_eq!(skipped[0].size(), 100, "names the file's size");
-        assert_eq!(skipped[0].batch_size(), 32, "names the limit");
+        assert_eq!(
+            skipped[0].validator(),
+            "v",
+            "names the validator that could not carry it"
+        );
+        assert_eq!(skipped[0].budget(), 32, "names the limit");
     }
 
     #[test]
@@ -2547,7 +3067,7 @@ mod tests {
             validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
 
         assert_eq!(batches.len(), 1, "a small diff is a single batch");
         assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
@@ -2567,7 +3087,7 @@ mod tests {
             ],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(batches.len(), 2);
         assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
@@ -2589,7 +3109,7 @@ mod tests {
             ],
         };
 
-        let (batches, skipped) = batch_work_list(&work, 25);
+        let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
 
         assert_eq!(batches.len(), 1, "the one distinct file is one batch");
         assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
@@ -2607,7 +3127,7 @@ mod tests {
             change_purpose: "p".to_string(),
             validators: vec![],
         };
-        let (batches, skipped) = batch_work_list(&work, 32 * 1024);
+        let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
         assert!(batches.is_empty());
         assert!(skipped.is_empty());
     }
@@ -2829,6 +3349,112 @@ mod tests {
                 .any(|row| row.file_path == "src/util.rs"),
             "similar should carry the reuse candidate, got: {:?}",
             similar.rows
+        );
+    }
+
+    // ---- scope_review: complexity probe evidence -------------------------
+
+    /// A file with one function far over the nesting gate and one well under it.
+    const MIXED_COMPLEXITY_SOURCE: &str = r#"fn deep(a: bool, b: bool, items: &[u8]) -> u8 {
+    if a {
+        for item in items {
+            while b {
+                if *item > 0 {
+                    return 1;
+                }
+            }
+        }
+    }
+    0
+}
+
+fn shallow(a: Option<u8>) -> u8 {
+    match a {
+        Some(v) => v,
+        None => 0,
+    }
+}
+"#;
+
+    /// Drive the real `scope_review` over a repo holding `source`, and return the
+    /// `complexity` probe evidence the pipeline attached to the file.
+    async fn complexity_evidence_for(source: &str) -> Vec<ProbeResult> {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        repo.write("src/lib.rs", source);
+
+        let conn = index_conn();
+        let loader = loader_with("complexity", "*.rs", &["complexity"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .expect("the working scope resolves");
+
+        work.validators
+            .iter()
+            .find(|v| v.validator_name == "complexity")
+            .expect("the complexity validator matched the changed .rs file")
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .expect("the changed file is work")
+            .probe_results
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn scope_review_attaches_computed_complexity_evidence_to_the_file() {
+        // The production path: a real repo, the real loader, the real probe
+        // runner. The agent must receive the measured numbers, not be asked for
+        // them.
+        let evidence = complexity_evidence_for(MIXED_COMPLEXITY_SOURCE).await;
+
+        let result = evidence
+            .iter()
+            .find(|r| r.name == "complexity")
+            .expect("the complexity probe result reaches the work item");
+        let symbols: Vec<&str> = result
+            .rows
+            .iter()
+            .filter_map(|row| row.symbol.as_deref())
+            .collect();
+
+        assert_eq!(
+            symbols,
+            vec!["deep"],
+            "only the over-gate function is listed, got: {:?}",
+            result.rows
+        );
+        assert!(
+            result.rows[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("max condition-nesting depth 4 (gate 4)")),
+            "the row carries the measured depth and its gate, got: {:?}",
+            result.rows[0].detail
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_review_reports_an_empty_complexity_result_for_a_simple_file() {
+        // An empty result is the deterministic fact the verify guard refutes a
+        // complexity claim with. It must survive the whole pipeline, not be
+        // dropped as "no evidence".
+        let evidence = complexity_evidence_for(
+            "fn shallow(a: Option<u8>) -> u8 {\n    match a {\n        Some(v) => v,\n        None => 0,\n    }\n}\n",
+        )
+        .await;
+
+        let result = evidence
+            .iter()
+            .find(|r| r.name == "complexity")
+            .expect("a simple file still gets a complexity result");
+        assert!(
+            result.rows.is_empty(),
+            "no function is over a gate, got: {:?}",
+            result.rows
         );
     }
 
@@ -3492,6 +4118,102 @@ mod tests {
         assert!(
             got.is_empty(),
             "an unrelated symbol target attaches to no file: {got:?}"
+        );
+    }
+
+    /// ^t7f5fqf: the batch-scoped `<changed-set>` `duplicates` comparison must
+    /// NEVER attach to an individual file's `probe_results` — it used to
+    /// match every file unconditionally, which multiplied its (potentially
+    /// ~1.43 MB) bytes by the batch's file count. It is shared evidence,
+    /// selected once per validator by [`select_shared_probe_results`] instead.
+    #[test]
+    fn probe_result_for_file_never_matches_the_shared_changed_set_result() {
+        let changed_set = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        assert!(
+            !probe_result_for_file(&changed_set, "src/lib.rs", &[]),
+            "the shared changed-set result must not attach to any individual file"
+        );
+        assert!(
+            !probe_result_for_file(&changed_set, "src/lib.rs", &["lib".to_string()]),
+            "a changed symbol name must not accidentally match the <changed-set> \
+             sentinel target either"
+        );
+    }
+
+    /// [`select_shared_probe_results`] is the sole path a validator's
+    /// batch-scoped shared evidence reaches [`ValidatorWork`] through: it
+    /// selects only the DECLARED probe's `<changed-set>` result, never a
+    /// per-file one, and never an undeclared probe's shared result.
+    #[test]
+    fn select_shared_probe_results_selects_only_the_declared_probes_changed_set_result() {
+        let per_file = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "src/a.rs".to_string(),
+            rows: vec![],
+        };
+        let shared = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let undeclared_shared = ProbeResult {
+            name: "similar".to_string(),
+            kind: ProbeKind::Candidate,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let cache = vec![per_file, shared.clone(), undeclared_shared];
+        let declared = ProbeNames::new(["duplicates".to_string()]);
+
+        let got = select_shared_probe_results(&cache, &declared);
+        assert_eq!(
+            got,
+            vec![shared],
+            "only the declared probe's <changed-set> result is selected, never a \
+             per-file result and never an undeclared probe's shared result"
+        );
+    }
+
+    /// [`WorkList::shared_probe_results`] dedups the shared evidence across
+    /// validators by `(probe name, target)`, so two validators that both
+    /// declare `duplicates` do not double the shared block in the rendered
+    /// prime.
+    #[test]
+    fn work_list_shared_probe_results_dedups_across_validators() {
+        let shared = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let v1 = ValidatorWork::new(
+            "one".to_string(),
+            RuleNames::default(),
+            ProbeNames::new(["duplicates".to_string()]),
+            vec![],
+        )
+        .with_shared_probe_results(vec![shared.clone()]);
+        let v2 = ValidatorWork::new(
+            "two".to_string(),
+            RuleNames::default(),
+            ProbeNames::new(["duplicates".to_string()]),
+            vec![],
+        )
+        .with_shared_probe_results(vec![shared.clone()]);
+
+        let work = WorkList::new("purpose".to_string(), vec![v1, v2]);
+
+        assert_eq!(
+            work.shared_probe_results(),
+            vec![shared],
+            "the identical shared result declared by two validators is carried once"
         );
     }
 }

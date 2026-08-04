@@ -9,7 +9,8 @@
 //!
 //! # The catalog is data, not branching
 //!
-//! There are exactly three probes — [`callers`], [`duplicates`], [`similar`] —
+//! There are exactly four probes — [`callers`], [`duplicates`], [`similar`],
+//! [`complexity`] —
 //! described by a single static table ([`CATALOG`]) of [`ProbeCatalogEntry`]
 //! rows. Each row binds a semantic probe name to the [`ProbeOp`] the runner
 //! interprets and the [`ProbeKind`] (`fact` vs `candidate`) the verify guard
@@ -22,13 +23,17 @@
 //! | `callers`    | `get callgraph` (inbound)  | each **added** symbol            | `fact`      |
 //! | `duplicates` | `find duplicates`          | each changed file + changed set  | `fact`      |
 //! | `similar`    | `search code` (semantic)   | each **added** function body     | `candidate` |
+//! | `complexity` | `cognitive_complexity`     | each file under review           | `fact`      |
 //!
 //! # Reuse, never reimplement
 //!
 //! The runner calls [`swissarmyhammer_code_context::find_duplicates`],
-//! [`swissarmyhammer_code_context::get_callgraph`], and
-//! [`swissarmyhammer_code_context::search_code`] as a library. It does not
-//! reimplement duplicate detection, call-graph traversal, or semantic search.
+//! [`swissarmyhammer_code_context::get_callgraph`],
+//! [`swissarmyhammer_code_context::search_code`], and
+//! [`swissarmyhammer_sem::parser::plugins::code::cognitive_complexity`] as a
+//! library. It does not
+//! reimplement duplicate detection, call-graph traversal, semantic search, or
+//! tree-sitter parsing.
 //! The one piece of logic that lives here — and must — is the **changed-set**
 //! duplicate comparison: a HEAD-based index does not contain another
 //! just-changed file, so the same block pasted into two new unindexed files
@@ -43,7 +48,7 @@
 //! [`TextEmbedder`] used to embed query bodies (for `similar`) and changed
 //! blocks (for the changed-set `duplicates` comparison).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use model_embedding::{cosine_similarity, TextEmbedder};
 use rusqlite::Connection;
@@ -52,6 +57,10 @@ use serde::Serialize;
 use swissarmyhammer_code_context::{
     find_duplicates_in, get_callgraph, load_all_embedded_chunks, search_loaded, CallGraphDirection,
     CallGraphOptions, FindDuplicatesOptions, LoadedChunk, SearchCodeOptions,
+};
+use swissarmyhammer_sem::parser::plugins::code::{
+    cognitive_complexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
+    NESTING_DEPTH_THRESHOLD,
 };
 
 use crate::error::AvpError;
@@ -88,6 +97,9 @@ pub enum ProbeOp {
     /// `search code` (semantic) bound to each added function body, self
     /// excluded.
     Similar,
+    /// Sonar cognitive complexity, computed per function from the tree-sitter
+    /// parse of each file under review.
+    Complexity,
 }
 
 /// One row of the probe catalog: a semantic name bound to an op and a kind.
@@ -102,7 +114,7 @@ pub struct ProbeCatalogEntry {
     pub op: ProbeOp,
 }
 
-/// The complete probe catalog — exactly three entries.
+/// The complete probe catalog — exactly four entries.
 ///
 /// Adding a probe is adding a row here plus an arm in [`ProbeOp`]; the runner
 /// does not change. This is the single source of truth for both
@@ -122,6 +134,11 @@ pub static CATALOG: &[ProbeCatalogEntry] = &[
         name: "similar",
         kind: ProbeKind::Candidate,
         op: ProbeOp::Similar,
+    },
+    ProbeCatalogEntry {
+        name: "complexity",
+        kind: ProbeKind::Fact,
+        op: ProbeOp::Complexity,
     },
 ];
 
@@ -236,18 +253,34 @@ impl ChangeEntry {
 
 /// The change set a `run_probes` invocation is bound to.
 ///
-/// Carries the diff's changed entities. The runner derives every probe's
-/// arguments from these — there is no other input axis.
+/// Carries the diff's changed entities, plus the current source of each file
+/// under review. Entity-bound probes (`callers`, `duplicates`, `similar`)
+/// derive their arguments from the entities; file-bound probes (`complexity`)
+/// read the sources.
 #[derive(Debug, Clone, Default)]
 pub struct FileChange {
     /// The changed entities from the semantic diff.
     pub entities: Vec<ChangeEntry>,
+    /// The current content of each file under review, keyed by path.
+    ///
+    /// A file-bound probe measures the file as it stands, not only the entities
+    /// the diff touched, because the review boundary is the whole file.
+    pub sources: BTreeMap<String, String>,
 }
 
 impl FileChange {
-    /// Build a change set from its entities.
+    /// Build a change set from its entities, with no file sources.
     pub fn new(entities: Vec<ChangeEntry>) -> Self {
-        Self { entities }
+        Self {
+            entities,
+            sources: BTreeMap::new(),
+        }
+    }
+
+    /// The same change set with the current source of each file attached.
+    pub fn with_sources(mut self, sources: BTreeMap<String, String>) -> Self {
+        self.sources = sources;
+        self
     }
 }
 
@@ -373,6 +406,7 @@ pub async fn run_probes(
             ProbeOp::Callers => run_callers(entry, file_change, conn)?,
             ProbeOp::Duplicates => run_duplicates(entry, file_change, &corpus, embedder).await?,
             ProbeOp::Similar => run_similar(entry, file_change, &corpus, embedder).await?,
+            ProbeOp::Complexity => run_complexity(entry, file_change),
         };
         results.append(&mut probe_results);
     }
@@ -398,6 +432,101 @@ fn resolve_entries(probe_names: &[String]) -> Result<Vec<&'static ProbeCatalogEn
             })
         })
         .collect()
+}
+
+/// The detail a `complexity` row carries when the file's language has no
+/// cognitive-complexity mapping.
+///
+/// A missing mapping must read as "unknown", never as "simple". Emitting this
+/// row keeps the probe result non-empty, so the verify guard cannot mistake an
+/// unmapped language for the fact "no function is too complex".
+const COMPLEXITY_NOT_COMPUTED: &str =
+    "cognitive complexity not computed — this language has no scorer mapping; judge from the source";
+
+/// `complexity`: Sonar cognitive complexity per function, computed from the
+/// tree-sitter parse of each file under review.
+///
+/// This is the probe that takes counting away from the agent. It emits one
+/// result per file, carrying **one row per function that exceeds a gate**, each
+/// row spelling out every computed number and the gate it is measured against.
+///
+/// An **empty** result is therefore a positive fact — "every function in this
+/// file is under both gates" — which the verify guard uses to refute a
+/// complexity claim outright. A file whose language has no mapping emits a
+/// [`COMPLEXITY_NOT_COMPUTED`] row instead, so absence of a score never reads as
+/// absence of complexity.
+fn run_complexity(entry: &ProbeCatalogEntry, file_change: &FileChange) -> Vec<ProbeResult> {
+    file_change
+        .sources
+        .iter()
+        .map(|(path, source)| {
+            let rows = match cognitive_complexity(path, source) {
+                Some(computed) => computed
+                    .functions
+                    .iter()
+                    .filter(|function| function.exceeds_gates())
+                    .map(|function| complexity_row(path, function))
+                    .collect(),
+                None => vec![ProbeRow {
+                    file_path: path.clone(),
+                    symbol: None,
+                    line: None,
+                    similarity: None,
+                    detail: Some(COMPLEXITY_NOT_COMPUTED.to_string()),
+                }],
+            };
+            ProbeResult {
+                name: entry.name.to_string(),
+                kind: entry.kind,
+                target: path.clone(),
+                rows,
+            }
+        })
+        .collect()
+}
+
+/// One over-gate function as an evidence row.
+///
+/// The detail carries every computed number AND the gate each one is measured
+/// against, so the agent compares rather than counts, and so a finding can say
+/// "7 branches" instead of "numerous branches".
+///
+/// A [`FunctionComplexity::is_partial`] function gets a distinct detail
+/// instead: its walk hit the scorer's traversal-depth cap, so the numbers
+/// below are a lower bound, not the true complexity. `exceeds_gates()` always
+/// includes a partial function, so it still reaches this row rather than
+/// silently reading as "under the gates".
+fn complexity_row(path: &str, function: &FunctionComplexity) -> ProbeRow {
+    let detail = if function.is_partial {
+        format!(
+            "cognitive complexity NOT FULLY COMPUTED — this function nests deeper than the \
+             scorer's traversal-depth cap, so the walk stopped short; the numbers below are a \
+             lower bound, not the true complexity: cognitive complexity {} (gate \
+             {COGNITIVE_COMPLEXITY_THRESHOLD}), max condition-nesting depth {} (gate \
+             {NESTING_DEPTH_THRESHOLD})",
+            function.cognitive_score, function.max_nesting_depth,
+        )
+    } else {
+        format!(
+            "cognitive complexity {} (gate {COGNITIVE_COMPLEXITY_THRESHOLD}), \
+             max condition-nesting depth {} (gate {NESTING_DEPTH_THRESHOLD}), \
+             {} branches, at most {} boolean operands in one condition, \
+             loops nested {} deep, longest else-if chain {}",
+            function.cognitive_score,
+            function.max_nesting_depth,
+            function.branch_count,
+            function.max_boolean_operands,
+            function.max_loop_nesting,
+            function.max_else_if_chain,
+        )
+    };
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: Some(function.name.clone()),
+        line: Some(function.start_line as u32),
+        similarity: None,
+        detail: Some(detail),
+    }
 }
 
 /// `callers`: `get callgraph` (inbound) on each added symbol.
@@ -636,13 +765,17 @@ mod tests {
     // --- catalog --------------------------------------------------------
 
     #[test]
-    fn catalog_has_exactly_the_three_probes_with_their_kinds() {
+    fn catalog_has_exactly_the_four_probes_with_their_kinds() {
         let names: Vec<_> = CATALOG.iter().map(|e| e.name).collect();
-        assert_eq!(names, vec!["callers", "duplicates", "similar"]);
+        assert_eq!(
+            names,
+            vec!["callers", "duplicates", "similar", "complexity"]
+        );
 
         assert_eq!(catalog_entry("callers").unwrap().kind, ProbeKind::Fact);
         assert_eq!(catalog_entry("duplicates").unwrap().kind, ProbeKind::Fact);
         assert_eq!(catalog_entry("similar").unwrap().kind, ProbeKind::Candidate);
+        assert_eq!(catalog_entry("complexity").unwrap().kind, ProbeKind::Fact);
     }
 
     #[test]
@@ -650,6 +783,7 @@ mod tests {
         assert!(probe_exists("callers"));
         assert!(probe_exists("duplicates"));
         assert!(probe_exists("similar"));
+        assert!(probe_exists("complexity"));
         assert!(!probe_exists("search_symbol"));
         assert!(!probe_exists("blastradius"));
         assert!(!probe_exists("nonsense"));
@@ -733,6 +867,130 @@ mod tests {
                 assert!(message.contains("unknown probe"), "got: {message}");
             }
             other => panic!("expected Validator error, got: {other:?}"),
+        }
+    }
+
+    // --- complexity -----------------------------------------------------
+
+    /// A file whose one function is far over the nesting gate.
+    const OVER_GATE_SOURCE: &str = r#"
+fn walk(a: bool, b: bool, items: &[u8]) -> u8 {
+    if a {
+        for item in items {
+            while b {
+                if *item > 0 {
+                    return 1;
+                }
+            }
+        }
+    }
+    0
+}
+"#;
+
+    /// `collect_line_tags` as the review flagged it: a two-arm `Option` match
+    /// inside one `if` inside one `while`, which measures well under both gates.
+    const UNDER_GATE_SOURCE: &str = r#"
+fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            i = skip_inline_code(bytes, i);
+            continue;
+        }
+        match tag_slug_at(bytes, i) {
+            Some(slug) => {
+                tags.insert(line[slug.clone()].to_string());
+                i = slug.end;
+            }
+            None => i += 1,
+        }
+    }
+}
+"#;
+
+    /// Run the `complexity` probe over one file through the real `run_probes`
+    /// entry point, so the catalog lookup and dispatch are exercised too.
+    async fn complexity_probe(path: &str, source: &str) -> ProbeResult {
+        let conn = index_conn();
+        let embedder = MockEmbedder::new(DIM);
+        let change = FileChange::default()
+            .with_sources(BTreeMap::from([(path.to_string(), source.to_string())]));
+
+        let results = run_probes(&["complexity".to_string()], &change, &conn, &embedder)
+            .await
+            .expect("the complexity probe runs");
+
+        assert_eq!(results.results.len(), 1, "one result per file under review");
+        results.results.into_iter().next().expect("one result")
+    }
+
+    #[tokio::test]
+    async fn complexity_lists_a_row_for_each_over_gate_function() {
+        let result = complexity_probe("src/walk.rs", OVER_GATE_SOURCE).await;
+
+        assert_eq!(result.name, "complexity");
+        assert_eq!(result.kind, ProbeKind::Fact, "it is a guard-able fact");
+        assert_eq!(result.target, "src/walk.rs", "the probe binds to the file");
+        assert_eq!(result.rows.len(), 1, "one over-gate function");
+
+        let row = &result.rows[0];
+        assert_eq!(row.symbol.as_deref(), Some("walk"));
+        let detail = row
+            .detail
+            .as_deref()
+            .expect("the row spells out the numbers");
+        assert!(
+            detail.contains("max condition-nesting depth 4 (gate 4)"),
+            "the row must carry the measured depth and its gate, got: {detail}"
+        );
+        assert!(
+            detail.contains("cognitive complexity 10 (gate 15)"),
+            "the row must carry the measured score and its gate, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn complexity_reports_no_rows_when_every_function_is_under_both_gates() {
+        // An empty result is the positive fact the verify guard refutes with:
+        // "nothing in this file is too complex". This is the file the review
+        // repeatedly flagged as "match arms contain code at depth 4".
+        let result = complexity_probe("src/tag_parser.rs", UNDER_GATE_SOURCE).await;
+
+        assert!(
+            result.rows.is_empty(),
+            "an under-gate file must list nothing, got: {:?}",
+            result.rows
+        );
+    }
+
+    #[tokio::test]
+    async fn complexity_reports_not_computed_for_an_unmapped_language() {
+        // Never a silent zero: an unmapped language must still produce a row, so
+        // the guard cannot read "no mapping" as "no complexity". Go carries no
+        // `ComplexitySpec` row (its test-marking convention is name/parameter
+        // based, not attribute based, so it cannot yet share the generic
+        // attribute-driven `is_test` mechanism the mapped languages use).
+        let result = complexity_probe("src/app.go", "func f() {}\n").await;
+
+        assert_eq!(result.rows.len(), 1, "not-computed is itself a row");
+        assert_eq!(
+            result.rows[0].detail.as_deref(),
+            Some(COMPLEXITY_NOT_COMPUTED),
+            "the row must say the score was not computed"
+        );
+    }
+
+    #[tokio::test]
+    async fn complexity_rows_are_identical_across_repeated_runs() {
+        // The gate is only binary if it is stable. No model is involved, so the
+        // repeated-run harness is cheap enough to keep in CI.
+        const RUNS: usize = 10;
+        let first = complexity_probe("src/walk.rs", OVER_GATE_SOURCE).await;
+        for run in 1..RUNS {
+            let again = complexity_probe("src/walk.rs", OVER_GATE_SOURCE).await;
+            assert_eq!(again, first, "run {run} produced different probe evidence");
         }
     }
 

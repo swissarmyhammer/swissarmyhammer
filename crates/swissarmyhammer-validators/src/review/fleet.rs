@@ -69,7 +69,7 @@
 
 use std::fmt::Write as _;
 
-use crate::review::probes::render_probe_evidence;
+use crate::review::probes::{render_probe_evidence, ProbeResult};
 use crate::review::scope::{FileWork, LineAnnotation, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
@@ -79,38 +79,51 @@ use crate::validators::{
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// The default review `batch_size` in **bytes** (384 KiB).
+/// The agent prompt cap every review prompt must fit inside, in **bytes**.
 ///
-/// Cramming every changed file's full source into one shared prime overflows the
-/// review model's context on a large diff (every fan-out validator then fails
-/// uniformly), and even when it fits it dilutes attention. So a run is split into
-/// byte-budgeted batches and each batch fans out independently. This budget is a
-/// deliberate, tunable knob — not derived from the model's context window.
+/// Read from [`claude_agent`], never re-declared here. That is the whole point:
+/// the batch budget and the cap the agent rejects a prompt against used to be
+/// separate numbers in separate crates, so the batcher packed roughly 4x what
+/// the agent would accept and every fat batch came back as a bare
+/// `invalid_params` with no message (see `^6jsxjbc`). One declaration means the
+/// two cannot silently disagree again.
 ///
-/// It is sized to clear the largest single source file in a typical change
-/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
-/// tripping the oversize-file error, while a genuinely large multi-file diff
-/// still splits across batches. (32 KiB, then 128 KiB — the previous defaults —
-/// were smaller than many real source files, so default reviews of normal
-/// commits errored.)
+/// A prompt is rejected against the `max_prompt_length` of the agent actually
+/// serving the run. ACP exposes no prompt-length capability to query, so this
+/// compile-time constant is the single source both sides read:
+/// `claude_agent::AgentConfig`'s default is this value, and
+/// `swissarmyhammer_agent` sets its Claude config from the same constant.
 ///
-/// # Why 384 KiB, not 256 KiB
+/// Re-exported from [`crate::validators::AGENT_PROMPT_CAP`], where the
+/// [`AgentPool`] that enforces it lives.
+pub use crate::validators::AGENT_PROMPT_CAP;
+
+/// The default review `batch_size` in **bytes** — the agent's prompt cap.
 ///
-/// [`batch_work_list`](crate::review::scope::batch_work_list) budgets on
-/// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice)'s
-/// raw byte length — the deliberate choice here, over measuring the rendered
-/// prime, so the scope stage (stage 1, deterministic and rendering-agnostic)
-/// never has to know how the fleet stage (stage 2) formats a file block. But
-/// [`render_numbered_source`] (via [`render_file_block`]) now renders each
-/// line as `{line:>6} | {sha:8} {mark} | {text}` — roughly 16 extra bytes
-/// PER LINE (the numbering, sha, and mark columns) on source lines that
-/// average ~35 bytes, so the rendered prime a batch actually sends is
-/// ~1.45x the raw `source_slice` bytes the budget measures. Raising the
-/// default from 256 KiB to 384 KiB (1.5x — comfortably over the measured
-/// 1.45x) keeps a normal commit inside ONE batch under the new format with
-/// the same margin the 256 KiB default gave the old unnumbered one, without
-/// coupling the scope stage to the fleet stage's rendering.
-pub const DEFAULT_BATCH_SIZE: usize = 384 * 1024;
+/// Cramming every changed file's full content into one prompt overflows the
+/// review model on a large diff (every fan-out validator then fails uniformly),
+/// so a run is split into budgeted batches that each fan out independently. The
+/// budget is not an independent knob: it is [`AGENT_PROMPT_CAP`], from which
+/// [`FleetConfig::file_payload_budget`] subtracts the run's measured framing to
+/// get what is left for file blocks.
+///
+/// # The budget measures the RENDERED prompt
+///
+/// [`batch_work_list`](crate::review::scope::batch_work_list) is handed a cost
+/// function and budgets on what it returns. The fleet passes
+/// [`rendered_file_block_bytes`], which renders the file through the very
+/// renderer the prompt uses, so the measured number and the sent number are the
+/// same bytes.
+///
+/// Nothing derived from raw source bytes can work here. [`render_file_block`]
+/// emits each line as `{line:>6} | {sha:8} {mark} | {text}` — about 16 fixed
+/// bytes PER LINE — so expansion is a function of line COUNT, not of byte
+/// count: a file of 4-byte lines renders at ~5x, a file of 200-byte lines at
+/// ~1.08x. A fixed multiplier is therefore most wrong for exactly the files
+/// most likely to overflow. And source is not even the dominant term: a
+/// production `duplication` prompt measured 14.9 MB, of which 14.3 MB was probe
+/// evidence and 0.1 MB was source. Rendering is the only honest measure.
+pub const DEFAULT_BATCH_SIZE: usize = AGENT_PROMPT_CAP;
 
 /// Configuration for a fan-out run.
 ///
@@ -122,25 +135,46 @@ pub const DEFAULT_BATCH_SIZE: usize = 384 * 1024;
 /// out independently, so a large diff no longer overflows the prime.
 #[derive(Debug, Clone, Copy)]
 pub struct FleetConfig {
-    /// The maximum inlined file content, in bytes, one batch's shared prime may
-    /// carry. Whole files are packed greedily up to this budget; a single file
-    /// larger than it is a hard error (never split, never sliced). Read through
+    /// The maximum RENDERED file content, in bytes, one batch's prompts may
+    /// carry. Whole files are packed greedily up to this budget; a
+    /// (validator, file) pair whose own rendered block exceeds it is excluded
+    /// and reported as a named gap (never split, never sliced). Always
+    /// `<= `[`AGENT_PROMPT_CAP`] — [`new`](Self::new) clamps it. Read through
     /// [`batch_size`](Self::batch_size); private so the config can evolve
     /// without a field-level API commitment.
     batch_size: usize,
 }
 
 impl FleetConfig {
-    /// Build a config with an explicit batch budget (bytes of inlined file
-    /// content per batch). [`FleetConfig::default`] uses [`DEFAULT_BATCH_SIZE`].
+    /// Build a config with an explicit batch budget (bytes of rendered file
+    /// content per batch), clamped to [`AGENT_PROMPT_CAP`].
+    ///
+    /// The clamp is load-bearing: `batch_size` is a caller-supplied `review`
+    /// modifier, so without it a caller could ask for a budget the agent
+    /// rejects outright. [`FleetConfig::default`] uses [`DEFAULT_BATCH_SIZE`].
     pub fn new(batch_size: usize) -> Self {
-        Self { batch_size }
+        Self {
+            batch_size: batch_size.min(AGENT_PROMPT_CAP),
+        }
     }
 
-    /// The maximum inlined file content, in bytes, one batch's shared prime may
-    /// carry.
+    /// The maximum rendered file content, in bytes, one batch's prompts may
+    /// carry, before the run's framing is subtracted.
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// The bytes of rendered file blocks one batch may carry, given the run's
+    /// `framing` bytes ([`prompt_framing_bytes`]).
+    ///
+    /// The cap applies to the WHOLE prompt, and a prompt is framing plus file
+    /// blocks, so the packer's budget is the cap minus the framing. Saturates
+    /// at zero: framing that alone exceeds the cap leaves no room for any file,
+    /// and every file is then reported as a named gap rather than underflowing
+    /// into an enormous budget.
+    pub fn file_payload_budget(&self, framing: usize) -> usize {
+        self.batch_size
+            .min(AGENT_PROMPT_CAP.saturating_sub(framing))
     }
 }
 
@@ -747,7 +781,7 @@ pub async fn unpin_prefix_session(guard: SessionPinGuard) {
 /// How a turn reused the shared file-context prefix, classified from the two
 /// reuse signals the two backends report.
 ///
-/// The native KV (llama/qwen) backend reports reuse as a fork attaching the
+/// A backend with a native KV cache reports reuse as a fork attaching the
 /// parent's saved generation state with a prefix token count
 /// ([`ForkAttachment::prefix_tokens`]); the claude backend's fork attaches no
 /// token counts and instead reports Anthropic prompt-cache reads/writes on the
@@ -756,7 +790,7 @@ pub async fn unpin_prefix_session(guard: SessionPinGuard) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefixReuse {
     /// A native KV fork attached the parent's saved state, reusing
-    /// `reused_tokens` prompt tokens (the llama/qwen warm path).
+    /// `reused_tokens` prompt tokens (the native-KV warm path).
     WarmKv {
         /// Prompt tokens the attached parent state covered.
         reused_tokens: u64,
@@ -781,7 +815,7 @@ pub enum PrefixReuse {
 ///
 /// Precedence:
 /// 1. A native KV fork with a prefix token count → [`PrefixReuse::WarmKv`]
-///    (the llama/qwen path, whose `fork.prefix_tokens` is authoritative).
+///    (the native-KV path, whose `fork.prefix_tokens` is authoritative).
 /// 2. Otherwise a claude turn reporting `cache_read_input_tokens > 0` →
 ///    [`PrefixReuse::WarmCache`] (the hosted prefix cache served it warm).
 /// 3. Otherwise [`PrefixReuse::Cold`] — a cold write (`cache_creation_input_tokens
@@ -1182,6 +1216,7 @@ pub fn render_fleet_prompt(
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
     out.push_str(&render_file_payload(validator.files()));
+    render_shared_probe_evidence(&mut out, validator.shared_probe_results());
     out.push_str(&render_validator_suffix(validator, ruleset));
     out
 }
@@ -1216,6 +1251,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
     out.push_str("\n\n");
     let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
     out.push_str(&render_file_payload(&distinct));
+    render_shared_probe_evidence(&mut out, &work.shared_probe_results());
     out.push_str(PRIME_HANDOFF);
     out
 }
@@ -1299,12 +1335,118 @@ fn render_focus_files(out: &mut String, files: &[FileWork]) {
     out.push('\n');
 }
 
+/// The header that opens every file payload, in the prime and in the
+/// monolithic fallback alike. Shared by [`render_file_payload`] and
+/// [`prompt_framing_bytes`] so the framing reserve counts the same bytes the
+/// payload writes.
+const FILE_PAYLOAD_HEADER: &str = "# Files under review\n\n";
+
+/// The rendered bytes one file contributes to a prompt.
+///
+/// Measured by running the real [`render_file_block`] and taking the length, so
+/// the number the packer budgets on and the number the agent receives are the
+/// same bytes. This is the cost function
+/// [`batch_work_list`](crate::review::scope::batch_work_list) is handed; see
+/// [`DEFAULT_BATCH_SIZE`] for why nothing derived from
+/// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice) can
+/// stand in for it.
+///
+/// The cost is per **(validator, file) pair**, not per path: a file's block
+/// carries the probe evidence selected for THAT validator, so the same path can
+/// cost kilobytes for one validator and megabytes for another.
+pub fn rendered_file_block_bytes(file: &FileWork) -> usize {
+    let mut out = String::new();
+    render_file_block(&mut out, file);
+    out.len()
+}
+
+/// The header introducing the batch-scoped shared probe evidence section —
+/// currently just the `<changed-set>` `duplicates` comparison. Shared by
+/// [`render_shared_probe_evidence`] and [`prompt_framing_bytes`] so the
+/// framing reserve counts the same bytes the section writes.
+const SHARED_EVIDENCE_HEADER: &str = "# Shared evidence\n\n";
+
+/// Render the batch-scoped shared probe evidence — currently just the
+/// `<changed-set>` `duplicates` comparison — ONCE per prompt, after the
+/// per-file blocks. Emits nothing when `results` is empty, so a prompt with
+/// no shared evidence is byte-identical to one rendered without this section
+/// at all.
+///
+/// This evidence spans the WHOLE change under review, not any single file, so
+/// rendering it inside every [`render_file_block`] used to repeat the
+/// identical, potentially multi-megabyte block once per file in the batch —
+/// zero additional information at N× the bytes (^t7f5fqf). Rendering it once
+/// here, shared by [`render_run_prime`] and [`render_fleet_prompt`] alike,
+/// shows the model the exact same rows at a fraction of the cost: the fix is a
+/// payload-size change only, never a change to which rows the model sees.
+pub fn render_shared_probe_evidence(out: &mut String, results: &[ProbeResult]) {
+    if results.is_empty() {
+        return;
+    }
+    out.push_str(SHARED_EVIDENCE_HEADER);
+    out.push_str(
+        "The evidence below spans the WHOLE change under review, not any single \
+         file, so it is shown ONCE here rather than repeated per file above. It \
+         still applies to any file a row below names.\n\n",
+    );
+    render_probe_evidence(out, results, false);
+}
+
+/// The bytes of a batch's prompt that are NOT file blocks — an upper bound over
+/// every validator in the run.
+///
+/// A batch sends two prompt shapes, and both are framing plus file blocks:
+///
+/// - the shared prime — change purpose + payload header + blocks +
+///   [`render_shared_probe_evidence`] + [`PRIME_HANDOFF`];
+/// - the monolithic per-validator fallback — change purpose + payload header +
+///   that validator's blocks + [`render_shared_probe_evidence`] +
+///   [`render_validator_suffix`].
+///
+/// The suffix (mandate, guidance, focus-file list, every rule body, the output
+/// contract) is by far the larger of the two tails and is what makes this worth
+/// measuring rather than guessing: a validator's rule bodies are authored
+/// Markdown of unbounded size. It is measured against the validator's WHOLE
+/// file list, so it bounds the suffix of any batch that subsets those files.
+///
+/// The shared evidence section is measured against the WHOLE work-list's
+/// dedup'd shared results ([`WorkList::shared_probe_results`]), never against
+/// one batch: that evidence is batch-scoped, not file-scoped, so it costs the
+/// same fixed bytes in every batch's prompt regardless of which files that
+/// batch carries.
+///
+/// A validator the `loader` does not know is skipped, exactly as
+/// [`plan_fan_out`] skips it — it never renders a prompt, so it cannot frame
+/// one.
+pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize {
+    let head = CHANGE_PURPOSE_HEADER.len()
+        + work.change_purpose().trim().len()
+        + "\n\n".len()
+        + FILE_PAYLOAD_HEADER.len();
+
+    let mut shared_evidence = String::new();
+    render_shared_probe_evidence(&mut shared_evidence, &work.shared_probe_results());
+
+    let tail = work
+        .validators()
+        .iter()
+        .filter_map(|validator| {
+            let ruleset = loader.get_ruleset(validator.validator_name())?;
+            Some(render_validator_suffix(validator, ruleset).len())
+        })
+        .max()
+        .unwrap_or(0)
+        .max(PRIME_HANDOFF.len());
+
+    head + shared_evidence.len() + tail
+}
+
 /// Render the file payload — one self-contained block per file (path + semantic
 /// diff + bounded source slice + probe evidence). Used by the run prime (every
 /// distinct file) and the monolithic fallback (one validator's files).
 pub fn render_file_payload(files: &[FileWork]) -> String {
     let mut out = String::new();
-    out.push_str("# Files under review\n\n");
+    out.push_str(FILE_PAYLOAD_HEADER);
     for file in files {
         render_file_block(&mut out, file);
     }
@@ -1422,9 +1564,11 @@ with an empty array `[]`.
 /// The changed file is always handed to the model **in full** — framed explicitly
 /// as the complete current contents the model does NOT need to re-read, because
 /// the read-round-trips that dominated review wall-clock came from the model
-/// re-reading a file it was only given a partial slice of. A file too large for
-/// the review `batch_size` never reaches here as a partial view: the scope stage
-/// rejects it with a hard error rather than trimming it to a slice.
+/// re-reading a file it was only given a partial slice of. A file whose rendered
+/// block would exceed the batch budget never reaches here as a partial view:
+/// [`batch_work_list`](crate::review::scope::batch_work_list) excludes it and
+/// reports it as a [`SkippedFile`](crate::review::scope::SkippedFile) gap instead
+/// of trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path());
 

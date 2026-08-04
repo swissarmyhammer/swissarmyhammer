@@ -108,6 +108,23 @@ comments:
     - evidence: `review sha b34eb9ced~1..b34eb9ced` returned 3 confirmed findings, all test-helper duplication: `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:977` (planted_duplicate_fixture_committed vs planted_duplicate_fixture:928), `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1011` (findings_json_at_line vs findings_json:1668), `crates/swissarmyhammer-validators/src/review/verify.rs:1113` (forking_verifier_agent vs verifier_agent:1101). Checked provenance against `b34eb9ced^`: all three named pairs are either wholly pre-existing test code or a new helper whose only fix path is modifying pre-existing test code. Dropped under the review skill's blanket "never refactor existing tests" exception (duplication is explicitly listed). Zero findings remain. Acceptance criterion 2 was already struck 2026-08-02 (conflicts with documented whole-file review design). Remaining two criteria (line-citation accuracy, regression test) are satisfied per the implement/test comments on this task.
     - next: none — task moved doing → done.
   timestamp: 2026-08-02T13:46:55.035653+00:00
+- actor: claude-code
+  id: 01kz561ytbv9p04jfwfd01ggys
+  text: |-
+    ### Merge note (2026-08-04) — parallel investigation on the `review` branch, folded in after the fact
+
+    A separate session on the `review` branch reopened this task independently (without visibility into the `main`-branch resolution below) and re-investigated the same territory. Its findings corroborate rather than contradict the standing resolution:
+
+    **Re-confirmed criteria 1 and 3 are fixed**: re-ran `review sha 42e32c3a3~1..42e32c3a3` (the exact commit this task's original evidence table was built from). All 4 confirmed findings cited exact-correct lines, checked by hand against the real file: `io.rs:493` = `"unnamed".to_string()`, `io.rs:1156` = `for i in 0..5 {`, `io.rs:1233` = `for _ in 0..16 {`, `store.rs:217` = `fn flatten_into(...)`. Zero drift.
+
+    **Independently rediscovered the criterion-2 conflict**: those same 4 findings, while line-accurate, all sit outside every diff hunk `42e32c3a3` touched. Traced this to the same `OUTPUT_CONTRACT` in `fleet.rs` (commit `7449c0c99`) already cited below, and — not having seen the "Dropped 2026-08-02" decision on this branch — re-recorded it as an open blocker requiring a human decision. That decision was already made: criterion 2 is dropped, per the standing resolution in the Acceptance section above. No further action needed on it.
+
+    **New regression test added, kept**: `a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol` in `crates/swissarmyhammer-validators/src/review/scope.rs` — a real two-commit `Scope::Sha` history (190 untouched filler lines, then one edited line) proving the edited line's number/blame/mark survive correctly at depth. This is additional, complementary coverage to the test already recorded as closing criterion 3; both are kept.
+
+    Verification on that branch: `cargo nextest run -p swissarmyhammer-validators` — 363 passed, 0 failed. `cargo fmt --all -- --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 3068 passed, 0 failed.
+
+    Task stays `done`. No scope-filtering code was added to `review sha` on either branch — the criterion-2 conflict was resolved by dropping the criterion, not by changing the engine.
+  timestamp: 2026-08-04T01:26:21.259353+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffff9080
 title: Review engine reports findings against a stale revision — cited line numbers do not resolve
@@ -146,6 +163,6 @@ Related but distinct: ^k5wsxh0 (same validator returns different finding sets ac
 
 ## Acceptance
 
-- Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows.
-- ~~`review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.~~ **Dropped 2026-08-02**: this conflicts with the deliberate, documented whole-file review design (`fleet.rs` `OUTPUT_CONTRACT`, commit `7449c0c99`) — the review boundary is the whole current file by design, so pre-existing issues in a touched file are reported too. Whole-file review is intended behavior, not a scoping bug. User decision: drop this criterion; close on the two remaining criteria.
+- Every finding's `file:line` resolves to code that matches the finding's own description. Demonstrate on a commit that touches a file with many edits above the changed region, since that is where drift shows. — CLOSED. Two regression tests now cover this: `a_findings_line_number_survives_from_the_prime_to_the_report` (small fixture) and `a_known_commit_with_many_lines_above_the_change_resolves_the_correct_symbol` (real two-commit history, 190 filler lines) in `crates/swissarmyhammer-validators/src/review/scope.rs`.
+- ~~`review sha <range>` reports only on code the range actually changed. A finding on an untouched function is a bug in scoping, not a pre-existing finding to be split off.~~ **Dropped 2026-08-02**: this conflicts with the deliberate, documented whole-file review design (`fleet.rs` `OUTPUT_CONTRACT`, commit `7449c0c99`) — the review boundary is the whole current file by design, so pre-existing issues in a touched file are reported too. Whole-file review is intended behavior, not a scoping bug. User decision: drop this criterion; close on the two remaining criteria. Independently re-confirmed and re-flagged by a parallel investigation on 2026-08-04 (see merge note above) — same conclusion, no change to the decision.
 - Add a regression test that reviews a known commit and asserts the reported lines resolve to the expected symbols. #bug #review

@@ -308,16 +308,249 @@ async fn run_fleet_and_unpin(
 // ---- config tests ----------------------------------------------------
 
 #[test]
-fn default_batch_size_is_384_kib() {
-    // Raised from 256 KiB (1x the ~95 KB largest-typical-file target) to
-    // 384 KiB (1.5x) so the numbered/blame-annotated render — measured at
-    // ~1.45x the raw `source_slice` bytes `batch_work_list` budgets on — still
-    // clears an ordinary commit in one batch, the same margin the old 256 KiB
-    // default gave the unnumbered format. See `DEFAULT_BATCH_SIZE`'s doc for
-    // the full "why not measure the rendered size instead" rationale.
-    assert_eq!(DEFAULT_BATCH_SIZE, 384 * 1024);
-    assert_eq!(DEFAULT_BATCH_SIZE, 393216);
+fn the_batch_budget_and_the_agent_prompt_cap_are_one_constant() {
+    // The defect this pins: the batch budget and the agent's prompt cap were
+    // three independent numbers in three crates, so the batcher packed ~4x
+    // what the agent would accept and every fat batch came back as a bare
+    // `invalid_params`. The budget is now the cap, read from the one place
+    // that declares it — they cannot drift apart.
+    assert_eq!(
+        AGENT_PROMPT_CAP,
+        claude_agent::constants::sizes::messages::MAX_PROMPT_LENGTH,
+        "the fleet reads the agent's cap; it never re-declares one"
+    );
+    assert_eq!(
+        DEFAULT_BATCH_SIZE, AGENT_PROMPT_CAP,
+        "the default batch budget IS the cap; the framing reserve is subtracted per run"
+    );
     assert_eq!(FleetConfig::default().batch_size(), DEFAULT_BATCH_SIZE);
+}
+
+#[test]
+fn a_caller_supplied_batch_size_is_clamped_to_the_agent_prompt_cap() {
+    // `batch_size` is a user-facing `review` modifier, so a caller can ask for
+    // a budget the agent would reject outright. The config clamps rather than
+    // trusting it.
+    assert_eq!(
+        FleetConfig::new(AGENT_PROMPT_CAP * 4).batch_size(),
+        AGENT_PROMPT_CAP,
+        "no caller can raise the budget above the cap"
+    );
+    let under = AGENT_PROMPT_CAP / 4;
+    assert_eq!(
+        FleetConfig::new(under).batch_size(),
+        under,
+        "a stricter caller budget is honored as-is"
+    );
+}
+
+#[test]
+fn the_file_payload_budget_leaves_room_for_the_prompt_framing() {
+    // The cap applies to the WHOLE prompt, and a batch prompt carries the
+    // change purpose, the payload header, and the validator's full ruleset on
+    // top of its file blocks. The budget the packer gets is what is left.
+    const FRAMING: usize = 40_000;
+    assert_eq!(
+        FleetConfig::default().file_payload_budget(FRAMING),
+        AGENT_PROMPT_CAP - FRAMING
+    );
+    assert_eq!(
+        FleetConfig::default().file_payload_budget(AGENT_PROMPT_CAP * 2),
+        0,
+        "framing alone over the cap leaves no room, and never underflows"
+    );
+}
+
+// ---- rendered-budget tests -------------------------------------------
+
+/// A source of `lines` short lines — the content shape a fixed expansion
+/// multiplier gets most wrong.
+///
+/// Every rendered line gains a fixed ~16 bytes for the `{line:>6} | {sha:8}
+/// {mark} | ` columns, so expansion is a function of LINE COUNT, not of byte
+/// count. A file of 4-byte lines renders at ~5x its raw size; a file of
+/// 200-byte lines at ~1.08x. No single multiplier on raw bytes can be right
+/// for both.
+fn short_line_source(lines: usize) -> String {
+    (0..lines).map(|_| "a;\n").collect()
+}
+
+/// A `FileWork` with no semantic diff and no probe evidence, so a test that
+/// measures rendering is measuring the source render and the fixed framing
+/// only.
+fn bare_file_work(path: &str, source: String) -> FileWork {
+    FileWork::new(path.to_string(), vec![], vec![], source, vec![])
+}
+
+#[test]
+fn a_short_line_file_the_raw_byte_budget_admits_is_measured_by_its_rendered_size() {
+    // The case a fixed multiplier misses. `tiny.rs` is 3000 bytes of raw
+    // source — comfortably inside a 6000-byte budget — but renders to well
+    // over it, because 1000 lines each gain the number/sha/mark columns.
+    const BUDGET: usize = 6_000;
+    const LINES: usize = 1_000;
+
+    let file = bare_file_work("tiny.rs", short_line_source(LINES));
+    assert!(
+        file.source_slice().len() <= BUDGET,
+        "the raw source is inside the budget, which is the whole point: {} vs {BUDGET}",
+        file.source_slice().len()
+    );
+
+    let rendered = rendered_file_block_bytes(&file);
+    assert!(
+        rendered > BUDGET,
+        "the RENDERED block is over the budget: {rendered} vs {BUDGET}"
+    );
+
+    let work = WorkList::new("purpose".to_string(), vec![validator_work("v", vec![file])]);
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, BUDGET, &rendered_file_block_bytes);
+
+    assert!(
+        batches.is_empty(),
+        "the file cannot be packed, so no batch carries it: {batches:?}"
+    );
+    assert_eq!(skipped.len(), 1, "it is reported, never silently dropped");
+    assert_eq!(skipped[0].path(), "tiny.rs");
+    assert_eq!(
+        skipped[0].validator(),
+        "v",
+        "the gap names which validator could not carry the file"
+    );
+    assert_eq!(
+        skipped[0].size(),
+        rendered,
+        "the reported size is the rendered size, not the raw source size"
+    );
+    assert_eq!(skipped[0].budget(), BUDGET);
+}
+
+#[test]
+fn one_validators_oversized_file_does_not_cost_the_other_validators_that_file() {
+    // The fan-out grain is the (validator, file) pair, so the gap is that
+    // pair, not the file. `heavy` carries evidence that blows the budget for
+    // `fat.rs`; `light` reviews the same file with none, and must keep it.
+    const BUDGET: usize = 6_000;
+
+    let bloated = bare_file_work("fat.rs", short_line_source(1_000));
+    let lean = bare_file_work("fat.rs", "fn ok() {}\n".to_string());
+
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
+            validator_work("heavy", vec![bloated]),
+            validator_work("light", vec![lean]),
+        ],
+    );
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, BUDGET, &rendered_file_block_bytes);
+
+    assert_eq!(batches.len(), 1, "the affordable pair still reviews");
+    assert_eq!(
+        batches[0]
+            .validators()
+            .iter()
+            .map(|v| v.validator_name())
+            .collect::<Vec<_>>(),
+        vec!["light"],
+        "only the validator that could not afford the file is dropped"
+    );
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].validator(), "heavy");
+}
+
+#[test]
+fn every_prompt_a_packed_batch_sends_fits_inside_the_agent_prompt_cap() {
+    // The acceptance test: pack a full run through the REAL batching and the
+    // REAL renderers, then measure the actual prompts. Both shapes are
+    // measured — the shared prime and, because the claude backend never saves
+    // restorable prime state, the monolithic per-validator fallback that is
+    // its production path.
+    let ruleset = ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", &"RULE BODY sentence. ".repeat(500))],
+    );
+    let loader = loader_with(vec![ruleset.clone()]);
+
+    // Twelve files of ~64 KB of raw source each: ~768 KB raw, well past the
+    // 512 KiB cap, so the run MUST split into several batches.
+    let files: Vec<FileWork> = (0..12)
+        .map(|i| {
+            file_work_with_slice(
+                &format!("src/f{i}.rs"),
+                &format!("sym{i}"),
+                "src/other.rs",
+                "fn filler() { let x = 1; }\n".repeat(2_400),
+            )
+        })
+        .collect();
+    let work = WorkList::new(
+        "PURPOSE: a large multi-file change.".to_string(),
+        vec![validator_work("bulk", files)],
+    );
+
+    let framing = prompt_framing_bytes(&work, &loader);
+    let budget = FleetConfig::default().file_payload_budget(framing);
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, budget, &rendered_file_block_bytes);
+
+    assert!(
+        skipped.is_empty(),
+        "no file here is individually oversized: {skipped:?}"
+    );
+    assert!(
+        batches.len() > 1,
+        "a run this large must split into several batches, not one over-cap prompt"
+    );
+
+    for batch in &batches {
+        let prime = render_run_prime(batch);
+        assert!(
+            prime.len() <= AGENT_PROMPT_CAP,
+            "a batch's shared prime is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap",
+            prime.len()
+        );
+        for validator in batch.validators() {
+            let monolithic = render_fleet_prompt(batch.change_purpose(), validator, &ruleset);
+            assert!(
+                monolithic.len() <= AGENT_PROMPT_CAP,
+                "{}'s monolithic prompt is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap",
+                validator.validator_name(),
+                monolithic.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_prompt_framing_bytes_cover_the_purpose_the_payload_header_and_the_ruleset() {
+    // The framing reserve must bound everything a prompt carries that is not a
+    // file block, or the packer hands back a budget that overflows the cap the
+    // moment the rules are appended.
+    let ruleset = ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", &"RULE BODY sentence. ".repeat(500))],
+    );
+    let loader = loader_with(vec![ruleset.clone()]);
+    let validator = validator_work("bulk", vec![file_work("src/a.rs", "alpha", "src/x.rs")]);
+    let work = WorkList::new("PURPOSE: framing.".to_string(), vec![validator]);
+
+    let framing = prompt_framing_bytes(&work, &loader);
+    let monolithic = render_fleet_prompt(
+        work.change_purpose(),
+        &work.validators()[0],
+        loader.get_ruleset("bulk").expect("the ruleset is loaded"),
+    );
+    let blocks: usize = work.distinct_files().map(rendered_file_block_bytes).sum();
+
+    assert!(
+        framing >= monolithic.len() - blocks,
+        "framing ({framing}) must cover the whole prompt minus its file blocks ({})",
+        monolithic.len() - blocks
+    );
 }
 
 // ---- renderer tests (pure) -------------------------------------------
@@ -609,6 +842,157 @@ fn run_prime_dedups_files_shared_across_validators() {
         prime.matches("## File: src/shared.rs").count(),
         1,
         "a file matched by two validators is inlined once in the prime: {prime}"
+    );
+}
+
+/// ^t7f5fqf: the batch-scoped `<changed-set>` `duplicates` comparison must
+/// render ONCE in the run prime, never once per file. A production batch of
+/// 10 files each carrying a ~1.43 MB shared changed-set result sent ~14.3 MB
+/// for zero additional information; this pins the fix at the assembled-prompt
+/// level, packing several files that all need the `duplicates` probe.
+#[test]
+fn run_prime_renders_the_shared_changed_set_evidence_once_not_once_per_file() {
+    let shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+
+    let files = vec![
+        file_work("src/a.rs", "alpha", "src/b.rs"),
+        file_work("src/b.rs", "beta", "src/a.rs"),
+        file_work("src/c.rs", "gamma", "src/a.rs"),
+    ];
+    let validator = validator_work("dedup", files).with_shared_probe_results(shared);
+    let work = WorkList::new("purpose".to_string(), vec![validator]);
+
+    let prime = render_run_prime(&work);
+
+    assert_eq!(
+        prime.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the shared changed-set evidence must render exactly once in the prime \
+         packing 3 files, not once per file: {prime}"
+    );
+    // The per-file evidence each file_work fixture carries is untouched by
+    // this change — it still renders once per file, as before.
+    assert_eq!(
+        prime.matches("probe `duplicates`").count(),
+        4,
+        "3 per-file `duplicates` results plus the 1 shared `<changed-set>` \
+         result, never duplicated further: {prime}"
+    );
+}
+
+/// The monolithic fallback ([`render_fleet_prompt`]) renders the same shared
+/// evidence exactly once too — the degraded path must not silently drop the
+/// `<changed-set>` evidence, nor multiply it across the validator's files.
+#[test]
+fn monolithic_fallback_renders_the_shared_changed_set_evidence_once_not_once_per_file() {
+    let shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+    let files = vec![
+        file_work("src/a.rs", "alpha", "src/b.rs"),
+        file_work("src/b.rs", "beta", "src/a.rs"),
+    ];
+    let vw = validator_work("dedup", files).with_shared_probe_results(shared);
+    let rs = ruleset(
+        "dedup",
+        "DEDUP_MANDATE.",
+        &[("no-copy-paste", "RULE_BODY.")],
+    );
+
+    let prompt = render_fleet_prompt("purpose", &vw, &rs);
+
+    assert_eq!(
+        prompt.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the monolithic fallback must render the shared evidence exactly \
+         once, never dropped and never once per file: {prompt}"
+    );
+}
+
+/// [`render_run_prime`] and [`render_fleet_prompt`] deliberately read shared
+/// probe evidence from two DIFFERENT scopes, mirroring how they already treat
+/// file content:
+///
+/// - the prime is the ONE shared context every validator's fork inherits, so
+///   — exactly like [`WorkList::distinct_files`] unions every validator's
+///   files — it renders [`WorkList::shared_probe_results`], the union of
+///   shared evidence any validator in the batch declared;
+/// - the monolithic fallback is a single validator's SELF-CONTAINED prompt
+///   (its own files ONLY, via [`ValidatorWork::files`], never another
+///   validator's), so it renders only [`ValidatorWork::shared_probe_results`]
+///   — that validator's OWN declared shared evidence.
+///
+/// Unifying the two onto the work-list-wide union would leak a
+/// `duplicates`-declaring validator's shared evidence into an unrelated
+/// validator's self-contained monolithic prompt: new information that
+/// validator never had before, which could change what it flags. This test
+/// pins the split as intentional, not an oversight.
+#[test]
+fn monolithic_fallback_never_leaks_another_validators_shared_probe_evidence() {
+    let dup_shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+
+    let dup_validator = validator_work("dedup", vec![file_work("src/a.rs", "alpha", "src/b.rs")])
+        .with_shared_probe_results(dup_shared);
+    let other_validator = ValidatorWork::new(
+        "style".to_string(),
+        RuleNames::new(["style-rule".to_string()]),
+        ProbeNames::new(["similar".to_string()]),
+        vec![file_work("src/c.rs", "gamma", "src/a.rs")],
+    );
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![dup_validator, other_validator.clone()],
+    );
+
+    // The PRIME is shared context every fork inherits: it shows the union of
+    // shared evidence any validator in the batch declared, exactly once.
+    let prime = render_run_prime(&work);
+    assert_eq!(
+        prime.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the prime carries the union of the batch's shared evidence, once: {prime}"
+    );
+
+    // The MONOLITHIC fallback for "style" (which never declared `duplicates`)
+    // must NOT show `dedup`'s shared evidence — its self-contained prompt
+    // otherwise carries only its OWN files, never another validator's.
+    let rs = ruleset("style", "STYLE_MANDATE.", &[("style-rule", "STYLE_BODY.")]);
+    let monolithic = render_fleet_prompt(work.change_purpose(), &other_validator, &rs);
+    assert!(
+        !monolithic.contains("SHARED_CHANGED_SET_MARKER"),
+        "a validator's monolithic fallback must show only its OWN declared \
+         shared evidence, never another validator's: {monolithic}"
     );
 }
 
@@ -1381,7 +1765,7 @@ async fn prefix_is_primed_once_per_run_and_validators_fork_suffix_only() {
     );
 
     // Observability: each fork task logs the warm reuse and token count,
-    // classified as a warm KV fork (the native llama/qwen path).
+    // classified as a warm KV fork (the native-KV path).
     assert!(logs_contain("fleet task prefix reuse"));
     assert!(logs_contain("reuse=\"warm KV fork\""));
     assert!(logs_contain(&format!(
@@ -2159,7 +2543,7 @@ async fn validator_missing_from_loader_is_skipped_not_panicked() {
 // ---- classify_reuse --------------------------------------------------
 
 /// A native KV fork that attached its parent's saved state with a token
-/// count classifies as `WarmKv` carrying that count — the llama/qwen path.
+/// count classifies as `WarmKv` carrying that count — the native-KV path.
 #[test]
 fn test_classify_reuse_kv_fork_is_warm_kv() {
     let fork = Some(ForkAttachment {

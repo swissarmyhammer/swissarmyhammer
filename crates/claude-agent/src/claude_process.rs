@@ -140,6 +140,12 @@ pub struct SpawnConfig {
     /// of a parent session's transcript. See [`ConversationAttachment`].
     #[builder(default)]
     pub attachment: ConversationAttachment,
+    /// Skip the "hi" init-trigger turn and the blocking init-message read in
+    /// [`crate::claude::ClaudeClient::spawn_process_and_consume_init`].
+    /// Carried from [`crate::config::ClaudeConfig::skip_init_trigger`].
+    /// Defaults to `false`, matching production behavior.
+    #[builder(default)]
+    pub skip_init_trigger: bool,
 }
 
 /// How a spawned claude CLI process attaches to a conversation.
@@ -489,7 +495,13 @@ impl ClaudeProcess {
     /// `--session-id <uuid>`, a reattach via `--resume <uuid>`, or a fork via
     /// `--resume <parent-uuid> --fork-session --session-id <uuid>` that clones
     /// the parent's persisted transcript onto this session's own UUID.
-    fn build_base_command(
+    ///
+    /// `pub(crate)` (rather than private) so
+    /// `crate::session_fork`'s tests can drive the real
+    /// `session/new` → `session/fork` → [`SpawnConfig`] chain all the way to
+    /// the assembled argv without a real `claude` binary — see
+    /// `crate::session_fork::tests::test_review_fanout_chain_carries_model_tier_to_forked_argv`.
+    pub(crate) fn build_base_command(
         claude_session_uuid: &str,
         attachment: &ConversationAttachment,
         extra_args: &[String],
@@ -1010,6 +1022,7 @@ impl Drop for ClaudeProcess {
 mod tests {
     use super::*;
     use crate::config::{HttpHeader, HttpTransport, McpServerConfig, SseTransport};
+    use crate::test_support::command_args;
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -1195,6 +1208,54 @@ mod tests {
         );
     }
 
+    /// A `SpawnConfig` with an empty `mcp_servers` list plus the review
+    /// subagent's extra CLI switches must still carry `--strict-mcp-config`
+    /// and `--disable-slash-commands` in the assembled argv — via
+    /// `extra_args`, not via `configure_mcp_servers` (which skips both flags
+    /// entirely when `mcp_servers` is empty, per
+    /// `test_configure_mcp_servers_skips_flags_for_empty_list` above). This is
+    /// the exact argv shape a review subagent spawn produces: zero MCP
+    /// servers, but explicitly strict about it, and with slash commands and
+    /// skills disabled.
+    #[test]
+    fn test_extra_args_carry_review_flags_with_empty_mcp_servers() {
+        let config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .mcp_servers(Vec::new())
+            .extra_args(vec![
+                "--model".to_string(),
+                "haiku".to_string(),
+                "--strict-mcp-config".to_string(),
+                "--disable-slash-commands".to_string(),
+            ])
+            .build();
+
+        let mut command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &config.extra_args,
+        );
+        ClaudeProcess::configure_mcp_servers(&mut command, &config);
+        let args = command_args(&command);
+
+        assert!(
+            args.iter().any(|a| a == "--strict-mcp-config"),
+            "expected --strict-mcp-config in argv, got: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--disable-slash-commands"),
+            "expected --disable-slash-commands in argv, got: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--mcp-config"),
+            "empty mcp_servers must still add no --mcp-config file, got: {args:?}"
+        );
+    }
+
     /// The spawned headless `claude` runs in `--print` mode, which does NOT
     /// load project/local `.claude/settings.json` unless `--setting-sources`
     /// is passed. Without it the board's `permissions.deny`/`allow` rules are
@@ -1251,15 +1312,6 @@ mod tests {
             Some("stream-json"),
             "--output-format must be followed by stream-json, got args: {args:?}"
         );
-    }
-
-    /// Collect a command's arguments as owned strings for assertions.
-    fn command_args(command: &Command) -> Vec<String> {
-        command
-            .as_std()
-            .get_args()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect()
     }
 
     /// The value following `flag`, if the flag is present at all.
@@ -1502,6 +1554,47 @@ mod tests {
             "fork must pass --fork-session, got args: {args:?}"
         );
         assert_eq!(arg_value(&args, "--session-id"), Some("child-uuid"));
+    }
+
+    /// Regression guard for `^1hmd9yy`: 127 of 129 forked review-fleet spawns
+    /// measured from a real `.sah` log carried NO `--model` flag, because the
+    /// fork path's `extra_args` was empty at the time. `extra_args` is now
+    /// threaded to the fork spawn path (`^j9rwjtx`), but nothing asserted the
+    /// argv itself for the `Fork` attachment shape carrying a configured
+    /// tier — every existing `extra_args` argv test used
+    /// `ConversationAttachment::New`, and the existing `Fork` argv test used
+    /// empty `extra_args`. This closes that gap directly: a `Fork` attachment
+    /// with a non-empty `extra_args` must carry BOTH the fork shape
+    /// (`--resume`/`--fork-session`/`--session-id`) AND the caller-supplied
+    /// `--model`, immediately followed by its value.
+    #[test]
+    fn test_base_command_fork_attachment_carries_extra_args() {
+        let parent = SessionId::new();
+        let command = ClaudeProcess::build_base_command(
+            "child-uuid",
+            &ConversationAttachment::Fork { parent },
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        let args = command_args(&command);
+
+        assert_eq!(
+            arg_value(&args, "--resume"),
+            Some(parent.to_uuid_string().as_str())
+        );
+        assert!(
+            args.iter().any(|a| a == "--fork-session"),
+            "fork must still pass --fork-session, got args: {args:?}"
+        );
+        assert_eq!(arg_value(&args, "--session-id"), Some("child-uuid"));
+
+        let model_pos = args.iter().position(|a| a == "--model").unwrap_or_else(|| {
+            panic!("a forked spawn's extra_args must carry --model, got args: {args:?}")
+        });
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku on a forked spawn, got args: {args:?}"
+        );
     }
 
     /// A `SpawnConfig` built without an explicit attachment begins a fresh
