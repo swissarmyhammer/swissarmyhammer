@@ -580,17 +580,33 @@ fn json_instructions_loaded(
     obj
 }
 
-/// Build JSON for a `ConfigChange` event.
-fn json_config_change(session_id: &str, source: &Option<String>, cwd: &Path) -> serde_json::Value {
+/// Build a base session-event JSON object (`session_id`, `cwd`,
+/// `hook_event_name`) and conditionally add one optional string field.
+///
+/// Shared by hook events whose JSON shape is the base fields plus a single
+/// optional named field — e.g. `ConfigChange`'s `source` and
+/// `TeammateIdle`'s `teammate_id`.
+fn build_session_event_with_optional_string(
+    session_id: &str,
+    event_name: &str,
+    optional_field_name: &str,
+    optional_value: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
     let mut obj = serde_json::json!({
         "session_id": session_id,
         "cwd": cwd.display().to_string(),
-        "hook_event_name": "ConfigChange",
+        "hook_event_name": event_name,
     });
-    if let Some(src) = source {
-        obj["source"] = serde_json::Value::String(src.clone());
+    if let Some(value) = optional_value {
+        obj[optional_field_name] = serde_json::Value::String(value.clone());
     }
     obj
+}
+
+/// Build JSON for a `ConfigChange` event.
+fn json_config_change(session_id: &str, source: &Option<String>, cwd: &Path) -> serde_json::Value {
+    build_session_event_with_optional_string(session_id, "ConfigChange", "source", source, cwd)
 }
 
 /// Build JSON for a `WorktreeCreate` event.
@@ -636,15 +652,13 @@ fn json_teammate_idle(
     teammate_id: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "TeammateIdle",
-    });
-    if let Some(id) = teammate_id {
-        obj["teammate_id"] = serde_json::Value::String(id.clone());
-    }
-    obj
+    build_session_event_with_optional_string(
+        session_id,
+        "TeammateIdle",
+        "teammate_id",
+        teammate_id,
+        cwd,
+    )
 }
 
 /// Build JSON for a `TaskCompleted` event.
