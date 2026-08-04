@@ -41,16 +41,33 @@ pub(crate) fn string_array_arg(
 
 /// Read an optional boolean argument, falling back to `default`.
 ///
-/// A wrong-typed value (string, number, null) is treated as absent, so the
-/// caller's default stands.
+/// An MCP caller is usually an agent, and agents routinely send the JSON string
+/// `"true"` where the schema declares a boolean. Coerce that instead of
+/// dropping it: a flag that is accepted and ignored returns a success-shaped
+/// response missing the thing the caller asked for, with nothing to show why.
+///
+/// A value that is neither a boolean nor `"true"`/`"false"` is an error, not a
+/// fall back to `default`, for the same reason. An absent or null value means
+/// "not set", so `default` stands.
 pub(crate) fn bool_arg(
     args: &serde_json::Map<String, serde_json::Value>,
     key: &str,
     default: bool,
-) -> bool {
-    args.get(key)
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(default)
+) -> Result<bool, String> {
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(default),
+        Some(serde_json::Value::Bool(value)) => Ok(*value),
+        Some(serde_json::Value::String(value)) => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(format!(
+                    "`{key}` must be a boolean; got the string \"{value}\""
+                )),
+            }
+        }
+        Some(other) => Err(format!("`{key}` must be a boolean; got {other}")),
+    }
 }
 
 /// The glob metacharacters that make a target a pattern rather than a literal path.
@@ -118,13 +135,36 @@ mod tests {
 
     #[test]
     fn bool_arg_reads_booleans_and_falls_back_to_the_default() {
-        let args = map(serde_json::json!({"yes": true, "no": false, "str": "true"}));
-        assert!(bool_arg(&args, "yes", false));
-        assert!(!bool_arg(&args, "no", true));
-        // Absent and wrong-typed both defer to the caller's default.
-        assert!(bool_arg(&args, "missing", true));
-        assert!(!bool_arg(&args, "missing", false));
-        assert!(bool_arg(&args, "str", true));
+        let args = map(serde_json::json!({"yes": true, "no": false, "null": null}));
+        assert!(bool_arg(&args, "yes", false).expect("boolean"));
+        assert!(!bool_arg(&args, "no", true).expect("boolean"));
+        // Absent and null both mean "not set", so the caller's default stands.
+        assert!(bool_arg(&args, "missing", true).expect("absent"));
+        assert!(!bool_arg(&args, "missing", false).expect("absent"));
+        assert!(bool_arg(&args, "null", true).expect("null"));
+    }
+
+    #[test]
+    fn bool_arg_coerces_string_booleans_an_agent_sends() {
+        let args = map(serde_json::json!({
+            "lower": "true", "upper": "TRUE", "mixed": "False", "padded": " true "
+        }));
+        for key in ["lower", "upper", "padded"] {
+            assert!(bool_arg(&args, key, false).expect(key), "{key} is true");
+        }
+        assert!(!bool_arg(&args, "mixed", true).expect("mixed"));
+    }
+
+    #[test]
+    fn bool_arg_rejects_a_value_it_cannot_read_rather_than_dropping_it() {
+        let args = map(serde_json::json!({"word": "yes", "num": 1, "arr": []}));
+        for key in ["word", "num", "arr"] {
+            let error = bool_arg(&args, key, false).expect_err("must not silently default");
+            assert!(
+                error.contains(key) && error.contains("must be a boolean"),
+                "{key} error names the key and the expected type: {error}"
+            );
+        }
     }
 
     #[test]

@@ -416,6 +416,80 @@ async fn list_validators_with_rules_pairs_like_the_engine_and_carries_bodies() {
     );
 }
 
+/// An agent is the intended caller of `rules: true`, and agents routinely send
+/// the JSON string `"true"` where the schema declares a boolean. The string must
+/// return the same bodies the boolean does: dropping it would answer with a
+/// success-shaped row carrying `rule_count` and no rules, which reads as "this
+/// validator has no rule text" rather than "you sent the wrong type".
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_honors_a_string_rules_flag_from_an_agent() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    write_ruleset(
+        &project.path().join(".validators"),
+        "rust-rules",
+        "**/*.rs",
+        &[],
+    );
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let rows_for = |flag: serde_json::Value| {
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), json!("list validators"));
+        args.insert("match".to_string(), json!(RUST_MATCH_TARGET));
+        args.insert("rules".to_string(), flag);
+        args
+    };
+
+    let from_bool = tool
+        .execute(rows_for(json!(true)), &context)
+        .await
+        .expect("boolean flag");
+    let from_string = tool
+        .execute(rows_for(json!("true")), &context)
+        .await
+        .expect("string flag");
+    assert_eq!(
+        extract_text(&from_bool),
+        extract_text(&from_string),
+        "`rules: \"true\"` must return the same bodies as `rules: true`"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&from_string)).unwrap();
+    let fixture = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .find(|r| r["name"] == json!("rust-rules"))
+        .expect("the fixture validator is listed");
+    assert!(
+        fixture["rules"][0]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Check the code"),
+        "the string flag must carry the verbatim rule bodies: {fixture}"
+    );
+
+    // A value that is neither a boolean nor "true"/"false" is rejected, not
+    // quietly read as `false` — the caller learns the flag did not apply.
+    let error = tool
+        .execute(rows_for(json!("yes")), &context)
+        .await
+        .expect_err("an unreadable flag must not silently default");
+    assert!(
+        error.to_string().contains("rules"),
+        "the error names the offending parameter: {error}"
+    );
+}
+
 /// A glob-fragment `match` (not a concrete path) keeps its documented lenient
 /// behavior: it answers "which validators declare this glob?", so a caller can
 /// still discover a ruleset by the pattern it matches on.

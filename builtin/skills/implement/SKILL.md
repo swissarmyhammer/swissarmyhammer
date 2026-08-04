@@ -3,7 +3,7 @@ name: implement
 description: Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing, leaving it green and ready for review. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
 agent: implementer
 license: MIT OR Apache-2.0
-compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks) and the `code_context` MCP tool (to research symbols and blast-radius before coding). 
+compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks), the `code_context` MCP tool (to research symbols and blast-radius before coding), and the `review` MCP tool (to fetch the validator rules before editing, and to self-review before handoff). 
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -69,11 +69,37 @@ Use the `/explore` skill to research the context provided in the task.
 
 Record what you discovered on the task — `{"op": "add comment", "task_id": "<id>", "text": "<discoveries>"}`.
 
+### Know the rules
+
+Get the rules that review will enforce, before you edit a file. One call per file on the `review` tool:
+
+```json
+{"op": "list validators", "match": "<file path>", "rules": true}
+```
+
+The response carries every applicable rule body word for word.
+
+Obey each rule as you write the code, not after. Document each public item. Name each numeric constant. Do not copy blocks. Keep functions small and flat. Follow the project naming. Delete dead code.
+
 ### Implement
 
 Do the work in the task and subtasks. After changing any symbol's signature or behavior, re-run `get callgraph` (inbound) and confirm every blast-radius caller still works.
 
-When you think you are done `/double-check` your work and implement the feedback.
+### Self-review
+
+Review your own work before you hand it off:
+
+```json
+{"op": "review working"}
+```
+
+Fix every finding. A finding is a requirement. Do not rank findings. Do not defer findings. Do not label findings.
+
+Run the review again. Repeat until the review is clean.
+
+One self-review run costs about 15 minutes. One full implement→test→review pass costs about 50 minutes. Each finding you fix here removes a pass.
+
+When the review is clean `/double-check` your work and implement the feedback. Only then hand off for the formal `/review`.
 
 ### Leave the task in `doing` for review
 

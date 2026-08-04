@@ -555,12 +555,14 @@ impl McpTool for ReviewTool {
             "list validators" => {
                 // An empty `match` is no filter, not a path that matches nothing
                 // — the same treatment an empty `op` gets above.
+                let include_rules = bool_arg(&args, "rules", false)
+                    .map_err(|e| rmcp::ErrorData::invalid_params(e, None))?;
                 let summaries = validators::list_validators(
                     string_arg(&args, "source").as_deref(),
                     string_arg(&args, "match")
                         .as_deref()
                         .filter(|value| !value.is_empty()),
-                    bool_arg(&args, "rules", false),
+                    include_rules,
                 )
                 .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
                 json_result(&summaries)
