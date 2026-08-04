@@ -550,6 +550,15 @@ fn complexity_row(path: &str, function: &FunctionComplexity) -> ProbeRow {
     }
 }
 
+/// Inbound call-graph depth used by the `callers` probe.
+///
+/// The probe answers one question about an added symbol: "does anything call
+/// this yet?" That is a direct-caller fact, so one hop of inbound depth is
+/// enough to gather every direct caller. Walking further would pull in
+/// callers-of-callers, which only dilutes the evidence rows with transitive
+/// callers the `fact` guard has no use for.
+const CALLGRAPH_MAX_DEPTH: u32 = 1;
+
 /// `callers`: `get callgraph` (inbound) on each added symbol.
 ///
 /// An added symbol that the index cannot resolve (e.g. a brand-new, not-yet-
@@ -565,7 +574,7 @@ fn run_callers(
         let options = CallGraphOptions {
             symbol: added.entity_name.clone(),
             direction: CallGraphDirection::Inbound,
-            max_depth: 1,
+            max_depth: CALLGRAPH_MAX_DEPTH,
         };
         let rows = match get_callgraph(conn, &options) {
             Ok(graph) => graph
