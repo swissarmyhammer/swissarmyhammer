@@ -509,6 +509,8 @@ Ralph prevents an autonomous agent from stopping while work remains. Used by ski
 
 The iteration counter persists across `set ralph` calls so a skill cannot reset the safety cap.
 
+Session ids on the two sides of this loop can never match: `set ralph` defaults to the MCP server process's session id, while the Stop hook runs `check ralph` in a fresh CLI process and pipes in the harness's session id. `check ralph` therefore falls back to the newest active `.ralph/*.md` when the named session has none, and `clear ralph`/`get ralph` without an explicit `session_id` fall back the same way (clear removes every state file, since its intent is to release the net).
+
 The hook runs `sah tool ralph ralph check --` and strict-parses its stdout, so the ralph tool reports `McpTool::cli_output_is_json` and the CLI prints exactly one JSON document for it. Every other `sah tool` family still prints YAML for a human reader. The hook reader we own (`agent-client-protocol-extras::hook_config`) accepts JSON or YAML from any hook command.
 
 ### Patterns

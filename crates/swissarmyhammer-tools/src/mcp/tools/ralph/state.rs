@@ -154,6 +154,83 @@ pub fn write_ralph(base_dir: &Path, session_id: &str, state: &RalphState) -> any
     Ok(())
 }
 
+/// Find the most recently modified active ralph state in `.ralph/`
+///
+/// `set ralph` keys state by the MCP server process's session id, but the
+/// Stop hook's `check ralph` runs in a fresh CLI process under the harness's
+/// session id — the two never match, so a session-keyed lookup from the hook
+/// always misses. Callers fall back to this scan to find the instruction
+/// that is actually active.
+///
+/// Skips files without an `.md` extension, files whose stem is not a valid
+/// session id, and files that do not parse as ralph state. Among the rest,
+/// returns the session id (file stem) and state of the newest file by
+/// modification time, ties broken by session id so the result is
+/// deterministic. Returns `Ok(None)` when nothing is active.
+pub fn find_active_ralph(base_dir: &Path) -> anyhow::Result<Option<(String, RalphState)>> {
+    let dir = ralph_dir(base_dir)?;
+    let mut newest: Option<(std::time::SystemTime, String, RalphState)> = None;
+
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if validate_session_id(stem).is_err() {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(state) = parse_ralph_file(&content) else {
+            continue;
+        };
+        let modified = entry.metadata()?.modified()?;
+
+        let is_newer = match &newest {
+            None => true,
+            Some((t, sid, _)) => modified > *t || (modified == *t && stem > sid.as_str()),
+        };
+        if is_newer {
+            newest = Some((modified, stem.to_string(), state));
+        }
+    }
+
+    Ok(newest.map(|(_, sid, state)| (sid, state)))
+}
+
+/// Delete every ralph state file in `.ralph/`
+///
+/// Used by `clear ralph` when the caller's own session has no file: the
+/// intent of a clear is "nothing should block stops anymore", and the file
+/// holding the active instruction may have been written by an MCP server
+/// process that no longer exists. Returns the session ids of the removed
+/// files, sorted for determinism.
+pub fn clear_all_ralph(base_dir: &Path) -> anyhow::Result<Vec<String>> {
+    let dir = ralph_dir(base_dir)?;
+    let mut cleared = Vec::new();
+
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        fs::remove_file(&path)?;
+        cleared.push(stem.to_string());
+    }
+
+    cleared.sort();
+    Ok(cleared)
+}
+
 /// Delete a session's ralph state file
 ///
 /// Removes `.ralph/<session_id>.md` if it exists. No-ops if the file
@@ -504,5 +581,97 @@ mod tests {
     fn test_text_without_a_frontmatter_block_returns_none() {
         let content = "Plain prose.\n---\ninstruction: not frontmatter\n---\n";
         assert!(parse_ralph_file(content).is_none());
+    }
+
+    // --- find_active_ralph / clear_all_ralph tests ---
+
+    fn state_with(instruction: &str) -> RalphState {
+        RalphState {
+            instruction: instruction.to_string(),
+            iteration: 0,
+            max_iterations: 50,
+            body: String::new(),
+        }
+    }
+
+    /// Push a session file's mtime into the past so mtime ordering is
+    /// unambiguous regardless of filesystem timestamp granularity.
+    fn age_file(base: &Path, session_id: &str, secs_ago: u64) {
+        let path = base.join(".ralph").join(format!("{session_id}.md"));
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_find_active_ralph_empty_returns_none() {
+        let tmp = setup();
+        assert!(find_active_ralph(tmp.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_find_active_ralph_returns_single_state() {
+        let tmp = setup();
+        write_ralph(tmp.path(), "session-a", &state_with("only one")).unwrap();
+
+        let (sid, state) = find_active_ralph(tmp.path()).unwrap().unwrap();
+        assert_eq!(sid, "session-a");
+        assert_eq!(state.instruction, "only one");
+    }
+
+    #[test]
+    fn test_find_active_ralph_prefers_newest() {
+        let tmp = setup();
+        write_ralph(tmp.path(), "session-old", &state_with("old")).unwrap();
+        write_ralph(tmp.path(), "session-new", &state_with("new")).unwrap();
+        age_file(tmp.path(), "session-old", 3600);
+
+        let (sid, state) = find_active_ralph(tmp.path()).unwrap().unwrap();
+        assert_eq!(sid, "session-new");
+        assert_eq!(state.instruction, "new");
+    }
+
+    #[test]
+    fn test_find_active_ralph_skips_malformed_files() {
+        let tmp = setup();
+        write_ralph(tmp.path(), "session-valid", &state_with("valid")).unwrap();
+        age_file(tmp.path(), "session-valid", 3600);
+        // Newer but unparseable — must not shadow the valid state
+        fs::write(tmp.path().join(".ralph").join("garbage.md"), "no frontmatter").unwrap();
+
+        let (sid, _) = find_active_ralph(tmp.path()).unwrap().unwrap();
+        assert_eq!(sid, "session-valid");
+    }
+
+    #[test]
+    fn test_find_active_ralph_ignores_non_md_files() {
+        let tmp = setup();
+        ensure_ralph_dir(tmp.path()).unwrap();
+        fs::write(
+            tmp.path().join(".ralph").join("notes.txt"),
+            "---\ninstruction: not md\n---\n",
+        )
+        .unwrap();
+
+        assert!(find_active_ralph(tmp.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_clear_all_ralph_removes_everything_and_reports_ids() {
+        let tmp = setup();
+        write_ralph(tmp.path(), "session-a", &state_with("a")).unwrap();
+        write_ralph(tmp.path(), "session-b", &state_with("b")).unwrap();
+
+        let cleared = clear_all_ralph(tmp.path()).unwrap();
+        assert_eq!(cleared, vec!["session-a".to_string(), "session-b".to_string()]);
+        assert!(find_active_ralph(tmp.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_clear_all_ralph_empty_dir_is_ok() {
+        let tmp = setup();
+        assert!(clear_all_ralph(tmp.path()).unwrap().is_empty());
     }
 }
