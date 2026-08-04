@@ -472,10 +472,10 @@ impl ModelConfigSource {
 #[derive(Error, Debug)]
 pub enum ModelError {
     /// Model not found in any source
-    #[error("Model '{0}' not found")]
+    #[error("model '{0}' not found")]
     NotFound(String),
     /// Invalid file path for model configuration
-    #[error("Invalid model path: {0}")]
+    #[error("invalid model path: {0}")]
     InvalidPath(PathBuf),
     /// IO error during file operations
     #[error("io error: {0}")]
@@ -1199,13 +1199,7 @@ impl ModelManager {
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
     pub fn load_user_models() -> Result<Vec<ModelInfo>, ModelError> {
-        if let Some(home_dir) = dirs::home_dir() {
-            let user_models_dir = home_dir.join(".models");
-            Self::load_models_from_dir(&user_models_dir, ModelConfigSource::User)
-        } else {
-            // No home directory available (rare case)
-            Ok(Vec::new())
-        }
+        Self::load_models_from(|| Ok(dirs::home_dir()), ".models", ModelConfigSource::User)
     }
 
     /// Load project-specific models from ./models/
@@ -1227,10 +1221,15 @@ impl ModelManager {
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
     pub fn load_project_models() -> Result<Vec<ModelInfo>, ModelError> {
-        let project_models_dir = std::env::current_dir()
-            .map_err(ModelError::IoError)?
-            .join("models");
-        Self::load_models_from_dir(&project_models_dir, ModelConfigSource::Project)
+        Self::load_models_from(
+            || {
+                std::env::current_dir()
+                    .map(Some)
+                    .map_err(ModelError::IoError)
+            },
+            "models",
+            ModelConfigSource::Project,
+        )
     }
 
     /// Load git root models from {git-root}/models/
@@ -1254,12 +1253,30 @@ impl ModelManager {
     pub fn load_gitroot_models() -> Result<Vec<ModelInfo>, ModelError> {
         use swissarmyhammer_common::utils::directory_utils::find_git_repository_root;
 
-        if let Some(git_root) = find_git_repository_root() {
-            let gitroot_models_dir = git_root.join("models");
-            Self::load_models_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
-        } else {
-            // Not in a git repository
-            Ok(Vec::new())
+        Self::load_models_from(
+            || Ok(find_git_repository_root()),
+            "models",
+            ModelConfigSource::GitRoot,
+        )
+    }
+
+    /// Load models from a root directory obtained via `root_provider`, joined
+    /// with `segment`, tagged with `source`.
+    ///
+    /// `root_provider` returns `Ok(None)` when the root simply doesn't exist
+    /// (e.g. no home directory, not in a git repository) — that case yields
+    /// an empty vector rather than an error. `Err` propagates as-is.
+    fn load_models_from<F>(
+        root_provider: F,
+        segment: &str,
+        source: ModelConfigSource,
+    ) -> Result<Vec<ModelInfo>, ModelError>
+    where
+        F: FnOnce() -> Result<Option<PathBuf>, ModelError>,
+    {
+        match root_provider()? {
+            Some(root) => Self::load_models_from_dir(&root.join(segment), source),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -1860,10 +1877,10 @@ mod tests {
     #[test]
     fn test_model_error_display() {
         let not_found = ModelError::NotFound("test-agent".to_string());
-        assert_eq!(format!("{}", not_found), "Model 'test-agent' not found");
+        assert_eq!(format!("{}", not_found), "model 'test-agent' not found");
 
         let invalid_path = ModelError::InvalidPath(PathBuf::from("/invalid/path"));
-        assert!(format!("{}", invalid_path).contains("Invalid model path"));
+        assert!(format!("{}", invalid_path).contains("invalid model path"));
         assert!(format!("{}", invalid_path).contains("/invalid/path"));
     }
 
