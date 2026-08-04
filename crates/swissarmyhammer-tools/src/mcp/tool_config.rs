@@ -246,7 +246,8 @@ impl ToolConfigWatcher {
     pub fn new() -> Self {
         let global_path = global_config_path();
         let project_path = project_config_path();
-        let (global_mtime, project_mtime) = read_layer_mtimes(&global_path, &project_path);
+        let (global_mtime, project_mtime) =
+            read_layer_mtimes(global_path.as_deref(), project_path.as_deref());
         Self {
             global_path,
             project_path,
@@ -263,7 +264,7 @@ impl ToolConfigWatcher {
         registry: &mut crate::mcp::tool_registry::ToolRegistry,
     ) -> bool {
         let (new_global_mtime, new_project_mtime) =
-            read_layer_mtimes(&self.global_path, &self.project_path);
+            read_layer_mtimes(self.global_path.as_deref(), self.project_path.as_deref());
 
         if new_global_mtime == self.global_mtime && new_project_mtime == self.project_mtime {
             return false;
@@ -303,12 +304,12 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 /// which differ only in whether the paths come from fresh resolution or from
 /// `self`.
 fn read_layer_mtimes(
-    global_path: &Option<PathBuf>,
-    project_path: &Option<PathBuf>,
+    global_path: Option<&Path>,
+    project_path: Option<&Path>,
 ) -> (Option<SystemTime>, Option<SystemTime>) {
     (
-        global_path.as_ref().and_then(|p| file_mtime(p)),
-        project_path.as_ref().and_then(|p| file_mtime(p)),
+        global_path.and_then(file_mtime),
+        project_path.and_then(file_mtime),
     )
 }
 

@@ -165,6 +165,62 @@ comments:
     - evidence: `cargo nextest run --workspace` — 13498 passed, 0 failed, 0 skipped; `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, no warnings
     - next: ready for review
   timestamp: 2026-08-04T17:17:15.603334+00:00
+- actor: claude-code
+  id: 01kz6wg3eca9qa57dj2yewyfxh
+  text: |-
+    ### commit — changed
+    - evidence: 06fc53d37 refactor(swissarmyhammer-tools): extract helpers in health_registry and tool_config
+    - next: proceed to review
+  timestamp: 2026-08-04T17:17:47.852633+00:00
+- actor: claude-code
+  id: 01kz6wwdag5b1z4w1h3scfana0
+  text: |-
+    ### review — findings
+    - evidence: 1 finding — crates/swissarmyhammer-tools/src/mcp/tool_config.rs:305
+    - next: fix read_layer_mtimes to accept Option<&Path>, update call sites at lines 249 and 266, re-run review
+  timestamp: 2026-08-04T17:24:31.184555+00:00
+- actor: claude-code
+  id: 01kz6wz34z7t480h9pe1n5bkzx
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — health_registry.rs (iter_markdown_files helper, case-insensitive .md, dedup home_dir resolution), tool_config.rs (resolve_config_path, load_and_merge_layer, read_layer_mtimes helpers, doc comment on default())
+    - test: green — cargo nextest run --workspace, 13498 passed; clippy clean
+    - commit: 06fc53d37
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/tool_config.rs:305
+  timestamp: 2026-08-04T17:25:59.071363+00:00
+- actor: claude-code
+  id: 01kz6x398char0v6r3kwwx2esb
+  text: |-
+    Fixed the last open finding (2026-08-04 12:18): `read_layer_mtimes` in `crates/swissarmyhammer-tools/src/mcp/tool_config.rs` accepted `&Option<PathBuf>` for both parameters. Changed the signature to `Option<&Path>` for both `global_path` and `project_path`, and simplified the body to `global_path.and_then(file_mtime)` / `project_path.and_then(file_mtime)`.
+
+    Call sites updated:
+    - `ToolConfigWatcher::new` (line ~249): `read_layer_mtimes(global_path.as_deref(), project_path.as_deref())`.
+    - `ToolConfigWatcher::check_and_reload` (line ~266): `read_layer_mtimes(self.global_path.as_deref(), self.project_path.as_deref())`.
+
+    Note: the finding text suggested `.as_ref()`, but `Option<PathBuf>::as_ref()` yields `Option<&PathBuf>`, not `Option<&Path>` — that combination fails to compile (E0308). Used `.as_deref()` instead, which deref-coerces to `Option<&Path>` and satisfies the actual intent of the finding (accept the generic `Option<&Path>`, not the concrete `PathBuf`).
+
+    Verified: `cargo check -p swissarmyhammer-tools --lib` clean, `cargo clippy -p swissarmyhammer-tools --lib -- -D warnings` clean, `cargo nextest run -p swissarmyhammer-tools --lib tool_config` — 12/12 passed.
+
+    Checklist item under "Review Findings (2026-08-04 12:18)" flipped to `[x]`.
+  timestamp: 2026-08-04T17:28:16.396169+00:00
+- actor: claude-code
+  id: 01kz6x3awmm0m9zzhp38n6fq2h
+  text: |-
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-tools/src/mcp/tool_config.rs — read_layer_mtimes now takes Option<&Path> instead of &Option<PathBuf>; call sites in ToolConfigWatcher::new and ToolConfigWatcher::check_and_reload use .as_deref(). cargo check/clippy clean, nextest tool_config tests 12/12 passed.
+    - next: leave in doing for review
+  timestamp: 2026-08-04T17:28:18.068058+00:00
+- actor: claude-code
+  id: 01kz6x5ghdv022b425hnpgw9w5
+  text: 'Correction: an earlier update task call in this pass accidentally wrote the description with literal `\n` escape text and dropped the tags (progress showed 0.0, tags emptied). Immediately re-issued update task with real newlines and restored tags=[bug, shelltool, test-hygiene, tools]. Verified via get task: description renders correctly, progress is 0.944 (17/18 checked), tags restored. No functional/code impact — this was a kanban metadata mistake, not a code change.'
+  timestamp: 2026-08-04T17:29:29.389130+00:00
+- actor: claude-code
+  id: 01kz6xbg16c28vqn36fm2t0tqh
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run --workspace — 13498 tests run: 13498 passed (5 slow), 0 failed, 0 skipped. cargo clippy --workspace --all-targets --all-features -- -D warnings — clean, 0 warnings.
+    - next: no fix was needed. Build is clean.
+  timestamp: 2026-08-04T17:32:45.478478+00:00
 position_column: doing
 position_ordinal: '8380'
 title: 'shell tests: stop `ShellExecuteTool::new()` in tests from making a `.shell` dir in the crate directory'
@@ -269,4 +325,9 @@ Scope: `review sha HEAD~1..HEAD` (commit 9b2e89707). The finding against `crates
 - [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:157` — Path construction logic is duplicated between `global_config_path` (line 157) and `project_config_path` (line 165). Both functions differ only in which directory source is used (`dirs::home_dir()` vs `find_git_repository_root()`), then both apply the identical transformation: `.map(|dir| dir.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))`. This is one operation with an argument waiting to be extracted. Extract a shared helper function `resolve_config_path<F: FnOnce() -> Option<PathBuf>>(dir_source: F) -> Option<PathBuf>` that encapsulates the path construction. Both `global_config_path` and `project_config_path` become single-line callers: `resolve_config_path(dirs::home_dir)` and `resolve_config_path(find_git_repository_root)` respectively.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:180` — Config loading and merging logic is duplicated in `load_merged_tool_config`. Lines 180–184 (global layer) and 187–191 (project layer) are near-verbatim blocks that differ only in variable names and which path source is used. Both follow the identical pattern: get path, load config, merge. This is one operation with an argument waiting to be extracted. Extract a shared helper function `load_and_merge_layer<F>(config: &mut ToolConfig, get_path: F)` where `F: FnOnce() -> Option<PathBuf>`. Call it twice: `load_and_merge_layer(&mut config, global_config_path)` and `load_and_merge_layer(&mut config, project_config_path)`. Eliminates the nested-if boilerplate and ensures both layers follow identical merge semantics.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:226` — Public method `fn default()` lacks a doc comment; the documentation rule requires all public items to be documented. Add a doc comment to the method, e.g., `/// Create a new watcher resolving config paths from the current environment.` (or ``/// Equivalent to [`Self::new`].`` if preferring to reference the documented `new` method).
-#bug #shelltool #test-hygiene #tools
+
+## Review Findings (2026-08-04 12:18)
+
+Scope: `review sha HEAD~1..HEAD` (commit 06fc53d37).
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:305` — Function parameters accept `&Option<PathBuf>` containing concrete PathBuf types, violating the principle "accept generics, not concrete types" (rule example: prefer `AsRef<Path>` over `&PathBuf`). Should accept more generic `Option<&Path>` instead. Change function signature to accept `Option<&Path>` instead of `&Option<PathBuf>`. Update call sites at lines 249 and 266 to use `self.global_path.as_ref()` and `self.project_path.as_ref()`. #bug #shelltool #test-hygiene #tools
