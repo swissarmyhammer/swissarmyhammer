@@ -174,12 +174,49 @@ impl WorkList {
     /// file set from. First-seen order keeps the rendered prime byte-stable
     /// across calls.
     pub fn distinct_files(&self) -> impl Iterator<Item = &FileWork> {
-        let mut seen = std::collections::BTreeSet::new();
-        self.validators
-            .iter()
-            .flat_map(|validator| validator.files.iter())
-            .filter(move |file| seen.insert(file.path.clone()))
+        dedup_by_key(
+            self.validators
+                .iter()
+                .flat_map(|validator| validator.files.iter()),
+            |file| file.path.clone(),
+        )
     }
+
+    /// The batch-scoped shared probe evidence — currently just the
+    /// `<changed-set>` `duplicates` comparison — carried by any validator in
+    /// this work-list, deduped by `(probe name, target)` in first-seen
+    /// (validator-order) order.
+    ///
+    /// This evidence spans the WHOLE change under review, not any single
+    /// file, so [`ValidatorWork::shared_probe_results`] carries it ONCE per
+    /// validator rather than once per file that validator matched. When two
+    /// or more validators both declare the same probe, this dedup is what
+    /// keeps the fan-out prime ([`render_run_prime`](crate::review::fleet::render_run_prime))
+    /// from rendering the identical shared block twice — the same discipline
+    /// [`distinct_files`](Self::distinct_files) applies to per-file content.
+    pub fn shared_probe_results(&self) -> Vec<ProbeResult> {
+        dedup_by_key(
+            self.validators
+                .iter()
+                .flat_map(|validator| validator.shared_probe_results.iter()),
+            |result| (result.name.clone(), result.target.clone()),
+        )
+        .cloned()
+        .collect()
+    }
+}
+
+/// Filter `items` down to the first occurrence of each `key`, in `items`'
+/// order — the "yield each distinct key once" discipline shared by
+/// [`WorkList::distinct_files`] (keyed by path) and
+/// [`WorkList::shared_probe_results`] (keyed by `(probe name, target)`), so
+/// the dedup mechanics live in exactly one place.
+fn dedup_by_key<T, K: Ord>(
+    items: impl Iterator<Item = T>,
+    mut key: impl FnMut(&T) -> K,
+) -> impl Iterator<Item = T> {
+    let mut seen = BTreeSet::new();
+    items.filter(move |item| seen.insert(key(item)))
 }
 
 /// The rule names inside a validator — what a review fork applies to a file.
@@ -240,10 +277,19 @@ pub struct ValidatorWork {
     probes: ProbeNames,
     /// The files this validator must review.
     files: Vec<FileWork>,
+    /// The validator's batch-scoped shared probe evidence (currently just the
+    /// `<changed-set>` `duplicates` comparison, when this validator declared
+    /// `duplicates`) — computed and attached ONCE per validator, never once
+    /// per file it matched. See
+    /// [`shared_probe_results`](Self::shared_probe_results).
+    shared_probe_results: Vec<ProbeResult>,
 }
 
 impl ValidatorWork {
-    /// Assemble one validator's slice of the work-list.
+    /// Assemble one validator's slice of the work-list, with no shared probe
+    /// evidence attached (use
+    /// [`with_shared_probe_results`](Self::with_shared_probe_results) when it
+    /// matters — the production `scope_review` path always does).
     ///
     /// The two name lists are separate types ([`RuleNames`], [`ProbeNames`]) so
     /// no call site can transpose them.
@@ -258,7 +304,15 @@ impl ValidatorWork {
             rules,
             probes,
             files,
+            shared_probe_results: Vec::new(),
         }
+    }
+
+    /// Attach the validator's batch-scoped shared probe evidence, computed
+    /// once for the whole validator rather than once per file it matched.
+    pub fn with_shared_probe_results(mut self, shared_probe_results: Vec<ProbeResult>) -> Self {
+        self.shared_probe_results = shared_probe_results;
+        self
     }
 
     /// The validator (RuleSet) name.
@@ -279,6 +333,19 @@ impl ValidatorWork {
     /// The files this validator must review.
     pub fn files(&self) -> &[FileWork] {
         &self.files
+    }
+
+    /// The validator's batch-scoped shared probe evidence — currently just
+    /// the `<changed-set>` `duplicates` comparison, when this validator
+    /// declared `duplicates`.
+    ///
+    /// This evidence spans the WHOLE change under review, not any single
+    /// file, so it is carried ONCE here rather than cloned onto every
+    /// [`FileWork`] the validator matched — see
+    /// [`render_shared_probe_evidence`](crate::review::fleet::render_shared_probe_evidence)
+    /// for where it renders: once per prompt, never once per file.
+    pub fn shared_probe_results(&self) -> &[ProbeResult] {
+        &self.shared_probe_results
     }
 }
 
@@ -656,7 +723,9 @@ fn compute_line_marks(before: Option<&str>, after: &str) -> BTreeSet<u32> {
 /// single match on the diff result. A hunk or line that fails to resolve (an
 /// out-of-range index, or a `+` line with no new-side line number) is
 /// skipped rather than treated as an error — partial hunk data still marks
-/// every line it CAN resolve.
+/// every line it CAN resolve. The per-line resolution itself is factored into
+/// [`added_line_number`] so this function stays two loops deep instead of
+/// nesting a let-else inside a let-else inside an if inside an if-let.
 fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
     let mut marks = BTreeSet::new();
     for hunk_idx in 0..patch.num_hunks() {
@@ -664,17 +733,26 @@ fn collect_added_lines(patch: &git2::Patch<'_>) -> BTreeSet<u32> {
             continue;
         };
         for line_idx in 0..lines {
-            let Ok(line) = patch.line_in_hunk(hunk_idx, line_idx) else {
-                continue;
-            };
-            if line.origin() == '+' {
-                if let Some(new_lineno) = line.new_lineno() {
-                    marks.insert(new_lineno);
-                }
+            if let Some(new_lineno) = added_line_number(patch, hunk_idx, line_idx) {
+                marks.insert(new_lineno);
             }
         }
     }
     marks
+}
+
+/// The new-side line number `hunk_idx`/`line_idx` maps to, when that line is
+/// an added (`+`) line with a resolvable new-side line number.
+///
+/// `None` for any line that fails to resolve (an out-of-range index), is not
+/// an added line, or has no new-side line number — [`collect_added_lines`]
+/// treats every `None` identically: skip it, never an error.
+fn added_line_number(patch: &git2::Patch<'_>, hunk_idx: usize, line_idx: usize) -> Option<u32> {
+    let line = patch.line_in_hunk(hunk_idx, line_idx).ok()?;
+    if line.origin() != '+' {
+        return None;
+    }
+    line.new_lineno()
 }
 
 /// Blame every matched file's current content ONCE for the whole review run
@@ -856,11 +934,13 @@ fn assemble_validator_work(
                 })
                 .collect();
             files.sort_by(|a, b| a.path.cmp(&b.path));
+            let shared_probe_results = select_shared_probe_results(probe_cache, &mv.probes);
             ValidatorWork {
                 validator_name: mv.name,
                 rules: mv.rules,
                 probes: mv.probes,
                 files,
+                shared_probe_results,
             }
         })
         .collect();
@@ -1602,6 +1682,27 @@ async fn run_probe_cache(
     Ok(results.results)
 }
 
+/// Select the probes results in `cache` that the validator's declared
+/// `probes` pulls, further narrowed to whichever results `matches` accepts.
+///
+/// The shared filter chain — declared-probe-name, then a caller-supplied
+/// predicate, then clone-and-collect — behind [`select_probe_results`] (file-
+/// scoped, by [`probe_result_for_file`]) and [`select_shared_probe_results`]
+/// (batch-scoped, by the `<changed-set>` target), so the two selection paths
+/// cannot drift apart on anything but their predicate.
+fn select_probe_results_by(
+    cache: &[ProbeResult],
+    probes: &ProbeNames,
+    matches: impl Fn(&ProbeResult) -> bool,
+) -> Vec<ProbeResult> {
+    cache
+        .iter()
+        .filter(|r| probes.as_slice().contains(&r.name))
+        .filter(|r| matches(r))
+        .cloned()
+        .collect()
+}
+
 /// Select the probe results that belong to `file` and the validator's declared
 /// `probes`, from the shared single-run cache.
 ///
@@ -1618,28 +1719,41 @@ fn select_probe_results(
     changed_symbols: &[String],
     probes: &ProbeNames,
 ) -> Vec<ProbeResult> {
-    cache
-        .iter()
-        .filter(|r| probes.as_slice().contains(&r.name))
-        .filter(|r| probe_result_for_file(r, file, changed_symbols))
-        .cloned()
-        .collect()
+    select_probe_results_by(cache, probes, |r| {
+        probe_result_for_file(r, file, changed_symbols)
+    })
 }
 
 /// Whether a probe result's bound subject relates to `file`.
 ///
-/// Probe targets come in three shapes and each resolves to its file differently:
+/// Probe targets come in two shapes and each resolves to its file differently:
 /// - **file path** (`duplicates` per-file) matches the path directly;
-/// - **`<changed-set>`** (`duplicates` cross-file) is shared evidence and attaches
-///   to every file that participated in the change;
 /// - **symbol name** (`callers` / `similar`) resolves via the semantic diff's
 ///   `entity_name → file_path` mapping: it attaches to the file whose changed
 ///   entity bears that name (`changed_symbols` is that mapping, pre-filtered to
 ///   this file).
+///
+/// **`<changed-set>`** (`duplicates` cross-file) is deliberately NOT one of
+/// these shapes: it is batch-scoped shared evidence spanning the WHOLE change,
+/// not any single file, so it never attaches to a [`FileWork`] here. Cloning
+/// it onto every file's `probe_results` used to multiply its bytes by the
+/// batch's file count for zero additional information (^t7f5fqf); it is
+/// selected once per validator instead, by
+/// [`select_shared_probe_results`], and carried on
+/// [`ValidatorWork::shared_probe_results`].
 fn probe_result_for_file(result: &ProbeResult, file: &str, changed_symbols: &[String]) -> bool {
-    result.target == file
-        || result.target == "<changed-set>"
-        || changed_symbols.iter().any(|s| s == &result.target)
+    result.target == file || changed_symbols.iter().any(|s| s == &result.target)
+}
+
+/// Select the batch-scoped shared probe results (currently just the
+/// `<changed-set>` `duplicates` comparison) a validator's declared `probes`
+/// pulls from the shared single-run cache.
+///
+/// Computed ONCE per validator — never once per file — because this evidence
+/// spans the WHOLE change under review rather than any one file
+/// (see [`probe_result_for_file`] for why `<changed-set>` is excluded there).
+fn select_shared_probe_results(cache: &[ProbeResult], probes: &ProbeNames) -> Vec<ProbeResult> {
+    select_probe_results_by(cache, probes, |r| r.target == "<changed-set>")
 }
 
 /// The deduped, sorted names of the symbols changed by `entities`.
@@ -1851,6 +1965,11 @@ fn project_onto_files(
                 rules: validator.rules.clone(),
                 probes: validator.probes.clone(),
                 files,
+                // Carried verbatim, never re-filtered by `paths`: this
+                // evidence is batch-scoped (spans the WHOLE change), not
+                // file-scoped, so it does not shrink when a batch subsets the
+                // work-list's files.
+                shared_probe_results: validator.shared_probe_results.clone(),
             })
         })
         .collect();
@@ -2087,6 +2206,29 @@ mod tests {
             dup_hit,
             "duplicates probe_results should carry the existing.rs hit, got: {:?}",
             file.probe_results
+        );
+
+        // ^t7f5fqf: the batch-scoped `<changed-set>` result is carried on the
+        // VALIDATOR now (once), never cloned onto the file's own
+        // `probe_results` — through the REAL `scope_review` path, not just
+        // the isolated selection helpers.
+        assert!(
+            !file
+                .probe_results
+                .iter()
+                .any(|r| r.target == "<changed-set>"),
+            "the shared <changed-set> result must not attach to the file's own \
+             probe_results; it is carried once on the validator instead, got: {:?}",
+            file.probe_results
+        );
+        assert!(
+            validator
+                .shared_probe_results()
+                .iter()
+                .any(|r| r.name == "duplicates" && r.target == "<changed-set>"),
+            "the validator's shared_probe_results must carry the changed-set \
+             duplicates comparison, got: {:?}",
+            validator.shared_probe_results()
         );
     }
 
@@ -2784,6 +2926,7 @@ mod tests {
             rules: RuleNames::new([format!("{name}-rule")]),
             probes: ProbeNames::default(),
             files: paths.iter().map(|p| file_at(p)).collect(),
+            shared_probe_results: vec![],
         }
     }
 
@@ -2807,6 +2950,7 @@ mod tests {
             rules: RuleNames::new([format!("{name}-rule")]),
             probes: ProbeNames::default(),
             files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
+            shared_probe_results: vec![],
         }
     }
 
@@ -3974,6 +4118,102 @@ fn shallow(a: Option<u8>) -> u8 {
         assert!(
             got.is_empty(),
             "an unrelated symbol target attaches to no file: {got:?}"
+        );
+    }
+
+    /// ^t7f5fqf: the batch-scoped `<changed-set>` `duplicates` comparison must
+    /// NEVER attach to an individual file's `probe_results` — it used to
+    /// match every file unconditionally, which multiplied its (potentially
+    /// ~1.43 MB) bytes by the batch's file count. It is shared evidence,
+    /// selected once per validator by [`select_shared_probe_results`] instead.
+    #[test]
+    fn probe_result_for_file_never_matches_the_shared_changed_set_result() {
+        let changed_set = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        assert!(
+            !probe_result_for_file(&changed_set, "src/lib.rs", &[]),
+            "the shared changed-set result must not attach to any individual file"
+        );
+        assert!(
+            !probe_result_for_file(&changed_set, "src/lib.rs", &["lib".to_string()]),
+            "a changed symbol name must not accidentally match the <changed-set> \
+             sentinel target either"
+        );
+    }
+
+    /// [`select_shared_probe_results`] is the sole path a validator's
+    /// batch-scoped shared evidence reaches [`ValidatorWork`] through: it
+    /// selects only the DECLARED probe's `<changed-set>` result, never a
+    /// per-file one, and never an undeclared probe's shared result.
+    #[test]
+    fn select_shared_probe_results_selects_only_the_declared_probes_changed_set_result() {
+        let per_file = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "src/a.rs".to_string(),
+            rows: vec![],
+        };
+        let shared = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let undeclared_shared = ProbeResult {
+            name: "similar".to_string(),
+            kind: ProbeKind::Candidate,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let cache = vec![per_file, shared.clone(), undeclared_shared];
+        let declared = ProbeNames::new(["duplicates".to_string()]);
+
+        let got = select_shared_probe_results(&cache, &declared);
+        assert_eq!(
+            got,
+            vec![shared],
+            "only the declared probe's <changed-set> result is selected, never a \
+             per-file result and never an undeclared probe's shared result"
+        );
+    }
+
+    /// [`WorkList::shared_probe_results`] dedups the shared evidence across
+    /// validators by `(probe name, target)`, so two validators that both
+    /// declare `duplicates` do not double the shared block in the rendered
+    /// prime.
+    #[test]
+    fn work_list_shared_probe_results_dedups_across_validators() {
+        let shared = ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "<changed-set>".to_string(),
+            rows: vec![],
+        };
+        let v1 = ValidatorWork::new(
+            "one".to_string(),
+            RuleNames::default(),
+            ProbeNames::new(["duplicates".to_string()]),
+            vec![],
+        )
+        .with_shared_probe_results(vec![shared.clone()]);
+        let v2 = ValidatorWork::new(
+            "two".to_string(),
+            RuleNames::default(),
+            ProbeNames::new(["duplicates".to_string()]),
+            vec![],
+        )
+        .with_shared_probe_results(vec![shared.clone()]);
+
+        let work = WorkList::new("purpose".to_string(), vec![v1, v2]);
+
+        assert_eq!(
+            work.shared_probe_results(),
+            vec![shared],
+            "the identical shared result declared by two validators is carried once"
         );
     }
 }

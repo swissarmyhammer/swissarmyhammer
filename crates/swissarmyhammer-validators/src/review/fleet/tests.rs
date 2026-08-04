@@ -845,6 +845,157 @@ fn run_prime_dedups_files_shared_across_validators() {
     );
 }
 
+/// ^t7f5fqf: the batch-scoped `<changed-set>` `duplicates` comparison must
+/// render ONCE in the run prime, never once per file. A production batch of
+/// 10 files each carrying a ~1.43 MB shared changed-set result sent ~14.3 MB
+/// for zero additional information; this pins the fix at the assembled-prompt
+/// level, packing several files that all need the `duplicates` probe.
+#[test]
+fn run_prime_renders_the_shared_changed_set_evidence_once_not_once_per_file() {
+    let shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+
+    let files = vec![
+        file_work("src/a.rs", "alpha", "src/b.rs"),
+        file_work("src/b.rs", "beta", "src/a.rs"),
+        file_work("src/c.rs", "gamma", "src/a.rs"),
+    ];
+    let validator = validator_work("dedup", files).with_shared_probe_results(shared);
+    let work = WorkList::new("purpose".to_string(), vec![validator]);
+
+    let prime = render_run_prime(&work);
+
+    assert_eq!(
+        prime.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the shared changed-set evidence must render exactly once in the prime \
+         packing 3 files, not once per file: {prime}"
+    );
+    // The per-file evidence each file_work fixture carries is untouched by
+    // this change — it still renders once per file, as before.
+    assert_eq!(
+        prime.matches("probe `duplicates`").count(),
+        4,
+        "3 per-file `duplicates` results plus the 1 shared `<changed-set>` \
+         result, never duplicated further: {prime}"
+    );
+}
+
+/// The monolithic fallback ([`render_fleet_prompt`]) renders the same shared
+/// evidence exactly once too — the degraded path must not silently drop the
+/// `<changed-set>` evidence, nor multiply it across the validator's files.
+#[test]
+fn monolithic_fallback_renders_the_shared_changed_set_evidence_once_not_once_per_file() {
+    let shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+    let files = vec![
+        file_work("src/a.rs", "alpha", "src/b.rs"),
+        file_work("src/b.rs", "beta", "src/a.rs"),
+    ];
+    let vw = validator_work("dedup", files).with_shared_probe_results(shared);
+    let rs = ruleset(
+        "dedup",
+        "DEDUP_MANDATE.",
+        &[("no-copy-paste", "RULE_BODY.")],
+    );
+
+    let prompt = render_fleet_prompt("purpose", &vw, &rs);
+
+    assert_eq!(
+        prompt.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the monolithic fallback must render the shared evidence exactly \
+         once, never dropped and never once per file: {prompt}"
+    );
+}
+
+/// [`render_run_prime`] and [`render_fleet_prompt`] deliberately read shared
+/// probe evidence from two DIFFERENT scopes, mirroring how they already treat
+/// file content:
+///
+/// - the prime is the ONE shared context every validator's fork inherits, so
+///   — exactly like [`WorkList::distinct_files`] unions every validator's
+///   files — it renders [`WorkList::shared_probe_results`], the union of
+///   shared evidence any validator in the batch declared;
+/// - the monolithic fallback is a single validator's SELF-CONTAINED prompt
+///   (its own files ONLY, via [`ValidatorWork::files`], never another
+///   validator's), so it renders only [`ValidatorWork::shared_probe_results`]
+///   — that validator's OWN declared shared evidence.
+///
+/// Unifying the two onto the work-list-wide union would leak a
+/// `duplicates`-declaring validator's shared evidence into an unrelated
+/// validator's self-contained monolithic prompt: new information that
+/// validator never had before, which could change what it flags. This test
+/// pins the split as intentional, not an oversight.
+#[test]
+fn monolithic_fallback_never_leaks_another_validators_shared_probe_evidence() {
+    let dup_shared = vec![ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: vec![ProbeRow {
+            file_path: "src/b.rs".to_string(),
+            symbol: Some("beta".to_string()),
+            line: None,
+            similarity: Some(TEST_SIMILARITY),
+            detail: Some("SHARED_CHANGED_SET_MARKER".to_string()),
+        }],
+    }];
+
+    let dup_validator = validator_work("dedup", vec![file_work("src/a.rs", "alpha", "src/b.rs")])
+        .with_shared_probe_results(dup_shared);
+    let other_validator = ValidatorWork::new(
+        "style".to_string(),
+        RuleNames::new(["style-rule".to_string()]),
+        ProbeNames::new(["similar".to_string()]),
+        vec![file_work("src/c.rs", "gamma", "src/a.rs")],
+    );
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![dup_validator, other_validator.clone()],
+    );
+
+    // The PRIME is shared context every fork inherits: it shows the union of
+    // shared evidence any validator in the batch declared, exactly once.
+    let prime = render_run_prime(&work);
+    assert_eq!(
+        prime.matches("SHARED_CHANGED_SET_MARKER").count(),
+        1,
+        "the prime carries the union of the batch's shared evidence, once: {prime}"
+    );
+
+    // The MONOLITHIC fallback for "style" (which never declared `duplicates`)
+    // must NOT show `dedup`'s shared evidence — its self-contained prompt
+    // otherwise carries only its OWN files, never another validator's.
+    let rs = ruleset("style", "STYLE_MANDATE.", &[("style-rule", "STYLE_BODY.")]);
+    let monolithic = render_fleet_prompt(work.change_purpose(), &other_validator, &rs);
+    assert!(
+        !monolithic.contains("SHARED_CHANGED_SET_MARKER"),
+        "a validator's monolithic fallback must show only its OWN declared \
+         shared evidence, never another validator's: {monolithic}"
+    );
+}
+
 /// A small (fully-inlined) changed file's payload carries the file's
 /// COMPLETE current contents in a clearly-labeled fenced block plus explicit
 /// "you do NOT need to read this file" framing — so the model stops

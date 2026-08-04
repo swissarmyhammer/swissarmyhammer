@@ -69,7 +69,7 @@
 
 use std::fmt::Write as _;
 
-use crate::review::probes::render_probe_evidence;
+use crate::review::probes::{render_probe_evidence, ProbeResult};
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
@@ -1216,6 +1216,7 @@ pub fn render_fleet_prompt(
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
     out.push_str(&render_file_payload(validator.files()));
+    render_shared_probe_evidence(&mut out, validator.shared_probe_results());
     out.push_str(&render_validator_suffix(validator, ruleset));
     out
 }
@@ -1250,6 +1251,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
     out.push_str("\n\n");
     let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
     out.push_str(&render_file_payload(&distinct));
+    render_shared_probe_evidence(&mut out, &work.shared_probe_results());
     out.push_str(PRIME_HANDOFF);
     out
 }
@@ -1358,20 +1360,60 @@ pub fn rendered_file_block_bytes(file: &FileWork) -> usize {
     out.len()
 }
 
+/// The header introducing the batch-scoped shared probe evidence section —
+/// currently just the `<changed-set>` `duplicates` comparison. Shared by
+/// [`render_shared_probe_evidence`] and [`prompt_framing_bytes`] so the
+/// framing reserve counts the same bytes the section writes.
+const SHARED_EVIDENCE_HEADER: &str = "# Shared evidence\n\n";
+
+/// Render the batch-scoped shared probe evidence — currently just the
+/// `<changed-set>` `duplicates` comparison — ONCE per prompt, after the
+/// per-file blocks. Emits nothing when `results` is empty, so a prompt with
+/// no shared evidence is byte-identical to one rendered without this section
+/// at all.
+///
+/// This evidence spans the WHOLE change under review, not any single file, so
+/// rendering it inside every [`render_file_block`] used to repeat the
+/// identical, potentially multi-megabyte block once per file in the batch —
+/// zero additional information at N× the bytes (^t7f5fqf). Rendering it once
+/// here, shared by [`render_run_prime`] and [`render_fleet_prompt`] alike,
+/// shows the model the exact same rows at a fraction of the cost: the fix is a
+/// payload-size change only, never a change to which rows the model sees.
+pub fn render_shared_probe_evidence(out: &mut String, results: &[ProbeResult]) {
+    if results.is_empty() {
+        return;
+    }
+    out.push_str(SHARED_EVIDENCE_HEADER);
+    out.push_str(
+        "The evidence below spans the WHOLE change under review, not any single \
+         file, so it is shown ONCE here rather than repeated per file above. It \
+         still applies to any file a row below names.\n\n",
+    );
+    render_probe_evidence(out, results, false);
+}
+
 /// The bytes of a batch's prompt that are NOT file blocks — an upper bound over
 /// every validator in the run.
 ///
 /// A batch sends two prompt shapes, and both are framing plus file blocks:
 ///
-/// - the shared prime — change purpose + payload header + blocks + [`PRIME_HANDOFF`];
+/// - the shared prime — change purpose + payload header + blocks +
+///   [`render_shared_probe_evidence`] + [`PRIME_HANDOFF`];
 /// - the monolithic per-validator fallback — change purpose + payload header +
-///   that validator's blocks + [`render_validator_suffix`].
+///   that validator's blocks + [`render_shared_probe_evidence`] +
+///   [`render_validator_suffix`].
 ///
 /// The suffix (mandate, guidance, focus-file list, every rule body, the output
 /// contract) is by far the larger of the two tails and is what makes this worth
 /// measuring rather than guessing: a validator's rule bodies are authored
 /// Markdown of unbounded size. It is measured against the validator's WHOLE
 /// file list, so it bounds the suffix of any batch that subsets those files.
+///
+/// The shared evidence section is measured against the WHOLE work-list's
+/// dedup'd shared results ([`WorkList::shared_probe_results`]), never against
+/// one batch: that evidence is batch-scoped, not file-scoped, so it costs the
+/// same fixed bytes in every batch's prompt regardless of which files that
+/// batch carries.
 ///
 /// A validator the `loader` does not know is skipped, exactly as
 /// [`plan_fan_out`] skips it — it never renders a prompt, so it cannot frame
@@ -1381,6 +1423,9 @@ pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize 
         + work.change_purpose().trim().len()
         + "\n\n".len()
         + FILE_PAYLOAD_HEADER.len();
+
+    let mut shared_evidence = String::new();
+    render_shared_probe_evidence(&mut shared_evidence, &work.shared_probe_results());
 
     let tail = work
         .validators()
@@ -1393,7 +1438,7 @@ pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize 
         .unwrap_or(0)
         .max(PRIME_HANDOFF.len());
 
-    head + tail
+    head + shared_evidence.len() + tail
 }
 
 /// Render the file payload — one self-contained block per file (path + semantic
