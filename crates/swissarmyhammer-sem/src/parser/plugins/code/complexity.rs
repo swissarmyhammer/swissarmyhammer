@@ -53,6 +53,24 @@
 //! A language with no row returns [`None`] — **not computed**, never a score of
 //! zero. A silent zero would disable the validator on that language, which is
 //! worse than the drift this module removes.
+//!
+//! Every row is built the same way: parse a real sample in the target grammar
+//! and read the s-expression it actually produces, then transcribe the node
+//! kinds and field names verbatim. Two structural shapes recur across the
+//! mapped grammars' `if`/`else if`/`else` chains, and [`walk_conditional`] and
+//! [`walk_alternative`] handle both from the same generic fields:
+//!
+//! - A **single, recursive `alternative` field**. Rust, C, C++, JavaScript and
+//!   TypeScript wrap the value in a transparent [`ComplexitySpec::else_wrapper_kinds`]
+//!   node (`else_clause`) holding either the next link (another
+//!   [`ComplexitySpec::conditional_kinds`] node) or the terminal body. Java and
+//!   C# skip the wrapper and put the next link or the terminal body directly in
+//!   `alternative`.
+//! - A **repeated `alternative` field flattened onto the original conditional**.
+//!   Python's `elif_clause` and PHP's `else_if_clause` — both listed in
+//!   [`ComplexitySpec::elif_kinds`] — carry their own `condition` and
+//!   [`ComplexitySpec::consequence_field`], sitting as siblings of a trailing
+//!   terminal `else_clause` rather than nested inside one another.
 
 use tree_sitter::Node;
 
@@ -81,20 +99,38 @@ struct ComplexitySpec {
     /// parent.
     function_kinds: &'static [&'static str],
     /// The field name holding a function's name, when the grammar names it.
+    /// Resolved through [`resolve_declarator_name`], which unwraps a nested
+    /// `declarator` field chain when the grammar needs one (C/C++'s
+    /// `function_declarator`/`pointer_declarator`).
     name_field: &'static str,
     /// Kinds that add `1 + nesting` and open a nesting level for their body.
     nesting_kinds: &'static [&'static str],
-    /// The subset of [`Self::nesting_kinds`] that are conditionals, so an
-    /// `else if` is recognized inside an else clause.
+    /// The subset of [`Self::nesting_kinds`] that are conditionals, walked via
+    /// [`walk_conditional`] so an `else if`/`elif` is recognized inside the
+    /// chain rather than as a separately-nested condition.
     conditional_kinds: &'static [&'static str],
+    /// The field name holding a conditional's primary branch body: Sonar's own
+    /// `"consequence"` convention, used by every mapped grammar except PHP's
+    /// `"body"`.
+    consequence_field: &'static str,
+    /// Kinds that continue an else-if chain with their own `condition` and
+    /// [`Self::consequence_field`], attached via a REPEATED `alternative`
+    /// field on the ORIGINAL conditional rather than through nesting —
+    /// Python's `elif_clause`, PHP's `else_if_clause`. Empty for grammars that
+    /// nest the next link as another [`Self::conditional_kinds`] node instead.
+    elif_kinds: &'static [&'static str],
+    /// A transparent wrapper the grammar puts around a conditional's single
+    /// `alternative` value, holding either the next chain link or the
+    /// terminal body as its one child — Rust/C/C++/JavaScript/TypeScript's
+    /// `else_clause`. Empty for grammars that put the next link or the
+    /// terminal body directly in `alternative` with no wrapper (Java's, C#'s).
+    else_wrapper_kinds: &'static [&'static str],
     /// The subset of [`Self::nesting_kinds`] that are loops, counted separately
     /// for [`FunctionComplexity::max_loop_nesting`].
     loop_kinds: &'static [&'static str],
-    /// The else-clause kind. It adds a flat +1 and opens no nesting level; an
-    /// `else if` inside it is flattened onto the same level.
-    else_kinds: &'static [&'static str],
     /// Arm/case kinds. Transparent: no increment, **no nesting level**. This is
-    /// the row that keeps a `match` arm from reading as a nested condition.
+    /// the row that keeps a `match`/`switch` arm from reading as a nested
+    /// condition.
     arm_kinds: &'static [&'static str],
     /// Kinds that open a nesting level without incrementing (closures, lambdas).
     nest_only_kinds: &'static [&'static str],
@@ -108,8 +144,19 @@ struct ComplexitySpec {
     /// children is ordinary control flow — `break 5` returns a value from a
     /// loop and is not a jump to a label.
     label_kinds: &'static [&'static str],
-    /// The node kind of an attribute that can mark a function as a test.
+    /// The node kind of an attribute/annotation/decorator that can mark a
+    /// function as a test, wherever the grammar attaches it: a preceding
+    /// sibling ([`is_test_definition`]'s sibling scan) or a child of the
+    /// definition itself, optionally one more level down inside
+    /// [`Self::attribute_container_kinds`].
     attribute_kinds: &'static [&'static str],
+    /// A wrapper node the grammar nests INSIDE the definition itself, holding
+    /// [`Self::attribute_kinds`] as its children — Java's `modifiers`, C#'s
+    /// `attribute_list`, PHP's `attribute_list`/`attribute_group`, C/C++'s
+    /// `attribute_declaration`. Empty when the grammar never nests an
+    /// attribute inside the definition (Rust, Python, TypeScript's sibling
+    /// model; JavaScript's bare `decorator` field needs no unwrap at all).
+    attribute_container_kinds: &'static [&'static str],
 }
 
 /// Rust. Verified against `tree_sitter_rust` by parsing samples covering every
@@ -126,8 +173,10 @@ static RUST_SPEC: ComplexitySpec = ComplexitySpec {
         "match_expression",
     ],
     conditional_kinds: &["if_expression"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
     loop_kinds: &["for_expression", "while_expression", "loop_expression"],
-    else_kinds: &["else_clause"],
     arm_kinds: &["match_arm"],
     nest_only_kinds: &["closure_expression"],
     logical_kinds: &["binary_expression"],
@@ -135,11 +184,360 @@ static RUST_SPEC: ComplexitySpec = ComplexitySpec {
     labelled_jump_kinds: &["break_expression", "continue_expression"],
     label_kinds: &["label"],
     attribute_kinds: &["attribute_item"],
+    attribute_container_kinds: &[],
+};
+
+/// TypeScript. Verified against `tree_sitter_typescript` (the `LANGUAGE_TYPESCRIPT`
+/// grammar). Its decorator is a sibling of the `method_definition` it marks
+/// inside `class_body` — unlike JavaScript's, which nests it as a field of the
+/// method itself — confirmed by parsing a two-method class with only one
+/// decorated.
+static TYPESCRIPT_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "typescript",
+    function_kinds: &[
+        "function_declaration",
+        "method_definition",
+        "arrow_function",
+    ],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
+    loop_kinds: &[
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["switch_case", "switch_default"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["continue_statement", "break_statement"],
+    label_kinds: &["statement_identifier"],
+    attribute_kinds: &["decorator"],
+    attribute_container_kinds: &[],
+};
+
+/// TSX. Verified against `tree_sitter_typescript` (the `LANGUAGE_TSX` grammar)
+/// by parsing the same control-flow and decorator samples used for TypeScript
+/// — the node kinds are identical; only the JSX-extended grammar differs, and
+/// none of the samples used JSX syntax.
+static TSX_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "tsx",
+    function_kinds: &[
+        "function_declaration",
+        "method_definition",
+        "arrow_function",
+    ],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
+    loop_kinds: &[
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["switch_case", "switch_default"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["continue_statement", "break_statement"],
+    label_kinds: &["statement_identifier"],
+    attribute_kinds: &["decorator"],
+    attribute_container_kinds: &[],
+};
+
+/// JavaScript. Verified against `tree_sitter_javascript`. Its decorator is a
+/// `decorator:` field of the `method_definition` itself — unlike TypeScript's
+/// sibling placement — confirmed by parsing a decorated class method and
+/// reading the field name on the s-expression.
+static JAVASCRIPT_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "javascript",
+    function_kinds: &[
+        "function_declaration",
+        "method_definition",
+        "arrow_function",
+    ],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
+    loop_kinds: &[
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["switch_case", "switch_default"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["continue_statement", "break_statement"],
+    label_kinds: &["statement_identifier"],
+    attribute_kinds: &["decorator"],
+    attribute_container_kinds: &[],
+};
+
+/// Python. Verified against `tree_sitter_python`. Its `if_statement` flattens
+/// every `elif_clause`/`else_clause` onto ONE repeated `alternative` field
+/// (confirmed with a three-way `elif` chain — none of them nest inside one
+/// another), and its boolean operator tokens are the literal keywords `and`/
+/// `or` rather than `&&`/`||` (confirmed by inspecting the operator node's own
+/// `kind()`).
+static PYTHON_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "python",
+    function_kinds: &["function_definition"],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "while_statement",
+        "match_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &["elif_clause"],
+    else_wrapper_kinds: &[],
+    loop_kinds: &["for_statement", "while_statement"],
+    arm_kinds: &["case_clause"],
+    nest_only_kinds: &[],
+    logical_kinds: &["boolean_operator"],
+    logical_operators: &["and", "or"],
+    labelled_jump_kinds: &[],
+    label_kinds: &[],
+    attribute_kinds: &["decorator"],
+    attribute_container_kinds: &[],
+};
+
+/// Java. Verified against `tree_sitter_java`. Its `if_statement` puts the next
+/// `else if` link or the terminal `else` body directly in `alternative` with
+/// NO wrapping node at all (confirmed with a three-way `else if` chain: each
+/// link is a bare nested `if_statement`, and the final `else` is a bare
+/// `block`) — unlike Rust/C/C++/JavaScript/TypeScript's `else_clause` wrapper.
+/// Its annotation sits inside the method's own `modifiers` child rather than
+/// as a preceding sibling (confirmed by parsing `@Test`/`@Test(timeout = 100)`
+/// and reading the exact byte span of each node).
+static JAVA_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "java",
+    function_kinds: &["method_declaration"],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "enhanced_for_statement",
+        "while_statement",
+        "do_statement",
+        "switch_expression",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &[],
+    loop_kinds: &[
+        "for_statement",
+        "enhanced_for_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["switch_block_statement_group"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["continue_statement", "break_statement"],
+    label_kinds: &["identifier"],
+    attribute_kinds: &["marker_annotation", "annotation"],
+    attribute_container_kinds: &["modifiers"],
+};
+
+/// C. Verified against `tree_sitter_c`. A function's name sits several
+/// `declarator` fields deep (`function_definition` names its
+/// `function_declarator`, which names the plain identifier — one more
+/// `pointer_declarator` level for a pointer-returning function), resolved
+/// generically by [`resolve_declarator_name`] rather than a C-specific
+/// special case. C has no labelled `break`/`continue`; its only labelled jump
+/// is `goto`, confirmed by parsing a `goto` past two nested `for` loops.
+static C_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "c",
+    function_kinds: &["function_definition"],
+    name_field: "declarator",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
+    loop_kinds: &["for_statement", "while_statement", "do_statement"],
+    arm_kinds: &["case_statement"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["goto_statement"],
+    label_kinds: &["statement_identifier"],
+    attribute_kinds: &["attribute"],
+    attribute_container_kinds: &["attribute_declaration"],
+};
+
+/// C++. Verified against `tree_sitter_cpp`. Structurally identical to C's
+/// control flow (its `if_statement`'s `condition` wraps the value in a
+/// `condition_clause` rather than C's `parenthesized_expression`, which is
+/// irrelevant here since [`walk_conditional`] fetches the `condition` field
+/// generically rather than matching its inner kind). Its attribute uses the
+/// C++11 `[[...]]` syntax (`attribute_declaration` wrapping `attribute`,
+/// confirmed by parsing `[[nodiscard]]`), the same shape C's does.
+static CPP_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "cpp",
+    function_kinds: &["function_definition"],
+    name_field: "declarator",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &["else_clause"],
+    loop_kinds: &["for_statement", "while_statement", "do_statement"],
+    arm_kinds: &["case_statement"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["goto_statement"],
+    label_kinds: &["statement_identifier"],
+    attribute_kinds: &["attribute"],
+    attribute_container_kinds: &["attribute_declaration"],
+};
+
+/// C#. Verified against `tree_sitter_c_sharp`. Its `if_statement` matches
+/// Java's shape exactly: `alternative` holds the next link or the terminal
+/// body directly, no wrapper (confirmed with a three-way `else if` chain). C#
+/// has no labelled `break`/`continue`; its only labelled jump is `goto`
+/// (confirmed by parsing a `goto` past two nested `foreach` loops). Its
+/// attribute sits inside the method's own `attribute_list` child (confirmed
+/// by parsing `[Test]`/`[Fact]` and reading each node's exact byte span).
+static CSHARP_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "csharp",
+    function_kinds: &["method_declaration"],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "consequence",
+    elif_kinds: &[],
+    else_wrapper_kinds: &[],
+    loop_kinds: &[
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["switch_section"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &["goto_statement"],
+    label_kinds: &["identifier"],
+    attribute_kinds: &["attribute"],
+    attribute_container_kinds: &["attribute_list"],
+};
+
+/// PHP. Verified against `tree_sitter_php` (the `LANGUAGE_PHP` grammar). Its
+/// `if_statement` flattens `else_if_clause`/`else_clause` onto one repeated
+/// `alternative` field exactly like Python's (confirmed with a three-way
+/// `elseif` chain), and it names the primary branch body `body` rather than
+/// `consequence`. Its attribute is nested two container levels deep
+/// (`attributes: (attribute_list (attribute_group (attribute ...)))`,
+/// confirmed on both a free function and a class method) — PHPUnit's real
+/// `#[Test]` attribute marker.
+static PHP_SPEC: ComplexitySpec = ComplexitySpec {
+    language: "php",
+    function_kinds: &["function_definition", "method_declaration"],
+    name_field: "name",
+    nesting_kinds: &[
+        "if_statement",
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+    ],
+    conditional_kinds: &["if_statement"],
+    consequence_field: "body",
+    elif_kinds: &["else_if_clause"],
+    else_wrapper_kinds: &[],
+    loop_kinds: &[
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+    ],
+    arm_kinds: &["case_statement", "default_statement"],
+    nest_only_kinds: &[],
+    logical_kinds: &["binary_expression"],
+    logical_operators: &["&&", "||"],
+    labelled_jump_kinds: &[],
+    label_kinds: &[],
+    attribute_kinds: &["attribute"],
+    attribute_container_kinds: &["attribute_list", "attribute_group"],
 };
 
 /// Every language with a scorer mapping. A language absent here is "not
 /// computed", never zero.
-static ALL_SPECS: &[&ComplexitySpec] = &[&RUST_SPEC];
+static ALL_SPECS: &[&ComplexitySpec] = &[
+    &RUST_SPEC,
+    &TYPESCRIPT_SPEC,
+    &TSX_SPEC,
+    &JAVASCRIPT_SPEC,
+    &PYTHON_SPEC,
+    &JAVA_SPEC,
+    &C_SPEC,
+    &CPP_SPEC,
+    &CSHARP_SPEC,
+    &PHP_SPEC,
+];
 
 /// The spec for a language id, or `None` when that language has no mapping.
 fn spec_for_language(language: &str) -> Option<&'static ComplexitySpec> {
@@ -298,9 +696,23 @@ fn score_function(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> Functi
 /// The function's declared name, or `<anonymous>`.
 fn function_name(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> String {
     node.child_by_field_name(spec.name_field)
-        .and_then(|n| node_text(n, source))
+        .and_then(|n| resolve_declarator_name(n, source))
         .unwrap_or("<anonymous>")
         .to_string()
+}
+
+/// Resolve a name-field value down to its leaf text, unwrapping the nested
+/// `declarator` field chain C/C++ use for pointer/function/array declarators
+/// (`int *get_pointer()` names a `pointer_declarator`, whose own `declarator`
+/// field names the `function_declarator`, whose own `declarator` field
+/// finally names the plain identifier). Every other mapped language's name
+/// field already points straight at a leaf, which has no `declarator` field
+/// of its own, so the first lookup already terminates there.
+fn resolve_declarator_name<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str> {
+    match node.child_by_field_name("declarator") {
+        Some(inner) => resolve_declarator_name(inner, source),
+        None => node_text(node, source),
+    }
 }
 
 /// The source text a node spans, when the byte range is valid UTF-8 boundaries.
@@ -308,38 +720,78 @@ fn node_text<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str> {
     source.get(node.start_byte()..node.end_byte())
 }
 
-/// Whether the definition is marked as a test by an attribute at the definition.
-///
-/// Rust marks tests with an attribute immediately above the item (`#[test]`,
-/// `#[tokio::test]`). The attribute's last path segment must be exactly `test`,
-/// so `#[serial_test::serial]` and `#[test_case(..)]` are not tests. The file
-/// name is never consulted.
+/// Whether the definition is marked as a test, wherever the grammar attaches
+/// the marker: a contiguous run of preceding siblings (Rust's `#[attr]`,
+/// Python's decorator inside the shared `decorated_definition` wrapper,
+/// TypeScript's decorator as a `class_body` sibling), a direct child of the
+/// definition itself (JavaScript's bare `decorator` field), or a child
+/// wrapped in a container the grammar nests inside the definition (Java's
+/// `modifiers`, C#'s `attribute_list`, PHP's `attribute_list`/
+/// `attribute_group`, C/C++'s `attribute_declaration`). The file name is
+/// never consulted.
 fn is_test_definition(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bool {
     let mut sibling = node.prev_named_sibling();
     while let Some(current) = sibling {
         if !spec.attribute_kinds.contains(&current.kind()) {
-            return false;
+            break;
         }
         if attribute_marks_test(current, source) {
             return true;
         }
         sibling = current.prev_named_sibling();
     }
+
+    let mut cursor = node.walk();
+    let found = node
+        .named_children(&mut cursor)
+        .any(|child| node_carries_test_attribute(child, spec, source));
+    drop(cursor);
+    found
+}
+
+/// Whether `node` is a test-marking attribute itself, or (through however
+/// many [`ComplexitySpec::attribute_container_kinds`] wrapper levels the
+/// grammar nests) contains one. Recurses through consecutive container
+/// levels generically — PHP nests two deep (`attribute_list` >
+/// `attribute_group` > `attribute`), Java/C#/C/C++ nest one.
+fn node_carries_test_attribute(node: Node<'_>, spec: &ComplexitySpec, source: &str) -> bool {
+    if spec.attribute_kinds.contains(&node.kind()) {
+        return attribute_marks_test(node, source);
+    }
+    if spec.attribute_container_kinds.contains(&node.kind()) {
+        let mut cursor = node.walk();
+        let found = node
+            .named_children(&mut cursor)
+            .any(|child| node_carries_test_attribute(child, spec, source));
+        drop(cursor);
+        return found;
+    }
     false
 }
 
-/// Whether one attribute node names the `test` marker.
+/// Whether one attribute/annotation/decorator node names the `test` marker,
+/// however the grammar spells it: Rust's `#[test]`/`#[tokio::test]`, Python's
+/// `@pytest.mark.test`, Java's `@Test`, C#'s `[Test]`, PHP's real PHPUnit
+/// `#[Test]`, JavaScript/TypeScript's `@Test`, or C/C++'s `[[test]]`. The
+/// last `.`/`::`/`\`-separated path segment must be exactly `test`
+/// (case-insensitively, to cover both Rust's lowercase convention and Java/
+/// C#/PHP's capitalized one), so `#[serial_test::serial]` and
+/// `#[test_case(..)]` are not tests.
 fn attribute_marks_test(node: Node<'_>, source: &str) -> bool {
     let Some(text) = node_text(node, source) else {
         return false;
     };
     let inner = text
         .trim()
-        .trim_start_matches("#[")
+        .trim_start_matches('#')
+        .trim_start_matches('@')
+        .trim_start_matches('[')
         .trim_end_matches(']')
         .trim();
     let path = inner.split('(').next().unwrap_or(inner).trim();
-    path.rsplit("::").next().is_some_and(|last| last == "test")
+    path.rsplit(['.', ':', '\\'])
+        .next()
+        .is_some_and(|last| last.eq_ignore_ascii_case("test"))
 }
 
 /// Walk one node, accumulating into `tally`.
@@ -419,17 +871,12 @@ fn walk_children(
     }
 }
 
-/// Walk a conditional's children: its body one level deeper, and its else
-/// clause at the conditional's OWN level.
+/// Walk one conditional's primary body and its `alternative` chain, whichever
+/// shape the grammar uses — see the module-level doc for the two shapes
+/// [`walk_alternative`] handles.
 ///
-/// The else clause is the one child that must not inherit the level the
-/// conditional opened. Sonar charges `else` a flat +1 at the level of the `if`
-/// it belongs to, and an `if`/`else if`/`else` chain is one decision with
-/// several branches, not a staircase.
-///
-/// `chain` is the 1-based position in the `else if` chain, so
+/// `chain` is the 1-based position of `node` in the else-if chain, so
 /// [`FunctionComplexity::max_else_if_chain`] can record the longest one.
-#[allow(clippy::too_many_arguments)]
 fn walk_conditional(
     node: Node<'_>,
     source: &str,
@@ -439,20 +886,38 @@ fn walk_conditional(
     tally: &mut Tally,
     chain: u32,
 ) {
+    if let Some(condition) = node.child_by_field_name("condition") {
+        walk(condition, source, spec, nesting + 1, loop_nesting, tally);
+    }
+    if let Some(consequence) = node.child_by_field_name(spec.consequence_field) {
+        walk(consequence, source, spec, nesting + 1, loop_nesting, tally);
+    }
+
     let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if spec.else_kinds.contains(&child.kind()) {
-            walk_else(child, source, spec, nesting, loop_nesting, tally, chain);
-            continue;
-        }
-        walk(child, source, spec, nesting + 1, loop_nesting, tally);
+    let mut chain = chain;
+    for alt in node.children_by_field_name("alternative", &mut cursor) {
+        chain = walk_alternative(alt, source, spec, nesting, loop_nesting, tally, chain);
     }
 }
 
-/// Walk an else clause: a flat +1, with an `else if` flattened onto the same
-/// level and its own else clause continuing the chain.
-#[allow(clippy::too_many_arguments)]
-fn walk_else(
+/// Score one value of a conditional's `alternative` field and return the
+/// chain position the NEXT link should use.
+///
+/// Unwraps a transparent [`ComplexitySpec::else_wrapper_kinds`] node first, if
+/// the grammar uses one (Rust/C/C++/JavaScript/TypeScript's `else_clause`).
+/// What remains is then either:
+///
+/// - a **chain link** — [`ComplexitySpec::conditional_kinds`] (a bare nested
+///   `if`, Java's/C#'s shape once unwrapped, or Rust/C/C++/JS/TS's shape
+///   after the `else_clause` unwrap) or [`ComplexitySpec::elif_kinds`]
+///   (Python's `elif_clause`, PHP's `else_if_clause`, which carry their own
+///   `condition` and never need unwrapping) — scored with a flat +1 at the
+///   SAME nesting level, then walked recursively via [`walk_conditional`] for
+///   its own body and any FURTHER alternatives; or
+/// - a **terminal else** — a bare body (Java's/C#'s direct `block`, or the
+///   single child left after unwrapping an `else_clause`) — scored with a
+///   flat +1 and its own body walked one level deeper.
+fn walk_alternative(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
@@ -460,22 +925,29 @@ fn walk_else(
     loop_nesting: u32,
     tally: &mut Tally,
     chain: u32,
-) {
+) -> u32 {
+    if spec.else_wrapper_kinds.contains(&node.kind()) {
+        let mut result = chain;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            result = walk_alternative(child, source, spec, nesting, loop_nesting, tally, result);
+        }
+        return result;
+    }
+
+    if spec.conditional_kinds.contains(&node.kind()) || spec.elif_kinds.contains(&node.kind()) {
+        tally.flat_increment();
+        tally.branch_count += 1;
+        tally.max_else_if_chain = tally.max_else_if_chain.max(chain);
+        tally.max_nesting_depth = tally.max_nesting_depth.max(nesting + 1);
+        walk_conditional(node, source, spec, nesting, loop_nesting, tally, chain + 1);
+        return chain + 1;
+    }
+
     tally.flat_increment();
     tally.branch_count += 1;
-
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if spec.conditional_kinds.contains(&child.kind()) {
-            // `else if`: the flat +1 above is its whole increment, and it opens
-            // no extra level — it is a sibling branch, not a nested condition.
-            tally.max_else_if_chain = tally.max_else_if_chain.max(chain);
-            tally.max_nesting_depth = tally.max_nesting_depth.max(nesting + 1);
-            walk_conditional(child, source, spec, nesting, loop_nesting, tally, chain + 1);
-            continue;
-        }
-        walk(child, source, spec, nesting + 1, loop_nesting, tally);
-    }
+    walk_children(node, source, spec, nesting + 1, loop_nesting, tally);
+    chain
 }
 
 /// Whether a jump names a label, which is what makes it a jump rather than
@@ -945,7 +1417,7 @@ fn build_request(a: bool) -> u8 {
     #[test]
     fn an_unmapped_language_is_not_computed_rather_than_zero() {
         assert!(
-            cognitive_complexity("src/app.py", "def f():\n    pass\n").is_none(),
+            cognitive_complexity("src/app.rb", "def f\nend\n").is_none(),
             "a language with no spec must report not-computed, never a zero score"
         );
     }
@@ -1033,5 +1505,1526 @@ impl Parser {
             score_of(&forward, "edit_line_markers"),
             score_of(&reversed, "edit_line_markers")
         );
+    }
+
+    // -----------------------------------------------------------------
+    // TypeScript
+    // -----------------------------------------------------------------
+
+    fn only_function_ts(source: &str) -> FunctionComplexity {
+        let file =
+            cognitive_complexity("src/lib.ts", source).expect("typescript is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn typescript_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_ts(
+            r#"
+function classify(value: number): number {
+    switch (value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            scored.cognitive_score, 1,
+            "a switch scores once for the whole construct"
+        );
+        assert_eq!(scored.max_nesting_depth, 1, "arms open no nesting level");
+        assert_eq!(
+            scored.branch_count, 3,
+            "three arms are three decision points"
+        );
+        assert!(!scored.exceeds_gates());
+    }
+
+    #[test]
+    fn typescript_if_else_if_else_chain_is_flat() {
+        let scored = only_function_ts(
+            r#"
+function pick(a: boolean, b: boolean): number {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            scored.cognitive_score, 3,
+            "if + else if + else is 1 + 1 + 1"
+        );
+        assert_eq!(
+            scored.max_nesting_depth, 1,
+            "an else-if chain is flat, not a staircase"
+        );
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn typescript_nested_loops_deepen_the_score() {
+        let scored = only_function_ts(
+            r#"
+function deep(a: boolean, b: boolean, items: number[]): number {
+    if (a) {
+        for (const item of items) {
+            while (b) {
+                if (item > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(
+            scored.cognitive_score, 10,
+            "1 + 2 + 3 + 4 as each construct nests one deeper"
+        );
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(
+            scored.max_loop_nesting, 2,
+            "for-of > while is two loops deep"
+        );
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn typescript_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_ts(
+            r#"
+function allThree(a: boolean, b: boolean, c: boolean): number {
+    if (a && b && c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(
+            and_only.cognitive_score, 2,
+            "the if scores 1, the one && run 1"
+        );
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_ts(
+            r#"
+function mixed(a: boolean, b: boolean, c: boolean): number {
+    if (a && b || c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(
+            mixed.cognitive_score, 3,
+            "the if scores 1, and && then || are two runs"
+        );
+    }
+
+    #[test]
+    fn typescript_test_decorator_at_the_definition_exempts_the_method() {
+        let file = cognitive_complexity(
+            "src/lib.ts",
+            r#"
+class Foo {
+    @Test
+    deeplyNested(a: boolean, b: boolean, items: number[]): number {
+        if (a) {
+            for (const item of items) {
+                while (b) {
+                    if (item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+        )
+        .expect("typescript is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "@Test marks the method as a test");
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn typescript_repeated_scoring_never_drifts() {
+        let source = r#"
+function pick(a: boolean, b: boolean): number {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    }
+    return 0;
+}
+"#;
+        let first = cognitive_complexity("src/lib.ts", source).expect("typescript is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.ts", source).expect("typescript is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // TSX
+    // -----------------------------------------------------------------
+
+    fn only_function_tsx(source: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/App.tsx", source).expect("tsx is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn tsx_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_tsx(
+            r#"
+function classify(value: number): number {
+    switch (value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn tsx_if_else_if_else_chain_is_flat() {
+        let scored = only_function_tsx(
+            r#"
+function pick(a: boolean, b: boolean): number {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn tsx_nested_loops_deepen_the_score() {
+        let scored = only_function_tsx(
+            r#"
+function deep(a: boolean, b: boolean, items: number[]): number {
+    if (a) {
+        for (const item of items) {
+            while (b) {
+                if (item > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(scored.max_loop_nesting, 2);
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn tsx_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_tsx(
+            r#"
+function allThree(a: boolean, b: boolean, c: boolean): number {
+    if (a && b && c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_tsx(
+            r#"
+function mixed(a: boolean, b: boolean, c: boolean): number {
+    if (a && b || c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn tsx_test_decorator_at_the_definition_exempts_the_method() {
+        let file = cognitive_complexity(
+            "src/App.tsx",
+            r#"
+class Foo {
+    @Test
+    deeplyNested(a: boolean, b: boolean, items: number[]): number {
+        if (a) {
+            for (const item of items) {
+                while (b) {
+                    if (item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+        )
+        .expect("tsx is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert!(!scored.exceeds_gates());
+    }
+
+    #[test]
+    fn tsx_repeated_scoring_never_drifts() {
+        let source = r#"
+function pick(a: boolean, b: boolean): number {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    }
+    return 0;
+}
+"#;
+        let first = cognitive_complexity("src/App.tsx", source).expect("tsx is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/App.tsx", source).expect("tsx is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // JavaScript
+    // -----------------------------------------------------------------
+
+    fn only_function_js(source: &str) -> FunctionComplexity {
+        let file =
+            cognitive_complexity("src/lib.js", source).expect("javascript is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn javascript_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_js(
+            r#"
+function classify(value) {
+    switch (value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn javascript_if_else_if_else_chain_is_flat() {
+        let scored = only_function_js(
+            r#"
+function pick(a, b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn javascript_nested_loops_deepen_the_score() {
+        let scored = only_function_js(
+            r#"
+function deep(a, b, items) {
+    if (a) {
+        for (const item of items) {
+            while (b) {
+                if (item > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(scored.max_loop_nesting, 2);
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn javascript_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_js(
+            r#"
+function allThree(a, b, c) {
+    if (a && b && c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_js(
+            r#"
+function mixed(a, b, c) {
+    if (a && b || c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn javascript_test_decorator_at_the_definition_exempts_the_method() {
+        let file = cognitive_complexity(
+            "src/lib.js",
+            r#"
+class Foo {
+    @Test
+    deeplyNested(a, b, items) {
+        if (a) {
+            for (const item of items) {
+                while (b) {
+                    if (item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+        )
+        .expect("javascript is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "@Test marks the method as a test");
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert!(!scored.exceeds_gates());
+    }
+
+    #[test]
+    fn javascript_repeated_scoring_never_drifts() {
+        let source = r#"
+function pick(a, b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    }
+    return 0;
+}
+"#;
+        let first = cognitive_complexity("src/lib.js", source).expect("javascript is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.js", source).expect("javascript is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Python
+    // -----------------------------------------------------------------
+
+    fn only_function_py(source: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/lib.py", source).expect("python is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn python_match_scores_once_and_cases_open_no_nesting() {
+        let scored = only_function_py(
+            r#"
+def classify(value):
+    match value:
+        case 0:
+            return 10
+        case 1:
+            return 11
+        case _:
+            return 15
+"#,
+        );
+        assert_eq!(
+            scored.cognitive_score, 1,
+            "a match scores once for the whole construct"
+        );
+        assert_eq!(scored.max_nesting_depth, 1, "cases open no nesting level");
+        assert_eq!(
+            scored.branch_count, 3,
+            "three cases are three decision points"
+        );
+    }
+
+    #[test]
+    fn python_if_elif_else_chain_is_flat() {
+        let scored = only_function_py(
+            r#"
+def pick(a, b):
+    if a:
+        return 1
+    elif b:
+        return 2
+    else:
+        return 3
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3, "if + elif + else is 1 + 1 + 1");
+        assert_eq!(
+            scored.max_nesting_depth, 1,
+            "an elif chain is flat, not a staircase"
+        );
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn python_three_way_elif_chain_reports_the_longest_link() {
+        let scored = only_function_py(
+            r#"
+def pick(a, b, c):
+    if a:
+        return 1
+    elif b:
+        return 2
+    elif c:
+        return 3
+    else:
+        return 4
+"#,
+        );
+        assert_eq!(
+            scored.cognitive_score, 4,
+            "if + elif + elif + else is 1 + 1 + 1 + 1"
+        );
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 2, "two elif links");
+    }
+
+    #[test]
+    fn python_nested_loops_deepen_the_score() {
+        let scored = only_function_py(
+            r#"
+def deep(a, b, items):
+    if a:
+        for item in items:
+            while b:
+                if item > 0:
+                    return 1
+    return 0
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(scored.max_loop_nesting, 2, "for > while is two loops deep");
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn python_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_py(
+            r#"
+def all_three(a, b, c):
+    if a and b and c:
+        return 1
+    return 0
+"#,
+        );
+        assert_eq!(
+            and_only.cognitive_score, 2,
+            "the if scores 1, the one `and` run 1"
+        );
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_py(
+            r#"
+def mixed(a, b, c):
+    if a and b or c:
+        return 1
+    return 0
+"#,
+        );
+        assert_eq!(
+            mixed.cognitive_score, 3,
+            "the if scores 1, and `and` then `or` are two runs"
+        );
+    }
+
+    #[test]
+    fn python_test_decorator_at_the_definition_exempts_the_function() {
+        let file = cognitive_complexity(
+            "src/lib.py",
+            r#"
+@pytest.mark.test
+def deeply_nested_test(a, b, items):
+    if a:
+        for item in items:
+            while b:
+                if item > 0:
+                    return 1
+    return 0
+"#,
+        )
+        .expect("python is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(
+            scored.is_test,
+            "@pytest.mark.test marks the definition as a test"
+        );
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn python_repeated_scoring_never_drifts() {
+        let source = r#"
+def pick(a, b):
+    if a:
+        return 1
+    elif b:
+        return 2
+    return 0
+"#;
+        let first = cognitive_complexity("src/lib.py", source).expect("python is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.py", source).expect("python is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Java
+    // -----------------------------------------------------------------
+
+    /// Score `source` (wrapped in a class if it is not already) and return the
+    /// method named `name`.
+    fn method_java(source: &str, name: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/Foo.java", source).expect("java is a mapped language");
+        file.functions
+            .into_iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name} is scored"))
+    }
+
+    #[test]
+    fn java_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = method_java(
+            r#"
+class Foo {
+    int classify(int value) {
+        switch (value) {
+            case 0:
+                return 10;
+            case 1:
+                return 11;
+            default:
+                return 15;
+        }
+    }
+}
+"#,
+            "classify",
+        );
+        assert_eq!(
+            scored.cognitive_score, 1,
+            "a switch scores once for the whole construct"
+        );
+        assert_eq!(scored.max_nesting_depth, 1, "arms open no nesting level");
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn java_if_else_if_else_chain_is_flat() {
+        let scored = method_java(
+            r#"
+class Foo {
+    int pick(boolean a, boolean b) {
+        if (a) {
+            return 1;
+        } else if (b) {
+            return 2;
+        } else {
+            return 3;
+        }
+    }
+}
+"#,
+            "pick",
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(
+            scored.max_nesting_depth, 1,
+            "an else-if chain is flat, not a staircase"
+        );
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn java_three_way_else_if_chain_reports_the_longest_link() {
+        let scored = method_java(
+            r#"
+class Foo {
+    int pick(boolean a, boolean b, boolean c) {
+        if (a) {
+            return 1;
+        } else if (b) {
+            return 2;
+        } else if (c) {
+            return 3;
+        } else {
+            return 4;
+        }
+    }
+}
+"#,
+            "pick",
+        );
+        assert_eq!(scored.cognitive_score, 4);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 2, "two else-if links");
+    }
+
+    #[test]
+    fn java_nested_loops_deepen_the_score() {
+        let scored = method_java(
+            r#"
+class Foo {
+    int deep(boolean a, boolean b, int[] items) {
+        if (a) {
+            for (int item : items) {
+                while (b) {
+                    if (item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+            "deep",
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(
+            scored.max_loop_nesting, 2,
+            "enhanced-for > while is two loops deep"
+        );
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn java_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = method_java(
+            r#"
+class Foo {
+    int allThree(boolean a, boolean b, boolean c) {
+        if (a && b && c) {
+            return 1;
+        }
+        return 0;
+    }
+}
+"#,
+            "allThree",
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = method_java(
+            r#"
+class Foo {
+    int mixed(boolean a, boolean b, boolean c) {
+        if (a && b || c) {
+            return 1;
+        }
+        return 0;
+    }
+}
+"#,
+            "mixed",
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn java_test_annotation_at_the_definition_exempts_the_method() {
+        let scored = method_java(
+            r#"
+class Foo {
+    @Test
+    void deeplyNested() {
+        boolean a = true, b = true;
+        int[] items = {1};
+        if (a) {
+            for (int item : items) {
+                while (b) {
+                    if (item > 0) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+"#,
+            "deeplyNested",
+        );
+
+        assert!(scored.is_test, "@Test marks the method as a test");
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn java_repeated_scoring_never_drifts() {
+        let source = r#"
+class Foo {
+    int pick(boolean a, boolean b) {
+        if (a) {
+            return 1;
+        } else if (b) {
+            return 2;
+        }
+        return 0;
+    }
+}
+"#;
+        let first = cognitive_complexity("src/Foo.java", source).expect("java is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/Foo.java", source).expect("java is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C
+    // -----------------------------------------------------------------
+
+    fn only_function_c(source: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/lib.c", source).expect("c is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn c_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_c(
+            r#"
+int classify(int value) {
+    switch (value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+        assert_eq!(
+            scored.name, "classify",
+            "the name resolves through the declarator chain"
+        );
+    }
+
+    #[test]
+    fn c_if_else_if_else_chain_is_flat() {
+        let scored = only_function_c(
+            r#"
+int pick(int a, int b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn c_nested_loops_deepen_the_score() {
+        let scored = only_function_c(
+            r#"
+int deep(int a, int b, int *items, int n) {
+    if (a) {
+        for (int i = 0; i < n; i++) {
+            while (b) {
+                if (items[i] > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(scored.max_loop_nesting, 2);
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn c_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_c(
+            r#"
+int all_three(int a, int b, int c) {
+    if (a && b && c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_c(
+            r#"
+int mixed(int a, int b, int c) {
+    if (a && b || c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn c_test_attribute_at_the_definition_exempts_the_function() {
+        let file = cognitive_complexity(
+            "src/lib.c",
+            r#"
+[[test]]
+int deeply_nested_test(int a, int b, int *items, int n) {
+    if (a) {
+        for (int i = 0; i < n; i++) {
+            while (b) {
+                if (items[i] > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        )
+        .expect("c is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "[[test]] marks the definition as a test");
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn c_repeated_scoring_never_drifts() {
+        let source = r#"
+int pick(int a, int b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    }
+    return 0;
+}
+"#;
+        let first = cognitive_complexity("src/lib.c", source).expect("c is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.c", source).expect("c is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C++
+    // -----------------------------------------------------------------
+
+    fn only_function_cpp(source: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/lib.cpp", source).expect("cpp is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn cpp_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_cpp(
+            r#"
+int classify(int value) {
+    switch (value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn cpp_if_else_if_else_chain_is_flat() {
+        let scored = only_function_cpp(
+            r#"
+int pick(bool a, bool b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn cpp_nested_loops_deepen_the_score() {
+        let scored = only_function_cpp(
+            r#"
+int deep(bool a, bool b, int *items, int n) {
+    if (a) {
+        for (int i = 0; i < n; i++) {
+            while (b) {
+                if (items[i] > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(scored.max_loop_nesting, 2);
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn cpp_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_cpp(
+            r#"
+int all_three(bool a, bool b, bool c) {
+    if (a && b && c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_cpp(
+            r#"
+int mixed(bool a, bool b, bool c) {
+    if (a && b || c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn cpp_test_attribute_at_the_definition_exempts_the_function() {
+        let file = cognitive_complexity(
+            "src/lib.cpp",
+            r#"
+[[test]]
+int deeply_nested_test(bool a, bool b, int *items, int n) {
+    if (a) {
+        for (int i = 0; i < n; i++) {
+            while (b) {
+                if (items[i] > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        )
+        .expect("cpp is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "[[test]] marks the definition as a test");
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert!(!scored.exceeds_gates());
+    }
+
+    #[test]
+    fn cpp_repeated_scoring_never_drifts() {
+        let source = r#"
+int pick(bool a, bool b) {
+    if (a) {
+        return 1;
+    } else if (b) {
+        return 2;
+    }
+    return 0;
+}
+"#;
+        let first = cognitive_complexity("src/lib.cpp", source).expect("cpp is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.cpp", source).expect("cpp is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C#
+    // -----------------------------------------------------------------
+
+    fn method_csharp(source: &str, name: &str) -> FunctionComplexity {
+        let file = cognitive_complexity("src/Foo.cs", source).expect("csharp is a mapped language");
+        file.functions
+            .into_iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name} is scored"))
+    }
+
+    #[test]
+    fn csharp_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = method_csharp(
+            r#"
+class Foo {
+    int Classify(int value) {
+        switch (value) {
+            case 0:
+                return 10;
+            case 1:
+                return 11;
+            default:
+                return 15;
+        }
+    }
+}
+"#,
+            "Classify",
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn csharp_if_else_if_else_chain_is_flat() {
+        let scored = method_csharp(
+            r#"
+class Foo {
+    int Pick(bool a, bool b) {
+        if (a) {
+            return 1;
+        } else if (b) {
+            return 2;
+        } else {
+            return 3;
+        }
+    }
+}
+"#,
+            "Pick",
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn csharp_nested_loops_deepen_the_score() {
+        let scored = method_csharp(
+            r#"
+class Foo {
+    int Deep(bool a, bool b, int[] items) {
+        if (a) {
+            foreach (int item in items) {
+                while (b) {
+                    if (item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+            "Deep",
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(
+            scored.max_loop_nesting, 2,
+            "foreach > while is two loops deep"
+        );
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn csharp_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = method_csharp(
+            r#"
+class Foo {
+    int AllThree(bool a, bool b, bool c) {
+        if (a && b && c) {
+            return 1;
+        }
+        return 0;
+    }
+}
+"#,
+            "AllThree",
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = method_csharp(
+            r#"
+class Foo {
+    int Mixed(bool a, bool b, bool c) {
+        if (a && b || c) {
+            return 1;
+        }
+        return 0;
+    }
+}
+"#,
+            "Mixed",
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn csharp_test_attribute_at_the_definition_exempts_the_method() {
+        let scored = method_csharp(
+            r#"
+class Foo {
+    [Test]
+    void DeeplyNested() {
+        bool a = true, b = true;
+        int[] items = { 1 };
+        if (a) {
+            foreach (int item in items) {
+                while (b) {
+                    if (item > 0) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+"#,
+            "DeeplyNested",
+        );
+
+        assert!(scored.is_test, "[Test] marks the method as a test");
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert!(!scored.exceeds_gates());
+    }
+
+    #[test]
+    fn csharp_repeated_scoring_never_drifts() {
+        let source = r#"
+class Foo {
+    int Pick(bool a, bool b) {
+        if (a) {
+            return 1;
+        } else if (b) {
+            return 2;
+        }
+        return 0;
+    }
+}
+"#;
+        let first = cognitive_complexity("src/Foo.cs", source).expect("csharp is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/Foo.cs", source).expect("csharp is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // PHP
+    // -----------------------------------------------------------------
+
+    fn only_function_php(source: &str) -> FunctionComplexity {
+        let full = format!("<?php\n{source}");
+        let file = cognitive_complexity("src/lib.php", &full).expect("php is a mapped language");
+        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
+        file.functions.into_iter().next().expect("one function")
+    }
+
+    #[test]
+    fn php_switch_scores_once_and_arms_open_no_nesting() {
+        let scored = only_function_php(
+            r#"
+function classify($value) {
+    switch ($value) {
+        case 0:
+            return 10;
+        case 1:
+            return 11;
+        default:
+            return 15;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 1);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.branch_count, 3);
+    }
+
+    #[test]
+    fn php_if_elseif_else_chain_is_flat() {
+        let scored = only_function_php(
+            r#"
+function pick($a, $b) {
+    if ($a) {
+        return 1;
+    } elseif ($b) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 3);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 1);
+    }
+
+    #[test]
+    fn php_three_way_elseif_chain_reports_the_longest_link() {
+        let scored = only_function_php(
+            r#"
+function pick($a, $b, $c) {
+    if ($a) {
+        return 1;
+    } elseif ($b) {
+        return 2;
+    } elseif ($c) {
+        return 3;
+    } else {
+        return 4;
+    }
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 4);
+        assert_eq!(scored.max_nesting_depth, 1);
+        assert_eq!(scored.max_else_if_chain, 2, "two elseif links");
+    }
+
+    #[test]
+    fn php_nested_loops_deepen_the_score() {
+        let scored = only_function_php(
+            r#"
+function deep($a, $b, $items) {
+    if ($a) {
+        foreach ($items as $item) {
+            while ($b) {
+                if ($item > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(scored.cognitive_score, 10);
+        assert_eq!(scored.max_nesting_depth, 4);
+        assert_eq!(
+            scored.max_loop_nesting, 2,
+            "foreach > while is two loops deep"
+        );
+        assert!(scored.exceeds_gates());
+    }
+
+    #[test]
+    fn php_boolean_run_scores_once_mixed_run_scores_twice() {
+        let and_only = only_function_php(
+            r#"
+function all_three($a, $b, $c) {
+    if ($a && $b && $c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(and_only.cognitive_score, 2);
+        assert_eq!(and_only.max_boolean_operands, 3);
+
+        let mixed = only_function_php(
+            r#"
+function mixed($a, $b, $c) {
+    if ($a && $b || $c) {
+        return 1;
+    }
+    return 0;
+}
+"#,
+        );
+        assert_eq!(mixed.cognitive_score, 3);
+    }
+
+    #[test]
+    fn php_test_attribute_at_the_definition_exempts_the_method() {
+        let file = cognitive_complexity(
+            "src/FooTest.php",
+            r#"<?php
+class FooTest {
+    #[Test]
+    public function deeplyNested($a, $b, $items) {
+        if ($a) {
+            foreach ($items as $item) {
+                while ($b) {
+                    if ($item > 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#,
+        )
+        .expect("php is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "#[Test] marks the method as a test");
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn php_repeated_scoring_never_drifts() {
+        let source = "<?php\nfunction pick($a, $b) {\n    if ($a) {\n        return 1;\n    } elseif ($b) {\n        return 2;\n    }\n    return 0;\n}\n";
+        let first = cognitive_complexity("src/lib.php", source).expect("php is mapped");
+        for run in 1..DETERMINISM_RUNS {
+            let again = cognitive_complexity("src/lib.php", source).expect("php is mapped");
+            assert_eq!(again, first, "run {run} drifted from run 0");
+        }
     }
 }

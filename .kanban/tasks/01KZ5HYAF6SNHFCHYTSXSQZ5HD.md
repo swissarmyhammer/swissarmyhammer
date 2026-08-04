@@ -1,0 +1,42 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: f780
+title: 'complexity scorer: map go, ruby, fortran, swift, elixir, bash (needs design extensions)'
+---
+This task follows ^xjyb2qf ("complexity scorer covers only Rust — map the remaining source_code languages"). That task added ComplexitySpec rows for typescript, tsx, javascript, python, java, c, cpp, csharp, and php — all grammar-verified with the full 6-test suite. Six languages from the original scope remain unmapped, each blocked on a real, specific gap rather than missing effort:
+
+## go
+
+No attribute/annotation grammar construct exists in `tree_sitter_go` for test-marking (verified: parsing a function has no decorator/annotation node kind at all). Go's real test convention is name+parameter-type based (`func TestXxx(t *testing.T)`), a fundamentally different mechanism from the attribute-based `is_test_definition`/`attribute_marks_test` machinery every mapped language shares. Needs a new, generic (not per-language-branched) spec mechanism — e.g. a `test_name_prefix`/`test_param_type` pair — before Go can share the same 6-test suite honestly.
+
+## ruby
+
+Same class of gap as Go: `tree_sitter_ruby` has no attribute/annotation node kind. RSpec/minitest mark tests via a call-based DSL (`it "does x" do ... end`, not a `def`) or a naming convention (`def test_foo`), neither of which is an attachable attribute node the existing mechanism can check.
+
+## fortran
+
+No attribute/annotation mechanism exists in `tree_sitter_fortran` at all (verified while mapping its `if`/`do`/`select case` node kinds — no such node kind appeared). No idiomatic test-marking convention exists for Fortran either, so there is no realistic sample to write the required "test marker exempts the function" test against.
+
+## swift
+
+Swift DOES have a genuine, current test-marking mechanism — verified: `@Test` parses as `modifiers > attribute`, matching the real Swift Testing framework (Swift 6). It is blocked on something else: its `if`/`else if`/`else` shape has NO wrapping `else_clause` node at all. Verified via `tree_sitter_swift`: the nested `if_statement` (or the final body) sits as an EXTRA direct child of the SAME outer `if_statement`, following an anonymous `else` token — not through a single or repeated `alternative` field the way every one of the 9 newly-mapped languages does. ^xjyb2qf's `walk_conditional`/`walk_alternative` design is built entirely around `child_by_field_name("alternative")` (single, recursive) or a repeated `alternative` field (Python/PHP's flat elif model); Swift fits neither shape and needs its own structural handling before it can be added without special-casing the shared walker.
+
+## elixir
+
+Functions are represented as generic `call` nodes (`target: (identifier)` naming `def`/`defp`/`defmacro`/etc.), not a distinguishable dedicated node KIND. Verified via `tree_sitter_elixir`: `defmodule Foo do def pick(a, b) do ... end end` parses to nested `call` nodes, and an ORDINARY function call inside a body (e.g. `Repo.insert()`) has the exact same node kind `call`. This breaks the `function_kinds` node-kind-matching foundation the whole `ComplexitySpec` design relies on (`spec.function_kinds.contains(&node.kind())`) — every call in the file would match, not just definitions. Needs a call-target-filtering mechanism (matching against the `target` field's identifier text, e.g. `def`/`defp`) added as a new generic spec capability before Elixir can be mapped correctly.
+
+## bash
+
+No attribute/annotation grammar construct exists in `tree_sitter_bash`. The one real-world convention (bats-core's `# @test "description"` comment marker) is unstructured free text inside a `comment` node, not a reliable grammar construct — and comments are used for many unrelated purposes, so treating any comment as a potential test marker would be unsafe and overbroad.
+
+## Acceptance
+
+- Each of the 6 languages above gets a `ComplexitySpec` row, grammar-verified the same way ^xjyb2qf did (parse a real sample, read the actual s-expression — never assumed).
+- Each gets the same 6-test suite `complexity.rs` already carries per language (match/switch flat, if/elif/else flat, nested loops deepen, boolean run once/mixed twice, test marker exempts, determinism) — OR, where the language's test-marking convention cannot fit the existing attribute-based mechanism (go, ruby, fortran), a new generic mechanism is designed and added first (not a per-language special case) so the "test marker" test can be written honestly for all three at once.
+- Elixir additionally needs the `function_kinds` matching mechanism extended to filter `call` nodes by target identifier before it can be included at all.
+- Swift additionally needs `walk_conditional`/`walk_alternative` extended to handle its wrapper-less `alternative`-as-sibling-of-same-node shape before it can be included at all.
+- A language with no grammar (or not yet mapped) still reports not-computed, never zero.
+
+#bug #review

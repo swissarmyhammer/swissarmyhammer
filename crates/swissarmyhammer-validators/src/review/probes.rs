@@ -950,8 +950,11 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
     #[tokio::test]
     async fn complexity_reports_not_computed_for_an_unmapped_language() {
         // Never a silent zero: an unmapped language must still produce a row, so
-        // the guard cannot read "no mapping" as "no complexity".
-        let result = complexity_probe("src/app.py", "def f():\n    pass\n").await;
+        // the guard cannot read "no mapping" as "no complexity". Go carries no
+        // `ComplexitySpec` row (its test-marking convention is name/parameter
+        // based, not attribute based, so it cannot yet share the generic
+        // attribute-driven `is_test` mechanism the mapped languages use).
+        let result = complexity_probe("src/app.go", "func f() {}\n").await;
 
         assert_eq!(result.rows.len(), 1, "not-computed is itself a row");
         assert_eq!(
