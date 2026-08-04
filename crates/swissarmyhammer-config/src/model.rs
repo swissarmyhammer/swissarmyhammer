@@ -105,6 +105,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use swissarmyhammer_common::SwissarmyhammerDirectory;
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
@@ -537,10 +538,12 @@ pub fn parse_model_description(content: &str) -> Option<String> {
 }
 
 /// Extract a field from YAML frontmatter
+///
+/// Delegates the split to [`split_frontmatter_body`], so only a line that is
+/// exactly three hyphens delimits: a `---` run embedded in a value stays part
+/// of the frontmatter instead of ending it early.
 fn extract_yaml_frontmatter_field(content: &str, field: &str) -> Option<String> {
-    let stripped = content.strip_prefix("---")?;
-    let end_pos = stripped.find("---")?;
-    let front_matter = &stripped[..end_pos];
+    let (front_matter, _body) = split_frontmatter_body(content)?;
 
     let yaml_value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(front_matter).ok()?;
     let value = yaml_value.get(field)?;
@@ -570,13 +573,12 @@ fn extract_comment_field(content: &str, prefix: &str) -> Option<String> {
 pub fn parse_model_config(content: &str) -> Result<ModelConfig, serde_yaml_ng::Error> {
     let content = content.trim();
 
-    // Check for YAML front matter
-    if let Some(stripped) = content.strip_prefix("---") {
-        if let Some(end_pos) = stripped.find("---") {
-            // Extract the content after the second ---
-            let config_content = &stripped[end_pos + 3..].trim();
-            return serde_yaml_ng::from_str::<ModelConfig>(config_content);
-        }
+    // Check for YAML front matter. Delegates the split to
+    // `split_frontmatter_body`, so only a line that is exactly three hyphens
+    // delimits: a `---` run embedded in a frontmatter value stays part of the
+    // frontmatter instead of ending it -- and cutting the config body -- early.
+    if let Some((_front_matter, body)) = split_frontmatter_body(content) {
+        return serde_yaml_ng::from_str::<ModelConfig>(body.trim());
     }
 
     // Fall back to parsing entire content as ModelConfig
@@ -2158,6 +2160,79 @@ quiet: true"#;
         assert!(config.is_ok(), "Should parse pure YAML agent config");
         let config = config.unwrap();
         assert!(config.quiet);
+    }
+
+    #[test]
+    fn test_parse_model_description_survives_triple_hyphen_in_value() {
+        // A `---` run embedded in a quoted scalar value must not be read as
+        // the closing frontmatter delimiter. Only a line that is exactly
+        // three hyphens delimits, so every frontmatter key -- including this
+        // one -- must survive.
+        let content = r#"---
+description: "Claude Code --- installed separately"
+other_field: value
+---
+executor:
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
+quiet: false"#;
+
+        let description = parse_model_description(content);
+        assert_eq!(
+            description,
+            Some("Claude Code --- installed separately".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_agent_config_survives_triple_hyphen_in_frontmatter_value() {
+        // Same content as above: the frontmatter description holds a `---`
+        // run. The model configuration must still load -- the frontmatter
+        // split must not cut in the middle of the quoted scalar.
+        let content = r#"---
+description: "Claude Code --- installed separately"
+other_field: value
+---
+executor:
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
+quiet: false"#;
+
+        let config = parse_model_config(content);
+        assert!(
+            config.is_ok(),
+            "model config must still load when frontmatter holds a `---` run: {:?}",
+            config.err()
+        );
+        assert!(!config.unwrap().quiet);
+    }
+
+    #[test]
+    fn test_parse_model_description_rejects_four_hyphen_opening_line() {
+        // A first line of four hyphens is not a valid opening delimiter --
+        // only a line that is exactly three hyphens opens frontmatter.
+        let content = "----\ndescription: not real frontmatter\n----\nquiet: true";
+        assert_eq!(parse_model_description(content), None);
+    }
+
+    #[test]
+    fn test_parse_model_description_rejects_hyphen_with_trailing_text_opening_line() {
+        // A first line of `---x` is not a valid opening delimiter either.
+        let content = "---x\ndescription: not real frontmatter\n---\nquiet: true";
+        assert_eq!(parse_model_description(content), None);
+    }
+
+    #[test]
+    fn test_parse_model_description_rejects_missing_closing_delimiter() {
+        // No closing `---` line at all: this must not be read as delimited
+        // frontmatter. With no `# Description:` comment either, the overall
+        // result is `None`.
+        let content = "---\ndescription: no closer\nother: field\n";
+        assert_eq!(parse_model_description(content), None);
     }
 
     #[test]
