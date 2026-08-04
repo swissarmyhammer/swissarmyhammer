@@ -1016,6 +1016,7 @@ impl Drop for ClaudeProcess {
 mod tests {
     use super::*;
     use crate::config::{HttpHeader, HttpTransport, McpServerConfig, SseTransport};
+    use crate::test_support::command_args;
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -1257,15 +1258,6 @@ mod tests {
             Some("stream-json"),
             "--output-format must be followed by stream-json, got args: {args:?}"
         );
-    }
-
-    /// Collect a command's arguments as owned strings for assertions.
-    fn command_args(command: &Command) -> Vec<String> {
-        command
-            .as_std()
-            .get_args()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect()
     }
 
     /// The value following `flag`, if the flag is present at all.

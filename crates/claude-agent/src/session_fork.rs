@@ -907,11 +907,7 @@ mod tests {
             &spawn_config.attachment,
             &spawn_config.extra_args,
         );
-        let args: Vec<String> = command
-            .as_std()
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
+        let args = crate::test_support::command_args(&command);
 
         let model_pos = args.iter().position(|a| a == "--model").unwrap_or_else(|| {
             panic!(

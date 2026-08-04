@@ -27,6 +27,54 @@ comments:
 
     next: /review
   timestamp: 2026-08-03T23:56:40.433922+00:00
+- actor: claude-code
+  id: 01kz511p3mneya8h2d8e1k0kyf
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — verified empirically (not assumed) that ^j9rwjtx already fixed the underlying bug: build_fork_spawn_config reads parent.extra_args.clone(), confirmed by driving the REAL production chain (session/new -> prime -> real fork_session extension -> build_fork_spawn_config -> build_base_command) to the literal argv, which carries --model haiku. Proved non-vacuous by reverting the fix and confirming failures, then restoring. Closed two genuine test gaps this task's own checklist asked for that ^j9rwjtx's narrower tests didn't cover: test_base_command_fork_attachment_carries_extra_args (claude_process.rs, argv-level) and test_review_fanout_chain_carries_model_tier_to_forked_argv (session_fork.rs, real end-to-end chain). Checked whether swissarmyhammer-validators' own fan-out tests could cover this instead — they drive a fully scripted ScriptedAgent double that never models claude argv, so that crate structurally cannot assert on --model; documented that boundary rather than building new fake-binary spawn infrastructure. Only production change: build_base_command visibility private -> pub(crate) so the cross-module test could reach it, no behavior change.
+    - test: green — cargo nextest run -p claude-agent -p swissarmyhammer-validators 1446/1446 passed; full rdeps(claude-agent) or rdeps(swissarmyhammer-validators) run for real: 4400/4400 passed; fmt clean; clippy clean
+    - commit: c85bb3830
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T23:58:49.460442+00:00
+- actor: claude-code
+  id: 01kz51m9eddbf30y6qa9kr00k9
+  text: |-
+    ### review — findings
+    - evidence: `review sha c85bb3830~1..c85bb3830` ran successfully (3 raw findings, 3 confirmed, 0 refuted-then-kept). Blame-checked each finding against `c85bb3830`: `crates/claude-agent/src/claude_process.rs:1120` and `:1127` blamed to `646b63b739` (2026-05-27) - pre-existing, dropped per instruction. `crates/claude-agent/src/session_fork.rs:910` blamed to `c85bb3830` itself - new code, kept.
+    - 1 finding recorded: `crates/claude-agent/src/session_fork.rs:910` - the new `test_review_fanout_chain_carries_model_tier_to_forked_argv` inlines `.as_std().get_args().map(...).collect()` instead of reusing the `command_args` helper already defined in `claude_process.rs`'s test module.
+    - next: fix the duplication in the new test (session_fork.rs only - do not touch pre-existing claude_process.rs test code), then /review again
+  timestamp: 2026-08-04T00:08:59.085301+00:00
+- actor: claude-code
+  id: 01kz51na5wsf76gt6x1zyperct
+  text: |-
+    ### finish iteration 1 — findings
+    - review: findings — engine ran successfully. 2 of 3 dropped as pre-existing (blame to 646b63b739, unrelated to this commit). 1 genuine: session_fork.rs:910 — the new test inlines argv extraction (command.as_std().get_args()...) instead of reusing the pre-existing command_args helper in claude_process.rs's test module. Not a test-refactor-exception case since it's the NEW test duplicating an existing helper, not an ask to refactor existing test code.
+    - next: /implement — add a local extraction helper in session_fork.rs's own test module (or reuse claude_process.rs's command_args if it's reachable cross-module), don't touch pre-existing claude_process.rs test code otherwise
+  timestamp: 2026-08-04T00:09:32.604783+00:00
+- actor: claude-code
+  id: 01kz521ne7ke0e98b7pyr52mnm
+  text: |-
+    ### implement — changed
+
+    Fixed the review finding on `crates/claude-agent/src/session_fork.rs:910`: the new `test_review_fanout_chain_carries_model_tier_to_forked_argv` inlined argv extraction (`command.as_std().get_args().map(...).collect()`) instead of reusing the pre-existing `command_args` helper in `claude_process.rs`'s test module.
+
+    Took option 1 (reuse via a shared test-utils location): the crate already has `crate::test_support` (`crates/claude-agent/src/test_support.rs`, `#[cfg(test)] pub(crate) mod test_support;` in `lib.rs`), used today for `StateDirGuard`. Moved `command_args` there as `pub(crate) fn command_args(command: &tokio::process::Command) -> Vec<String>`, then:
+    - `claude_process.rs`: removed the local `fn command_args` definition from its test module, added `use crate::test_support::command_args;` to its test-module imports. All 12 pre-existing call sites in that file are untouched — same function name in scope, no other test code touched.
+    - `session_fork.rs`: replaced the inlined 5-line extraction in the new test with `let args = crate::test_support::command_args(&command);`.
+
+    Evidence:
+    - `cargo test -p claude-agent --lib` → 761 passed, 0 failed.
+    - Both new tests individually confirmed green: `session_fork::tests::test_review_fanout_chain_carries_model_tier_to_forked_argv` and `claude_process::tests::test_base_command_fork_attachment_carries_extra_args`.
+    - `cargo fmt --all` clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - `cargo nextest run -E 'rdeps(claude-agent) or rdeps(swissarmyhammer-validators)'` → 4400 tests run, 4400 passed, 0 skipped.
+
+    Files changed: `crates/claude-agent/src/claude_process.rs`, `crates/claude-agent/src/session_fork.rs`, `crates/claude-agent/src/test_support.rs`.
+
+    Checked off the finding in `## Review Findings (2026-08-03 18:59)`.
+
+    next: /review
+  timestamp: 2026-08-04T00:16:17.351144+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Review fan-out forks spawn `claude` without `--model`; only the primed session carries the tier
@@ -127,4 +175,10 @@ expected message; both reverts were then undone.
 
 ## Workflow
 
-- Use `/tdd` — establish the empirical answer first, then write the failing test. #bug #config #review
+- Use `/tdd` — establish the empirical answer first, then write the failing test.
+
+## Review Findings (2026-08-03 18:59)
+
+- [x] `crates/claude-agent/src/session_fork.rs:910` — Test duplicates command-args extraction logic that exists as a helper in claude_process.rs tests (lines 1263-1269), instead of reusing it or extracting to a shared test utility module. Export `command_args` from claude_process tests as a public test utility, or create a shared test utilities module (e.g., `crate::test_utils`) and reuse the helper across test modules.
+
+Blame-checked against `c85bb3830` before recording: the engine also reported `crates/claude-agent/src/claude_process.rs:1120` (hardcoded port duplicated from line 1063) and `crates/claude-agent/src/claude_process.rs:1127` (inlined command-args extraction instead of the `command_args` helper). Both blamed to commit `646b63b739` (2026-05-27), predating this task's commit `c85bb3830` - dropped as pre-existing, not introduced by this change. The `session_fork.rs:910` finding above blamed to `c85bb3830` itself (the new `test_review_fanout_chain_carries_model_tier_to_forked_argv`), so it is recorded. #bug #config #review
