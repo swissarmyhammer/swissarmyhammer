@@ -85,6 +85,25 @@ pub const COGNITIVE_COMPLEXITY_THRESHOLD: u32 = 15;
 /// 3 levels deep (4+ is a flag)".
 pub const NESTING_DEPTH_THRESHOLD: u32 = 4;
 
+/// The deepest tree-sitter tree depth the walk descends before stopping and
+/// reporting the function as partial rather than continuing to recurse.
+///
+/// This probe runs on real diffs, including third-party repository content
+/// parsed directly (see `mirdan/src/git_source.rs`). A pathologically deep but
+/// finite source file — generated code, a huge chained `if`/`match`, deeply
+/// nested literals from a minifier — produces a parse tree deep enough to
+/// exhaust the native call stack through `walk`/`walk_children`/
+/// `walk_conditional`/`walk_alternative`/`walk_boolean`/`boolean_chain` (and
+/// `collect_functions`'s own tree walk), which mirror the tree with one Rust
+/// stack frame per level. That is a hard crash, not a graceful error, and it
+/// would take down the whole review process rather than fail one probe.
+///
+/// The deepest pinned fixture is depth 4, and real code rarely exceeds depth
+/// 10-20, so this cap is two orders of magnitude above any plausible real
+/// function. It never touches legitimate code while stopping every walker
+/// far short of exhausting even a small thread stack.
+const MAX_TRAVERSAL_DEPTH: u32 = 256;
+
 /// The per-grammar node kinds the scorer interprets.
 ///
 /// Every language is one row of data. The scorer is a single traversal
@@ -503,6 +522,11 @@ pub struct FunctionComplexity {
     /// Read at the definition, never from the file name — a complex helper in a
     /// test file is still a complex function.
     pub is_test: bool,
+    /// True when the walk hit [`MAX_TRAVERSAL_DEPTH`] before finishing this
+    /// function. The numbers above are real for everything the walk reached,
+    /// but nothing past the cut was walked, so they are a lower bound — never
+    /// treat a partial result as "verified simple".
+    pub is_partial: bool,
 }
 
 impl FunctionComplexity {
@@ -511,10 +535,16 @@ impl FunctionComplexity {
     /// A test function never trips one: the validator's rule exempts tests
     /// whose complexity is sequential assertions, and that exemption is now
     /// computed from the definition rather than recalled by the model.
+    ///
+    /// A partial function always trips this, test or not: [`Self::is_partial`]
+    /// means the numbers are a lower bound, so reporting it as "under the
+    /// gates" would be exactly the silent wrong number this module exists to
+    /// avoid.
     pub fn exceeds_gates(&self) -> bool {
-        !self.is_test
-            && (self.cognitive_score >= COGNITIVE_COMPLEXITY_THRESHOLD
-                || self.max_nesting_depth >= NESTING_DEPTH_THRESHOLD)
+        self.is_partial
+            || (!self.is_test
+                && (self.cognitive_score >= COGNITIVE_COMPLEXITY_THRESHOLD
+                    || self.max_nesting_depth >= NESTING_DEPTH_THRESHOLD))
     }
 }
 
@@ -545,7 +575,7 @@ pub fn cognitive_complexity(path: &str, source: &str) -> Option<FileComplexity> 
     let tree = parser.parse(source, None)?;
 
     let mut functions = Vec::new();
-    collect_functions(tree.root_node(), source, spec, &mut functions);
+    collect_functions(tree.root_node(), source, spec, 0, &mut functions);
     Some(FileComplexity {
         language: spec.language,
         functions,
@@ -560,14 +590,21 @@ fn collect_functions(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
+    depth: u32,
     out: &mut Vec<FunctionComplexity>,
 ) {
+    if depth > MAX_TRAVERSAL_DEPTH {
+        // Stop descending rather than risk the native call stack. A function
+        // nested this deep in surrounding structure is unreachable in any
+        // real file; the walk simply never finds it.
+        return;
+    }
     if spec.function_kinds.contains(&node.kind()) {
         out.push(score_function(node, source, spec));
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_functions(child, source, spec, out);
+        collect_functions(child, source, spec, depth + 1, out);
     }
 }
 
@@ -580,6 +617,7 @@ struct Tally {
     max_boolean_operands: u32,
     max_loop_nesting: u32,
     max_else_if_chain: u32,
+    is_partial: bool,
 }
 
 impl Tally {
@@ -594,6 +632,13 @@ impl Tally {
     fn flat_increment(&mut self) {
         self.cognitive_score += 1;
     }
+
+    /// Record that a walker stopped at [`MAX_TRAVERSAL_DEPTH`] rather than
+    /// finishing. Everything counted up to this point is real; nothing past
+    /// the cut was walked, so the totals become a lower bound.
+    fn depth_capped(&mut self) {
+        self.is_partial = true;
+    }
 }
 
 /// Score one function node.
@@ -601,7 +646,7 @@ fn score_function(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> Functi
     let mut tally = Tally::default();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk(child, source, spec, 0, 0, &mut tally);
+        walk(child, source, spec, 0, 0, 1, &mut tally);
     }
 
     FunctionComplexity {
@@ -615,6 +660,7 @@ fn score_function(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> Functi
         max_loop_nesting: tally.max_loop_nesting,
         max_else_if_chain: tally.max_else_if_chain,
         is_test: is_test_definition(node, source, spec),
+        is_partial: tally.is_partial,
     }
 }
 
@@ -722,15 +768,25 @@ fn attribute_marks_test(node: Node<'_>, source: &str) -> bool {
 /// Walk one node, accumulating into `tally`.
 ///
 /// `nesting` is the count of enclosing constructs that opened a nesting level.
-/// `loop_nesting` is the same count restricted to loops.
+/// `loop_nesting` is the same count restricted to loops. `depth` is the raw
+/// tree depth of `node` below the function's own root (its children, if any,
+/// are walked at `depth + 1`) — a plain recursion-depth counter, unrelated to
+/// `nesting`, that exists solely to bound the native call stack. See
+/// [`MAX_TRAVERSAL_DEPTH`].
 fn walk(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
 ) {
+    if depth > MAX_TRAVERSAL_DEPTH {
+        tally.depth_capped();
+        return;
+    }
+
     let kind = node.kind();
 
     // A nested function is its own unit — `collect_functions` scores it.
@@ -748,9 +804,26 @@ fn walk(
         };
         if spec.conditional_kinds.contains(&kind) {
             tally.branch_count += 1;
-            walk_conditional(node, source, spec, nesting, inner_loop_nesting, tally, 1);
+            walk_conditional(
+                node,
+                source,
+                spec,
+                nesting,
+                inner_loop_nesting,
+                depth,
+                tally,
+                1,
+            );
         } else {
-            walk_children(node, source, spec, nesting + 1, inner_loop_nesting, tally);
+            walk_children(
+                node,
+                source,
+                spec,
+                nesting + 1,
+                inner_loop_nesting,
+                depth + 1,
+                tally,
+            );
         }
         return;
     }
@@ -759,12 +832,20 @@ fn walk(
         // Transparent: an arm is a branch of one decision, not a nested
         // decision. No increment and no nesting level.
         tally.branch_count += 1;
-        walk_children(node, source, spec, nesting, loop_nesting, tally);
+        walk_children(node, source, spec, nesting, loop_nesting, depth + 1, tally);
         return;
     }
 
     if spec.nest_only_kinds.contains(&kind) {
-        walk_children(node, source, spec, nesting + 1, loop_nesting, tally);
+        walk_children(
+            node,
+            source,
+            spec,
+            nesting + 1,
+            loop_nesting,
+            depth + 1,
+            tally,
+        );
         return;
     }
 
@@ -774,25 +855,28 @@ fn walk(
     }
 
     if is_boolean_root(node, spec) {
-        walk_boolean(node, source, spec, nesting, loop_nesting, tally);
+        walk_boolean(node, source, spec, nesting, loop_nesting, depth, tally);
         return;
     }
 
-    walk_children(node, source, spec, nesting, loop_nesting, tally);
+    walk_children(node, source, spec, nesting, loop_nesting, depth + 1, tally);
 }
 
-/// Walk a node's named children at the given levels.
+/// Walk a node's named children at the given levels. `depth` is already the
+/// depth at which each child is walked — the caller adds the one level
+/// crossing from `node` to its children before calling in.
 fn walk_children(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk(child, source, spec, nesting, loop_nesting, tally);
+        walk(child, source, spec, nesting, loop_nesting, depth, tally);
     }
 }
 
@@ -802,26 +886,63 @@ fn walk_children(
 ///
 /// `chain` is the 1-based position of `node` in the else-if chain, so
 /// [`FunctionComplexity::max_else_if_chain`] can record the longest one.
+///
+/// `depth` is `node`'s own raw tree depth — see [`walk`]'s doc. This function
+/// is a recursive-walk entry point in its own right (an else-if chain link
+/// re-enters it directly from [`walk_alternative`] without going back through
+/// [`walk`]'s guard), so it re-checks [`MAX_TRAVERSAL_DEPTH`] itself.
+#[allow(clippy::too_many_arguments)]
 fn walk_conditional(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
     chain: u32,
 ) {
+    if depth > MAX_TRAVERSAL_DEPTH {
+        tally.depth_capped();
+        return;
+    }
+
     if let Some(condition) = node.child_by_field_name("condition") {
-        walk(condition, source, spec, nesting + 1, loop_nesting, tally);
+        walk(
+            condition,
+            source,
+            spec,
+            nesting + 1,
+            loop_nesting,
+            depth + 1,
+            tally,
+        );
     }
     if let Some(consequence) = node.child_by_field_name(spec.consequence_field) {
-        walk(consequence, source, spec, nesting + 1, loop_nesting, tally);
+        walk(
+            consequence,
+            source,
+            spec,
+            nesting + 1,
+            loop_nesting,
+            depth + 1,
+            tally,
+        );
     }
 
     let mut cursor = node.walk();
     let mut chain = chain;
     for alt in node.children_by_field_name("alternative", &mut cursor) {
-        chain = walk_alternative(alt, source, spec, nesting, loop_nesting, tally, chain);
+        chain = walk_alternative(
+            alt,
+            source,
+            spec,
+            nesting,
+            loop_nesting,
+            depth + 1,
+            tally,
+            chain,
+        );
     }
 }
 
@@ -842,20 +963,41 @@ fn walk_conditional(
 /// - a **terminal else** — a bare body (Java's/C#'s direct `block`, or the
 ///   single child left after unwrapping an `else_clause`) — scored with a
 ///   flat +1 and its own body walked one level deeper.
+///
+/// `depth` is `node`'s own raw tree depth — see [`walk`]'s doc. An else-if
+/// wrapper unwrap re-enters this function on the wrapper's child without
+/// going through [`walk`]'s guard, so it re-checks [`MAX_TRAVERSAL_DEPTH`]
+/// itself.
+#[allow(clippy::too_many_arguments)]
 fn walk_alternative(
     node: Node<'_>,
     source: &str,
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
     chain: u32,
 ) -> u32 {
+    if depth > MAX_TRAVERSAL_DEPTH {
+        tally.depth_capped();
+        return chain;
+    }
+
     if spec.else_wrapper_kinds.contains(&node.kind()) {
         let mut result = chain;
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            result = walk_alternative(child, source, spec, nesting, loop_nesting, tally, result);
+            result = walk_alternative(
+                child,
+                source,
+                spec,
+                nesting,
+                loop_nesting,
+                depth + 1,
+                tally,
+                result,
+            );
         }
         return result;
     }
@@ -865,13 +1007,30 @@ fn walk_alternative(
         tally.branch_count += 1;
         tally.max_else_if_chain = tally.max_else_if_chain.max(chain);
         tally.max_nesting_depth = tally.max_nesting_depth.max(nesting + 1);
-        walk_conditional(node, source, spec, nesting, loop_nesting, tally, chain + 1);
+        walk_conditional(
+            node,
+            source,
+            spec,
+            nesting,
+            loop_nesting,
+            depth,
+            tally,
+            chain + 1,
+        );
         return chain + 1;
     }
 
     tally.flat_increment();
     tally.branch_count += 1;
-    walk_children(node, source, spec, nesting + 1, loop_nesting, tally);
+    walk_children(
+        node,
+        source,
+        spec,
+        nesting + 1,
+        loop_nesting,
+        depth + 1,
+        tally,
+    );
     chain
 }
 
@@ -922,6 +1081,7 @@ fn walk_boolean(
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
 ) {
     let mut sequences = 0u32;
@@ -932,6 +1092,7 @@ fn walk_boolean(
         spec,
         nesting,
         loop_nesting,
+        depth,
         tally,
         None,
         &mut sequences,
@@ -942,7 +1103,11 @@ fn walk_boolean(
 }
 
 /// Recurse a boolean chain, counting operator-run changes and walking every
-/// non-boolean operand normally.
+/// non-boolean operand normally. `depth` is the current node's own raw tree
+/// depth — see [`walk`]'s doc; each recursive step into an operand crosses one
+/// tree level, so it re-checks [`MAX_TRAVERSAL_DEPTH`] itself rather than
+/// relying on [`walk`]'s guard, which only sees the operands, not the operator
+/// nodes between them.
 #[allow(clippy::too_many_arguments)]
 fn boolean_chain(
     node: Node<'_>,
@@ -950,14 +1115,20 @@ fn boolean_chain(
     spec: &ComplexitySpec,
     nesting: u32,
     loop_nesting: u32,
+    depth: u32,
     tally: &mut Tally,
     parent_operator: Option<&str>,
     sequences: &mut u32,
     operators: &mut u32,
 ) {
+    if depth > MAX_TRAVERSAL_DEPTH {
+        tally.depth_capped();
+        return;
+    }
+
     let Some(operator) = logical_operator(node, spec) else {
         // A plain operand: it may still hold conditions of its own.
-        walk(node, source, spec, nesting, loop_nesting, tally);
+        walk(node, source, spec, nesting, loop_nesting, depth, tally);
         return;
     };
 
@@ -974,6 +1145,7 @@ fn boolean_chain(
             spec,
             nesting,
             loop_nesting,
+            depth + 1,
             tally,
             Some(operator),
             sequences,
@@ -2979,5 +3151,100 @@ class FooTest {
             let again = cognitive_complexity("src/lib.php", source).expect("php is mapped");
             assert_eq!(again, first, "run {run} drifted from run 0");
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Pathological depth — the traversal-depth cap
+    // -----------------------------------------------------------------
+
+    /// A source string with `depth` levels of `if true { ... }` nested inside
+    /// one function body — far beyond any plausible real function, and far
+    /// beyond [`MAX_TRAVERSAL_DEPTH`].
+    fn deeply_nested_if_source(depth: usize) -> String {
+        let mut source = String::from("fn deep() -> u32 {\n");
+        source.push_str(&"if true {\n".repeat(depth));
+        source.push_str("1\n");
+        source.push_str(&"}\n".repeat(depth));
+        source.push_str("}\n");
+        source
+    }
+
+    #[test]
+    fn pathological_nesting_does_not_crash_and_is_reported_as_partial() {
+        // Thousands of levels — two orders of magnitude past MAX_TRAVERSAL_DEPTH,
+        // and far past any plausible real function. Reaching this assertion at
+        // all (rather than a stack-overflow abort) is the point of the test.
+        let source = deeply_nested_if_source(5_000);
+
+        let file = cognitive_complexity("src/lib.rs", &source).expect("rust is a mapped language");
+        assert_eq!(
+            file.functions.len(),
+            1,
+            "the outer function itself is still found and scored, got {:?}",
+            file.functions
+        );
+        let scored = &file.functions[0];
+
+        assert!(
+            scored.is_partial,
+            "nesting past the traversal cap must report a partial result, never a fabricated \
+             score: {scored:?}"
+        );
+        assert!(
+            scored.exceeds_gates(),
+            "a partial result must never read as \"under the gates\": {scored:?}"
+        );
+    }
+
+    #[test]
+    fn nesting_well_under_the_traversal_cap_is_never_marked_partial() {
+        // A depth (well) below MAX_TRAVERSAL_DEPTH but far above every other
+        // fixture in this suite, to pin the cap does not clip ordinary — if
+        // unusually deep — real code.
+        let source = deeply_nested_if_source(32);
+
+        let file = cognitive_complexity("src/lib.rs", &source).expect("rust is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(
+            !scored.is_partial,
+            "32 levels of nesting sits far below the traversal cap: {scored:?}"
+        );
+        assert_eq!(scored.max_nesting_depth, 32);
+    }
+
+    #[test]
+    fn pinned_small_fixtures_are_unaffected_by_the_traversal_cap() {
+        // Every depth 1-4 fixture already pinned above must produce the exact
+        // same numbers with the cap in place — the cap changes nothing for any
+        // plausible real function.
+        let collect_line_tags = only_function(COLLECT_LINE_TAGS);
+        assert!(!collect_line_tags.is_partial);
+        assert_eq!(collect_line_tags.cognitive_score, 5);
+        assert_eq!(collect_line_tags.max_nesting_depth, 2);
+
+        let edit_line_markers = only_function(EDIT_LINE_MARKERS);
+        assert!(!edit_line_markers.is_partial);
+        assert_eq!(edit_line_markers.max_nesting_depth, 3);
+
+        let deep = only_function(
+            r#"
+fn deep(a: bool, b: bool, items: &[u8]) -> u8 {
+    if a {
+        for item in items {
+            while b {
+                if *item > 0 {
+                    return 1;
+                }
+            }
+        }
+    }
+    0
+}
+"#,
+        );
+        assert!(!deep.is_partial);
+        assert_eq!(deep.cognitive_score, 10);
+        assert_eq!(deep.max_nesting_depth, 4);
     }
 }

@@ -490,13 +490,24 @@ fn run_complexity(entry: &ProbeCatalogEntry, file_change: &FileChange) -> Vec<Pr
 /// The detail carries every computed number AND the gate each one is measured
 /// against, so the agent compares rather than counts, and so a finding can say
 /// "7 branches" instead of "numerous branches".
+///
+/// A [`FunctionComplexity::is_partial`] function gets a distinct detail
+/// instead: its walk hit the scorer's traversal-depth cap, so the numbers
+/// below are a lower bound, not the true complexity. `exceeds_gates()` always
+/// includes a partial function, so it still reaches this row rather than
+/// silently reading as "under the gates".
 fn complexity_row(path: &str, function: &FunctionComplexity) -> ProbeRow {
-    ProbeRow {
-        file_path: path.to_string(),
-        symbol: Some(function.name.clone()),
-        line: Some(function.start_line as u32),
-        similarity: None,
-        detail: Some(format!(
+    let detail = if function.is_partial {
+        format!(
+            "cognitive complexity NOT FULLY COMPUTED — this function nests deeper than the \
+             scorer's traversal-depth cap, so the walk stopped short; the numbers below are a \
+             lower bound, not the true complexity: cognitive complexity {} (gate \
+             {COGNITIVE_COMPLEXITY_THRESHOLD}), max condition-nesting depth {} (gate \
+             {NESTING_DEPTH_THRESHOLD})",
+            function.cognitive_score, function.max_nesting_depth,
+        )
+    } else {
+        format!(
             "cognitive complexity {} (gate {COGNITIVE_COMPLEXITY_THRESHOLD}), \
              max condition-nesting depth {} (gate {NESTING_DEPTH_THRESHOLD}), \
              {} branches, at most {} boolean operands in one condition, \
@@ -507,7 +518,14 @@ fn complexity_row(path: &str, function: &FunctionComplexity) -> ProbeRow {
             function.max_boolean_operands,
             function.max_loop_nesting,
             function.max_else_if_chain,
-        )),
+        )
+    };
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: Some(function.name.clone()),
+        line: Some(function.start_line as u32),
+        similarity: None,
+        detail: Some(detail),
     }
 }
 
