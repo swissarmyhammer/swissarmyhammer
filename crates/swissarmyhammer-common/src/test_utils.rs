@@ -4,6 +4,18 @@
 /// all SwissArmyHammer crates without creating circular dependencies. The utilities
 /// focus on creating isolated test environments and managing test processes.
 ///
+/// # Examples
+///
+/// ```
+/// use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+///
+/// fn main() -> std::io::Result<()> {
+///     let env = IsolatedTestEnvironment::new()?;
+///     let home = env.home_path();
+///     // `home` is an isolated HOME directory, safe to use in parallel tests
+///     assert!(home.exists());
+///     Ok(())
+/// }
 /// ```
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -45,6 +57,18 @@ fn lock_or_recover<T>(lock: &'static Mutex<T>, name: &str) -> MutexGuard<'static
         tracing::warn!("{name} lock was poisoned, recovering");
         poisoned.into_inner()
     })
+}
+
+/// Return an error if `path` does not exist.
+///
+/// Shared by [`CurrentDirGuard::new`]'s pre-lock and post-lock existence
+/// checks, which differ only in the error message, so the check has one
+/// source of truth instead of being duplicated per call site.
+fn check_dir_exists(path: &Path, msg: impl Into<String>) -> std::io::Result<()> {
+    if !path.exists() {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, msg.into()));
+    }
+    Ok(())
 }
 
 /// Retry a fallible operation up to [`MAX_RETRY_ATTEMPTS`] times, sleeping
@@ -164,15 +188,13 @@ impl CurrentDirGuard {
 
         // Verify the new directory exists BEFORE trying to acquire the mutex
         // This catches the case where a TempDir was created but deleted before we get here
-        if !new_dir_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!(
-                    "Target directory does not exist: {}",
-                    new_dir_path.display()
-                ),
-            ));
-        }
+        check_dir_exists(
+            new_dir_path,
+            format!(
+                "Target directory does not exist: {}",
+                new_dir_path.display()
+            ),
+        )?;
 
         let lock_guard = lock_or_recover(&CURRENT_DIR_LOCK, "Current directory");
 
@@ -196,15 +218,13 @@ impl CurrentDirGuard {
         };
 
         // Double-check the new directory still exists after acquiring the mutex
-        if !new_dir_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!(
-                    "Target directory was deleted while waiting for lock: {}",
-                    new_dir_path.display()
-                ),
-            ));
-        }
+        check_dir_exists(
+            new_dir_path,
+            format!(
+                "Target directory was deleted while waiting for lock: {}",
+                new_dir_path.display()
+            ),
+        )?;
 
         std::env::set_current_dir(new_dir_path)?;
 
@@ -287,6 +307,18 @@ impl ProcessGuard {
         Ok(self.0.wait_timeout(timeout)?.is_some())
     }
 
+    /// Send a kill signal and wait up to [`PROCESS_KILL_TIMEOUT_SECS`] for the
+    /// process to exit.
+    ///
+    /// Shared by [`terminate_gracefully`](Self::terminate_gracefully) (once
+    /// its graceful wait has timed out) and [`force_kill`](Self::force_kill),
+    /// so the kill-and-wait sequence has one source of truth.
+    fn kill_and_wait(&mut self) -> Result<(), ProcessGuardError> {
+        self.0.kill()?;
+        self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
+            .map(|_| ())
+    }
+
     /// Attempt to gracefully terminate the process with a timeout
     pub fn terminate_gracefully(
         &mut self,
@@ -299,16 +331,12 @@ impl ProcessGuard {
         }
 
         // If the process didn't exit gracefully, force kill it
-        self.0.kill()?;
-        self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
-            .map(|_| ())
+        self.kill_and_wait()
     }
 
     /// Force kill the process immediately
     pub fn force_kill(&mut self) -> Result<(), ProcessGuardError> {
-        self.0.kill()?;
-        self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
-            .map(|_| ())
+        self.kill_and_wait()
     }
 }
 
@@ -370,6 +398,14 @@ pub fn acquire_home_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// panicking -- callers that want retry-with-backoff or panic-on-exhaustion
 /// semantics apply those themselves (see [`IsolatedTestHome::new`]).
 ///
+/// Uses `TempDir::new()` directly rather than [`create_temp_dir`] -- this
+/// function is called from [`IsolatedTestHome::try_new`], which is documented
+/// as a single attempt with no retry, and both of its callers
+/// ([`IsolatedTestHome::new`] and [`IsolatedTestEnvironment::try_create`])
+/// already apply an outer [`retry_with_backoff`]. Calling the
+/// already-retrying [`create_temp_dir`] here would nest a second retry loop
+/// inside that outer one.
+///
 /// # Example
 ///
 /// ```ignore
@@ -379,7 +415,7 @@ pub fn acquire_home_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// // temp_dir is automatically cleaned up when dropped
 /// ```
 fn create_isolated_test_home() -> std::io::Result<(TempDir, PathBuf)> {
-    let temp_dir = create_temp_dir()?;
+    let temp_dir = TempDir::new()?;
     let home_path = temp_dir.path().to_path_buf();
 
     // Create mock SwissArmyHammer directory structure using centralized directory management

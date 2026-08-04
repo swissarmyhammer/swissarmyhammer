@@ -208,6 +208,66 @@ comments:
     - evidence: `cargo nextest run --workspace` — 13501 tests run, 13501 passed, 0 failed, 0 skipped (114.276s). `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, no warnings.
     - next: ready for review.
   timestamp: 2026-08-04T19:51:23.711916+00:00
+- actor: claude-code
+  id: 01kz75ahwbkeq6np1at442k2ds
+  text: |-
+    ### commit — changed
+    - evidence: 68b88e123 fix(swissarmyhammer-common): return io::Result from test_utils temp-dir helpers
+    - next: none
+  timestamp: 2026-08-04T19:52:03.211693+00:00
+- actor: claude-code
+  id: 01kz764qkt3503egw35cdyf708
+  text: |-
+    ### review — findings
+    - evidence: 4 findings — crates/swissarmyhammer-common/src/test_utils.rs:7, crates/swissarmyhammer-common/src/test_utils.rs:167, crates/swissarmyhammer-common/src/test_utils.rs:302, crates/swissarmyhammer-common/src/test_utils.rs:450
+    - scope: review sha HEAD~1..HEAD (commit 68b88e123)
+    - dropped: test_utils.rs:702 (hardcoded thread count 5 in test_concurrent_access) — never-refactor-existing-tests rule, pre-existing test code untouched by this commit
+    - next: task stays in review; a fix pass must address the 4 open findings
+  timestamp: 2026-08-04T20:06:21.050079+00:00
+- actor: claude-code
+  id: 01kz765h0tffb808x3p03hbd6v
+  text: |-
+    ### finish iteration 5 — findings
+    - implement: changed — create_isolated_test_home/create_temp_dir now return io::Result instead of panicking; IsolatedTestHome::new()/try_new() split for retry semantics
+    - test: green — cargo nextest run --workspace, 13501 passed; clippy clean
+    - commit: 68b88e123
+    - review: findings — crates/swissarmyhammer-common/src/test_utils.rs:7 (broken rustdoc code fence), :167 (duplicated dir-exists check), :302 (duplicated kill-and-wait sequence), :450 (nested retry bug: try_new() indirectly retries via create_temp_dir causing 3x3=9 attempts instead of 3)
+  timestamp: 2026-08-04T20:06:47.066058+00:00
+- actor: claude-code
+  id: 01kz76p2v77231jjb26394m4ec
+  text: |-
+    ### implement — changed
+
+    Fixed all 4 review findings from the 2026-08-04 14:52 round, all in `crates/swissarmyhammer-common/src/test_utils.rs`:
+
+    1. Module-level doc had an unclosed code fence and no example. Replaced with a closed `# Examples` block using `IsolatedTestEnvironment::new()?`. Verified: the module-level doctest now compiles and runs (`cargo test -p swissarmyhammer-common --doc`).
+    2. Extracted `fn check_dir_exists(path: &Path, msg: impl Into<String>) -> std::io::Result<()>` and switched both existence checks in `CurrentDirGuard::new` (pre-lock and post-lock) to call it.
+    3. Extracted `fn kill_and_wait(&mut self) -> Result<(), ProcessGuardError>` on `ProcessGuard`; `terminate_gracefully` calls it after its graceful wait times out, `force_kill` is now a one-line call to it.
+    4. Real bug: `create_isolated_test_home()` now calls `TempDir::new()?` directly instead of `create_temp_dir()?`, so `try_new()` is truly single-attempt as documented, eliminating the nested 3×3=9-attempt retry. `create_temp_dir()` remains a public utility with its own internal retry for direct/test callers, just no longer called from inside a `try_*` function that already sits inside an outer retry wrapper.
+
+    Also did a full whole-file re-read of the retry/lock/panic control flow afterward (not just grepping for magic numbers), specifically hunting for the same nested-retry-inside-retry class as finding 4. Confirmed: the only two retry wrappers are `IsolatedTestHome::new()` (wraps now-single-attempt `try_new`) and `IsolatedTestEnvironment::new()` (wraps `try_create`, which calls `IsolatedTestHome::try_new()` directly, not `new()`, avoiding double-wrapping). `create_temp_dir()`'s own retry is only reached from `#[cfg(test)]` tests now, never from inside another retry wrapper. No further nested-retry instances found.
+
+    One self-inflicted issue caught and fixed during this pass: my first edit for finding 2 accidentally inserted `check_dir_exists`'s function body between `retry_with_backoff`'s doc comment and its `fn` signature, orphaning both doc comments (a rustdoc attachment bug, not a compile error). Caught it on re-read and reordered so each function keeps its own doc comment.
+
+    Also caught and fixed a self-inflicted kanban tagging issue: the description text originally read "finding #4 above", which the kanban tool parsed as a `#4` tag marker, adding a spurious "4" tag to the task. Removed the `#` before "4" and reset tags explicitly back to `bug, cleanup, docs, skills` via `update task`.
+
+    Verification: `cargo check -p swissarmyhammer-common --lib --tests` clean, zero warnings; `cargo check --workspace --tests` clean, zero warnings; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed; `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo nextest run --workspace` -> 13501 passed, 0 skipped.
+
+    - evidence: crates/swissarmyhammer-common/src/test_utils.rs (module doc, check_dir_exists, kill_and_wait, create_isolated_test_home)
+    - next: ready for another review pass; task left in `doing` per process (not moved to review by this step)
+
+    step: implement
+    outcome: changed
+    evidence: 1 file — crates/swissarmyhammer-common/src/test_utils.rs
+    task: ^d525k4k
+  timestamp: 2026-08-04T20:15:49.607310+00:00
+- actor: claude-code
+  id: 01kz76vf6zc5vc8zpa5avan8yh
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run --workspace — 13501 tests run: 13501 passed, 0 failed, 0 skipped (3 slow, 1 leaky); cargo clippy --workspace --all-targets --all-features -- -D warnings — clean, exit 0
+    - next: none
+  timestamp: 2026-08-04T20:18:46.111125+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Three committed .skills/ snapshots have drifted from builtin/skills/
@@ -315,7 +375,7 @@ untrack decision — see comment left there.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:372` — `IsolatedTestHome::new()` duplicates `acquire_home_env_lock()`'s logic. -> Fixed: now calls `acquire_home_env_lock()` directly.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:430` — Hardcoded 3 retry attempts should be a named constant. -> Fixed: extracted `MAX_RETRY_ATTEMPTS`.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:433` — Same. -> Fixed alongside the above.
-- [x] `crates/swissarmyhammer-common/src/test_utils.rs:435` — Hardcoded 10ms retry backoff should be a named constant. -> Fixed: extracted `DIR_RETRY_BACKOFF_BASE_MS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:435` — Hardcoded 10ms retry backoff should be a named constant. -> Fixed via `DIR_RETRY_BACKOFF_BASE_MS`.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:564` — Same 3-attempts magic number. -> Fixed using `MAX_RETRY_ATTEMPTS`.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:566` — Same 10ms backoff magic number. -> Fixed using `DIR_RETRY_BACKOFF_BASE_MS`.
 - [x] `crates/swissarmyhammer-common/src/test_utils.rs:787` — Hardcoded 100ms test delay should be a named constant. -> Fixed: added `TEST_PROCESS_COMPLETION_WAIT_MS`, replaced all three occurrences.
@@ -355,4 +415,16 @@ Note: Two findings from this scan are dropped under the never-refactor-existing-
 
 Verification: `cargo check -p swissarmyhammer-common --lib --tests` clean, zero warnings; `cargo check --workspace --tests` clean, zero warnings; `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo nextest run --workspace` -> 13501 passed, 0 skipped.
 
+## Review Findings (2026-08-04 14:52)
+
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:7` — Module-level documentation opens a code block with `/// ``` ` but never closes it, which will cause a rustdoc parsing error. Additionally, the documentation rule requires crate-level docs to include concrete examples showing common use cases, but this module provides only descriptive text without any working code examples. Replace line 7 with a complete code example showing common module usage. -> Fixed: replaced the module doc with a closed code-fence example under a `# Examples` heading, using `IsolatedTestEnvironment::new()?` / `home_path()` / `assert!(home.exists())` inside `fn main() -> std::io::Result<()> { ... Ok(()) }`. Verified with `cargo test -p swissarmyhammer-common --doc`: the module-level doctest now compiles and passes (previously it could not even be collected due to the unclosed fence).
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:167` — Directory existence checks at lines 167-175 and 199-207 are near-identical blocks that differ only in the error message. Both check `!path.exists()`, construct a `NotFound` error with a formatted message, and return early. This is one function parameterized by the message. Extract a helper function: `fn check_dir_exists(path: &Path, msg: impl Into<String>) -> io::Result<()> { if !path.exists() { return Err(io::Error::new(io::ErrorKind::NotFound, msg.into())); } Ok(()) }` and call it at both sites with the appropriate message string. -> Fixed: added `fn check_dir_exists(path: &Path, msg: impl Into<String>) -> std::io::Result<()>` exactly as specified, and switched both existence checks in `CurrentDirGuard::new` (pre-lock and post-lock) to call it with their respective messages.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:302` — The kill-and-wait sequence at lines 302-304 (in `terminate_gracefully`) is verbatim identical to lines 309-311 (in `force_kill`). Both execute `self.0.kill()?; self.wait_for_exit(...).map(|_| ())` with the same timeout constant. Extract a helper method `fn kill_and_wait(&mut self) -> Result<(), ProcessGuardError>` that encapsulates both lines, then call it from both `terminate_gracefully` (after the graceful timeout fails) and `force_kill`. -> Fixed: added `fn kill_and_wait(&mut self) -> Result<(), ProcessGuardError>` doing exactly the kill-then-wait sequence; `terminate_gracefully` now calls it after its graceful wait times out, and `force_kill` is now just a one-line call to it.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:450` — try_new() is documented (lines 445–446) as 'single attempt, no retry', but the implementation indirectly retries through create_isolated_test_home() (line 455) → create_temp_dir() (line 382) → retry_with_backoff() (line 639). This violates the invariant that try_* functions do not retry internally; retry is delegated to the caller. When IsolatedTestHome::new() (line 439) wraps try_new() in its own retry_with_backoff(), the result is nested retries—up to 3 (internal) × 3 (outer) = 9 total TempDir::new() attempts instead of the documented/intended 3—wasting resources and contradicting the contract. Change create_isolated_test_home() (line 382) from create_temp_dir()? to TempDir::new()?, so that try_new() remains truly single-attempt as documented. Centralize all retry logic in the dedicated wrappers (IsolatedTestHome::new() and IsolatedTestEnvironment::new()). Keep create_temp_dir() as a public utility with internal retry for direct callers, but do not call it from try_* functions where the caller already handles retry. -> Fixed: `create_isolated_test_home()` now calls `TempDir::new()?` directly instead of `create_temp_dir()?`. `try_new()` is now truly single-attempt with no internal retry, matching its doc contract. `create_temp_dir()` is unchanged and remains available as a public utility with its own internal retry for direct/test callers; it is no longer called from any `try_*` function that already sits inside an outer retry wrapper.
+
+Final whole-file re-read of the retry/lock/panic control flow (not just a grep for magic numbers), specifically hunting for the same nested-retry-inside-retry class as finding above: the only two retry wrappers in the file are `IsolatedTestHome::new()` (wraps `try_new`, which is now single-attempt) and `IsolatedTestEnvironment::new()` (wraps `try_create`, which calls `IsolatedTestHome::try_new()` directly -- not `new()` -- so it is not double-wrapped). `create_temp_dir()` keeps its own internal `retry_with_backoff` but is now called only from `#[cfg(test)]` tests directly, never from inside another retry wrapper. `IsolatedTestEnvironment::try_create()`'s own working-directory temp dir uses `TempDir::new()?` directly (not `create_temp_dir()`), so no nesting there either. No other instance of an inner retry wrapper nested inside an outer one was found.
+
+Note: `crates/swissarmyhammer-common/src/test_utils.rs:702` (hardcoded thread count 5 in `test_concurrent_access`) is dropped under the never-refactor-existing-tests rule. The subject is pre-existing test code. This commit did not touch it.
+
+Verification: `cargo check -p swissarmyhammer-common --lib --tests` clean, zero warnings; `cargo check --workspace --tests` clean, zero warnings; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed; `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo nextest run --workspace` -> 13501 passed, 0 skipped.
 #bug #cleanup #docs #skills
