@@ -66,7 +66,10 @@ fn lock_or_recover<T>(lock: &'static Mutex<T>, name: &str) -> MutexGuard<'static
 /// source of truth instead of being duplicated per call site.
 fn check_dir_exists(path: &Path, msg: impl Into<String>) -> std::io::Result<()> {
     if !path.exists() {
-        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, msg.into()));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            msg.into(),
+        ));
     }
     Ok(())
 }
@@ -426,7 +429,9 @@ fn create_isolated_test_home() -> std::io::Result<(TempDir, PathBuf)> {
     std::fs::create_dir_all(&dot_prompts_dir)?;
 
     for subdir in ["workflows", "todo", "issues", "issues/complete"] {
-        sah_dir.ensure_subdir(subdir).map_err(std::io::Error::other)?;
+        sah_dir
+            .ensure_subdir(subdir)
+            .map_err(std::io::Error::other)?;
     }
 
     Ok((temp_dir, home_path))
@@ -754,8 +759,7 @@ mod tests {
 
     #[test]
     fn test_workspace_root_from_manifest_dir() {
-        let root =
-            workspace_root_from_manifest_dir("/repo/crates/swissarmyhammer-skills");
+        let root = workspace_root_from_manifest_dir("/repo/crates/swissarmyhammer-skills");
         assert_eq!(root, PathBuf::from("/repo"));
 
         let root = workspace_root_from_manifest_dir("/repo/apps/kanban-cli");

@@ -103,9 +103,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 #[cfg(test)]
 use swissarmyhammer_common::SwissarmyhammerDirectory;
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 

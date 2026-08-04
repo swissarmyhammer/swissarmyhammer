@@ -1255,7 +1255,10 @@ mod tests {
 
         let mut set_args = serde_json::Map::new();
         set_args.insert("op".to_string(), serde_json::json!("set ralph"));
-        set_args.insert("session_id".to_string(), serde_json::json!("server-session"));
+        set_args.insert(
+            "session_id".to_string(),
+            serde_json::json!("server-session"),
+        );
         set_args.insert(
             "instruction".to_string(),
             serde_json::json!("Finish all ready kanban tasks"),

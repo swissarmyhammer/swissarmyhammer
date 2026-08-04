@@ -162,8 +162,7 @@ fn collect_yaml_errors_from_dir(dir: &std::path::Path) -> Vec<(std::path::PathBu
 
     iter_markdown_files(dir)
         .filter_map(|entry| {
-            validate_frontmatter_file(entry.path())
-                .map(|error| (entry.path().to_path_buf(), error))
+            validate_frontmatter_file(entry.path()).map(|error| (entry.path().to_path_buf(), error))
         })
         .collect()
 }

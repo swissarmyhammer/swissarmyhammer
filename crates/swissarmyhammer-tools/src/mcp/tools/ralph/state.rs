@@ -599,10 +599,8 @@ mod tests {
     fn age_file(base: &Path, session_id: &str, secs_ago: u64) {
         let path = base.join(".ralph").join(format!("{session_id}.md"));
         let file = fs::File::options().write(true).open(&path).unwrap();
-        file.set_modified(
-            std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago),
-        )
-        .unwrap();
+        file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago))
+            .unwrap();
     }
 
     #[test]
@@ -639,7 +637,11 @@ mod tests {
         write_ralph(tmp.path(), "session-valid", &state_with("valid")).unwrap();
         age_file(tmp.path(), "session-valid", 3600);
         // Newer but unparseable — must not shadow the valid state
-        fs::write(tmp.path().join(".ralph").join("garbage.md"), "no frontmatter").unwrap();
+        fs::write(
+            tmp.path().join(".ralph").join("garbage.md"),
+            "no frontmatter",
+        )
+        .unwrap();
 
         let (sid, _) = find_active_ralph(tmp.path()).unwrap().unwrap();
         assert_eq!(sid, "session-valid");
@@ -665,7 +667,10 @@ mod tests {
         write_ralph(tmp.path(), "session-b", &state_with("b")).unwrap();
 
         let cleared = clear_all_ralph(tmp.path()).unwrap();
-        assert_eq!(cleared, vec!["session-a".to_string(), "session-b".to_string()]);
+        assert_eq!(
+            cleared,
+            vec!["session-a".to_string(), "session-b".to_string()]
+        );
         assert!(find_active_ralph(tmp.path()).unwrap().is_none());
     }
 
