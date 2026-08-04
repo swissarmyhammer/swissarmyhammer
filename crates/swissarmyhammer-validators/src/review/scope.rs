@@ -1677,8 +1677,9 @@ async fn run_probe_cache(
         return Ok(Vec::new());
     }
     let names: Vec<String> = union.into_iter().collect();
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let change = ProbeChange::new(change_entities.to_vec()).with_sources(sources);
-    let results = run_probes(&names, &change, conn, embedder).await?;
+    let results = run_probes(&name_refs, &change, conn, embedder).await?;
     Ok(results.results)
 }
 

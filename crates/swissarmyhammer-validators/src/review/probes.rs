@@ -169,47 +169,68 @@ pub fn probe_exists(name: &str) -> bool {
 /// with its `(fact)`/`(candidate)` [kind](ProbeKind) so the adversary knows which
 /// rows are deterministic facts; fan-out omits it.
 pub(crate) fn render_probe_evidence(out: &mut String, results: &[ProbeResult], show_kind: bool) {
-    use std::fmt::Write as _;
-
     if results.is_empty() {
         out.push_str("_No probe evidence._\n\n");
         return;
     }
     for result in results {
-        if show_kind {
-            let kind = match result.kind {
-                ProbeKind::Fact => "fact",
-                ProbeKind::Candidate => "candidate",
-            };
-            let _ = writeln!(
-                out,
-                "- probe `{}` ({kind}) on `{}`:",
-                result.name, result.target
-            );
-        } else {
-            let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
-        }
-        if result.rows.is_empty() {
-            out.push_str("  - (no rows)\n");
-            continue;
-        }
-        for row in &result.rows {
-            out.push_str("  - ");
-            out.push_str(&row.file_path);
-            if let Some(line) = row.line {
-                let _ = write!(out, ":{line}");
-            }
-            if let Some(symbol) = &row.symbol {
-                let _ = write!(out, " `{symbol}`");
-            }
-            if let Some(similarity) = row.similarity {
-                let _ = write!(out, " @ {similarity:.2}");
-            }
-            if let Some(detail) = &row.detail {
-                let _ = write!(out, " — {detail}");
-            }
-            out.push('\n');
-        }
+        render_result_header(out, result, show_kind);
+        render_result_rows(out, result);
+    }
+    out.push('\n');
+}
+
+/// Render one result's header line (`- probe \`name\` [(kind)] on \`target\`:`).
+///
+/// `show_kind` is verify's only divergence from fan-out: it annotates the
+/// header with the probe's `(fact)`/`(candidate)` [kind](ProbeKind).
+fn render_result_header(out: &mut String, result: &ProbeResult, show_kind: bool) {
+    use std::fmt::Write as _;
+
+    if show_kind {
+        let kind = match result.kind {
+            ProbeKind::Fact => "fact",
+            ProbeKind::Candidate => "candidate",
+        };
+        let _ = writeln!(
+            out,
+            "- probe `{}` ({kind}) on `{}`:",
+            result.name, result.target
+        );
+    } else {
+        let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
+    }
+}
+
+/// Render one result's evidence rows, or the `(no rows)` sentinel when empty.
+fn render_result_rows(out: &mut String, result: &ProbeResult) {
+    if result.rows.is_empty() {
+        out.push_str("  - (no rows)\n");
+        return;
+    }
+    for row in &result.rows {
+        render_probe_row(out, row);
+    }
+}
+
+/// Render one evidence row (`file_path:line \`symbol\` @ {sim:.2} — {detail}`),
+/// eliding each optional field that is absent.
+fn render_probe_row(out: &mut String, row: &ProbeRow) {
+    use std::fmt::Write as _;
+
+    out.push_str("  - ");
+    out.push_str(&row.file_path);
+    if let Some(line) = row.line {
+        let _ = write!(out, ":{line}");
+    }
+    if let Some(symbol) = &row.symbol {
+        let _ = write!(out, " `{symbol}`");
+    }
+    if let Some(similarity) = row.similarity {
+        let _ = write!(out, " @ {similarity:.2}");
+    }
+    if let Some(detail) = &row.detail {
+        let _ = write!(out, " — {detail}");
     }
     out.push('\n');
 }
@@ -374,7 +395,7 @@ async fn embed(embedder: &dyn TextEmbedder, text: &str) -> Result<Vec<f32>, AvpE
 /// embedder fails. A probe that simply finds nothing is *not* an error — it
 /// yields a [`ProbeResult`] with empty `rows`.
 pub async fn run_probes(
-    probe_names: &[String],
+    probe_names: &[&str],
     file_change: &FileChange,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
@@ -415,12 +436,12 @@ pub async fn run_probes(
 }
 
 /// Resolve probe names to catalog entries, erroring on the first unknown name.
-fn resolve_entries(probe_names: &[String]) -> Result<Vec<&'static ProbeCatalogEntry>, AvpError> {
+fn resolve_entries(probe_names: &[&str]) -> Result<Vec<&'static ProbeCatalogEntry>, AvpError> {
     probe_names
         .iter()
         .map(|name| {
             catalog_entry(name).ok_or_else(|| AvpError::Validator {
-                validator: name.clone(),
+                validator: name.to_string(),
                 message: format!(
                     "unknown probe '{name}'; the catalog defines: {}",
                     CATALOG
@@ -857,7 +878,7 @@ mod tests {
         let embedder = MockEmbedder::new(DIM);
         let change = FileChange::default();
 
-        let err = run_probes(&["bogus".to_string()], &change, &conn, &embedder)
+        let err = run_probes(&["bogus"], &change, &conn, &embedder)
             .await
             .unwrap_err();
 
@@ -918,7 +939,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
         let change = FileChange::default()
             .with_sources(BTreeMap::from([(path.to_string(), source.to_string())]));
 
-        let results = run_probes(&["complexity".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["complexity"], &change, &conn, &embedder)
             .await
             .expect("the complexity probe runs");
 
@@ -1003,7 +1024,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
         let embedder = MockEmbedder::new(DIM);
         let change = FileChange::new(vec![added_fn("brand_new_fn", "src/new.rs")]);
 
-        let results = run_probes(&["callers".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["callers"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1037,7 +1058,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(body("target_fn")),
         }]);
 
-        let results = run_probes(&["callers".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["callers"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1071,7 +1092,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(shared.clone()),
         }]);
 
-        let results = run_probes(&["duplicates".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["duplicates"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1117,7 +1138,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             },
         ]);
 
-        let results = run_probes(&["duplicates".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["duplicates"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1181,7 +1202,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(reimplemented.clone()),
         }]);
 
-        let results = run_probes(&["similar".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["similar"], &change, &conn, &embedder)
             .await
             .unwrap();
 
