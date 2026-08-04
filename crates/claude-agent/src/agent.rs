@@ -1373,6 +1373,12 @@ impl ClaudeAgent {
         // whatever the agent's live config holds at fork time.
         self.store_extra_args_in_session(&session_id)?;
 
+        // Persist the agent's currently configured `skip_init_trigger` onto
+        // the live session, for the same reason: a later `session/fork` must
+        // replay the PARENT's captured value, not whatever the agent's live
+        // config holds at fork time.
+        self.store_skip_init_trigger_in_session(&session_id)?;
+
         // Register per-session notification channel
         self.notification_sender
             .register_session(&session_id.to_string());
@@ -1514,6 +1520,28 @@ impl ClaudeAgent {
         let extra_args = self.config.claude.extra_args.clone();
         self.persist_session_field(session_id, |session| {
             session.extra_args = extra_args;
+        })
+    }
+
+    /// Persist the agent's currently configured `skip_init_trigger` onto the
+    /// live session.
+    ///
+    /// Mirrors [`Self::store_extra_args_in_session`]: `skip_init_trigger`
+    /// always comes from `self.config.claude.skip_init_trigger` at the
+    /// moment the session is created, so it is captured unconditionally.
+    /// `session/fork` reads this captured value back from the parent
+    /// [`Session`](crate::session::Session) rather than the agent's live
+    /// config, so a config change between the parent's creation and a later
+    /// fork cannot silently restore the "hi" init trigger for a review
+    /// session's fork — see `crate::session_fork`'s "Prefix caching" module
+    /// doc.
+    pub(crate) fn store_skip_init_trigger_in_session(
+        &self,
+        session_id: &crate::session::SessionId,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let skip_init_trigger = self.config.claude.skip_init_trigger;
+        self.persist_session_field(session_id, |session| {
+            session.skip_init_trigger = skip_init_trigger;
         })
     }
 

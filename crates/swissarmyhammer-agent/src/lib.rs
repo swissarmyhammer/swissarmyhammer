@@ -752,15 +752,14 @@ fn claude_agent_config_from_model(
     // run's resolved model is provable in the `.sah` logs even if the
     // subprocess argv line never lands.
     tracing::info!("Building claude agent (extra_args={:?})", extra_args);
-    let mut agent_config = build_claude_agent_config(
+    build_claude_agent_config(
         mcp_config,
         options.ephemeral,
         options.tools_override.clone(),
         options.auto_allow_all,
         extra_args,
-    );
-    agent_config.claude.skip_init_trigger = options.skip_init_trigger;
-    agent_config
+        options.skip_init_trigger,
+    )
 }
 
 /// Build the `claude_agent::AgentConfig` for a Claude ACP agent.
@@ -791,6 +790,7 @@ fn build_claude_agent_config(
     tools_override: Option<String>,
     auto_allow_all: bool,
     extra_args: Vec<String>,
+    skip_init_trigger: bool,
 ) -> claude_agent::AgentConfig {
     let auto_allow_tool_patterns = resolve_auto_allow_patterns(auto_allow_all);
 
@@ -819,6 +819,7 @@ fn build_claude_agent_config(
     agent_config.claude.ephemeral = ephemeral;
     agent_config.claude.tools_override = tools_override;
     agent_config.claude.extra_args = extra_args;
+    agent_config.claude.skip_init_trigger = skip_init_trigger;
     agent_config
 }
 
@@ -1573,7 +1574,7 @@ mod tests {
     #[test]
     fn test_build_claude_agent_config_threads_auto_allow_all_in_both_branches() {
         // No-MCP branch.
-        let no_mcp = build_claude_agent_config(None, false, None, true, Vec::new());
+        let no_mcp = build_claude_agent_config(None, false, None, true, Vec::new(), false);
         assert_eq!(
             no_mcp.auto_allow_tool_patterns,
             vec!["*".to_string()],
@@ -1587,6 +1588,7 @@ mod tests {
             None,
             true,
             Vec::new(),
+            false,
         );
         assert_eq!(
             with_mcp.auto_allow_tool_patterns,
@@ -1600,7 +1602,7 @@ mod tests {
     /// caller relies on.
     #[test]
     fn test_build_claude_agent_config_default_is_mcp_only_in_both_branches() {
-        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new());
+        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new(), false);
         assert_eq!(no_mcp.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
 
         let with_mcp = build_claude_agent_config(
@@ -1609,6 +1611,7 @@ mod tests {
             None,
             false,
             Vec::new(),
+            false,
         );
         assert_eq!(
             with_mcp.auto_allow_tool_patterns,
@@ -1626,6 +1629,7 @@ mod tests {
             None,
             false,
             Vec::new(),
+            false,
         );
         assert_eq!(with_mcp.mcp_servers.len(), 1);
         match &with_mcp.mcp_servers[0] {
@@ -1636,7 +1640,7 @@ mod tests {
             _ => panic!("expected an HTTP MCP server variant"),
         }
 
-        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new());
+        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new(), false);
         assert!(
             no_mcp.mcp_servers.is_empty(),
             "no MCP config must attach no servers"
@@ -1647,11 +1651,12 @@ mod tests {
     /// Claude config in both branches.
     #[test]
     fn test_build_claude_agent_config_threads_ephemeral_and_tools_override() {
-        let custom = build_claude_agent_config(None, true, Some(String::new()), false, Vec::new());
+        let custom =
+            build_claude_agent_config(None, true, Some(String::new()), false, Vec::new(), false);
         assert!(custom.claude.ephemeral);
         assert_eq!(custom.claude.tools_override, Some(String::new()));
 
-        let plain = build_claude_agent_config(None, false, None, false, Vec::new());
+        let plain = build_claude_agent_config(None, false, None, false, Vec::new(), false);
         assert!(!plain.claude.ephemeral);
         assert_eq!(plain.claude.tools_override, None);
     }
@@ -1667,6 +1672,7 @@ mod tests {
             None,
             false,
             vec!["--model".to_string(), "haiku".to_string()],
+            false,
         );
         assert_eq!(
             result.claude.extra_args,
@@ -1678,8 +1684,21 @@ mod tests {
     /// preserving today's behavior for a chat scope that spawns plain `claude`.
     #[test]
     fn test_build_claude_agent_config_empty_extra_args() {
-        let result = build_claude_agent_config(None, false, None, false, Vec::new());
+        let result = build_claude_agent_config(None, false, None, false, Vec::new(), false);
         assert!(result.claude.extra_args.is_empty());
+    }
+
+    /// `skip_init_trigger` is carried through onto the nested Claude config
+    /// like `ephemeral`, `tools_override`, and `extra_args` — set INSIDE
+    /// `build_claude_agent_config` from its own parameter, not by the caller
+    /// mutating the returned config afterward.
+    #[test]
+    fn test_build_claude_agent_config_threads_skip_init_trigger() {
+        let skipped = build_claude_agent_config(None, false, None, false, Vec::new(), true);
+        assert!(skipped.claude.skip_init_trigger);
+
+        let not_skipped = build_claude_agent_config(None, false, None, false, Vec::new(), false);
+        assert!(!not_skipped.claude.skip_init_trigger);
     }
 
     /// The wiring `create_agent_with_options` performs: take the switches from a
@@ -1695,7 +1714,7 @@ mod tests {
         let extra_args = config.claude_args();
         assert_eq!(extra_args, vec!["--model".to_string(), "haiku".to_string()]);
 
-        let built = build_claude_agent_config(None, false, None, false, extra_args);
+        let built = build_claude_agent_config(None, false, None, false, extra_args, false);
         assert_eq!(
             built.claude.extra_args,
             vec!["--model".to_string(), "haiku".to_string()]

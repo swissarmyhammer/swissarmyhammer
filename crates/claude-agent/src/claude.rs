@@ -1917,6 +1917,13 @@ mod tests {
         }
     }
 
+    /// Maximum number of 50ms polling attempts while waiting for the fake
+    /// `claude` script (spawned by
+    /// `spawn_process_and_consume_init_skips_trigger_when_configured`) to
+    /// start and create its stdin-capture file. Bounds the wait at 2 seconds
+    /// so a genuine failure to spawn fails the test instead of hanging it.
+    const CAPTURE_FILE_POLLING_ATTEMPTS: usize = 40;
+
     /// `skip_init_trigger: true` must skip BOTH the "hi" init-trigger write
     /// and the blocking init-message read: `spawn_process_and_consume_init`
     /// writes no line to the spawned process's stdin.
@@ -1968,7 +1975,7 @@ mod tests {
         );
 
         // Give the fake script a moment to start and create the capture file.
-        for _ in 0..40 {
+        for _ in 0..CAPTURE_FILE_POLLING_ATTEMPTS {
             if capture_file.exists() {
                 break;
             }

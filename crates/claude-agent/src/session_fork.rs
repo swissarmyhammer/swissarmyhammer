@@ -285,6 +285,7 @@ impl ClaudeAgent {
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
             .extra_args(parent.extra_args.clone())
+            .skip_init_trigger(parent.skip_init_trigger)
             .build()
     }
 
@@ -822,6 +823,50 @@ mod tests {
              whatever the live agent config holds at fork time, or a config \
              change between parent creation and fork silently changes the \
              fork's model and breaks the cache match"
+        );
+    }
+
+    /// A forked child's spawn config must carry the parent's OWN
+    /// `skip_init_trigger` as captured at the parent's `session/new` time —
+    /// not whatever `skip_init_trigger` the current live agent config
+    /// happens to hold at fork time. This is the same gap class
+    /// `test_fork_spawn_config_carries_parent_extra_args_not_live_config`
+    /// guards for `extra_args`: a review session is created with
+    /// `skip_init_trigger: true`, and a forked child of that review session
+    /// must NOT silently pick up `false` from a live config that has since
+    /// diverged (or belongs to a different agent instance by fork time).
+    #[tokio::test]
+    #[serial]
+    async fn test_fork_spawn_config_carries_parent_skip_init_trigger_not_live_config() {
+        let _state = StateDirGuard::new();
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = headless_config(false);
+        // The agent's CURRENT live config has `skip_init_trigger: false`,
+        // simulating a config reload (or a different agent config live by
+        // fork time) that diverges from what the parent session captured.
+        config.claude.skip_init_trigger = false;
+        let (agent, _rx) = ClaudeAgent::new(config).await.expect("headless agent");
+        let parent_id = primed_parent(&agent, cwd.path());
+        agent
+            .session_manager
+            .update_session(&parent_id, |session| {
+                session.skip_init_trigger = true;
+            })
+            .expect("set parent skip_init_trigger");
+
+        let parent = agent
+            .session_manager
+            .get_session(&parent_id)
+            .expect("lookup")
+            .expect("parent must exist");
+
+        let spawn_config = agent.build_fork_spawn_config(&parent, SessionId::new());
+
+        assert!(
+            spawn_config.skip_init_trigger,
+            "a forked child must carry the PARENT's captured skip_init_trigger, \
+             not whatever the live agent config holds at fork time, or a fork of \
+             a review session silently restores the \"hi\" init trigger"
         );
     }
 

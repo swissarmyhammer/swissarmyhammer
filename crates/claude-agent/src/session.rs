@@ -252,6 +252,21 @@ pub struct Session {
     /// module doc for the fuller explanation.
     #[serde(default)]
     pub extra_args: Vec<String>,
+    /// Whether this session's Claude CLI process was spawned with the "hi"
+    /// init-trigger turn suppressed, captured from
+    /// [`crate::config::ClaudeConfig::skip_init_trigger`] at `session/new`
+    /// time.
+    ///
+    /// Persisted here for the same reason as [`Session::extra_args`]:
+    /// `session/fork` ([`crate::session_fork::ClaudeAgent::fork_session`])
+    /// spawns the forked child's CLI process from THIS session's captured
+    /// value, not from whatever `skip_init_trigger` the agent's live config
+    /// holds at fork time. A review session is spawned with
+    /// `skip_init_trigger: true`; reading the live config instead would let
+    /// a config change between this session's creation and a later fork
+    /// silently spawn the fork with the "hi" trigger restored.
+    #[serde(default)]
+    pub skip_init_trigger: bool,
 }
 
 impl Session {
@@ -289,6 +304,7 @@ impl Session {
             title: None,
             system_prompt: None,
             extra_args: Vec::new(),
+            skip_init_trigger: false,
         }
     }
 
