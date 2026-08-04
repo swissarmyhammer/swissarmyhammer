@@ -27,8 +27,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T05:53:39.132889+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5ng7xwpw89femq70nmwrdc
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — investigated before choosing (per task instruction). First hypothesis (an unrelated file's commit shifts blame) was tested and REJECTED — git2's blame walk already handles that correctly. Real bug found: /finish's per-iteration `git add -A && commit` sweeps a still-open finding's own uncommitted line into a commit made to resolve a DIFFERENT finding in the SAME file, flipping that line's blame from worktree to a real sha even though its bytes never changed. Chose Option A (pin blame_at to merge-base with main/master via working_tree_blame_anchor, falling back to old HEAD-bound behavior when no anchor exists) over Option B (drop the sha column) — rejected B because the column has demonstrated value used throughout today's entire /finish batch for blame-checking findings (^k12rn64).
+    - test: green — swissarmyhammer-validators 364 passed; fmt clean; clippy clean; full rdeps(swissarmyhammer-validators) run for real: 3071 passed, 0 failed
+    - commit: be66a8826
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T05:56:17.980663+00:00
+- actor: claude-code
+  id: 01kz5nzc10a2689c72q8nqb917
+  text: |-
+    ### review — clean
+    - evidence: review sha be66a8826~1..be66a8826 — engine returned 2 confirmed findings, both at crates/swissarmyhammer-validators/src/review/scope.rs:2015-2016 (hardcoded padding-loop count `30`); blame-checked against be66a8826 — both lines predate this commit (June 2026, unrelated pre-existing test `working_scope_groups_duplicate_under_validator_with_full_source`), not touched by this diff. Dropped per pre-existing-line check and the existing-test-refactor exception. Zero new findings.
+    - next: none — task moved to done
+  timestamp: 2026-08-04T06:04:33.696800+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9c80
 title: blame shas in the review prime drift the prompt between finish-loop iterations
 ---
 Found while investigating ^k5wsxh0.

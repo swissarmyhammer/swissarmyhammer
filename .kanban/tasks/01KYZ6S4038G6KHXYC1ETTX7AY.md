@@ -129,8 +129,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-03T18:08:05.118720+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz4d5m5h94c340kh0byrmd8h
+  text: |-
+    ### finish iteration 3 — changed
+    - implement: changed — all 3 round-2 findings fixed: builtin_validators.rs test now asserts the nine moved rule files actually landed in the two merged sets, not just that the sets exist; RetiredFile + RetiredSet gained PartialEq/Eq derives; retired_validators module now has a doc comment.
+    - test: green — fmt clean, clippy clean, cargo test -p mirdan -p swissarmyhammer-validators 412+2 and 362+2 doctests passed, full rdeps(swissarmyhammer-validators) or rdeps(mirdan) run for real: 3545 passed, 0 skipped, 0 failed
+    - commit: c535bb75e
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T18:11:27.025406+00:00
+- actor: claude-code
+  id: 01kz4ds5s2gvz581jmn1ttbadk
+  text: |-
+    ### review — clean
+    - evidence: `review sha c535bb75e~1..c535bb75e`. Engine ran to completion (0 failed, 0 skipped). sah --version 0.17.0/fba8183656f9, matching round 2 — no stale-process signal. Returned 60 confirmed findings, all "missing doc comment" flags on `pub mod` declarations in `crates/mirdan/src/lib.rs` (lines 12,13,14,15,17-36,42-48). Blame-checked every one against `c535bb75e` via `git blame -L 1,50 c535bb75e -- crates/mirdan/src/lib.rs`: all 60 blame to commits from Feb-June 2026, pre-existing, untouched by this diff. None cite line 37 (the doc comment this commit actually added) or anything in `builtin_validators.rs`/`retired_validators.rs`. 0 new findings survive blame-check. All 3 round-2 findings remain checked `[x]`.
+    - next: done
+  timestamp: 2026-08-03T18:22:07.650439+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9580
 title: Merge nine single-rule builtin validators into code-security and code-hygiene
 ---
 ## What

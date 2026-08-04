@@ -15,8 +15,24 @@ comments:
     - Doc-only change confirmed: `git diff` on the two touched files shows only comment text changed, no code lines. Zero behavior change.
     - next: /review
   timestamp: 2026-08-04T06:29:32.021867+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5qfz7vvz9z1653kh4t12ze
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — fixed both cited stale comments plus one more found in the sweep (FileWork::source_slice() doc), all replacing stale "hard error" language with the actual skip-and-report behavior. Verified every remaining "hard error" mention in the review directory already states the current behavior correctly. Confirmed doc-only diff — no code lines changed.
+    - test: green — swissarmyhammer-validators 366 passed (unchanged); fmt clean; clippy clean; full rdeps(swissarmyhammer-validators) run for real: 3073 passed (unchanged)
+    - commit: b4feed65c
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T06:31:06.235274+00:00
+- actor: claude-code
+  id: 01kz5qrp5psgaea7msetm2at57
+  text: |-
+    ### review — clean
+    - evidence: `review sha b4feed65c~1..b4feed65c` returned 1 raw finding (`scope.rs:2018`, "hardcoded padding size 30 should be a named constant"). Blame-checked: that line traces to commit `945a7583ff` (2026-06-09), pre-existing test setup code untouched by `b4feed65c`. Dropped per the blame-check requirement and the never-refactor-existing-tests rule. Net new findings: 0.
+    - next: none — task moved to done
+  timestamp: 2026-08-04T06:35:51.862882+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9e80
 title: Two doc comments still claim batch_work_list hard-errors on an oversized file
 ---
 Found while investigating ^k5wsxh0.

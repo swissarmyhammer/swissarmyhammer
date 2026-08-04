@@ -75,8 +75,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T00:16:17.351144+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz525jqrw9cskdgt28f6eegh
+  text: |-
+    ### finish iteration 2 — changed
+    - implement: changed — consolidated argv-extraction into a shared crate::test_support::command_args helper: removed the duplicate local fn from claude_process.rs's test module (all 12 pre-existing call sites unaffected), session_fork.rs's new test now calls the shared helper instead of inlining extraction.
+    - test: green — cargo test -p claude-agent --lib 761 passed (both new tests individually confirmed green); fmt clean; clippy clean; full rdeps(claude-agent) or rdeps(swissarmyhammer-validators) run for real: 4400 passed, 0 skipped
+    - commit: f83c80044
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T00:18:25.656715+00:00
+- actor: claude-code
+  id: 01kz52grpjt1pb7k81h2dfycap
+  text: |-
+    ### review — clean
+    - evidence: `review sha f83c80044~1..f83c80044` ran successfully (7 raw findings, 7 confirmed). Blame-checked all 7 against `f83c80044`: `claude_process.rs:282` → `0479a4f990`; `claude_process.rs:538,611,621` → `b424f622d7`; `claude_process.rs:737` → `cf03df67a1`; `claude_process.rs:1128,1187` → `646b63b739`. All predate this commit, which only touched the test module (added `use crate::test_support::command_args;`, removed the local `command_args` fn definition). Zero new findings. All prior `## Review Findings` items already checked.
+    - next: none — task done
+  timestamp: 2026-08-04T00:24:32.210729+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9880
 title: Review fan-out forks spawn `claude` without `--model`; only the primed session carries the tier
 ---
 ## What

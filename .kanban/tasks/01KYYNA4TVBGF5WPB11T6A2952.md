@@ -18,8 +18,29 @@ comments:
     - Verification: `cargo nextest run -p swissarmyhammer-entity` 327 passed; `cargo fmt --all` clean; `cargo clippy -p swissarmyhammer-entity --all-targets -- -D warnings` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run -E 'rdeps(swissarmyhammer-entity)'` 7776 passed (1 slow), 0 failed, 0 skipped.
     - next: /review
   timestamp: 2026-08-04T02:09:45.351306+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz58p8sghtw2hwwftjvfxqbm
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — investigated why 13 became 4 on re-run: confirmed non-deterministic engine behavior for non-complexity validators is the dominant cause (3 fresh runs on the same commit each returned different, non-overlapping finding sets), with real intervening code changes as a secondary contributor. All 13 originals triaged to a resolution: 6 fixed (real path threaded into serialization instead of a sentinel; TEMP_FILE_PREFIX const; rename_or_cleanup/rename_ignore_not_found extracted to dedupe rename+cleanup logic), 4 closed not-a-defect (attachment path validation already constrained by sanitize_filename/attachments_dir; read_attachment doesn't exist), 3 closed under the tests exception (magic numbers in #[cfg(test)] code). A real, distinct security issue was found while triaging the attachment cluster and spun into its own card ^2xznfsw (AddAttachment.path has zero validation, lets an MCP client copy any locally-readable file into .attachments/) rather than fixed here.
+    - test: green — cargo nextest run -p swissarmyhammer-entity 327 passed; fmt clean; clippy clean (crate + workspace); full rdeps(swissarmyhammer-entity) run for real: 7776 passed, 0 failed
+    - commit: 4ba16d698
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T02:12:23.984075+00:00
+- actor: claude-code
+  id: 01kz597403bwwg3vnywgfndywf
+  text: |-
+    ### review — clean
+    - evidence: `review sha 4ba16d698~1..4ba16d698` returned 9 findings (counts: findings=9, confirmed=9, refuted=11). Blame-checked every reported line against `4ba16d698` (committed 2026-08-03 21:11:53 -0500):
+      - io.rs:118, :256, :266, :288, :304 (`.expect()` panic findings) — all blame to commits dated 2026-03-02 to 2026-03-04, months before this commit. Pre-existing, dropped.
+      - io.rs:937, :1233, :1243, :1320 (magic-number findings) — blame to `42e32c3a36` (2026-08-01) and `f257c7db02` (2026-04-14). Pre-existing, dropped.
+      - Net new findings introduced by `4ba16d698`: 0.
+    - Note: this run returned 9 findings where prior runs on nearby scopes returned 4, 6, and 22 (documented non-determinism, see task body) — consistent with that pattern; the blame-check on this run's 9 confirms none land on lines this commit touched.
+    - next: none — task clean, moved to done
+    task: ^t6a2952
+  timestamp: 2026-08-04T02:21:36.131197+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9980
 title: Triage 13 pre-existing findings surfaced against swissarmyhammer-entity io.rs and store.rs
 ---
 Reviewing `42e32c3a3` for ^fpcbeth produced 13 confirmed findings that target code the commit never touched. Split out here rather than folded into ^fpcbeth, matching the convention in `0eabb9e10` and `aecbd1216`.

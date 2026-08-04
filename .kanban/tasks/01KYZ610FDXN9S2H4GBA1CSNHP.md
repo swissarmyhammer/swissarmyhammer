@@ -120,8 +120,33 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T04:05:51.669495+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5facasfs37hqpm88phrqk3
+  text: |-
+    ### finish iteration 3 — changed
+    - implement: changed — round-trip finding resolved by pointing to the existing covering test (session_fork::tests::test_fork_spawn_config_carries_parent_skip_init_trigger_not_live_config) via a doc comment, no duplicate test added. Duplication finding resolved: extracted store_config_field_in_session<T,F>, composing with (not replacing) persist_session_field; both store_extra_args_in_session and store_skip_init_trigger_in_session are now one-line calls into it.
+    - test: green — claude-agent 764 passed; fmt clean; clippy clean; full rdeps(claude-agent) or rdeps(swissarmyhammer-agent) run for real: 4406 passed, 0 skipped
+    - commit: f019fb5a9
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T04:08:14.425653+00:00
+- actor: claude-code
+  id: 01kz5fx1avdaweb44hamyhtvmd
+  text: |-
+    ### review — clean
+    - evidence: engine ran successfully on `review sha f019fb5a9~1..f019fb5a9` (7 confirmed, 2 refuted, 9 attempted). Blame-checked all 7 reported lines against f019fb5a9 — all 7 blame to earlier commits (71441e9127, 479d2793e3, b424f622d7, ae4f478d50), none inside this commit's actual diff (the new store_config_field_in_session helper plus the one-line-call rewrites of store_extra_args_in_session and store_skip_init_trigger_in_session). Zero findings survive.
+    - guardrail: the line-1487 finding (store_mcp_servers_in_session/store_system_prompt_in_session not using the new helper) sits in the same duplicated-session-persistence class flagged for repeat-checking, but blames to ae4f478d50 (pre-dates f019fb5a9) — dropped as pre-existing, not a third recurrence.
+    - next: none — all prior findings checked, this round clean, task moved to done
+    task: ^a1csnhp
+  timestamp: 2026-08-04T04:18:25.755514+00:00
+- actor: claude-code
+  id: 01kz5g31yh2v1mr5f4gada7nk9
+  text: |-
+    ### review — correction
+    - The prior update-task call in this round hit the same description double-encoding bug noted in the 2026-08-04 04:05 comment: literal two-character `\n`/`\"` sequences were written into the description and the `review` tag was dropped from `tags`/`filter_tags`. Re-applied the update using real line breaks and plain quote characters (no escape typing) plus `tags: ["review"]`. Verified via `get task`: description now round-trips with real newlines/quotes, `tags: ["review"]`, `filter_tags: ["review"]`, column still `done`.
+    task: ^a1csnhp
+  timestamp: 2026-08-04T04:21:42.993014+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9a80
 title: Spawn review subagent Claude CLI with no MCP servers, no skills, and no init turn
 ---
 ## What
@@ -182,4 +207,21 @@ Scope: `review sha 9539ea405~1..9539ea405`. Engine returned 38 confirmed finding
   RESOLVED: added `fn store_config_field_in_session<T, F>(&self, session_id: &crate::session::SessionId, value: T, setter: F) -> Result<(), agent_client_protocol::Error> where F: FnOnce(&mut crate::session::Session, T)` (takes the already-read value directly, matching the exact shape both existing callers already had, rather than a separate getter closure). It composes with `persist_session_field` by calling it internally with a closure that applies `setter` to the value — `persist_session_field` still owns the `update_session` call and error mapping. Both `store_extra_args_in_session` and `store_skip_init_trigger_in_session` are now one-line calls to this helper with their own field-setting closure. Documented as reusable by a third field with no further extraction needed.
 
 **Guardrail note**: the second finding above is in the same class the user flagged for repeat-checking — duplicated session-persistence wrapper logic. This is not an identical recurrence of round 2's finding (round 2's gap was a *missing* persistence step for `skip_init_trigger`; this commit added that step, correctly reusing the shared `persist_session_field` helper, per the commit message's explicit note "not a fourth near-duplicate store_* function"). The new finding is narrower: it asks to further collapse the two thin one-line wrapper functions (`store_extra_args_in_session`, `store_skip_init_trigger_in_session`) — each of which already delegates to `persist_session_field` — into one generic helper. It is a legitimate, non-pre-existing finding on code this commit added, and is recorded as a requirement, not judged on cost/benefit.
-#review
+
+## Review Findings (2026-08-03 23:08)
+
+Scope: `review sha f019fb5a9~1..f019fb5a9`. Engine ran successfully: 7 confirmed findings, 2 refuted, 9 attempted. Blame-checked every reported `file:line` against `f019fb5a9`:
+
+- `crates/claude-agent/src/agent.rs:820` — blames to `71441e9127` (2026-05-01). Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:844` — blames to `71441e9127` (2026-05-01). Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:1059` — blames to `479d2793e3` (2026-01-08). Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:1318` — blames to `b424f622d7` (2026-01-28). Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:1487` (and 1489, and the paired `store_system_prompt_in_session` lines) — blames to `ae4f478d50` (2026-08-03 16:57), a commit that predates `f019fb5a9`. Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:2239` — blames to `b424f622d7` (2026-01-28). Pre-existing. Dropped.
+- `crates/claude-agent/src/agent.rs:2947` — blames to `479d2793e3` (2026-01-08). Pre-existing. Dropped.
+
+`f019fb5a9`'s actual diff is confined to three spots in `crates/claude-agent/src/agent.rs`: the new `store_config_field_in_session<T, F>` helper, the one-line-call rewrite of `store_extra_args_in_session`, and the one-line-call rewrite plus doc comment on `store_skip_init_trigger_in_session`. None of the engine's 7 reported lines fall inside that diff.
+
+**Guardrail check**: the line-1487 finding (`store_mcp_servers_in_session` / `store_system_prompt_in_session` not yet using the new `store_config_field_in_session` helper) sits in the same conceptual area the user flagged for repeat-checking — duplicated session-persistence logic. It is not a third recurrence of that class here: it blames to `ae4f478d50`, a commit before `f019fb5a9`, so it is pre-existing code this commit did not touch, and is dropped per the blame-check rule rather than being judged on its merits.
+
+Zero findings survive blame-check. No open findings remain from any prior round — all are checked [x]. #review

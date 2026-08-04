@@ -14,8 +14,21 @@ comments:
     - cargo nextest run -E 'rdeps(swissarmyhammer-validators) or rdeps(swissarmyhammer-tools)': 3067 tests run: 3067 passed (3 slow, 1 leaky), 0 skipped
     next: /review
   timestamp: 2026-08-03T20:04:41.972247+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz4ksq785yqc4mg5wywftzfk
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — DEFAULT_REMOTE_WORKERS (review_op.rs) 4->16, MAX_REMOTE_WORKERS (pool.rs) 8->16, test_pool_config_remote_clamps_workers updated to assert the new 16 cap. review.concurrency override and PoolConfig::local() (1 worker) confirmed untouched. TDD: RED confirmed before the constant edit, GREEN after.
+    - test: green — cargo test -p swissarmyhammer-validators -p swissarmyhammer-tools all green except one pre-existing unrelated doctest failure (confirmed via git stash + rerun reproducing identically without this change). fmt clean, clippy clean. Full rdeps(swissarmyhammer-validators) or rdeps(swissarmyhammer-tools) run for real: 3067 passed, 0 skipped, 0 failed.
+    - commit: 07ca81895
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T20:07:16.968481+00:00
+- actor: claude-code
+  id: 01kz4mgqnd3rrbzp4gj49w5yah
+  text: '### review — clean\n- evidence: review sha 07ca81895~1..07ca81895 — engine ran (counts: findings 13, confirmed 13, refuted 29, failed 0). All 13 confirmed findings blame-checked against 07ca81895: none fall inside the commit''s changed lines (review_op.rs:300, pool.rs:44, pool.rs:~1600-1610) — all reference pre-existing code (review_op.rs:1277,1450; pool.rs:343,576,1698,1728,1818,1819,1824,1860,1938,2012,2024) untouched by this diff. Dropped per pre-existing-code rule. Zero new findings.\n- next: done'
+  timestamp: 2026-08-03T20:19:51.085299+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9680
 title: Raise the review agent pool default worker count from 4 to 16
 ---
 ## What
