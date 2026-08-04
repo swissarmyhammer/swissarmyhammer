@@ -148,10 +148,13 @@ pub struct WorkList {
 impl WorkList {
     /// Assemble a work-list from the review-level intent and the per-validator
     /// work entries.
-    pub fn new(change_purpose: String, validators: Vec<ValidatorWork>) -> Self {
+    pub fn new(
+        change_purpose: String,
+        validators: impl IntoIterator<Item = ValidatorWork>,
+    ) -> Self {
         Self {
             change_purpose,
-            validators,
+            validators: validators.into_iter().collect(),
         }
     }
 
@@ -427,25 +430,28 @@ impl FileWork {
     /// when they matter — the production `scope_review` path always does).
     pub fn new(
         path: String,
-        semantic_diff: Vec<SemanticChange>,
-        changed_symbols: Vec<String>,
+        semantic_diff: impl IntoIterator<Item = SemanticChange>,
+        changed_symbols: impl IntoIterator<Item = String>,
         source_slice: String,
-        probe_results: Vec<ProbeResult>,
+        probe_results: impl IntoIterator<Item = ProbeResult>,
     ) -> Self {
         Self {
             path,
-            semantic_diff,
-            changed_symbols,
+            semantic_diff: semantic_diff.into_iter().collect(),
+            changed_symbols: changed_symbols.into_iter().collect(),
             source_slice,
-            probe_results,
+            probe_results: probe_results.into_iter().collect(),
             line_annotations: Vec::new(),
         }
     }
 
     /// Attach the per-line blame/change annotations computed once for this
     /// review run.
-    pub fn with_line_annotations(mut self, line_annotations: Vec<LineAnnotation>) -> Self {
-        self.line_annotations = line_annotations;
+    pub fn with_line_annotations(
+        mut self,
+        line_annotations: impl IntoIterator<Item = LineAnnotation>,
+    ) -> Self {
+        self.line_annotations = line_annotations.into_iter().collect();
         self
     }
 
@@ -1677,8 +1683,9 @@ async fn run_probe_cache(
         return Ok(Vec::new());
     }
     let names: Vec<String> = union.into_iter().collect();
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let change = ProbeChange::new(change_entities.to_vec()).with_sources(sources);
-    let results = run_probes(&names, &change, conn, embedder).await?;
+    let results = run_probes(&name_refs, &change, conn, embedder).await?;
     Ok(results.results)
 }
 

@@ -169,47 +169,68 @@ pub fn probe_exists(name: &str) -> bool {
 /// with its `(fact)`/`(candidate)` [kind](ProbeKind) so the adversary knows which
 /// rows are deterministic facts; fan-out omits it.
 pub(crate) fn render_probe_evidence(out: &mut String, results: &[ProbeResult], show_kind: bool) {
-    use std::fmt::Write as _;
-
     if results.is_empty() {
         out.push_str("_No probe evidence._\n\n");
         return;
     }
     for result in results {
-        if show_kind {
-            let kind = match result.kind {
-                ProbeKind::Fact => "fact",
-                ProbeKind::Candidate => "candidate",
-            };
-            let _ = writeln!(
-                out,
-                "- probe `{}` ({kind}) on `{}`:",
-                result.name, result.target
-            );
-        } else {
-            let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
-        }
-        if result.rows.is_empty() {
-            out.push_str("  - (no rows)\n");
-            continue;
-        }
-        for row in &result.rows {
-            out.push_str("  - ");
-            out.push_str(&row.file_path);
-            if let Some(line) = row.line {
-                let _ = write!(out, ":{line}");
-            }
-            if let Some(symbol) = &row.symbol {
-                let _ = write!(out, " `{symbol}`");
-            }
-            if let Some(similarity) = row.similarity {
-                let _ = write!(out, " @ {similarity:.2}");
-            }
-            if let Some(detail) = &row.detail {
-                let _ = write!(out, " — {detail}");
-            }
-            out.push('\n');
-        }
+        render_result_header(out, result, show_kind);
+        render_result_rows(out, result);
+    }
+    out.push('\n');
+}
+
+/// Render one result's header line (`- probe \`name\` [(kind)] on \`target\`:`).
+///
+/// `show_kind` is verify's only divergence from fan-out: it annotates the
+/// header with the probe's `(fact)`/`(candidate)` [kind](ProbeKind).
+fn render_result_header(out: &mut String, result: &ProbeResult, show_kind: bool) {
+    use std::fmt::Write as _;
+
+    if show_kind {
+        let kind = match result.kind {
+            ProbeKind::Fact => "fact",
+            ProbeKind::Candidate => "candidate",
+        };
+        let _ = writeln!(
+            out,
+            "- probe `{}` ({kind}) on `{}`:",
+            result.name, result.target
+        );
+    } else {
+        let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
+    }
+}
+
+/// Render one result's evidence rows, or the `(no rows)` sentinel when empty.
+fn render_result_rows(out: &mut String, result: &ProbeResult) {
+    if result.rows.is_empty() {
+        out.push_str("  - (no rows)\n");
+        return;
+    }
+    for row in &result.rows {
+        render_probe_row(out, row);
+    }
+}
+
+/// Render one evidence row (`file_path:line \`symbol\` @ {sim:.2} — {detail}`),
+/// eliding each optional field that is absent.
+fn render_probe_row(out: &mut String, row: &ProbeRow) {
+    use std::fmt::Write as _;
+
+    out.push_str("  - ");
+    out.push_str(&row.file_path);
+    if let Some(line) = row.line {
+        let _ = write!(out, ":{line}");
+    }
+    if let Some(symbol) = &row.symbol {
+        let _ = write!(out, " `{symbol}`");
+    }
+    if let Some(similarity) = row.similarity {
+        let _ = write!(out, " @ {similarity:.2}");
+    }
+    if let Some(detail) = &row.detail {
+        let _ = write!(out, " — {detail}");
     }
     out.push('\n');
 }
@@ -270,16 +291,16 @@ pub struct FileChange {
 
 impl FileChange {
     /// Build a change set from its entities, with no file sources.
-    pub fn new(entities: Vec<ChangeEntry>) -> Self {
+    pub fn new(entities: impl IntoIterator<Item = ChangeEntry>) -> Self {
         Self {
-            entities,
+            entities: entities.into_iter().collect(),
             sources: BTreeMap::new(),
         }
     }
 
     /// The same change set with the current source of each file attached.
-    pub fn with_sources(mut self, sources: BTreeMap<String, String>) -> Self {
-        self.sources = sources;
+    pub fn with_sources(mut self, sources: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.sources = sources.into_iter().collect();
         self
     }
 }
@@ -374,7 +395,7 @@ async fn embed(embedder: &dyn TextEmbedder, text: &str) -> Result<Vec<f32>, AvpE
 /// embedder fails. A probe that simply finds nothing is *not* an error — it
 /// yields a [`ProbeResult`] with empty `rows`.
 pub async fn run_probes(
-    probe_names: &[String],
+    probe_names: &[&str],
     file_change: &FileChange,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
@@ -415,12 +436,12 @@ pub async fn run_probes(
 }
 
 /// Resolve probe names to catalog entries, erroring on the first unknown name.
-fn resolve_entries(probe_names: &[String]) -> Result<Vec<&'static ProbeCatalogEntry>, AvpError> {
+fn resolve_entries(probe_names: &[&str]) -> Result<Vec<&'static ProbeCatalogEntry>, AvpError> {
     probe_names
         .iter()
         .map(|name| {
             catalog_entry(name).ok_or_else(|| AvpError::Validator {
-                validator: name.clone(),
+                validator: name.to_string(),
                 message: format!(
                     "unknown probe '{name}'; the catalog defines: {}",
                     CATALOG
@@ -529,6 +550,15 @@ fn complexity_row(path: &str, function: &FunctionComplexity) -> ProbeRow {
     }
 }
 
+/// Inbound call-graph depth used by the `callers` probe.
+///
+/// The probe answers one question about an added symbol: "does anything call
+/// this yet?" That is a direct-caller fact, so one hop of inbound depth is
+/// enough to gather every direct caller. Walking further would pull in
+/// callers-of-callers, which only dilutes the evidence rows with transitive
+/// callers the `fact` guard has no use for.
+const CALLGRAPH_MAX_DEPTH: u32 = 1;
+
 /// `callers`: `get callgraph` (inbound) on each added symbol.
 ///
 /// An added symbol that the index cannot resolve (e.g. a brand-new, not-yet-
@@ -544,7 +574,7 @@ fn run_callers(
         let options = CallGraphOptions {
             symbol: added.entity_name.clone(),
             direction: CallGraphDirection::Inbound,
-            max_depth: 1,
+            max_depth: CALLGRAPH_MAX_DEPTH,
         };
         let rows = match get_callgraph(conn, &options) {
             Ok(graph) => graph
@@ -857,7 +887,7 @@ mod tests {
         let embedder = MockEmbedder::new(DIM);
         let change = FileChange::default();
 
-        let err = run_probes(&["bogus".to_string()], &change, &conn, &embedder)
+        let err = run_probes(&["bogus"], &change, &conn, &embedder)
             .await
             .unwrap_err();
 
@@ -918,7 +948,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
         let change = FileChange::default()
             .with_sources(BTreeMap::from([(path.to_string(), source.to_string())]));
 
-        let results = run_probes(&["complexity".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["complexity"], &change, &conn, &embedder)
             .await
             .expect("the complexity probe runs");
 
@@ -968,11 +998,14 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
     #[tokio::test]
     async fn complexity_reports_not_computed_for_an_unmapped_language() {
         // Never a silent zero: an unmapped language must still produce a row, so
-        // the guard cannot read "no mapping" as "no complexity". Go carries no
-        // `ComplexitySpec` row (its test-marking convention is name/parameter
-        // based, not attribute based, so it cannot yet share the generic
-        // attribute-driven `is_test` mechanism the mapped languages use).
-        let result = complexity_probe("src/app.go", "func f() {}\n").await;
+        // the guard cannot read "no mapping" as "no complexity". Bash carries no
+        // `ComplexitySpec` row: it has no attribute/annotation grammar construct
+        // at all, and its one real-world test convention — bats-core's
+        // `# @test "description"` comment marker — is unstructured free text
+        // inside a generic `comment` node, indistinguishable by kind from an
+        // ordinary doc comment or license header, so treating any comment as a
+        // potential test marker would be unsafe and overbroad.
+        let result = complexity_probe("src/app.sh", "f() {\n  echo 1\n}\n").await;
 
         assert_eq!(result.rows.len(), 1, "not-computed is itself a row");
         assert_eq!(
@@ -1003,7 +1036,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
         let embedder = MockEmbedder::new(DIM);
         let change = FileChange::new(vec![added_fn("brand_new_fn", "src/new.rs")]);
 
-        let results = run_probes(&["callers".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["callers"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1037,7 +1070,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(body("target_fn")),
         }]);
 
-        let results = run_probes(&["callers".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["callers"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1071,7 +1104,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(shared.clone()),
         }]);
 
-        let results = run_probes(&["duplicates".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["duplicates"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1117,7 +1150,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             },
         ]);
 
-        let results = run_probes(&["duplicates".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["duplicates"], &change, &conn, &embedder)
             .await
             .unwrap();
 
@@ -1181,7 +1214,7 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             after_content: Some(reimplemented.clone()),
         }]);
 
-        let results = run_probes(&["similar".to_string()], &change, &conn, &embedder)
+        let results = run_probes(&["similar"], &change, &conn, &embedder)
             .await
             .unwrap();
 
