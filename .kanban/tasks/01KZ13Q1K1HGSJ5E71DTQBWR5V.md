@@ -31,8 +31,31 @@ comments:
     - evidence: cargo nextest run --workspace — 13506 tests run, 13506 passed, 0 failed, 0 skipped. cargo clippy --workspace --all-targets --all-features -- -D warnings — 0 warnings.
     - next: none, no fixes needed.
   timestamp: 2026-08-04T21:54:47.533833+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz7cdh161ans53jj0cen21w1
+  text: |-
+    ### commit — changed
+    - evidence: a193b9427 fix(config): use split_frontmatter_body for model.rs frontmatter parsing
+    - next: ready for review
+  timestamp: 2026-08-04T21:56:00.678383+00:00
+- actor: claude-code
+  id: 01kz7cn5qxaaqfmz6a9tcdfdc9
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit a193b9427) — 0 findings
+    - next: task moved to done
+  timestamp: 2026-08-04T22:00:11.261003+00:00
+- actor: claude-code
+  id: 01kz7cnjrkw17z4ppexgjr4057
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — model.rs's two substring frontmatter splitters (extract_yaml_frontmatter_field, parse_model_config) now delegate to swissarmyhammer_common::frontmatter::split_frontmatter_body; 5 new regression tests, TDD RED-first confirmed
+    - test: green — cargo nextest run --workspace, 13506 passed; clippy clean
+    - commit: a193b9427
+    - review: clean — 0 findings; task moved to done
+  timestamp: 2026-08-04T22:00:24.595507+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa880
 title: swissarmyhammer-config model.rs carries three substring frontmatter splits
 ---
 `crates/swissarmyhammer-config/src/model.rs` carries three private frontmatter splits that cut on the bare `---` substring:
