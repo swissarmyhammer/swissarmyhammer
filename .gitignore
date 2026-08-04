@@ -179,9 +179,12 @@ ane-embedding/convert/output/
 # Isolated CARGO_TARGET_DIR scratch dirs used by implement/verify runs
 target-implement-verify/
 
-# Generated skill/agent deploy targets (source of truth lives in builtin/)
-/.skills/
-/.agents/
-/.claude/skills/
-/.claude/agents/
-/.zed/skills/
+# Generated skill/agent deploy targets (source of truth lives in builtin/).
+# Unanchored (no leading `/`, `**/` on the multi-segment ones) so a deploy run
+# from inside any `apps/*-cli/` directory is also ignored, not just one at the
+# repository root -- see ^d525k4k.
+.skills/
+.agents/
+**/.claude/skills/
+**/.claude/agents/
+**/.zed/skills/

@@ -34,10 +34,26 @@ comments:
     - evidence: 225c62ebc docs(architecture): fold dual-backend bullet into ACP-as-protocol
     - next: none
   timestamp: 2026-08-04T17:45:52.838517+00:00
+- actor: claude-code
+  id: 01kz6y4t3z002cywac58pwzzmg
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit abbcae20b) — 0 findings, nothing in scope (docs + kanban state only)
+    - next: task moved to done
+  timestamp: 2026-08-04T17:46:35.007046+00:00
+- actor: claude-code
+  id: 01kz6y52jmrfza8tycsnjt0ew1
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — ARCHITECTURE.md (removed stale "Dual-Backend, Single Protocol" bullet, folded into "ACP as Protocol")
+    - test: green — cargo nextest run --workspace, 13498 passed; clippy clean
+    - commit: abbcae20b
+    - review: clean — 0 findings; task moved to done
+  timestamp: 2026-08-04T17:46:43.668781+00:00
 depends_on:
 - 01KZ23NHE9JR2WAMMQP3Y5N9G6
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa680
 project: drop-llama-agent
 title: Refresh ARCHITECTURE.md for the Claude-only agent facade
 ---

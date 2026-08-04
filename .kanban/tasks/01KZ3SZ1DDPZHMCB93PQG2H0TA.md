@@ -1,6 +1,11 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kz6ytrctxwppt0yv8ggc5w5q
+  text: 'Superseded by ^d525k4k. That card investigated the same three files (plus six symlink siblings under `.claude/skills/` and `.zed/skills/` in `apps/kanban-cli/` and `apps/code-context-cli/`) and decided to untrack them instead of regenerating: `SkillResolver` only ever reads `{git_root}/.skills`, and for every crate in this workspace `{git_root}` is the repository root, not an `apps/*` subdirectory — so these were dead deploy artifacts, never read at runtime, not just drifted ones. All nine paths are now removed from git, `.gitignore` was widened to catch a future accidental commit from any `apps/*-cli/` directory, and a regression test (`crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs`) fails if one is ever re-added. This card''s acceptance criteria ("no tracked file under any `.skills/` directory mentions `llama-agent`") are trivially satisfied since no such file is tracked anymore. Safe to close.'
+  timestamp: 2026-08-04T17:58:34.138031+00:00
 position_column: todo
 position_ordinal: f380
 project: drop-llama-agent
