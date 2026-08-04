@@ -1435,6 +1435,15 @@ mod tests_relax_required_tool_args {
     /// `STDIN_ARGS_SUBCOMMAND` must name a real subcommand of the CLI the
     /// binary builds. Rename the dynamic command and the relaxation becomes a
     /// silent no-op that the synthetic trees above would never catch.
+    ///
+    /// This exercises `ralph set`, not the Stop hook's own `ralph check`:
+    /// `check`'s `--session_id` is optional on the real CLI now — it falls
+    /// back to the most recent active `.ralph/*.md` instruction when the
+    /// named session has none (see `ARCHITECTURE.md`) — so `check` no longer
+    /// has a required argument to prove relaxation against. `set`'s
+    /// `--instruction` stays required, so it still demonstrates that
+    /// relaxation reaches a required argument nested inside the real `tool`
+    /// tree.
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn stdin_args_subcommand_names_a_real_command() {
@@ -1459,19 +1468,19 @@ mod tests_relax_required_tool_args {
             super::STDIN_ARGS_SUBCOMMAND
         );
 
-        // The ralph Stop hook's exact argv, on the real command tree.
-        let hook_argv = ["sah", "tool", "ralph", "ralph", "check", "--"];
+        // `ralph set`, on the real command tree, missing its required `--instruction`.
+        let set_argv = ["sah", "tool", "ralph", "ralph", "set", "--"];
         let strict = real_cli
             .clone()
-            .try_get_matches_from(hook_argv)
-            .expect_err("--session_id is required before relaxing");
+            .try_get_matches_from(set_argv)
+            .expect_err("--instruction is required before relaxing");
         assert_eq!(
             strict.kind(),
             clap::error::ErrorKind::MissingRequiredArgument
         );
         relax_required_tool_args(real_cli)
-            .try_get_matches_from(hook_argv)
-            .expect("relaxed parse accepts the absent --session_id");
+            .try_get_matches_from(set_argv)
+            .expect("relaxed parse accepts the absent --instruction");
     }
 
     /// Only the `tool` tree reads stdin, so a static command must still report
