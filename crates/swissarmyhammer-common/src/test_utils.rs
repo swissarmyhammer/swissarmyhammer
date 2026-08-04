@@ -6,16 +6,13 @@
 ///
 /// ```
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
+use wait_timeout::ChildExt;
 
 /// Global mutex to serialize access to current directory manipulation
 /// This prevents race conditions when multiple tests run in parallel
 static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
-
-/// Poll interval used while waiting for a child process to exit via
-/// repeated `try_wait` calls (see [`ProcessGuard`]).
-const PROCESS_POLL_INTERVAL_MS: u64 = 10;
 
 /// Timeout for waiting on a process to exit after a kill signal has been
 /// sent (see [`ProcessGuard::force_kill`] and the post-kill wait in
@@ -34,6 +31,46 @@ const MAX_RETRY_ATTEMPTS: u32 = 3;
 /// Base backoff delay, multiplied by the attempt number, between the
 /// filesystem retry attempts governed by [`MAX_RETRY_ATTEMPTS`].
 const DIR_RETRY_BACKOFF_BASE_MS: u64 = 10;
+
+/// Acquire `lock`, recovering from mutex poisoning left behind by an earlier
+/// panicked test instead of propagating the poison to every subsequent test.
+///
+/// Shared by every global test-serialization lock in this module
+/// ([`CurrentDirGuard::new`], [`acquire_semantic_db_lock`],
+/// [`acquire_home_env_lock`]) so the lock/recover pattern has one source of
+/// truth instead of being reimplemented per lock. `name` identifies the lock
+/// in the warning logged on recovery.
+fn lock_or_recover<T>(lock: &'static Mutex<T>, name: &str) -> MutexGuard<'static, T> {
+    lock.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("{name} lock was poisoned, recovering");
+        poisoned.into_inner()
+    })
+}
+
+/// Retry a fallible operation up to [`MAX_RETRY_ATTEMPTS`] times, sleeping
+/// `DIR_RETRY_BACKOFF_BASE_MS * attempt` between attempts.
+///
+/// Shared by [`IsolatedTestEnvironment::new`] and [`create_temp_dir`], whose
+/// filesystem operations can transiently fail under parallel test execution,
+/// so the retry-with-backoff pattern has one source of truth. Returns the
+/// last error if every attempt fails.
+fn retry_with_backoff<T, E>(mut operation: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+    let mut last_err = None;
+    for attempt in 1..=MAX_RETRY_ATTEMPTS {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                if attempt < MAX_RETRY_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        DIR_RETRY_BACKOFF_BASE_MS * attempt as u64,
+                    ));
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.expect("MAX_RETRY_ATTEMPTS must be at least 1"))
+}
 
 /// In-memory `tracing` capture writer for log-output tests.
 ///
@@ -137,11 +174,7 @@ impl CurrentDirGuard {
             ));
         }
 
-        let lock_guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|poisoned| {
-            // When a test panics, the mutex is poisoned. We need to clear the poisoning.
-            eprintln!("WARNING: Current directory lock was poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let lock_guard = lock_or_recover(&CURRENT_DIR_LOCK, "Current directory");
 
         // After acquiring the mutex, check if the current directory is valid.
         // If not, reset to a known good directory (the cargo manifest dir).
@@ -216,7 +249,16 @@ impl Drop for CurrentDirGuard {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct ProcessGuard(pub std::process::Child);
+
+/// Errors from [`ProcessGuard`]'s process-management operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessGuardError {
+    /// Waiting on, signaling, or killing the underlying process failed.
+    #[error("process management I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
 
 impl ProcessGuard {
     /// Create a new ProcessGuard from a child process
@@ -233,37 +275,23 @@ impl ProcessGuard {
         }
     }
 
-    /// Poll `try_wait` until the process exits or `timeout` elapses.
+    /// Wait for the process to exit or `timeout` to elapse.
     ///
     /// Returns `Ok(true)` if the process exited within the timeout, or
     /// `Ok(false)` if the timeout elapsed while the process was still
     /// running. Shared by [`terminate_gracefully`](Self::terminate_gracefully)
     /// (both its initial wait and its post-kill wait) and
-    /// [`force_kill`](Self::force_kill) so the polling logic has one source
-    /// of truth.
-    fn wait_for_exit(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        use std::time::Instant;
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            match self.0.try_wait() {
-                Ok(Some(_)) => return Ok(true), // Process exited
-                Ok(None) => {
-                    std::thread::sleep(std::time::Duration::from_millis(PROCESS_POLL_INTERVAL_MS))
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(false)
+    /// [`force_kill`](Self::force_kill) so the wait logic has one source of
+    /// truth.
+    fn wait_for_exit(&mut self, timeout: std::time::Duration) -> Result<bool, ProcessGuardError> {
+        Ok(self.0.wait_timeout(timeout)?.is_some())
     }
 
     /// Attempt to gracefully terminate the process with a timeout
     pub fn terminate_gracefully(
         &mut self,
         timeout: std::time::Duration,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ProcessGuardError> {
         // For now, we'll use a simple approach - just wait a bit then force kill
         // This could be enhanced later with proper signal handling if needed
         if self.wait_for_exit(timeout)? {
@@ -277,7 +305,7 @@ impl ProcessGuard {
     }
 
     /// Force kill the process immediately
-    pub fn force_kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn force_kill(&mut self) -> Result<(), ProcessGuardError> {
         self.0.kill()?;
         self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
             .map(|_| ())
@@ -309,10 +337,7 @@ static SEMANTIC_DB_ENV_LOCK: Mutex<()> = Mutex::new(());
 /// Acquire the global semantic database environment lock
 /// This prevents race conditions when multiple tests run in parallel and manipulate SWISSARMYHAMMER_SEMANTIC_DB_PATH
 pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
-    SEMANTIC_DB_ENV_LOCK.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Semantic DB environment lock was poisoned, recovering");
-        poisoned.into_inner()
-    })
+    lock_or_recover(&SEMANTIC_DB_ENV_LOCK, "Semantic DB environment")
 }
 
 /// Acquire the global HOME environment lock.
@@ -329,10 +354,7 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
 /// then restore the *real* `HOME` when it drops — leaving the calling test
 /// with a `pre` value that no longer matches the eventual `post` value.
 pub fn acquire_home_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    HOME_ENV_LOCK.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("HOME environment lock was poisoned, recovering");
-        poisoned.into_inner()
-    })
+    lock_or_recover(&HOME_ENV_LOCK, "HOME environment")
 }
 
 /// Create an isolated test home directory for parallel-safe testing
@@ -359,18 +381,11 @@ fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let dot_prompts_dir = home_path.join(".prompts");
     std::fs::create_dir_all(&dot_prompts_dir).expect("Failed to create .prompts directory");
 
-    sah_dir
-        .ensure_subdir("workflows")
-        .expect("Failed to create workflows directory");
-    sah_dir
-        .ensure_subdir("todo")
-        .expect("Failed to create todo directory");
-    sah_dir
-        .ensure_subdir("issues")
-        .expect("Failed to create issues directory");
-    sah_dir
-        .ensure_subdir("issues/complete")
-        .expect("Failed to create issues/complete directory");
+    for subdir in ["workflows", "todo", "issues", "issues/complete"] {
+        sah_dir
+            .ensure_subdir(subdir)
+            .unwrap_or_else(|e| panic!("Failed to create {subdir} directory: {e}"));
+    }
 
     (temp_dir, home_path)
 }
@@ -385,6 +400,7 @@ fn create_isolated_test_home() -> (TempDir, PathBuf) {
 /// that HOME manipulation is serialized across all tests in the test suite.
 ///
 /// Used from IsolatedTestEnvironment to provide a complete isolated test setup.
+#[derive(Debug)]
 struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,
@@ -442,6 +458,7 @@ impl Drop for IsolatedTestHome {
 
 /// RAII helper that isolates HOME directory for tests without changing the working directory
 /// This prevents test pollution while allowing parallel test execution
+#[derive(Debug)]
 pub struct IsolatedTestEnvironment {
     _home_guard: IsolatedTestHome,
     _temp_dir: TempDir,
@@ -455,22 +472,9 @@ impl IsolatedTestEnvironment {
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
-        // Retry up to MAX_RETRY_ATTEMPTS times in case of temporary filesystem
-        // issues during parallel test execution
-        for attempt in 1..=MAX_RETRY_ATTEMPTS {
-            match Self::try_create() {
-                Ok(env) => return Ok(env),
-                Err(_e) if attempt < MAX_RETRY_ATTEMPTS => {
-                    // Add small delay before retry to reduce contention
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        DIR_RETRY_BACKOFF_BASE_MS * attempt as u64,
-                    ));
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        unreachable!()
+        // Retry in case of temporary filesystem issues during parallel test
+        // execution; see [`retry_with_backoff`].
+        retry_with_backoff(Self::try_create)
     }
 
     /// Try to create an isolated test environment (single attempt)
@@ -588,26 +592,18 @@ pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf {
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
 /// better error handling and consistent behavior across tests.
+///
+/// # Panics
+/// Panics if creating the temporary directory still fails after
+/// [`MAX_RETRY_ATTEMPTS`] retries with backoff. This should only happen under
+/// severe filesystem exhaustion or permission failures, neither of which
+/// retrying further would fix.
 pub fn create_temp_dir() -> TempDir {
-    // Retry up to MAX_RETRY_ATTEMPTS times in case of temporary filesystem
-    // issues during parallel test execution
-    for attempt in 1..=MAX_RETRY_ATTEMPTS {
-        match TempDir::new() {
-            Ok(temp_dir) => return temp_dir,
-            Err(_e) if attempt < MAX_RETRY_ATTEMPTS => {
-                // Add small delay before retry to reduce contention
-                std::thread::sleep(std::time::Duration::from_millis(
-                    DIR_RETRY_BACKOFF_BASE_MS * attempt as u64,
-                ));
-                continue;
-            }
-            Err(e) => panic!(
-                "Failed to create temporary directory for test after {} attempts: {}",
-                attempt, e
-            ),
-        }
-    }
-    unreachable!()
+    retry_with_backoff(TempDir::new).unwrap_or_else(|e| {
+        panic!(
+            "Failed to create temporary directory for test after {MAX_RETRY_ATTEMPTS} attempts: {e}"
+        )
+    })
 }
 
 #[cfg(test)]

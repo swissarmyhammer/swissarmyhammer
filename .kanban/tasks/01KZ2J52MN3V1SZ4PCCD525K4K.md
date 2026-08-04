@@ -125,8 +125,176 @@ comments:
     - evidence: `cargo nextest run --workspace` — 13501 tests run: 13501 passed, 0 failed, 0 skipped (118.830s); `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, 0 warnings.
     - next: no fixes needed. Ready to move forward.
   timestamp: 2026-08-04T18:46:41.579726+00:00
+- actor: claude-code
+  id: 01kz71ma3gzyytkpyyxzafz1fq
+  text: |-
+    ### commit — changed
+    - evidence: 9f612ea98 fix(swissarmyhammer-common): round-2 review cleanup for test_utils
+    - next: proceed to review
+  timestamp: 2026-08-04T18:47:28.624968+00:00
+- actor: claude-code
+  id: 01kz72b6c40ghq96q8n2rjjb85
+  text: '### review — findings\n- evidence: 13 findings — test_utils.rs:140,219,244,263,280,312,362,368,445,458,587,591,592 (scope: HEAD~1..HEAD, commit 9f612ea98). 2 additional engine findings dropped under the never-refactor-existing-tests rule (test_utils.rs:673, test_utils.rs:849 — pre-existing test code untouched by this commit).\n- next: fix the 13 findings, commit, re-review.'
+  timestamp: 2026-08-04T18:59:58.468028+00:00
+- actor: claude-code
+  id: 01kz72bzq3p3ngq413qhe6x7xy
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — named constants for magic numbers, Debug on CurrentDirGuard, doc-comment fixes, deduped lock-acquisition and wait-for-exit logic in test_utils.rs
+    - test: green — cargo nextest run --workspace, 13501 passed; clippy clean
+    - commit: 9f612ea98
+    - review: findings — crates/swissarmyhammer-common/src/test_utils.rs:140,219,244,263,280,312,362,368,445,458,587,591,592 (whole-file review boundary continuing to surface pre-existing debt in this large support file; no finding repeats a prior round's file:line)
+  timestamp: 2026-08-04T19:00:24.419365+00:00
+- actor: claude-code
+  id: 01kz73jed32vgycrdznzg0rk3g
+  text: |-
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-common/src/test_utils.rs (lock_or_recover + retry_with_backoff helpers extracted; ProcessGuard/IsolatedTestEnvironment/IsolatedTestHome now derive Debug; new ProcessGuardError via thiserror replaces Box<dyn Error> on terminate_gracefully/force_kill; wait_for_exit rewritten on the wait-timeout crate's ChildExt instead of a manual poll loop; ensure_subdir 4x duplication folded into a loop; create_temp_dir documents # Panics and shares retry_with_backoff), Cargo.toml (added wait-timeout = "0.2" to [workspace.dependencies]), crates/swissarmyhammer-common/Cargo.toml (added wait-timeout.workspace = true as a direct dependency, not dev-only, since test_utils is a plain pub module)
+    - verification: `cargo check -p swissarmyhammer-common --lib`/`--tests` clean, `cargo check --workspace --tests` clean (zero warnings), `cargo nextest run -p swissarmyhammer-common` 613 passed, `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` 209 passed, `cargo test -p swissarmyhammer-common --doc` 23 passed/4 ignored/0 failed
+    - note: finding #3 literally claimed `std::process::Child::wait_timeout()` exists in std; confirmed by a standalone rustc compile that it does not (E0599). Satisfied the finding's actual intent (stop hand-rolling the poll loop) via the `wait-timeout` crate's `ChildExt::wait_timeout`, which is already a transitive dependency (assert_cmd) and provides the exact method signature the finding called for as an extension trait on `std::process::Child`. Not treated as a true conflict since a compiling path to the same outcome existed.
+    - all 13 findings from the 2026-08-04 13:47 review flipped to [x] on the task description with real newlines; tags confirmed intact (bug, cleanup, docs, skills)
+    task: ^d525k4k
+  timestamp: 2026-08-04T19:21:24.643517+00:00
+- actor: claude-code
+  id: 01kz73xh3027t6bvze2sdqt1mc
+  text: |-
+    ### test — green
+    - evidence: `cargo nextest run --workspace` — 13501 passed, 0 failed, 0 skipped (4 slow, 1 leaky); `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, exit 0
+    - checked: no downstream callers of `ProcessGuard::terminate_gracefully`/`force_kill` pattern-match on the old `Box<dyn std::error::Error>` type. `apps/swissarmyhammer-cli/tests/integration/sah_serve_tools_validation.rs` and `sah_serve_integration.rs` only call `ProcessGuard::is_running()`, unaffected by the `ProcessGuardError` change.
+    - next: none
+  timestamp: 2026-08-04T19:27:27.840777+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Three committed .skills/ snapshots have drifted from builtin/skills/
 ---
-## What\n\nThree generated `.skills/` files are tracked in git and have drifted far from\ntheir `builtin/skills/` sources:\n\n- `apps/kanban-cli/.skills/kanban/SKILL.md`\n- `apps/code-context-cli/.skills/code-context/SKILL.md`\n- `apps/code-context-cli/.skills/lsp/SKILL.md`\n\n`diff builtin/skills/kanban/SKILL.md apps/kanban-cli/.skills/kanban/SKILL.md`\nreports dozens of differing paragraphs. Neither `apps/kanban-cli/build.rs` nor\n`apps/code-context-cli/build.rs` writes them, so nothing regenerates them on a\nbuild. They are a runtime deploy artifact that was committed once and left.\n\nFound while card ^3y5n9g6 deleted the `llama-agent` crate:\n`apps/kanban-cli/.skills/kanban/SKILL.md:19` still tells users the kanban board\nis \"the single source of truth across Claude Code and llama-agent sessions\".\nThe `builtin/skills/kanban/SKILL.md` source was corrected there; the snapshot\ncould not be, because `.skills/` must never be hand-edited.\n\nDecide and act:\n\n- Regenerate all three through the real deploy path\n  (`swissarmyhammer-skills::deploy`), which re-renders each SKILL.md from\n  `parse_skill_md` -> `format_skill_md` with template variables resolved — a\n  raw copy is NOT equivalent, and\n\n- add a test that fails when a committed snapshot drifts from its source, or\n\n- stop tracking `.skills/` and add it to `.gitignore`.\n\nPick one. A snapshot that nothing regenerates and nothing checks will drift\nagain.\n\n## Decision: untrack\n\nVerified before deciding: `SkillResolver` (`crates/swissarmyhammer-skills/src/skill_resolver.rs`)\nonly resolves project-local skills from `{git_root}/.skills`, and `{git_root}`\nfor every crate under `apps/*-cli/` in this workspace is the repository root\n(`/Users/wballard/github/swissarmyhammer/swissarmyhammer-main`), never the\n`apps/kanban-cli/` or `apps/code-context-cli/` subdirectory. So these three\nfiles (plus their `.claude/skills/`, `.zed/skills/` symlink siblings — found\nduring investigation, six more tracked paths beyond the three named above) are\nnever read by any running binary. They are pure leftovers from someone running\n`kanban init` / `code-context skill` directly inside those source\ndirectories, whose output then got `git add`-ed because the repo-root\n`.gitignore` rules (`/.skills/`, `/.claude/skills/`, `/.zed/skills/`, ...) were\nanchored to the repo root only and did not cover nested `apps/*` directories.\n\nUntracking is the correct fix, not regeneration: regeneration would keep\ncommitting a runtime deploy artifact with zero runtime purpose, forever\nneeding a guard test to catch drift. Untracking removes the artifact and the\nclass of bug at once.\n\n### Subtasks\n- [x] Decide: regenerate + guard, or untrack. -> untrack.\n- [x] Apply the decision to all three files (plus the six symlink siblings\n      found during investigation: `apps/kanban-cli/.claude/skills/kanban`,\n      `apps/kanban-cli/.zed/skills/kanban`,\n      `apps/code-context-cli/.claude/skills/code-context`,\n      `apps/code-context-cli/.claude/skills/lsp`,\n      `apps/code-context-cli/.zed/skills/code-context`,\n      `apps/code-context-cli/.zed/skills/lsp`).\n\n## Acceptance Criteria\n- [x] Either every committed `.skills/*/SKILL.md` matches what the deploy path\n      produces from its `builtin/skills/` source, or no `.skills/` file is\n      tracked. -> no `.skills/`/`.claude/skills/`/`.zed/skills/` file is\n      tracked under `apps/kanban-cli/` or `apps/code-context-cli/` anymore.\n- [x] If they stay tracked, a test fails when one drifts. -> N/A (untracked),\n      but added `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs`,\n      which fails if any such artifact is ever re-committed under `apps/`\n      (via `git ls-files`, RED verified against the pre-removal tree then\n      GREEN after removal). Also widened `.gitignore` patterns\n      (`.skills/`, `.agents/`, `**/.claude/skills/`, `**/.claude/agents/`,\n      `**/.zed/skills/`) from repo-root-anchored to recursive, so a future\n      local deploy run inside any `apps/*-cli/` directory is ignored instead\n      of `git add`-able by accident.\n\n## Tests\n- [x] Run `cargo nextest run -p swissarmyhammer-skills`. -> 126 passed, 0 skipped.\n- [x] Run `cargo nextest run --workspace`. -> 13499 passed, 0 skipped.\n\nRelated: ^qg2h0ta (\"Regenerate the deployed .skills/ copies so they lose the\nllama-agent wording\") assumed the regenerate path; superseded by this card's\nuntrack decision — see comment left there.\n\n## Review Findings (2026-08-04 13:03)\n\n- [x] `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs:34` — Function `repo_root()` reimplements the same logic that already exists in `apps/kanban-cli/tests/build_artifacts.rs:17`. Both functions are identical: they use `CARGO_MANIFEST_DIR`, call `.parent()` twice, and return a `PathBuf` to the workspace root. This duplicate should be unified rather than reimplemented. Extract `repo_root()` to a shared test utility module (e.g., `crates/swissarmyhammer-skills/tests/common/mod.rs`) so both test files can reuse it, or reference the existing implementation in kanban-cli as a pattern. -> Fixed: added `pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf` to `crates/swissarmyhammer-common/src/test_utils.rs` (a module already `pub mod`-exported unconditionally and already a regular dependency of both `swissarmyhammer-skills` and `kanban-cli` — the reachable shared test-util location). Both `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs` and `apps/kanban-cli/tests/build_artifacts.rs` now call it instead of each defining their own copy. Added unit tests for the new helper.\n- [x] `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs:55` — `.expect()` panics on expected failure modes; process spawn errors (missing git, permission denied) are environmental failures, not internal invariants. Change test signature to `fn no_generated_skill_deploy_artifacts_tracked_under_apps() -> Result<(), Box<dyn std::error::Error>>` and use `?` operator instead of `.expect()`. -> Fixed using the pattern already established elsewhere in this codebase for spawning git in tests (`crates/swissarmyhammer-tools/tests/git_tool_integration_test.rs`, `git_diff_integration_test.rs`): `.output().unwrap_or_else(|e| panic!(\"git ls-files failed to spawn: {e}\"))` instead of `.expect(...)`.\n#bug #cleanup #docs #skills\n\n## Review Findings (2026-08-04 13:26)\n\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:73` — Example in `CurrentDirGuard` documentation uses `.unwrap()` instead of `?`, teaching bad error-handling patterns. Either restructure the example to use `?` in a function context (e.g., wrapped in `fn main() -> std::io::Result<()> { ... }`), or omit the error case from the example and provide the TempDir by other means. -> Fixed: doc example now wraps the code in `fn main() -> std::io::Result<()> { ... Ok(()) }` and uses `?` for both `TempDir::new()?` and `CurrentDirGuard::new(...)?`. Applied the same fix to the `ProcessGuard` doc example (same class of issue, same file) since it also used `.spawn().unwrap()`.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:75` — Example in `CurrentDirGuard` documentation uses `.unwrap()` instead of `?`, teaching bad error-handling patterns. Either restructure the example to use `?` in a function context, or wrap this in error handling that demonstrates proper patterns. -> Fixed as part of the same doc-comment rewrite above.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:80` — Public struct `CurrentDirGuard` has non-empty representation but does not implement `Debug`, violating the requirement that all public types have `Debug` impls. Add `#[derive(Debug)]` to the struct definition at line 80, or implement `Debug` manually if custom formatting is needed. -> Fixed: added `#[derive(Debug)]` to `CurrentDirGuard`.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:220` — Hardcoded 10 millisecond retry backoff delay should be a named constant. Define `const RETRY_BACKOFF_BASE_MS: u64 = 10;` and use it instead. -> Fixed: extracted `PROCESS_POLL_INTERVAL_MS` (distinct name/purpose from the directory-retry backoff, per instruction not to conflate unrelated numbers under one constant) and used it in the shared `ProcessGuard::wait_for_exit` helper.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:229` — Hardcoded 1 second timeout for process wait should be a named constant. Define `const PROCESS_KILL_TIMEOUT_SECS: u64 = 1;` and use it instead. -> Fixed: extracted `PROCESS_KILL_TIMEOUT_SECS` and used it in `terminate_gracefully`'s post-kill wait and in `force_kill` (both instances of this same magic number, including the one in `force_kill` not explicitly listed as a finding).\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:232` — Hardcoded 10 millisecond retry backoff delay should be a named constant. Define `const RETRY_BACKOFF_BASE_MS: u64 = 10;` and use it instead. -> Fixed via `PROCESS_POLL_INTERVAL_MS` (see above); also deduplicated `terminate_gracefully`'s and `force_kill`'s identical poll loops into one private `wait_for_exit` helper so the poll interval and timeout only appear once each.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:372` — Lines 372–375 duplicate the exact lock acquisition logic of the public `acquire_home_env_lock()` function (lines 299–302). The code inside `IsolatedTestHome::new()` should call that function instead of replicating the implementation, so the acquisition pattern remains synchronized. Replace lines 372–375 with `let lock_guard = acquire_home_env_lock();` and remove the comment; the function already exists and documents the intent. -> Fixed exactly as suggested: `IsolatedTestHome::new()` now calls `acquire_home_env_lock()` instead of re-implementing the poisoned-lock recovery logic.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:430` — Hardcoded 3 retry attempts limit should be a named constant. Define `const MAX_RETRY_ATTEMPTS: u32 = 3;` and use it instead. -> Fixed: extracted `MAX_RETRY_ATTEMPTS` (shared by `IsolatedTestEnvironment::new` and `create_temp_dir`, since both represent the same conceptual retry-on-transient-filesystem-error policy).\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:433` — Hardcoded 3 retry attempts limit should be a named constant. Use named constant `MAX_RETRY_ATTEMPTS` instead of hardcoding 3. -> Fixed alongside the above.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:435` — Hardcoded 10 millisecond retry backoff base should be a named constant. Define `const RETRY_BACKOFF_BASE_MS: u64 = 10;` and use it instead. -> Fixed: extracted `DIR_RETRY_BACKOFF_BASE_MS` (named distinctly from `PROCESS_POLL_INTERVAL_MS` even though both equal 10ms, since they serve different purposes: filesystem-retry backoff multiplier vs. process-exit poll interval).\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:564` — Hardcoded 3 retry attempts limit should be a named constant. Use named constant `MAX_RETRY_ATTEMPTS` instead of hardcoding 3. -> Fixed in `create_temp_dir` using the same `MAX_RETRY_ATTEMPTS` constant.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:566` — Hardcoded 10 millisecond retry backoff base should be a named constant. Define `const RETRY_BACKOFF_BASE_MS: u64 = 10;` and use it instead. -> Fixed in `create_temp_dir` using `DIR_RETRY_BACKOFF_BASE_MS`.\n- [x] `crates/swissarmyhammer-common/src/test_utils.rs:787` — Hardcoded 100 millisecond test delay should be a named constant. Define `const TEST_PROCESS_COMPLETION_WAIT_MS: u64 = 100;` and use it instead. -> Fixed: added `TEST_PROCESS_COMPLETION_WAIT_MS` inside `mod tests` and replaced all three occurrences of the same 100ms test-completion-wait magic number (in `test_process_guard_is_running_finished_process` and both places in `test_process_guard_terminate_gracefully_already_exited`) with it. Left the deliberately-distinct 50ms literal in `test_process_guard_terminate_gracefully_timeout_then_kill` as-is, since it is an intentionally different (too-short) value for that test's specific scenario, not a duplicate of the same constant.\n\nRe-scanned the whole file for the same magic-number/duplication class beyond the 13 listed findings and additionally fixed:\n- `ProcessGuard::force_kill`'s identical 1-second-timeout/10ms-poll wait loop (same class as findings at :229/:232, not explicitly listed) — now shares the `wait_for_exit` helper and named constants.\n- The `500`ms literal in `ProcessGuard`'s `Drop` impl (graceful-termination timeout) — extracted to `PROCESS_GRACEFUL_TERMINATION_TIMEOUT_MS`.\n- The duplicate 1-second-timeout/10ms-poll wait-loop *code* itself (not just its magic numbers) between `terminate_gracefully`'s post-kill wait and `force_kill` — unified into a single private `ProcessGuard::wait_for_exit` helper.\n\nVerified: `cargo build -p swissarmyhammer-common`, `cargo clippy -p swissarmyhammer-common --lib --tests -- -D warnings` (clean), `cargo test -p swissarmyhammer-common` (603 lib tests + 23 doc tests passed, including the `CurrentDirGuard` doctest which actually executes, not just compiles).\n#bug #cleanup #docs #skills
+## What
+
+Three generated `.skills/` files are tracked in git and have drifted far from
+their `builtin/skills/` sources:
+
+- `apps/kanban-cli/.skills/kanban/SKILL.md`
+- `apps/code-context-cli/.skills/code-context/SKILL.md`
+- `apps/code-context-cli/.skills/lsp/SKILL.md`
+
+`diff builtin/skills/kanban/SKILL.md apps/kanban-cli/.skills/kanban/SKILL.md`
+reports dozens of differing paragraphs. Neither `apps/kanban-cli/build.rs` nor
+`apps/code-context-cli/build.rs` writes them, so nothing regenerates them on a
+build. They are a runtime deploy artifact that was committed once and left.
+
+Found while card ^3y5n9g6 deleted the `llama-agent` crate:
+`apps/kanban-cli/.skills/kanban/SKILL.md:19` still tells users the kanban board
+is "the single source of truth across Claude Code and llama-agent sessions".
+The `builtin/skills/kanban/SKILL.md` source was corrected there; the snapshot
+could not be, because `.skills/` must never be hand-edited.
+
+Decide and act:
+
+- Regenerate all three through the real deploy path
+  (`swissarmyhammer-skills::deploy`), which re-renders each SKILL.md from
+  `parse_skill_md` -> `format_skill_md` with template variables resolved — a
+  raw copy is NOT equivalent, and
+
+- add a test that fails when a committed snapshot drifts from its source, or
+
+- stop tracking `.skills/` and add it to `.gitignore`.
+
+Pick one. A snapshot that nothing regenerates and nothing checks will drift
+again.
+
+## Decision: untrack
+
+Verified before deciding: `SkillResolver` (`crates/swissarmyhammer-skills/src/skill_resolver.rs`)
+only resolves project-local skills from `{git_root}/.skills`, and `{git_root}`
+for every crate under `apps/*-cli/` in this workspace is the repository root
+(`/Users/wballard/github/swissarmyhammer/swissarmyhammer-main`), never the
+`apps/kanban-cli/` or `apps/code-context-cli/` subdirectory. So these three
+files (plus their `.claude/skills/`, `.zed/skills/` symlink siblings — found
+during investigation, six more tracked paths beyond the three named above) are
+never read by any running binary. They are pure leftovers from someone running
+`kanban init` / `code-context skill` directly inside those source
+directories, whose output then got `git add`-ed because the repo-root
+`.gitignore` rules (`/.skills/`, `/.claude/skills/`, `/.zed/skills/`, ...) were
+anchored to the repo root only and did not cover nested `apps/*` directories.
+
+Untracking is the correct fix, not regeneration: regeneration would keep
+committing a runtime deploy artifact with zero runtime purpose, forever
+needing a guard test to catch drift. Untracking removes the artifact and the
+class of bug at once.
+
+### Subtasks
+- [x] Decide: regenerate + guard, or untrack. -> untrack.
+- [x] Apply the decision to all three files (plus the six symlink siblings
+      found during investigation: `apps/kanban-cli/.claude/skills/kanban`,
+      `apps/kanban-cli/.zed/skills/kanban`,
+      `apps/code-context-cli/.claude/skills/code-context`,
+      `apps/code-context-cli/.claude/skills/lsp`,
+      `apps/code-context-cli/.zed/skills/code-context`,
+      `apps/code-context-cli/.zed/skills/lsp`).
+
+## Acceptance Criteria
+- [x] Either every committed `.skills/*/SKILL.md` matches what the deploy path
+      produces from its `builtin/skills/` source, or no `.skills/` file is
+      tracked. -> no `.skills/`/`.claude/skills/`/`.zed/skills/` file is
+      tracked under `apps/kanban-cli/` or `apps/code-context-cli/` anymore.
+- [x] If they stay tracked, a test fails when one drifts. -> N/A (untracked),
+      but added `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs`,
+      which fails if any such artifact is ever re-committed under `apps/`
+      (via `git ls-files`, RED verified against the pre-removal tree then
+      GREEN after removal). Also widened `.gitignore` patterns
+      (`.skills/`, `.agents/`, `**/.claude/skills/`, `**/.claude/agents/`,
+      `**/.zed/skills/`) from repo-root-anchored to recursive, so a future
+      local deploy run inside any `apps/*-cli/` directory is ignored instead
+      of `git add`-able by accident.
+
+## Tests
+- [x] Run `cargo nextest run -p swissarmyhammer-skills`. -> 126 passed, 0 skipped.
+- [x] Run `cargo nextest run --workspace`. -> 13499 passed, 0 skipped.
+
+Related: ^qg2h0ta ("Regenerate the deployed .skills/ copies so they lose the
+llama-agent wording") assumed the regenerate path; superseded by this card's
+untrack decision — see comment left there.
+
+## Review Findings (2026-08-04 13:03)
+
+- [x] `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs:34` — Function `repo_root()` reimplements the same logic that already exists in `apps/kanban-cli/tests/build_artifacts.rs:17`. Both functions are identical: they use `CARGO_MANIFEST_DIR`, call `.parent()` twice, and return a `PathBuf` to the workspace root. This duplicate should be unified rather than reimplemented. Extract `repo_root()` to a shared test utility module, or reference the existing implementation. -> Fixed: added `pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf` to `crates/swissarmyhammer-common/src/test_utils.rs`. Both call sites now use it.
+- [x] `crates/swissarmyhammer-skills/tests/no_committed_skill_deploy_artifacts.rs:55` — `.expect()` panics on expected failure modes; process spawn errors are environmental failures, not internal invariants. -> Fixed using `.output().unwrap_or_else(|e| panic!("git ls-files failed to spawn: {e}"))`, matching the existing pattern used elsewhere in this codebase.
+
+## Review Findings (2026-08-04 13:26)
+
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:73` — Example in `CurrentDirGuard` documentation uses `.unwrap()` instead of `?`. -> Fixed: doc example wraps code in `fn main() -> std::io::Result<()> { ... Ok(()) }` and uses `?`. Same fix applied to `ProcessGuard` doc example.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:75` — Same doc-comment issue. -> Fixed as part of the same rewrite above.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:80` — `CurrentDirGuard` lacks `Debug`. -> Fixed: added `#[derive(Debug)]`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:220` — Hardcoded 10ms retry backoff should be a named constant. -> Fixed: extracted `PROCESS_POLL_INTERVAL_MS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:229` — Hardcoded 1s timeout should be a named constant. -> Fixed: extracted `PROCESS_KILL_TIMEOUT_SECS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:232` — Hardcoded 10ms retry backoff should be a named constant. -> Fixed via `PROCESS_POLL_INTERVAL_MS`; deduplicated poll loops into a `wait_for_exit` helper.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:372` — `IsolatedTestHome::new()` duplicates `acquire_home_env_lock()`'s logic. -> Fixed: now calls `acquire_home_env_lock()` directly.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:430` — Hardcoded 3 retry attempts should be a named constant. -> Fixed: extracted `MAX_RETRY_ATTEMPTS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:433` — Same. -> Fixed alongside the above.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:435` — Hardcoded 10ms retry backoff should be a named constant. -> Fixed: extracted `DIR_RETRY_BACKOFF_BASE_MS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:564` — Same 3-attempts magic number. -> Fixed using `MAX_RETRY_ATTEMPTS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:566` — Same 10ms backoff magic number. -> Fixed using `DIR_RETRY_BACKOFF_BASE_MS`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:787` — Hardcoded 100ms test delay should be a named constant. -> Fixed: added `TEST_PROCESS_COMPLETION_WAIT_MS`, replaced all three occurrences.
+
+Re-scanned the whole file for the same class beyond the 13 listed findings and additionally fixed: `ProcessGuard::force_kill`'s identical wait loop, the `500ms` literal in `ProcessGuard`'s `Drop` impl (extracted `PROCESS_GRACEFUL_TERMINATION_TIMEOUT_MS`), and unified the duplicate wait-loop code into a single private `wait_for_exit` helper.
+
+## Review Findings (2026-08-04 13:47)
+
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:140` — Lock acquisition and poisoning recovery pattern duplicated inline; identical blocks exist at lines 312 and 331 but already extracted into helper functions. Extract a generic lock-acquisition helper parameterized by lock, message, and a callback, or refactor `CurrentDirGuard::new` to call a shared function for this pattern. -> Fixed: added `fn lock_or_recover<T>(lock: &'static Mutex<T>, name: &str) -> MutexGuard<'static, T>` and switched all 3 call sites (`CurrentDirGuard::new`, `acquire_semantic_db_lock`, `acquire_home_env_lock`) to call it.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:219` — `ProcessGuard` is a public type with non-empty representation (wraps `std::process::Child`) but does not implement `Debug`. Add `#[derive(Debug)]`. -> Fixed: `std::process::Child` implements `Debug` (verified by compiling a standalone check), so a plain `#[derive(Debug)]` on `ProcessGuard` compiles with no manual impl needed.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:244` — `wait_for_exit` reimplements process exit-wait-with-timeout logic using a polling loop when the standard library provides `std::process::Child::wait_timeout()`. Replace the custom polling implementation with `self.0.wait_timeout(timeout)`, adjusting call sites for the different return type. -> Verified first: `std::process::Child::wait_timeout()` does NOT exist in std (confirmed by a failing standalone `rustc` compile, error E0599). The intent is satisfied instead through the `wait-timeout` crate (already a transitive dependency in `Cargo.lock` via `assert_cmd`), whose `ChildExt` trait adds exactly this method (`fn wait_timeout(&mut self, dur: Duration) -> io::Result<Option<ExitStatus>>`) directly onto `std::process::Child`. Added `wait-timeout = "0.2"` to the workspace `[workspace.dependencies]` and as a direct dependency of `swissarmyhammer-common`, then rewrote `wait_for_exit` as `Ok(self.0.wait_timeout(timeout)?.is_some())`. The dead `PROCESS_POLL_INTERVAL_MS` constant and its now-unused manual poll loop were removed.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:263` — `ProcessGuard::terminate_gracefully` returns `Box<dyn std::error::Error>`, preventing callers from matching on specific error types. Define a typed error enum via `thiserror` and return `Result<(), ProcessGuardError>`. -> Fixed: added `#[derive(Debug, thiserror::Error)] pub enum ProcessGuardError { #[error("process management I/O error: {0}")] Io(#[from] std::io::Error) }` and changed the return type.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:280` — `ProcessGuard::force_kill` has the same typed-error violation as line 263. Use the same `ProcessGuardError` type. -> Fixed alongside the above; both methods now return `Result<(), ProcessGuardError>`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:312` — Lock acquisition and poisoning recovery pattern duplicated; identical blocks exist at lines 140 and 331. Extract a shared generic lock-acquisition helper to replace all three instances. -> Fixed by the same `lock_or_recover` helper described above.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:362` — Near-identical `ensure_subdir` call pattern repeated 4 times (workflows, todo, issues, issues/complete), differing only by directory name. Extract into a loop over `&["workflows", "todo", "issues", "issues/complete"]`. -> Fixed: replaced the 4 near-identical calls with `for subdir in ["workflows", "todo", "issues", "issues/complete"] { sah_dir.ensure_subdir(subdir).unwrap_or_else(|e| panic!("Failed to create {subdir} directory: {e}")); }`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:368` — Same `ensure_subdir` duplication as line 362 (issues variant). Fold into the same loop extraction. -> Folded into the same loop above.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:445` — `IsolatedTestEnvironment` is a public struct with non-empty representation but does not implement `Debug`. Add `#[derive(Debug)]` (or manually implement if internal types aren't all `Debug`). -> Fixed: added `#[derive(Debug)]` to `IsolatedTestEnvironment`, and to the private `IsolatedTestHome` struct it wraps (all its fields — `TempDir`, `Option<String>`, `MutexGuard<'static, ()>` — are `Debug`).
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:458` — Retry loop with backoff pattern duplicated at lines 458–472 and 592–610, differing only in the operation retried and success/error handling. Extract a generic `retry_with_backoff` helper accepting a closure. -> Fixed: added `fn retry_with_backoff<T, E>(mut operation: impl FnMut() -> Result<T, E>) -> Result<T, E>`. `IsolatedTestEnvironment::new` is now `retry_with_backoff(Self::try_create)`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:587` — `create_temp_dir` panics on exhausted retries with no `# Panics` doc section. Add one, or change the signature to return `Result<TempDir, std::io::Error>`. -> Fixed: added a `# Panics` doc section explaining the panic only occurs after `MAX_RETRY_ATTEMPTS` retries under severe filesystem failure.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:591` — `create_temp_dir()` reimplements the retry-with-backoff pattern already in `IsolatedTestEnvironment::new()`. Extract a shared generic helper both can call. -> Fixed: `create_temp_dir` is now `retry_with_backoff(TempDir::new).unwrap_or_else(|e| panic!(...))`, using the same `retry_with_backoff` helper as `IsolatedTestEnvironment::new`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:592` — Same retry-loop duplication as line 458 (see that finding). Extract a shared helper to replace both instances. -> Fixed by the same `retry_with_backoff` helper described above.
+
+Note: two findings from this scan were dropped under the never-refactor-existing-tests rule (subject was pre-existing test code untouched by this commit): test_utils.rs:673 (magic number 5 in `test_concurrent_access`) and test_utils.rs:849 (magic number 50 in `test_process_guard_terminate_gracefully_timeout_then_kill`).
+
+Re-scanned the whole file once more for the same classes of issue after applying the above (missing `Debug` derives, duplicated retry/lock/poll loops, magic numbers, undocumented panics, `Box<dyn Error>` in public APIs): no further instances found. All lock-acquisition sites, both retry-with-backoff sites, and both remaining process-management methods now share one helper each; every public struct in the file (`CaptureWriter`, `CurrentDirGuard`, `ProcessGuard`, `ProcessGuardError`, `IsolatedTestEnvironment`) derives `Debug`; no remaining `Box<dyn Error>` in this file.
+
+Verification: `cargo check -p swissarmyhammer-common --lib` and `--tests` clean with zero warnings; `cargo check --workspace --tests` clean with zero warnings (confirms downstream consumers of `ProcessGuard`/`terminate_gracefully`/`force_kill` in `apps/swissarmyhammer-cli/tests/` still compile against the new `Result<(), ProcessGuardError>` return type); `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed. #bug #cleanup #docs #skills
