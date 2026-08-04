@@ -595,6 +595,33 @@ fn build_session_event_with_optional_string(
     obj
 }
 
+/// Build a base event JSON object on top of [`base_event_json`], with two
+/// optional string fields conditionally added.
+///
+/// Shared by hook events whose JSON shape is the base fields plus two
+/// optional named fields — e.g. `WorktreeCreate`'s `worktree_path`/
+/// `branch_name` and `TaskCompleted`'s `task_id`/`task_title`. Follows the
+/// same pattern as [`build_session_event_with_optional_string`], generalized
+/// to two fields and an optional (rather than required) `session_id`.
+fn build_event_with_two_optional_string_fields(
+    session_id: Option<&str>,
+    event_name: &str,
+    field1_name: &str,
+    field1_value: &Option<String>,
+    field2_name: &str,
+    field2_value: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = base_event_json(session_id, event_name, cwd);
+    if let Some(value) = field1_value {
+        obj[field1_name] = serde_json::Value::String(value.clone());
+    }
+    if let Some(value) = field2_value {
+        obj[field2_name] = serde_json::Value::String(value.clone());
+    }
+    obj
+}
+
 /// Build JSON for a `ConfigChange` event.
 fn json_config_change(session_id: &str, source: &Option<String>, cwd: &Path) -> serde_json::Value {
     build_session_event_with_optional_string(session_id, "ConfigChange", "source", source, cwd)
@@ -606,14 +633,15 @@ fn json_worktree_create(
     branch_name: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = base_event_json(None, "WorktreeCreate", cwd);
-    if let Some(wp) = worktree_path {
-        obj["worktree_path"] = serde_json::Value::String(wp.clone());
-    }
-    if let Some(bn) = branch_name {
-        obj["branch_name"] = serde_json::Value::String(bn.clone());
-    }
-    obj
+    build_event_with_two_optional_string_fields(
+        None,
+        "WorktreeCreate",
+        "worktree_path",
+        worktree_path,
+        "branch_name",
+        branch_name,
+        cwd,
+    )
 }
 
 /// Build JSON for a `WorktreeRemove` event.
@@ -650,14 +678,15 @@ fn json_task_completed(
     task_title: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = base_event_json(Some(session_id), "TaskCompleted", cwd);
-    if let Some(id) = task_id {
-        obj["task_id"] = serde_json::Value::String(id.clone());
-    }
-    if let Some(title) = task_title {
-        obj["task_title"] = serde_json::Value::String(title.clone());
-    }
-    obj
+    build_event_with_two_optional_string_fields(
+        Some(session_id),
+        "TaskCompleted",
+        "task_id",
+        task_id,
+        "task_title",
+        task_title,
+        cwd,
+    )
 }
 
 /// Build JSON for tool-related events (PreToolUse, PostToolUse, PostToolUseFailure).
@@ -1556,16 +1585,33 @@ fn interpret_exit_2_stderr(
     }
 }
 
+/// Per-event-kind exit-2 handling properties: `(kind, is_blockable,
+/// feeds_stderr_to_agent)`.
+///
+/// Centralizes both properties in one table instead of two parallel match
+/// statements over `HookEventKind`, so [`is_blockable`] and
+/// [`feeds_stderr_to_agent`] cannot drift out of sync as event kinds are
+/// added. A kind absent from this table defaults to `(false, false)` —
+/// informational events that can neither block nor feed stderr back to the
+/// agent.
+const EVENT_PROPERTIES: &[(HookEventKind, bool, bool)] = &[
+    (HookEventKind::PreToolUse, true, false),
+    (HookEventKind::UserPromptSubmit, true, false),
+    (HookEventKind::PostToolUse, false, true),
+    (HookEventKind::PostToolUseFailure, false, true),
+];
+
 /// Whether an event kind supports blocking via exit-2.
 ///
 /// Only PreToolUse and UserPromptSubmit can block because the action
 /// hasn't happened yet. All other events (PostToolUse, PostToolUseFailure,
 /// Notification, SessionStart) cannot block.
 fn is_blockable(kind: HookEventKind) -> bool {
-    matches!(
-        kind,
-        HookEventKind::PreToolUse | HookEventKind::UserPromptSubmit
-    )
+    EVENT_PROPERTIES
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map(|(_, blockable, _)| *blockable)
+        .unwrap_or(false)
 }
 
 /// Whether exit-2 stderr should be fed back as agent context.
@@ -1573,10 +1619,11 @@ fn is_blockable(kind: HookEventKind) -> bool {
 /// PostToolUse and PostToolUseFailure can't block (action already happened)
 /// but Claude Code feeds the stderr back to the agent as context.
 fn feeds_stderr_to_agent(kind: HookEventKind) -> bool {
-    matches!(
-        kind,
-        HookEventKind::PostToolUse | HookEventKind::PostToolUseFailure
-    )
+    EVENT_PROPERTIES
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map(|(_, _, feeds)| *feeds)
+        .unwrap_or(false)
 }
 
 /// Prompt/agent handler: calls a [`HookEvaluator`] for LLM-backed evaluation.
@@ -2269,6 +2316,17 @@ hooks:
         assert_eq!(regs[0].events, vec![HookEventKind::Stop]);
     }
 
+    /// Shell-escape a path for safe interpolation into an `sh -c` command
+    /// string built by a test.
+    ///
+    /// Wraps the path in single quotes, escaping any embedded single quote
+    /// as `'\''` (close quote, escaped literal quote, reopen quote) so a
+    /// path containing shell metacharacters — `$()`, backticks, spaces,
+    /// quotes — cannot break out of the intended command.
+    fn shell_escape_path(path: &std::path::Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    }
+
     /// A command hook built via `build_registrations_with_context` receives the
     /// context's `transcript_path` (and `permission_mode`) in its JSON stdin —
     /// the field is captured into the handler at build time, not left at the
@@ -2280,7 +2338,7 @@ hooks:
         // The hook copies its JSON stdin to the marker so the test can inspect it.
         let json = format!(
             r#"{{ "hooks": {{ "SessionStart": [ {{ "hooks": [ {{ "type": "command", "command": "cat > {}" }} ] }} ] }} }}"#,
-            marker.display()
+            shell_escape_path(&marker)
         );
         let config: HookConfig = serde_json::from_str(&json).unwrap();
 
@@ -2301,6 +2359,74 @@ hooks:
         let value: serde_json::Value = serde_json::from_str(&recorded).unwrap();
         assert_eq!(value["transcript_path"], "/state/acp/SESSION/raw.jsonl");
         assert_eq!(value["permission_mode"], "acceptEdits");
+    }
+
+    /// Regression test for the command-injection finding: a hook command
+    /// string built by embedding a tempfile path must escape that path for
+    /// shell interpolation. Without escaping, a path containing shell
+    /// metacharacters — here a single quote, `$(...)` command substitution,
+    /// and a space, combined in one filename — breaks out of the intended
+    /// `cat > <path>` command and executes the injected command instead of
+    /// being treated as a literal filename.
+    ///
+    /// The injected `$(touch ...)` payload targets a bare, no-slash relative
+    /// filename rather than an absolute path: a real filesystem path cannot
+    /// embed `/` characters within a single path component, so an absolute
+    /// sentinel path spliced into the marker's own filename text would make
+    /// `marker` itself unopenable — a filesystem-validity problem, not a
+    /// shell-escaping one. `run_command` does not set a child `current_dir`,
+    /// so if the exploit ever fires it lands in the test process's cwd; the
+    /// sentinel is looked up and removed there.
+    #[tokio::test]
+    async fn command_handler_command_string_escapes_shell_metacharacters_in_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sentinel_name = format!(
+            "acp_extras_shell_injection_sentinel_{}.tmp",
+            std::process::id()
+        );
+        let sentinel = std::env::current_dir().unwrap().join(&sentinel_name);
+        let _ = std::fs::remove_file(&sentinel); // best-effort cleanup from a prior failed run
+
+        let marker = dir
+            .path()
+            .join(format!("it's a $(touch {sentinel_name}) marker.json"));
+
+        // The hook copies its JSON stdin to the marker so the test can inspect it.
+        // Built via `serde_json::json!` (not a hand-templated JSON string) so
+        // the backslash `shell_escape_path` introduces for the embedded
+        // single quote is itself correctly JSON-escaped.
+        let command = format!("cat > {}", shell_escape_path(&marker));
+        let config_json = serde_json::json!({
+            "hooks": {
+                "SessionStart": [
+                    { "hooks": [ { "type": "command", "command": command } ] }
+                ]
+            }
+        });
+        let config: HookConfig = serde_json::from_value(config_json).unwrap();
+        let regs = config.build_registrations(None).unwrap();
+
+        let event = HookEvent::SessionStart {
+            session_id: "SESSION".to_string(),
+            source: SessionSource::Startup,
+            cwd: std::path::PathBuf::from("/project"),
+        };
+        let _ = regs[0].handler.handle(&event).await;
+
+        let sentinel_created = sentinel.exists();
+        let _ = std::fs::remove_file(&sentinel);
+        assert!(
+            !sentinel_created,
+            "shell metacharacters embedded in the path must not execute an injected command"
+        );
+
+        let recorded = std::fs::read_to_string(&marker).unwrap_or_else(|e| {
+            panic!(
+                "expected the hook to write to the literal marker path {marker:?}, got error: {e}"
+            )
+        });
+        let value: serde_json::Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(value["cwd"], "/project");
     }
 
     #[test]
