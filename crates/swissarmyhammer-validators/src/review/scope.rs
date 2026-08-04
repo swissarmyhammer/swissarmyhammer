@@ -399,7 +399,8 @@ impl FileWork {
 
     /// The file's **complete** current source, inlined in full into the review
     /// payload so the model never needs to `read_file` the changed file (see
-    /// the field's invariants on wholeness and the `batch_size` hard error).
+    /// the field's invariants on wholeness and how [`batch_work_list`] excludes
+    /// an oversized file as a [`SkippedFile`] gap instead of trimming it).
     pub fn source_slice(&self) -> &str {
         &self.source_slice
     }
@@ -806,8 +807,9 @@ fn compute_per_file_facts(
         // The changed file is always inlined in FULL: the model re-reads any file
         // it is not given whole, and those round-trips dominate review wall-clock.
         // A deletion has no current content, so its source is empty (the removal
-        // is carried by the semantic diff). A file too large for the review
-        // `batch_size` is never trimmed here — [`batch_work_list`] rejects it.
+        // is carried by the semantic diff). A file whose rendered block would
+        // exceed the batch budget is never trimmed here either — [`batch_work_list`]
+        // excludes it and reports it as a [`SkippedFile`] gap instead.
         let source_slice = after_content.get(file).cloned().unwrap_or_default();
         per_file.insert(
             file.clone(),

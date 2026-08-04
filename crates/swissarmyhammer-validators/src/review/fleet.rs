@@ -1519,9 +1519,11 @@ with an empty array `[]`.
 /// The changed file is always handed to the model **in full** — framed explicitly
 /// as the complete current contents the model does NOT need to re-read, because
 /// the read-round-trips that dominated review wall-clock came from the model
-/// re-reading a file it was only given a partial slice of. A file too large for
-/// the review `batch_size` never reaches here as a partial view: the scope stage
-/// rejects it with a hard error rather than trimming it to a slice.
+/// re-reading a file it was only given a partial slice of. A file whose rendered
+/// block would exceed the batch budget never reaches here as a partial view:
+/// [`batch_work_list`](crate::review::scope::batch_work_list) excludes it and
+/// reports it as a [`SkippedFile`](crate::review::scope::SkippedFile) gap instead
+/// of trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path());
 
