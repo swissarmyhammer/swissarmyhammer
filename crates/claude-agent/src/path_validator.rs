@@ -29,37 +29,37 @@ pub struct PathValidator {
 /// Errors that can occur during path validation
 #[derive(Debug, Error, PartialEq)]
 pub enum PathValidationError {
-    #[error("Path is not absolute: {0}")]
+    #[error("path is not absolute: {0}")]
     NotAbsolute(String),
 
-    #[error("Path traversal attempt detected in: {0}")]
+    #[error("path traversal attempt detected in: {0}")]
     PathTraversalAttempt(String),
 
-    #[error("Path contains relative components: {0}")]
+    #[error("path contains relative components: {0}")]
     RelativeComponent(String),
 
-    #[error("Path too long: {0} characters > maximum allowed ({1})")]
+    #[error("path too long: {0} characters > maximum allowed ({1})")]
     PathTooLong(usize, usize),
 
-    #[error("Path canonicalization failed for {0}: {1}")]
+    #[error("path canonicalization failed for {0}: {1}")]
     CanonicalizationFailed(String, String),
 
-    #[error("Path outside allowed boundaries: {0}")]
+    #[error("path outside allowed boundaries: {0}")]
     OutsideBoundaries(String),
 
-    #[error("Path is blocked: {0}")]
+    #[error("path is blocked: {0}")]
     Blocked(String),
 
-    #[error("Invalid path format: {0}")]
+    #[error("invalid path format: {0}")]
     InvalidFormat(String),
 
-    #[error("Path contains null bytes")]
+    #[error("path contains null bytes")]
     NullBytesInPath,
 
-    #[error("Empty path provided")]
+    #[error("empty path provided")]
     EmptyPath,
 
-    #[error("Insufficient permissions for path {path}: missing {required}")]
+    #[error("insufficient permissions for path {path}: missing {required}")]
     InsufficientPermissions { path: String, required: String },
 }
 

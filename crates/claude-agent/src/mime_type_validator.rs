@@ -5,7 +5,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 pub enum MimeTypeValidationError {
-    #[error("Unsupported MIME type for {content_type}: {mime_type}")]
+    #[error("unsupported MIME type for {content_type}: {mime_type}")]
     UnsupportedMimeType {
         content_type: String,
         mime_type: String,
@@ -24,9 +24,9 @@ pub enum MimeTypeValidationError {
         detected: String,
         mime_type: String,
     },
-    #[error("Invalid MIME type format: {mime_type}")]
+    #[error("invalid MIME type format: {mime_type}")]
     InvalidFormat { mime_type: String },
-    #[error("Content validation failed: {details}")]
+    #[error("content validation failed: {details}")]
     ContentValidation { details: String },
 }
 

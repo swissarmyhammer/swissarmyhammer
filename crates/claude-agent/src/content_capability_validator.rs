@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 /// Errors that can occur during content capability validation
 #[derive(Debug, Error, Clone)]
 pub enum ContentCapabilityError {
-    #[error("Invalid content type: agent does not support {content_type} content")]
+    #[error("invalid content type: agent does not support {content_type} content")]
     UnsupportedContentType {
         content_type: String,
         declared_capability: bool,
@@ -19,10 +19,10 @@ pub enum ContentCapabilityError {
         supported_types: Vec<String>,
     },
 
-    #[error("Content validation failed: {reason}")]
+    #[error("content validation failed: {reason}")]
     ValidationFailed { reason: String },
 
-    #[error("Multiple content capability violations: {violation_count} issues")]
+    #[error("multiple content capability violations: {violation_count} issues")]
     MultipleViolations {
         violation_count: usize,
         violations: Vec<ContentCapabilityError>,
@@ -44,7 +44,7 @@ impl ContentCapabilityError {
                 required_capability,
                 supported_types,
             } => crate::acp_error::invalid_params(format!(
-                "Invalid content type: agent does not support {} content",
+                "invalid content type: agent does not support {} content",
                 content_type
             ))
             .data(json!({
@@ -54,14 +54,14 @@ impl ContentCapabilityError {
                 "supportedTypes": supported_types
             })),
             ContentCapabilityError::ValidationFailed { reason } => {
-                crate::acp_error::invalid_params(format!("Content validation failed: {}", reason))
+                crate::acp_error::invalid_params(format!("content validation failed: {}", reason))
                     .data(json!({ "reason": reason }))
             }
             ContentCapabilityError::MultipleViolations {
                 violation_count,
                 violations,
             } => crate::acp_error::invalid_params(format!(
-                "Multiple content capability violations: {} issues",
+                "multiple content capability violations: {} issues",
                 violation_count
             ))
             .data(json!({

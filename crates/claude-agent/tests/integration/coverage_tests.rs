@@ -249,7 +249,7 @@ fn test_agent_error_serialization() {
 #[test]
 fn test_agent_error_server_error_display() {
     let err = AgentError::ServerError("server crashed".to_string());
-    assert_eq!(err.to_string(), "Server error: server crashed");
+    assert_eq!(err.to_string(), "server error: server crashed");
     assert_eq!(err.to_json_rpc_code(), -32603);
 }
 
@@ -2396,5 +2396,5 @@ fn test_session_id_error_empty_display() {
 #[test]
 fn test_session_id_error_invalid_display() {
     let err = claude_agent::session::SessionId::parse("INVALID!!!").unwrap_err();
-    assert!(err.to_string().contains("Invalid ULID"));
+    assert!(err.to_string().contains("invalid ULID"));
 }

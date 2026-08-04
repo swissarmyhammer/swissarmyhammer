@@ -15,12 +15,12 @@ use url::Url;
 
 #[derive(Debug, Error, Clone)]
 pub enum ContentSecurityError {
-    #[error("Content security validation failed: {reason} (policy: {policy_violated})")]
+    #[error("content security validation failed: {reason} (policy: {policy_violated})")]
     SecurityValidationFailed {
         reason: String,
         policy_violated: String,
     },
-    #[error("Suspicious content detected: {threat_type} - {details}")]
+    #[error("suspicious content detected: {threat_type} - {details}")]
     SuspiciousContentDetected {
         threat_type: String,
         details: String,
@@ -34,21 +34,21 @@ pub enum ContentSecurityError {
     UriSecurityViolation { uri: String, reason: String },
     #[error("Base64 security violation: {reason}")]
     Base64SecurityViolation { reason: String },
-    #[error("Content type spoofing detected: declared {declared}, actual {actual}")]
+    #[error("content type spoofing detected: declared {declared}, actual {actual}")]
     ContentTypeSpoofingDetected { declared: String, actual: String },
-    #[error("Content sanitization failed: {reason}")]
+    #[error("content sanitization failed: {reason}")]
     ContentSanitizationFailed { reason: String },
     #[error("SSRF protection triggered: {target} - {reason}")]
     SsrfProtectionTriggered { target: String, reason: String },
-    #[error("Memory limit exceeded: {actual} > {limit} bytes")]
+    #[error("memory limit exceeded: {actual} > {limit} bytes")]
     MemoryLimitExceeded { actual: usize, limit: usize },
-    #[error("Rate limit exceeded: {operation}")]
+    #[error("rate limit exceeded: {operation}")]
     RateLimitExceeded { operation: String },
-    #[error("Content array too large: {length} > {max_length}")]
+    #[error("content array too large: {length} > {max_length}")]
     ContentArrayTooLarge { length: usize, max_length: usize },
-    #[error("Invalid content encoding: {encoding}")]
+    #[error("invalid content encoding: {encoding}")]
     InvalidContentEncoding { encoding: String },
-    #[error("Malicious pattern detected: {pattern_type}")]
+    #[error("malicious pattern detected: {pattern_type}")]
     MaliciousPatternDetected { pattern_type: String },
 }
 

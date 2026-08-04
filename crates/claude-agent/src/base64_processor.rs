@@ -11,27 +11,27 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 pub enum Base64ProcessorError {
-    #[error("Invalid base64 format: {0}")]
+    #[error("invalid base64 format: {0}")]
     InvalidBase64(String),
-    #[error("Data exceeds maximum size limit of {limit} bytes (actual: {actual})")]
+    #[error("data exceeds maximum size limit of {limit} bytes (actual: {actual})")]
     SizeExceeded { limit: usize, actual: usize },
-    #[error("Unsupported image format: {0}")]
+    #[error("unsupported image format: {0}")]
     UnsupportedImageFormat(String),
-    #[error("Unsupported audio format: {0}")]
+    #[error("unsupported audio format: {0}")]
     UnsupportedAudioFormat(String),
-    #[error("Format validation failed: expected {expected}, but data appears to be {actual}")]
+    #[error("format validation failed: expected {expected}, but data appears to be {actual}")]
     FormatMismatch { expected: String, actual: String },
     #[error("MIME type not allowed: {0}")]
     MimeTypeNotAllowed(String),
-    #[error("Memory allocation failed: insufficient memory for processing")]
+    #[error("memory allocation failed: insufficient memory for processing")]
     MemoryAllocationFailed,
-    #[error("Capability not supported: {capability}")]
+    #[error("capability not supported: {capability}")]
     CapabilityNotSupported { capability: String },
-    #[error("Security validation failed")]
+    #[error("security validation failed")]
     SecurityValidationFailed,
-    #[error("Enhanced security validation failed: {0}")]
+    #[error("enhanced security validation failed: {0}")]
     EnhancedSecurityValidationFailed(#[from] ContentSecurityError),
-    #[error("Content validation failed: {details}")]
+    #[error("content validation failed: {details}")]
     ContentValidationFailed { details: String },
     #[error("MIME type validation failed: {0}")]
     MimeTypeValidationFailed(#[from] MimeTypeValidationError),

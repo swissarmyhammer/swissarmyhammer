@@ -268,8 +268,36 @@ comments:
     - evidence: cargo nextest run --workspace — 13501 tests run: 13501 passed, 0 failed, 0 skipped (3 slow, 1 leaky); cargo clippy --workspace --all-targets --all-features -- -D warnings — clean, exit 0
     - next: none
   timestamp: 2026-08-04T20:18:46.111125+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz76x66t1210pz0cfqn89yn7
+  text: |-
+    ### commit — changed
+    - evidence: 31bdff42d fix(swissarmyhammer-common): close rustdoc fence, extract helpers, fix nested-retry bug
+    - next: ready for review
+
+    step: commit
+    outcome: changed
+    evidence: 31bdff42d fix(swissarmyhammer-common): close rustdoc fence, extract helpers, fix nested-retry bug
+    task: ^d525k4k
+  timestamp: 2026-08-04T20:19:42.426316+00:00
+- actor: claude-code
+  id: 01kz773ae961gkr7afk7ccw25v
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 31bdff42d) -> 1 raw finding, test_utils.rs:738 (`(0..5)` thread count in `test_concurrent_access`), dropped under the never-refactor-existing-tests rule (pre-existing test code, not touched by this commit's diff; same finding already dropped 3x in prior rounds at lines 673/669/702). Net: 0 live findings. All prior dated Review Findings sections fully checked.
+    - next: task moved to done.
+  timestamp: 2026-08-04T20:23:03.369051+00:00
+- actor: claude-code
+  id: 01kz773tp8kp0pefsnbet6scc2
+  text: |-
+    ### finish iteration 6 — clean
+    - implement: changed — closed rustdoc fence, extracted check_dir_exists/kill_and_wait helpers, fixed nested-retry bug
+    - test: green — cargo nextest run --workspace, 13501 passed; clippy clean
+    - commit: 31bdff42d
+    - review: clean — 0 net findings (1 raw finding dropped, pre-existing untouched test code); task moved to done
+  timestamp: 2026-08-04T20:23:20.008625+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa780
 title: Three committed .skills/ snapshots have drifted from builtin/skills/
 ---
 ## What

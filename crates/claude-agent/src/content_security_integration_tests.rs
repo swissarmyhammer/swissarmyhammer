@@ -418,7 +418,7 @@ mod tests {
         // Verify the error contains meaningful information
         let error_string = format!("{}", error);
         assert!(
-            error_string.contains("Content security validation failed")
+            error_string.contains("content security validation failed")
                 || error_string.contains("security")
                 || error_string.contains("validation")
         );

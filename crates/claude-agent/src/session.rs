@@ -177,7 +177,7 @@ pub enum SessionIdError {
     ///
     /// This error occurs when attempting to parse an empty string as a session ID.
     /// Provide a properly formatted ULID session ID.
-    #[error("Session ID cannot be empty")]
+    #[error("session ID cannot be empty")]
     Empty,
 
     /// The ULID is malformed
@@ -190,7 +190,7 @@ pub enum SessionIdError {
     /// - Invalid: `INVALID` (too short)
     /// - Invalid: `01ARZ3NDEKTSV4RRFFQ69G5FAV!!!` (invalid characters)
     /// - Valid: `01ARZ3NDEKTSV4RRFFQ69G5FAV`
-    #[error("Invalid ULID format in session ID '{provided}': {error}")]
+    #[error("invalid ULID format in session ID '{provided}': {error}")]
     InvalidUlid { provided: String, error: String },
 }
 

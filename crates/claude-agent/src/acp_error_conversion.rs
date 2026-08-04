@@ -20,46 +20,46 @@ use uuid::Uuid;
 /// Content processing error with ACP compliance
 #[derive(Debug, Error)]
 pub enum ContentProcessingError {
-    #[error("Invalid content block structure: {0}")]
+    #[error("invalid content block structure: {0}")]
     InvalidStructure(String),
 
-    #[error("Unsupported content type: {content_type}, supported types: {supported:?}")]
+    #[error("unsupported content type: {content_type}, supported types: {supported:?}")]
     UnsupportedContentType {
         content_type: String,
         supported: Vec<String>,
     },
 
-    #[error("Invalid base64 data: {0}")]
+    #[error("invalid base64 data: {0}")]
     InvalidBase64(String),
 
-    #[error("Content size exceeded: {size} > {limit}")]
+    #[error("content size exceeded: {size} > {limit}")]
     ContentSizeExceeded { size: usize, limit: usize },
 
     #[error("MIME type validation failed: {mime_type} does not match content format")]
     MimeTypeMismatch { mime_type: String },
 
-    #[error("Content capability not supported: {capability}")]
+    #[error("content capability not supported: {capability}")]
     CapabilityNotSupported { capability: String },
 
-    #[error("Security validation failed: {reason}")]
+    #[error("security validation failed: {reason}")]
     SecurityViolation { reason: String },
 
-    #[error("Memory pressure: insufficient memory for content processing")]
+    #[error("memory pressure: insufficient memory for content processing")]
     MemoryPressure,
 
-    #[error("Resource contention: processing queue full")]
+    #[error("resource contention: processing queue full")]
     ResourceContention,
 
-    #[error("Invalid URI format: {uri}")]
+    #[error("invalid URI format: {uri}")]
     InvalidUri { uri: String },
 
-    #[error("Missing required field: {field}")]
+    #[error("missing required field: {field}")]
     MissingRequiredField { field: String },
 
-    #[error("Content validation failed: {details}")]
+    #[error("content validation failed: {details}")]
     ContentValidationFailed { details: String },
 
-    #[error("Format detection failed: {reason}")]
+    #[error("format detection failed: {reason}")]
     FormatDetectionFailed { reason: String },
 }
 
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(json_rpc_error.code, -32602);
         assert_eq!(
             json_rpc_error.message,
-            "Invalid base64 format: Invalid padding"
+            "invalid base64 format: Invalid padding"
         );
 
         if let Some(data) = json_rpc_error.data {
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(json_rpc_error.code, -32602);
         assert_eq!(
             json_rpc_error.message,
-            "Data exceeds maximum size limit of 1024 bytes (actual: 2048)"
+            "data exceeds maximum size limit of 1024 bytes (actual: 2048)"
         );
 
         if let Some(data) = json_rpc_error.data {
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(json_rpc_error.code, -32602);
         assert_eq!(
             json_rpc_error.message,
-            "Security validation failed: sensitive internal details"
+            "security validation failed: sensitive internal details"
         );
 
         if let Some(data) = json_rpc_error.data {
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(json_rpc_error.code, -32602);
         assert!(json_rpc_error
             .message
-            .contains("Invalid content block structure"));
+            .contains("invalid content block structure"));
 
         if let Some(data) = json_rpc_error.data {
             assert_eq!(data["error"], "invalid_structure");
@@ -443,7 +443,7 @@ mod tests {
         let json_rpc_error = error.to_json_rpc_error();
 
         assert_eq!(json_rpc_error.code, -32602);
-        assert!(json_rpc_error.message.contains("Invalid base64"));
+        assert!(json_rpc_error.message.contains("invalid base64"));
     }
 
     #[test]

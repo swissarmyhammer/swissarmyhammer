@@ -26,35 +26,35 @@ pub struct EnhancedSecurityConfig {
 pub enum ContentBlockProcessorError {
     #[error("Base64 processing error: {0}")]
     Base64Error(#[from] Base64ProcessorError),
-    #[error("Resource validation error: {0}")]
+    #[error("resource validation error: {0}")]
     ResourceValidation(String),
     #[error("ResourceLink validation error: {0}")]
     ResourceLinkValidation(String),
-    #[error("Unsupported content type: {0}")]
+    #[error("unsupported content type: {0}")]
     UnsupportedContentType(String),
-    #[error("Missing required field: {0}")]
+    #[error("missing required field: {0}")]
     MissingRequiredField(String),
-    #[error("Invalid URI format: {0}")]
+    #[error("invalid URI format: {0}")]
     InvalidUri(String),
-    #[error("Content size exceeds limit: {actual} > {limit} bytes")]
+    #[error("content size exceeds limit: {actual} > {limit} bytes")]
     ContentSizeExceeded { actual: usize, limit: usize },
-    #[error("Invalid annotation: {0}")]
+    #[error("invalid annotation: {0}")]
     InvalidAnnotation(String),
-    #[error("Capability not supported: {capability}")]
+    #[error("capability not supported: {capability}")]
     CapabilityNotSupported { capability: String },
-    #[error("Content validation failed: {details}")]
+    #[error("content validation failed: {details}")]
     ContentValidationFailed { details: String },
-    #[error("Invalid content structure: {details}")]
+    #[error("invalid content structure: {details}")]
     InvalidContentStructure { details: String },
-    #[error("Memory allocation failed during processing")]
+    #[error("memory allocation failed during processing")]
     MemoryAllocationFailed,
-    #[error("Batch processing partially failed: {successful}/{total} items processed")]
+    #[error("batch processing partially failed: {successful}/{total} items processed")]
     PartialBatchFailure { successful: usize, total: usize },
-    #[error("Resource link fetch failed: {uri}")]
+    #[error("resource link fetch failed: {uri}")]
     ResourceLinkFetchFailed { uri: String },
-    #[error("Content array validation failed: {details}")]
+    #[error("content array validation failed: {details}")]
     ContentArrayValidationFailed { details: String },
-    #[error("Content security validation failed: {0}")]
+    #[error("content security validation failed: {0}")]
     ContentSecurityValidationFailed(#[from] ContentSecurityError),
 }
 

@@ -3190,7 +3190,7 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid session ID format") || error.contains("Session not found"));
+        assert!(error.contains("invalid session ID format") || error.contains("Session not found"));
     }
 
     #[tokio::test]

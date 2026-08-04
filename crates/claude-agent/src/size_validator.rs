@@ -4,7 +4,7 @@ use thiserror::Error;
 /// Unified error type for size validation failures
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum SizeValidationError {
-    #[error("Size exceeds limit for {field}: {actual} bytes > {limit} bytes")]
+    #[error("size exceeds limit for {field}: {actual} bytes > {limit} bytes")]
     SizeExceeded {
         field: String,
         actual: usize,

@@ -24,11 +24,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 pub enum Base64ValidationError {
-    #[error("Empty base64 data")]
+    #[error("empty base64 data")]
     EmptyData,
-    #[error("Contains invalid characters")]
+    #[error("contains invalid characters")]
     InvalidCharacters,
-    #[error("Invalid base64 padding")]
+    #[error("invalid base64 padding")]
     InvalidPadding,
 }
 

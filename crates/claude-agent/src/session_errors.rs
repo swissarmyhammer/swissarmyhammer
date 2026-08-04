@@ -28,17 +28,17 @@ pub struct InvalidParameterTypeDetails {
 #[derive(Error, Debug, Clone)]
 pub enum SessionSetupError {
     // Working directory errors
-    #[error("Invalid working directory: path must be absolute")]
+    #[error("invalid working directory: path must be absolute")]
     WorkingDirectoryNotAbsolute {
         provided_path: PathBuf,
         requirement: String,
         example: String,
     },
 
-    #[error("Working directory not found: {path}")]
+    #[error("working directory not found: {path}")]
     WorkingDirectoryNotFound { path: PathBuf },
 
-    #[error("Working directory access denied: insufficient permissions")]
+    #[error("working directory access denied: insufficient permissions")]
     WorkingDirectoryPermissionDenied {
         path: PathBuf,
         required_permissions: Vec<String>,
@@ -50,13 +50,13 @@ pub enum SessionSetupError {
         source: std::sync::Arc<std::io::Error>,
     },
 
-    #[error("Working directory path contains invalid characters")]
+    #[error("working directory path contains invalid characters")]
     WorkingDirectoryInvalidPath {
         path: PathBuf,
         invalid_chars: Vec<String>,
     },
 
-    #[error("Working directory is a network path which is not supported")]
+    #[error("working directory is a network path which is not supported")]
     WorkingDirectoryNetworkPath { path: PathBuf, suggestion: String },
 
     // MCP server connection errors
@@ -104,33 +104,33 @@ pub enum SessionSetupError {
     },
 
     // Session loading errors
-    #[error("Session not found: sessionId does not exist or has expired")]
+    #[error("session not found: sessionId does not exist or has expired")]
     SessionNotFound {
         session_id: SessionId,
         available_sessions: Vec<String>,
     },
 
-    #[error("Session expired: session has exceeded maximum age")]
+    #[error("session expired: session has exceeded maximum age")]
     SessionExpired {
         session_id: SessionId,
         expired_at: String,
         max_age_seconds: u64,
     },
 
-    #[error("Session load failed: corrupted session data")]
+    #[error("session load failed: corrupted session data")]
     SessionCorrupted {
         session_id: SessionId,
         corruption_details: String,
     },
 
-    #[error("Session storage backend failure")]
+    #[error("session storage backend failure")]
     SessionStorageFailure {
         session_id: Option<SessionId>,
         storage_error: String,
         recovery_suggestion: String,
     },
 
-    #[error("Session history replay failed")]
+    #[error("session history replay failed")]
     SessionHistoryReplayFailed {
         session_id: SessionId,
         failed_at_message: usize,
@@ -139,7 +139,7 @@ pub enum SessionSetupError {
     },
 
     // Capability validation errors
-    #[error("Transport not supported: agent does not support {requested_transport} transport")]
+    #[error("transport not supported: agent does not support {requested_transport} transport")]
     TransportNotSupported {
         requested_transport: String,
         declared_capability: bool,
@@ -149,52 +149,52 @@ pub enum SessionSetupError {
     #[error("LoadSession capability not supported")]
     LoadSessionNotSupported { declared_capability: bool },
 
-    #[error("Capability format validation failed")]
+    #[error("capability format validation failed")]
     CapabilityFormatError {
         capability_name: String,
         expected_format: String,
         actual_value: Value,
     },
 
-    #[error("Unknown capability: {capability_name}")]
+    #[error("unknown capability: {capability_name}")]
     UnknownCapability {
         capability_name: String,
         known_capabilities: Vec<String>,
     },
 
-    #[error("Capability not supported: {capability_name} required for {required_for}")]
+    #[error("capability not supported: {capability_name} required for {required_for}")]
     CapabilityNotSupported {
         capability_name: String,
         required_for: String,
     },
 
     // Request validation errors
-    #[error("Malformed session request: {details}")]
+    #[error("malformed session request: {details}")]
     MalformedRequest {
         request_type: String, // "session/new" or "session/load"
         details: String,
         example: Option<String>,
     },
 
-    #[error("Invalid session ID format")]
+    #[error("invalid session ID format")]
     InvalidSessionId {
         provided_id: String,
         expected_format: String,
         example: String,
     },
 
-    #[error("Missing required parameter: {parameter_name}")]
+    #[error("missing required parameter: {parameter_name}")]
     MissingRequiredParameter {
         request_type: String,
         parameter_name: String,
         parameter_type: String,
     },
 
-    #[error("Invalid parameter type for parameter")]
+    #[error("invalid parameter type for parameter")]
     InvalidParameterType(Box<InvalidParameterTypeDetails>),
 
     // Cleanup and recovery errors
-    #[error("Partial session cleanup failed")]
+    #[error("partial session cleanup failed")]
     PartialSessionCleanupFailed {
         session_id: SessionId,
         cleanup_errors: Vec<String>,
@@ -668,7 +668,7 @@ mod tests {
             protocol_error.code,
             agent_client_protocol::ErrorCode::InvalidParams
         );
-        assert!(protocol_error.message.contains("Invalid session ID format"));
+        assert!(protocol_error.message.contains("invalid session ID format"));
         assert!(protocol_error.data.is_some());
     }
 

@@ -42,7 +42,7 @@ pub enum McpError {
     /// Occurs when the system cannot execute the MCP server command,
     /// typically due to missing executable, insufficient permissions,
     /// or invalid command configuration.
-    #[error("Failed to spawn MCP server process '{0}': {1}")]
+    #[error("failed to spawn MCP server process '{0}': {1}")]
     ProcessSpawnFailed(String, #[source] std::io::Error),
 
     /// MCP server stdin stream is not available for writing
@@ -112,7 +112,7 @@ pub enum McpError {
     ///
     /// Occurs when MCP server configuration contains invalid values,
     /// missing required fields, or unsupported transport types.
-    #[error("Invalid MCP configuration: {0}")]
+    #[error("invalid MCP configuration: {0}")]
     InvalidConfiguration(String),
 
     /// JSON message serialization or deserialization failed
@@ -188,40 +188,40 @@ pub enum AgentError {
     #[error("MCP error: {0}")]
     Mcp(#[from] McpError),
 
-    #[error("Path validation error: {0}")]
+    #[error("path validation error: {0}")]
     PathValidation(#[from] crate::path_validator::PathValidationError),
 
-    #[error("Protocol error: {0}")]
+    #[error("protocol error: {0}")]
     Protocol(String),
 
-    #[error("Session error: {0}")]
+    #[error("session error: {0}")]
     Session(String),
 
-    #[error("Tool execution error: {0}")]
+    #[error("tool execution error: {0}")]
     ToolExecution(String),
 
-    #[error("Configuration error: {0}")]
+    #[error("configuration error: {0}")]
     Config(String),
 
-    #[error("Server error: {0}")]
+    #[error("server error: {0}")]
     ServerError(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Serialization error: {0}")]
+    #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    #[error("Permission denied: {0}")]
+    #[error("permission denied: {0}")]
     PermissionDenied(String),
 
-    #[error("Invalid request: {0}")]
+    #[error("invalid request: {0}")]
     InvalidRequest(String),
 
-    #[error("Method not found: {0}")]
+    #[error("method not found: {0}")]
     MethodNotFound(String),
 
-    #[error("Internal error: {0}")]
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
@@ -292,7 +292,7 @@ mod tests {
         let error = AgentError::Protocol("test protocol error".to_string());
         let json_rpc = <AgentError as ToJsonRpcError>::to_json_rpc_error(&error);
         assert_eq!(json_rpc.code, -32600);
-        assert_eq!(json_rpc.message, "Protocol error: test protocol error");
+        assert_eq!(json_rpc.message, "protocol error: test protocol error");
         assert!(json_rpc.data.is_none());
 
         // Test McpError trait implementation
@@ -336,28 +336,28 @@ mod tests {
         assert_eq!(err.to_string(), "Claude process error: process failed");
 
         let err = AgentError::Protocol("test protocol error".to_string());
-        assert_eq!(err.to_string(), "Protocol error: test protocol error");
+        assert_eq!(err.to_string(), "protocol error: test protocol error");
 
         let err = AgentError::Session("session timeout".to_string());
-        assert_eq!(err.to_string(), "Session error: session timeout");
+        assert_eq!(err.to_string(), "session error: session timeout");
 
         let err = AgentError::ToolExecution("tool failed".to_string());
-        assert_eq!(err.to_string(), "Tool execution error: tool failed");
+        assert_eq!(err.to_string(), "tool execution error: tool failed");
 
         let err = AgentError::Config("invalid config".to_string());
-        assert_eq!(err.to_string(), "Configuration error: invalid config");
+        assert_eq!(err.to_string(), "configuration error: invalid config");
 
         let err = AgentError::PermissionDenied("access denied".to_string());
-        assert_eq!(err.to_string(), "Permission denied: access denied");
+        assert_eq!(err.to_string(), "permission denied: access denied");
 
         let err = AgentError::InvalidRequest("bad request".to_string());
-        assert_eq!(err.to_string(), "Invalid request: bad request");
+        assert_eq!(err.to_string(), "invalid request: bad request");
 
         let err = AgentError::MethodNotFound("unknown method".to_string());
-        assert_eq!(err.to_string(), "Method not found: unknown method");
+        assert_eq!(err.to_string(), "method not found: unknown method");
 
         let err = AgentError::Internal("internal error".to_string());
-        assert_eq!(err.to_string(), "Internal error: internal error");
+        assert_eq!(err.to_string(), "internal error: internal error");
 
         // Test PathValidation error
         let path_err =
@@ -365,7 +365,7 @@ mod tests {
         let err = AgentError::PathValidation(path_err);
         assert_eq!(
             err.to_string(),
-            "Path validation error: Path is not absolute: relative/path"
+            "path validation error: path is not absolute: relative/path"
         );
     }
 
@@ -466,7 +466,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::InvalidRequest
         );
-        assert_eq!(acp_error.message, "Protocol error: invalid protocol");
+        assert_eq!(acp_error.message, "protocol error: invalid protocol");
 
         // Test ToolExecution error conversion. ACP 0.11 maps -32000 to
         // `ErrorCode::AuthRequired` (the JSON-RPC server-error range is repurposed
@@ -479,7 +479,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::AuthRequired
         );
-        assert_eq!(acp_error.message, "Tool execution error: command failed");
+        assert_eq!(acp_error.message, "tool execution error: command failed");
 
         // Test Session error conversion (also -32000 → AuthRequired in ACP 0.11).
         let agent_error = AgentError::Session("session expired".to_string());
@@ -488,7 +488,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::AuthRequired
         );
-        assert_eq!(acp_error.message, "Session error: session expired");
+        assert_eq!(acp_error.message, "session error: session expired");
 
         // Test InvalidRequest error conversion
         let agent_error = AgentError::InvalidRequest("bad params".to_string());
@@ -497,7 +497,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::InvalidParams
         );
-        assert_eq!(acp_error.message, "Invalid request: bad params");
+        assert_eq!(acp_error.message, "invalid request: bad params");
 
         // Test MethodNotFound error conversion
         let agent_error = AgentError::MethodNotFound("unknown_method".to_string());
@@ -506,7 +506,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::MethodNotFound
         );
-        assert_eq!(acp_error.message, "Method not found: unknown_method");
+        assert_eq!(acp_error.message, "method not found: unknown_method");
 
         // Test Internal error conversion
         let agent_error = AgentError::Internal("unexpected error".to_string());
@@ -515,7 +515,7 @@ mod tests {
             acp_error.code,
             agent_client_protocol::ErrorCode::InternalError
         );
-        assert_eq!(acp_error.message, "Internal error: unexpected error");
+        assert_eq!(acp_error.message, "internal error: unexpected error");
     }
 
     #[test]
