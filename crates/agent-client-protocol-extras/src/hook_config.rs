@@ -437,14 +437,28 @@ impl HookEvent {
     }
 }
 
+/// Build the base JSON object shared by every hook event: `hook_event_name`
+/// and `cwd`, plus `session_id` when the event carries one.
+///
+/// Every `json_*` helper in this file builds its event-specific JSON on top
+/// of this single base builder, so the base fields are constructed in
+/// exactly one place no matter how many hook event shapes exist.
+fn base_event_json(session_id: Option<&str>, event_name: &str, cwd: &Path) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": event_name,
+    });
+    if let Some(session_id) = session_id {
+        obj["session_id"] = serde_json::Value::String(session_id.to_string());
+    }
+    obj
+}
+
 /// Build JSON for a `SessionStart` event.
 fn json_session_start(session_id: &str, source: SessionSource, cwd: &Path) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "SessionStart",
-        "source": source.as_str(),
-    })
+    let mut obj = base_event_json(Some(session_id), "SessionStart", cwd);
+    obj["source"] = serde_json::Value::String(source.as_str().to_string());
+    obj
 }
 
 /// Build JSON for a `UserPromptSubmit` event.
@@ -453,12 +467,9 @@ fn json_user_prompt_submit(
     prompt: &[ContentBlock],
     cwd: &Path,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "UserPromptSubmit",
-        "prompt": extract_prompt_text(prompt),
-    })
+    let mut obj = base_event_json(Some(session_id), "UserPromptSubmit", cwd);
+    obj["prompt"] = serde_json::Value::String(extract_prompt_text(prompt));
+    obj
 }
 
 /// Build JSON for a `PostToolUseFailure` event.
@@ -492,23 +503,18 @@ fn json_stop(
     stop_hook_active: bool,
     cwd: &Path,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "Stop",
-        "stop_reason": format!("{:?}", stop_reason),
-        "stop_hook_active": stop_hook_active,
-    })
+    let mut obj = base_event_json(Some(session_id), "Stop", cwd);
+    obj["stop_reason"] = serde_json::Value::String(format!("{:?}", stop_reason));
+    obj["stop_hook_active"] = serde_json::Value::Bool(stop_hook_active);
+    obj
 }
 
 /// Build JSON for a `Notification` event.
 fn json_notification(notification: &SessionNotification, cwd: &Path) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": notification.session_id.to_string(),
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "Notification",
-        "notification_type": notification_update_name(&notification.update),
-    });
+    let session_id = notification.session_id.to_string();
+    let mut obj = base_event_json(Some(&session_id), "Notification", cwd);
+    obj["notification_type"] =
+        serde_json::Value::String(notification_update_name(&notification.update).to_string());
     if let Ok(update_value) = serde_json::to_value(&notification.update) {
         obj["notification"] = update_value;
     }
@@ -524,13 +530,9 @@ fn json_elicitation(
     requested_schema: &serde_json::Value,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "Elicitation",
-        "mode": mode,
-        "requested_schema": requested_schema,
-    });
+    let mut obj = base_event_json(Some(session_id), "Elicitation", cwd);
+    obj["mode"] = serde_json::Value::String(mode.to_string());
+    obj["requested_schema"] = requested_schema.clone();
     if let Some(name) = mcp_server_name {
         obj["mcp_server_name"] = serde_json::Value::String(name.clone());
     }
@@ -549,14 +551,10 @@ fn json_elicitation_result(
     elicitation_id: &str,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "ElicitationResult",
-        "mcp_server_name": mcp_server_name,
-        "content": content,
-        "elicitation_id": elicitation_id,
-    });
+    let mut obj = base_event_json(Some(session_id), "ElicitationResult", cwd);
+    obj["mcp_server_name"] = serde_json::Value::String(mcp_server_name.to_string());
+    obj["content"] = content.clone();
+    obj["elicitation_id"] = serde_json::Value::String(elicitation_id.to_string());
     if let Some(a) = action {
         obj["action"] = serde_json::Value::String(a.clone());
     }
@@ -569,19 +567,16 @@ fn json_instructions_loaded(
     load_reason: &str,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "InstructionsLoaded",
-        "load_reason": load_reason,
-    });
+    let mut obj = base_event_json(None, "InstructionsLoaded", cwd);
+    obj["load_reason"] = serde_json::Value::String(load_reason.to_string());
     if let Some(fp) = file_path {
         obj["file_path"] = serde_json::Value::String(fp.clone());
     }
     obj
 }
 
-/// Build a base session-event JSON object (`session_id`, `cwd`,
-/// `hook_event_name`) and conditionally add one optional string field.
+/// Build a session-scoped event JSON object on top of [`base_event_json`],
+/// with one optional string field conditionally added.
 ///
 /// Shared by hook events whose JSON shape is the base fields plus a single
 /// optional named field — e.g. `ConfigChange`'s `source` and
@@ -593,11 +588,7 @@ fn build_session_event_with_optional_string(
     optional_value: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": event_name,
-    });
+    let mut obj = base_event_json(Some(session_id), event_name, cwd);
     if let Some(value) = optional_value {
         obj[optional_field_name] = serde_json::Value::String(value.clone());
     }
@@ -615,10 +606,7 @@ fn json_worktree_create(
     branch_name: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "WorktreeCreate",
-    });
+    let mut obj = base_event_json(None, "WorktreeCreate", cwd);
     if let Some(wp) = worktree_path {
         obj["worktree_path"] = serde_json::Value::String(wp.clone());
     }
@@ -630,20 +618,14 @@ fn json_worktree_create(
 
 /// Build JSON for a `WorktreeRemove` event.
 fn json_worktree_remove(worktree_path: &str, cwd: &Path) -> serde_json::Value {
-    serde_json::json!({
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "WorktreeRemove",
-        "worktree_path": worktree_path,
-    })
+    let mut obj = base_event_json(None, "WorktreeRemove", cwd);
+    obj["worktree_path"] = serde_json::Value::String(worktree_path.to_string());
+    obj
 }
 
 /// Build JSON for a `PostCompact` event.
 fn json_post_compact(session_id: &str, cwd: &Path) -> serde_json::Value {
-    serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "PostCompact",
-    })
+    base_event_json(Some(session_id), "PostCompact", cwd)
 }
 
 /// Build JSON for a `TeammateIdle` event.
@@ -668,11 +650,7 @@ fn json_task_completed(
     task_title: &Option<String>,
     cwd: &Path,
 ) -> serde_json::Value {
-    let mut obj = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": "TaskCompleted",
-    });
+    let mut obj = base_event_json(Some(session_id), "TaskCompleted", cwd);
     if let Some(id) = task_id {
         obj["task_id"] = serde_json::Value::String(id.clone());
     }
@@ -692,12 +670,8 @@ fn tool_event_json(
     tool_use_id: &Option<String>,
     tool_response: &Option<serde_json::Value>,
 ) -> serde_json::Value {
-    let mut o = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": event_name,
-        "tool_name": tool_name,
-    });
+    let mut o = base_event_json(Some(session_id), event_name, cwd);
+    o["tool_name"] = serde_json::Value::String(tool_name.to_string());
     o["tool_input"] = tool_input.clone().unwrap_or(serde_json::json!({}));
     if let Some(id) = tool_use_id {
         o["tool_use_id"] = serde_json::Value::String(id.clone());
