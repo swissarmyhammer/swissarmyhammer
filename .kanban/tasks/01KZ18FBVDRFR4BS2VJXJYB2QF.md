@@ -23,6 +23,60 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T04:54:56.104564+00:00
+- actor: claude-code
+  id: 01kz5j5btgpbtfaahrexzhn4w2
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — added grammar-verified ComplexitySpec rows (full 6-test suite each) for 9 languages: typescript, tsx, javascript, python, java, c, cpp, csharp, php. Node kinds verified via scratch harnesses parsing real samples with tree_sitter_* crates and reading Node::to_sexp() output (scratch files deleted, confirmed not in the final diff). Generalized the shared walker (consequence_field/elif_kinds/else_wrapper_kinds) to handle 3 distinct verified if/else-if/else AST shapes, and generalized is_test_definition/attribute_marks_test for sibling/direct-child/container-wrapped attribute placements. Fixed a knock-on: probes.rs's unmapped-language test used Python, now genuinely-unmapped Go. Deferred 6 languages (go, ruby, fortran, swift, elixir, bash) with specific named blockers each (no attribute construct / no alternative-field wrapper / functions indistinguishable by node kind) — filed as ^xsqz5hd, not attempted with unverified guesses.
+    - test: green — rdeps(swissarmyhammer-sem) 3328/3328 passed; swissarmyhammer-sem+swissarmyhammer-validators 621/621 passed; fmt clean; clippy clean
+    - commit: 50dc631de
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T04:57:55.792261+00:00
+- actor: claude-code
+  id: 01kz5k4bawc6r9nhqw4b1q6b5j
+  text: |-
+    ### review — findings
+    - evidence: 12 findings (after blame-check drop) — crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:235, :275, :422, :1514, :1695, :1847, :2000, :2176, :2383, :2540, :2690, :2863
+    - scope: review sha 50dc631de~1..50dc631de
+    - engine raw counts: 13 findings, 13 confirmed, 0 refuted
+    - dropped: crates/swissarmyhammer-validators/src/review/probes.rs:171 (render_probe_evidence complexity 24>15) — blames to 83ebacb2bf (2026-06-15), predates 50dc631de, out of scope
+    - next: /implement to resolve, then /review ^xjyb2qf
+  timestamp: 2026-08-04T05:14:51.100935+00:00
+- actor: claude-code
+  id: 01kz5k6d643ehp3fyh966y60d3
+  text: |-
+    ### finish iteration 1 — findings
+    - review: findings — engine ran successfully (13 raw, 1 blame-checked out as pre-existing probes.rs complexity). 12 survive, all genuine duplication in NEW code from this commit (not test-refactor-exception eligible): TSX_SPEC/JAVASCRIPT_SPEC byte-for-byte duplicate TYPESCRIPT_SPEC except language field; CPP_SPEC byte-for-byte duplicate of C_SPEC except language field; 7 only_function_* helpers (ts/tsx/js/py/c/cpp/php) repeat the same pattern instead of a shared parameterized helper; method_java/method_csharp duplicate the same "extract method by name from a class file" structure.
+    - next: /implement — dedupe the spec constants (share/derive TYPESCRIPT_SPEC->TSX_SPEC/JAVASCRIPT_SPEC and C_SPEC->CPP_SPEC where language differs only), parameterize only_function_* into one shared helper taking a language param, parameterize method_java/method_csharp similarly
+  timestamp: 2026-08-04T05:15:58.532714+00:00
+- actor: claude-code
+  id: 01kz5m29jx3an9brqadx02hjtk
+  text: |-
+    ### implement — changed
+
+    Fixed all 12 duplication findings in `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs`, grouped into 4 clusters:
+
+    1. **TSX_SPEC/JAVASCRIPT_SPEC duplicate TYPESCRIPT_SPEC** (:235, :275) — extracted a `const fn typescript_family_spec(language: &'static str) -> ComplexitySpec` with all shared field values; `TYPESCRIPT_SPEC`/`TSX_SPEC`/`JAVASCRIPT_SPEC` are now one-line calls (`typescript_family_spec("typescript")` etc.), each keeping its own doc comment explaining the language's specific grammar quirks.
+    2. **CPP_SPEC duplicates C_SPEC** (:422) — extracted a `const fn c_family_spec(language: &'static str) -> ComplexitySpec` the same way; `C_SPEC`/`CPP_SPEC` are now one-line calls.
+    3. **Seven `only_function_*` test helpers** (ts/tsx/js/py/c/cpp/php, :1514/:1695/:1847/:2000/:2383/:2540/:2863) — read all 7 to confirm the true common shape (parse `file`, assert exactly one function, return it; PHP additionally prefixes `<?php\n`). Extracted one shared `fn only_function_for(file: &str, source: &str) -> FunctionComplexity` plus a small `fn php_source(body: &str) -> String` for PHP's prefix. Deleted all 7 per-language wrapper functions and rewrote all 37 call sites (31 non-PHP + 6 PHP) to call `only_function_for` directly with the literal file path. Removed an orphaned doc comment (originally documenting the deleted `method_java`, misfiled above `java_switch_scores_once_and_arms_open_no_nesting`'s `#[test]`) found while checking for stray comments left by the deletions.
+    4. **method_java/method_csharp** (:2176, :2690) — extracted `fn method_in_class(file: &str, source: &str, name: &str) -> FunctionComplexity`; deleted both per-language versions and rewrote all 13 call sites (7 Java + 6 C#).
+
+    Did not touch the pre-existing Rust `only_function` helper or its call sites — out of scope per the task.
+
+    Also fixed a pre-existing double-encoding bug on this task's own description (flagged in the task instructions as a known hazard): the stored description had literal `\n`/`\"` two-character escape sequences instead of real newlines/quotes (confirmed at the byte level in the `.md` file). Decoded it back to real markdown while flipping the 12 checkboxes, then verified via `get task` that the re-saved description now round-trips correctly (single `\n` in the JSON encoding, i.e. real newlines).
+
+    Verification:
+    - `cargo check -p swissarmyhammer-sem --lib --tests` — clean (confirms the `const fn` struct-factory approach compiles for `static` initializers)
+    - `cargo nextest run -p swissarmyhammer-sem -p swissarmyhammer-validators` → 621/621 passed, 0 skipped (same as baseline)
+    - `cargo fmt --all` — clean
+    - `cargo clippy --workspace --all-targets -- -D warnings` — clean
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-sem)'` → 3328/3328 passed (1 slow), 0 skipped (same as baseline)
+    - `git status`/`git diff --stat` confirm only `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs` changed (227 insertions, 274 deletions after `cargo fmt`)
+
+    All 12 findings checked off in the `## Review Findings` section. Task left in `doing`.
+
+    next: /review
+  timestamp: 2026-08-04T05:31:12.349575+00:00
 position_column: doing
 position_ordinal: '8380'
 title: complexity scorer covers only Rust — map the remaining source_code languages
@@ -61,3 +115,20 @@ Along the way, the shared walker was generalized from Rust's `else_kinds`-scan t
 - [x] The per-language node kinds are verified against the grammar, not assumed — see the implement comment for the verification method (temporary `tests/grammar_dump*.rs` scratch harnesses, parsed with the real `tree_sitter_*` crates, deleted after use).
 
 #bug #review
+
+## Review Findings (2026-08-03 23:58)
+
+Scope: `review sha 50dc631de~1..50dc631de`. All line numbers below were blame-checked against `50dc631de` — each cited line traces to that commit. One engine finding (`crates/swissarmyhammer-validators/src/review/probes.rs:171`, cognitive complexity 24 > 15 on `render_probe_evidence`) was dropped: that function blames to `83ebacb2bf` (2026-06-15), predates this commit, and this commit touched only one unrelated line in that file (the Python-to-Go test-fixture swap). It is pre-existing and out of scope for this review.
+
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:235` — TSX_SPEC duplicates TYPESCRIPT_SPEC; both blocks are byte-for-byte identical except for the language field ('tsx' vs 'typescript'). Two blocks that differ only by a value should be extracted into a shared function with that value as a parameter. Extract a const function or macro that creates the spec with language as the sole parameter: all three C-like languages (TypeScript, TSX, JavaScript) share identical nesting_kinds, conditional handling, loop definitions, and operator tokens.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:275` — JAVASCRIPT_SPEC duplicates both TYPESCRIPT_SPEC and TSX_SPEC; all three are byte-for-byte identical except language field ('javascript' vs 'typescript' vs 'tsx'). One function with language as an argument would replace all three. Consolidate the three C-like language specs using a macro or const function factory pattern, passing only the language identifier to parameterize the difference.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:422` — CPP_SPEC duplicates C_SPEC; both blocks are byte-for-byte identical except for the language field ('cpp' vs 'c'). Two blocks that differ only by a value should be extracted into a shared function with that value as a parameter. Extract a const function or macro that generates the C-family spec with language as the sole parameter, since C and C++ share identical control-flow complexity rules.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:1514` — Near-match not extended: `only_function_ts` reinvents the `only_function` pattern instead of being parameterized. Consolidate `only_function_ts`, `only_function_tsx`, `only_function_js`, `only_function_py`, `only_function_c`, `only_function_cpp`, and `only_function_php` (all added by this commit) into one shared parameterized helper taking a file extension (and, for PHP, an optional source prefix) instead of one function per language.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:1695` — Near-match not extended: `only_function_tsx` duplicates the `only_function_ts`/`only_function_js`/etc. pattern with only the file path changed. Fold into the same shared parameterized helper as the other `only_function_*` variants.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:1847` — Near-match not extended: `only_function_js` duplicates the same `only_function_*` pattern with only the file path changed. Fold into the same shared parameterized helper as the other `only_function_*` variants.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2000` — Near-match not extended: `only_function_py` duplicates the same `only_function_*` pattern. Fold into the same shared parameterized helper as the other `only_function_*` variants.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2176` — Near-match not extended: `method_java` extracts a method by name from a class file; `method_csharp` (line 2690, also added by this commit) duplicates the same structure. Consolidate both into one parameterized helper, e.g. `fn method_in_class(source: &str, name: &str, file: &str)`.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2383` — Near-match not extended: `only_function_c` duplicates the same `only_function_*` pattern. Fold into the same shared parameterized helper as the other `only_function_*` variants.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2540` — Near-match not extended: `only_function_cpp` duplicates the same `only_function_*` pattern. Fold into the same shared parameterized helper as the other `only_function_*` variants.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2690` — Near-match not extended: `method_csharp` duplicates `method_java` (line 2176). Consolidate both into one parameterized helper, e.g. `fn method_in_class(source: &str, name: &str, file: &str)`.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:2863` — Near-match not extended: `only_function_php` duplicates the same `only_function_*` pattern (with an additional `<?php` source prefix). Fold into the same shared parameterized helper as the other `only_function_*` variants, with the prefix handled as an optional parameter.

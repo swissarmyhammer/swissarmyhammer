@@ -187,126 +187,66 @@ static RUST_SPEC: ComplexitySpec = ComplexitySpec {
     attribute_container_kinds: &[],
 };
 
+/// Shared field values for TypeScript, TSX, and JavaScript. All three
+/// grammars are C-like and produce identical node kinds for every field
+/// except the language id itself, confirmed by parsing the same
+/// control-flow and decorator samples under each grammar.
+const fn typescript_family_spec(language: &'static str) -> ComplexitySpec {
+    ComplexitySpec {
+        language,
+        function_kinds: &[
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+        ],
+        name_field: "name",
+        nesting_kinds: &[
+            "if_statement",
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+        ],
+        conditional_kinds: &["if_statement"],
+        consequence_field: "consequence",
+        elif_kinds: &[],
+        else_wrapper_kinds: &["else_clause"],
+        loop_kinds: &[
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+        ],
+        arm_kinds: &["switch_case", "switch_default"],
+        nest_only_kinds: &[],
+        logical_kinds: &["binary_expression"],
+        logical_operators: &["&&", "||"],
+        labelled_jump_kinds: &["continue_statement", "break_statement"],
+        label_kinds: &["statement_identifier"],
+        attribute_kinds: &["decorator"],
+        attribute_container_kinds: &[],
+    }
+}
+
 /// TypeScript. Verified against `tree_sitter_typescript` (the `LANGUAGE_TYPESCRIPT`
 /// grammar). Its decorator is a sibling of the `method_definition` it marks
 /// inside `class_body` — unlike JavaScript's, which nests it as a field of the
 /// method itself — confirmed by parsing a two-method class with only one
 /// decorated.
-static TYPESCRIPT_SPEC: ComplexitySpec = ComplexitySpec {
-    language: "typescript",
-    function_kinds: &[
-        "function_declaration",
-        "method_definition",
-        "arrow_function",
-    ],
-    name_field: "name",
-    nesting_kinds: &[
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "switch_statement",
-    ],
-    conditional_kinds: &["if_statement"],
-    consequence_field: "consequence",
-    elif_kinds: &[],
-    else_wrapper_kinds: &["else_clause"],
-    loop_kinds: &[
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-    ],
-    arm_kinds: &["switch_case", "switch_default"],
-    nest_only_kinds: &[],
-    logical_kinds: &["binary_expression"],
-    logical_operators: &["&&", "||"],
-    labelled_jump_kinds: &["continue_statement", "break_statement"],
-    label_kinds: &["statement_identifier"],
-    attribute_kinds: &["decorator"],
-    attribute_container_kinds: &[],
-};
+static TYPESCRIPT_SPEC: ComplexitySpec = typescript_family_spec("typescript");
 
 /// TSX. Verified against `tree_sitter_typescript` (the `LANGUAGE_TSX` grammar)
 /// by parsing the same control-flow and decorator samples used for TypeScript
 /// — the node kinds are identical; only the JSX-extended grammar differs, and
 /// none of the samples used JSX syntax.
-static TSX_SPEC: ComplexitySpec = ComplexitySpec {
-    language: "tsx",
-    function_kinds: &[
-        "function_declaration",
-        "method_definition",
-        "arrow_function",
-    ],
-    name_field: "name",
-    nesting_kinds: &[
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "switch_statement",
-    ],
-    conditional_kinds: &["if_statement"],
-    consequence_field: "consequence",
-    elif_kinds: &[],
-    else_wrapper_kinds: &["else_clause"],
-    loop_kinds: &[
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-    ],
-    arm_kinds: &["switch_case", "switch_default"],
-    nest_only_kinds: &[],
-    logical_kinds: &["binary_expression"],
-    logical_operators: &["&&", "||"],
-    labelled_jump_kinds: &["continue_statement", "break_statement"],
-    label_kinds: &["statement_identifier"],
-    attribute_kinds: &["decorator"],
-    attribute_container_kinds: &[],
-};
+static TSX_SPEC: ComplexitySpec = typescript_family_spec("tsx");
 
 /// JavaScript. Verified against `tree_sitter_javascript`. Its decorator is a
 /// `decorator:` field of the `method_definition` itself — unlike TypeScript's
 /// sibling placement — confirmed by parsing a decorated class method and
 /// reading the field name on the s-expression.
-static JAVASCRIPT_SPEC: ComplexitySpec = ComplexitySpec {
-    language: "javascript",
-    function_kinds: &[
-        "function_declaration",
-        "method_definition",
-        "arrow_function",
-    ],
-    name_field: "name",
-    nesting_kinds: &[
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "switch_statement",
-    ],
-    conditional_kinds: &["if_statement"],
-    consequence_field: "consequence",
-    elif_kinds: &[],
-    else_wrapper_kinds: &["else_clause"],
-    loop_kinds: &[
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-    ],
-    arm_kinds: &["switch_case", "switch_default"],
-    nest_only_kinds: &[],
-    logical_kinds: &["binary_expression"],
-    logical_operators: &["&&", "||"],
-    labelled_jump_kinds: &["continue_statement", "break_statement"],
-    label_kinds: &["statement_identifier"],
-    attribute_kinds: &["decorator"],
-    attribute_container_kinds: &[],
-};
+static JAVASCRIPT_SPEC: ComplexitySpec = typescript_family_spec("javascript");
 
 /// Python. Verified against `tree_sitter_python`. Its `if_statement` flattens
 /// every `elif_clause`/`else_clause` onto ONE repeated `alternative` field
@@ -379,6 +319,39 @@ static JAVA_SPEC: ComplexitySpec = ComplexitySpec {
     attribute_container_kinds: &["modifiers"],
 };
 
+/// Shared field values for C and C++. Their control-flow, loop, and
+/// attribute node kinds are identical — confirmed by parsing the same
+/// samples under each grammar — and [`walk_conditional`] fetches the
+/// `condition` field generically, so C++'s `condition_clause` wrapper vs.
+/// C's `parenthesized_expression` never needs to be modeled here.
+const fn c_family_spec(language: &'static str) -> ComplexitySpec {
+    ComplexitySpec {
+        language,
+        function_kinds: &["function_definition"],
+        name_field: "declarator",
+        nesting_kinds: &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+        ],
+        conditional_kinds: &["if_statement"],
+        consequence_field: "consequence",
+        elif_kinds: &[],
+        else_wrapper_kinds: &["else_clause"],
+        loop_kinds: &["for_statement", "while_statement", "do_statement"],
+        arm_kinds: &["case_statement"],
+        nest_only_kinds: &[],
+        logical_kinds: &["binary_expression"],
+        logical_operators: &["&&", "||"],
+        labelled_jump_kinds: &["goto_statement"],
+        label_kinds: &["statement_identifier"],
+        attribute_kinds: &["attribute"],
+        attribute_container_kinds: &["attribute_declaration"],
+    }
+}
+
 /// C. Verified against `tree_sitter_c`. A function's name sits several
 /// `declarator` fields deep (`function_definition` names its
 /// `function_declarator`, which names the plain identifier — one more
@@ -386,31 +359,7 @@ static JAVA_SPEC: ComplexitySpec = ComplexitySpec {
 /// generically by [`resolve_declarator_name`] rather than a C-specific
 /// special case. C has no labelled `break`/`continue`; its only labelled jump
 /// is `goto`, confirmed by parsing a `goto` past two nested `for` loops.
-static C_SPEC: ComplexitySpec = ComplexitySpec {
-    language: "c",
-    function_kinds: &["function_definition"],
-    name_field: "declarator",
-    nesting_kinds: &[
-        "if_statement",
-        "for_statement",
-        "while_statement",
-        "do_statement",
-        "switch_statement",
-    ],
-    conditional_kinds: &["if_statement"],
-    consequence_field: "consequence",
-    elif_kinds: &[],
-    else_wrapper_kinds: &["else_clause"],
-    loop_kinds: &["for_statement", "while_statement", "do_statement"],
-    arm_kinds: &["case_statement"],
-    nest_only_kinds: &[],
-    logical_kinds: &["binary_expression"],
-    logical_operators: &["&&", "||"],
-    labelled_jump_kinds: &["goto_statement"],
-    label_kinds: &["statement_identifier"],
-    attribute_kinds: &["attribute"],
-    attribute_container_kinds: &["attribute_declaration"],
-};
+static C_SPEC: ComplexitySpec = c_family_spec("c");
 
 /// C++. Verified against `tree_sitter_cpp`. Structurally identical to C's
 /// control flow (its `if_statement`'s `condition` wraps the value in a
@@ -419,31 +368,7 @@ static C_SPEC: ComplexitySpec = ComplexitySpec {
 /// generically rather than matching its inner kind). Its attribute uses the
 /// C++11 `[[...]]` syntax (`attribute_declaration` wrapping `attribute`,
 /// confirmed by parsing `[[nodiscard]]`), the same shape C's does.
-static CPP_SPEC: ComplexitySpec = ComplexitySpec {
-    language: "cpp",
-    function_kinds: &["function_definition"],
-    name_field: "declarator",
-    nesting_kinds: &[
-        "if_statement",
-        "for_statement",
-        "while_statement",
-        "do_statement",
-        "switch_statement",
-    ],
-    conditional_kinds: &["if_statement"],
-    consequence_field: "consequence",
-    elif_kinds: &[],
-    else_wrapper_kinds: &["else_clause"],
-    loop_kinds: &["for_statement", "while_statement", "do_statement"],
-    arm_kinds: &["case_statement"],
-    nest_only_kinds: &[],
-    logical_kinds: &["binary_expression"],
-    logical_operators: &["&&", "||"],
-    labelled_jump_kinds: &["goto_statement"],
-    label_kinds: &["statement_identifier"],
-    attribute_kinds: &["attribute"],
-    attribute_container_kinds: &["attribute_declaration"],
-};
+static CPP_SPEC: ComplexitySpec = c_family_spec("cpp");
 
 /// C#. Verified against `tree_sitter_c_sharp`. Its `if_statement` matches
 /// Java's shape exactly: `alternative` holds the next link or the terminal
@@ -1077,6 +1002,35 @@ mod tests {
         file.functions.into_iter().next().expect("one function")
     }
 
+    /// Score `source` as `file` and return its only function. Shared by
+    /// every per-language test below — only the file path (whose extension
+    /// selects the language) differs between languages.
+    fn only_function_for(file: &str, source: &str) -> FunctionComplexity {
+        let scored = cognitive_complexity(file, source)
+            .unwrap_or_else(|| panic!("{file} should be a mapped language"));
+        assert_eq!(scored.functions.len(), 1, "got {:?}", scored.functions);
+        scored.functions.into_iter().next().expect("one function")
+    }
+
+    /// Prefix a PHP fixture body with the `<?php` opening tag every
+    /// `only_function_for("src/lib.php", ...)` call needs.
+    fn php_source(body: &str) -> String {
+        format!("<?php\n{body}")
+    }
+
+    /// Look up `name` in the class(es) parsed from `source` as `file` and
+    /// return its complexity. Shared by the Java and C# tests below — only
+    /// the file path (whose extension selects the language) differs.
+    fn method_in_class(file: &str, source: &str, name: &str) -> FunctionComplexity {
+        let parsed = cognitive_complexity(file, source)
+            .unwrap_or_else(|| panic!("{file} should be a mapped language"));
+        parsed
+            .functions
+            .into_iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name} is scored"))
+    }
+
     /// `collect_line_tags` exactly as it stood when the review flagged it for
     /// "match arms contain code at depth 4". It is a two-arm `Option` match
     /// inside one `if` inside one `while`.
@@ -1511,16 +1465,10 @@ impl Parser {
     // TypeScript
     // -----------------------------------------------------------------
 
-    fn only_function_ts(source: &str) -> FunctionComplexity {
-        let file =
-            cognitive_complexity("src/lib.ts", source).expect("typescript is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn typescript_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_ts(
+        let scored = only_function_for(
+            "src/lib.ts",
             r#"
 function classify(value: number): number {
     switch (value) {
@@ -1548,7 +1496,8 @@ function classify(value: number): number {
 
     #[test]
     fn typescript_if_else_if_else_chain_is_flat() {
-        let scored = only_function_ts(
+        let scored = only_function_for(
+            "src/lib.ts",
             r#"
 function pick(a: boolean, b: boolean): number {
     if (a) {
@@ -1574,7 +1523,8 @@ function pick(a: boolean, b: boolean): number {
 
     #[test]
     fn typescript_nested_loops_deepen_the_score() {
-        let scored = only_function_ts(
+        let scored = only_function_for(
+            "src/lib.ts",
             r#"
 function deep(a: boolean, b: boolean, items: number[]): number {
     if (a) {
@@ -1604,7 +1554,8 @@ function deep(a: boolean, b: boolean, items: number[]): number {
 
     #[test]
     fn typescript_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_ts(
+        let and_only = only_function_for(
+            "src/lib.ts",
             r#"
 function allThree(a: boolean, b: boolean, c: boolean): number {
     if (a && b && c) {
@@ -1620,7 +1571,8 @@ function allThree(a: boolean, b: boolean, c: boolean): number {
         );
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_ts(
+        let mixed = only_function_for(
+            "src/lib.ts",
             r#"
 function mixed(a: boolean, b: boolean, c: boolean): number {
     if (a && b || c) {
@@ -1692,15 +1644,10 @@ function pick(a: boolean, b: boolean): number {
     // TSX
     // -----------------------------------------------------------------
 
-    fn only_function_tsx(source: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/App.tsx", source).expect("tsx is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn tsx_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_tsx(
+        let scored = only_function_for(
+            "src/App.tsx",
             r#"
 function classify(value: number): number {
     switch (value) {
@@ -1721,7 +1668,8 @@ function classify(value: number): number {
 
     #[test]
     fn tsx_if_else_if_else_chain_is_flat() {
-        let scored = only_function_tsx(
+        let scored = only_function_for(
+            "src/App.tsx",
             r#"
 function pick(a: boolean, b: boolean): number {
     if (a) {
@@ -1741,7 +1689,8 @@ function pick(a: boolean, b: boolean): number {
 
     #[test]
     fn tsx_nested_loops_deepen_the_score() {
-        let scored = only_function_tsx(
+        let scored = only_function_for(
+            "src/App.tsx",
             r#"
 function deep(a: boolean, b: boolean, items: number[]): number {
     if (a) {
@@ -1765,7 +1714,8 @@ function deep(a: boolean, b: boolean, items: number[]): number {
 
     #[test]
     fn tsx_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_tsx(
+        let and_only = only_function_for(
+            "src/App.tsx",
             r#"
 function allThree(a: boolean, b: boolean, c: boolean): number {
     if (a && b && c) {
@@ -1778,7 +1728,8 @@ function allThree(a: boolean, b: boolean, c: boolean): number {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_tsx(
+        let mixed = only_function_for(
+            "src/App.tsx",
             r#"
 function mixed(a: boolean, b: boolean, c: boolean): number {
     if (a && b || c) {
@@ -1844,16 +1795,10 @@ function pick(a: boolean, b: boolean): number {
     // JavaScript
     // -----------------------------------------------------------------
 
-    fn only_function_js(source: &str) -> FunctionComplexity {
-        let file =
-            cognitive_complexity("src/lib.js", source).expect("javascript is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn javascript_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_js(
+        let scored = only_function_for(
+            "src/lib.js",
             r#"
 function classify(value) {
     switch (value) {
@@ -1874,7 +1819,8 @@ function classify(value) {
 
     #[test]
     fn javascript_if_else_if_else_chain_is_flat() {
-        let scored = only_function_js(
+        let scored = only_function_for(
+            "src/lib.js",
             r#"
 function pick(a, b) {
     if (a) {
@@ -1894,7 +1840,8 @@ function pick(a, b) {
 
     #[test]
     fn javascript_nested_loops_deepen_the_score() {
-        let scored = only_function_js(
+        let scored = only_function_for(
+            "src/lib.js",
             r#"
 function deep(a, b, items) {
     if (a) {
@@ -1918,7 +1865,8 @@ function deep(a, b, items) {
 
     #[test]
     fn javascript_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_js(
+        let and_only = only_function_for(
+            "src/lib.js",
             r#"
 function allThree(a, b, c) {
     if (a && b && c) {
@@ -1931,7 +1879,8 @@ function allThree(a, b, c) {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_js(
+        let mixed = only_function_for(
+            "src/lib.js",
             r#"
 function mixed(a, b, c) {
     if (a && b || c) {
@@ -1997,15 +1946,10 @@ function pick(a, b) {
     // Python
     // -----------------------------------------------------------------
 
-    fn only_function_py(source: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/lib.py", source).expect("python is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn python_match_scores_once_and_cases_open_no_nesting() {
-        let scored = only_function_py(
+        let scored = only_function_for(
+            "src/lib.py",
             r#"
 def classify(value):
     match value:
@@ -2030,7 +1974,8 @@ def classify(value):
 
     #[test]
     fn python_if_elif_else_chain_is_flat() {
-        let scored = only_function_py(
+        let scored = only_function_for(
+            "src/lib.py",
             r#"
 def pick(a, b):
     if a:
@@ -2051,7 +1996,8 @@ def pick(a, b):
 
     #[test]
     fn python_three_way_elif_chain_reports_the_longest_link() {
-        let scored = only_function_py(
+        let scored = only_function_for(
+            "src/lib.py",
             r#"
 def pick(a, b, c):
     if a:
@@ -2074,7 +2020,8 @@ def pick(a, b, c):
 
     #[test]
     fn python_nested_loops_deepen_the_score() {
-        let scored = only_function_py(
+        let scored = only_function_for(
+            "src/lib.py",
             r#"
 def deep(a, b, items):
     if a:
@@ -2093,7 +2040,8 @@ def deep(a, b, items):
 
     #[test]
     fn python_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_py(
+        let and_only = only_function_for(
+            "src/lib.py",
             r#"
 def all_three(a, b, c):
     if a and b and c:
@@ -2107,7 +2055,8 @@ def all_three(a, b, c):
         );
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_py(
+        let mixed = only_function_for(
+            "src/lib.py",
             r#"
 def mixed(a, b, c):
     if a and b or c:
@@ -2171,19 +2120,10 @@ def pick(a, b):
     // Java
     // -----------------------------------------------------------------
 
-    /// Score `source` (wrapped in a class if it is not already) and return the
-    /// method named `name`.
-    fn method_java(source: &str, name: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/Foo.java", source).expect("java is a mapped language");
-        file.functions
-            .into_iter()
-            .find(|f| f.name == name)
-            .unwrap_or_else(|| panic!("{name} is scored"))
-    }
-
     #[test]
     fn java_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = method_java(
+        let scored = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int classify(int value) {
@@ -2210,7 +2150,8 @@ class Foo {
 
     #[test]
     fn java_if_else_if_else_chain_is_flat() {
-        let scored = method_java(
+        let scored = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int pick(boolean a, boolean b) {
@@ -2236,7 +2177,8 @@ class Foo {
 
     #[test]
     fn java_three_way_else_if_chain_reports_the_longest_link() {
-        let scored = method_java(
+        let scored = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int pick(boolean a, boolean b, boolean c) {
@@ -2261,7 +2203,8 @@ class Foo {
 
     #[test]
     fn java_nested_loops_deepen_the_score() {
-        let scored = method_java(
+        let scored = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int deep(boolean a, boolean b, int[] items) {
@@ -2291,7 +2234,8 @@ class Foo {
 
     #[test]
     fn java_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = method_java(
+        let and_only = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int allThree(boolean a, boolean b, boolean c) {
@@ -2307,7 +2251,8 @@ class Foo {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = method_java(
+        let mixed = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     int mixed(boolean a, boolean b, boolean c) {
@@ -2325,7 +2270,8 @@ class Foo {
 
     #[test]
     fn java_test_annotation_at_the_definition_exempts_the_method() {
-        let scored = method_java(
+        let scored = method_in_class(
+            "src/Foo.java",
             r#"
 class Foo {
     @Test
@@ -2380,15 +2326,10 @@ class Foo {
     // C
     // -----------------------------------------------------------------
 
-    fn only_function_c(source: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/lib.c", source).expect("c is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn c_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_c(
+        let scored = only_function_for(
+            "src/lib.c",
             r#"
 int classify(int value) {
     switch (value) {
@@ -2413,7 +2354,8 @@ int classify(int value) {
 
     #[test]
     fn c_if_else_if_else_chain_is_flat() {
-        let scored = only_function_c(
+        let scored = only_function_for(
+            "src/lib.c",
             r#"
 int pick(int a, int b) {
     if (a) {
@@ -2433,7 +2375,8 @@ int pick(int a, int b) {
 
     #[test]
     fn c_nested_loops_deepen_the_score() {
-        let scored = only_function_c(
+        let scored = only_function_for(
+            "src/lib.c",
             r#"
 int deep(int a, int b, int *items, int n) {
     if (a) {
@@ -2457,7 +2400,8 @@ int deep(int a, int b, int *items, int n) {
 
     #[test]
     fn c_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_c(
+        let and_only = only_function_for(
+            "src/lib.c",
             r#"
 int all_three(int a, int b, int c) {
     if (a && b && c) {
@@ -2470,7 +2414,8 @@ int all_three(int a, int b, int c) {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_c(
+        let mixed = only_function_for(
+            "src/lib.c",
             r#"
 int mixed(int a, int b, int c) {
     if (a && b || c) {
@@ -2537,15 +2482,10 @@ int pick(int a, int b) {
     // C++
     // -----------------------------------------------------------------
 
-    fn only_function_cpp(source: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/lib.cpp", source).expect("cpp is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn cpp_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_cpp(
+        let scored = only_function_for(
+            "src/lib.cpp",
             r#"
 int classify(int value) {
     switch (value) {
@@ -2566,7 +2506,8 @@ int classify(int value) {
 
     #[test]
     fn cpp_if_else_if_else_chain_is_flat() {
-        let scored = only_function_cpp(
+        let scored = only_function_for(
+            "src/lib.cpp",
             r#"
 int pick(bool a, bool b) {
     if (a) {
@@ -2586,7 +2527,8 @@ int pick(bool a, bool b) {
 
     #[test]
     fn cpp_nested_loops_deepen_the_score() {
-        let scored = only_function_cpp(
+        let scored = only_function_for(
+            "src/lib.cpp",
             r#"
 int deep(bool a, bool b, int *items, int n) {
     if (a) {
@@ -2610,7 +2552,8 @@ int deep(bool a, bool b, int *items, int n) {
 
     #[test]
     fn cpp_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_cpp(
+        let and_only = only_function_for(
+            "src/lib.cpp",
             r#"
 int all_three(bool a, bool b, bool c) {
     if (a && b && c) {
@@ -2623,7 +2566,8 @@ int all_three(bool a, bool b, bool c) {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_cpp(
+        let mixed = only_function_for(
+            "src/lib.cpp",
             r#"
 int mixed(bool a, bool b, bool c) {
     if (a && b || c) {
@@ -2687,17 +2631,10 @@ int pick(bool a, bool b) {
     // C#
     // -----------------------------------------------------------------
 
-    fn method_csharp(source: &str, name: &str) -> FunctionComplexity {
-        let file = cognitive_complexity("src/Foo.cs", source).expect("csharp is a mapped language");
-        file.functions
-            .into_iter()
-            .find(|f| f.name == name)
-            .unwrap_or_else(|| panic!("{name} is scored"))
-    }
-
     #[test]
     fn csharp_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = method_csharp(
+        let scored = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     int Classify(int value) {
@@ -2721,7 +2658,8 @@ class Foo {
 
     #[test]
     fn csharp_if_else_if_else_chain_is_flat() {
-        let scored = method_csharp(
+        let scored = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     int Pick(bool a, bool b) {
@@ -2744,7 +2682,8 @@ class Foo {
 
     #[test]
     fn csharp_nested_loops_deepen_the_score() {
-        let scored = method_csharp(
+        let scored = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     int Deep(bool a, bool b, int[] items) {
@@ -2774,7 +2713,8 @@ class Foo {
 
     #[test]
     fn csharp_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = method_csharp(
+        let and_only = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     int AllThree(bool a, bool b, bool c) {
@@ -2790,7 +2730,8 @@ class Foo {
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = method_csharp(
+        let mixed = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     int Mixed(bool a, bool b, bool c) {
@@ -2808,7 +2749,8 @@ class Foo {
 
     #[test]
     fn csharp_test_attribute_at_the_definition_exempts_the_method() {
-        let scored = method_csharp(
+        let scored = method_in_class(
+            "src/Foo.cs",
             r#"
 class Foo {
     [Test]
@@ -2860,17 +2802,12 @@ class Foo {
     // PHP
     // -----------------------------------------------------------------
 
-    fn only_function_php(source: &str) -> FunctionComplexity {
-        let full = format!("<?php\n{source}");
-        let file = cognitive_complexity("src/lib.php", &full).expect("php is a mapped language");
-        assert_eq!(file.functions.len(), 1, "got {:?}", file.functions);
-        file.functions.into_iter().next().expect("one function")
-    }
-
     #[test]
     fn php_switch_scores_once_and_arms_open_no_nesting() {
-        let scored = only_function_php(
-            r#"
+        let scored = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function classify($value) {
     switch ($value) {
         case 0:
@@ -2882,6 +2819,7 @@ function classify($value) {
     }
 }
 "#,
+            ),
         );
         assert_eq!(scored.cognitive_score, 1);
         assert_eq!(scored.max_nesting_depth, 1);
@@ -2890,8 +2828,10 @@ function classify($value) {
 
     #[test]
     fn php_if_elseif_else_chain_is_flat() {
-        let scored = only_function_php(
-            r#"
+        let scored = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function pick($a, $b) {
     if ($a) {
         return 1;
@@ -2902,6 +2842,7 @@ function pick($a, $b) {
     }
 }
 "#,
+            ),
         );
         assert_eq!(scored.cognitive_score, 3);
         assert_eq!(scored.max_nesting_depth, 1);
@@ -2910,8 +2851,10 @@ function pick($a, $b) {
 
     #[test]
     fn php_three_way_elseif_chain_reports_the_longest_link() {
-        let scored = only_function_php(
-            r#"
+        let scored = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function pick($a, $b, $c) {
     if ($a) {
         return 1;
@@ -2924,6 +2867,7 @@ function pick($a, $b, $c) {
     }
 }
 "#,
+            ),
         );
         assert_eq!(scored.cognitive_score, 4);
         assert_eq!(scored.max_nesting_depth, 1);
@@ -2932,8 +2876,10 @@ function pick($a, $b, $c) {
 
     #[test]
     fn php_nested_loops_deepen_the_score() {
-        let scored = only_function_php(
-            r#"
+        let scored = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function deep($a, $b, $items) {
     if ($a) {
         foreach ($items as $item) {
@@ -2947,6 +2893,7 @@ function deep($a, $b, $items) {
     return 0;
 }
 "#,
+            ),
         );
         assert_eq!(scored.cognitive_score, 10);
         assert_eq!(scored.max_nesting_depth, 4);
@@ -2959,8 +2906,10 @@ function deep($a, $b, $items) {
 
     #[test]
     fn php_boolean_run_scores_once_mixed_run_scores_twice() {
-        let and_only = only_function_php(
-            r#"
+        let and_only = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function all_three($a, $b, $c) {
     if ($a && $b && $c) {
         return 1;
@@ -2968,12 +2917,15 @@ function all_three($a, $b, $c) {
     return 0;
 }
 "#,
+            ),
         );
         assert_eq!(and_only.cognitive_score, 2);
         assert_eq!(and_only.max_boolean_operands, 3);
 
-        let mixed = only_function_php(
-            r#"
+        let mixed = only_function_for(
+            "src/lib.php",
+            &php_source(
+                r#"
 function mixed($a, $b, $c) {
     if ($a && $b || $c) {
         return 1;
@@ -2981,6 +2933,7 @@ function mixed($a, $b, $c) {
     return 0;
 }
 "#,
+            ),
         );
         assert_eq!(mixed.cognitive_score, 3);
     }
