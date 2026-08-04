@@ -13,6 +13,28 @@ use tempfile::TempDir;
 /// This prevents race conditions when multiple tests run in parallel
 static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
+/// Poll interval used while waiting for a child process to exit via
+/// repeated `try_wait` calls (see [`ProcessGuard`]).
+const PROCESS_POLL_INTERVAL_MS: u64 = 10;
+
+/// Timeout for waiting on a process to exit after a kill signal has been
+/// sent (see [`ProcessGuard::force_kill`] and the post-kill wait in
+/// [`ProcessGuard::terminate_gracefully`]).
+const PROCESS_KILL_TIMEOUT_SECS: u64 = 1;
+
+/// Timeout for the initial graceful-termination attempt in
+/// [`ProcessGuard`]'s `Drop` impl, before falling back to a force-kill.
+const PROCESS_GRACEFUL_TERMINATION_TIMEOUT_MS: u64 = 500;
+
+/// Maximum number of attempts when retrying filesystem operations (creating
+/// a temp dir or isolated test environment) that may transiently fail under
+/// parallel test execution.
+const MAX_RETRY_ATTEMPTS: u32 = 3;
+
+/// Base backoff delay, multiplied by the attempt number, between the
+/// filesystem retry attempts governed by [`MAX_RETRY_ATTEMPTS`].
+const DIR_RETRY_BACKOFF_BASE_MS: u64 = 10;
+
 /// In-memory `tracing` capture writer for log-output tests.
 ///
 /// The canonical capture sink for asserting on formatted tracing output:
@@ -70,13 +92,17 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
 /// use swissarmyhammer_common::test_utils::CurrentDirGuard;
 /// use tempfile::TempDir;
 ///
-/// let temp = TempDir::new().unwrap();
-/// {
-///     let _guard = CurrentDirGuard::new(temp.path()).unwrap();
-///     // Current directory is now temp.path()
-///     // Original directory restored when _guard is dropped
+/// fn main() -> std::io::Result<()> {
+///     let temp = TempDir::new()?;
+///     {
+///         let _guard = CurrentDirGuard::new(temp.path())?;
+///         // Current directory is now temp.path()
+///         // Original directory restored when _guard is dropped
+///     }
+///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct CurrentDirGuard {
     original_dir: PathBuf,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
@@ -183,9 +209,12 @@ impl Drop for CurrentDirGuard {
 /// use std::process::Command;
 /// use swissarmyhammer_common::test_utils::ProcessGuard;
 ///
-/// let child = Command::new("some_program").spawn().unwrap();
-/// let _guard = ProcessGuard::new(child);
-/// // Process will be killed when _guard goes out of scope
+/// fn main() -> std::io::Result<()> {
+///     let child = Command::new("some_program").spawn()?;
+///     let _guard = ProcessGuard::new(child);
+///     // Process will be killed when _guard goes out of scope
+///     Ok(())
+/// }
 /// ```
 pub struct ProcessGuard(pub std::process::Child);
 
@@ -204,59 +233,63 @@ impl ProcessGuard {
         }
     }
 
+    /// Poll `try_wait` until the process exits or `timeout` elapses.
+    ///
+    /// Returns `Ok(true)` if the process exited within the timeout, or
+    /// `Ok(false)` if the timeout elapsed while the process was still
+    /// running. Shared by [`terminate_gracefully`](Self::terminate_gracefully)
+    /// (both its initial wait and its post-kill wait) and
+    /// [`force_kill`](Self::force_kill) so the polling logic has one source
+    /// of truth.
+    fn wait_for_exit(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use std::time::Instant;
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            match self.0.try_wait() {
+                Ok(Some(_)) => return Ok(true), // Process exited
+                Ok(None) => {
+                    std::thread::sleep(std::time::Duration::from_millis(PROCESS_POLL_INTERVAL_MS))
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(false)
+    }
+
     /// Attempt to gracefully terminate the process with a timeout
     pub fn terminate_gracefully(
         &mut self,
         timeout: std::time::Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use std::time::Instant;
-
         // For now, we'll use a simple approach - just wait a bit then force kill
         // This could be enhanced later with proper signal handling if needed
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            match self.0.try_wait() {
-                Ok(Some(_)) => return Ok(()), // Process exited
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                Err(e) => return Err(e.into()),
-            }
+        if self.wait_for_exit(timeout)? {
+            return Ok(());
         }
 
         // If the process didn't exit gracefully, force kill it
         self.0.kill()?;
-        // Use try_wait in a loop instead of blocking wait
-        let wait_start = Instant::now();
-        while wait_start.elapsed() < std::time::Duration::from_secs(1) {
-            match self.0.try_wait() {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(())
+        self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
+            .map(|_| ())
     }
 
     /// Force kill the process immediately
     pub fn force_kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.0.kill()?;
-        // Use try_wait in a loop instead of blocking wait
-        use std::time::Instant;
-        let start = Instant::now();
-        while start.elapsed() < std::time::Duration::from_secs(1) {
-            match self.0.try_wait() {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(())
+        self.wait_for_exit(std::time::Duration::from_secs(PROCESS_KILL_TIMEOUT_SECS))
+            .map(|_| ())
     }
 }
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
         // First try graceful termination with a short timeout
-        let _ = self.terminate_gracefully(std::time::Duration::from_millis(500));
+        let _ = self.terminate_gracefully(std::time::Duration::from_millis(
+            PROCESS_GRACEFUL_TERMINATION_TIMEOUT_MS,
+        ));
 
         // If graceful termination failed, try force kill as fallback
         if self.is_running() {
@@ -368,11 +401,7 @@ impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
         // Acquire the global HOME environment lock to prevent race conditions
-        // If the lock is poisoned, we can still proceed since the guard data is not corrupted
-        let lock_guard = HOME_ENV_LOCK.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("HOME environment lock was poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let lock_guard = acquire_home_env_lock();
 
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();
@@ -426,13 +455,16 @@ impl IsolatedTestEnvironment {
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
-        // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
-        for attempt in 1..=3 {
+        // Retry up to MAX_RETRY_ATTEMPTS times in case of temporary filesystem
+        // issues during parallel test execution
+        for attempt in 1..=MAX_RETRY_ATTEMPTS {
             match Self::try_create() {
                 Ok(env) => return Ok(env),
-                Err(_e) if attempt < 3 => {
+                Err(_e) if attempt < MAX_RETRY_ATTEMPTS => {
                     // Add small delay before retry to reduce contention
-                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        DIR_RETRY_BACKOFF_BASE_MS * attempt as u64,
+                    ));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -557,13 +589,16 @@ pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf {
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
 /// better error handling and consistent behavior across tests.
 pub fn create_temp_dir() -> TempDir {
-    // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
-    for attempt in 1..=3 {
+    // Retry up to MAX_RETRY_ATTEMPTS times in case of temporary filesystem
+    // issues during parallel test execution
+    for attempt in 1..=MAX_RETRY_ATTEMPTS {
         match TempDir::new() {
             Ok(temp_dir) => return temp_dir,
-            Err(_e) if attempt < 3 => {
+            Err(_e) if attempt < MAX_RETRY_ATTEMPTS => {
                 // Add small delay before retry to reduce contention
-                std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                std::thread::sleep(std::time::Duration::from_millis(
+                    DIR_RETRY_BACKOFF_BASE_MS * attempt as u64,
+                ));
                 continue;
             }
             Err(e) => panic!(
@@ -578,6 +613,10 @@ pub fn create_temp_dir() -> TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Delay used in tests to allow a short-lived spawned process to finish
+    /// exiting before asserting on its state.
+    const TEST_PROCESS_COMPLETION_WAIT_MS: u64 = 100;
 
     /// `CaptureWriter` records the formatted output of a tracing subscriber so
     /// a test can assert on emitted log lines verbatim.
@@ -742,7 +781,9 @@ mod tests {
 
         let mut guard = ProcessGuard::new(child);
         // Give the process time to complete
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(
+            TEST_PROCESS_COMPLETION_WAIT_MS,
+        ));
         assert!(!guard.is_running());
     }
 
@@ -784,10 +825,14 @@ mod tests {
 
         let mut guard = ProcessGuard::new(child);
         // Wait for completion
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(
+            TEST_PROCESS_COMPLETION_WAIT_MS,
+        ));
 
         // Graceful termination on an already-exited process should succeed
-        let result = guard.terminate_gracefully(std::time::Duration::from_millis(100));
+        let result = guard.terminate_gracefully(std::time::Duration::from_millis(
+            TEST_PROCESS_COMPLETION_WAIT_MS,
+        ));
         assert!(result.is_ok());
     }
 
