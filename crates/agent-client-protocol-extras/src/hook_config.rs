@@ -1197,6 +1197,67 @@ impl Default for HookOutput {
     }
 }
 
+/// Builder for [`HookOutput`]'s six optional fields.
+///
+/// `HookOutput` starts from [`HookOutput::default`] (`should_continue: true`,
+/// `suppress_output: false`, every `Option` field `None`); each `with_*`
+/// method sets one optional field and returns `Self` for chaining, and
+/// [`HookOutputBuilder::build`] produces the finished value. This exists to
+/// make optional-field construction explicit and readable in place of a
+/// struct literal with `..Default::default()`.
+#[derive(Clone, Debug, Default)]
+pub struct HookOutputBuilder {
+    output: HookOutput,
+}
+
+impl HookOutputBuilder {
+    /// Start a new builder from `HookOutput::default()`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set `stop_reason`, the message shown when `should_continue` is false.
+    pub fn with_stop_reason(mut self, stop_reason: impl Into<String>) -> Self {
+        self.output.stop_reason = Some(stop_reason.into());
+        self
+    }
+
+    /// Set `system_message`, a warning message shown to the user.
+    pub fn with_system_message(mut self, system_message: impl Into<String>) -> Self {
+        self.output.system_message = Some(system_message.into());
+        self
+    }
+
+    /// Set `decision`, the top-level allow/block/ask decision.
+    pub fn with_decision(mut self, decision: HookDecisionValue) -> Self {
+        self.output.decision = Some(decision);
+        self
+    }
+
+    /// Set `reason`, the explanation for `decision`.
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.output.reason = Some(reason.into());
+        self
+    }
+
+    /// Set `hook_specific_output`, the event-specific output payload.
+    pub fn with_hook_specific_output(mut self, hook_specific_output: HookSpecificOutput) -> Self {
+        self.output.hook_specific_output = Some(hook_specific_output);
+        self
+    }
+
+    /// Set `additional_context`, a string appended to Claude's context.
+    pub fn with_additional_context(mut self, additional_context: impl Into<String>) -> Self {
+        self.output.additional_context = Some(additional_context.into());
+        self
+    }
+
+    /// Consume the builder and produce the finished [`HookOutput`].
+    pub fn build(self) -> HookOutput {
+        self.output
+    }
+}
+
 /// Event-specific output fields inside `hookSpecificOutput`.
 ///
 /// Tagged by `hookEventName` to enforce per-event field sets, matching
@@ -2380,15 +2441,14 @@ hooks:
 
     #[test]
     fn test_interpret_output_pre_tool_use_deny() {
-        let output = HookOutput {
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse {
+        let output = HookOutputBuilder::new()
+            .with_hook_specific_output(HookSpecificOutput::PreToolUse {
                 permission_decision: Some("deny".into()),
                 permission_decision_reason: Some("Not allowed".into()),
                 updated_input: None,
                 additional_context: None,
-            }),
-            ..Default::default()
-        };
+            })
+            .build();
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(
             decision,
@@ -2398,26 +2458,24 @@ hooks:
 
     #[test]
     fn test_interpret_output_pre_tool_use_allow() {
-        let output = HookOutput {
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse {
+        let output = HookOutputBuilder::new()
+            .with_hook_specific_output(HookSpecificOutput::PreToolUse {
                 permission_decision: Some("allow".into()),
                 permission_decision_reason: None,
                 updated_input: None,
                 additional_context: None,
-            }),
-            ..Default::default()
-        };
+            })
+            .build();
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Allow));
     }
 
     #[test]
     fn test_interpret_output_stop_block_is_should_continue() {
-        let output = HookOutput {
-            decision: Some(HookDecisionValue::Block),
-            reason: Some("Tests not passing".into()),
-            ..Default::default()
-        };
+        let output = HookOutputBuilder::new()
+            .with_decision(HookDecisionValue::Block)
+            .with_reason("Tests not passing")
+            .build();
         let decision = interpret_output(&output, HookEventKind::Stop);
         assert!(matches!(
             decision,
@@ -2427,11 +2485,10 @@ hooks:
 
     #[test]
     fn test_interpret_output_user_prompt_block() {
-        let output = HookOutput {
-            decision: Some(HookDecisionValue::Block),
-            reason: Some("Prompt rejected".into()),
-            ..Default::default()
-        };
+        let output = HookOutputBuilder::new()
+            .with_decision(HookDecisionValue::Block)
+            .with_reason("Prompt rejected")
+            .build();
         let decision = interpret_output(&output, HookEventKind::UserPromptSubmit);
         assert!(matches!(
             decision,
@@ -2441,10 +2498,9 @@ hooks:
 
     #[test]
     fn test_interpret_output_additional_context() {
-        let output = HookOutput {
-            additional_context: Some("Extra info".into()),
-            ..Default::default()
-        };
+        let output = HookOutputBuilder::new()
+            .with_additional_context("Extra info")
+            .build();
         let decision = interpret_output(&output, HookEventKind::SessionStart);
         assert!(matches!(
             decision,
@@ -2457,6 +2513,47 @@ hooks:
         let output = HookOutput::default();
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Allow));
+    }
+
+    // =====================================================================
+    // HookOutputBuilder tests
+    // =====================================================================
+
+    #[test]
+    fn test_hook_output_builder_defaults_match_hook_output_default() {
+        let built = HookOutputBuilder::new().build();
+        assert!(built.should_continue);
+        assert!(!built.suppress_output);
+        assert!(built.stop_reason.is_none());
+        assert!(built.system_message.is_none());
+        assert!(built.decision.is_none());
+        assert!(built.reason.is_none());
+        assert!(built.hook_specific_output.is_none());
+        assert!(built.additional_context.is_none());
+    }
+
+    #[test]
+    fn test_hook_output_builder_sets_every_optional_field() {
+        let output = HookOutputBuilder::new()
+            .with_stop_reason("Build failed")
+            .with_system_message("careful")
+            .with_decision(HookDecisionValue::Block)
+            .with_reason("Blocked")
+            .with_hook_specific_output(HookSpecificOutput::Stop {
+                reason: Some("stop reason".into()),
+            })
+            .with_additional_context("extra")
+            .build();
+
+        assert_eq!(output.stop_reason.as_deref(), Some("Build failed"));
+        assert_eq!(output.system_message.as_deref(), Some("careful"));
+        assert_eq!(output.decision, Some(HookDecisionValue::Block));
+        assert_eq!(output.reason.as_deref(), Some("Blocked"));
+        assert!(matches!(
+            output.hook_specific_output,
+            Some(HookSpecificOutput::Stop { reason: Some(ref r) }) if r == "stop reason"
+        ));
+        assert_eq!(output.additional_context.as_deref(), Some("extra"));
     }
 
     // =====================================================================
@@ -2904,31 +3001,24 @@ hooks:
 
     #[test]
     fn test_interpret_output_with_enum_block_decision() {
-        let output = HookOutput {
-            should_continue: true,
-            stop_reason: None,
-            suppress_output: false,
-            system_message: None,
-            decision: Some(HookDecisionValue::Block),
-            reason: Some("Blocked".to_string()),
-            hook_specific_output: None,
-            additional_context: None,
-        };
+        let output = HookOutputBuilder::new()
+            .with_decision(HookDecisionValue::Block)
+            .with_reason("Blocked")
+            .build();
         let decision = interpret_output(&output, HookEventKind::UserPromptSubmit);
         assert!(matches!(decision, HookDecision::Block { .. }));
     }
 
     #[test]
     fn test_interpret_output_with_enum_permission_decision() {
-        let output = HookOutput {
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse {
+        let output = HookOutputBuilder::new()
+            .with_hook_specific_output(HookSpecificOutput::PreToolUse {
                 permission_decision: Some("deny".into()),
                 permission_decision_reason: Some("Denied".into()),
                 updated_input: None,
                 additional_context: None,
-            }),
-            ..Default::default()
-        };
+            })
+            .build();
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Block { .. }));
     }
