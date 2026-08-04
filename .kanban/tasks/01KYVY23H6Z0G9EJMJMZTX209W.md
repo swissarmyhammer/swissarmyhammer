@@ -41,10 +41,29 @@ comments:
     - follow-up card: ^16bjcm9 (five sibling `as_bool()` sites still drop a string flag)
     - next: ready for `/review`; card stays in `doing`
   timestamp: 2026-08-04T22:51:58.991079+00:00
+- actor: claude-code
+  id: 01kz7gbv5cknqshad83rhma3py
+  text: |-
+    ### review — clean
+    - evidence: `review sha 72a67be9a~1..72a67be9a` — engine returned 11 findings, all in crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs at lines 893, 1044, 1128, 1187, 1413, 1418, 1528, 1565, 1608, 1668, 1705. `git blame` at 72a67be9a shows every one of those lines comes from an earlier commit (945a7583, 0ecaff64, b34eb9ce, e6a38400, 6edfbd74). The only tests.rs hunk in 72a67be9a is lines 416-496. Each finding asks to name a hardcoded number in test code that already existed, so the review skill's written exception for existing tests drops all 11. No prior Review Findings section on this task.
+    - next: none — task moved to done.
+  timestamp: 2026-08-04T23:04:59.820348+00:00
+- actor: claude-code
+  id: 01kz7gdhnnbff9yzqq9x3dn45g
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files (builtin/skills/implement/SKILL.md, crates/swissarmyhammer-skills/tests/implement_rules_and_self_review_guidance.rs (new), crates/swissarmyhammer-tools/src/mcp/{op_tool_helpers.rs, tools/review/mod.rs, tools/review/tests.rs})
+    - test: green — `cargo nextest run -E 'rdeps(swissarmyhammer-skills) | rdeps(swissarmyhammer-tools)'` 8309 passed, 0 failed, 0 skipped; `cargo clippy --workspace --all-targets -- -D warnings` clean; this task's 5 files have zero rustfmt diff
+    - commit: 72a67be9a
+    - review: clean — `review sha 72a67be9a~1..72a67be9a`, engine 11 findings / 0 relayable, all 11 on pre-existing test code outside the commit's only hunk (+419,74), dropped by the review skill's written existing-tests exception (builtin/skills/review/SKILL.md:27)
+    - verified independently by the orchestrator: the exception text exists at review/SKILL.md:27; `git show --unified=0 72a67be9a` confirms the single hunk; `git blame` at 72a67be9a on sampled lines 893, 1413, 1705 returns 945a7583/e6a38400 — all outside the hunk
+    - note: 11 findings with zero inside the diff is another instance of the review engine's whole-file scan, the convergence driver diagnosed earlier this session
+    - follow-up card raised: ^16bjcm9 — five sibling `as_bool()` sites still silently drop a string boolean flag
+  timestamp: 2026-08-04T23:05:55.637531+00:00
 depends_on:
 - 01KYVYC5DE70XGP2P9GT6TW0KG
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa980
 title: 'Implement skill: read validator rules before coding, self-review before handoff'
 ---
 # Problem
