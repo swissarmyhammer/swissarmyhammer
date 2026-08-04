@@ -33,8 +33,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T08:13:13.845319+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5xfp2ess0je5dqjaq9stn1
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — root cause was in scope.rs's probe_result_for_file, which matched <changed-set> unconditionally for every file, cloning the shared ~1.43MB duplicates result onto every FileWork in a batch. Fix: ValidatorWork gained shared_probe_results (populated once per validator), WorkList::shared_probe_results() dedups the union across validators, new render_shared_probe_evidence renders the block once. render_run_prime uses the batch-wide union; render_fleet_prompt (monolithic fallback) uses only that validator's own shared evidence to avoid leaking across validators. Findings unchanged — no code determining which duplicate rows exist was touched, only how many times they're printed. Live 71-file re-measurement not attempted (needs a real embedder + populated index, genuinely costly); relied on unit tests per the task's own allowance. Analytically a 10-file batch's prompt should drop by roughly (10-1) x 1.43MB ~= 12.9MB.
+    - test: green — swissarmyhammer-validators 372 passed; fmt clean; clippy clean; full rdeps(swissarmyhammer-validators) run for real: 3079 passed, 0 skipped
+    - commit: 0193e51ba
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T08:15:48.302761+00:00
+- actor: claude-code
+  id: 01kz5y4z5fkhqrpcjvz13e2g3c
+  text: |-
+    ### review — clean
+    - evidence: review sha 0193e51ba~1..0193e51ba → 5 findings reported, all blamed to pre-existing commits (0ecaff64a6, c691f8ec43), none introduced by 0193e51ba; net 0 new findings
+    - next: none (moved to done)
+  timestamp: 2026-08-04T08:27:25.743458+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9f80
 title: duplicates probe repeats its ~1.43 MB <changed-set> evidence once per file in the prompt
 ---
 Found while diagnosing ^6jsxjbc (review batch budget exceeds the agent prompt cap).

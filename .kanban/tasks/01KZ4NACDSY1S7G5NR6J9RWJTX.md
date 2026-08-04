@@ -189,8 +189,25 @@ comments:
 
     next: /review
   timestamp: 2026-08-03T21:56:28.655120+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kz4t4wr6xpn165qvqhr2ytkp
+  text: |-
+    ### finish iteration 3 — changed
+    - implement: changed — extracted persist_session_field<F> helper in agent.rs; store_mcp_servers_in_session, store_system_prompt_in_session, and store_extra_args_in_session are now thin wrappers over it, no signature changes, callers unaffected.
+    - test: green — cargo test -p claude-agent --lib 759 passed; fmt clean; clippy clean; full rdeps(claude-agent) or rdeps(swissarmyhammer-validators) run for real: 4398 passed, 0 skipped, 0 failed
+    - commit: ae4f478d5
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-03T21:58:14.534403+00:00
+- actor: claude-code
+  id: 01kz4tj5dcf77w7zdwcvchjvgp
+  text: |-
+    ### review — clean
+    - evidence: `review sha ae4f478d5~1..ae4f478d5` ran successfully (8 findings, 8 confirmed, 0 refuted per engine counts). Blame-checked every reported line against ae4f478d5's hunks (new-file ranges 1421-1459, 1489-1497, 1512-1520, per `git diff ae4f478d5~1..ae4f478d5`): all 8 (agent.rs:380, 1059, 1125, 1144, 1714, 2140, 2199, 2895) fall outside every hunk this commit touched — pre-existing code, dropped. None is the store_* duplication cause from rounds 2/3 (they are four distinct unrelated causes: a panic-on-config-error, two magic-number constants, and three separate duplication pairs elsewhere in the file). Repeat-finding guardrail: not triggered — the persist_session_field extraction removed the round 2/3 cause without introducing a new one. All prior checklist items already checked.
+    - next: none — task complete
+    task: ^j9rwjtx
+  timestamp: 2026-08-03T22:05:29.388349+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9780
 title: Review fleet forks are 100% cold — warm prefix reuse never fires, not just degraded
 ---
 

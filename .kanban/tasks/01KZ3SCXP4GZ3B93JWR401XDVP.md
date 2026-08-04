@@ -33,8 +33,24 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T08:51:12.845425+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5znxx94dfswywxwdj9cc4r
+  text: |-
+    ### finish iteration 1 — changed
+    - implement: changed — chose an explicit recursion-depth cap over an iterative rewrite (the walk family threads too much local state through mutual recursion for a safe rewrite to be worth the risk). MAX_TRAVERSAL_DEPTH=256 threaded as a raw depth counter through every recursive walker, including directly-reentrant ones (walk_conditional/walk_alternative/boolean_chain each re-check). FunctionComplexity.is_partial set via Tally::depth_capped(); exceeds_gates() returns true unconditionally when is_partial so a depth-capped function can never be silently read as under-gate. probes.rs's complexity_row emits a distinct NOT FULLY COMPUTED line for partial rows. Tests: 5,000-level pathological nesting (no crash, is_partial true), 32-level case proving the cap doesn't clip real deep code, regression re-pinning all previously-pinned small fixtures. A follow-up card ^spzf59q filed for two unrelated pre-existing findings in probes.rs surfaced by the implementer's own review pass, not fixed here to avoid scope creep.
+    - test: green — swissarmyhammer-sem+swissarmyhammer-validators 633 passed; fmt clean; clippy clean; full rdeps(swissarmyhammer-sem) run for real: 3340 passed
+    - commit: c1d45ede4
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T08:54:10.089006+00:00
+- actor: claude-code
+  id: 01kz600k2td3gajbynqmv5r38m
+  text: |-
+    ### review — clean
+    - evidence: `review sha c1d45ede4~1..c1d45ede4` returned 1 raw finding (probes.rs:171, render_probe_evidence complexity 24). Blame-checked: `git blame` shows line 171 belongs to commit 83ebacb2bf (2026-06-15), pre-existing code untouched by c1d45ede4 — dropped per blame-check rule. Already tracked separately on ^spzf59q. Net new findings for this commit: 0.
+    - next: none
+  timestamp: 2026-08-04T08:59:59.450167+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffa080
 title: complexity scorer's tree walk has no recursion-depth guard — pathological nesting can stack-overflow the review process
 ---
 # Symptom

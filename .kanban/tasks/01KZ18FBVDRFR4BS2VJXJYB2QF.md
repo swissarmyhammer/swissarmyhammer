@@ -77,8 +77,26 @@ comments:
 
     next: /review
   timestamp: 2026-08-04T05:31:12.349575+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz5m5wsr39r4a9frdaxezyqf
+  text: |-
+    ### finish iteration 2 — changed
+    - implement: changed — all 12 findings fixed via 4 consolidations: typescript_family_spec/c_family_spec const fns dedupe TSX/JS/CPP specs; only_function_for + php_source consolidate 7 per-language test helpers (37 call sites rewritten); method_in_class consolidates method_java/method_csharp (13 call sites rewritten). Pure refactor, zero behavior change — test counts identical before/after.
+    - test: green — swissarmyhammer-sem+swissarmyhammer-validators 621/621 (unchanged); fmt clean; clippy clean; full rdeps(swissarmyhammer-sem) run for real: 3328/3328 (unchanged)
+    - commit: f299212ce
+    - next: /review HEAD~1..HEAD
+  timestamp: 2026-08-04T05:33:10.328720+00:00
+- actor: claude-code
+  id: 01kz5mf09ncs9ga33fjg4fnz15
+  text: |-
+    ### review — clean
+    - evidence: engine ran `review sha f299212ce~1..f299212ce`, raw counts {findings:1, confirmed:1, refuted:0}. One finding at crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs:1008 (`only_function_for` duplicates the pre-existing `only_function` helper). Blame-checked: `only_function` blames to 8d7d8f57dd (pre-existing test helper, predates f299212ce); `only_function_for` blames to f299212ce itself. Dropped under the review skill's blanket test-refactor exception — the finding's remedy is to modify `only_function`, existing test code, to call the new helper. That is exactly "refactoring/deduplicating test code that already existed," which the skill instructs to drop regardless of validator flag.
+    - repeat-finding guardrail: checked — this is not a repeat of round 2's 12 findings (all of which were consolidated and are now `[x]`). It surfaces a new pairing (new `only_function_for` vs. pre-existing `only_function`), but it is exempted by the same test-refactor rule, so no new duplication cluster survives in this area.
+    - net new findings after exception: 0. All 12 prior findings already checked off.
+    - next: done
+  timestamp: 2026-08-04T05:38:08.821757+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff9b80
 title: complexity scorer covers only Rust — map the remaining source_code languages
 ---
 The `complexity` probe computes Sonar cognitive complexity from the tree-sitter parse (see `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs`). It had one `ComplexitySpec` row: Rust.
