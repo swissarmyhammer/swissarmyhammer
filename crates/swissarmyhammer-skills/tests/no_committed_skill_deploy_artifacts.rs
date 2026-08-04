@@ -27,21 +27,12 @@
 //! only fails if such an artifact is actually committed, including via a
 //! future `git add -f` that gets past `.gitignore`.
 
-use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Repository root, derived from the crate manifest directory.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("swissarmyhammer-skills must live inside the workspace")
-        .to_path_buf()
-}
+use swissarmyhammer_common::test_utils::workspace_root_from_manifest_dir;
 
 #[test]
 fn no_generated_skill_deploy_artifacts_tracked_under_apps() {
-    let root = repo_root();
+    let root = workspace_root_from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     if !root.join(".git").exists() {
         // Not a git checkout (e.g. a packaged source tarball) -- nothing to
         // check against.
@@ -52,7 +43,7 @@ fn no_generated_skill_deploy_artifacts_tracked_under_apps() {
         .args(["ls-files", "apps"])
         .current_dir(&root)
         .output()
-        .expect("git ls-files should run");
+        .unwrap_or_else(|e| panic!("git ls-files failed to spawn: {e}"));
     assert!(
         output.status.success(),
         "git ls-files failed: {}",

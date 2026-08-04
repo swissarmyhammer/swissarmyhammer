@@ -11,15 +11,11 @@
 //! `apps/kanban-cli/` crate root) with `../..` to reach the repository
 //! root, matching the `Path::new("../..")` base used in `build.rs`.
 
-use std::path::{Path, PathBuf};
+use swissarmyhammer_common::test_utils::workspace_root_from_manifest_dir;
 
 /// Repository root, derived from the crate manifest directory.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("kanban-cli must live inside the workspace")
-        .to_path_buf()
+fn repo_root() -> std::path::PathBuf {
+    workspace_root_from_manifest_dir(env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]

@@ -527,6 +527,31 @@ impl Drop for IsolatedTestEnvironment {
     }
 }
 
+/// Resolve the repository (workspace) root from a crate's manifest directory.
+///
+/// Every crate in this workspace lives exactly two directories below the
+/// repository root (`crates/<name>` or `apps/<name>`), so walking up two
+/// parents from its manifest directory reaches the root. Callers pass their
+/// own `env!("CARGO_MANIFEST_DIR")` -- that macro expands relative to the
+/// calling crate, not this one, so it cannot be baked in here.
+///
+/// Shared by tests across crates (e.g. `swissarmyhammer-skills` and
+/// `kanban-cli`) that need the repository root to check tracked files or
+/// generated build artifacts, so the "two parents up" logic has one source
+/// of truth instead of being reimplemented per test file.
+///
+/// # Panics
+/// Panics if `manifest_dir` does not have two parent directories.
+pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf {
+    Path::new(manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or_else(|| {
+            panic!("{manifest_dir} must live two directories below the repository root")
+        })
+        .to_path_buf()
+}
+
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
@@ -621,6 +646,22 @@ mod tests {
         for handle in handles {
             handle.join().expect("Thread panicked");
         }
+    }
+
+    #[test]
+    fn test_workspace_root_from_manifest_dir() {
+        let root =
+            workspace_root_from_manifest_dir("/repo/crates/swissarmyhammer-skills");
+        assert_eq!(root, PathBuf::from("/repo"));
+
+        let root = workspace_root_from_manifest_dir("/repo/apps/kanban-cli");
+        assert_eq!(root, PathBuf::from("/repo"));
+    }
+
+    #[test]
+    #[should_panic(expected = "must live two directories below the repository root")]
+    fn test_workspace_root_from_manifest_dir_panics_when_too_shallow() {
+        workspace_root_from_manifest_dir("/repo");
     }
 
     #[test]
