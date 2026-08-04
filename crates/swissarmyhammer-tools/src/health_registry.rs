@@ -52,21 +52,22 @@ impl Doctorable for PromptHealthChecker {
             cat,
         ));
 
+        // Resolve both prompt directory paths once; the per-directory checks
+        // below and the YAML frontmatter scan both need the same paths.
+        let home_prompts = dirs::home_dir().map(|home| home.join(PROMPTS_DIR_NAME));
+        let local_prompts = std::path::PathBuf::from(PROMPTS_DIR_NAME);
+
         // Check user prompts directory
-        if let Some(home) = dirs::home_dir() {
-            let user_prompts = home.join(PROMPTS_DIR_NAME);
-            check_prompts_directory(USER_PROMPTS_CHECK_NAME, &user_prompts, cat, &mut checks);
+        if let Some(user_prompts) = &home_prompts {
+            check_prompts_directory(USER_PROMPTS_CHECK_NAME, user_prompts, cat, &mut checks);
         }
 
         // Check local prompts directory
-        let local_prompts = std::path::PathBuf::from(PROMPTS_DIR_NAME);
         check_prompts_directory(LOCAL_PROMPTS_CHECK_NAME, &local_prompts, cat, &mut checks);
 
         // Check YAML front matter parsing in all prompt directories
         let mut dirs_to_check = vec![local_prompts];
-        if let Some(home) = dirs::home_dir() {
-            dirs_to_check.push(home.join(PROMPTS_DIR_NAME));
-        }
+        dirs_to_check.extend(home_prompts);
 
         let yaml_errors: Vec<(std::path::PathBuf, String)> = dirs_to_check
             .iter()
@@ -131,6 +132,25 @@ fn validate_frontmatter_file(path: &std::path::Path) -> Option<String> {
     }
 }
 
+/// Iterate over every markdown file within a directory, recursively.
+///
+/// A file counts as markdown when its extension is `md`, matched
+/// case-insensitively (so `.md`, `.MD`, and `.Md` all match). Shared by
+/// [`count_markdown_files`] and [`collect_yaml_errors_from_dir`] so the two
+/// can never drift on what counts as a markdown file.
+fn iter_markdown_files(dir: &std::path::Path) -> impl Iterator<Item = walkdir::DirEntry> {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        })
+}
+
 /// Collect YAML frontmatter errors from every markdown file in a directory.
 ///
 /// Returns an empty list when the directory does not exist. Each entry pairs
@@ -140,11 +160,7 @@ fn collect_yaml_errors_from_dir(dir: &std::path::Path) -> Vec<(std::path::PathBu
         return Vec::new();
     }
 
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+    iter_markdown_files(dir)
         .filter_map(|entry| {
             validate_frontmatter_file(entry.path())
                 .map(|error| (entry.path().to_path_buf(), error))
@@ -167,12 +183,7 @@ fn frontmatter_yaml_error(content: &str) -> Option<String> {
 
 /// Count markdown files in a directory
 fn count_markdown_files(path: &std::path::Path) -> usize {
-    walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-        .count()
+    iter_markdown_files(path).count()
 }
 
 /// Collect all health checks from MCP tools and standalone components
@@ -392,6 +403,42 @@ mod tests {
             reported.is_empty(),
             "notfm.md has no frontmatter, so it should report no YAML error, got: {:?}",
             reported
+        );
+    }
+
+    /// `iter_markdown_files` (and, through it, `count_markdown_files` and
+    /// `collect_yaml_errors_from_dir`) must match markdown extensions
+    /// case-insensitively, so `.MD` and `.Md` files aren't silently excluded
+    /// from prompt counts or YAML frontmatter validation.
+    #[test]
+    fn test_markdown_files_are_matched_case_insensitively() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.md"), "content").unwrap();
+        fs::write(tmp.path().join("b.MD"), "content").unwrap();
+        fs::write(tmp.path().join("c.Md"), "content").unwrap();
+        fs::write(tmp.path().join("d.txt"), "content").unwrap();
+
+        assert_eq!(
+            count_markdown_files(tmp.path()),
+            3,
+            "count_markdown_files should match .md, .MD, and .Md case-insensitively"
+        );
+
+        // A .MD file with invalid frontmatter must still surface as a YAML
+        // error — proving collect_yaml_errors_from_dir also matches
+        // case-insensitively via the same shared iter_markdown_files helper.
+        fs::write(
+            tmp.path().join("bad.MD"),
+            "---\ntitle: [unclosed bracket\n---\n# Content",
+        )
+        .unwrap();
+        let errors = collect_yaml_errors_from_dir(tmp.path());
+        assert!(
+            errors
+                .iter()
+                .any(|(path, _)| path.file_name().unwrap() == "bad.MD"),
+            "collect_yaml_errors_from_dir should validate .MD files too, got: {:?}",
+            errors
         );
     }
 

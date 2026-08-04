@@ -150,19 +150,39 @@ pub fn save_tool_config(config: &ToolConfig, path: &Path) -> std::io::Result<()>
     std::fs::write(path, yaml)
 }
 
+/// Join a base directory with the `.sah/tools.yaml` layer path.
+///
+/// Shared by [`global_config_path`] and [`project_config_path`], which differ
+/// only in how they resolve the base directory (`dir_source`).
+fn resolve_config_path<F: FnOnce() -> Option<PathBuf>>(dir_source: F) -> Option<PathBuf> {
+    dir_source().map(|dir| dir.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))
+}
+
 /// Resolve the global tools.yaml path (`~/.sah/tools.yaml`).
 ///
 /// Returns `None` if the home directory cannot be determined.
 pub fn global_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))
+    resolve_config_path(dirs::home_dir)
 }
 
 /// Resolve the project tools.yaml path (`.sah/tools.yaml` at the git root).
 ///
 /// Returns `None` if the current directory is not inside a git repository.
 pub fn project_config_path() -> Option<PathBuf> {
-    swissarmyhammer_common::utils::find_git_repository_root()
-        .map(|root| root.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))
+    resolve_config_path(swissarmyhammer_common::utils::find_git_repository_root)
+}
+
+/// Load a config layer from `get_path()` (if resolvable) and merge it on top
+/// of `config`. Missing files and unresolvable paths are silently skipped.
+///
+/// Shared by both layers of [`load_merged_tool_config`], which differ only in
+/// which path source (`get_path`) they merge from.
+fn load_and_merge_layer<F: FnOnce() -> Option<PathBuf>>(config: &mut ToolConfig, get_path: F) {
+    if let Some(path) = get_path() {
+        if let Some(layer_config) = load_tool_config_from_path(&path) {
+            config.merge(layer_config);
+        }
+    }
 }
 
 /// Load and merge tool config from the global and project layers.
@@ -177,18 +197,10 @@ pub fn load_merged_tool_config() -> ToolConfig {
     let mut config = ToolConfig::default();
 
     // Layer 1: Global (~/.sah/tools.yaml)
-    if let Some(global_path) = global_config_path() {
-        if let Some(global_config) = load_tool_config_from_path(&global_path) {
-            config.merge(global_config);
-        }
-    }
+    load_and_merge_layer(&mut config, global_config_path);
 
     // Layer 2: Project (.sah/tools.yaml) — overrides global
-    if let Some(project_path) = project_config_path() {
-        if let Some(project_config) = load_tool_config_from_path(&project_path) {
-            config.merge(project_config);
-        }
-    }
+    load_and_merge_layer(&mut config, project_config_path);
 
     config
 }
@@ -223,6 +235,7 @@ pub struct ToolConfigWatcher {
 }
 
 impl Default for ToolConfigWatcher {
+    /// Equivalent to [`Self::new`].
     fn default() -> Self {
         Self::new()
     }
@@ -233,8 +246,7 @@ impl ToolConfigWatcher {
     pub fn new() -> Self {
         let global_path = global_config_path();
         let project_path = project_config_path();
-        let global_mtime = global_path.as_ref().and_then(|p| file_mtime(p));
-        let project_mtime = project_path.as_ref().and_then(|p| file_mtime(p));
+        let (global_mtime, project_mtime) = read_layer_mtimes(&global_path, &project_path);
         Self {
             global_path,
             project_path,
@@ -250,8 +262,8 @@ impl ToolConfigWatcher {
         &mut self,
         registry: &mut crate::mcp::tool_registry::ToolRegistry,
     ) -> bool {
-        let new_global_mtime = self.global_path.as_ref().and_then(|p| file_mtime(p));
-        let new_project_mtime = self.project_path.as_ref().and_then(|p| file_mtime(p));
+        let (new_global_mtime, new_project_mtime) =
+            read_layer_mtimes(&self.global_path, &self.project_path);
 
         if new_global_mtime == self.global_mtime && new_project_mtime == self.project_mtime {
             return false;
@@ -281,6 +293,23 @@ impl ToolConfigWatcher {
 /// Get the mtime of a file, or `None` if it doesn't exist or can't be read.
 fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// Read the mtimes of the global and project config layers, in that order.
+///
+/// Either path may be `None` (layer not resolvable) or point to a file that
+/// doesn't exist yet, in which case the corresponding mtime is `None` too.
+/// Shared by [`ToolConfigWatcher::new`] and [`ToolConfigWatcher::check_and_reload`],
+/// which differ only in whether the paths come from fresh resolution or from
+/// `self`.
+fn read_layer_mtimes(
+    global_path: &Option<PathBuf>,
+    project_path: &Option<PathBuf>,
+) -> (Option<SystemTime>, Option<SystemTime>) {
+    (
+        global_path.as_ref().and_then(|p| file_mtime(p)),
+        project_path.as_ref().and_then(|p| file_mtime(p)),
+    )
 }
 
 #[cfg(test)]
