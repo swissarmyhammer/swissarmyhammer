@@ -20,6 +20,7 @@ metadata:
 - Skipped tests are broken (fix) or dead (delete) — never acceptable.
 - Never silence: no `#[allow(...)]`, `@suppress`, `// eslint-disable`.
 - Never skip: no `#[ignore]` or `skip` to make a test stop failing.
+- Never hand-prove a test is non-vacuous: edit source, run, watch it fail, revert. Nothing is captured or re-runnable. If proving it needs perturbing the thing under test, that perturbation is a permanent test case: pin the literal value, not just the symbol (`assert_eq!(CONST, "haiku")`, not a compare that resolves both sides through the same symbol), or set an explicit override inside the test and assert the different outcome.
 
 {% include "_partials/findings-are-requirements" %}
 

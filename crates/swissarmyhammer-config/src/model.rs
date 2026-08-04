@@ -4277,6 +4277,20 @@ mod chat_model_config_tests {
         );
     }
 
+    /// Pins the literal switch, not just the symbol. Every other test in this
+    /// file compares against `REVIEW_DEFAULT_CLAUDE_MODEL` itself, which stays
+    /// green even if the fallback path stops reading the constant, as long as
+    /// both sides still resolve to the same symbol. This test fails the moment
+    /// anyone edits the constant's value, with no hand-editing-and-reverting
+    /// required to prove that.
+    #[test]
+    fn review_default_claude_model_is_the_literal_haiku_switch() {
+        assert_eq!(
+            REVIEW_DEFAULT_CLAUDE_MODEL, "haiku",
+            "the baked-in review-scope default must stay the literal `haiku` switch"
+        );
+    }
+
     /// The default (non-review) chat scope stays plain `claude` with no
     /// `--model`, so the Claude CLI's own default applies.
     #[test]
