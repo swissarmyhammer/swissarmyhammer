@@ -72,9 +72,10 @@ pub enum SessionSource {
 impl SessionSource {
     /// String representation matching Claude Code's JSON format.
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Startup => "startup",
-            Self::Resume => "resume",
+        if self == Self::Startup {
+            "startup"
+        } else {
+            "resume"
         }
     }
 }
@@ -224,29 +225,44 @@ pub enum HookEventKind {
     WorktreeRemove,
 }
 
-impl HookEvent {
-    /// The kind of this event.
-    pub fn kind(&self) -> HookEventKind {
-        match self {
-            Self::SessionStart { .. } => HookEventKind::SessionStart,
-            Self::UserPromptSubmit { .. } => HookEventKind::UserPromptSubmit,
-            Self::PreToolUse { .. } => HookEventKind::PreToolUse,
-            Self::PostToolUse { .. } => HookEventKind::PostToolUse,
-            Self::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
-            Self::Stop { .. } => HookEventKind::Stop,
-            Self::Notification { .. } => HookEventKind::Notification,
-            Self::Elicitation { .. } => HookEventKind::Elicitation,
-            Self::ElicitationResult { .. } => HookEventKind::ElicitationResult,
-            Self::InstructionsLoaded { .. } => HookEventKind::InstructionsLoaded,
-            Self::ConfigChange { .. } => HookEventKind::ConfigChange,
-            Self::WorktreeCreate { .. } => HookEventKind::WorktreeCreate,
-            Self::WorktreeRemove { .. } => HookEventKind::WorktreeRemove,
-            Self::PostCompact { .. } => HookEventKind::PostCompact,
-            Self::TeammateIdle { .. } => HookEventKind::TeammateIdle,
-            Self::TaskCompleted { .. } => HookEventKind::TaskCompleted,
+// `HookEvent::kind()` is a mechanical 1:1 mapping from each `HookEvent`
+// variant to the `HookEventKind` variant of the same name. Generating it from
+// a single list of shared identifiers means adding a variant to one enum
+// without adding it here fails to compile (the match becomes non-exhaustive)
+// instead of silently drifting out of sync.
+macro_rules! hook_event_kind_map {
+    ($($variant:ident),+ $(,)?) => {
+        impl HookEvent {
+            /// The kind of this event.
+            pub fn kind(&self) -> HookEventKind {
+                match self {
+                    $(Self::$variant { .. } => HookEventKind::$variant,)+
+                }
+            }
         }
-    }
+    };
+}
 
+hook_event_kind_map!(
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+    Notification,
+    Elicitation,
+    ElicitationResult,
+    InstructionsLoaded,
+    ConfigChange,
+    WorktreeCreate,
+    WorktreeRemove,
+    PostCompact,
+    TeammateIdle,
+    TaskCompleted,
+);
+
+impl HookEvent {
     /// The string value that matchers test against.
     ///
     /// Returns `None` for events that don't support matchers
@@ -290,28 +306,22 @@ impl HookEvent {
     }
 
     /// Build per-variant JSON without AVP context fields.
+    ///
+    /// A simple dispatcher: each arm extracts its variant's fields and hands
+    /// them to a `json_<variant>` helper that owns that variant's
+    /// JSON-building logic (including any conditional optional fields).
     fn to_base_json(&self) -> serde_json::Value {
         match self {
             Self::SessionStart {
                 session_id,
                 source,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "SessionStart",
-                "source": source.as_str(),
-            }),
+            } => json_session_start(session_id, *source, cwd),
             Self::UserPromptSubmit {
                 session_id,
                 prompt,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": extract_prompt_text(prompt),
-            }),
+            } => json_user_prompt_submit(session_id, prompt, cwd),
             Self::PreToolUse {
                 session_id,
                 tool_name,
@@ -350,47 +360,21 @@ impl HookEvent {
                 error,
                 tool_use_id,
                 cwd,
-            } => {
-                let mut o = tool_event_json(
-                    "PostToolUseFailure",
-                    session_id,
-                    tool_name,
-                    cwd,
-                    tool_input,
-                    tool_use_id,
-                    &None,
-                );
-                if let Some(err) = error {
-                    o["error"] = err.clone();
-                }
-                o
-            }
+            } => json_post_tool_use_failure(
+                session_id,
+                tool_name,
+                tool_input,
+                error,
+                tool_use_id,
+                cwd,
+            ),
             Self::Stop {
                 session_id,
                 stop_reason,
                 stop_hook_active,
                 cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "Stop",
-                "stop_reason": format!("{:?}", stop_reason),
-                "stop_hook_active": stop_hook_active,
-            }),
-            Self::Notification {
-                notification, cwd, ..
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": notification.session_id.to_string(),
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "Notification",
-                    "notification_type": notification_update_name(&notification.update),
-                });
-                if let Ok(update_value) = serde_json::to_value(&notification.update) {
-                    obj["notification"] = update_value;
-                }
-                obj
-            }
+            } => json_stop(session_id, stop_reason, *stop_hook_active, cwd),
+            Self::Notification { notification, cwd } => json_notification(notification, cwd),
             Self::Elicitation {
                 session_id,
                 mcp_server_name,
@@ -398,22 +382,14 @@ impl HookEvent {
                 mode,
                 requested_schema,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "Elicitation",
-                    "mode": mode,
-                    "requested_schema": requested_schema,
-                });
-                if let Some(name) = mcp_server_name {
-                    obj["mcp_server_name"] = serde_json::Value::String(name.clone());
-                }
-                if let Some(msg) = message {
-                    obj["message"] = serde_json::Value::String(msg.clone());
-                }
-                obj
-            }
+            } => json_elicitation(
+                session_id,
+                mcp_server_name,
+                message,
+                mode,
+                requested_schema,
+                cwd,
+            ),
             Self::ElicitationResult {
                 session_id,
                 mcp_server_name,
@@ -421,113 +397,275 @@ impl HookEvent {
                 content,
                 elicitation_id,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "ElicitationResult",
-                    "mcp_server_name": mcp_server_name,
-                    "content": content,
-                    "elicitation_id": elicitation_id,
-                });
-                if let Some(a) = action {
-                    obj["action"] = serde_json::Value::String(a.clone());
-                }
-                obj
-            }
+            } => json_elicitation_result(
+                session_id,
+                mcp_server_name,
+                action,
+                content,
+                elicitation_id,
+                cwd,
+            ),
             Self::InstructionsLoaded {
                 file_path,
                 load_reason,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "InstructionsLoaded",
-                    "load_reason": load_reason,
-                });
-                if let Some(fp) = file_path {
-                    obj["file_path"] = serde_json::Value::String(fp.clone());
-                }
-                obj
-            }
+            } => json_instructions_loaded(file_path, load_reason, cwd),
             Self::ConfigChange {
                 session_id,
                 source,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "ConfigChange",
-                });
-                if let Some(src) = source {
-                    obj["source"] = serde_json::Value::String(src.clone());
-                }
-                obj
-            }
+            } => json_config_change(session_id, source, cwd),
             Self::WorktreeCreate {
                 worktree_path,
                 branch_name,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "WorktreeCreate",
-                });
-                if let Some(wp) = worktree_path {
-                    obj["worktree_path"] = serde_json::Value::String(wp.clone());
-                }
-                if let Some(bn) = branch_name {
-                    obj["branch_name"] = serde_json::Value::String(bn.clone());
-                }
-                obj
-            }
-            Self::WorktreeRemove { worktree_path, cwd } => serde_json::json!({
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "WorktreeRemove",
-                "worktree_path": worktree_path,
-            }),
-            Self::PostCompact { session_id, cwd } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "PostCompact",
-            }),
+            } => json_worktree_create(worktree_path, branch_name, cwd),
+            Self::WorktreeRemove { worktree_path, cwd } => json_worktree_remove(worktree_path, cwd),
+            Self::PostCompact { session_id, cwd } => json_post_compact(session_id, cwd),
             Self::TeammateIdle {
                 session_id,
                 teammate_id,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "TeammateIdle",
-                });
-                if let Some(id) = teammate_id {
-                    obj["teammate_id"] = serde_json::Value::String(id.clone());
-                }
-                obj
-            }
+            } => json_teammate_idle(session_id, teammate_id, cwd),
             Self::TaskCompleted {
                 session_id,
                 task_id,
                 task_title,
                 cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "TaskCompleted",
-                });
-                if let Some(id) = task_id {
-                    obj["task_id"] = serde_json::Value::String(id.clone());
-                }
-                if let Some(title) = task_title {
-                    obj["task_title"] = serde_json::Value::String(title.clone());
-                }
-                obj
-            }
+            } => json_task_completed(session_id, task_id, task_title, cwd),
         }
     }
+}
+
+/// Build JSON for a `SessionStart` event.
+fn json_session_start(session_id: &str, source: SessionSource, cwd: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "SessionStart",
+        "source": source.as_str(),
+    })
+}
+
+/// Build JSON for a `UserPromptSubmit` event.
+fn json_user_prompt_submit(
+    session_id: &str,
+    prompt: &[ContentBlock],
+    cwd: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": extract_prompt_text(prompt),
+    })
+}
+
+/// Build JSON for a `PostToolUseFailure` event.
+fn json_post_tool_use_failure(
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &Option<serde_json::Value>,
+    error: &Option<serde_json::Value>,
+    tool_use_id: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut o = tool_event_json(
+        "PostToolUseFailure",
+        session_id,
+        tool_name,
+        cwd,
+        tool_input,
+        tool_use_id,
+        &None,
+    );
+    if let Some(err) = error {
+        o["error"] = err.clone();
+    }
+    o
+}
+
+/// Build JSON for a `Stop` event.
+fn json_stop(
+    session_id: &str,
+    stop_reason: &StopReason,
+    stop_hook_active: bool,
+    cwd: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "Stop",
+        "stop_reason": format!("{:?}", stop_reason),
+        "stop_hook_active": stop_hook_active,
+    })
+}
+
+/// Build JSON for a `Notification` event.
+fn json_notification(notification: &SessionNotification, cwd: &Path) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": notification.session_id.to_string(),
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "Notification",
+        "notification_type": notification_update_name(&notification.update),
+    });
+    if let Ok(update_value) = serde_json::to_value(&notification.update) {
+        obj["notification"] = update_value;
+    }
+    obj
+}
+
+/// Build JSON for an `Elicitation` event.
+fn json_elicitation(
+    session_id: &str,
+    mcp_server_name: &Option<String>,
+    message: &Option<String>,
+    mode: &str,
+    requested_schema: &serde_json::Value,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "Elicitation",
+        "mode": mode,
+        "requested_schema": requested_schema,
+    });
+    if let Some(name) = mcp_server_name {
+        obj["mcp_server_name"] = serde_json::Value::String(name.clone());
+    }
+    if let Some(msg) = message {
+        obj["message"] = serde_json::Value::String(msg.clone());
+    }
+    obj
+}
+
+/// Build JSON for an `ElicitationResult` event.
+fn json_elicitation_result(
+    session_id: &str,
+    mcp_server_name: &str,
+    action: &Option<String>,
+    content: &serde_json::Value,
+    elicitation_id: &str,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "ElicitationResult",
+        "mcp_server_name": mcp_server_name,
+        "content": content,
+        "elicitation_id": elicitation_id,
+    });
+    if let Some(a) = action {
+        obj["action"] = serde_json::Value::String(a.clone());
+    }
+    obj
+}
+
+/// Build JSON for an `InstructionsLoaded` event.
+fn json_instructions_loaded(
+    file_path: &Option<String>,
+    load_reason: &str,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "InstructionsLoaded",
+        "load_reason": load_reason,
+    });
+    if let Some(fp) = file_path {
+        obj["file_path"] = serde_json::Value::String(fp.clone());
+    }
+    obj
+}
+
+/// Build JSON for a `ConfigChange` event.
+fn json_config_change(session_id: &str, source: &Option<String>, cwd: &Path) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "ConfigChange",
+    });
+    if let Some(src) = source {
+        obj["source"] = serde_json::Value::String(src.clone());
+    }
+    obj
+}
+
+/// Build JSON for a `WorktreeCreate` event.
+fn json_worktree_create(
+    worktree_path: &Option<String>,
+    branch_name: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "WorktreeCreate",
+    });
+    if let Some(wp) = worktree_path {
+        obj["worktree_path"] = serde_json::Value::String(wp.clone());
+    }
+    if let Some(bn) = branch_name {
+        obj["branch_name"] = serde_json::Value::String(bn.clone());
+    }
+    obj
+}
+
+/// Build JSON for a `WorktreeRemove` event.
+fn json_worktree_remove(worktree_path: &str, cwd: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "WorktreeRemove",
+        "worktree_path": worktree_path,
+    })
+}
+
+/// Build JSON for a `PostCompact` event.
+fn json_post_compact(session_id: &str, cwd: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "PostCompact",
+    })
+}
+
+/// Build JSON for a `TeammateIdle` event.
+fn json_teammate_idle(
+    session_id: &str,
+    teammate_id: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "TeammateIdle",
+    });
+    if let Some(id) = teammate_id {
+        obj["teammate_id"] = serde_json::Value::String(id.clone());
+    }
+    obj
+}
+
+/// Build JSON for a `TaskCompleted` event.
+fn json_task_completed(
+    session_id: &str,
+    task_id: &Option<String>,
+    task_title: &Option<String>,
+    cwd: &Path,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": "TaskCompleted",
+    });
+    if let Some(id) = task_id {
+        obj["task_id"] = serde_json::Value::String(id.clone());
+    }
+    if let Some(title) = task_title {
+        obj["task_title"] = serde_json::Value::String(title.clone());
+    }
+    obj
 }
 
 /// Build JSON for tool-related events (PreToolUse, PostToolUse, PostToolUseFailure).
@@ -577,19 +715,37 @@ fn append_avp_context(obj: &mut serde_json::Value, ctx: &HookCommandContext) {
 }
 
 /// Map SessionUpdate variant to a string name for matcher/serialization.
+///
+/// `SessionUpdate` is `#[serde(tag = "sessionUpdate", rename_all = "snake_case")]`,
+/// so each variant already carries a stable wire-format name. Looking that
+/// name up in a small table — instead of a match with one arm per variant —
+/// means this function does not need its own arm for every `SessionUpdate`
+/// variant, and automatically returns `"unknown"` for variants added to the
+/// (`#[non_exhaustive]`) upstream enum after this table was written.
 fn notification_update_name(update: &SessionUpdate) -> &'static str {
-    match update {
-        SessionUpdate::AgentMessageChunk(_) => "agent_message",
-        SessionUpdate::AgentThoughtChunk(_) => "agent_thought",
-        SessionUpdate::ToolCall(_) => "tool_call",
-        SessionUpdate::ToolCallUpdate(_) => "tool_call_update",
-        SessionUpdate::Plan(_) => "plan",
-        SessionUpdate::AvailableCommandsUpdate(_) => "available_commands",
-        SessionUpdate::CurrentModeUpdate(_) => "current_mode",
-        SessionUpdate::ConfigOptionUpdate(_) => "config_option",
-        SessionUpdate::UserMessageChunk(_) => "user_message",
-        _ => "unknown",
-    }
+    /// `(wire-format "sessionUpdate" tag, matcher/notification name)` pairs.
+    const NAMES: &[(&str, &str)] = &[
+        ("agent_message_chunk", "agent_message"),
+        ("agent_thought_chunk", "agent_thought"),
+        ("tool_call", "tool_call"),
+        ("tool_call_update", "tool_call_update"),
+        ("plan", "plan"),
+        ("available_commands_update", "available_commands"),
+        ("current_mode_update", "current_mode"),
+        ("config_option_update", "config_option"),
+        ("user_message_chunk", "user_message"),
+    ];
+
+    let wire_value = serde_json::to_value(update).ok();
+    let wire_tag = wire_value
+        .as_ref()
+        .and_then(|value| value.get("sessionUpdate"))
+        .and_then(serde_json::Value::as_str);
+
+    NAMES
+        .iter()
+        .find_map(|(tag, name)| (Some(*tag) == wire_tag).then_some(*name))
+        .unwrap_or("unknown")
 }
 
 // ---------------------------------------------------------------------------
@@ -861,31 +1017,73 @@ impl TryFrom<HookEventKindConfig> for HookEventKind {
 
     /// Maps a supported `HookEventKindConfig` variant to its `HookEventKind`.
     /// Returns `UnsupportedEventKind` for forward-compatible variants that ACP does not support.
+    ///
+    /// Looks the config variant up in a table of supported `(HookEventKindConfig,
+    /// HookEventKind)` pairs, rather than matching every variant by hand — a
+    /// config variant not listed there is, by construction, one ACP does not
+    /// support yet, so it falls through to `UnsupportedEventKind`.
     fn try_from(config: HookEventKindConfig) -> Result<Self, Self::Error> {
-        match config {
-            HookEventKindConfig::SessionStart => Ok(HookEventKind::SessionStart),
-            HookEventKindConfig::UserPromptSubmit => Ok(HookEventKind::UserPromptSubmit),
-            HookEventKindConfig::PreToolUse => Ok(HookEventKind::PreToolUse),
-            HookEventKindConfig::PostToolUse => Ok(HookEventKind::PostToolUse),
-            HookEventKindConfig::PostToolUseFailure => Ok(HookEventKind::PostToolUseFailure),
-            HookEventKindConfig::Stop => Ok(HookEventKind::Stop),
-            HookEventKindConfig::Notification => Ok(HookEventKind::Notification),
-            HookEventKindConfig::PostCompact => Ok(HookEventKind::PostCompact),
-            HookEventKindConfig::TeammateIdle => Ok(HookEventKind::TeammateIdle),
-            HookEventKindConfig::TaskCompleted => Ok(HookEventKind::TaskCompleted),
-            HookEventKindConfig::Elicitation => Ok(HookEventKind::Elicitation),
-            HookEventKindConfig::ElicitationResult => Ok(HookEventKind::ElicitationResult),
-            HookEventKindConfig::InstructionsLoaded => Ok(HookEventKind::InstructionsLoaded),
-            HookEventKindConfig::ConfigChange => Ok(HookEventKind::ConfigChange),
-            HookEventKindConfig::WorktreeCreate => Ok(HookEventKind::WorktreeCreate),
-            HookEventKindConfig::WorktreeRemove => Ok(HookEventKind::WorktreeRemove),
-            HookEventKindConfig::PermissionRequest
-            | HookEventKindConfig::SubagentStart
-            | HookEventKindConfig::SubagentStop
-            | HookEventKindConfig::PreCompact
-            | HookEventKindConfig::Setup
-            | HookEventKindConfig::SessionEnd => Err(UnsupportedEventKind),
-        }
+        /// Config variants ACP can fire, paired with their `HookEventKind`.
+        /// Forward-compatible, Claude-Code-only variants (`PermissionRequest`,
+        /// `SubagentStart`, `SubagentStop`, `PreCompact`, `Setup`, `SessionEnd`)
+        /// are deliberately absent, and resolve to `UnsupportedEventKind` below.
+        const SUPPORTED: &[(HookEventKindConfig, HookEventKind)] = &[
+            (
+                HookEventKindConfig::SessionStart,
+                HookEventKind::SessionStart,
+            ),
+            (
+                HookEventKindConfig::UserPromptSubmit,
+                HookEventKind::UserPromptSubmit,
+            ),
+            (HookEventKindConfig::PreToolUse, HookEventKind::PreToolUse),
+            (HookEventKindConfig::PostToolUse, HookEventKind::PostToolUse),
+            (
+                HookEventKindConfig::PostToolUseFailure,
+                HookEventKind::PostToolUseFailure,
+            ),
+            (HookEventKindConfig::Stop, HookEventKind::Stop),
+            (
+                HookEventKindConfig::Notification,
+                HookEventKind::Notification,
+            ),
+            (HookEventKindConfig::PostCompact, HookEventKind::PostCompact),
+            (
+                HookEventKindConfig::TeammateIdle,
+                HookEventKind::TeammateIdle,
+            ),
+            (
+                HookEventKindConfig::TaskCompleted,
+                HookEventKind::TaskCompleted,
+            ),
+            (HookEventKindConfig::Elicitation, HookEventKind::Elicitation),
+            (
+                HookEventKindConfig::ElicitationResult,
+                HookEventKind::ElicitationResult,
+            ),
+            (
+                HookEventKindConfig::InstructionsLoaded,
+                HookEventKind::InstructionsLoaded,
+            ),
+            (
+                HookEventKindConfig::ConfigChange,
+                HookEventKind::ConfigChange,
+            ),
+            (
+                HookEventKindConfig::WorktreeCreate,
+                HookEventKind::WorktreeCreate,
+            ),
+            (
+                HookEventKindConfig::WorktreeRemove,
+                HookEventKind::WorktreeRemove,
+            ),
+        ];
+
+        SUPPORTED
+            .iter()
+            .find(|(from, _)| *from == config)
+            .map(|(_, to)| *to)
+            .ok_or(UnsupportedEventKind)
     }
 }
 
