@@ -121,6 +121,19 @@
 //! classified exactly like `def` ([`ComplexitySpec::call_target_test_kinds`]),
 //! so being named `test` at the definition IS the marker.
 //!
+//! The prefix match is case-sensitive by default (Go's and Ruby's languages
+//! are both case-sensitive, and `go test` itself requires the exact-case
+//! `Test` prefix), but Fortran overrides it with
+//! [`ComplexitySpec::test_name_case_insensitive`]: Fortran identifiers are
+//! case-insensitive by language semantics, so `TEST_DEEPLY_NESTED` and
+//! `test_deeply_nested` name the same subroutine and must both be recognized
+//! as a FRUIT-style test. Fortran's own `.and.`/`.or.` boolean-operator
+//! tokens need no equivalent case handling in [`ComplexitySpec::logical_operators`]:
+//! `tree_sitter_fortran`'s grammar aliases each via a `caseInsensitive()`
+//! regex to the SAME lowercase node kind regardless of source casing
+//! (verified by reading `grammar.js` and by parsing `.AND.`/`.OR.` samples,
+//! covered by `fortran_boolean_operators_are_recognized_regardless_of_case`).
+//!
 //! Bash has no attribute/annotation grammar construct either, and its one
 //! real-world convention — bats-core's `# @test "description"` comment — is
 //! unstructured free text inside a generic `comment` node, indistinguishable
@@ -260,6 +273,14 @@ struct ComplexitySpec {
     /// with [`Self::test_param_type`]. Empty when [`Self::test_param_type`]
     /// is `None`.
     parameters_field: &'static str,
+    /// Whether [`Self::test_name_prefix`] matching in
+    /// [`name_signature_marks_test`] must ignore case — Fortran's, whose
+    /// identifiers are case-insensitive by language semantics (`TEST_FOO`,
+    /// `test_foo`, and `Test_Foo` all name the same subroutine), unlike Go's
+    /// and Ruby's, both case-sensitive languages where `go test`/minitest
+    /// require the exact-case prefix. `false` for every other grammar,
+    /// including Go and Ruby.
+    test_name_case_insensitive: bool,
 
     // ---- indirect header fields (fortran) ----
     //
@@ -367,6 +388,49 @@ struct ComplexitySpec {
     name_from_call_arguments: bool,
 }
 
+/// Default values for the fields ^xjyb2qf added to support Go's, Ruby's, and
+/// Fortran's name+signature test marking, Swift's and Fortran's
+/// marker/positional conditional shapes, and Elixir's call-target
+/// classification. Every language mapped before that work needs none of
+/// them, so its spec literal inherits this whole block via struct-update
+/// syntax (`..EXTENDED_SPEC_DEFAULTS`) and overrides only the field(s) that
+/// actually differ, instead of repeating the same dozen field values in
+/// every definition. The leading fields set here are placeholders, never
+/// read: every spec below sets its own function/nesting/conditional shape
+/// explicitly, so this constant is never used by itself.
+const EXTENDED_SPEC_DEFAULTS: ComplexitySpec = ComplexitySpec {
+    language: "",
+    function_kinds: &[],
+    name_field: "",
+    nesting_kinds: &[],
+    conditional_kinds: &[],
+    consequence_field: "",
+    elif_kinds: &[],
+    else_wrapper_kinds: &[],
+    loop_kinds: &[],
+    arm_kinds: &[],
+    nest_only_kinds: &[],
+    logical_kinds: &[],
+    logical_operators: &[],
+    labelled_jump_kinds: &[],
+    label_kinds: &[],
+    attribute_kinds: &[],
+    attribute_container_kinds: &[],
+    test_name_prefix: None,
+    test_param_type: None,
+    parameters_field: "",
+    test_name_case_insensitive: false,
+    header_child_kinds: &[],
+    condition_field: "condition",
+    else_marker_kinds: &[],
+    positional_conditional: false,
+    statement_terminator_kinds: &[],
+    alternative_nested_in_consequence: false,
+    call_target_kinds: &[],
+    call_target_test_kinds: &[],
+    name_from_call_arguments: false,
+};
+
 /// Rust. Verified against `tree_sitter_rust` by parsing samples covering every
 /// listed kind — the node names below are the grammar's, not guesses.
 static RUST_SPEC: ComplexitySpec = ComplexitySpec {
@@ -393,18 +457,7 @@ static RUST_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &["label"],
     attribute_kinds: &["attribute_item"],
     attribute_container_kinds: &[],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Shared field values for TypeScript, TSX, and JavaScript. All three
@@ -446,18 +499,7 @@ const fn typescript_family_spec(language: &'static str) -> ComplexitySpec {
         label_kinds: &["statement_identifier"],
         attribute_kinds: &["decorator"],
         attribute_container_kinds: &[],
-        test_name_prefix: None,
-        test_param_type: None,
-        parameters_field: "",
-        header_child_kinds: &[],
-        condition_field: "condition",
-        else_marker_kinds: &[],
-        positional_conditional: false,
-        statement_terminator_kinds: &[],
-        alternative_nested_in_consequence: false,
-        call_target_kinds: &[],
-        call_target_test_kinds: &[],
-        name_from_call_arguments: false,
+        ..EXTENDED_SPEC_DEFAULTS
     }
 }
 
@@ -509,18 +551,7 @@ static PYTHON_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &[],
     attribute_kinds: &["decorator"],
     attribute_container_kinds: &[],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Java. Verified against `tree_sitter_java`. Its `if_statement` puts the next
@@ -561,18 +592,7 @@ static JAVA_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &["identifier"],
     attribute_kinds: &["marker_annotation", "annotation"],
     attribute_container_kinds: &["modifiers"],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Shared field values for C and C++. Their control-flow, loop, and
@@ -605,18 +625,7 @@ const fn c_family_spec(language: &'static str) -> ComplexitySpec {
         label_kinds: &["statement_identifier"],
         attribute_kinds: &["attribute"],
         attribute_container_kinds: &["attribute_declaration"],
-        test_name_prefix: None,
-        test_param_type: None,
-        parameters_field: "",
-        header_child_kinds: &[],
-        condition_field: "condition",
-        else_marker_kinds: &[],
-        positional_conditional: false,
-        statement_terminator_kinds: &[],
-        alternative_nested_in_consequence: false,
-        call_target_kinds: &[],
-        call_target_test_kinds: &[],
-        name_from_call_arguments: false,
+        ..EXTENDED_SPEC_DEFAULTS
     }
 }
 
@@ -675,18 +684,7 @@ static CSHARP_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &["identifier"],
     attribute_kinds: &["attribute"],
     attribute_container_kinds: &["attribute_list"],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// PHP. Verified against `tree_sitter_php` (the `LANGUAGE_PHP` grammar). Its
@@ -727,18 +725,7 @@ static PHP_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &[],
     attribute_kinds: &["attribute"],
     attribute_container_kinds: &["attribute_list", "attribute_group"],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Go. Verified against `tree_sitter_go`. Its `if_statement` matches Java's/
@@ -782,15 +769,7 @@ static GO_SPEC: ComplexitySpec = ComplexitySpec {
     test_name_prefix: Some("Test"),
     test_param_type: Some("testing.T"),
     parameters_field: "parameters",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Ruby. Verified against `tree_sitter_ruby`. Its `if` matches Java's/C#'s
@@ -823,17 +802,7 @@ static RUBY_SPEC: ComplexitySpec = ComplexitySpec {
     attribute_kinds: &[],
     attribute_container_kinds: &[],
     test_name_prefix: Some("test_"),
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Fortran. Verified against `tree_sitter_fortran`. Its `subroutine`/
@@ -868,17 +837,11 @@ static FORTRAN_SPEC: ComplexitySpec = ComplexitySpec {
     attribute_kinds: &[],
     attribute_container_kinds: &[],
     test_name_prefix: Some("test_"),
-    test_param_type: None,
-    parameters_field: "",
+    test_name_case_insensitive: true,
     header_child_kinds: &["subroutine_statement", "function_statement"],
-    condition_field: "condition",
-    else_marker_kinds: &[],
     positional_conditional: true,
     statement_terminator_kinds: &["end_if_statement"],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Swift. Verified against `tree_sitter_swift`. It DOES have a genuine,
@@ -919,18 +882,8 @@ static SWIFT_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &[],
     attribute_kinds: &["attribute"],
     attribute_container_kinds: &["modifiers"],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
-    condition_field: "condition",
     else_marker_kinds: &["else"],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
-    alternative_nested_in_consequence: false,
-    call_target_kinds: &[],
-    call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Elixir. Verified against `tree_sitter_elixir`. `def`/`defp`/`defmacro`/
@@ -979,14 +932,7 @@ static ELIXIR_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &[],
     attribute_kinds: &[],
     attribute_container_kinds: &[],
-    test_name_prefix: None,
-    test_param_type: None,
-    parameters_field: "",
-    header_child_kinds: &[],
     condition_field: "arguments",
-    else_marker_kinds: &[],
-    positional_conditional: false,
-    statement_terminator_kinds: &[],
     alternative_nested_in_consequence: true,
     call_target_kinds: &[
         "def",
@@ -1001,6 +947,7 @@ static ELIXIR_SPEC: ComplexitySpec = ComplexitySpec {
     ],
     call_target_test_kinds: &["test"],
     name_from_call_arguments: true,
+    ..EXTENDED_SPEC_DEFAULTS
 };
 
 /// Every language with a scorer mapping. A language absent here is "not
@@ -1430,6 +1377,16 @@ fn attribute_marks_test(node: Node<'_>, source: &str) -> bool {
 /// of an attribute, none of whose grammars has an attribute/annotation node
 /// kind at all. `false` for every grammar that marks tests via an attribute
 /// instead ([`ComplexitySpec::test_name_prefix`] is `None`).
+///
+/// The prefix match itself is case-sensitive UNLESS
+/// [`ComplexitySpec::test_name_case_insensitive`] is set — Fortran's, whose
+/// identifiers are case-insensitive by language semantics, so
+/// `TEST_DEEPLY_NESTED`/`test_deeply_nested`/`Test_Deeply_Nested` all name
+/// the same subroutine. Go and Ruby leave it unset: both are case-sensitive
+/// languages where `go test`/minitest require the exact-case prefix, so a
+/// case-insensitive match there would recognize helpers `go test` itself
+/// would never run (an unexported `testHelper` is not a real `Test` entry
+/// point).
 fn name_signature_marks_test(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bool {
     let Some(prefix) = spec.test_name_prefix else {
         return false;
@@ -1441,7 +1398,13 @@ fn name_signature_marks_test(node: Node<'_>, source: &str, spec: &ComplexitySpec
     else {
         return false;
     };
-    if !name.starts_with(prefix) {
+    let prefix_matches = if spec.test_name_case_insensitive {
+        name.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    } else {
+        name.starts_with(prefix)
+    };
+    if !prefix_matches {
         return false;
     }
     let Some(required_type) = spec.test_param_type else {
@@ -4715,6 +4678,52 @@ end subroutine mixed
     }
 
     #[test]
+    fn fortran_boolean_operators_are_recognized_regardless_of_case() {
+        // Fortran is case-insensitive, and `tree_sitter_fortran`'s grammar
+        // aliases `.and.`/`.or.` via a `caseInsensitive()` regex to the SAME
+        // lowercase node kind no matter how the source spells it (verified
+        // by reading `grammar.js`: `[caseInsensitive('.and.'), ...]` aliases
+        // to the literal lowercase string, so `node.kind()` for an uppercase
+        // `.AND.` token is still `".and."`). This asserts the real parsed
+        // behavior rather than the grammar source: an uppercase run scores
+        // identically to the lowercase run already covered above.
+        let uppercase = only_function_for(
+            "src/lib.f90",
+            r#"
+subroutine all_three_upper(a, b, c, result)
+  logical, intent(in) :: a, b, c
+  logical, intent(out) :: result
+  if (a .AND. b .AND. c) then
+    result = 1
+  end if
+end subroutine all_three_upper
+"#,
+        );
+        assert_eq!(
+            uppercase.cognitive_score, 2,
+            "uppercase .AND. must be recognized exactly like lowercase .and."
+        );
+        assert_eq!(uppercase.max_boolean_operands, 3);
+
+        let mixed_case = only_function_for(
+            "src/lib.f90",
+            r#"
+subroutine mixed_upper(a, b, c, result)
+  logical, intent(in) :: a, b, c
+  logical, intent(out) :: result
+  if (a .AND. b .OR. c) then
+    result = 1
+  end if
+end subroutine mixed_upper
+"#,
+        );
+        assert_eq!(
+            mixed_case.cognitive_score, 3,
+            "uppercase .AND./.OR. must mix into two sequences exactly like lowercase"
+        );
+    }
+
+    #[test]
     fn fortran_test_name_prefix_exempts_the_subroutine() {
         let file = cognitive_complexity(
             "src/lib.f90",
@@ -4743,6 +4752,48 @@ end subroutine test_deeply_nested
         assert!(
             scored.is_test,
             "FRUIT's test_* subroutine naming marks the subroutine"
+        );
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn fortran_uppercase_test_name_prefix_exempts_the_subroutine() {
+        // Fortran identifiers are case-insensitive by language semantics —
+        // `TEST_DEEPLY_NESTED`, `test_deeply_nested`, and `Test_Deeply_Nested`
+        // all name the same subroutine — so FRUIT's all-caps naming style
+        // must be recognized as a test exactly like the lowercase spelling
+        // covered above.
+        let file = cognitive_complexity(
+            "src/lib.f90",
+            r#"
+subroutine TEST_DEEPLY_NESTED(a, b, n, result)
+  logical, intent(in) :: a, b
+  integer, intent(in) :: n
+  integer, intent(out) :: result
+  integer :: i
+  if (a) then
+    do i = 1, n
+      do while (b)
+        if (i > 0) then
+          result = 1
+          return
+        end if
+      end do
+    end do
+  end if
+end subroutine TEST_DEEPLY_NESTED
+"#,
+        )
+        .expect("fortran is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(
+            scored.is_test,
+            "an uppercase-named FRUIT test subroutine is still recognized as a test"
         );
         assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
         assert!(
