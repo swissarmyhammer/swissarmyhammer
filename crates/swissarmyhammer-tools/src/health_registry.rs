@@ -16,6 +16,16 @@ use crate::mcp::{
     register_review_tools, register_shell_tools, register_web_tools,
 };
 
+/// Directory name (relative to a user's home directory, or the current
+/// working directory) that holds user-authored prompts.
+const PROMPTS_DIR_NAME: &str = ".prompts";
+
+/// Health check name for the user-level prompts directory.
+const USER_PROMPTS_CHECK_NAME: &str = "User prompts directory";
+
+/// Health check name for the local (project) prompts directory.
+const LOCAL_PROMPTS_CHECK_NAME: &str = "Local prompts directory";
+
 /// Health checker for prompt directories and YAML front matter
 ///
 /// Prompts aren't an MCP tool — they're served via MCP's native Prompts
@@ -44,73 +54,24 @@ impl Doctorable for PromptHealthChecker {
 
         // Check user prompts directory
         if let Some(home) = dirs::home_dir() {
-            let user_prompts = home.join(".prompts");
-            if user_prompts.exists() {
-                let count = count_markdown_files(&user_prompts);
-                checks.push(HealthCheck::ok(
-                    "User prompts directory",
-                    format!("Found {} prompts in {:?}", count, user_prompts),
-                    cat,
-                ));
-            } else {
-                checks.push(HealthCheck::ok(
-                    "User prompts directory",
-                    format!("Not found (optional): {:?}", user_prompts),
-                    cat,
-                ));
-            }
+            let user_prompts = home.join(PROMPTS_DIR_NAME);
+            check_prompts_directory(USER_PROMPTS_CHECK_NAME, &user_prompts, cat, &mut checks);
         }
 
         // Check local prompts directory
-        let local_prompts = std::path::PathBuf::from(".prompts");
-        if local_prompts.exists() {
-            let count = count_markdown_files(&local_prompts);
-            checks.push(HealthCheck::ok(
-                "Local prompts directory",
-                format!("Found {} prompts in {:?}", count, local_prompts),
-                cat,
-            ));
-        } else {
-            checks.push(HealthCheck::ok(
-                "Local prompts directory",
-                format!("Not found (optional): {:?}", local_prompts),
-                cat,
-            ));
-        }
+        let local_prompts = std::path::PathBuf::from(PROMPTS_DIR_NAME);
+        check_prompts_directory(LOCAL_PROMPTS_CHECK_NAME, &local_prompts, cat, &mut checks);
 
         // Check YAML front matter parsing in all prompt directories
         let mut dirs_to_check = vec![local_prompts];
         if let Some(home) = dirs::home_dir() {
-            dirs_to_check.push(home.join(".prompts"));
+            dirs_to_check.push(home.join(PROMPTS_DIR_NAME));
         }
 
-        let mut yaml_errors = Vec::new();
-        for dir in dirs_to_check {
-            if !dir.exists() {
-                continue;
-            }
-
-            for entry in walkdir::WalkDir::new(&dir)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-            {
-                match std::fs::read_to_string(entry.path()) {
-                    Ok(content) => {
-                        if let Some(error) = frontmatter_yaml_error(&content) {
-                            yaml_errors.push((entry.path().to_path_buf(), error));
-                        }
-                    }
-                    Err(e) => {
-                        yaml_errors.push((
-                            entry.path().to_path_buf(),
-                            format!("Failed to read file: {}", e),
-                        ));
-                    }
-                }
-            }
-        }
+        let yaml_errors: Vec<(std::path::PathBuf, String)> = dirs_to_check
+            .iter()
+            .flat_map(|dir| collect_yaml_errors_from_dir(dir))
+            .collect();
 
         if yaml_errors.is_empty() {
             checks.push(HealthCheck::ok(
@@ -131,6 +92,64 @@ impl Doctorable for PromptHealthChecker {
 
         checks
     }
+}
+
+/// Check whether a single prompts directory exists and push an OK
+/// [`HealthCheck`] reporting either the markdown file count (found) or that
+/// the directory is absent (optional).
+fn check_prompts_directory(
+    check_name: &str,
+    dir: &std::path::Path,
+    cat: &str,
+    checks: &mut Vec<HealthCheck>,
+) {
+    if dir.exists() {
+        let count = count_markdown_files(dir);
+        checks.push(HealthCheck::ok(
+            check_name,
+            format!("Found {} prompts in {:?}", count, dir),
+            cat,
+        ));
+    } else {
+        checks.push(HealthCheck::ok(
+            check_name,
+            format!("Not found (optional): {:?}", dir),
+            cat,
+        ));
+    }
+}
+
+/// Validate the YAML frontmatter of a single file.
+///
+/// Returns `None` when the file reads and its frontmatter (if any) parses.
+/// Returns `Some(message)` when the file cannot be read, or its frontmatter
+/// fails to parse.
+fn validate_frontmatter_file(path: &std::path::Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => frontmatter_yaml_error(&content),
+        Err(e) => Some(format!("Failed to read file: {}", e)),
+    }
+}
+
+/// Collect YAML frontmatter errors from every markdown file in a directory.
+///
+/// Returns an empty list when the directory does not exist. Each entry pairs
+/// the offending file's path with its error message.
+fn collect_yaml_errors_from_dir(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+        .filter_map(|entry| {
+            validate_frontmatter_file(entry.path())
+                .map(|error| (entry.path().to_path_buf(), error))
+        })
+        .collect()
 }
 
 /// Report the YAML error in a markdown file's frontmatter block

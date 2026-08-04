@@ -1,0 +1,1 @@
+{"id":"01KZ6TVSJGQX60YAG1HMDW5RP5","timestamp":"2026-08-04T16:49:13.808614Z","op":"create","item_id":"01KZ6TVSJE4N8H5KGSY2FJX34K","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 1d76db\n+tag_name: swissarmyhammer-tools\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 1d76db\n-tag_name: swissarmyhammer-tools\n","transaction_id":null}

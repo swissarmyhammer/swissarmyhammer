@@ -42,7 +42,7 @@ pub const KNOWN_TOOL_NAMES: &[&str] = &[
 ];
 
 /// Per-tool configuration entry
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolEntry {
     /// Whether the tool is enabled (`true`) or disabled (`false`).
     enabled: bool,
@@ -69,7 +69,7 @@ impl ToolEntry {
 /// kanban:
 ///   enabled: false
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolConfig {
     #[serde(flatten)]
     entries: HashMap<String, ToolEntry>,
@@ -111,6 +111,11 @@ impl ToolConfig {
 
 const TOOLS_CONFIG_FILENAME: &str = "tools.yaml";
 
+/// Name of the SwissArmyHammer configuration directory, relative to either
+/// the user's home directory (global layer) or the git repository root
+/// (project layer).
+const SAH_CONFIG_DIR: &str = ".sah";
+
 /// Load tool config from a single YAML file.
 ///
 /// Returns `None` if the file does not exist or cannot be read, and logs a
@@ -149,7 +154,7 @@ pub fn save_tool_config(config: &ToolConfig, path: &Path) -> std::io::Result<()>
 ///
 /// Returns `None` if the home directory cannot be determined.
 pub fn global_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".sah").join(TOOLS_CONFIG_FILENAME))
+    dirs::home_dir().map(|home| home.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))
 }
 
 /// Resolve the project tools.yaml path (`.sah/tools.yaml` at the git root).
@@ -157,7 +162,7 @@ pub fn global_config_path() -> Option<PathBuf> {
 /// Returns `None` if the current directory is not inside a git repository.
 pub fn project_config_path() -> Option<PathBuf> {
     swissarmyhammer_common::utils::find_git_repository_root()
-        .map(|root| root.join(".sah").join(TOOLS_CONFIG_FILENAME))
+        .map(|root| root.join(SAH_CONFIG_DIR).join(TOOLS_CONFIG_FILENAME))
 }
 
 /// Load and merge tool config from the global and project layers.
@@ -209,6 +214,7 @@ pub fn apply_tool_config(
 /// value and re-reads only when the file has actually changed on disk.
 ///
 /// A deleted file is treated as "all tools enabled" (empty config).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolConfigWatcher {
     global_path: Option<PathBuf>,
     project_path: Option<PathBuf>,

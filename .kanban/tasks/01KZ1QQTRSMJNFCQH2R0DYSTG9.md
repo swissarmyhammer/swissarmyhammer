@@ -43,6 +43,66 @@ comments:
 
     - next: this card's named scope is done and verified; ^2kqcswb remains open to close the wider `McpServer::new()` gap (now including the mcp-proxy site).
   timestamp: 2026-08-04T16:10:46.877839+00:00
+- actor: claude-code
+  id: 01kz6rs2pzavmwwnhf1z870fgt
+  text: |-
+    ### commit — changed
+    - evidence: 8443ab358 fix(swissarmyhammer-tools): stop shell-tool tests from littering .shell in crate dirs
+    - next: none (not pushed, per instruction)
+  timestamp: 2026-08-04T16:12:47.711526+00:00
+- actor: claude-code
+  id: 01kz6t05wh67deg6hmm1t097cv
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (commit 8443ab358) — 23 raw findings, confirmed 23. Of these, 7 are on production code and are kept (health_registry.rs:34,47,69; tool_config.rs:45,72,152,212). The remaining 16 target test code that already existed before this checkpoint (magic numbers and string-literal duplication in pre-existing test bodies in health_registry.rs, tool_config.rs, file_size_limits.rs, mcp_server_paritys.rs) — dropped per the review skill's blanket test-refactor exception.
+    - next: implementer must address the 7 open findings, then re-review.
+  timestamp: 2026-08-04T16:34:08.913195+00:00
+- actor: claude-code
+  id: 01kz6t0s3x2aaenzpps0b4rpxt
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 4 files (tool_config.rs, tool_registry.rs, file_size_limits.rs, mcp_server_paritys.rs); filed follow-up ^2kqcswb for McpServer::new() call sites out of scope
+    - test: green — cargo nextest run --workspace, 13497 passed; fixed additional unguarded CWD sites in health_registry.rs, mcp_tools_registration.rs, end_to_end.rs
+    - commit: 8443ab358
+    - review: findings — crates/swissarmyhammer-tools/src/health_registry.rs:34,47,69; crates/swissarmyhammer-tools/src/mcp/tool_config.rs:45,72,152,212
+  timestamp: 2026-08-04T16:34:28.605107+00:00
+- actor: claude-code
+  id: 01kz6tx26eyw5v4k6997y2dtfy
+  text: |-
+    Fixed all 7 review findings (iteration 1):
+
+    1. `health_registry.rs::run_health_checks` — extracted 3 helpers: `check_prompts_directory` (handles both the user- and local-prompts existence/count branches), `validate_frontmatter_file` (read + parse a single file), and `collect_yaml_errors_from_dir` (walk a directory, collect errors via `validate_frontmatter_file`). `run_health_checks` is now a flat sequence of calls with no nested loops, which resolves both the cognitive-complexity-23 and nesting-depth-4 gate failures.
+    2. `.prompts"` literal — extracted `const PROMPTS_DIR_NAME: &str = ".prompts";`, replaced all 3 occurrences (user prompts join, local prompts join, dirs_to_check push).
+    3. `"Local prompts directory"` literal — extracted `const LOCAL_PROMPTS_CHECK_NAME`; also extracted `const USER_PROMPTS_CHECK_NAME` for the same duplication pattern on the user-prompts side (not explicitly named in the finding, but same root cause — a hardcoded check-name literal — so fixed for the whole file per the "root cause across the whole file" rule).
+    4/5. `ToolEntry` and `ToolConfig` now derive `Eq` in addition to `PartialEq`. Verified: `ToolEntry` has only a `bool` field (Eq-safe); `ToolConfig` has `HashMap<String, ToolEntry>` (Eq-safe once `ToolEntry: Eq`).
+    6. `".sah"` literal — extracted `const SAH_CONFIG_DIR: &str = ".sah";`, replaced both occurrences (`global_config_path`, `project_config_path`).
+    7. `ToolConfigWatcher` — added `#[derive(Debug, Clone, PartialEq, Eq)]`. Verified all 4 fields (`Option<PathBuf>` x2, `Option<SystemTime>` x2) support all four derives — `SystemTime` implements `Eq`.
+
+    Verification: `cargo nextest run -p swissarmyhammer-tools health_registry tool_config` — 22/22 passed. `cargo build -p swissarmyhammer-tools` clean. `cargo clippy -p swissarmyhammer-tools --lib -- -D warnings` clean, zero warnings. `mcp__sah__diagnostics check working` — 0 errors, 0 warnings.
+
+    Discovery: ran an unsolicited self-check `review file` pass on both touched files afterward. It surfaced 7 additional findings, all against code that predates this card's edits (a case-sensitive `.md` extension check, a capitalized error message, and duplication in `project_config_path`/`global_config_path` and in `ToolConfigWatcher`'s mtime-reading code — none introduced by this card's constant-extraction/derive-only edits). Per "new work discovered goes on a new card," filed these as ^kymcq7j rather than expanding this card's scope.
+  timestamp: 2026-08-04T16:49:55.406585+00:00
+- actor: claude-code
+  id: 01kz6tx7b8kmzr435k4jg4qeh0
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — crates/swissarmyhammer-tools/src/health_registry.rs, crates/swissarmyhammer-tools/src/mcp/tool_config.rs. All 7 review findings fixed and checked off. `cargo nextest run -p swissarmyhammer-tools health_registry tool_config` 22/22 passed; `cargo clippy -p swissarmyhammer-tools --lib -- -D warnings` clean.
+    - next: ready for /review. Filed ^kymcq7j for pre-existing latent findings surfaced by a self-check review pass (out of this card's scope).
+  timestamp: 2026-08-04T16:50:00.680435+00:00
+- actor: claude-code
+  id: 01kz6v3pg7s8296t6pvrdn4ek0
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run --workspace — 13497 passed, 0 failed, 0 skipped; cargo clippy --workspace --all-targets --all-features -- -D warnings — clean, 0 warnings
+    - next: none
+  timestamp: 2026-08-04T16:53:32.807305+00:00
+- actor: claude-code
+  id: 01kz6v51v4hzzssyhhm9e4yqk5
+  text: |-
+    ### commit — changed
+    - evidence: 66250a1de fix(tools): reduce complexity + add missing derives in health_registry/tool_config
+    - next: none
+  timestamp: 2026-08-04T16:54:17.188613+00:00
 position_column: doing
 position_ordinal: '8380'
 title: 'shell tests: stop `ShellExecuteTool::new()` in tests from making a `.shell` dir in the crate directory'
@@ -125,3 +185,15 @@ site list.
       (the literal constructor named in this card's scope — `tool_config.rs`
       and `file_size_limits.rs` — now use `new_isolated()` / a
       `CurrentDirGuard`-pinned temp dir). #bug #shelltool #test-hygiene #tools
+
+## Review Findings (2026-08-04 11:13)
+
+Scope: `review sha HEAD~1..HEAD` (commit 8443ab358). Findings against pre-existing test code (magic numbers, string-literal duplication inside test bodies that already existed before this checkpoint) are dropped per the review skill's test-refactor exception. Findings against production code are kept in full.
+
+- [x] `crates/swissarmyhammer-tools/src/health_registry.rs:34` — Function run_health_checks has cognitive complexity 23 (gate 15) and max condition-nesting depth 4 (gate 4). The function performs multiple responsibilities: checking user and project prompt directories, walking directory trees, reading file contents, parsing YAML frontmatter, and collecting errors. The nested loops with multiple conditional branches (directory existence checks, file filtering, match on read result, nested if-let on parse error) create excessive complexity. Extract helper functions to reduce complexity. Create separate functions for: (1) checking and reporting a single directory's prompts, (2) validating YAML frontmatter in a single file, (3) collecting YAML errors from a directory. This makes each function easier to understand and test.
+- [x] `crates/swissarmyhammer-tools/src/health_registry.rs:47` — The literal string ".prompts" is repeated 3 times in this file (lines 47, 65, 84). This is a configuration value — the name of the prompts directory — that should be defined once as a constant. Repeating it requires updating multiple places if the directory name ever changes. Define a constant at the top of the file: `const PROMPTS_DIR_NAME: &str = ".prompts";` and replace all three occurrences with references to this constant.
+- [x] `crates/swissarmyhammer-tools/src/health_registry.rs:69` — The literal string "Local prompts directory" is repeated 2 times in this function (lines 69, 75). This check label should be defined once as a constant to avoid duplication and ensure consistency if the label needs to change. Define a constant at the module level: `const LOCAL_PROMPTS_CHECK_NAME: &str = "Local prompts directory";` and replace both occurrences with this constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:45` — ToolEntry implements PartialEq but not Eq, despite having no NaN-capable fields (only a bool). Per trait-implementations rule, when PartialEq is implemented, Eq must also be implemented for types that support it, since downstream crates cannot add Eq due to orphan rules. Add Eq to the derive list: #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:72` — ToolConfig implements PartialEq but not Eq, despite having no NaN-capable fields (HashMap of ToolEntry values where ToolEntry contains only bool). Downstream crates cannot add Eq due to orphan rules. Add Eq to the derive list: #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:152` — The literal string ".sah" is repeated 2 times in this file (lines 152, 160). This is a configuration value — the name of the SAH configuration directory — that should be defined once as a constant. Repeating it requires updating multiple places if the directory name ever changes. Define a constant at the top of the file: `const SAH_CONFIG_DIR: &str = ".sah";` and replace both occurrences with references to this constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:212` — ToolConfigWatcher is a public struct with no trait derives. It should implement Debug (required for all public types per Rust conventions), Clone (all fields are Clone-able), PartialEq, and Eq (all fields support these). Downstream crates cannot add these due to orphan rules. Add #[derive(Debug, Clone, PartialEq, Eq)] before the struct definition at line 212.
