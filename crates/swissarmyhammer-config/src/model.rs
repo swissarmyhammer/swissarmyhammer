@@ -888,6 +888,38 @@ impl ModelManager {
         Ok(models)
     }
 
+    /// Validate basic path constraints shared by directory and config-file
+    /// paths.
+    ///
+    /// Checks that `path` is non-empty and does not exceed `MAX_PATH_LENGTH`.
+    /// `context` labels the path in warning text (e.g. `"model directory"`,
+    /// `"config file"`).
+    ///
+    /// # Returns
+    /// * `Result<PathBuf, ModelError>` - The path, unchanged, or an error
+    fn validate_path_basics(path: &Path, context: &str) -> Result<PathBuf, ModelError> {
+        // Check for empty path
+        if path.as_os_str().is_empty() {
+            tracing::warn!("{context} path is empty");
+            return Err(ModelError::InvalidPath(path.to_path_buf()));
+        }
+
+        // Check path length to prevent system issues
+        const MAX_PATH_LENGTH: usize = 4096;
+        let path_str = path.to_string_lossy();
+        if path_str.len() > MAX_PATH_LENGTH {
+            tracing::warn!(
+                "{context} path too long ({} characters, maximum {}): {}",
+                path_str.len(),
+                MAX_PATH_LENGTH,
+                path_str
+            );
+            return Err(ModelError::InvalidPath(path.to_path_buf()));
+        }
+
+        Ok(path.to_path_buf())
+    }
+
     /// Validate and canonicalize a directory path for secure access
     ///
     /// # Security
@@ -904,24 +936,7 @@ impl ModelManager {
     /// # Returns
     /// * `Result<PathBuf, ModelError>` - Canonicalized path or error
     fn validate_directory_path(dir_path: &Path) -> Result<PathBuf, ModelError> {
-        // Check for empty path
-        if dir_path.as_os_str().is_empty() {
-            tracing::warn!("Attempted to load models from empty path");
-            return Err(ModelError::InvalidPath(dir_path.to_path_buf()));
-        }
-
-        // Check path length to prevent system issues
-        const MAX_PATH_LENGTH: usize = 4096;
-        let path_str = dir_path.to_string_lossy();
-        if path_str.len() > MAX_PATH_LENGTH {
-            tracing::warn!(
-                "Path too long ({} characters, maximum {}): {}",
-                path_str.len(),
-                MAX_PATH_LENGTH,
-                path_str
-            );
-            return Err(ModelError::InvalidPath(dir_path.to_path_buf()));
-        }
+        Self::validate_path_basics(dir_path, "model directory")?;
 
         // Canonicalize path to resolve symlinks and validate existence
         let canonical_path = match dir_path.canonicalize() {
@@ -961,8 +976,16 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Check directory permissions to ensure it's readable
-    fn check_directory_permissions(path: &Path) -> Result<(), ModelError> {
+    /// Check that `path` is a directory with `required_mode` permission bits
+    /// set for the owner (e.g. `0o400` for read, `0o200` for write).
+    ///
+    /// `access_name` (e.g. `"readable"`, `"writable"`) labels the checked
+    /// permission in log and error text.
+    fn check_directory_access(
+        path: &Path,
+        required_mode: u32,
+        access_name: &str,
+    ) -> Result<(), ModelError> {
         // Check if we can read the directory metadata
         match std::fs::metadata(path) {
             Ok(metadata) => {
@@ -970,17 +993,17 @@ impl ModelManager {
                     tracing::warn!("Path is not a directory: {}", path.display());
                     return Err(ModelError::InvalidPath(path.to_path_buf()));
                 }
-                // On Unix, check read permission
+                // On Unix, check the requested permission bit
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let mode = metadata.permissions().mode();
-                    let has_read = (mode & 0o400) != 0; // Owner read permission
-                    if !has_read {
-                        tracing::warn!("Directory is not readable: {}", path.display());
+                    let has_access = (mode & required_mode) != 0;
+                    if !has_access {
+                        tracing::warn!("Directory is not {access_name}: {}", path.display());
                         return Err(ModelError::IoError(std::io::Error::new(
                             std::io::ErrorKind::PermissionDenied,
-                            format!("Directory is not readable: {}", path.display()),
+                            format!("Directory is not {access_name}: {}", path.display()),
                         )));
                     }
                 }
@@ -992,6 +1015,11 @@ impl ModelManager {
         }
 
         Ok(())
+    }
+
+    /// Check directory permissions to ensure it's readable
+    fn check_directory_permissions(path: &Path) -> Result<(), ModelError> {
+        Self::check_directory_access(path, 0o400, "readable")
     }
 
     /// Check if path is a valid directory for loading models
@@ -1285,6 +1313,16 @@ impl ModelManager {
         None
     }
 
+    /// Canonicalize `path`, mapping any error to `ModelError::IoError` and
+    /// logging it with `context` (e.g. `"current directory"`, `"config
+    /// path"`) to identify which caller failed.
+    fn canonicalize_path(path: &Path, context: &str) -> Result<PathBuf, ModelError> {
+        path.canonicalize().map_err(|e| {
+            tracing::error!("Failed to canonicalize {context} {}: {}", path.display(), e);
+            ModelError::IoError(e)
+        })
+    }
+
     /// Ensure project configuration directory structure exists
     ///
     /// Creates the `.sah/` directory if it doesn't exist and returns the path
@@ -1316,14 +1354,7 @@ impl ModelManager {
         let current_dir = std::env::current_dir().map_err(ModelError::IoError)?;
 
         // Security: Canonicalize current directory to resolve symlinks
-        let canonical_current = current_dir.canonicalize().map_err(|e| {
-            tracing::error!(
-                "Failed to canonicalize current directory {}: {}",
-                current_dir.display(),
-                e
-            );
-            ModelError::IoError(e)
-        })?;
+        let canonical_current = Self::canonicalize_path(&current_dir, "current directory")?;
 
         // Security: Audit log the directory we're working in
         tracing::debug!(
@@ -1382,68 +1413,20 @@ impl ModelManager {
 
     /// Check if a directory is writable
     fn check_directory_writable(path: &Path) -> Result<(), ModelError> {
-        match std::fs::metadata(path) {
-            Ok(metadata) => {
-                if !metadata.is_dir() {
-                    return Err(ModelError::InvalidPath(path.to_path_buf()));
-                }
-                // On Unix, check write permission
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = metadata.permissions().mode();
-                    let has_write = (mode & 0o200) != 0; // Owner write permission
-                    if !has_write {
-                        tracing::error!("Directory is not writable: {}", path.display());
-                        return Err(ModelError::IoError(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            format!("Directory is not writable: {}", path.display()),
-                        )));
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Cannot access directory {}: {}", path.display(), e);
-                return Err(ModelError::IoError(e));
-            }
-        }
-        Ok(())
+        Self::check_directory_access(path, 0o200, "writable")
     }
 
     /// Validate a config file path for security
     fn validate_config_file_path(path: &Path) -> Result<PathBuf, ModelError> {
-        // Check for empty path
-        if path.as_os_str().is_empty() {
-            tracing::warn!("Config file path is empty");
-            return Err(ModelError::InvalidPath(path.to_path_buf()));
-        }
-
-        // Check path length
-        const MAX_PATH_LENGTH: usize = 4096;
-        let path_str = path.to_string_lossy();
-        if path_str.len() > MAX_PATH_LENGTH {
-            tracing::warn!(
-                "Config path too long ({} characters, maximum {}): {}",
-                path_str.len(),
-                MAX_PATH_LENGTH,
-                path_str
-            );
-            return Err(ModelError::InvalidPath(path.to_path_buf()));
-        }
+        Self::validate_path_basics(path, "config file")?;
 
         // Security: Check for suspicious patterns
+        let path_str = path.to_string_lossy();
         Self::check_suspicious_patterns(&path_str)?;
 
         // If the file exists, canonicalize it
         if path.exists() {
-            let canonical = path.canonicalize().map_err(|e| {
-                tracing::error!(
-                    "Failed to canonicalize config path {}: {}",
-                    path.display(),
-                    e
-                );
-                ModelError::IoError(e)
-            })?;
+            let canonical = Self::canonicalize_path(path, "config path")?;
 
             // Verify it's a file
             if !canonical.is_file() {
