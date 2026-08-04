@@ -109,6 +109,16 @@ pub struct ClaudeConfig {
     /// takes precedence over ephemeral mode's default model.
     #[serde(default)]
     pub extra_args: Vec<String>,
+    /// Skip the "hi" init-trigger turn and the blocking init-message read in
+    /// `spawn_process_and_consume_init`. Flows into
+    /// [`crate::claude_process::SpawnConfig::skip_init_trigger`].
+    ///
+    /// Defaults to `false`, matching production behavior: the init message's
+    /// available-agent list and slash-command list are consumed as before.
+    /// Set to `true` only for spawns that need neither (e.g. review
+    /// subagents), to save one full API call per spawn.
+    #[serde(default)]
+    pub skip_init_trigger: bool,
 }
 
 /// Server configuration options  
@@ -608,6 +618,7 @@ impl Default for AgentConfig {
                 ephemeral: false,
                 tools_override: None,
                 extra_args: Vec::new(),
+                skip_init_trigger: false,
             },
             server: ServerConfig {
                 port: None,

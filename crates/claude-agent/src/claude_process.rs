@@ -140,6 +140,12 @@ pub struct SpawnConfig {
     /// of a parent session's transcript. See [`ConversationAttachment`].
     #[builder(default)]
     pub attachment: ConversationAttachment,
+    /// Skip the "hi" init-trigger turn and the blocking init-message read in
+    /// [`crate::claude::ClaudeClient::spawn_process_and_consume_init`].
+    /// Carried from [`crate::config::ClaudeConfig::skip_init_trigger`].
+    /// Defaults to `false`, matching production behavior.
+    #[builder(default)]
+    pub skip_init_trigger: bool,
 }
 
 /// How a spawned claude CLI process attaches to a conversation.
@@ -1199,6 +1205,54 @@ mod tests {
             !args.iter().any(|a| a == "--strict-mcp-config"),
             "Empty MCP server list must not add --strict-mcp-config, got args: {:?}",
             args
+        );
+    }
+
+    /// A `SpawnConfig` with an empty `mcp_servers` list plus the review
+    /// subagent's extra CLI switches must still carry `--strict-mcp-config`
+    /// and `--disable-slash-commands` in the assembled argv — via
+    /// `extra_args`, not via `configure_mcp_servers` (which skips both flags
+    /// entirely when `mcp_servers` is empty, per
+    /// `test_configure_mcp_servers_skips_flags_for_empty_list` above). This is
+    /// the exact argv shape a review subagent spawn produces: zero MCP
+    /// servers, but explicitly strict about it, and with slash commands and
+    /// skills disabled.
+    #[test]
+    fn test_extra_args_carry_review_flags_with_empty_mcp_servers() {
+        let config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .mcp_servers(Vec::new())
+            .extra_args(vec![
+                "--model".to_string(),
+                "haiku".to_string(),
+                "--strict-mcp-config".to_string(),
+                "--disable-slash-commands".to_string(),
+            ])
+            .build();
+
+        let mut command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &config.extra_args,
+        );
+        ClaudeProcess::configure_mcp_servers(&mut command, &config);
+        let args = command_args(&command);
+
+        assert!(
+            args.iter().any(|a| a == "--strict-mcp-config"),
+            "expected --strict-mcp-config in argv, got: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--disable-slash-commands"),
+            "expected --disable-slash-commands in argv, got: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--mcp-config"),
+            "empty mcp_servers must still add no --mcp-config file, got: {args:?}"
         );
     }
 

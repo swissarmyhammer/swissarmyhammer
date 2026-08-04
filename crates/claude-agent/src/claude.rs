@@ -322,8 +322,17 @@ impl ClaudeClient {
     )> {
         self.log_spawn_config(&config);
         let acp_session_id = config.acp_session_id.clone();
+        let skip_init_trigger = config.skip_init_trigger;
 
         let process = self.process_manager.spawn_process(config).await?;
+
+        if skip_init_trigger {
+            tracing::debug!(
+                "skip_init_trigger set: not sending the init trigger or blocking on the init read"
+            );
+            return Ok((None, None));
+        }
+
         self.send_init_trigger(&process).await?;
 
         let init_line = self.read_init_message(&process).await;
@@ -1874,5 +1883,105 @@ mod tests {
         );
         // The error envelope must NOT carry a success/action payload.
         assert!(response["response"]["response"].is_null());
+    }
+
+    /// Restores `PATH` on drop. `PATH` is process-wide, so callers must run
+    /// under `#[serial_test::serial(path_env)]` to keep this from
+    /// interleaving with any other test that also touches `PATH`.
+    struct PathGuard {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl PathGuard {
+        /// Prepend `dir` to `PATH` for the guard's lifetime, so a program
+        /// name with no path separator (e.g. `"claude"`) resolves to a
+        /// binary placed in `dir`.
+        fn prepend(dir: &std::path::Path) -> Self {
+            let original = std::env::var_os("PATH");
+            let mut new_path = std::ffi::OsString::from(dir);
+            if let Some(existing) = &original {
+                new_path.push(":");
+                new_path.push(existing);
+            }
+            std::env::set_var("PATH", &new_path);
+            Self { original }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// `skip_init_trigger: true` must skip BOTH the "hi" init-trigger write
+    /// and the blocking init-message read: `spawn_process_and_consume_init`
+    /// writes no line to the spawned process's stdin.
+    ///
+    /// Drives the real function against a fake `claude` executable (shimmed
+    /// onto `PATH`) that records every byte written to its stdin into a
+    /// capture file — proving the production write path directly, not a
+    /// mock at the `ClaudeProcess` boundary.
+    #[tokio::test]
+    #[serial_test::serial(path_env)]
+    async fn spawn_process_and_consume_init_skips_trigger_when_configured() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin_dir = tempdir().unwrap();
+        let capture_file = bin_dir.path().join("stdin_capture.txt");
+        let script_path = bin_dir.path().join("claude");
+        std::fs::write(
+            &script_path,
+            format!(
+                "#!/bin/sh\ntouch '{capture}'\ncat >> '{capture}'\n",
+                capture = capture_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let _path_guard = PathGuard::prepend(bin_dir.path());
+
+        let protocol_translator = create_test_translator();
+        let client = ClaudeClient::new(protocol_translator).unwrap();
+
+        let session_id = SessionId::new();
+        let acp_session_id = agent_client_protocol::schema::SessionId::new(session_id.to_string());
+        let config = SpawnConfig::builder()
+            .session_id(session_id)
+            .acp_session_id(acp_session_id)
+            .cwd(std::env::temp_dir())
+            .skip_init_trigger(true)
+            .build();
+
+        let result = client
+            .spawn_process_and_consume_init(config)
+            .await
+            .expect("spawn must succeed against the fake claude script");
+        assert_eq!(
+            result,
+            (None, None),
+            "skip_init_trigger must short-circuit with no parsed agents/current_agent"
+        );
+
+        // Give the fake script a moment to start and create the capture file.
+        for _ in 0..40 {
+            if capture_file.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(capture_file.exists(), "fake claude script never started");
+
+        let captured = std::fs::read_to_string(&capture_file).unwrap();
+        assert!(
+            captured.is_empty(),
+            "skip_init_trigger must write no init trigger line to stdin, got: {captured:?}"
+        );
+
+        let _ = client.terminate_session(&session_id).await;
     }
 }

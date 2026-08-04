@@ -1615,6 +1615,7 @@ impl ClaudeAgent {
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
             .extra_args(self.config.claude.extra_args.clone())
+            .skip_init_trigger(self.config.claude.skip_init_trigger)
             .build()
     }
 
@@ -1923,6 +1924,7 @@ impl ClaudeAgent {
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
             .extra_args(self.config.claude.extra_args.clone())
+            .skip_init_trigger(self.config.claude.skip_init_trigger)
             .build()
     }
 

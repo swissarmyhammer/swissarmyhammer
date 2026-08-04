@@ -313,6 +313,23 @@ pub struct CreateAgentOptions {
     /// The kanban app opts in to this; other consumers (e.g. validator agents)
     /// keep the conservative default.
     pub auto_allow_all: bool,
+    /// Extra CLI switches appended AFTER the resolved model's `extra_args`
+    /// (e.g. after `--model haiku`), threaded onto `claude.extra_args`.
+    ///
+    /// Used by the review engine to trim per-spawn overhead:
+    /// `--strict-mcp-config` (no `--mcp-config` means zero MCP servers loaded,
+    /// instead of the CLI falling back to the user's ambient MCP config) and
+    /// `--disable-slash-commands` (skips loading skills/slash commands the
+    /// review subagent never uses). Empty for every other caller.
+    pub extra_claude_args: Vec<String>,
+    /// Skip the "hi" init-trigger turn and the blocking init-message read in
+    /// `claude_agent::claude::ClaudeClient::spawn_process_and_consume_init`.
+    ///
+    /// The init message carries the available-agent list and slash-command
+    /// list; review subagents use neither, so skipping it saves one full API
+    /// call (~300 output tokens) per spawn. `false` for every other caller,
+    /// which keeps consuming the init message as before.
+    pub skip_init_trigger: bool,
 }
 
 /// Resolve the `auto_allow_tool_patterns` glob set for the Claude
@@ -408,12 +425,33 @@ pub fn review_agent_factory(
     Arc::new(move || {
         let config = Arc::clone(&config);
         Box::pin(async move {
-            let handle = create_agent(&config, None)
+            let handle = create_agent_with_options(&config, None, review_create_agent_options())
                 .await
                 .map_err(|e| format!("failed to create review agent: {e}"))?;
             Ok(AgentHandle::new(handle.agent, handle.notification_rx))
         })
     })
+}
+
+/// The [`CreateAgentOptions`] every review subagent spawn uses.
+///
+/// A single source shared by [`review_agent_factory`] and its regression test
+/// so the test cannot drift from what the factory actually builds. Trims the
+/// per-spawn overhead of the ~45 `claude` processes a review run forks: no
+/// ambient MCP servers (`--strict-mcp-config` with no `--mcp-config`), no
+/// skills/slash commands (`--disable-slash-commands`), and no "hi"
+/// init-trigger turn (`skip_init_trigger`) — the review engine drives prompts
+/// and collects findings directly, so it needs neither the agent list nor the
+/// slash-command list the init message would otherwise carry.
+fn review_create_agent_options() -> CreateAgentOptions {
+    CreateAgentOptions {
+        extra_claude_args: vec![
+            "--strict-mcp-config".to_string(),
+            "--disable-slash-commands".to_string(),
+        ],
+        skip_init_trigger: true,
+        ..CreateAgentOptions::default()
+    }
 }
 
 /// Wrap a `claude_agent::ClaudeAgent` into a `DynConnectTo<Client>`
@@ -704,19 +742,25 @@ fn claude_agent_config_from_model(
     mcp_config: Option<McpServerConfig>,
     options: &CreateAgentOptions,
 ) -> claude_agent::AgentConfig {
-    let extra_args = config.claude_args();
+    // The resolved model's switches (e.g. `--model haiku`) come first, then
+    // any caller-supplied extra switches (e.g. review's `--strict-mcp-config`
+    // `--disable-slash-commands`) are appended after them.
+    let mut extra_args = config.claude_args();
+    extra_args.extend(options.extra_claude_args.iter().cloned());
     // Record the chosen tier BEFORE the subprocess starts: the tier-bearing
     // `extra_args` (e.g. `["--model", "haiku"]`) are logged here so a review
     // run's resolved model is provable in the `.sah` logs even if the
     // subprocess argv line never lands.
     tracing::info!("Building claude agent (extra_args={:?})", extra_args);
-    build_claude_agent_config(
+    let mut agent_config = build_claude_agent_config(
         mcp_config,
         options.ephemeral,
         options.tools_override.clone(),
         options.auto_allow_all,
         extra_args,
-    )
+    );
+    agent_config.claude.skip_init_trigger = options.skip_init_trigger;
+    agent_config
 }
 
 /// Build the `claude_agent::AgentConfig` for a Claude ACP agent.
@@ -1721,6 +1765,46 @@ mod tests {
             spawn.claude.extra_args,
             vec!["--model".to_string(), "haiku".to_string()],
             "the review backend's spawned claude must carry --model haiku"
+        );
+    }
+
+    /// Real-path proof that the review backend's spawned `claude` config
+    /// carries the per-spawn trimming this task adds: `--strict-mcp-config`
+    /// and `--disable-slash-commands` appended AFTER the resolved
+    /// `--model haiku`, and `skip_init_trigger == true`.
+    ///
+    /// Drives the same production chain as
+    /// [`review_resolved_default_spawns_claude_with_model_haiku`], but through
+    /// [`review_create_agent_options`] — the exact options
+    /// [`review_agent_factory`] passes to `create_agent_with_options` — so
+    /// this cannot drift from what the wired review factory actually builds.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn review_resolved_config_disables_mcp_skills_and_init_trigger() {
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_config::model::{ModelManager, ModelPaths};
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        let config = ModelManager::resolve_review_chat_config(&ModelPaths::sah())
+            .expect("an unconfigured review scope must resolve to the baked-in default");
+
+        let spawn = claude_agent_config_from_model(&config, None, &review_create_agent_options());
+
+        assert_eq!(
+            spawn.claude.extra_args,
+            vec![
+                "--model".to_string(),
+                "haiku".to_string(),
+                "--strict-mcp-config".to_string(),
+                "--disable-slash-commands".to_string(),
+            ],
+            "review extra_args must carry --strict-mcp-config and \
+             --disable-slash-commands after the resolved --model haiku"
+        );
+        assert!(
+            spawn.claude.skip_init_trigger,
+            "review spawns must skip the init-trigger turn"
         );
     }
 
