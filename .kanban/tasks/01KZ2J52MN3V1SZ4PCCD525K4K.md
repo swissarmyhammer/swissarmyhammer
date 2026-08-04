@@ -163,6 +163,51 @@ comments:
     - checked: no downstream callers of `ProcessGuard::terminate_gracefully`/`force_kill` pattern-match on the old `Box<dyn std::error::Error>` type. `apps/swissarmyhammer-cli/tests/integration/sah_serve_tools_validation.rs` and `sah_serve_integration.rs` only call `ProcessGuard::is_running()`, unaffected by the `ProcessGuardError` change.
     - next: none
   timestamp: 2026-08-04T19:27:27.840777+00:00
+- actor: claude-code
+  id: 01kz73yxat2r36etzz7bj2g6wn
+  text: |-
+    ### commit — changed
+    - evidence: 2622d5077 fix(swissarmyhammer-common): round-3 review fixes for test_utils
+    - next: not pushed; local commit only
+  timestamp: 2026-08-04T19:28:13.146706+00:00
+- actor: claude-code
+  id: 01kz74hvhystcq3et644hc112d
+  text: |-
+    ### review — findings
+    - evidence: 4 findings (of 6 confirmed; 2 dropped as pre-existing untouched test code) — crates/swissarmyhammer-common/src/test_utils.rs:379, :387, :423, :602
+    - next: fix panics-on-expected-failure at test_utils.rs:379,387,602 and the retry-semantics gap at test_utils.rs:423, then re-review
+  timestamp: 2026-08-04T19:38:33.918815+00:00
+- actor: claude-code
+  id: 01kz74jy5acqvmy95j8b3h9fax
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — lock_or_recover helper, ProcessGuard Debug derive, wait-timeout crate replacing manual poll loop, ProcessGuardError via thiserror, ensure_subdir loop, Debug on IsolatedTestEnvironment/IsolatedTestHome, retry_with_backoff helper, # Panics doc on create_temp_dir
+    - test: green — cargo nextest run --workspace, 13501 passed; clippy clean
+    - commit: 2622d5077
+    - review: findings — crates/swissarmyhammer-common/src/test_utils.rs:379,387,423,602 (expect()/panic on expected I/O failure instead of Result; IsolatedTestHome::new() not retry-wrapped)
+  timestamp: 2026-08-04T19:39:09.354984+00:00
+- actor: claude-code
+  id: 01kz7542qys6h0qtyaw944gnjd
+  text: |-
+    ### implement — changed
+    - evidence: Fixed all 4 findings from the 2026-08-04 14:28 review round, all in `crates/swissarmyhammer-common/src/test_utils.rs`:
+      1. (line ~379) `create_isolated_test_home()` now returns `std::io::Result<(TempDir, PathBuf)>`; the `SwissarmyhammerDirectory::from_custom_root(..)` call uses `.map_err(std::io::Error::other)?` instead of `.expect(..)`.
+      2. (line ~387) same function's `ensure_subdir` loop uses `.map_err(std::io::Error::other)?` instead of `.unwrap_or_else(|e| panic!(...))`.
+      3. (line ~423) split `IsolatedTestHome::new()` into `pub fn new() -> Self` (retries via `retry_with_backoff(Self::try_new)`, panics only after `MAX_RETRY_ATTEMPTS` exhausted — used by `Default::default()` and the 4 direct test call sites) and `fn try_new() -> std::io::Result<Self>` (single attempt, no retry, no panic). `IsolatedTestEnvironment::try_create()` now calls `IsolatedTestHome::try_new()?` directly instead of `IsolatedTestHome::new()`, so its single fallible attempt is retried exactly once by the existing outer `retry_with_backoff(Self::try_create)` — this avoids a 3×3 double-retry that would have resulted from calling the panicking `new()` from inside an already-retried `try_create()`. Both the direct-instantiation path and the `IsolatedTestEnvironment` path now retry the identical number of times with identical backoff.
+      4. (line ~602) `create_temp_dir()` now returns `std::io::Result<TempDir>` (`retry_with_backoff(TempDir::new)`, no panic). Verified no external call sites exist anywhere else in the workspace (only this file, plus an unrelated same-named local function in `apps/swissarmyhammer-cli/tests/test_utils.rs`). Updated the 5 in-file call sites (`create_isolated_test_home` + 4 `#[cfg(test)]` tests) to propagate/`.unwrap()`.
+    - Verification: `cargo check -p swissarmyhammer-common --lib --tests` clean, zero warnings; `cargo check --workspace --tests` clean, zero warnings; `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo nextest run --workspace` -> 13501 passed, 0 skipped.
+    - Description updated: all 4 finding checkboxes flipped to `- [x]` with fix explanations appended, using real newlines (verified via `get task` and by reading the raw `.kanban/tasks/01KZ2J52MN3V1SZ4PCCD525K4K.md` on disk — no literal `\n` corruption, tags `bug`/`cleanup`/`docs`/`skills` and progress 1.0 intact).
+    - Not a full plateau: `IsolatedTestHome::swissarmyhammer_dir()` (private struct, ~line 475) still has `.expect("Failed to get swissarmyhammer directory")` — the same panic-on-expected-I/O-failure pattern as the 4 findings just fixed, and it was never flagged across 5 review rounds despite exhaustive scans. Left alone deliberately: fixing it forces `IsolatedTestEnvironment::swissarmyhammer_dir()` (the public wrapper) to also become fallible, and that getter is called without `.unwrap()` in at least 5 other files across 4 other crates (`apps/swissarmyhammer-cli/tests/test_utils.rs`, `crates/swissarmyhammer/tests/test_home_integration.rs`, `crates/swissarmyhammer-config/tests/integration/{fresh_loadings,precedences,integrations}.rs`) — a materially larger, cross-crate blast radius than anything in this round's 4 findings, which were all confined to a single file. If a future round flags it, it is a legitimate new finding, not a re-litigation — I did not fix it here only because it exceeds what this round asked for and would require touching 4+ other crates.
+    - next: ready for review
+    task: ^d525k4k
+  timestamp: 2026-08-04T19:48:31.102222+00:00
+- actor: claude-code
+  id: 01kz759b9zndtb7w9bhd01sxvf
+  text: |-
+    ### test — green
+    - evidence: `cargo nextest run --workspace` — 13501 tests run, 13501 passed, 0 failed, 0 skipped (114.276s). `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, no warnings.
+    - next: ready for review.
+  timestamp: 2026-08-04T19:51:23.711916+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Three committed .skills/ snapshots have drifted from builtin/skills/
@@ -297,4 +342,17 @@ Note: two findings from this scan were dropped under the never-refactor-existing
 
 Re-scanned the whole file once more for the same classes of issue after applying the above (missing `Debug` derives, duplicated retry/lock/poll loops, magic numbers, undocumented panics, `Box<dyn Error>` in public APIs): no further instances found. All lock-acquisition sites, both retry-with-backoff sites, and both remaining process-management methods now share one helper each; every public struct in the file (`CaptureWriter`, `CurrentDirGuard`, `ProcessGuard`, `ProcessGuardError`, `IsolatedTestEnvironment`) derives `Debug`; no remaining `Box<dyn Error>` in this file.
 
-Verification: `cargo check -p swissarmyhammer-common --lib` and `--tests` clean with zero warnings; `cargo check --workspace --tests` clean with zero warnings (confirms downstream consumers of `ProcessGuard`/`terminate_gracefully`/`force_kill` in `apps/swissarmyhammer-cli/tests/` still compile against the new `Result<(), ProcessGuardError>` return type); `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed. #bug #cleanup #docs #skills
+Verification: `cargo check -p swissarmyhammer-common --lib` and `--tests` clean with zero warnings; `cargo check --workspace --tests` clean with zero warnings (confirms downstream consumers of `ProcessGuard`/`terminate_gracefully`/`force_kill` in `apps/swissarmyhammer-cli/tests/` still compile against the new `Result<(), ProcessGuardError>` return type); `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed.
+
+## Review Findings (2026-08-04 14:28)
+
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:379` — Panics on expected I/O failure (directory creation). The rule forbids panicking on expected failure modes — only bugs (internal invariant violations) should panic. Return `Result` or propagate the error via `?` instead of panicking via `.expect()`. -> Fixed: `create_isolated_test_home()` now returns `std::io::Result<(TempDir, PathBuf)>` and propagates `SwissarmyhammerDirectory::from_custom_root(..)` failures with `.map_err(std::io::Error::other)?` instead of `.expect(..)`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:387` — Panics on expected I/O failure (directory creation). The rule forbids panicking on expected failure modes — only internal invariant violations should panic. Return `Result` or propagate the error via `?` instead of panicking. -> Fixed: the `ensure_subdir` loop now does `sah_dir.ensure_subdir(subdir).map_err(std::io::Error::other)?` inside the now-`Result`-returning `create_isolated_test_home()`, instead of `.unwrap_or_else(|e| panic!(...))`.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:423` — `create_isolated_test_home()` performs filesystem operations (creating subdirectories at lines 384–388) that the docstring for `retry_with_backoff` identifies as transiently failing under parallel test execution. This function is called from two paths with inconsistent retry semantics: from `IsolatedTestEnvironment::try_create()` (line 484), which is wrapped in `retry_with_backoff` at line 477, and directly from `IsolatedTestHome::new()` (line 423), whose callers in tests (lines 641, 672, 908, 1074) do not retry. Direct test calls to `IsolatedTestHome::new()` will panic on transient failures instead of retrying. Wrap `IsolatedTestHome::new()` in `retry_with_backoff` as well (or refactor to `try_new()` paired with a retry wrapper at call sites), so the same transient-failure scenario is handled consistently whether `create_isolated_test_home()` is reached via `IsolatedTestEnvironment` or direct instantiation. -> Fixed via the `try_new()` option: split `IsolatedTestHome::new()` into `pub fn new() -> Self` (retries via `retry_with_backoff(Self::try_new)`, panics only after `MAX_RETRY_ATTEMPTS` exhausted — used by `Default::default()` and the 4 direct test call sites) and `fn try_new() -> std::io::Result<Self>` (single attempt, no retry, no panic). `IsolatedTestEnvironment::try_create()` now calls `IsolatedTestHome::try_new()?` directly instead of `IsolatedTestHome::new()`, so it stays a single fallible attempt and is retried exactly once by the existing outer `retry_with_backoff(Self::try_create)` in `IsolatedTestEnvironment::new()` — avoiding a double-retry (3×3 attempts) that calling the panicking `new()` from inside `try_create()` would have caused. Both paths now retry the identical number of times with identical backoff.
+- [x] `crates/swissarmyhammer-common/src/test_utils.rs:602` — Public function panics on expected I/O failure. Library functions should return `Result` for expected failures, not panic. Filesystem exhaustion and permission errors are expected failure modes, not internal invariants. Change function signature to `pub fn create_temp_dir() -> std::io::Result<TempDir>` and return the result instead of panicking. -> Fixed: `create_temp_dir()` now returns `std::io::Result<TempDir>` and is simply `retry_with_backoff(TempDir::new)` (the `Err` case returns the last underlying `io::Error` from `TempDir::new` directly, no panic). Verified there are no external call sites of this function anywhere else in the workspace (only within this file and the CLI's own unrelated locally-defined `create_temp_dir` in `apps/swissarmyhammer-cli/tests/test_utils.rs`, which is a separate function) — updated the 5 in-file call sites (`create_isolated_test_home`, and 4 `#[cfg(test)]` tests) to propagate/`.unwrap()` the new `Result`.
+
+Note: Two findings from this scan are dropped under the never-refactor-existing-tests rule. The subject is pre-existing test code. This commit did not touch it. Dropped items: test_utils.rs:669 (magic number 5 in `test_concurrent_access`) and test_utils.rs:844 (magic number 50 in `test_process_guard_terminate_gracefully_timeout_then_kill`).
+
+Verification: `cargo check -p swissarmyhammer-common --lib --tests` clean, zero warnings; `cargo check --workspace --tests` clean, zero warnings; `cargo nextest run -p swissarmyhammer-common` -> 613 passed, 0 skipped; `cargo test -p swissarmyhammer-common --doc` -> 23 passed, 4 ignored, 0 failed; `cargo nextest run -p swissarmyhammer -p swissarmyhammer-skills` -> 209 passed, 0 skipped; `cargo nextest run --workspace` -> 13501 passed, 0 skipped.
+
+#bug #cleanup #docs #skills

@@ -362,32 +362,38 @@ pub fn acquire_home_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// This creates a temporary directory with a mock SwissArmyHammer setup,
 /// allowing tests to run in parallel without interfering with each other.
 ///
+/// # Errors
+/// Returns an error if the temporary directory, the `.sah` directory
+/// structure, or any of its subdirectories cannot be created. These are
+/// expected (transient or environmental) I/O failure modes, not internal
+/// invariants, so this function propagates them via `Result` instead of
+/// panicking -- callers that want retry-with-backoff or panic-on-exhaustion
+/// semantics apply those themselves (see [`IsolatedTestHome::new`]).
+///
 /// # Example
 ///
 /// ```ignore
 /// // This function is private - use IsolatedTestEnvironment instead
-/// let (temp_dir, home_path) = create_isolated_test_home();
+/// let (temp_dir, home_path) = create_isolated_test_home()?;
 /// // Use home_path for testing instead of reading from HOME env var
 /// // temp_dir is automatically cleaned up when dropped
 /// ```
-fn create_isolated_test_home() -> (TempDir, PathBuf) {
-    let temp_dir = create_temp_dir();
+fn create_isolated_test_home() -> std::io::Result<(TempDir, PathBuf)> {
+    let temp_dir = create_temp_dir()?;
     let home_path = temp_dir.path().to_path_buf();
 
     // Create mock SwissArmyHammer directory structure using centralized directory management
     let sah_dir = crate::directory::SwissarmyhammerDirectory::from_custom_root(home_path.clone())
-        .expect("Failed to create .sah directory");
+        .map_err(std::io::Error::other)?;
     // Create .prompts/ directory (the dot-directory path used by PromptResolver)
     let dot_prompts_dir = home_path.join(".prompts");
-    std::fs::create_dir_all(&dot_prompts_dir).expect("Failed to create .prompts directory");
+    std::fs::create_dir_all(&dot_prompts_dir)?;
 
     for subdir in ["workflows", "todo", "issues", "issues/complete"] {
-        sah_dir
-            .ensure_subdir(subdir)
-            .unwrap_or_else(|e| panic!("Failed to create {subdir} directory: {e}"));
+        sah_dir.ensure_subdir(subdir).map_err(std::io::Error::other)?;
     }
 
-    (temp_dir, home_path)
+    Ok((temp_dir, home_path))
 }
 
 /// RAII guard for isolated HOME environment with race condition protection
@@ -414,22 +420,48 @@ impl Default for IsolatedTestHome {
 }
 
 impl IsolatedTestHome {
-    /// Create a new isolated test home environment
+    /// Create a new isolated test home environment.
+    ///
+    /// Retries via [`retry_with_backoff`], since the directory creation
+    /// [`create_isolated_test_home`] performs can transiently fail under
+    /// parallel test execution. This gives direct callers (tests that
+    /// instantiate `IsolatedTestHome` on its own) the same retry semantics
+    /// as [`IsolatedTestEnvironment::try_create`], which calls
+    /// [`try_new`](Self::try_new) directly and relies on the outer
+    /// [`retry_with_backoff`] in [`IsolatedTestEnvironment::new`] instead.
+    ///
+    /// # Panics
+    /// Panics if creation still fails after [`MAX_RETRY_ATTEMPTS`] retries
+    /// with backoff. This should only happen under severe filesystem
+    /// exhaustion or permission failures, neither of which retrying further
+    /// would fix.
     pub fn new() -> Self {
+        retry_with_backoff(Self::try_new).unwrap_or_else(|e| {
+            panic!("Failed to create isolated test home after {MAX_RETRY_ATTEMPTS} attempts: {e}")
+        })
+    }
+
+    /// Try to create a new isolated test home environment (single attempt,
+    /// no retry). Shared by [`new`](Self::new), which wraps this in
+    /// [`retry_with_backoff`], and by
+    /// [`IsolatedTestEnvironment::try_create`], which is itself already
+    /// retried by the outer [`retry_with_backoff`] in
+    /// [`IsolatedTestEnvironment::new`].
+    fn try_new() -> std::io::Result<Self> {
         // Acquire the global HOME environment lock to prevent race conditions
         let lock_guard = acquire_home_env_lock();
 
         let original_home = std::env::var("HOME").ok();
-        let (temp_dir, home_path) = create_isolated_test_home();
+        let (temp_dir, home_path) = create_isolated_test_home()?;
 
         // Set HOME to the temporary directory
         std::env::set_var("HOME", &home_path);
 
-        Self {
+        Ok(Self {
             _temp_dir: temp_dir,
             original_home,
             _lock_guard: lock_guard,
-        }
+        })
     }
 
     /// Get the path to the isolated home directory
@@ -481,7 +513,10 @@ impl IsolatedTestEnvironment {
     fn try_create() -> std::io::Result<Self> {
         // Capture original HOME before any isolation happens
         let original_home = std::env::var("HOME").ok();
-        let home_guard = IsolatedTestHome::new();
+        // Use the single-attempt, non-panicking `try_new` (not `new`) since
+        // this whole function is already retried by `retry_with_backoff` in
+        // `IsolatedTestEnvironment::new`.
+        let home_guard = IsolatedTestHome::try_new()?;
         let temp_dir = TempDir::new()?;
 
         // Ensure the temporary directory exists and is accessible
@@ -591,19 +626,17 @@ pub fn workspace_root_from_manifest_dir(manifest_dir: &str) -> PathBuf {
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
-/// better error handling and consistent behavior across tests.
+/// better error handling and consistent behavior across tests. Retries up to
+/// [`MAX_RETRY_ATTEMPTS`] times with backoff via [`retry_with_backoff`], since
+/// directory creation can transiently fail under parallel test execution.
 ///
-/// # Panics
-/// Panics if creating the temporary directory still fails after
-/// [`MAX_RETRY_ATTEMPTS`] retries with backoff. This should only happen under
-/// severe filesystem exhaustion or permission failures, neither of which
-/// retrying further would fix.
-pub fn create_temp_dir() -> TempDir {
-    retry_with_backoff(TempDir::new).unwrap_or_else(|e| {
-        panic!(
-            "Failed to create temporary directory for test after {MAX_RETRY_ATTEMPTS} attempts: {e}"
-        )
-    })
+/// # Errors
+/// Returns the last error if creating the temporary directory still fails
+/// after [`MAX_RETRY_ATTEMPTS`] retries with backoff. This should only happen
+/// under severe filesystem exhaustion or permission failures, neither of
+/// which retrying further would fix.
+pub fn create_temp_dir() -> std::io::Result<TempDir> {
+    retry_with_backoff(TempDir::new)
 }
 
 #[cfg(test)]
@@ -701,14 +734,14 @@ mod tests {
 
     #[test]
     fn test_create_temp_dir() {
-        let temp_dir = create_temp_dir();
+        let temp_dir = create_temp_dir().unwrap();
         assert!(temp_dir.path().exists());
         assert!(temp_dir.path().is_dir());
     }
 
     #[test]
     fn test_current_dir_guard_basic() {
-        let temp = create_temp_dir();
+        let temp = create_temp_dir().unwrap();
         let original = std::env::current_dir().unwrap().canonicalize().unwrap();
         let temp_canonical = temp.path().canonicalize().unwrap();
 
@@ -739,7 +772,7 @@ mod tests {
     #[test]
     fn test_current_dir_guard_deleted_before_lock() {
         // Create a directory, then delete it before acquiring the guard
-        let temp = create_temp_dir();
+        let temp = create_temp_dir().unwrap();
         let path = temp.path().to_path_buf();
         // Drop temp to delete the directory
         drop(temp);
@@ -1027,8 +1060,8 @@ mod tests {
 
     #[test]
     fn test_create_temp_dir_returns_unique_dirs() {
-        let dir1 = create_temp_dir();
-        let dir2 = create_temp_dir();
+        let dir1 = create_temp_dir().unwrap();
+        let dir2 = create_temp_dir().unwrap();
 
         assert_ne!(dir1.path(), dir2.path());
         assert!(dir1.path().exists());
@@ -1037,7 +1070,7 @@ mod tests {
 
     #[test]
     fn test_create_isolated_test_home_structure() {
-        let (temp_dir, home_path) = create_isolated_test_home();
+        let (temp_dir, home_path) = create_isolated_test_home().unwrap();
 
         assert!(temp_dir.path().exists());
         assert!(home_path.exists());
