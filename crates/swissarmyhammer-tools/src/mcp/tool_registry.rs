@@ -3498,9 +3498,18 @@ mod tests {
     }
 
     // --- create_fully_registered_tool_registry tests ---
+    //
+    // `create_fully_registered_tool_registry` registers the real shell tool
+    // via `ShellExecuteTool::new()`, which roots its state under the process
+    // CWD — the crate directory under `cargo nextest`. A `CurrentDirGuard`
+    // pins the CWD to a throwaway temp dir for the call so these tests don't
+    // leave a `.shell` directory behind in the crate source tree.
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_is_non_empty() {
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
+            .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
         assert!(
             !registry.is_empty(),
@@ -3510,6 +3519,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_has_cli_tools() {
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
+            .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
         let cli_tools = registry.get_cli_tools();
         assert!(
@@ -3520,6 +3532,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_validation() {
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
+            .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
         let report = registry.validate_all_tools();
         // All registered tools should pass validation

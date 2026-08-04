@@ -10,9 +10,20 @@ use swissarmyhammer_tools::mcp::tool_registry::{
 };
 
 /// Test that verifies all expected MCP tools are registered
+///
+/// `register_shell_tools` registers the real `ShellExecuteTool::new()`, which
+/// roots its state under the process CWD -- the crate directory under `cargo
+/// nextest`. A `CurrentDirGuard` pins the CWD to a throwaway temp dir for the
+/// registration step so this test doesn't leave a `.shell` directory behind
+/// in the crate source tree.
 #[tokio::test]
 async fn test_mcp_tools_are_registered() {
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
     let mut registry = ToolRegistry::new();
+
+    let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+    let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // This mirrors exactly what McpServer does in its constructor
     register_file_tools(&mut registry);
@@ -104,9 +115,20 @@ async fn test_mcp_tools_are_registered() {
 }
 
 /// Test CLI category mapping works
+///
+/// `register_shell_tools` registers the real `ShellExecuteTool::new()`, which
+/// roots its state under the process CWD -- the crate directory under `cargo
+/// nextest`. A `CurrentDirGuard` pins the CWD to a throwaway temp dir for the
+/// registration step so this test doesn't leave a `.shell` directory behind
+/// in the crate source tree.
 #[tokio::test]
 async fn test_cli_categories_are_available() {
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
     let mut registry = ToolRegistry::new();
+
+    let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+    let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // Register all tools
     register_file_tools(&mut registry);
@@ -156,9 +178,20 @@ async fn test_cli_categories_are_available() {
 /// The Claude API does NOT support `oneOf`, `allOf`, or `anyOf` at the top level
 /// of tool input schemas. This test ensures no tool accidentally uses these
 /// unsupported constructs.
+///
+/// `register_shell_tools` registers the real `ShellExecuteTool::new()`, which
+/// roots its state under the process CWD -- the crate directory under `cargo
+/// nextest`. A `CurrentDirGuard` pins the CWD to a throwaway temp dir for the
+/// registration step so this test doesn't leave a `.shell` directory behind
+/// in the crate source tree.
 #[tokio::test]
 async fn test_tool_schemas_are_claude_api_compatible() {
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
     let mut registry = ToolRegistry::new();
+
+    let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+    let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // Register all tools
     register_file_tools(&mut registry);
@@ -312,9 +345,21 @@ const FULL_ONLY_KEYS: [&str; 3] = [
 /// `review` ship the heavy schema over the wire. The dropped-key list is
 /// imported from the operations crate rather than re-listed here, so adding a
 /// key keeps this guard in lockstep automatically.
+///
+/// `create_fully_registered_tool_registry` registers the real shell tool via
+/// `ShellExecuteTool::new()`, which roots its state under the process CWD --
+/// the crate directory under `cargo nextest`. A `CurrentDirGuard` pins the
+/// CWD to a throwaway temp dir for the synchronous registration step so this
+/// test doesn't leave a `.shell` directory behind in the crate source tree.
 #[tokio::test]
 async fn test_operation_tools_split_wire_and_full_schemas() {
-    let registry = create_fully_registered_tool_registry().await;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    let registry = {
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
+        create_fully_registered_tool_registry().await
+    };
 
     let mut checked = Vec::new();
     for tool in registry.iter_tools() {

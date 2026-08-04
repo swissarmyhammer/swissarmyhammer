@@ -376,8 +376,20 @@ mod tests {
         );
     }
 
+    /// `collect_all_health_checks` calls `register_shell_tools`, which
+    /// registers the real `ShellExecuteTool::new()` — the constructor that
+    /// roots its state under the process CWD (the crate directory under
+    /// `cargo nextest`). A `CurrentDirGuard` pins the CWD to a throwaway
+    /// temp dir for the call so these tests don't leave a `.shell` directory
+    /// behind in the crate source tree. `#[serial_test::serial(cwd)]` keeps
+    /// this in step with the other CWD-mutating tests in this file.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_collect_all_health_checks() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks().await;
 
         // Should have at least some checks (web_search provides Chrome check)
@@ -392,7 +404,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_web_search_health_check_included() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks().await;
 
         // Should have a Brave Search check from web tool
@@ -410,7 +427,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_all_tool_groups_enumerated() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks().await;
 
         // Every registered tool group should surface at least one check.
@@ -446,7 +468,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_review_validators_health_check_included() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks().await;
 
         // The review tool overrides the blanket OK default to lint validators;
@@ -468,7 +495,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_prompt_health_checks_included() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks().await;
 
         // Should have prompt-related checks

@@ -390,13 +390,52 @@ async fn test_edit_tool_replace_all_on_large_file() {
 // Shell Execute Tool Size Limit Tests
 // ============================================================================
 
-/// Register a plain `ShellExecuteTool` for the size-limit tests.
+/// Register a plain `ShellExecuteTool` for the size-limit tests, rooted in an
+/// isolated temp directory.
 ///
-/// These tests only care about the command response shape, so a default
-/// tool is sufficient.
+/// These tests only care about the command response shape, so the exact
+/// shell state directory doesn't matter — but `ShellExecuteTool::new()`
+/// resolves it relative to the process CWD, which under `cargo nextest` is
+/// the crate directory. `ShellExecuteTool::new_isolated()` is `#[cfg(test)]`
+/// `pub(crate)` and unreachable from this external integration test crate,
+/// so a `CurrentDirGuard` pins the CWD to a throwaway temp dir for the
+/// duration of construction instead, keeping `.shell` out of the crate
+/// source tree.
 fn register_shell_tool(registry: &mut ToolRegistry) {
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
+
+    let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+    let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
     registry.register(ShellExecuteTool::new());
+}
+
+/// Regression guard: `register_shell_tool` — the isolated-CWD helper this
+/// file's shell tests use in place of a bare `ShellExecuteTool::new()` —
+/// must never create `.shell` under the crate directory.
+///
+/// Cargo (and `cargo nextest`) already runs this integration test binary
+/// with the crate directory as its process CWD, so there is no need to
+/// `chdir` there first — doing so via a second `CurrentDirGuard` here would
+/// also deadlock, since `register_shell_tool` takes its own guard internally
+/// and the guard's lock isn't reentrant. Checking the fixed
+/// `CARGO_MANIFEST_DIR` path before and after is enough to reproduce the
+/// conditions that used to leave a stray `.shell/` in
+/// `crates/swissarmyhammer-tools/`.
+#[tokio::test]
+async fn test_register_shell_tool_does_not_create_shell_dir_in_crate_directory() {
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let shell_dir = crate_dir.join(".shell");
+    let existed_before = shell_dir.exists();
+
+    let mut registry = ToolRegistry::new();
+    register_shell_tool(&mut registry);
+
+    assert_eq!(
+        shell_dir.exists(),
+        existed_before,
+        "register_shell_tool must not create `.shell` in the crate directory"
+    );
 }
 
 #[tokio::test]

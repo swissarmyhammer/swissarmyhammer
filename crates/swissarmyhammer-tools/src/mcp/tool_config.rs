@@ -353,6 +353,34 @@ mod tests {
         assert!(!config.entries()["shell"].is_enabled());
     }
 
+    /// Regression guard: `ShellExecuteTool::new_isolated()` — the constructor
+    /// this file's tests use in place of `ShellExecuteTool::new()` — must
+    /// never create `.shell` under the crate directory, even when the
+    /// process CWD is pinned there. That is exactly the CWD `cargo nextest`
+    /// gives every test binary in this crate, so this reproduces the
+    /// conditions that used to leave a stray `.shell/` in
+    /// `crates/swissarmyhammer-tools/` (see the removed calls to
+    /// `ShellExecuteTool::new()` this test replaces).
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_new_isolated_does_not_create_shell_dir_in_crate_directory() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shell_dir = crate_dir.join(".shell");
+        let existed_before = shell_dir.exists();
+
+        let _cwd = CurrentDirGuard::new(crate_dir).expect("chdir into crate dir");
+
+        let _tool = crate::mcp::tools::shell::ShellExecuteTool::new_isolated();
+
+        assert_eq!(
+            shell_dir.exists(),
+            existed_before,
+            "ShellExecuteTool::new_isolated() must not create `.shell` in the crate directory"
+        );
+    }
+
     /// Validate that every name in KNOWN_TOOL_NAMES exists in a fully-registered
     /// ToolRegistry.  This guards against KNOWN_TOOL_NAMES drifting out of sync
     /// with the actual tool implementations.
@@ -368,13 +396,16 @@ mod tests {
         use crate::mcp::tool_registry::{
             register_code_context_tools, register_diagnostics_tools, register_file_tools,
             register_git_tools, register_kanban_tools, register_questions_tools,
-            register_ralph_tools, register_review_tools, register_shell_tools, register_web_tools,
-            ToolRegistry,
+            register_ralph_tools, register_review_tools, register_web_tools, ToolRegistry,
         };
         use crate::mcp::tools::{agent::register_agent_tools, skill::register_skill_tools};
 
         let mut registry = ToolRegistry::new();
-        register_shell_tools(&mut registry);
+        // Isolated: this test only checks tool *names* against KNOWN_TOOL_NAMES,
+        // so an isolated ShellExecuteTool stands in for the real
+        // `register_shell_tools`, which would otherwise create `.shell` under
+        // the crate directory (nextest's CWD for this test binary).
+        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
         register_file_tools(&mut registry);
         register_git_tools(&mut registry);
         register_kanban_tools(&mut registry);
@@ -404,9 +435,10 @@ mod tests {
     }
 
     // NOTE: The watcher tests use `#[tokio::test]` even though `check_and_reload`
-    // is a synchronous function.  This is required because `ShellExecuteTool::new()`
-    // internally accesses shared async state (ShellState) that requires a Tokio
-    // runtime to be active at construction time.
+    // is a synchronous function.  This is required because
+    // `ShellExecuteTool::new_isolated()` internally accesses shared async state
+    // (ShellState) that requires a Tokio runtime to be active at construction
+    // time.
     //
     // Isolation requirements: tests that trigger an actual reload run
     // `load_merged_tool_config()`, which reads the *process-global* HOME (via
@@ -442,7 +474,7 @@ mod tests {
 
         // Create a registry with a mock tool
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new());
+        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
 
         // First check — mtimes match, no reload
         assert!(!watcher.check_and_reload(&mut registry));
@@ -476,7 +508,7 @@ mod tests {
         };
 
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new());
+        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
 
         // Check twice with no file change — both should return false
         assert!(!watcher.check_and_reload(&mut registry));
@@ -513,7 +545,7 @@ mod tests {
         };
 
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new());
+        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
 
         // Apply initial config
         apply_tool_config(&mut registry, &config);

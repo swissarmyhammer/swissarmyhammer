@@ -178,7 +178,17 @@ async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
 ///
 /// This function is used by both HTTP and STDIN server tests to ensure
 /// they validate against the same authoritative tool list.
+///
+/// `create_fully_registered_tool_registry` registers the real shell tool via
+/// `ShellExecuteTool::new()`, which roots its state under the process CWD —
+/// the crate directory under `cargo nextest`. A `CurrentDirGuard` pins the
+/// CWD to a throwaway temp dir for the synchronous registration step so this
+/// test doesn't leave a `.shell` directory behind in the crate source tree.
 async fn get_mcp_tools() -> Vec<String> {
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+    let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
     let registry = create_fully_registered_tool_registry().await;
 
     // Get MCP tool names with sah__ prefix to match MCP protocol
