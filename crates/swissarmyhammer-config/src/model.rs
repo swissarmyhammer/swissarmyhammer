@@ -976,8 +976,17 @@ impl ModelManager {
         Ok(())
     }
 
+    /// Owner read permission bit, passed as `required_mode` to
+    /// [`Self::check_directory_access`] when checking readability.
+    const READABLE_MODE_BIT: u32 = 0o400;
+
+    /// Owner write permission bit, passed as `required_mode` to
+    /// [`Self::check_directory_access`] when checking writability.
+    const WRITABLE_MODE_BIT: u32 = 0o200;
+
     /// Check that `path` is a directory with `required_mode` permission bits
-    /// set for the owner (e.g. `0o400` for read, `0o200` for write).
+    /// set for the owner (e.g. `Self::READABLE_MODE_BIT` for read,
+    /// `Self::WRITABLE_MODE_BIT` for write).
     ///
     /// `access_name` (e.g. `"readable"`, `"writable"`) labels the checked
     /// permission in log and error text.
@@ -1019,7 +1028,7 @@ impl ModelManager {
 
     /// Check directory permissions to ensure it's readable
     fn check_directory_permissions(path: &Path) -> Result<(), ModelError> {
-        Self::check_directory_access(path, 0o400, "readable")
+        Self::check_directory_access(path, Self::READABLE_MODE_BIT, "readable")
     }
 
     /// Check if path is a valid directory for loading models
@@ -1413,7 +1422,7 @@ impl ModelManager {
 
     /// Check if a directory is writable
     fn check_directory_writable(path: &Path) -> Result<(), ModelError> {
-        Self::check_directory_access(path, 0o200, "writable")
+        Self::check_directory_access(path, Self::WRITABLE_MODE_BIT, "writable")
     }
 
     /// Validate a config file path for security
