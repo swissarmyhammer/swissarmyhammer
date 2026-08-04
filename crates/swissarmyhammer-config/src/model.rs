@@ -77,7 +77,7 @@
 //!
 //! let info = ModelManager::find_agent_by_name("qwen-embedding")?;
 //! let config = parse_model_config(&info.content)?;
-//! println!("Executor: {:?}", config.executor_type());
+//! println!("Executor: {:?}", config.executor_type()?);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -404,17 +404,19 @@ impl ModelConfig {
     /// Convenience accessor: returns the selected executor for the current platform.
     ///
     /// Backward-compatible replacement for the old `config.executor` field.
-    /// Panics if no executor matches — use `select_executor()` for fallible access.
-    pub fn executor(&self) -> &ModelExecutorConfig {
-        self.select_executor()
-            .expect("no compatible executor for current platform")
+    /// Returns `Err(ModelError::ConfigError)` if no executor matches — see
+    /// `select_executor()` for the `Option`-returning alternative.
+    pub fn executor(&self) -> Result<&ModelExecutorConfig, ModelError> {
+        self.select_executor().ok_or_else(|| {
+            ModelError::ConfigError("no compatible executor for current platform".to_string())
+        })
     }
 
     /// Get the executor type from the configuration
-    pub fn executor_type(&self) -> ModelExecutorType {
-        match self.executor() {
-            ModelExecutorConfig::LlamaEmbedding(_) => ModelExecutorType::LlamaEmbedding,
-            ModelExecutorConfig::AneEmbedding(_) => ModelExecutorType::AneEmbedding,
+    pub fn executor_type(&self) -> Result<ModelExecutorType, ModelError> {
+        match self.executor()? {
+            ModelExecutorConfig::LlamaEmbedding(_) => Ok(ModelExecutorType::LlamaEmbedding),
+            ModelExecutorConfig::AneEmbedding(_) => Ok(ModelExecutorType::AneEmbedding),
         }
     }
 }
@@ -476,13 +478,13 @@ pub enum ModelError {
     #[error("Invalid model path: {0}")]
     InvalidPath(PathBuf),
     /// IO error during file operations
-    #[error("IO error: {0}")]
+    #[error("io error: {0}")]
     IoError(#[from] std::io::Error),
     /// Configuration parsing error
-    #[error("Parse error: {0}")]
+    #[error("parse error: {0}")]
     ParseError(#[from] serde_yaml_ng::Error),
     /// Configuration validation error
-    #[error("Configuration error: {0}")]
+    #[error("configuration error: {0}")]
     ConfigError(String),
 }
 
@@ -1646,7 +1648,10 @@ mod tests {
         // Should deserialize from YAML correctly
         let deserialized: ModelConfig =
             serde_yaml_ng::from_str(&yaml).expect("Failed to deserialize from YAML");
-        assert_eq!(config.executor_type(), deserialized.executor_type());
+        assert_eq!(
+            config.executor_type().unwrap(),
+            deserialized.executor_type().unwrap()
+        );
         assert_eq!(config.quiet, deserialized.quiet);
     }
 
@@ -1662,7 +1667,10 @@ mod tests {
         // Should deserialize from JSON correctly
         let deserialized: ModelConfig =
             serde_json::from_str(&json).expect("Failed to deserialize from JSON");
-        assert_eq!(config.executor_type(), deserialized.executor_type());
+        assert_eq!(
+            config.executor_type().unwrap(),
+            deserialized.executor_type().unwrap()
+        );
         assert_eq!(config.quiet, deserialized.quiet);
     }
 
@@ -2953,7 +2961,10 @@ quiet: false
         let config: ModelConfig = serde_yaml_ng::from_str(yaml).expect("old format should parse");
         assert_eq!(config.executors.len(), 1);
         assert!(config.executors[0].platform.is_none());
-        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+        assert_eq!(
+            config.executor_type().unwrap(),
+            ModelExecutorType::LlamaEmbedding
+        );
     }
 
     #[test]
@@ -3015,7 +3026,10 @@ quiet: false
             quiet: false,
         };
         // First entry matches current platform, so it should be selected
-        assert_eq!(config.executor_type(), ModelExecutorType::AneEmbedding);
+        assert_eq!(
+            config.executor_type().unwrap(),
+            ModelExecutorType::AneEmbedding
+        );
     }
 
     #[test]
@@ -3057,7 +3071,10 @@ quiet: false
             quiet: false,
         };
         // First entry doesn't match, second is universal fallback
-        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+        assert_eq!(
+            config.executor_type().unwrap(),
+            ModelExecutorType::LlamaEmbedding
+        );
     }
 
     #[test]
@@ -3858,7 +3875,10 @@ another_unknown: 42
 "#;
         let config: ModelConfig =
             serde_yaml_ng::from_str(yaml).expect("Should parse despite unknown fields");
-        assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+        assert_eq!(
+            config.executor_type().unwrap(),
+            ModelExecutorType::LlamaEmbedding
+        );
         assert!(!config.quiet);
     }
 
@@ -3974,7 +3994,7 @@ max_sequence_length: 512
             quiet: false,
         };
         assert_eq!(
-            embedding_config.executor_type(),
+            embedding_config.executor_type().unwrap(),
             ModelExecutorType::LlamaEmbedding
         );
 
@@ -3994,7 +4014,10 @@ max_sequence_length: 512
             }],
             quiet: false,
         };
-        assert_eq!(ane_config.executor_type(), ModelExecutorType::AneEmbedding);
+        assert_eq!(
+            ane_config.executor_type().unwrap(),
+            ModelExecutorType::AneEmbedding
+        );
     }
 
     #[test]

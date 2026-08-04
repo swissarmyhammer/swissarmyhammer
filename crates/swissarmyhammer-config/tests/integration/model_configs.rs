@@ -608,7 +608,10 @@ executor:
 quiet: true"#;
 
     let config = parse_model_config(content).expect("Should parse config with frontmatter");
-    assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+    assert_eq!(
+        config.executor_type().unwrap(),
+        ModelExecutorType::LlamaEmbedding
+    );
     assert!(config.quiet);
 }
 
@@ -626,7 +629,10 @@ fn test_agent_config_parsing_pure_config() {
 quiet: false"#;
 
     let config = parse_model_config(content).expect("Should parse pure config");
-    assert_eq!(config.executor_type(), ModelExecutorType::AneEmbedding);
+    assert_eq!(
+        config.executor_type().unwrap(),
+        ModelExecutorType::AneEmbedding
+    );
     assert!(!config.quiet);
 }
 
@@ -643,7 +649,10 @@ executor:
 quiet: false"#;
 
     let config = parse_model_config(content).expect("Should parse config with comments");
-    assert_eq!(config.executor_type(), ModelExecutorType::LlamaEmbedding);
+    assert_eq!(
+        config.executor_type().unwrap(),
+        ModelExecutorType::LlamaEmbedding
+    );
     assert!(!config.quiet);
 }
 
