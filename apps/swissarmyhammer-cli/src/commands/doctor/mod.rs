@@ -51,7 +51,7 @@ impl Doctor {
     ///
     /// A surrounding Git repository is informational, not required: the only
     /// project-scoped check (the `.sah` directory) runs when a repo is detected.
-    /// The install-stack checks (preamble, permissions, skills, agents, MCP)
+    /// The install-stack checks (permissions, skills, agents, MCP)
     /// cover both project and user scope agent-agnostically and always run. In a
     /// user-mode install (e.g. running `sah doctor` from `~`) the missing repo is
     /// reported as a Warning and all scope-independent checks still run. The exit
@@ -140,7 +140,7 @@ impl Doctor {
 
     /// Run the agent-agnostic install-stack checks for project and user scope.
     ///
-    /// Reports one row per applicable (agent, scope, component) — preamble,
+    /// Reports one row per applicable (agent, scope, component) —
     /// permissions, skills, subagents, and MCP — for every detected agent. This
     /// is scope-independent and runs regardless of whether a Git repository is
     /// present, so user-scope rows surface even from `~`.

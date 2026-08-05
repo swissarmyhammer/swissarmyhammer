@@ -14,7 +14,12 @@
 
 use std::path::{Path, PathBuf};
 
-use swissarmyhammer_common::lifecycle::{InitResult, InitStatus};
+use swissarmyhammer_common::lifecycle::{InitResult, InitScope, InitStatus};
+use swissarmyhammer_common::reporter::NullReporter;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+use crate::install::Selector;
+use crate::tool_install::ToolInstall;
 
 /// RAII guard that points mirdan's agent detection at a specific `agents.yaml`
 /// via the `MIRDAN_AGENTS_CONFIG` env var, restoring the prior value on drop.
@@ -22,6 +27,7 @@ use swissarmyhammer_common::lifecycle::{InitResult, InitStatus};
 /// The env var is process-global, so tests using this guard must serialize
 /// against each other (and against any CWD/HOME mutation) — apply
 /// `#[serial_test::serial(cwd)]` at the call site.
+#[derive(Debug)]
 pub struct MirdanConfigGuard {
     original: Option<String>,
 }
@@ -98,6 +104,7 @@ pub fn read_json(path: &Path) -> serde_json::Value {
 
 /// Assertions for a `User`-scope (global) profile install against an isolated
 /// `$HOME` matching [`write_single_agent_config`].
+#[derive(Debug)]
 pub struct UserScopeDeploy<'a> {
     /// The isolated home the install wrote into.
     pub home: &'a Path,
@@ -140,6 +147,7 @@ impl UserScopeDeploy<'_> {
 
 /// Assertions for a `Project`-scope profile install rooted at an explicit
 /// `root` matching [`write_single_agent_config`].
+#[derive(Debug)]
 pub struct ProjectScopeDeploy<'a> {
     /// The explicit root the install was directed at.
     pub root: &'a Path,
@@ -176,4 +184,100 @@ impl ProjectScopeDeploy<'_> {
             self.server
         );
     }
+}
+
+/// Assert `T`'s profile is exactly the tool shape: its own `<name> serve` MCP
+/// server plus `expected_skills`, and none of the sah-only artifacts.
+///
+/// Every tool CLI declares that same shape, so the check lives here once rather
+/// than once per CLI registry.
+pub fn assert_tool_profile<T: ToolInstall>(expected_skills: &Selector) {
+    let profile = T::profile();
+
+    let server = profile
+        .mcp_server
+        .unwrap_or_else(|| panic!("{} profile must register an MCP server", T::SERVER_NAME));
+    assert_eq!(server.name, T::SERVER_NAME);
+    assert_eq!(server.command, T::SERVER_NAME);
+    assert_eq!(server.args, vec!["serve".to_string()]);
+
+    assert_eq!(profile.skills.as_ref(), Some(expected_skills));
+    assert!(profile.agents.is_none());
+    assert!(profile.validators.is_none());
+    assert!(!profile.statusline);
+    assert!(!profile.edit_redirect);
+}
+
+/// Assert `T` registers exactly `expected` genuine tool-lifecycle components —
+/// the concerns that stay outside the profile installer.
+pub fn assert_tool_component_count<T: ToolInstall>(expected: usize) {
+    assert_eq!(
+        T::component_registry().len(),
+        expected,
+        "{} must register exactly {expected} lifecycle component(s)",
+        T::SERVER_NAME
+    );
+}
+
+/// Drive `T`'s real `init` then `deinit` at `scope` in a hermetic environment,
+/// asserting the install deployed every skill in `skills` plus the MCP server,
+/// and that the matching `deinit` removed both again.
+///
+/// `$HOME`, the working directory, and the agent config are all redirected at
+/// temporary locations, so nothing touches the developer's machine. Those
+/// redirections are process-global: apply `#[serial_test::serial(cwd)]` at the
+/// call site.
+pub fn assert_tool_lifecycle_round_trip<T: ToolInstall>(scope: InitScope, skills: &[&str]) {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let home = env.home_path();
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let config_path = write_single_agent_config(&root, &home);
+    let _mirdan = MirdanConfigGuard::set(&config_path);
+
+    // A user-scope install lands in `$HOME` and takes no explicit root; project
+    // and local scope are rooted at `<root>` so they never read the CWD.
+    let explicit_root = match scope {
+        InitScope::User => None,
+        _ => Some(root.as_path()),
+    };
+    // Where the fake agent layout puts what the install deployed.
+    let (skill_dir, mcp_path) = match scope {
+        InitScope::User => (home.join(".fake/skills"), home.join(".fake/mcp.json")),
+        _ => (root.join(".fake/skills"), root.join(".mcp.json")),
+    };
+
+    let init_results = T::init(scope, explicit_root, &NullReporter);
+    assert_no_init_error(&format!("{} init", T::SERVER_NAME), &init_results);
+    match scope {
+        InitScope::User => UserScopeDeploy {
+            home: &home,
+            server: T::SERVER_NAME,
+            skills,
+        }
+        .assert(),
+        _ => ProjectScopeDeploy {
+            root: &root,
+            server: T::SERVER_NAME,
+            skills,
+        }
+        .assert(),
+    }
+
+    let deinit_results = T::deinit(scope, explicit_root, &NullReporter);
+    assert_no_init_error(&format!("{} deinit", T::SERVER_NAME), &deinit_results);
+    for skill in skills {
+        assert!(
+            !skill_dir.join(skill).exists(),
+            "{} deinit must remove the `{skill}` skill link",
+            T::SERVER_NAME
+        );
+    }
+    let mcp = read_json(&mcp_path);
+    assert!(
+        mcp["mcpServers"][T::SERVER_NAME].is_null(),
+        "{} deinit must unregister the MCP server: {mcp}",
+        T::SERVER_NAME
+    );
 }

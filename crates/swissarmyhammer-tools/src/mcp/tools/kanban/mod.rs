@@ -36,7 +36,7 @@ use swissarmyhammer_kanban::{
 /// `InitRegistry` runs its components in ASCENDING priority. `sah init`
 /// registers two — `ProjectStructure` (40) and this tool — so the value only
 /// has to sort after that one; `kanban init` registers this tool alone, where
-/// it orders nothing. Skills, agents, the preamble and the statusline are NOT
+/// it orders nothing. Skills, agents and the statusline are NOT
 /// registry components — they are `Profile` fields that
 /// `mirdan::install::init_profile` handles before the registry runs, so no
 /// priority value orders against them.

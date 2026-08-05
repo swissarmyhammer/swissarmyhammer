@@ -1,57 +1,24 @@
 //! Remove sah from all detected AI coding agents (skills + agents + MCP +
-//! statusline + preamble).
+//! statusline).
 //!
 //! Mirrors [`super::init`]: the MCP server, builtin skills, builtin agents,
-//! statusline, and CLAUDE.md preamble are removed through sah's declarative
+//! and statusline are removed through sah's declarative
 //! [`Profile`] via [`mirdan::install::deinit_profile`], and the non-profile
 //! `Initializable` components (project workspace, kanban merge drivers) run via
 //! [`crate::commands::registry::register_all`].
 
-use std::time::Instant;
-
 use crate::cli::InstallTarget;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
-use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
+
+use super::{run_lifecycle, Direction};
 
 /// Uninstall sah from all detected AI coding agents.
 ///
 /// Runs sah's [`Profile`] through [`mirdan::install::deinit_profile`] (MCP,
-/// skills, agents, statusline, preamble) and then the non-profile
+/// skills, agents, statusline) and then the non-profile
 /// `Initializable` components in reverse priority order. The `remove_directory`
 /// flag controls whether `ProjectStructure` removes `.sah/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
-    let reporter = CliReporter;
-    let start = Instant::now();
-    let scope: InitScope = target.into();
-
-    crate::banner::print_banner_stderr();
-    reporter.emit(&InitEvent::Header {
-        message: format!("Removing for {:?} scope", scope),
-    });
-
-    let mut results = mirdan::install::deinit_profile(
-        &crate::commands::profile::sah_profile(),
-        scope,
-        None,
-        &reporter,
-    );
-
-    let mut registry = InitRegistry::new();
-    crate::commands::registry::register_all(&mut registry, remove_directory);
-    results.extend(registry.run_all_deinit(&scope, &reporter));
-
-    let has_errors = super::report_results(&results, &reporter);
-
-    reporter.emit(&InitEvent::Finished {
-        message: "sah removal".to_string(),
-        elapsed_ms: start.elapsed().as_millis() as u64,
-    });
-
-    if has_errors {
-        Err("Some components failed to deinitialize".to_string())
-    } else {
-        Ok(())
-    }
+    run_lifecycle(Direction::Uninstall, target, remove_directory)
 }
 
 // Unit tests for the store-cleanup helpers (`remove_if_symlink`,

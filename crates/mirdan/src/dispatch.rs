@@ -168,7 +168,10 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
 
         Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, *global)),
 
-        Commands::Status { all, json } => handle_registry_result(status::run_status(*all, *json)),
+        Commands::Status { all, json } => handle_registry_result(status::run_status(
+            status::StatusVisibility::from_all_flag(*all),
+            status::StatusFormat::from_json_flag(*json),
+        )),
 
         Commands::Doctor { verbose } => doctor::run_doctor(*verbose).await,
 

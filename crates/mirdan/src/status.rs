@@ -15,20 +15,19 @@ use swissarmyhammer_common::lifecycle::InitScope;
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::agents::{
-    self, agent_global_agent_dir, agent_global_instructions_file, agent_global_mcp_config,
-    agent_global_settings_file, agent_global_skill_dir, agent_project_agent_dir,
-    agent_project_instructions_file, agent_project_mcp_config, agent_project_settings_file,
-    agent_project_skill_dir, AgentDef, AgentsConfig,
+    self, agent_global_agent_dir, agent_global_mcp_config, agent_global_settings_file,
+    agent_global_skill_dir, agent_project_agent_dir, agent_project_mcp_config,
+    agent_project_settings_file, agent_project_skill_dir, AgentDef, AgentsConfig,
 };
 use crate::registry::RegistryError;
 use crate::table;
 
-/// The preamble marker that must appear at the top of an agent's instructions
-/// file (e.g. Claude Code's `CLAUDE.md`).
+/// How many variants [`Component`] has, and so how many entries
+/// [`Component::all`] returns.
 ///
-/// This is the single source of truth for the marker; the CLI re-exports it as
-/// `CLAUDE_MD_PREAMBLE` so there is exactly one definition.
-pub const PREAMBLE_MARKER: &str = "MANDATORY: load the thoughtful skill if not already loaded.";
+/// Named so the array length in `all`'s signature and the enum stay in step:
+/// adding a variant without raising this fails to compile.
+const COMPONENT_COUNT: usize = 4;
 
 /// A sah-managed component that can be installed into an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +38,6 @@ pub enum Component {
     Skills,
     /// The sah subagents deployed to the agent's agent directory.
     Agents,
-    /// The sah preamble marker in the agent's instructions file.
-    Preamble,
     /// The sah permission entries in the agent's settings file.
     Permissions,
 }
@@ -52,18 +49,16 @@ impl Component {
             Component::Mcp => "MCP server",
             Component::Skills => "Skills",
             Component::Agents => "Subagents",
-            Component::Preamble => "Preamble",
             Component::Permissions => "Permissions",
         }
     }
 
     /// All components, in display order.
-    pub fn all() -> [Component; 5] {
+    pub fn all() -> [Component; COMPONENT_COUNT] {
         [
             Component::Mcp,
             Component::Skills,
             Component::Agents,
-            Component::Preamble,
             Component::Permissions,
         ]
     }
@@ -144,13 +139,6 @@ pub fn component_path(agent: &AgentDef, component: Component, scope: InitScope) 
                 agent_project_agent_dir(agent)
             }
         }
-        Component::Preamble => {
-            if is_user {
-                agent_global_instructions_file(agent)
-            } else {
-                agent_project_instructions_file(agent)
-            }
-        }
         Component::Permissions => {
             if is_user {
                 agent_global_settings_file(agent)
@@ -213,7 +201,6 @@ fn detect_component(
     let installed = match component {
         Component::Mcp => mcp_server_installed(path, servers_key),
         Component::Skills | Component::Agents => dir_non_empty(path),
-        Component::Preamble => preamble_present(path),
         Component::Permissions => permissions_present(path),
     };
 
@@ -230,7 +217,7 @@ fn detect_component(
     (state, detail)
 }
 
-/// Check all five components for one agent at one scope.
+/// Check all four components for one agent at one scope.
 pub fn check_agent(agent: &AgentDef, scope: InitScope) -> Vec<ComponentStatus> {
     Component::all()
         .into_iter()
@@ -244,9 +231,25 @@ pub fn check_agent(agent: &AgentDef, scope: InitScope) -> Vec<ComponentStatus> {
 /// Detected agents are resolved via [`agents::get_detected_agents`], which falls
 /// back to `claude-code` when nothing is detected.
 pub fn check_all(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentStatus> {
-    let detected = agents::get_detected_agents(config);
-    let mut out = Vec::with_capacity(detected.len() * scopes.len() * Component::all().len());
-    for agent in &detected {
+    check_selected(config, scopes, |_| true)
+}
+
+/// Check every component, for every detected agent that satisfies `keep`,
+/// across the given scopes.
+///
+/// The single sweep behind [`check_all`] and [`check_all_doctored`], which
+/// differ only in which detected agents they admit.
+fn check_selected(
+    config: &AgentsConfig,
+    scopes: &[InitScope],
+    keep: impl Fn(&AgentDef) -> bool,
+) -> Vec<ComponentStatus> {
+    let selected: Vec<_> = agents::get_detected_agents(config)
+        .into_iter()
+        .filter(|a| keep(&a.def))
+        .collect();
+    let mut out = Vec::with_capacity(selected.len() * scopes.len() * COMPONENT_COUNT);
+    for agent in &selected {
         for &scope in scopes {
             out.extend(check_agent(&agent.def, scope));
         }
@@ -268,15 +271,7 @@ pub fn check_all(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentSt
 /// instead: that view is "where are the packages installed across every
 /// detected agent" and is not gated by the doctor opt-in.
 pub fn check_all_doctored(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentStatus> {
-    let detected = agents::get_detected_agents(config);
-    let doctored: Vec<_> = detected.into_iter().filter(|a| a.def.doctor).collect();
-    let mut out = Vec::with_capacity(doctored.len() * scopes.len() * Component::all().len());
-    for agent in &doctored {
-        for &scope in scopes {
-            out.extend(check_agent(&agent.def, scope));
-        }
-    }
-    out
+    check_selected(config, scopes, |def| def.doctor)
 }
 
 /// Map a [`ComponentStatus`] into a doctor [`Check`].
@@ -404,12 +399,18 @@ fn scope_label(scope: InitScope) -> &'static str {
     }
 }
 
+/// How many scopes [`STATUS_SCOPES`] reports on.
+///
+/// Named so the array length and the entry list stay in step: reporting on a
+/// further scope without raising this fails to compile.
+const STATUS_SCOPE_COUNT: usize = 2;
+
 /// The scopes `mirdan status` and the doctor install-stack check report on.
 ///
 /// Project and user are the two scopes a sah install writes to; `Local` differs
 /// only in MCP registration and shares on-disk paths with `Project`, so it is
 /// omitted here to avoid duplicate rows.
-const STATUS_SCOPES: [InitScope; 2] = [InitScope::Project, InitScope::User];
+const STATUS_SCOPES: [InitScope; STATUS_SCOPE_COUNT] = [InitScope::Project, InitScope::User];
 
 /// Serialize a slice of [`ComponentStatus`] into the `mirdan status --json` shape.
 ///
@@ -450,6 +451,46 @@ pub fn status_json<'a>(
     })
 }
 
+/// Whether `mirdan status` lists components an agent does not support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusVisibility {
+    /// Hide [`ComponentState::NotApplicable`] rows — the default view.
+    Applicable,
+    /// Show every row, [`ComponentState::NotApplicable`] ones included.
+    All,
+}
+
+impl StatusVisibility {
+    /// Read the `--all` flag. Set means [`StatusVisibility::All`].
+    pub fn from_all_flag(all: bool) -> Self {
+        if all {
+            Self::All
+        } else {
+            Self::Applicable
+        }
+    }
+}
+
+/// How `mirdan status` renders its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusFormat {
+    /// The human-readable table.
+    Table,
+    /// The machine-readable JSON from [`status_json`].
+    Json,
+}
+
+impl StatusFormat {
+    /// Read the `--json` flag. Set means [`StatusFormat::Json`].
+    pub fn from_json_flag(json: bool) -> Self {
+        if json {
+            Self::Json
+        } else {
+            Self::Table
+        }
+    }
+}
+
 /// Run the `mirdan status` command.
 ///
 /// Detects the install-status of every sah-managed component for every detected
@@ -457,19 +498,19 @@ pub fn status_json<'a>(
 /// Scope / Component / State / Path) or, when `json` is set, the structured JSON
 /// from [`status_json`].
 ///
-/// When `all` is false, [`ComponentState::NotApplicable`] rows are hidden — they
-/// describe components an agent simply does not support at a scope and are noise
-/// in the common case. `--all` surfaces them.
-pub fn run_status(all: bool, json: bool) -> Result<(), RegistryError> {
+/// [`StatusVisibility::Applicable`] hides [`ComponentState::NotApplicable`]
+/// rows — they describe components an agent simply does not support at a scope
+/// and are noise in the common case. [`StatusVisibility::All`] surfaces them.
+pub fn run_status(visibility: StatusVisibility, format: StatusFormat) -> Result<(), RegistryError> {
     let config = agents::load_agents_config()?;
     let statuses = check_all(&config, &STATUS_SCOPES);
 
     let visible: Vec<&ComponentStatus> = statuses
         .iter()
-        .filter(|s| all || s.state != ComponentState::NotApplicable)
+        .filter(|s| visibility == StatusVisibility::All || s.state != ComponentState::NotApplicable)
         .collect();
 
-    if json {
+    if format == StatusFormat::Json {
         println!(
             "{}",
             serde_json::to_string_pretty(&status_json(visible.iter().copied())).unwrap()
@@ -510,6 +551,10 @@ fn init_command(scope: InitScope) -> &'static str {
     }
 }
 
+/// How many servers keys [`mcp_server_installed`] probes: the agent's own
+/// `servers_key`, plus the three conventional fallbacks.
+const MCP_SERVERS_KEY_CAPACITY: usize = 4;
+
 /// True when the MCP config at `path` registers the sah server.
 ///
 /// Installed when a `sah` entry exists under either the agent's configured
@@ -540,7 +585,7 @@ pub fn mcp_server_installed(path: &Path, servers_key: Option<&str>) -> bool {
     // `"servers"` (vscode-style), and `"mcp_servers"` (Codex's TOML
     // convention) — so legacy installs and agents whose definition lacks an
     // `mcp_config` still detect.
-    let mut keys: Vec<&str> = Vec::with_capacity(4);
+    let mut keys: Vec<&str> = Vec::with_capacity(MCP_SERVERS_KEY_CAPACITY);
     if let Some(key) = servers_key {
         keys.push(key);
     }
@@ -572,33 +617,6 @@ fn dir_non_empty(path: &Path) -> bool {
     std::fs::read_dir(path)
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false)
-}
-
-/// True when the instructions file at `path` exists and its first non-empty
-/// line contains [`PREAMBLE_MARKER`].
-///
-/// This is the **single source of truth** for "is the sah preamble present at
-/// this path?" and is consumed by both `mirdan::status` and the sah-cli install
-/// layer so detection and installation cannot drift.
-pub fn preamble_present(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    preamble_present_in(&content)
-}
-
-/// True when `content`'s first non-empty line contains [`PREAMBLE_MARKER`].
-///
-/// Companion to [`preamble_present`] for callers that have already read the
-/// file (e.g. the install layer's `ensure`/`merge` paths, which need both the
-/// detection result and the original content). Keeping a single string-based
-/// predicate avoids reading the file twice and guarantees the install layer
-/// and `mirdan status` apply identical "is the preamble there?" logic.
-pub fn preamble_present_in(content: &str) -> bool {
-    content
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .is_some_and(|line| line.contains(PREAMBLE_MARKER))
 }
 
 /// True when the settings JSON at `path` lists `"Bash"` under `permissions.deny`.
@@ -905,30 +923,6 @@ mod tests {
     }
 
     #[test]
-    fn test_preamble_missing_then_installed() {
-        let dir = TempDir::new().unwrap();
-        let agent = temp_agent(dir.path());
-        assert_eq!(
-            state_of(&agent, Component::Preamble),
-            ComponentState::Missing
-        );
-
-        let claude_md = dir.path().join("CLAUDE.md");
-        // File without the marker is missing.
-        std::fs::write(&claude_md, "# notes\n").unwrap();
-        assert_eq!(
-            state_of(&agent, Component::Preamble),
-            ComponentState::Missing
-        );
-
-        std::fs::write(&claude_md, format!("\n{}\n\nnotes\n", PREAMBLE_MARKER)).unwrap();
-        assert_eq!(
-            state_of(&agent, Component::Preamble),
-            ComponentState::Installed
-        );
-    }
-
-    #[test]
     fn test_permissions_missing_then_installed() {
         let dir = TempDir::new().unwrap();
         let agent = temp_agent(dir.path());
@@ -960,17 +954,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let agent = bare_agent(dir.path());
         // Skills always resolves a path (project_path/global_path are required),
-        // so the remaining four are NotApplicable when the field is None.
+        // so the remaining three are NotApplicable when the field is None.
         assert_eq!(
             state_of(&agent, Component::Mcp),
             ComponentState::NotApplicable
         );
         assert_eq!(
             state_of(&agent, Component::Agents),
-            ComponentState::NotApplicable
-        );
-        assert_eq!(
-            state_of(&agent, Component::Preamble),
             ComponentState::NotApplicable
         );
         assert_eq!(
@@ -998,7 +988,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let agent = temp_agent(dir.path());
         let statuses = check_agent(&agent, InitScope::Project);
-        assert_eq!(statuses.len(), 5);
+        assert_eq!(statuses.len(), COMPONENT_COUNT);
         let components: Vec<Component> = statuses.iter().map(|s| s.component).collect();
         assert_eq!(components, Component::all().to_vec());
     }
@@ -1014,8 +1004,8 @@ mod tests {
         let scopes = [InitScope::Project, InitScope::User];
         let statuses = check_all(&config, &scopes);
 
-        // 1 agent × 2 scopes × 5 components.
-        assert_eq!(statuses.len(), 10);
+        // 1 agent × 2 scopes × every component.
+        assert_eq!(statuses.len(), scopes.len() * COMPONENT_COUNT);
 
         for scope in scopes {
             for component in Component::all() {
@@ -1106,9 +1096,11 @@ mod tests {
         let json = status_json(&statuses);
 
         // Top-level shape: a components array plus a total count.
-        assert_eq!(json["total"], 10); // 1 agent × 2 scopes × 5 components
+        // 1 agent × 2 scopes × every component.
+        let expected = scopes.len() * COMPONENT_COUNT;
+        assert_eq!(json["total"], expected);
         let components = json["components"].as_array().expect("components array");
-        assert_eq!(components.len(), 10);
+        assert_eq!(components.len(), expected);
 
         // Every (scope, component) pair is represented for the one agent.
         for scope in scopes {
@@ -1155,7 +1147,7 @@ mod tests {
     /// Build a synthetic `codex` `AgentDef` whose every probed path lands
     /// inside `dir`. This mirrors the `temp_agent` helper but pins the agent
     /// to `codex` so the same shape the real `agents_default.yaml` entry
-    /// produces (no `agent_path`, but MCP + Preamble paths set) is exercised
+    /// produces (no `agent_path`, but MCP + skill paths set) is exercised
     /// end-to-end.
     fn codex_temp_agent(dir: &Path) -> AgentDef {
         let p = |name: &str| dir.join(name).to_string_lossy().to_string();
@@ -1202,10 +1194,10 @@ mod tests {
         let scopes = [InitScope::Project, InitScope::User];
         let statuses = check_all(&config, &scopes);
 
-        // With both Preamble and MCP path fields populated for both scopes,
+        // With both the skill and MCP path fields populated for both scopes,
         // the four (component × scope) cells we care about must resolve to a
         // concrete on-disk state (Installed or Missing), never NotApplicable.
-        for &component in &[Component::Mcp, Component::Preamble] {
+        for &component in &[Component::Mcp, Component::Skills] {
             for &scope in &scopes {
                 let status = statuses
                     .iter()
@@ -1226,7 +1218,7 @@ mod tests {
             }
         }
 
-        // With nothing on disk yet, both MCP and Preamble report Missing at
+        // With nothing on disk yet, both MCP and Skills report Missing at
         // both scopes — the rows are reachable but the artifacts are not
         // installed.
         let project_mcp = statuses
@@ -1240,31 +1232,29 @@ mod tests {
             .unwrap();
         assert_eq!(user_mcp.state, ComponentState::Missing);
 
-        let project_preamble = statuses
+        let project_skills = statuses
             .iter()
-            .find(|s| s.component == Component::Preamble && s.scope == InitScope::Project)
+            .find(|s| s.component == Component::Skills && s.scope == InitScope::Project)
             .unwrap();
-        assert_eq!(project_preamble.state, ComponentState::Missing);
-        let user_preamble = statuses
+        assert_eq!(project_skills.state, ComponentState::Missing);
+        let user_skills = statuses
             .iter()
-            .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
+            .find(|s| s.component == Component::Skills && s.scope == InitScope::User)
             .unwrap();
-        assert_eq!(user_preamble.state, ComponentState::Missing);
+        assert_eq!(user_skills.state, ComponentState::Missing);
 
-        // Write a preamble file at the user scope path and re-check: that one
-        // cell flips to Installed, proving the row genuinely participates in
+        // Deploy a skill at the user scope path and re-check: that one cell
+        // flips to Installed, proving the row genuinely participates in
         // detection rather than being permanently NotApplicable.
-        std::fs::write(
-            dir.path().join("global-AGENTS.md"),
-            format!("{}\n", PREAMBLE_MARKER),
-        )
-        .unwrap();
+        let global_skills = dir.path().join("global-skills");
+        std::fs::create_dir_all(&global_skills).unwrap();
+        std::fs::write(global_skills.join("a-skill"), "x").unwrap();
         let statuses = check_all(&config, &scopes);
-        let user_preamble = statuses
+        let user_skills = statuses
             .iter()
-            .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
+            .find(|s| s.component == Component::Skills && s.scope == InitScope::User)
             .unwrap();
-        assert_eq!(user_preamble.state, ComponentState::Installed);
+        assert_eq!(user_skills.state, ComponentState::Installed);
     }
 
     /// `check_all_doctored` must filter agents by `AgentDef.doctor` before
@@ -1389,19 +1379,19 @@ mod tests {
 
     #[test]
     fn test_statuses_to_checks_demotes_project_missing_when_user_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
-        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let user_path = PathBuf::from("/Users/test/.claude/settings.json");
+        let project_path = PathBuf::from("/work/repo/.claude/settings.json");
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::Project,
                 ComponentState::Missing,
                 Some(project_path.clone()),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::User,
                 ComponentState::Installed,
                 Some(user_path.clone()),
@@ -1413,8 +1403,8 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Preamble")
-            .expect("project preamble row");
+            .find(|c| c.name == "Claude Code · project · Permissions")
+            .expect("project permissions row");
         assert_eq!(
             project_check.status,
             CheckStatus::Ok,
@@ -1439,27 +1429,27 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Preamble")
-            .expect("user preamble row");
+            .find(|c| c.name == "Claude Code · user · Permissions")
+            .expect("user permissions row");
         assert_eq!(user_check.status, CheckStatus::Ok);
         assert!(user_check.fix.is_none());
     }
 
     #[test]
     fn test_statuses_to_checks_demotes_user_missing_when_project_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
-        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let user_path = PathBuf::from("/Users/test/.claude/settings.json");
+        let project_path = PathBuf::from("/work/repo/.claude/settings.json");
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::Project,
                 ComponentState::Installed,
                 Some(project_path.clone()),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::User,
                 ComponentState::Missing,
                 Some(user_path.clone()),
@@ -1469,8 +1459,8 @@ mod tests {
         let checks = statuses_to_checks(&statuses);
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Preamble")
-            .expect("user preamble row");
+            .find(|c| c.name == "Claude Code · user · Permissions")
+            .expect("user permissions row");
         assert_eq!(
             user_check.status,
             CheckStatus::Ok,
@@ -1496,17 +1486,17 @@ mod tests {
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+                Some(PathBuf::from("/work/repo/.claude/settings.json")),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::User,
                 ComponentState::Missing,
-                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+                Some(PathBuf::from("/Users/test/.claude/settings.json")),
             ),
         ];
 
@@ -1515,7 +1505,7 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Preamble")
+            .find(|c| c.name == "Claude Code · project · Permissions")
             .unwrap();
         assert_eq!(project_check.status, CheckStatus::Warning);
         let project_fix = project_check
@@ -1527,7 +1517,7 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Preamble")
+            .find(|c| c.name == "Claude Code · user · Permissions")
             .unwrap();
         assert_eq!(user_check.status, CheckStatus::Warning);
         assert!(user_check
@@ -1542,17 +1532,17 @@ mod tests {
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::Project,
                 ComponentState::Installed,
-                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+                Some(PathBuf::from("/work/repo/.claude/settings.json")),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::User,
                 ComponentState::Installed,
-                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+                Some(PathBuf::from("/Users/test/.claude/settings.json")),
             ),
         ];
 
@@ -1583,10 +1573,10 @@ mod tests {
             ),
             synthetic_status(
                 "claude-code",
-                Component::Preamble,
+                Component::Permissions,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+                Some(PathBuf::from("/work/repo/.claude/settings.json")),
             ),
         ];
 
@@ -1596,7 +1586,7 @@ mod tests {
             1,
             "NotApplicable statuses should produce no checks"
         );
-        assert_eq!(checks[0].name, "Claude Code · project · Preamble");
+        assert_eq!(checks[0].name, "Claude Code · project · Permissions");
     }
 
     #[test]

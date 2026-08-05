@@ -21,10 +21,10 @@
 //! clap surface is rebuilt here as builder subcommands so the two stay aligned.
 
 use clap::{ArgMatches, Command};
+use commands::registry::CodeContextInstall;
+use mirdan::tool_install::{run_lifecycle_command, Lifecycle};
 use serde_json::Value;
 use swissarmyhammer_cli_completions::lifecycle;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
-use swissarmyhammer_common::reporter::CliReporter;
 use swissarmyhammer_tools::mcp::tool_registry::McpTool;
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
 
@@ -118,8 +118,12 @@ async fn dispatch(matches: &ArgMatches, schema: &Value) -> i32 {
                 1
             }
         },
-        Some(("init", sub_m)) => run_init(lifecycle::target_scope(sub_m)),
-        Some(("deinit", sub_m)) => run_deinit(lifecycle::target_scope(sub_m)),
+        Some(("init", sub_m)) => {
+            run_lifecycle_command::<CodeContextInstall>(Lifecycle::Install, sub_m)
+        }
+        Some(("deinit", sub_m)) => {
+            run_lifecycle_command::<CodeContextInstall>(Lifecycle::Uninstall, sub_m)
+        }
         Some(("doctor", sub_m)) => commands::doctor::run_doctor(sub_m.get_flag("verbose")).await,
         Some(("skill", _)) => commands::skill::run_skill(),
         Some(("completion", sub_m)) => {
@@ -140,58 +144,6 @@ async fn dispatch(matches: &ArgMatches, schema: &Value) -> i32 {
             1
         }
     }
-}
-
-/// Return `true` if any `InitResult` has `Error` status.
-fn any_init_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> bool {
-    results
-        .iter()
-        .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error)
-}
-
-/// Install code-context for the given scope and return the exit code.
-///
-/// Runs the mirdan profile installer (registers the `code-context` MCP server —
-/// strategy-aware, so it handles Claude local scope the old hand-rolled loop
-/// dropped — and deploys the `code-context` + `explore` + `lsp` +
-/// `detected-projects` skills) followed by the genuine tool-lifecycle components
-/// (the `.code-context/` directory + `.gitignore`). A single errored result from
-/// either phase demotes the run to exit code 1.
-fn run_init(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::init_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    i32::from(any_init_error(&results))
-}
-
-/// Remove code-context for the given scope and return the exit code.
-///
-/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then runs
-/// the mirdan profile deinstaller (unregisters the MCP server and removes the
-/// `code-context` + `explore` + `lsp` + `detected-projects` skills).
-fn run_deinit(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::deinit_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    i32::from(any_init_error(&results))
 }
 
 #[cfg(test)]

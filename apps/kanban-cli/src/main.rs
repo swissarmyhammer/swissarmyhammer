@@ -10,11 +10,11 @@ mod logging;
 mod merge;
 
 use clap::Command;
+use commands::registry::KanbanInstall;
+use mirdan::tool_install::{run_lifecycle_command, Lifecycle};
 use serde_json::Value;
 use std::path::PathBuf;
 use swissarmyhammer_cli_completions::lifecycle;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope, InitStatus};
-use swissarmyhammer_common::reporter::CliReporter;
 use tracing::error;
 
 fn main() {
@@ -90,8 +90,14 @@ fn dispatch(matches: &clap::ArgMatches, schema: &Value) -> ! {
         }
         Some(("merge", sub_m)) => std::process::exit(merge::handle_merge(sub_m)),
         Some(("serve", _)) => std::process::exit(run_serve()),
-        Some(("init", sub_m)) => std::process::exit(run_init(lifecycle::target_scope(sub_m))),
-        Some(("deinit", sub_m)) => std::process::exit(run_deinit(lifecycle::target_scope(sub_m))),
+        Some(("init", sub_m)) => std::process::exit(run_lifecycle_command::<KanbanInstall>(
+            Lifecycle::Install,
+            sub_m,
+        )),
+        Some(("deinit", sub_m)) => std::process::exit(run_lifecycle_command::<KanbanInstall>(
+            Lifecycle::Uninstall,
+            sub_m,
+        )),
         Some(("doctor", sub_m)) => {
             std::process::exit(commands::doctor::run_doctor(sub_m.get_flag("verbose")))
         }
@@ -118,15 +124,6 @@ fn dispatch(matches: &clap::ArgMatches, schema: &Value) -> ! {
     }
 }
 
-/// Return `true` if any [`InitResult`] has `Error` status.
-///
-/// Used to translate the per-component registry results into a top-level
-/// process exit code — a single errored component demotes the whole run
-/// to exit 1.
-fn any_init_error(results: &[InitResult]) -> bool {
-    results.iter().any(|r| r.status == InitStatus::Error)
-}
-
 /// Run the MCP `serve` loop and return a process exit code.
 ///
 /// Constructs a fresh tokio runtime — the top-level `fn main` is
@@ -147,58 +144,6 @@ fn run_serve() -> i32 {
             error!("Error: {}", e);
             1
         }
-    }
-}
-
-/// Install kanban for the given target scope.
-///
-/// Runs the mirdan profile installer (registers the `kanban` MCP server and
-/// deploys the `kanban`-profile builtin skills) followed by the genuine
-/// tool-lifecycle components (`.kanban/` git merge drivers). Prints progress
-/// through [`CliReporter`] and returns 0 on full success or 1 if any result
-/// reported an error.
-fn run_init(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::init_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    if any_init_error(&results) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Remove kanban for the given target scope.
-///
-/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then
-/// runs the mirdan profile deinstaller (unregisters the MCP server and removes
-/// the `kanban`-profile skills).
-fn run_deinit(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::deinit_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    if any_init_error(&results) {
-        1
-    } else {
-        0
     }
 }
 

@@ -16,9 +16,9 @@
 //! - 1: Error
 
 use clap::Command;
+use commands::registry::ShelltoolInstall;
+use mirdan::tool_install::{run_lifecycle_command, Lifecycle};
 use swissarmyhammer_cli_completions::lifecycle;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
-use swissarmyhammer_common::reporter::CliReporter;
 use swissarmyhammer_operations::cli_gen::extract_noun_verb_arguments;
 use swissarmyhammer_tools::mcp::tool_registry::McpTool;
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
@@ -82,64 +82,6 @@ fn build_cli(schema: &serde_json::Value) -> Command {
     )
 }
 
-/// Return `true` if any `InitResult` has `Error` status.
-fn any_init_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> bool {
-    results
-        .iter()
-        .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error)
-}
-
-/// Install shelltool for the given scope and return the exit code.
-///
-/// Runs the mirdan profile installer (registers the `shelltool` MCP server and
-/// deploys the builtin `shell` skill) followed by the genuine tool-lifecycle
-/// components (`Bash` deny + `.shell/config.yaml`). A single errored result from
-/// either phase demotes the run to exit code 1.
-fn run_init(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::init_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    if any_init_error(&results) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Remove shelltool for the given scope and return the exit code.
-///
-/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then runs
-/// the mirdan profile deinstaller (unregisters the MCP server and removes the
-/// `shell` skill).
-fn run_deinit(scope: InitScope) -> i32 {
-    let reporter = CliReporter;
-
-    let mut reg = InitRegistry::new();
-    commands::registry::register_all(&mut reg);
-    let results = mirdan::install::deinit_profile_with_registry(
-        &commands::registry::profile(scope),
-        &reg,
-        scope,
-        None,
-        &reporter,
-    );
-
-    if any_init_error(&results) {
-        1
-    } else {
-        0
-    }
-}
-
 /// Route the matched CLI invocation to the correct handler and return an exit code.
 ///
 /// The lifecycle subcommands (`serve`, `init`, `deinit`, `doctor`, `completion`)
@@ -158,8 +100,12 @@ async fn dispatch(matches: &clap::ArgMatches, schema: &serde_json::Value) -> i32
                 1
             }
         },
-        Some(("init", sub_m)) => run_init(lifecycle::target_scope(sub_m)),
-        Some(("deinit", sub_m)) => run_deinit(lifecycle::target_scope(sub_m)),
+        Some(("init", sub_m)) => {
+            run_lifecycle_command::<ShelltoolInstall>(Lifecycle::Install, sub_m)
+        }
+        Some(("deinit", sub_m)) => {
+            run_lifecycle_command::<ShelltoolInstall>(Lifecycle::Uninstall, sub_m)
+        }
         Some(("doctor", sub_m)) => commands::doctor::run_doctor(sub_m.get_flag("verbose")),
         Some(("completion", sub_m)) => lifecycle::run_completion(build_cli(schema), PROGRAM, sub_m),
         Some((noun, _)) => {
