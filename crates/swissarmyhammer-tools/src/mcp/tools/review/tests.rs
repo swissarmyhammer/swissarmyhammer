@@ -1554,7 +1554,15 @@ async fn review_working_batch_size_override_skips_a_file_the_default_would_revie
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
-    assert_eq!(parsed["counts"]["findings"], json!(0));
+    // The skip is a coverage failure: it surfaces as a CONFIRMED checklist
+    // finding and in the structured skipped-file list, not only as a warning
+    // line, so a review with an over-cap file can never end clean.
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert!(
+        markdown.contains("- [ ] `src/lib.rs:1`"),
+        "the skip must render as a checklist finding: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["skipped_files"], json!(["src/lib.rs"]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1596,7 +1604,10 @@ async fn review_file_batch_size_override_skips_a_file_the_default_would_review()
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
-    assert_eq!(parsed["counts"]["findings"], json!(0));
+    // The skip is a coverage failure: it surfaces as a CONFIRMED checklist
+    // finding and in the structured skipped-file list.
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["skipped_files"], json!(["src/lib.rs"]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1638,7 +1649,10 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
-    assert_eq!(parsed["counts"]["findings"], json!(0));
+    // The skip is a coverage failure: it surfaces as a CONFIRMED checklist
+    // finding and in the structured skipped-file list.
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["skipped_files"], json!(["src/lib.rs"]));
 }
 
 /// A genuinely large source file — one whose rendered block fills most of the
@@ -1865,7 +1879,10 @@ async fn review_batch_size_zero_skips_every_file() {
     let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
 
     assert_eq!(parsed["counts"]["skipped"], json!(1));
-    assert_eq!(parsed["counts"]["findings"], json!(0));
+    // The skip is a coverage failure: even the degenerate zero budget yields a
+    // CONFIRMED finding and the structured skipped-file list.
+    assert_eq!(parsed["counts"]["findings"], json!(1));
+    assert_eq!(parsed["counts"]["skipped_files"], json!(["src/lib.rs"]));
 }
 
 /// Two changed files matched by the same validator: one fits `batch_size`, one
@@ -1916,9 +1933,12 @@ async fn review_working_an_oversized_file_does_not_block_review_of_the_others() 
         markdown.contains("src/huge.rs"),
         "the oversized file must be named as a gap: {markdown}"
     );
-    assert_eq!(parsed["counts"]["findings"], json!(1));
-    assert_eq!(parsed["counts"]["confirmed"], json!(1));
+    // Two findings: the planted duplicate on the small file, plus the
+    // engine-emitted skip finding on the oversized one.
+    assert_eq!(parsed["counts"]["findings"], json!(2));
+    assert_eq!(parsed["counts"]["confirmed"], json!(2));
     assert_eq!(parsed["counts"]["skipped"], json!(1));
+    assert_eq!(parsed["counts"]["skipped_files"], json!(["src/huge.rs"]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

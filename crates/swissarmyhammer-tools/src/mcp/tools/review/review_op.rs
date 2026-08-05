@@ -1087,7 +1087,7 @@ impl ReviewResponse {
 /// failures are a single `findings` count, not a per-tier breakdown. The fields
 /// are private (read through the getters); serde serializes them by their field
 /// names, so the wire shape is unchanged by the encapsulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewCountsView {
     /// Confirmed findings rendered into the checklist (post-dedup).
     findings: usize,
@@ -1101,9 +1101,14 @@ pub struct ReviewCountsView {
     /// non-zero value means the rendered findings are INCOMPLETE.
     failed: usize,
     /// How many changed files were excluded from review because their inlined
-    /// rendered block alone exceeded the batch budget. A non-zero value means the
-    /// markdown names each one as a "not reviewed, too large" gap.
+    /// rendered block alone exceeded the batch budget. A non-zero value means
+    /// the review cannot be clean: each skipped file also becomes a CONFIRMED
+    /// finding, and the markdown names each one as a "not reviewed, too large"
+    /// gap.
     skipped: usize,
+    /// The skipped file paths — distinct, sorted. The structured twin of
+    /// `skipped`: orchestrators gate on this list without parsing markdown.
+    skipped_files: Vec<String>,
 }
 
 impl ReviewCountsView {
@@ -1134,10 +1139,19 @@ impl ReviewCountsView {
     }
 
     /// How many changed files were excluded from review because their inlined
-    /// rendered block alone exceeded the batch budget. A non-zero value means the
-    /// markdown names each one as a "not reviewed, too large" gap.
+    /// rendered block alone exceeded the batch budget. A non-zero value means
+    /// the review cannot be clean: each skipped file also becomes a CONFIRMED
+    /// finding, and the markdown names each one as a "not reviewed, too large"
+    /// gap.
     pub fn skipped(&self) -> usize {
         self.skipped
+    }
+
+    /// The skipped file paths — distinct, sorted. The structured twin of
+    /// [`ReviewCountsView::skipped`]: orchestrators gate on this list without
+    /// parsing markdown.
+    pub fn skipped_files(&self) -> &[String] {
+        &self.skipped_files
     }
 }
 
@@ -1146,7 +1160,7 @@ impl ReviewCountsView {
 /// its counts are re-shaped into the serializable [`ReviewCountsView`].
 impl From<ReviewReport> for ReviewResponse {
     fn from(report: ReviewReport) -> Self {
-        let counts = *report.counts();
+        let counts = report.counts().clone();
         ReviewResponse {
             markdown: report.into_markdown(),
             counts: ReviewCountsView {
@@ -1156,6 +1170,7 @@ impl From<ReviewReport> for ReviewResponse {
                 attempted: counts.tasks_attempted(),
                 failed: counts.tasks_failed(),
                 skipped: counts.skipped(),
+                skipped_files: counts.skipped_files().to_vec(),
             },
         }
     }
@@ -2136,8 +2151,12 @@ mod tests {
         assert_eq!(response.counts().failed(), 1);
         assert_eq!(response.counts().findings(), 0);
 
-        // The counts view is a value type: Copy + Eq hold.
-        let copied = *response.counts();
-        assert_eq!(copied, *response.counts());
+        // The counts view is a value type: Clone + Eq hold.
+        let cloned = response.counts().clone();
+        assert_eq!(&cloned, response.counts());
+        // The skipped-file list is present on the wire, empty when no file
+        // was skipped.
+        assert_eq!(json["counts"]["skipped_files"], serde_json::json!([]));
+        assert_eq!(response.counts().skipped_files(), &[] as &[String]);
     }
 }

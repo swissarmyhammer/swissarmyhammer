@@ -86,11 +86,13 @@ impl From<&FleetOutcome> for FleetTally {
 ///
 /// Review is binary pass/fail — there is no graded severity — so the rendered
 /// failures are a single `findings` count, not a per-tier breakdown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReviewCounts {
     /// Confirmed findings rendered into the checklist (post-dedup).
     findings: usize,
-    /// Findings the verifier confirmed (across every input, pre-dedup).
+    /// Findings confirmed (across every input, pre-dedup): the verifier's
+    /// confirmations plus the engine-emitted skip findings, which are
+    /// confirmed by construction.
     confirmed: usize,
     /// Findings the verifier refuted (across every input).
     refuted: usize,
@@ -99,12 +101,15 @@ pub struct ReviewCounts {
     /// How many fan-out tasks failed and degraded to zero findings. A non-zero
     /// value means the rendered findings are INCOMPLETE.
     tasks_failed: usize,
-    /// How many (validator, file) pairs were excluded from review because the
+    /// How many distinct file paths were excluded from review because the
     /// file's rendered block alone exceeded the batch budget (see
     /// [`SkippedFile`](crate::review::scope::SkippedFile)). A non-zero value
-    /// means the run is a named GAP, not a failure — the markdown names each
-    /// skipped file.
+    /// means the review cannot be clean: each skipped path also becomes a
+    /// CONFIRMED finding, and the markdown names each skipped file.
     skipped: usize,
+    /// The skipped file paths — distinct, sorted. The structured twin of
+    /// `skipped`: orchestrators gate on this list without parsing markdown.
+    skipped_files: Vec<String>,
 }
 
 impl ReviewCounts {
@@ -113,7 +118,8 @@ impl ReviewCounts {
         self.findings
     }
 
-    /// Findings the verifier confirmed (across every input, pre-dedup).
+    /// Findings confirmed (across every input, pre-dedup): the verifier's
+    /// confirmations plus the engine-emitted skip findings.
     pub fn confirmed(&self) -> usize {
         self.confirmed
     }
@@ -134,11 +140,20 @@ impl ReviewCounts {
         self.tasks_failed
     }
 
-    /// How many (validator, file) pairs were excluded from review because the
+    /// How many distinct file paths were excluded from review because the
     /// file's rendered block alone exceeded the batch budget. A non-zero value
-    /// means the markdown names a "not reviewed, too large" gap for each one.
+    /// means the review cannot be clean: each skipped path also becomes a
+    /// CONFIRMED finding, and the markdown names each one as a "not reviewed,
+    /// too large" gap.
     pub fn skipped(&self) -> usize {
         self.skipped
+    }
+
+    /// The skipped file paths — distinct, sorted. The structured twin of
+    /// [`ReviewCounts::skipped`]: orchestrators gate on this list without
+    /// parsing markdown.
+    pub fn skipped_files(&self) -> &[String] {
+        &self.skipped_files
     }
 }
 
@@ -194,7 +209,9 @@ impl ReviewReport {
 /// as a named "not reviewed, too large" gap directly under the header (and any
 /// incomplete-run banner), and their count rides into [`ReviewCounts::skipped`].
 /// This is deliberately never an error — one oversized file must not block
-/// review of every OTHER file in scope.
+/// review of every OTHER file in scope. It is a coverage FAILURE though: each
+/// skipped path also enters the finding stream as one CONFIRMED finding, so a
+/// review that contains an over-cap file can never end clean.
 ///
 /// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
 /// caller) — it is collected once up front so a caller need not materialize a
@@ -205,7 +222,19 @@ pub fn synthesize(
     skipped: &[SkippedFile],
     now: &str,
 ) -> ReviewReport {
-    let verified = verified.into_iter().collect::<Vec<_>>();
+    // The skip list is per (validator, file) pair, but the reader cares about
+    // the FILE, so the pairs are folded onto one entry per path first. Both
+    // levels are sorted, so every use below is deterministic.
+    let by_path = group_skips_by_path(skipped);
+
+    // A skipped file is a coverage failure, not only a warning: each skipped
+    // path becomes one CONFIRMED finding in the same stream as the verifier's
+    // findings, so every later step (count, dedup, order, render) and every
+    // consumer that gates on findings treats it with no special handling.
+    let verified = verified
+        .into_iter()
+        .chain(skip_findings(&by_path))
+        .collect::<Vec<_>>();
     let counts_confirmed = verified.iter().filter(|v| v.confirmed).count();
     let counts_refuted = verified.len() - counts_confirmed;
 
@@ -220,7 +249,8 @@ pub fn synthesize(
         // Distinct PATHS, not pairs: the reader counts files, and one file that
         // no validator could carry is one gap however many validators matched
         // it.
-        skipped: group_skips_by_path(skipped).len(),
+        skipped: by_path.len(),
+        skipped_files: by_path.keys().map(|path| (*path).to_string()).collect(),
         ..ReviewCounts::default()
     };
 
@@ -237,12 +267,8 @@ pub fn synthesize(
         );
     }
 
-    // Name every oversized file as a gap, not a failure. The skip list is per
-    // (validator, file) pair, but the reader cares about the FILE, so the pairs
-    // are grouped onto one line per path naming the validators that could not
-    // carry it. Both the paths and the validator names are sorted so the
-    // rendering is deterministic regardless of scope/scan order.
-    let by_path = group_skips_by_path(skipped);
+    // Keep the warning block: existing consumers read this text. The failure
+    // itself rides in the checklist findings below, one per path.
     if !by_path.is_empty() {
         let _ = writeln!(
             markdown,
@@ -353,6 +379,61 @@ struct SkipGroup<'a> {
     budget: usize,
     /// The validators that could not carry the file, sorted.
     validators: Vec<&'a str>,
+}
+
+/// The line a file-level skip finding anchors to. The gap is about the whole
+/// file, and a file starts at line 1.
+const FILE_START_LINE: u32 = 1;
+
+/// The validator name a skip finding carries. No real validator produced the
+/// finding — the engine itself did — so the name identifies the engine.
+const SKIP_FINDING_VALIDATOR: &str = "review-engine";
+
+/// The rule name a skip finding cites.
+const SKIP_FINDING_RULE: &str = "prompt-cap";
+
+/// Turn each skipped path into one CONFIRMED [`VerifiedFinding`].
+///
+/// A file no validator could read is a coverage failure: every review of it
+/// would read "clean" for that validator's dimension until the file shrinks.
+/// So the skip enters the normal finding stream — confirmed by construction,
+/// because the batch packer measured the rendered block over the budget
+/// deterministically — and no consumer needs special handling to fail the
+/// gate. The grain is the PATH: one finding per file, with the claim naming
+/// the validators that could not carry it.
+fn skip_findings(by_path: &BTreeMap<&str, SkipGroup<'_>>) -> Vec<VerifiedFinding> {
+    by_path
+        .iter()
+        .map(|(path, group)| VerifiedFinding {
+            finding: Finding {
+                file: (*path).to_string(),
+                line: FILE_START_LINE,
+                validator: SKIP_FINDING_VALIDATOR.to_string(),
+                rule: Some(SKIP_FINDING_RULE.to_string()),
+                claim: format!(
+                    "This file exceeds the review prompt cap — {} rendered bytes against the \
+                     {}-byte batch budget — so these validators could not review it: {}",
+                    group.largest,
+                    group.budget,
+                    group.validators.join(", ")
+                ),
+                evidence: format!(
+                    "batch packer: the file's rendered block alone is {} bytes, over the \
+                     {}-byte budget",
+                    group.largest, group.budget
+                ),
+                suggestion: Some(
+                    "Split the file into smaller modules that fit the review prompt cap"
+                        .to_string(),
+                ),
+            },
+            confirmed: true,
+            reason: "the batch packer measured the rendered block over the budget — \
+                     a deterministic measurement, not a judgement"
+                .to_string(),
+            decided_by: None,
+        })
+        .collect()
 }
 
 /// Fold the per-(validator, file) skip list onto one entry per path, sorted by
@@ -729,6 +810,54 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_file_becomes_a_confirmed_checklist_finding() {
+        // A file no validator could read must not let the review end clean:
+        // the skip becomes one CONFIRMED checklist finding per path, so every
+        // consumer that gates on findings fails without special handling.
+        let skipped = vec![
+            SkippedFile::for_test("src/huge.rs", "duplication", 500_000, 393_216),
+            SkippedFile::for_test("src/huge.rs", "dead-code", 400_000, 393_216),
+        ];
+        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+
+        assert!(
+            report.markdown.contains("- [ ] `src/huge.rs:1`"),
+            "the skip must render as a checklist finding: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("prompt cap"),
+            "the finding must name the prompt cap: {}",
+            report.markdown
+        );
+        assert_eq!(
+            report.counts.findings, 1,
+            "one finding per skipped path, not per (validator, file) pair"
+        );
+        assert_eq!(
+            report.counts.confirmed, 1,
+            "the skip finding is CONFIRMED so the gate cannot pass"
+        );
+        assert_eq!(report.counts.skipped, 1);
+    }
+
+    #[test]
+    fn counts_carry_the_skipped_file_list_sorted_and_distinct() {
+        // Orchestrators gate on structured data, not on markdown text: the
+        // counts carry the skipped paths — distinct, sorted — next to the
+        // `skipped` tally.
+        let skipped = vec![
+            SkippedFile::for_test("src/z.rs", "v", 10, 5),
+            SkippedFile::for_test("src/a.rs", "v", 10, 5),
+            SkippedFile::for_test("src/a.rs", "w", 12, 5),
+        ];
+        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+
+        assert_eq!(report.counts.skipped_files, ["src/a.rs", "src/z.rs"]);
+        assert_eq!(report.counts.skipped, 2);
+    }
+
+    #[test]
     fn skipped_files_render_sorted_by_path_regardless_of_input_order() {
         let skipped = vec![
             SkippedFile::for_test("src/z.rs", "v", 10, 5),
@@ -773,7 +902,14 @@ mod tests {
             report.markdown
         );
         assert_eq!(report.counts.skipped, 1);
-        assert_eq!(report.counts.findings, 1);
+        // Two findings: the confirmed one on the reviewed file, plus the
+        // engine-emitted skip finding on the oversized file.
+        assert_eq!(report.counts.findings, 2);
+        assert!(
+            report.markdown.contains("- [ ] `src/huge.rs:1`"),
+            "the skip must render as a checklist finding: {}",
+            report.markdown
+        );
     }
 
     #[test]

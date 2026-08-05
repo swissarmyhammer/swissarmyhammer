@@ -229,8 +229,25 @@ comments:
     - next: formal /review (task stays in doing)
     task: ^t1y1c37
   timestamp: 2026-08-05T22:56:11.278904+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kza2vqqbpca8ed4yfrs1bzxn
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (fb718f067) — 0 findings, 9 attempted, 0 skipped, 1 refuted; no file skipped for the prompt cap; all prior findings checked
+    - next: none — task moved to done
+  timestamp: 2026-08-05T23:06:43.819742+00:00
+- actor: claude-code
+  id: 01kza2wbf1wbzc609vbga4499k
+  text: |-
+    ### finish iteration 4 — clean
+    - implement: changed — 5 files, all 5 prior findings fixed (shared safe_dir_name traversal guard at 7 sites, MAX_PACKAGE_NAME_LENGTH, AsRef<Path> signature)
+    - test: green — cargo nextest --workspace, 13543/13543; fmt + clippy clean
+    - commit: fb718f067
+    - review: clean — 0 findings, 0 skipped; acceptance PASS
+    - result: ^t1y1c37 done
+  timestamp: 2026-08-05T23:07:04.033029+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffad80
 title: crates/mirdan/src/install.rs is too large for the review engine — duplication can never read it
 ---
 # Problem
