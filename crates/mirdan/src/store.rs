@@ -220,14 +220,17 @@ pub fn remove_if_exists(path: &Path) -> Result<(), RegistryError> {
 /// Check whether any agent skill directory still has a symlink pointing to the
 /// given store path. Used to decide if the store entry can be removed during
 /// uninstall.
-pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[&Path]) -> bool {
+pub fn store_entry_still_referenced(
+    store_path: &Path,
+    agent_skill_dirs: &[impl AsRef<Path>],
+) -> bool {
     let canonical_store = match std::fs::canonicalize(store_path) {
         Ok(p) => p,
         Err(_) => return false, // store path doesn't exist, so not referenced
     };
 
     for skill_dir in agent_skill_dirs {
-        let Ok(entries) = std::fs::read_dir(skill_dir) else {
+        let Ok(entries) = std::fs::read_dir(skill_dir.as_ref()) else {
             continue;
         };
         for entry in entries.flatten() {

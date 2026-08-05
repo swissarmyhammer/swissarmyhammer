@@ -72,14 +72,17 @@ pub fn parse_package_type(s: &str) -> Option<PackageType> {
     }
 }
 
+/// Maximum length of a package name, in bytes (shared by agentskills.io and AVP).
+pub const MAX_PACKAGE_NAME_LENGTH: usize = 64;
+
 /// Validate that a package name is valid.
 ///
 /// Rules (shared by agentskills.io and AVP):
-/// - 1-64 characters
+/// - 1 to [`MAX_PACKAGE_NAME_LENGTH`] characters
 /// - Lowercase alphanumeric and hyphens only
 /// - No leading, trailing, or consecutive hyphens
 pub fn is_valid_package_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 64 {
+    if name.is_empty() || name.len() > MAX_PACKAGE_NAME_LENGTH {
         return false;
     }
     if name.starts_with('-') || name.ends_with('-') {
@@ -114,7 +117,7 @@ mod tests {
         assert!(!is_valid_package_name("has spaces"));
         assert!(!is_valid_package_name("has_underscores"));
         assert!(!is_valid_package_name("double--hyphen"));
-        let long = "a".repeat(65);
+        let long = "a".repeat(MAX_PACKAGE_NAME_LENGTH + 1);
         assert!(!is_valid_package_name(&long));
     }
 
@@ -197,8 +200,8 @@ mod tests {
 
     #[test]
     fn test_valid_name_boundary() {
-        // Exactly 64 chars (max valid)
-        let max_name = "a".repeat(64);
+        // Exactly the maximum length (max valid)
+        let max_name = "a".repeat(MAX_PACKAGE_NAME_LENGTH);
         assert!(is_valid_package_name(&max_name));
         // Single char
         assert!(is_valid_package_name("a"));

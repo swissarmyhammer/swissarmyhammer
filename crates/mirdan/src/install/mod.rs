@@ -35,6 +35,7 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+use crate::registry::RegistryError;
 use crate::store;
 
 /// Sanitize a package name for use as a filesystem directory name.
@@ -42,6 +43,27 @@ use crate::store;
 /// Delegates to [`store::sanitize_dir_name`].
 fn sanitize_dir_name(name: &str) -> String {
     store::sanitize_dir_name(name)
+}
+
+/// Sanitize a package name and reject any result that could escape a target
+/// directory.
+///
+/// Runs [`sanitize_dir_name`], then validates the result with
+/// [`store::is_safe_relative_path`], which rejects parent-directory
+/// references (`..`), backslashes, absolute paths, and empty segments.
+/// Multi-segment results (e.g. `owner/repo/skill` from a URL-derived name)
+/// stay accepted because store entries deploy to nested paths.
+///
+/// The single name-validation step behind every path-building site in
+/// [`uninstall`].
+fn safe_dir_name(name: &str) -> Result<String, RegistryError> {
+    let sanitized = sanitize_dir_name(name);
+    if !store::is_safe_relative_path(&sanitized) {
+        return Err(RegistryError::Validation(format!(
+            "unsafe package name: {name:?}"
+        )));
+    }
+    Ok(sanitized)
 }
 
 /// Resolve a project-scope relative path against an explicit `root`.

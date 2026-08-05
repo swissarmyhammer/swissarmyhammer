@@ -2073,3 +2073,134 @@ fn test_version_detail_deserializes_without_optional_fields() {
     assert!(detail.mcp.is_none());
     assert!(detail.tool_md.is_none());
 }
+
+/// [`safe_dir_name`] rejects every name whose sanitized form could escape a
+/// target directory, and accepts plain and nested (URL-derived) names.
+#[test]
+fn test_safe_dir_name_rejects_traversal_and_accepts_nested() {
+    assert!(safe_dir_name("../escape").is_err());
+    assert!(safe_dir_name("..").is_err());
+    assert!(safe_dir_name("foo/../bar").is_err());
+    assert!(safe_dir_name("evil\\name").is_err());
+    assert!(safe_dir_name("/etc/passwd").is_err());
+    assert!(safe_dir_name("").is_err());
+    assert!(safe_dir_name("https://github.com/../../etc").is_err());
+
+    assert_eq!(safe_dir_name("no-secrets").unwrap(), "no-secrets");
+    assert_eq!(
+        safe_dir_name("https://github.com/anthropics/skills/algorithmic-art").unwrap(),
+        "anthropics/skills/algorithmic-art"
+    );
+}
+
+/// A `..`-carrying skill name must not escape the skill store: the uninstall
+/// rejects it with a Validation error and the sibling directory survives.
+#[test]
+#[serial]
+fn test_uninstall_skill_rejects_path_traversal_name() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    std::fs::create_dir_all(work.path().join(".skills")).unwrap();
+    let victim = work.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+
+    let result = uninstall_skill_at("../victim", None, false, Some(work.path()));
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+    assert!(
+        victim.exists(),
+        "a traversal name must not delete outside the skill store"
+    );
+
+    let result = uninstall_skill_at("evil\\name", None, false, Some(work.path()));
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+}
+
+/// A `..`-carrying validator name must not escape the validators store.
+#[test]
+#[serial]
+fn test_uninstall_validator_rejects_path_traversal_name() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    std::fs::create_dir_all(work.path().join(".validators")).unwrap();
+    let victim = work.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+
+    let result = uninstall_validator("../victim", false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+    assert!(
+        victim.exists(),
+        "a traversal name must not delete outside the validators store"
+    );
+
+    let result = uninstall_validator("evil\\name", false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+}
+
+/// A `..`-carrying agent name must not escape the agent store.
+#[test]
+#[serial]
+fn test_uninstall_agent_at_rejects_path_traversal_name() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    std::fs::create_dir_all(work.path().join(".agents")).unwrap();
+    let victim = work.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+
+    let result = uninstall_agent_at("../victim", None, false, Some(work.path()));
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+    assert!(
+        victim.exists(),
+        "a traversal name must not delete outside the agent store"
+    );
+
+    let result = uninstall_agent_at("evil\\name", None, false, Some(work.path()));
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+}
+
+/// A `..`-carrying tool name must not escape the tool store.
+#[test]
+#[serial]
+fn test_uninstall_tool_rejects_path_traversal_name() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    std::fs::create_dir_all(work.path().join(".tools")).unwrap();
+    let victim = work.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+
+    let result = uninstall_tool("../victim", None, false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+    assert!(
+        victim.exists(),
+        "a traversal name must not delete outside the tool store"
+    );
+
+    let result = uninstall_tool("evil\\name", None, false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+}
+
+/// A `..`-carrying plugin name must not escape any agent plugin directory.
+#[test]
+#[serial]
+fn test_uninstall_plugin_rejects_path_traversal_name() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    let victim = work.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+
+    let result = uninstall_plugin("../victim", None, false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+    assert!(victim.exists());
+
+    let result = uninstall_plugin("evil\\name", None, false);
+    assert!(matches!(result.unwrap_err(), RegistryError::Validation(_)));
+}

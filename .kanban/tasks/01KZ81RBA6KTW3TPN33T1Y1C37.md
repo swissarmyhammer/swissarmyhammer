@@ -185,6 +185,50 @@ comments:
     - next: formal /review (task stays in doing)
     task: ^t1y1c37
   timestamp: 2026-08-05T22:30:40.837623+00:00
+- actor: claude-code
+  id: 01kza1j21yn4417h6k4v5st68y
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (86bc987c0) — 5 findings, 5 confirmed, 0 skipped. Files: crates/mirdan/src/install/uninstall.rs:276, uninstall.rs:354, uninstall.rs:636, crates/mirdan/src/package_type.rs:201, crates/mirdan/src/store.rs:223
+    - acceptance: no file in the "not reviewed — prompt cap" list. The cap problem is gone.
+    - next: correct the 5 open items in the section "Review Findings (2026-08-05 17:36)", then run the review again.
+  timestamp: 2026-08-05T22:43:58.142156+00:00
+- actor: claude-code
+  id: 01kza1jresk4vrakermj3414nf
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 6 files, all 17 prior findings fixed and checked
+    - test: green — cargo nextest --workspace, 13537/13537; fmt + clippy clean
+    - commit: 86bc987c0
+    - review: findings — 5 confirmed, 0 skipped; acceptance (no prompt-cap skip) PASS; open: uninstall.rs:276,354,636 (path traversal guards), package_type.rs:201 (named constant), store.rs:223 (AsRef<Path> signature)
+  timestamp: 2026-08-05T22:44:21.081675+00:00
+- actor: claude-code
+  id: 01kza288qpw04dcsk4b1eeca7v
+  text: |-
+    ### Findings pass 3 — all 5 items of "Review Findings (2026-08-05 17:36)" corrected
+
+    **Traversal guards (uninstall.rs:276, :354, :636).** One shared helper removes the cause from the whole file. `safe_dir_name(name)` in `crates/mirdan/src/install/mod.rs` runs `sanitize_dir_name` and then validates the result with `store::is_safe_relative_path`. The check rejects `..` references, backslashes, absolute paths, and empty segments. It returns `RegistryError::Validation` for an unsafe name.
+
+    Why `is_safe_relative_path` and not `is_safe_name`: sanitized names can hold multiple `/`-separated segments. URL-derived names deploy to nested store paths (see `sanitize_dir_name` doc, the nested-path comment in `uninstall_skill_at`, and `test_e2e_clone_anthropics_deploy_validator_uninstall_by_url`). `is_safe_name` rejects `/` and would break that documented contract. `is_safe_relative_path` is the documented multi-segment sibling and blocks the same `..` traversal.
+
+    Whole-file cause removal: every path-building site in uninstall.rs now uses the helper — `uninstall_skill_at`, `uninstall_validator`, `uninstall_tool`, `uninstall_plugin`, `uninstall_agent_at` (validate-first, before agent resolution), plus `guess_installed_type` (unsafe name → Skill default → Validation error downstream) and `plugin_installed` (unsafe name → false). No raw `sanitize_dir_name` call remains in uninstall.rs.
+
+    TDD RED→GREEN: six new tests in install/tests.rs. `test_safe_dir_name_rejects_traversal_and_accepts_nested` plus one traversal test per uninstall function (skill, validator, agent, tool, plugin). Each traversal test creates a `victim/` directory next to the store and asserts a `../victim` name and an `evil\name` name get `Validation` and the victim survives. RED run: 5 failed — the skill test showed the real vulnerability (`unwrap_err` on `Ok`: the traversal name deleted the victim and returned success). GREEN after the fix: 8/8 pass.
+
+    **package_type.rs:201.** New `pub const MAX_PACKAGE_NAME_LENGTH: usize = 64;` with a doc comment. Whole-file cause removal: the production check in `is_valid_package_name`, the `65`-char test (`MAX_PACKAGE_NAME_LENGTH + 1`), and the boundary test all use the constant. The doc list on `is_valid_package_name` references the constant.
+
+    **store.rs:223.** `store_entry_still_referenced` takes `agent_skill_dirs: &[impl AsRef<Path>]`; the loop calls `.as_ref()`. The production caller in uninstall.rs now passes `&all_agent_dirs` (`Vec<PathBuf>`) directly — the intermediate `Vec<&Path>` is deleted. The two store.rs test call sites compile unchanged (`&Path` implements `AsRef<Path>`).
+
+    **Verification.** `cargo nextest run -E 'rdeps(mirdan)'` — 3224 passed, 0 skipped. `cargo fmt --all` applied; `cargo fmt --all -- --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. All 5 checklist items are `- [x]` on the card.
+  timestamp: 2026-08-05T22:56:05.878926+00:00
+- actor: claude-code
+  id: 01kza28e0e3verrk29g69rrpg8
+  text: |-
+    ### implement — changed
+    - evidence: 5 files — crates/mirdan/src/install/mod.rs (new safe_dir_name helper), crates/mirdan/src/install/uninstall.rs (7 sites use the helper), crates/mirdan/src/install/tests.rs (6 new tests, RED→GREEN), crates/mirdan/src/package_type.rs (MAX_PACKAGE_NAME_LENGTH), crates/mirdan/src/store.rs (store_entry_still_referenced takes &[impl AsRef<Path>]); 5/5 findings checked; nextest rdeps(mirdan) 3224/3224, 0 skipped; fmt applied; clippy -D warnings clean
+    - next: formal /review (task stays in doing)
+    task: ^t1y1c37
+  timestamp: 2026-08-05T22:56:11.278904+00:00
 position_column: doing
 position_ordinal: '8380'
 title: crates/mirdan/src/install.rs is too large for the review engine — duplication can never read it
@@ -282,3 +326,11 @@ Consider also whether the engine should treat "a file no validator could read" a
 - [x] `crates/mirdan/src/store.rs:290` — Parameter `names: &[String]` uses concrete type instead of generic. Should accept borrowed strings `&[&str]` for better API flexibility, consistent with rule guidance to use `&str` not `&String`. Change parameter type to `names: &[&str]` to allow callers to pass string slices without requiring String allocation or borrowing.
 - [x] `crates/mirdan/src/store.rs:812` — setup_skill_structure duplicates the logic of setup_store_structure (line 970)—both join path components from root, create directories, and return the pair. Should call the parameterized generic version. Replace setup_skill_structure with: `setup_store_structure(root, ".skills", ".github/copilot/skills")`.
 - [x] `crates/mirdan/src/store.rs:984` — create_store_entry_with_symlink reimplements the logic already present in create_skill_symlink (line 822). Both create a store directory, write a metadata file, and establish a symlink—this shared capability should be consolidated into one parameterized function instead of duplicated. Extract a shared helper function with signature `fn create_store_entry_with_symlink_generic(store_dir: &Path, link_dir: &Path, name: &str, filename: &str, content: &str) -> (PathBuf, PathBuf)` and have both call it with appropriate arguments, or have one call the other with customized parameters.
+
+## Review Findings (2026-08-05 17:36)
+
+- [x] `crates/mirdan/src/install/uninstall.rs:276` — Path traversal vulnerability: `sanitize_dir_name(name)` does not prevent `..` sequences in package names, allowing escape from the skill store directory when constructing `flat_path`. Validate the name using `is_safe_name()` (which checks for `..`) before using it, or integrate path traversal checks into `sanitize_dir_name`. Example: add `if !is_safe_name(name) { return Err(...) }` before line 260, similar to `remove_store_entries` at store.rs:318.
+- [x] `crates/mirdan/src/install/uninstall.rs:354` — Path traversal vulnerability: `uninstall_validator` constructs the target directory using `sanitize_dir_name(name)` without validating against `..` sequences. Add path traversal validation: check `if !is_safe_name(name)` before line 354, or modify `sanitize_dir_name` to call `is_safe_name` and reject unsafe inputs.
+- [x] `crates/mirdan/src/install/uninstall.rs:636` — Path traversal vulnerability: `uninstall_agent_at` constructs the store path using `sanitize_dir_name(name)` without validating against `..` sequences. Add validation: check `if !is_safe_name(name)` before line 606, or modify `sanitize_dir_name` to include path traversal checks similar to the `is_safe_name` function at store.rs:258-264.
+- [x] `crates/mirdan/src/package_type.rs:201` — Hardcoded numeric literal 64 used to configure test behavior (size validation boundary) should derive from a named constant rather than being a magic number. Define a constant `const MAX_PACKAGE_NAME_LENGTH: usize = 64;` and use `"a".repeat(MAX_PACKAGE_NAME_LENGTH)` instead of hardcoding 64.
+- [x] `crates/mirdan/src/store.rs:223` — Function accepts `&[&Path]` but should accept `&[impl AsRef<Path>]` to follow std library conventions and avoid forcing callers to create intermediate reference vectors when they already have PathBuf collections. Change the signature to `pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[impl AsRef<Path>]) -> bool {` and update the loop to call `.as_ref()` on each element if needed.

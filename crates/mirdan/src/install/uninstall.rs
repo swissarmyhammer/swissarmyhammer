@@ -15,7 +15,7 @@ use crate::registry::RegistryError;
 use crate::store;
 
 use super::package::read_frontmatter;
-use super::{remove_empty_dirs_up_to, rooted, sanitize_dir_name, validators_dir};
+use super::{remove_empty_dirs_up_to, rooted, safe_dir_name, validators_dir};
 
 /// Find all package names in a lockfile that were installed from a given git URL or shorthand.
 ///
@@ -255,9 +255,8 @@ pub fn uninstall_skill_at(
     global: bool,
     root: Option<&Path>,
 ) -> Result<(), RegistryError> {
+    let sanitized = safe_dir_name(name)?;
     let (_config, agents) = load_and_resolve_agents(agent_filter)?;
-
-    let sanitized = sanitize_dir_name(name);
 
     // 1. Remove symlinks from each agent's skill directory
     let removed = remove_agent_symlinks(&agents, &sanitized, |def| {
@@ -351,7 +350,7 @@ fn read_skill_frontmatter_name(path: &Path) -> Option<String> {
 
 /// Uninstall a validator: remove its directory from the validators store.
 pub(crate) fn uninstall_validator(name: &str, global: bool) -> Result<(), RegistryError> {
-    let target_dir = validators_dir(global).join(sanitize_dir_name(name));
+    let target_dir = validators_dir(global).join(safe_dir_name(name)?);
 
     if !target_dir.exists() {
         return Err(not_found_error(
@@ -468,6 +467,12 @@ type StoreDirFn = fn(bool) -> PathBuf;
 
 /// Guess the package type based on what's installed.
 fn guess_installed_type(name: &str, global: bool) -> PackageType {
+    // An unsafe name is never installed in any store. Fall through to the
+    // Skill default so the dispatched uninstall rejects it with a
+    // Validation error instead of probing a traversal path.
+    let Ok(sanitized) = safe_dir_name(name) else {
+        return PackageType::Skill;
+    };
     // Check the stores in precedence order: validator, tool, agent.
     let stores: [(StoreDirFn, PackageType); 3] = [
         (validators_dir, PackageType::Validator),
@@ -475,7 +480,7 @@ fn guess_installed_type(name: &str, global: bool) -> PackageType {
         (store::agent_store_dir, PackageType::Agent),
     ];
     for (store_dir, pkg_type) in stores {
-        if store_dir(global).join(sanitize_dir_name(name)).exists() {
+        if store_dir(global).join(&sanitized).exists() {
             return pkg_type;
         }
     }
@@ -488,7 +493,13 @@ fn guess_installed_type(name: &str, global: bool) -> PackageType {
 }
 
 /// Check whether any agent's plugin directory holds an entry named `name`.
+///
+/// An unsafe name is never installed, so it reports `false` instead of
+/// probing a traversal path.
 fn plugin_installed(name: &str, global: bool) -> bool {
+    let Ok(sanitized) = safe_dir_name(name) else {
+        return false;
+    };
     let Ok(config) = agents::load_agents_config() else {
         return false;
     };
@@ -498,7 +509,7 @@ fn plugin_installed(name: &str, global: bool) -> bool {
         } else {
             agents::agent_project_plugin_dir(agent)
         };
-        plugin_dir.is_some_and(|dir| dir.join(sanitize_dir_name(name)).exists())
+        plugin_dir.is_some_and(|dir| dir.join(&sanitized).exists())
     })
 }
 
@@ -510,9 +521,9 @@ pub(crate) fn uninstall_tool(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<Vec<crate::DeployResult>, RegistryError> {
+    let sanitized = safe_dir_name(name)?;
     let (_config, agents) = load_and_resolve_agents(agent_filter)?;
 
-    let sanitized = sanitize_dir_name(name);
     let mut results = Vec::new();
 
     // 1. Unregister from each agent's MCP config
@@ -540,9 +551,9 @@ pub(crate) fn uninstall_plugin(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
+    let sanitized = safe_dir_name(name)?;
     let (_config, agents) = load_and_resolve_agents(agent_filter)?;
 
-    let sanitized = sanitize_dir_name(name);
     let mut removed = 0;
 
     for agent in &agents {
@@ -601,9 +612,8 @@ pub(crate) fn uninstall_agent_at(
     global: bool,
     root: Option<&Path>,
 ) -> Result<usize, RegistryError> {
+    let sanitized = safe_dir_name(name)?;
     let (config, target_agents) = load_and_resolve_agents(agent_filter)?;
-
-    let sanitized = sanitize_dir_name(name);
 
     // 1. Remove symlinks from each coding agent's agent directory
     let removed = remove_agent_symlinks(&target_agents, &sanitized, |def| {
@@ -647,9 +657,8 @@ fn remove_agent_store_entry_if_unreferenced(
             }
         })
         .collect();
-    let all_agent_dir_refs: Vec<&Path> = all_agent_dirs.iter().map(PathBuf::as_path).collect();
 
-    if !store::store_entry_still_referenced(&store_path, &all_agent_dir_refs) {
+    if !store::store_entry_still_referenced(&store_path, &all_agent_dirs) {
         remove_and_log_store_entry(&store_path)?;
     }
     Ok(())
