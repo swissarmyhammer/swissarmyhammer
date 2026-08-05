@@ -216,6 +216,78 @@ comments:
     - verification: `cargo fmt --all` exit 0 (no diff); `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings; `cargo nextest run -p swissarmyhammer-entity` exit 0, 327 tests run, 327 passed, 0 skipped
     - next: ready for /review
   timestamp: 2026-08-05T11:51:48.838727+00:00
+- actor: claude-code
+  id: 01kz8wr6j8yv1bnjsazxv7majj
+  text: |-
+    ### review — findings
+    - evidence: `review sha b12b1b630~1..b12b1b630` returned 5 confirmed findings. 3 (io.rs:1258, io.rs:1335, io.rs:1535) target magic numbers inside pre-existing test functions untouched by this diff — dropped per the never-refactor-existing-tests rule. 2 stand: io.rs:122 (write_entity panics on missing parent dir instead of returning Result), io.rs:300 (restore_entity_files panics on missing filename instead of returning Result).
+    - next: address the two panic-vs-Result findings, then re-review scoped to the fix commit.
+  timestamp: 2026-08-05T12:00:42.056109+00:00
+- actor: claude-code
+  id: 01kz8wrykt76vhmq2q6r36zqhj
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — crates/swissarmyhammer-entity/src/io.rs (39 insertions, 24 deletions); fixed 5 prior findings (undocumented panics, duplicated YAML helpers)
+    - test: green — cargo nextest run -p swissarmyhammer-entity, 327 passed, 0 skipped
+    - commit: b12b1b630
+    - review: findings — crates/swissarmyhammer-entity/src/io.rs:122 (write_entity panics via .expect() instead of returning Result), crates/swissarmyhammer-entity/src/io.rs:300 (restore_entity_files panics via .expect() instead of returning Result)
+  timestamp: 2026-08-05T12:01:06.682260+00:00
+- actor: claude-code
+  id: 01kz9113g2jdj3vsaw5yjfbz2y
+  text: |-
+    ### implement — changed
+
+    Fixed both open findings: `write_entity` and `restore_entity_files` no longer panic via `.expect()` on structurally invalid paths — both return the new `EntityError::InvalidPath { path, reason }` variant instead.
+
+    ## Core change
+
+    `crates/swissarmyhammer-entity/src/error.rs` — added `EntityError::InvalidPath { path: PathBuf, reason: String }`, `#[error("invalid path {path}: {reason}")]`.
+
+    `crates/swissarmyhammer-entity/src/io.rs`:
+    - `write_entity` — `path.parent().expect(...)` → `require_parent(path)?`; also added a `require_filename(path)?` check (see completeness note below).
+    - `trash_entity_files` — both `.expect("...filename")` → `require_filename(path)?`.
+    - `restore_entity_files` — `path.parent().expect(...)` → `require_parent(path)?` (was previously a tolerant `if let Some`); both filename `.expect()` → `require_filename(path)?`.
+    - New shared helpers: `invalid_path_error(path, reason)`, `require_parent(path) -> Result<&Path>`, `require_filename(path) -> Result<&OsStr>`, `temp_file_path(dir) -> PathBuf`, `changelog_trash_paths(path, trash_dir)`, `move_changelog_to_trash`, `move_changelog_from_trash`.
+    - `apps/kanban-cli/src/commands/serve.rs` `classify_entity_error_kind` — added the new `EntityError::InvalidPath` arm (compile-time exhaustiveness caught this caller), classified `InvalidRequest` (caller-addressable per self-review finding, see below).
+
+    ## Self-review rounds (findings are requirements — all confirmed findings about code this diff touches were fixed)
+
+    Round 1 (io.rs:122, io.rs:300 — the two assigned findings): fixed as above.
+
+    Round 2 (4 new confirmed findings, all about the code I'd just written): fixed all —
+    - `missing_parent_error`/`missing_filename_error` deduplicated into `invalid_path_error(path, reason)` + `require_parent`/`require_filename`.
+    - Completeness: `write_entity` validated parent but not filename, unlike the trash/restore siblings — added `require_filename(path)?` to `write_entity` too. New test `write_entity_errors_when_path_has_no_filename` uses `Path::new(".")`, verified via `rustc` probe and the passing test itself that `.` has `parent = Some("")`, `file_name = None` — the exact case this closes (parent exists, filename doesn't; previously this would have failed later at the OS-level rename with a generic `Io` error instead of a typed one).
+    - `restore_entity_files` hardened from tolerant `if let Some(parent)` to `require_parent(path)?`, matching `write_entity`.
+    - `trash_entity_files`/`restore_entity_files` changelog-path duplication collapsed into `changelog_trash_paths`.
+    - Added documenting test `read_entity_returns_io_error_when_path_has_no_filename` for the one finding that offered a non-behavior-change alternative (asymmetry between `read_entity` and the write-side validation is intentional — `read_entity` never constructs a second path from `path`, so there's no arithmetic step needing a precondition).
+
+    Round 3 (4 new confirmed findings): fixed all —
+    - `temp_file_path(dir)` extracted, deduplicating `write_entity` and the pre-existing `copy_attachment` (same expression, untouched by me until now).
+    - `changelog_trash_paths` further split into `move_changelog_to_trash`/`move_changelog_from_trash` (one of the two options the finding itself offered).
+    - `EntityError::InvalidPath` reclassified `Internal` → `InvalidRequest` in `serve.rs` per the finding's reasoning (caller-addressable path problem, not a server failure).
+    - One finding (io.rs:1694, claiming `Path::new(".").file_name()` returns `Some(".")`) was factually wrong — refuted with two independent verifications: a standalone `rustc` probe (`"." parent=Some("") file_name=None`) and the actual passing test run (332/332, including that exact test, which could only pass if `require_filename` really returned `None` there). Test left unchanged.
+
+    Round 4 (11 findings, none acted on) — stopped the loop here:
+    - Two of the four production-code findings recur the `Yaml`/`Io` error-message capitalization in `error.rs`, confirmed via `git diff` to be 100% pre-existing, untouched by my diff (my only edit to that file is the new `InvalidPath` variant block). Out of scope per "no unrelated refactors while implementing."
+    - One finding (io.rs:207) asks to collapse `move_changelog_to_trash`/`move_changelog_from_trash` back into a single function with a direction parameter — this directly contradicts round 3's own finding, which explicitly offered "two named functions" as one of two acceptable fixes and is exactly what I implemented. Two rules that can't both be correct; recording as a conflict rather than flip-flopping further.
+    - The remaining 7 magic-number findings (io.rs:1002, 1298, 1308, 1385, 1585, 1959, 1986) are all inside pre-existing test functions never touched by this diff (confirmed via `git diff --stat`/hunk headers — every touched region is above line ~625 or exactly the new tests block added at the end; these line numbers fall in the untouched middle, just shifted by my insertions). Dropped per the explicit "never refactor existing tests" rule.
+
+    ## Verification
+
+    - `cargo fmt --all --check` — clean, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, 0 warnings (also caught and required the `serve.rs` exhaustiveness fix for the new `EntityError::InvalidPath` variant).
+    - `cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields` — 2194 tests run, 2194 passed, 0 skipped.
+    - RED/GREEN proven by hand for all 3 new panic→error tests: reverted to the old `.expect()` code, ran the 3 tests, watched all 3 fail by panicking at the exact `.expect()` call sites; restored the fix, all 3 passed.
+
+    Both checkboxes above are now checked. Ready for `/review`.
+  timestamp: 2026-08-05T13:15:28.130885+00:00
+- actor: claude-code
+  id: 01kz911a2q77e7ybnp4hpfhhnp
+  text: |-
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-entity/src/error.rs (new EntityError::InvalidPath variant), crates/swissarmyhammer-entity/src/io.rs (write_entity/trash_entity_files/restore_entity_files converted from panics to typed errors; new helpers require_parent/require_filename/invalid_path_error/temp_file_path/changelog_trash_paths/move_changelog_to_trash/move_changelog_from_trash; 4 new tests), apps/kanban-cli/src/commands/serve.rs (EntityError::InvalidPath classifier arm, InvalidRequest). cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields: 2194 passed, 0 skipped. cargo clippy --workspace --all-targets -- -D warnings: exit 0. cargo fmt --all --check: clean.
+    - next: ready for /review
+  timestamp: 2026-08-05T13:15:34.871975+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Regression test that a real kanban card with a markdown table in a comment parses
@@ -293,3 +365,8 @@ All four cards read correctly with the binary built from `main`.
 - [x] `crates/swissarmyhammer-entity/src/io.rs:280` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 288 and 304, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no filename.".
 - [x] `crates/swissarmyhammer-entity/src/io.rs:376` — YAML serialization error handler repeated verbatim 4 times across the file — `.map_err(|e| EntityError::Yaml { path: path.to_path_buf(), source: e })` appears in parse_frontmatter_body, parse_plain_yaml, format_frontmatter_body, and format_plain_yaml. Each occurrence can drift independently if the error format changes, inflating maintenance burden. Extract a helper function `fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError { EntityError::Yaml { path: path.to_path_buf(), source: e } }` and replace all four occurrences with `.map_err(|e| yaml_error(path, e))`.
 - [x] `crates/swissarmyhammer-entity/src/io.rs:381` — Entity building from YAML map is verbatim-duplicated: lines 381–384 (parse_frontmatter_body) and lines 421–424 (parse_plain_yaml) both execute identical code: `let mut entity = Entity::new(entity_type, id); for (k, v) in yaml_map { flatten_into(&mut entity, &k, v); }`. This block could drift out of sync if one function is updated but the other is not. Extract a helper function `fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity` and call it from both parse_frontmatter_body and parse_plain_yaml after their respective YAML parsing steps.
+
+## Review Findings (2026-08-05 06:52)
+
+- [x] `crates/swissarmyhammer-entity/src/io.rs:122` — Public function write_entity panics on invalid input (path with no parent directory) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Either handle the case where path has no parent gracefully, or return an error result if that condition makes the operation impossible. This aligns with the pattern used elsewhere in the file (e.g., copy_attachment validates inputs and returns errors rather than panicking).
+- [x] `crates/swissarmyhammer-entity/src/io.rs:300` — Public function restore_entity_files panics on invalid input (path with no filename) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Use the Result error mechanism for all input validation.
