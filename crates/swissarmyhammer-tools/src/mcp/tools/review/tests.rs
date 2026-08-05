@@ -64,6 +64,7 @@ fn review_tool_is_registered_with_its_ops() {
         "review working",
         "review sha",
         "list validators",
+        "dump validators",
         "get validator",
         "check validators",
     ] {
@@ -191,6 +192,7 @@ fn review_command_tree_covers_all_operations() {
         "review working",
         "review sha",
         "list validators",
+        "dump validators",
         "get validator",
         "check validators",
     ] {
@@ -206,8 +208,17 @@ fn review_command_tree_covers_all_operations() {
 // ---------------------------------------------------------------------------
 
 /// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`, with
-/// the given file glob and probe list.
+/// the given file glob and probe list. The single rule carries the shared
+/// fixture body `Check the code.`.
 fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
+    write_ruleset_with_rule_body(base, name, glob, probes, "Check the code.");
+}
+
+/// Write a minimal RuleSet whose single rule carries `body`.
+///
+/// A distinct body per RuleSet lets the `dump validators` tests count each rule
+/// body exactly once in the produced markdown.
+fn write_ruleset_with_rule_body(base: &Path, name: &str, glob: &str, probes: &[&str], body: &str) {
     let dir = base.join(name);
     std::fs::create_dir_all(dir.join("rules")).unwrap();
     let probes_yaml = if probes.is_empty() {
@@ -225,7 +236,7 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     .unwrap();
     std::fs::write(
         dir.join("rules/check.md"),
-        "---\nname: check\ndescription: Check\n---\n\nCheck the code.\n",
+        format!("---\nname: check\ndescription: Check\n---\n\n{body}\n"),
     )
     .unwrap();
 }
@@ -765,6 +776,269 @@ async fn get_validator_returns_rule_bodies_and_probes() {
             .any(|r| r["body"].as_str().unwrap_or("").contains("Check the code")),
         "rule bodies must be returned verbatim: {parsed}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// dump validators (loader read + one markdown rules file in the temp dir)
+// ---------------------------------------------------------------------------
+
+/// Guards for a seeded project the `dump validators` tests run in: an isolated
+/// HOME (no user validators leak in), a temp git project carrying
+/// `.validators`, and the CWD pinned to that project.
+struct SeededProject {
+    _home: IsolatedTestEnvironment,
+    project: tempfile::TempDir,
+    _cwd: CurrentDirGuard,
+}
+
+/// Seed a project with one RuleSet per `(name, glob, rule body)` triple.
+fn seeded_project(rulesets: &[(&str, &str, &str)]) -> SeededProject {
+    let home = IsolatedTestEnvironment::new().expect("isolated env");
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let validators_dir = project.path().join(".validators");
+    for (name, glob, body) in rulesets {
+        write_ruleset_with_rule_body(&validators_dir, name, glob, &[], body);
+    }
+    let cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+    SeededProject {
+        _home: home,
+        project,
+        _cwd: cwd,
+    }
+}
+
+/// Execute one `dump validators` call against a freshly registered tool rooted
+/// at `dir`, returning the parsed JSON response.
+async fn dump_validators_call(
+    dir: &Path,
+    paths: serde_json::Value,
+) -> Result<serde_json::Value, rmcp::ErrorData> {
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(dir).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("dump validators"));
+    args.insert("paths".to_string(), paths);
+    let result = tool.execute(args, &context).await?;
+    Ok(serde_json::from_str(&extract_text(&result)).expect("json response"))
+}
+
+/// Read the markdown file a `dump validators` response points at, then remove
+/// it so test runs do not accumulate temp files.
+fn read_and_remove_rules_file(response: &serde_json::Value) -> String {
+    let path = response["path"].as_str().expect("response carries a path");
+    let markdown = std::fs::read_to_string(path).expect("the rules file exists");
+    std::fs::remove_file(path).expect("remove the rules file");
+    markdown
+}
+
+/// The distinct rust rule body the dump tests count in the produced markdown.
+const RUST_RULE_BODY: &str = "Obey the Rust fixture rule.";
+/// The distinct typescript rule body the dump tests count in the produced
+/// markdown.
+const TS_RULE_BODY: &str = "Obey the TS fixture rule.";
+
+/// Seed the two-extension fixture the dump tests share: one Rust-matching and
+/// one TypeScript-matching RuleSet, each with a distinct rule body.
+fn seeded_two_extension_project() -> SeededProject {
+    seeded_project(&[
+        ("rust-rules", "**/*.rs", RUST_RULE_BODY),
+        ("ts-rules", "**/*.ts", TS_RULE_BODY),
+    ])
+}
+
+/// Two `.rs` paths and one `.ts` path: the produced markdown must carry each
+/// applicable rule body exactly ONCE — the validator set is deduplicated across
+/// input paths, not repeated per path.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_writes_each_applicable_rule_body_once() {
+    let seeded = seeded_two_extension_project();
+
+    let response = dump_validators_call(
+        seeded.project.path(),
+        json!(["src/lib.rs", "src/main.rs", "src/app.ts"]),
+    )
+    .await
+    .expect("dump validators");
+
+    // The builtin layer matches too, so assert fixture-relative invariants:
+    // both fixture validators are present, and the set carries no duplicate
+    // even though two `.rs` paths matched the same validator.
+    let validators: Vec<String> = response["validators"]
+        .as_array()
+        .expect("validators is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    for name in ["rust-rules", "ts-rules"] {
+        assert_eq!(
+            validators.iter().filter(|v| *v == name).count(),
+            1,
+            "`{name}` must appear exactly once: {response}"
+        );
+    }
+
+    let markdown = read_and_remove_rules_file(&response);
+    for body in [RUST_RULE_BODY, TS_RULE_BODY] {
+        assert_eq!(
+            markdown.matches(body).count(),
+            1,
+            "the rule body must appear exactly once: {markdown}"
+        );
+    }
+
+    // Deduplication at the count level: a second path with the SAME extension
+    // matches the same validators, so it must not grow the dumped set.
+    let single = dump_validators_call(seeded.project.path(), json!(["src/lib.rs"]))
+        .await
+        .expect("dump validators for one path");
+    let doubled = dump_validators_call(seeded.project.path(), json!(["src/lib.rs", "src/main.rs"]))
+        .await
+        .expect("dump validators for two same-extension paths");
+    assert_eq!(
+        single["validators"], doubled["validators"],
+        "a second same-extension path must not grow the validator set"
+    );
+    assert_eq!(
+        single["rule_count"], doubled["rule_count"],
+        "a second same-extension path must not grow the rule count"
+    );
+    read_and_remove_rules_file(&single);
+    read_and_remove_rules_file(&doubled);
+}
+
+/// The response pairs each input path with the validator names the engine
+/// matcher pairs it with, and lists the distinct extensions of the inputs.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_reports_matched_pairs_and_distinct_extensions() {
+    let seeded = seeded_two_extension_project();
+
+    let response = dump_validators_call(seeded.project.path(), json!(["src/lib.rs", "src/app.ts"]))
+        .await
+        .expect("dump validators");
+
+    // The builtin layer matches too, so assert the fixture pairings: each path
+    // carries its own extension's validator and never the other one.
+    let matched_names = |path: &str| -> Vec<String> {
+        response["matched"][path]
+            .as_array()
+            .expect("matched carries the path")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    let rs_matched = matched_names("src/lib.rs");
+    assert!(
+        rs_matched.contains(&"rust-rules".to_string()),
+        "the .rs path pairs with the Rust validator: {response}"
+    );
+    assert!(
+        !rs_matched.contains(&"ts-rules".to_string()),
+        "the .rs path must not pair with the TypeScript validator: {response}"
+    );
+    let ts_matched = matched_names("src/app.ts");
+    assert!(
+        ts_matched.contains(&"ts-rules".to_string()),
+        "the .ts path pairs with the TypeScript validator: {response}"
+    );
+    assert!(
+        !ts_matched.contains(&"rust-rules".to_string()),
+        "the .ts path must not pair with the Rust validator: {response}"
+    );
+    assert_eq!(
+        response["extensions"],
+        json!(["rs", "ts"]),
+        "the distinct input extensions: {response}"
+    );
+    read_and_remove_rules_file(&response);
+}
+
+/// A path no validator matches still produces a valid file — the file states
+/// that no rules apply and the validator list is empty.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_with_no_match_writes_a_file_and_returns_an_empty_list() {
+    let seeded = seeded_project(&[("rust-rules", "**/*.rs", RUST_RULE_BODY)]);
+
+    let response = dump_validators_call(seeded.project.path(), json!(["docs/guide.md"]))
+        .await
+        .expect("dump validators");
+
+    assert_eq!(
+        response["validators"],
+        json!([]),
+        "no validator matches a .md path: {response}"
+    );
+    assert_eq!(response["rule_count"], json!(0), "{response}");
+    assert_eq!(
+        response["matched"]["docs/guide.md"],
+        json!([]),
+        "the unmatched path still appears in the map: {response}"
+    );
+
+    let markdown = read_and_remove_rules_file(&response);
+    assert!(
+        markdown.contains("No validator matches"),
+        "the file must state that no rules apply: {markdown}"
+    );
+}
+
+/// Forgiving input: a single string path and a stringified JSON array return
+/// the same answer as the one-element array carrying that path.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_accepts_a_single_string_path() {
+    let seeded = seeded_project(&[("rust-rules", "**/*.rs", RUST_RULE_BODY)]);
+
+    let from_array = dump_validators_call(seeded.project.path(), json!(["src/lib.rs"]))
+        .await
+        .expect("dump validators with an array path");
+    read_and_remove_rules_file(&from_array);
+
+    for (shape, paths) in [
+        ("a single string path", json!("src/lib.rs")),
+        ("a stringified JSON array", json!("[\"src/lib.rs\"]")),
+    ] {
+        let response = dump_validators_call(seeded.project.path(), paths)
+            .await
+            .unwrap_or_else(|e| panic!("dump validators with {shape}: {e}"));
+        for key in ["validators", "matched", "extensions", "rule_count"] {
+            assert_eq!(
+                response[key], from_array[key],
+                "{shape} must answer like a one-element array"
+            );
+        }
+        read_and_remove_rules_file(&response);
+    }
+}
+
+/// An empty `paths` input is an error, not an empty rules file. A blank
+/// string and a blank array element carry no path, so they are empty too.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_rejects_empty_paths() {
+    let seeded = seeded_project(&[("rust-rules", "**/*.rs", RUST_RULE_BODY)]);
+
+    for (shape, paths) in [
+        ("an empty array", json!([])),
+        ("a blank string", json!("")),
+        ("a blank array element", json!([""])),
+        ("a whitespace-only string", json!("  ")),
+    ] {
+        let error = match dump_validators_call(seeded.project.path(), paths).await {
+            Err(error) => error,
+            Ok(response) => panic!("{shape} must be rejected, got: {response}"),
+        };
+        assert!(
+            error.message.contains("paths"),
+            "the error for {shape} names the `paths` param: {error}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

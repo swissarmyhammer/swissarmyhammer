@@ -15,6 +15,7 @@
 //! | `review working` | Review uncommitted changes vs HEAD. |
 //! | `review sha` | Review the changes in/since a commit or range. |
 //! | `list validators` | Summarize the loaded RuleSet stack. |
+//! | `dump validators` | Write every rule the given paths match to one markdown file. |
 //! | `get validator` | One validator's frontmatter, probes, and rule bodies. |
 //! | `check validators` | Lint every loaded validator. |
 //!
@@ -26,7 +27,7 @@
 /// The three pipeline ops (`review file/working/sha`): scope resolution, engine
 /// invocation over a live ACP agent, and progress/content notification streaming.
 pub mod review_op;
-/// The validator introspection ops (`list/get/check validators`): pure loader
+/// The validator introspection ops (`list/dump/get/check validators`): loader
 /// reads over the builtin → user → project RuleSet stack, no agent required.
 pub mod validators;
 
@@ -184,6 +185,32 @@ impl Operation for ListValidators {
     }
 }
 
+/// `dump validators` — write every rule the given paths match to one file.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DumpValidators;
+
+static DUMP_VALIDATORS_PARAMS: &[ParamMeta] = &[ParamMeta::new("paths")
+    .description(
+        "One example file path per distinct extension you will edit. Accepts a single string, an array of strings, or a stringified JSON array.",
+    )
+    .param_type(ParamType::Array)
+    .required()];
+
+impl Operation for DumpValidators {
+    fn verb(&self) -> &'static str {
+        "dump"
+    }
+    fn noun(&self) -> &'static str {
+        "validators"
+    }
+    fn description(&self) -> &'static str {
+        "Write every rule the given paths match to one markdown file and return its path"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        DUMP_VALIDATORS_PARAMS
+    }
+}
+
 /// `get validator` — one validator's full detail.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GetValidator;
@@ -231,6 +258,7 @@ static REVIEW_FILE: Lazy<ReviewFile> = Lazy::new(ReviewFile::default);
 static REVIEW_WORKING: Lazy<ReviewWorking> = Lazy::new(ReviewWorking::default);
 static REVIEW_SHA: Lazy<ReviewSha> = Lazy::new(ReviewSha::default);
 static LIST_VALIDATORS: Lazy<ListValidators> = Lazy::new(ListValidators::default);
+static DUMP_VALIDATORS: Lazy<DumpValidators> = Lazy::new(DumpValidators::default);
 static GET_VALIDATOR: Lazy<GetValidator> = Lazy::new(GetValidator::default);
 static CHECK_VALIDATORS: Lazy<CheckValidators> = Lazy::new(CheckValidators::default);
 
@@ -241,6 +269,7 @@ pub static REVIEW_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*REVIEW_WORKING as &dyn Operation,
         &*REVIEW_SHA as &dyn Operation,
         &*LIST_VALIDATORS as &dyn Operation,
+        &*DUMP_VALIDATORS as &dyn Operation,
         &*GET_VALIDATOR as &dyn Operation,
         &*CHECK_VALIDATORS as &dyn Operation,
     ]
@@ -259,8 +288,8 @@ const DEFAULT_OP: &str = "review working";
 
 /// The operation-based `review` MCP tool.
 ///
-/// Holds an optional [`AgentFactory`]: the loader-read ops (`list`/`get`/`check`
-/// validators) never use it, but the three `review` ops require it. The
+/// Holds an optional [`AgentFactory`]: the loader-read ops (`list`/`dump`/`get`/
+/// `check` validators) never use it, but the three `review` ops require it. The
 /// production server injects a factory that builds the configured backend; a
 /// tool constructed without one (the default) serves the loader-read ops and
 /// returns an actionable error for the `review` ops.
@@ -355,7 +384,7 @@ impl ReviewTool {
                  The `sah tool review ...` CLI route never wires one, so it cannot run these ops — \
                  call `review file`/`review working`/`review sha` through the MCP `review` tool from \
                  a connected agent (e.g. `sah serve`) instead. (The loader-read ops \
-                 `list`/`get`/`check validators` work from either route, no agent required.)",
+                 `list`/`dump`/`get`/`check validators` work from either route, no agent required.)",
                 None,
             )
         })?;
@@ -433,7 +462,7 @@ impl swissarmyhammer_common::health::Doctorable for ReviewTool {
     /// here). All valid → one OK line; each problem → one Error line naming the
     /// offending validator, describing the problem, and carrying a fix.
     ///
-    /// CWD resolution: like the `list`/`get`/`check validators` ops, the lint
+    /// CWD resolution: like the `list`/`dump`/`get`/`check validators` ops, the lint
     /// loads the project layer relative to the session's working directory (the
     /// directory `sah doctor` runs in), never an unrelated `current_dir()`.
     fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
@@ -534,22 +563,20 @@ impl McpTool for ReviewTool {
         match op_str {
             DEFAULT_OP => self.execute_review(Scope::Working, &args, context).await,
             "review file" => {
-                let target = string_arg(&args, "path").ok_or_else(|| {
-                    rmcp::ErrorData::invalid_params(
-                        "`review file` requires a `path` (a file path or glob)",
-                        None,
-                    )
-                })?;
+                let target = required_string_arg(
+                    &args,
+                    "path",
+                    "`review file` requires a `path` (a file path or glob)",
+                )?;
                 self.execute_review(scope_for_path(&target), &args, context)
                     .await
             }
             "review sha" => {
-                let sha = string_arg(&args, "sha").ok_or_else(|| {
-                    rmcp::ErrorData::invalid_params(
-                        "`review sha` requires a `sha` (a commit or range)",
-                        None,
-                    )
-                })?;
+                let sha = required_string_arg(
+                    &args,
+                    "sha",
+                    "`review sha` requires a `sha` (a commit or range)",
+                )?;
                 self.execute_review(Scope::Sha(sha), &args, context).await
             }
             "list validators" => {
@@ -564,20 +591,27 @@ impl McpTool for ReviewTool {
                         .filter(|value| !value.is_empty()),
                     include_rules,
                 )
-                .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+                .map_err(validator_op_error)?;
                 json_result(&summaries)
             }
-            "get validator" => {
-                let name = string_arg(&args, "name").ok_or_else(|| {
-                    rmcp::ErrorData::invalid_params("`get validator` requires a `name`", None)
+            "dump validators" => {
+                let paths_value = args.get("paths").ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params(
+                        "`dump validators` requires `paths` (one example file per extension)",
+                        None,
+                    )
                 })?;
-                let detail = validators::get_validator(&name)
-                    .map_err(|e| rmcp::ErrorData::invalid_params(e, None))?;
+                let response =
+                    validators::dump_validators(paths_value).map_err(validator_op_error)?;
+                json_result(&response)
+            }
+            "get validator" => {
+                let name = required_string_arg(&args, "name", "`get validator` requires a `name`")?;
+                let detail = validators::get_validator(&name).map_err(validator_op_error)?;
                 json_result(&detail)
             }
             "check validators" => {
-                let response = validators::check_validators()
-                    .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+                let response = validators::check_validators().map_err(validator_op_error)?;
                 json_result(&response)
             }
             other => {
@@ -598,6 +632,38 @@ impl McpTool for ReviewTool {
     }
 }
 
+/// Map a [`validators::ValidatorOpError`] to the right MCP error class.
+///
+/// Caller mistakes (`UnknownValidator`, `MalformedPaths`, `EmptyPaths`) map to
+/// `invalid_params`; server-side failures (`Load`, `WriteRulesFile`) map to
+/// `internal_error`. The one place the mapping lives, so every validator op
+/// classifies errors the same way.
+fn validator_op_error(error: validators::ValidatorOpError) -> rmcp::ErrorData {
+    use validators::ValidatorOpError;
+    match &error {
+        ValidatorOpError::UnknownValidator(_)
+        | ValidatorOpError::MalformedPaths
+        | ValidatorOpError::EmptyPaths => rmcp::ErrorData::invalid_params(error.to_string(), None),
+        ValidatorOpError::Load(_) | ValidatorOpError::WriteRulesFile { .. } => {
+            rmcp::ErrorData::internal_error(error.to_string(), None)
+        }
+    }
+}
+
+/// Read the required string argument `key`, mapping absence to an
+/// `invalid_params` error carrying `requirement`.
+///
+/// The one place a required-string op input is extracted, so every op arm
+/// validates the same way.
+fn required_string_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    requirement: &str,
+) -> Result<String, rmcp::ErrorData> {
+    string_arg(args, key)
+        .ok_or_else(|| rmcp::ErrorData::invalid_params(requirement.to_string(), None))
+}
+
 /// Build the [`Scope`] for a `review file` target: a glob when it has glob
 /// metacharacters, else a single file path.
 fn scope_for_path(target: &str) -> Scope {
@@ -611,7 +677,7 @@ fn scope_for_path(target: &str) -> Scope {
 /// Register the operation-based `review` tool with the registry.
 ///
 /// The tool is registered without an agent factory: the loader-read ops
-/// (`list`/`get`/`check validators`) work immediately. The server attaches a
+/// (`list`/`dump`/`get`/`check validators`) work immediately. The server attaches a
 /// live-agent factory for the three `review` ops where it wires the backend.
 pub fn register_review_tools(registry: &mut ToolRegistry) {
     registry.register(ReviewTool::new());

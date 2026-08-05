@@ -61,15 +61,20 @@ The loader-read ops introspect what is plugged in (no agent, fast):
 - `list validators` — one summary row per loaded RuleSet, filterable by `source`
   (`builtin` | `user` | `project` | `all`) and a path/glob `match`. Set
   `rules: true` and each row also carries that validator's rules — every rule's
-  `name` plus its verbatim `body`.
+  `name` plus its verbatim `body`. Use it for summaries and introspection.
+- `dump validators` — write every rule the given `paths` match to ONE markdown
+  file in the system temp directory and return its path, plus a JSON summary:
+  the deduplicated `validators`, the total `rule_count`, a `matched` map from
+  each path to its validator names, and the distinct `extensions`.
 - `get validator` — one validator's frontmatter, probes, and full rule bodies,
   by `name`.
 - `check validators` — lint every loaded validator: globs compile, no stray
   trigger, declared probes exist in the catalog.
 
-Read the rules for a file BEFORE you edit it: one call,
-`{"op": "list validators", "match": "src/auth.rs", "rules": true}`, returns the
-full rule text a review will enforce on that file. A path-shaped `match` is
-answered by the engine's own file matcher, so the answer is exactly the validator
-set a `review` run pairs with that path — no per-name `get validator` calls, no
-guessing.
+Read the rules BEFORE you edit: rules match by file pattern, so one example
+file per distinct extension gives the full rule set. One call,
+`{"op": "dump validators", "paths": ["src/auth.rs", "web/app.ts"]}`, writes
+every applicable rule body verbatim to one file — read that file whole, one
+time. Each path runs through the engine's own file matcher, so the file holds
+exactly the rules a `review` run enforces on those paths — no per-file calls,
+no per-name `get validator` calls, no guessing.

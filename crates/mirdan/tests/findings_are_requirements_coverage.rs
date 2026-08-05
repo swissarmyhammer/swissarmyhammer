@@ -28,8 +28,11 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 /// Builtin agents that write or judge code. Each must render the stance.
+///
+/// The 'implementer' agent is not in this list. That agent gets the stance
+/// through the `implement` skill. The `implement` skill stays in
+/// `COVERED_SKILLS`.
 const COVERED_AGENTS: &[&str] = &[
-    "implementer",
     "reviewer",
     "tester",
     "committer",

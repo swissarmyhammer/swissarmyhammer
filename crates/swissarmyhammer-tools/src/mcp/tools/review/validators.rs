@@ -1,33 +1,70 @@
-//! Validator introspection ops for the `review` tool: `list/get/check validators`.
+//! Validator introspection ops for the `review` tool:
+//! `list/dump/get/check validators`.
 //!
-//! These three ops are pure loader reads — no agent, no index, fast. They load
-//! the full builtin → user → project RuleSet stack via
+//! These ops are loader reads — no agent, no index, fast. They load the full
+//! builtin → user → project RuleSet stack via
 //! [`swissarmyhammer_validators::load_rules`] and report on it:
 //!
 //! - `list validators` — one summary row per loaded RuleSet (name, description,
 //!   source layer, match globs, probes, rule count, path), optionally
 //!   filtered by `source` and/or a path/glob `match`, and optionally carrying
-//!   every rule's verbatim body (`rules: true`). One call with
-//!   `match: <file>` + `rules: true` therefore answers "what will a review
-//!   enforce on this file?" without a `get validator` call per name.
+//!   every rule's verbatim body (`rules: true`).
+//! - `dump validators` — write every rule the engine enforces on a set of
+//!   paths to ONE markdown file in the system temp directory, deduplicated
+//!   across paths, and return the file path. One call with one example file
+//!   per extension answers "what will a review enforce on the files I will
+//!   edit?" in one readable file.
 //! - `get validator` — one RuleSet's full rule bodies + probes.
 //! - `check validators` — lint every loaded RuleSet: frontmatter is valid (it
 //!   parsed), declared globs compile, no stray `triggerMatcher`, and every
 //!   declared probe exists in the engine's probe catalog.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use swissarmyhammer_validators::review::probe_exists;
 use swissarmyhammer_validators::validators::{
     compile_glob_patterns, matches_any_pattern, MatchContext, ValidatorLoader, ValidatorMatch,
 };
-use swissarmyhammer_validators::{load_rules, RuleSet};
+use swissarmyhammer_validators::{load_rules, AvpError, RuleSet};
 
-use crate::mcp::op_tool_helpers::is_glob_pattern;
+use crate::mcp::op_tool_helpers::{forgiving_string_list, is_glob_pattern};
+
+/// Errors the validator introspection ops (`list/dump/get/check validators`)
+/// return.
+///
+/// The op error messages live here, once — a caller renders them with
+/// `Display`, and no per-call-site `format!` copy can drift.
+#[derive(Debug, thiserror::Error)]
+pub enum ValidatorOpError {
+    /// The RuleSet stack failed to load.
+    #[error("failed to load validators: {0}")]
+    Load(#[from] AvpError),
+    /// No loaded RuleSet carries the requested name.
+    #[error("no validator named '{0}'")]
+    UnknownValidator(String),
+    /// The `paths` input has a shape the op does not accept.
+    #[error(
+        "`paths` must be a file path string, an array of file path strings, or a \
+         stringified JSON array of file path strings"
+    )]
+    MalformedPaths,
+    /// The `paths` input holds no path.
+    #[error("`dump validators` requires at least one path in `paths`")]
+    EmptyPaths,
+    /// The rules file failed to write.
+    #[error("failed to write {path}: {source}")]
+    WriteRulesFile {
+        /// The temp-dir file path the write targeted.
+        path: PathBuf,
+        /// The io error the write returned.
+        source: std::io::Error,
+    },
+}
 
 /// A `list validators` summary row.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ValidatorSummary {
     /// The RuleSet name.
     pub name: String,
@@ -50,7 +87,7 @@ pub struct ValidatorSummary {
 }
 
 /// One rule in a `get validator` response.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RuleDetail {
     /// The rule name.
     pub name: String,
@@ -59,7 +96,7 @@ pub struct RuleDetail {
 }
 
 /// A `get validator` response — one RuleSet's full detail.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ValidatorDetail {
     /// The RuleSet name.
     pub name: String,
@@ -76,7 +113,7 @@ pub struct ValidatorDetail {
 }
 
 /// The frontmatter view rendered into a `get validator` response.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ValidatorFrontmatterView {
     /// The RuleSet name.
     pub name: String,
@@ -91,7 +128,7 @@ pub struct ValidatorFrontmatterView {
 }
 
 /// One `check validators` problem.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ValidatorProblem {
     /// The RuleSet path (or name) the problem is about.
     pub path: String,
@@ -100,7 +137,7 @@ pub struct ValidatorProblem {
 }
 
 /// A `check validators` response: overall `ok` plus every problem found.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CheckValidatorsResponse {
     /// True when no problem was found across every loaded RuleSet.
     pub ok: bool,
@@ -219,14 +256,14 @@ fn passes_filters(
 ///
 /// # Errors
 ///
-/// Returns a message when [`load_rules`] fails (user/project directory read
-/// error).
+/// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails (user/project
+/// directory read error).
 pub fn list_validators(
     source: Option<&str>,
     match_filter: Option<&str>,
     include_rules: bool,
-) -> Result<Vec<ValidatorSummary>, String> {
-    let loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+) -> Result<Vec<ValidatorSummary>, ValidatorOpError> {
+    let loader = load_rules()?;
     // A path-shaped `match` is answered by the engine matcher, once for the whole
     // stack rather than per row.
     let engine_matched = match_filter
@@ -243,17 +280,160 @@ pub fn list_validators(
     Ok(summaries)
 }
 
+/// A `dump validators` response: where the rules file landed plus what it holds.
+#[derive(Clone, Debug, Serialize)]
+pub struct DumpValidatorsResponse {
+    /// The markdown rules file, written under the system temp directory.
+    pub path: String,
+    /// The deduplicated, sorted names of every validator any input path matched.
+    pub validators: Vec<String>,
+    /// The total rule count across the deduplicated validators.
+    pub rule_count: usize,
+    /// Each input path paired with the sorted validator names the engine
+    /// matcher pairs it with (empty when no validator matches the path).
+    pub matched: BTreeMap<String, Vec<String>>,
+    /// The distinct, sorted extensions of the input paths. A path with no
+    /// extension adds no entry.
+    pub extensions: Vec<String>,
+}
+
+/// Parse the forgiving `paths` input and drop blank entries.
+///
+/// Shape tolerance comes from [`forgiving_string_list`]: an array of strings,
+/// a stringified JSON array, and a single string all yield the same list. An
+/// entry that is empty or whitespace carries no path, so it is dropped — a
+/// blank-only input therefore parses to an empty list, which
+/// [`dump_validators`] rejects as empty.
+///
+/// # Errors
+///
+/// Returns [`ValidatorOpError::MalformedPaths`] when the value has none of
+/// those shapes, or when an array element is not a string.
+fn path_list(value: &serde_json::Value) -> Result<Vec<String>, ValidatorOpError> {
+    let paths = forgiving_string_list(value).ok_or(ValidatorOpError::MalformedPaths)?;
+    Ok(paths
+        .into_iter()
+        .filter(|path| !path.trim().is_empty())
+        .collect())
+}
+
+/// The distinct extensions of the input paths, sorted.
+///
+/// A path with no extension adds no entry.
+fn distinct_extensions(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|path| Path::new(path).extension())
+        .map(|extension| extension.to_string_lossy().to_string())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
+/// A unique rules-file path under the system temp directory.
+///
+/// Never the CWD: bundled GUI apps start with a read-only CWD.
+fn rules_file_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "sah-rules-{}.md",
+        swissarmyhammer_common::generate_monotonic_ulid_string()
+    ))
+}
+
+/// Render the dumped RuleSets as one markdown document.
+///
+/// Each validator gets a heading with its name, then its description and source
+/// layer, then each rule's name and verbatim body. An empty set states that no
+/// rules apply.
+fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String {
+    let mut doc = String::from("# Review rules\n\n");
+    if !extensions.is_empty() {
+        doc.push_str(&format!("Extensions: {}\n\n", extensions.join(", ")));
+    }
+    if rulesets.is_empty() {
+        doc.push_str("No validator matches the given paths. No rules apply.\n");
+        return doc;
+    }
+    for ruleset in rulesets {
+        doc.push_str(&format!(
+            "## {}\n\n{}\n\nSource layer: {}\n\n",
+            ruleset.name(),
+            ruleset.description(),
+            ruleset.source
+        ));
+        for rule in rule_details(ruleset) {
+            doc.push_str(&format!("### {}\n\n{}\n\n", rule.name, rule.body));
+        }
+    }
+    doc
+}
+
+/// `dump validators`: write every rule the engine enforces on `paths` to one
+/// markdown file in the system temp directory, and return its path.
+///
+/// Each input path runs through the engine's own matcher
+/// ([`engine_matched_names`]) — the same pairing `scope_review` and
+/// `list validators` use — so the dumped set cannot differ from what a review
+/// run enforces. The validator set is deduplicated across paths: rules match by
+/// file pattern, so one example file per distinct extension gives the full set.
+///
+/// # Errors
+///
+/// Returns a [`ValidatorOpError`] when `paths` is empty or malformed, when
+/// [`load_rules`] fails, or when the file cannot be written.
+pub fn dump_validators(
+    paths_value: &serde_json::Value,
+) -> Result<DumpValidatorsResponse, ValidatorOpError> {
+    let paths = path_list(paths_value)?;
+    if paths.is_empty() {
+        return Err(ValidatorOpError::EmptyPaths);
+    }
+
+    let loader = load_rules()?;
+
+    let mut matched: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for path in &paths {
+        let path_names = engine_matched_names(&loader, path);
+        names.extend(path_names.iter().cloned());
+        matched.insert(path.clone(), path_names.into_iter().collect());
+    }
+
+    let rulesets: Vec<&RuleSet> = names
+        .iter()
+        .filter_map(|name| loader.get_ruleset(name))
+        .collect();
+    let rule_count = rulesets.iter().map(|ruleset| ruleset.rules.len()).sum();
+    let extensions = distinct_extensions(&paths);
+
+    let file_path = rules_file_path();
+    std::fs::write(&file_path, render_rules_markdown(&rulesets, &extensions)).map_err(
+        |source| ValidatorOpError::WriteRulesFile {
+            path: file_path.clone(),
+            source,
+        },
+    )?;
+
+    Ok(DumpValidatorsResponse {
+        path: file_path.display().to_string(),
+        validators: names.into_iter().collect(),
+        rule_count,
+        matched,
+        extensions,
+    })
+}
+
 /// `get validator`: load the stack and return one RuleSet's full detail.
 ///
 /// # Errors
 ///
-/// Returns a message when [`load_rules`] fails or when no RuleSet is named
-/// `name`.
-pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
-    let loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+/// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails, and
+/// [`ValidatorOpError::UnknownValidator`] when no RuleSet is named `name`.
+pub fn get_validator(name: &str) -> Result<ValidatorDetail, ValidatorOpError> {
+    let loader = load_rules()?;
     let ruleset = loader
         .get_ruleset(name)
-        .ok_or_else(|| format!("no validator named '{name}'"))?;
+        .ok_or_else(|| ValidatorOpError::UnknownValidator(name.to_string()))?;
 
     Ok(ValidatorDetail {
         name: ruleset.name().to_string(),
@@ -285,9 +465,9 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
 ///
 /// # Errors
 ///
-/// Returns a message when [`load_rules`] fails.
-pub fn check_validators() -> Result<CheckValidatorsResponse, String> {
-    let loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+/// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails.
+pub fn check_validators() -> Result<CheckValidatorsResponse, ValidatorOpError> {
+    let loader = load_rules()?;
     let mut errors: Vec<ValidatorProblem> = Vec::new();
 
     let rulesets = loader.list_rulesets();

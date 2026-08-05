@@ -19,9 +19,11 @@
 mod common;
 use common::rendered_builtin_instructions;
 
-/// The rules fetch the skill must prescribe: ONE call per file that carries
-/// `rules: true`, so the response holds every applicable rule body.
-const RULES_CALL: &str = r#"{"op": "list validators", "match": "<file path>", "rules": true}"#;
+/// The rules fetch the skill must prescribe: ONE `dump validators` call that
+/// carries one example file for each distinct extension, so the returned file
+/// holds every applicable rule body.
+const RULES_CALL: &str =
+    r#"{"op": "dump validators", "paths": ["<one example file per extension>"]}"#;
 
 /// The self-review call the skill must prescribe before handoff.
 const SELF_REVIEW_CALL: &str = r#"{"op": "review working"}"#;
@@ -45,9 +47,9 @@ fn offset_of(body: &str, marker: &str, requirement: &str) -> usize {
         .unwrap_or_else(|| panic!("the implement skill must {requirement} (marker {marker:?})"))
 }
 
-/// The skill must prescribe the one-call-per-file rules fetch, and must place it
-/// before the step that edits code — rules read after the edit are review
-/// findings, not guidance.
+/// The skill must prescribe the one-call-per-extension rules fetch, and must
+/// place it before the step that edits code — rules read after the edit are
+/// review findings, not guidance.
 #[test]
 fn implement_skill_prescribes_the_rules_call_before_editing() {
     let body = rendered_builtin_instructions("implement");
@@ -55,7 +57,7 @@ fn implement_skill_prescribes_the_rules_call_before_editing() {
     let rules_at = offset_of(
         &body,
         RULES_CALL,
-        "prescribe the `list validators` call with `rules: true`",
+        "prescribe the `dump validators` call with one example file per extension",
     );
     let implement_at = offset_of(&body, IMPLEMENT_STEP, "keep its `Implement` step");
     assert!(
@@ -65,21 +67,31 @@ fn implement_skill_prescribes_the_rules_call_before_editing() {
 
     // Each phrase the rules step must carry, with the requirement it encodes.
     let required_markers: &[(&str, &str)] = &[
-        // One call per file — a loop of `get validator` calls is the failure
-        // mode this replaces.
+        // One example file per extension — a call per file (or a loop of
+        // `get validator` calls) is the failure mode this replaces.
         (
-            "One call per file",
-            "state that the fetch is one call per file",
+            "one example file for each extension",
+            "state that the fetch takes one example file for each extension",
         ),
         // The fetch happens before the edit, not after.
         (
             "before you edit a file",
             "place the fetch before the file is edited",
         ),
+        // The returned file is read whole, one time.
+        (
+            "Read that file whole, one time",
+            "require reading the returned rules file whole, one time",
+        ),
+        // A re-fetch happens only for a new extension.
+        (
+            "Call again only when a later edit targets a file with a new extension",
+            "limit re-fetches to files with a new extension",
+        ),
         // The response is authoritative: the bodies arrive verbatim.
         (
             "word for word",
-            "say the response carries the rule bodies word for word",
+            "say the returned file carries the rule bodies word for word",
         ),
         // The rules bind while the code is written, not afterwards.
         (

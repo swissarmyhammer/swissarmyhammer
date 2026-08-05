@@ -71,13 +71,17 @@ Record what you discovered on the task — `{"op": "add comment", "task_id": "<i
 
 ### Know the rules
 
-Get the rules that review will enforce, before you edit a file. One call per file on the `review` tool:
+Get the rules that review will enforce, before you edit a file. Rules match by file pattern, so one example file for each extension gives the full rule set.
+
+Collect the distinct extensions of the files you plan to edit. Pick one example file for each extension. Then make one call on the `review` tool with those example paths:
 
 ```json
-{"op": "list validators", "match": "<file path>", "rules": true}
+{"op": "dump validators", "paths": ["<one example file per extension>"]}
 ```
 
-The response carries every applicable rule body word for word.
+The call writes one markdown file and returns its path. Read that file whole, one time. The file carries every applicable rule body word for word.
+
+Do not call again for more files with the same extensions. Call again only when a later edit targets a file with a new extension.
 
 Obey each rule as you write the code, not after. Document each public item. Name each numeric constant. Do not copy blocks. Keep functions small and flat. Follow the project naming. Delete dead code.
 

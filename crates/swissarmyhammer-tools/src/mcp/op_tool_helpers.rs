@@ -90,6 +90,26 @@ pub(crate) fn usize_arg(
     args.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
 }
 
+/// Parse a forgiving list-of-strings value.
+///
+/// Three shapes yield a list: an array of strings, a stringified JSON array of
+/// strings, and a single string (a one-element list) — the shape tolerance sah
+/// ops give list params. Returns `None` for any other shape, and for an array
+/// holding a non-string element.
+pub(crate) fn forgiving_string_list(value: &serde_json::Value) -> Option<Vec<String>> {
+    if let Some(items) = value.as_array() {
+        return items
+            .iter()
+            .map(|item| item.as_str().map(str::to_string))
+            .collect();
+    }
+    let text = value.as_str()?;
+    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(text) {
+        return Some(parsed);
+    }
+    Some(vec![text.to_string()])
+}
+
 /// Serialize a value into a JSON-text [`CallToolResult`].
 ///
 /// The value is pretty-printed; a serialization failure (effectively
@@ -116,6 +136,28 @@ mod tests {
         assert_eq!(string_arg(&args, "missing"), None);
         // Wrong-typed (number) is treated as absent.
         assert_eq!(string_arg(&args, "n"), None);
+    }
+
+    #[test]
+    fn forgiving_string_list_accepts_the_three_shapes_and_rejects_the_rest() {
+        // An array of strings.
+        assert_eq!(
+            forgiving_string_list(&serde_json::json!(["a", "b"])),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        // A stringified JSON array.
+        assert_eq!(
+            forgiving_string_list(&serde_json::json!("[\"a\", \"b\"]")),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        // A single string is a one-element list.
+        assert_eq!(
+            forgiving_string_list(&serde_json::json!("a")),
+            Some(vec!["a".to_string()])
+        );
+        // A non-string array element and a non-list shape are malformed.
+        assert_eq!(forgiving_string_list(&serde_json::json!(["a", 1])), None);
+        assert_eq!(forgiving_string_list(&serde_json::json!(1)), None);
     }
 
     #[test]
