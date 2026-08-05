@@ -7,17 +7,18 @@
 //! directory.
 //!
 //! This is a thin wrapper over mirdan's profile installer: it builds a
-//! skills-only [`mirdan::install::Profile`] (the same [`registry::skills_selector`]
-//! the full `init` profile uses — every builtin skill, no MCP server) and
-//! applies it through
+//! skills-only [`mirdan::install::Profile`] from the same selector the full
+//! `init` profile uses ([`ToolInstall::skills`] on [`CodeContextInstall`] —
+//! every builtin skill, no MCP server) and applies it through
 //! [`mirdan::install::init_profile`]. All rendering (Liquid templating of the
 //! builtin SKILL.md) and store+symlink deployment live in mirdan, so there is no
 //! per-CLI render/deploy pipeline here.
 
+use mirdan::tool_install::ToolInstall;
 use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
 use swissarmyhammer_common::reporter::CliReporter;
 
-use crate::commands::registry;
+use crate::commands::registry::CodeContextInstall;
 
 /// Deploy the code-context skills to detected agents and return an exit code.
 ///
@@ -27,7 +28,7 @@ use crate::commands::registry;
 /// otherwise.
 pub fn run_skill() -> i32 {
     let profile = mirdan::install::Profile {
-        skills: Some(registry::skills_selector()),
+        skills: Some(CodeContextInstall::skills()),
         ..Default::default()
     };
     let reporter = CliReporter;

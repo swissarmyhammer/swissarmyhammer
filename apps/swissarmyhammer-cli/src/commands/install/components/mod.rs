@@ -11,6 +11,7 @@
 //! config edit.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
@@ -23,6 +24,16 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 /// It runs after the profile's per-agent settings, and `sah init` registers
 /// only one other component (the kanban tool, at 55), which must follow it.
 const PROJECT_STRUCTURE_PRIORITY: i32 = 40;
+
+/// The project runtime-state directory [`ProjectStructure`] creates and removes.
+const SAH_DIR_NAME: &str = ".sah";
+
+/// The project prompt-override directory [`ProjectStructure`] creates and
+/// removes.
+const PROMPTS_DIR_NAME: &str = ".prompts";
+
+/// The workflow-definition subdirectory created inside [`SAH_DIR_NAME`].
+const WORKFLOWS_SUBDIR_NAME: &str = "workflows";
 
 /// Creates/removes the `.sah/` and `.prompts/` project directories.
 ///
@@ -54,6 +65,7 @@ const PROJECT_STRUCTURE_PRIORITY: i32 = 40;
 /// `$HOME`, add a separate `GlobalUserStructure` component applicable to
 /// `User` rather than widening this one — the two scopes have different
 /// lifecycles and ownership.
+#[derive(Debug)]
 pub struct ProjectStructure {
     remove_directory: bool,
 }
@@ -62,6 +74,12 @@ impl ProjectStructure {
     /// Create a new ProjectStructure component.
     pub fn new(remove_directory: bool) -> Self {
         Self { remove_directory }
+    }
+
+    /// The project root both lifecycle halves act on, or the single errored
+    /// result they both report when it cannot be resolved.
+    fn root_or_error(&self) -> Result<PathBuf, Vec<InitResult>> {
+        workspace_root().map_err(|e| vec![InitResult::error(self.name(), e)])
     }
 }
 
@@ -108,17 +126,9 @@ impl Initializable for ProjectStructure {
     /// itself is root-explicit so it is unit-testable without touching the
     /// process CWD.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
-            Some(root) => root,
-            None => match std::env::current_dir() {
-                Ok(cwd) => cwd,
-                Err(e) => {
-                    return vec![InitResult::error(
-                        self.name(),
-                        format!("Failed to get current directory: {}", e),
-                    )];
-                }
-            },
+        let root = match self.root_or_error() {
+            Ok(root) => root,
+            Err(failure) => return failure,
         };
 
         let sah_root = match create_workspace_structure(&root) {
@@ -146,46 +156,64 @@ impl Initializable for ProjectStructure {
             )];
         }
 
-        let cwd = match std::env::current_dir() {
-            Ok(c) => c,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to get current directory: {}", e),
-                )];
-            }
+        let root = match self.root_or_error() {
+            Ok(root) => root,
+            Err(failure) => return failure,
         };
 
-        let sah_dir = cwd.join(".sah");
-        if sah_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&sah_dir) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to remove {}: {}", sah_dir.display(), e),
-                )];
+        for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME] {
+            if let Some(failure) =
+                remove_directory_if_exists(&root, dir_name, self.name(), reporter)
+            {
+                return vec![failure];
             }
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!("{}", sah_dir.display()),
-            });
-        }
-
-        let prompts_dir = cwd.join(".prompts");
-        if prompts_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&prompts_dir) {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to remove {}: {}", prompts_dir.display(), e),
-                )];
-            }
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!("{}", prompts_dir.display()),
-            });
         }
 
         vec![InitResult::ok(self.name(), "Project directories removed")]
     }
+}
+
+/// Resolve the project root this component acts on: the git repository root,
+/// else the process working directory.
+///
+/// [`ProjectStructure::init`] and [`ProjectStructure::deinit`] must agree on
+/// this, or a `deinit` run from a subdirectory would look for a workspace that
+/// `init` created at the git root.
+fn workspace_root() -> Result<PathBuf, String> {
+    if let Some(root) = swissarmyhammer_common::utils::find_git_repository_root() {
+        return Ok(root);
+    }
+    std::env::current_dir().map_err(|e| format!("failed to get current directory: {e}"))
+}
+
+/// Remove `<root>/<dir_name>` and report it, if the directory is there.
+///
+/// Returns `None` when the directory was removed or was already absent, and
+/// `Some(error)` naming `component` when the removal failed — so the caller can
+/// stop at the first failure.
+fn remove_directory_if_exists(
+    root: &Path,
+    dir_name: &str,
+    component: &str,
+    reporter: &dyn InitReporter,
+) -> Option<InitResult> {
+    let dir = root.join(dir_name);
+    if !dir.exists() {
+        return None;
+    }
+
+    if let Err(e) = fs::remove_dir_all(&dir) {
+        return Some(InitResult::error(
+            component,
+            format!("failed to remove {}: {e}", dir.display()),
+        ));
+    }
+
+    reporter.emit(&InitEvent::Action {
+        verb: "Removed".to_string(),
+        message: dir.display().to_string(),
+    });
+    None
 }
 
 /// Create `<root>/.sah/` (with its `workflows/` subdir) and `<root>/.prompts/`.
@@ -198,17 +226,17 @@ impl Initializable for ProjectStructure {
 ///
 /// Returns the created `.sah/` root on success, or an error message describing
 /// the first filesystem failure encountered.
-fn create_workspace_structure(root: &std::path::Path) -> Result<std::path::PathBuf, String> {
+fn create_workspace_structure(root: &Path) -> Result<PathBuf, String> {
     let sah_dir = SwissarmyhammerDirectory::from_custom_root(root.to_path_buf())
-        .map_err(|e| format!("Failed to create .sah directory: {}", e))?;
+        .map_err(|e| format!("failed to create {SAH_DIR_NAME} directory: {e}"))?;
 
     sah_dir
-        .ensure_subdir("workflows")
-        .map_err(|e| format!("Failed to create workflows directory: {}", e))?;
+        .ensure_subdir(WORKFLOWS_SUBDIR_NAME)
+        .map_err(|e| format!("failed to create {WORKFLOWS_SUBDIR_NAME} directory: {e}"))?;
 
-    let prompts_dir = root.join(".prompts");
+    let prompts_dir = root.join(PROMPTS_DIR_NAME);
     fs::create_dir_all(&prompts_dir)
-        .map_err(|e| format!("Failed to create .prompts directory: {}", e))?;
+        .map_err(|e| format!("failed to create {PROMPTS_DIR_NAME} directory: {e}"))?;
 
     Ok(sah_dir.root().to_path_buf())
 }
@@ -275,5 +303,102 @@ mod tests {
         create_workspace_structure(temp.path()).unwrap();
         assert!(temp.path().join(".sah").join("workflows").is_dir());
         assert!(temp.path().join(".prompts").is_dir());
+    }
+
+    /// A reporter that keeps the emitted events so a test can assert what the
+    /// removal announced, rather than only that it returned.
+    #[derive(Default)]
+    struct RecordingReporter {
+        messages: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl InitReporter for RecordingReporter {
+        fn emit(&self, event: &InitEvent) {
+            if let InitEvent::Action { verb, message } = event {
+                self.messages
+                    .lock()
+                    .expect("recording reporter mutex")
+                    .push(format!("{verb} {message}"));
+            }
+        }
+    }
+
+    /// A directory that is there is deleted, announced, and reported as no
+    /// failure.
+    #[test]
+    fn test_remove_directory_if_exists_removes_and_reports() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join(SAH_DIR_NAME);
+        fs::create_dir_all(target.join(WORKFLOWS_SUBDIR_NAME)).unwrap();
+
+        let reporter = RecordingReporter::default();
+        let failure =
+            remove_directory_if_exists(temp.path(), SAH_DIR_NAME, "project-structure", &reporter);
+
+        assert!(failure.is_none(), "removal should report no failure");
+        assert!(!target.exists(), "{SAH_DIR_NAME} should be gone");
+        assert_eq!(
+            reporter.messages.lock().unwrap().as_slice(),
+            [format!("Removed {}", target.display())]
+        );
+    }
+
+    /// A directory that was never created is not a failure, and announces
+    /// nothing.
+    #[test]
+    fn test_remove_directory_if_exists_ignores_missing_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let reporter = RecordingReporter::default();
+        let failure = remove_directory_if_exists(
+            temp.path(),
+            PROMPTS_DIR_NAME,
+            "project-structure",
+            &reporter,
+        );
+
+        assert!(failure.is_none(), "a missing directory is not a failure");
+        assert!(reporter.messages.lock().unwrap().is_empty());
+    }
+
+    /// The component's own lifecycle round-trips, and both halves target the
+    /// same directory: run from a subdirectory of a repository, `init` creates
+    /// the workspace at the repository root and `deinit` removes it from there
+    /// again. A `deinit` that resolved the root differently from `init` would
+    /// look in the subdirectory and leave the workspace behind.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_project_structure_round_trips_from_a_subdirectory() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path().canonicalize().unwrap();
+        // A `.git` entry is all the root finder looks for.
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let subdir = repo.join("crates").join("inner");
+        fs::create_dir_all(&subdir).unwrap();
+        let _cwd = CurrentDirGuard::new(&subdir).unwrap();
+        let reporter = RecordingReporter::default();
+
+        let component = ProjectStructure::new(true);
+        component.init(&InitScope::Project, &reporter);
+        assert!(
+            repo.join(SAH_DIR_NAME).is_dir(),
+            "init creates {SAH_DIR_NAME} at the repository root"
+        );
+        assert!(
+            repo.join(PROMPTS_DIR_NAME).is_dir(),
+            "init creates {PROMPTS_DIR_NAME} at the repository root"
+        );
+
+        component.deinit(&InitScope::Project, &reporter);
+        assert!(
+            !repo.join(SAH_DIR_NAME).exists(),
+            "deinit removes {SAH_DIR_NAME} from the repository root"
+        );
+        assert!(
+            !repo.join(PROMPTS_DIR_NAME).exists(),
+            "deinit removes {PROMPTS_DIR_NAME} from the repository root"
+        );
     }
 }
