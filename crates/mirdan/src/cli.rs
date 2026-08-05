@@ -50,6 +50,10 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Every top-level `mirdan` subcommand.
+///
+/// One variant per verb the CLI dispatches on; each carries that verb's own
+/// arguments, and [`Cli::command`] selects the one the user asked for.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Detect and list installed AI coding agents
@@ -194,8 +198,7 @@ pub enum Commands {
     /// Report the install-status of sah-managed components per agent and scope
     ///
     /// Shows, for each detected agent and scope (project, user), whether the
-    /// sah MCP server, skills, subagents, preamble, and permissions are
-    /// installed.
+    /// sah MCP server, skills, subagents, and permissions are installed.
     Status {
         /// Include components that do not apply to an agent at a scope
         #[arg(long)]
@@ -243,6 +246,10 @@ Examples:
     },
 }
 
+/// Which kind of package `mirdan new` scaffolds.
+///
+/// One variant per package type mirdan can create; each carries the arguments
+/// that type's scaffold needs.
 #[derive(Subcommand, Debug)]
 pub enum NewKind {
     /// Scaffold a new skill (agentskills.io spec)

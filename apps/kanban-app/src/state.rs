@@ -567,6 +567,7 @@ impl MenuItemHandle {
         }
     }
 
+    /// Set the menu item's visible label.
     pub(crate) fn set_text(&self, text: &str) -> tauri::Result<()> {
         match self {
             Self::Regular(item) => item.set_text(text),
@@ -1133,7 +1134,7 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
 ///
 /// A board's workspace is exactly its tools — currently just the kanban tool —
 /// so the profile declares no MCP server, no agents, and none of the sah-only
-/// statusline/preamble flags: just the skills. Skill selection is not curated
+/// statusline flags: just the skills. Skill selection is not curated
 /// per consumer; every consumer deploys the full builtin set with
 /// [`Selector::All`](mirdan::install::Selector::All).
 fn kanban_profile() -> mirdan::install::Profile {
@@ -1291,13 +1292,28 @@ const ACTOR_COLORS: &[&str] = &[
     "2b6cb0", "c05621", "2f855a", "2c7a7b", "6b46c1", "b83280",
 ];
 
+/// The DJB2 starting hash. Part of the published algorithm, not a tunable.
+const DJB2_SEED: u64 = 5381;
+
+/// The DJB2 per-byte multiplier. Part of the published algorithm, not a tunable.
+const DJB2_MULTIPLIER: u64 = 33;
+
 /// Derive a deterministic hex color from a username.
 fn deterministic_color(username: &str) -> String {
-    let hash: u64 = username
-        .bytes()
-        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    let hash: u64 = username.bytes().fold(DJB2_SEED, |h, b| {
+        h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(b as u64)
+    });
     ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
 }
+
+/// The first byte of a JPEG start-of-image marker (`FF D8`).
+const JPEG_SOI_FIRST: u8 = 0xFF;
+
+/// The second byte of a JPEG start-of-image marker (`FF D8`).
+const JPEG_SOI_SECOND: u8 = 0xD8;
+
+/// How many bytes the JPEG start-of-image marker occupies.
+const JPEG_SOI_LEN: usize = 2;
 
 /// Try to load the macOS user profile picture as a data URI.
 ///
@@ -1360,7 +1376,7 @@ fn dscl_jpeg_photo(username: &str) -> Option<String> {
                 .and_then(|pair| u8::from_str_radix(pair, 16).ok())
         })
         .collect();
-    if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+    if bytes.len() > JPEG_SOI_LEN && bytes[0] == JPEG_SOI_FIRST && bytes[1] == JPEG_SOI_SECOND {
         return Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(&bytes)

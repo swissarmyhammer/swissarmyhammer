@@ -27,13 +27,8 @@ use crate::commands::registry;
 /// otherwise.
 pub fn run_skill() -> i32 {
     let profile = mirdan::install::Profile {
-        mcp_server: None,
         skills: Some(registry::skills_selector()),
-        agents: None,
-        validators: None,
-        statusline: false,
-        preamble: false,
-        edit_redirect: false,
+        ..Default::default()
     };
     let reporter = CliReporter;
     let results = mirdan::install::init_profile(&profile, InitScope::Project, None, &reporter);

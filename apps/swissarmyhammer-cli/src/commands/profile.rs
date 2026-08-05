@@ -39,7 +39,6 @@ pub fn sah_profile() -> Profile {
         agents: Some(Selector::All),
         validators: Some(Selector::All),
         statusline: true,
-        preamble: false,
         edit_redirect: true,
     }
 }
@@ -65,7 +64,6 @@ mod tests {
         assert_eq!(profile.agents, Some(Selector::All));
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
-        assert!(!profile.preamble);
         assert!(profile.edit_redirect);
     }
 }

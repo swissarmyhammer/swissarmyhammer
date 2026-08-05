@@ -32,15 +32,10 @@ const SKILL_NAME: &str = "shell";
 /// is retained for signature parity with the other consumers (and forwarded to
 /// the installer by the caller), but no longer gates skill selection.
 pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
-    mirdan::install::Profile {
-        mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
-        skills: Some(mirdan::install::Selector::Single(SKILL_NAME.to_string())),
-        agents: None,
-        validators: None,
-        statusline: false,
-        preamble: false,
-        edit_redirect: false,
-    }
+    mirdan::install::Profile::tool(
+        SERVER_NAME,
+        mirdan::install::Selector::Single(SKILL_NAME.to_string()),
+    )
 }
 
 /// Register the genuine tool-lifecycle components into `registry`.

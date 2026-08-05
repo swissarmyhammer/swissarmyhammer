@@ -19,8 +19,8 @@ use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::mcp_config;
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
+use crate::settings;
 use crate::store;
-use crate::{settings, status};
 
 /// Sanitize a package name for use as a filesystem directory name.
 ///
@@ -943,8 +943,6 @@ pub struct Profile {
     pub validators: Option<Selector>,
     /// Whether to install the Claude Code statusline (`sah statusline`).
     pub statusline: bool,
-    /// Whether to ensure the CLAUDE.md preamble is present.
-    pub preamble: bool,
     /// Whether to install the edit-surface redirect fragment: a
     /// `permissions.deny` on the native `Edit`/`Write` tools so every
     /// mutation flows through the served `files` MCP replacement (the
@@ -953,6 +951,25 @@ pub struct Profile {
     /// and inert on hosts that don't read that key (see
     /// [`apply_profile_edit_redirect`]).
     pub edit_redirect: bool,
+}
+
+impl Profile {
+    /// The shape every tool CLI installs: its own `<name> serve` MCP server
+    /// plus a skill selection, and nothing else.
+    ///
+    /// Companion to [`ProfileMcpServer::serve`]. kanban, code-context, and
+    /// shelltool differ only in the server name and which skills they deploy,
+    /// so they declare that pair rather than respelling the whole struct and
+    /// drifting apart. sah is not a tool profile — it also carries agents,
+    /// validators, the statusline, and the edit redirect — so it builds its
+    /// own value.
+    pub fn tool(server_name: impl Into<String>, skills: Selector) -> Self {
+        Self {
+            mcp_server: Some(ProfileMcpServer::serve(server_name)),
+            skills: Some(skills),
+            ..Default::default()
+        }
+    }
 }
 
 /// Map an [`InitScope`] to the boolean `global` flag the deploy/store helpers
@@ -1654,160 +1671,6 @@ fn apply_profile_edit_redirect(
     )
 }
 
-/// Ensure the CLAUDE.md preamble is present in every detected agent's
-/// instructions file, or strip it when `install` is false. Root-aware so
-/// project-scope instructions files resolve against `root`.
-fn apply_profile_preamble(
-    install: bool,
-    scope: InitScope,
-    root: Option<&Path>,
-    reporter: &dyn InitReporter,
-) -> Vec<InitResult> {
-    let verb = if install { "Installed" } else { "Removed" };
-    for_each_detected_agent(
-        scope,
-        reporter,
-        |agent, global| {
-            let Some(path) = resolve_agent_file(
-                agent,
-                global,
-                root,
-                agents::agent_global_instructions_file,
-                agents::agent_project_instructions_file,
-            ) else {
-                return Ok(None);
-            };
-            let outcome = if install {
-                ensure_preamble(&path)?
-            } else {
-                remove_preamble(&path)?
-            };
-            Ok(outcome.changed().then(|| AgentAction {
-                verb: outcome.verb().to_string(),
-                message: format!("preamble for {} ({})", agent.name, path.display()),
-            }))
-        },
-        |changed| {
-            InitResult::ok(
-                "profile-preamble",
-                format!("{verb} preamble for {changed} agent(s)"),
-            )
-        },
-    )
-}
-
-/// The outcome of an `ensure_preamble` / `remove_preamble` operation, carrying
-/// both a human-readable verb and whether the file actually changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreambleOutcome {
-    /// The file was created with the preamble.
-    Created,
-    /// The preamble was prepended to existing content.
-    Prepended,
-    /// The preamble was already present; no change.
-    AlreadyPresent,
-    /// The preamble was stripped from existing content.
-    Removed,
-    /// The file contained only the preamble and was deleted.
-    Deleted,
-    /// No file existed, or it had no preamble; no change.
-    Absent,
-}
-
-impl PreambleOutcome {
-    /// A stable verb for the reporter Action event.
-    fn verb(self) -> &'static str {
-        match self {
-            PreambleOutcome::Created => "Created",
-            PreambleOutcome::Prepended => "Prepended",
-            PreambleOutcome::AlreadyPresent => "Present",
-            PreambleOutcome::Removed => "Removed",
-            PreambleOutcome::Deleted => "Deleted",
-            PreambleOutcome::Absent => "Absent",
-        }
-    }
-
-    /// Whether the file changed on disk.
-    fn changed(self) -> bool {
-        matches!(
-            self,
-            PreambleOutcome::Created
-                | PreambleOutcome::Prepended
-                | PreambleOutcome::Removed
-                | PreambleOutcome::Deleted
-        )
-    }
-}
-
-/// Ensure the instructions file at `path` opens with the required preamble,
-/// creating the file (and parents) when missing and prepending the marker when
-/// present-but-missing. Delegates the "is it there?" check to
-/// [`status::preamble_present_in`] so install and `mirdan status` stay in lockstep.
-fn ensure_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
-    let marker = status::PREAMBLE_MARKER;
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                RegistryError::Validation(format!("failed to create {}: {e}", parent.display()))
-            })?;
-        }
-        std::fs::write(path, format!("{marker}\n")).map_err(|e| {
-            RegistryError::Validation(format!("failed to create {}: {e}", path.display()))
-        })?;
-        return Ok(PreambleOutcome::Created);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
-    })?;
-    if status::preamble_present_in(&content) {
-        return Ok(PreambleOutcome::AlreadyPresent);
-    }
-    std::fs::write(path, format!("{marker}\n\n{content}")).map_err(|e| {
-        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
-    })?;
-    Ok(PreambleOutcome::Prepended)
-}
-
-/// Strip the preamble (and any blank lines immediately after it) from the
-/// instructions file at `path`, deleting the file when only the preamble
-/// remained. A missing file or one without the preamble is a no-op.
-fn remove_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
-    if !path.exists() {
-        return Ok(PreambleOutcome::Absent);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
-    })?;
-    if !status::preamble_present_in(&content) {
-        return Ok(PreambleOutcome::Absent);
-    }
-    let mut after_preamble: Vec<&str> = Vec::new();
-    let mut found = false;
-    for line in content.lines() {
-        if !found && line.contains(status::PREAMBLE_MARKER) {
-            found = true;
-            continue;
-        }
-        if found {
-            after_preamble.push(line);
-        }
-    }
-    while after_preamble.first().is_some_and(|l| l.trim().is_empty()) {
-        after_preamble.remove(0);
-    }
-    if after_preamble.is_empty() {
-        std::fs::remove_file(path).map_err(|e| {
-            RegistryError::Validation(format!("failed to delete {}: {e}", path.display()))
-        })?;
-        return Ok(PreambleOutcome::Deleted);
-    }
-    let new_content = after_preamble.join("\n") + "\n";
-    std::fs::write(path, new_content).map_err(|e| {
-        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
-    })?;
-    Ok(PreambleOutcome::Removed)
-}
-
 /// Register the profile's MCP server across detected agents.
 ///
 /// With no explicit `root`, dispatches through the strategy-aware
@@ -1996,10 +1859,6 @@ pub fn init_profile(
         results.extend(apply_profile_statusline(true, scope, root, reporter));
     }
 
-    if profile.preamble {
-        results.extend(apply_profile_preamble(true, scope, root, reporter));
-    }
-
     if profile.edit_redirect {
         results.extend(apply_profile_edit_redirect(true, scope, root, reporter));
     }
@@ -2103,10 +1962,6 @@ pub fn deinit_profile(
 
     if profile.statusline {
         results.extend(apply_profile_statusline(false, scope, root, reporter));
-    }
-
-    if profile.preamble {
-        results.extend(apply_profile_preamble(false, scope, root, reporter));
     }
 
     if profile.edit_redirect {
@@ -5549,7 +5404,6 @@ mod profile_tests {
             agents: Some(Selector::Single("reviewer".to_string())),
             validators: None,
             statusline: false,
-            preamble: false,
             edit_redirect: false,
         }
     }
@@ -6018,7 +5872,6 @@ mod profile_consistency_tests {
             agents: Some(Selector::All),
             validators: Some(Selector::All),
             statusline: true,
-            preamble: false,
             edit_redirect: true,
         }
     }

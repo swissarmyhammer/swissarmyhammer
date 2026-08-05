@@ -90,10 +90,10 @@ pub struct AgentDef {
     /// Global agent (subagent) directory (e.g. `~/.claude/agents`).
     #[serde(default)]
     pub global_agent_path: Option<String>,
-    /// Project-level preamble/instructions file (e.g. Claude Code: `CLAUDE.md`).
+    /// Project-level instructions file (e.g. Claude Code: `CLAUDE.md`).
     #[serde(default)]
     pub instructions_path: Option<String>,
-    /// Global preamble/instructions file (e.g. Claude Code: `~/.claude/CLAUDE.md`).
+    /// Global instructions file (e.g. Claude Code: `~/.claude/CLAUDE.md`).
     #[serde(default)]
     pub global_instructions_path: Option<String>,
     /// Project-level settings/permissions file (e.g. Claude Code: `.claude/settings.json`).
@@ -105,7 +105,7 @@ pub struct AgentDef {
     /// Whether the `sah doctor` check-stack runs against this agent.
     ///
     /// When `true`, the doctor reports per-component install rows (MCP, Skills,
-    /// Subagents, Preamble, Permissions) for this agent. When `false` (the
+    /// Subagents, Permissions) for this agent. When `false` (the
     /// default for any agent that omits the field), the doctor skips it
     /// entirely. Only the four agents we explicitly support — `claude-code`,
     /// `zed-ai`, `copilot`, `codex` — should set this to `true`.
@@ -183,55 +183,46 @@ fn expand_tilde(path: &str) -> PathBuf {
 ///
 /// ANY match in detect methods means the agent is present.
 pub fn detect_agents(config: &AgentsConfig) -> Vec<DetectedAgent> {
-    config
-        .agents
-        .iter()
-        .map(|def| {
-            let mut detected = false;
-            let mut detail = String::new();
+    config.agents.iter().map(detect_agent).collect()
+}
 
-            for method in &def.detect {
-                match method {
-                    DetectMethod::Dir { dir } => {
-                        let expanded = expand_tilde(dir);
-                        if expanded.exists() {
-                            detected = true;
-                            detail = format!("{}", expanded.display());
-                            break;
-                        }
-                    }
-                    DetectMethod::Command { command } => {
-                        if which::which(command).is_ok() {
-                            detected = true;
-                            detail = format!("{} (command)", command);
-                            break;
-                        }
-                    }
-                }
-            }
+/// Detect one agent, resolving the detail string for both outcomes.
+///
+/// On a hit the detail names what matched; on a miss it names the first
+/// directory that was probed, so the caller can report what was looked for.
+fn detect_agent(def: &AgentDef) -> DetectedAgent {
+    // Probe once: `find_map` stops at the first match, and its result decides
+    // both `detected` and the detail, so no probe runs twice.
+    let hit = def.detect.iter().find_map(detection_hit);
+    let detected = hit.is_some();
+    let detection_detail = hit.unwrap_or_else(|| first_probed_dir(&def.detect).unwrap_or_default());
 
-            if !detected {
-                // Show what we looked for
-                let dirs: Vec<String> = def
-                    .detect
-                    .iter()
-                    .filter_map(|m| match m {
-                        DetectMethod::Dir { dir } => Some(expand_tilde(dir).display().to_string()),
-                        _ => None,
-                    })
-                    .collect();
-                if !dirs.is_empty() {
-                    detail = dirs[0].clone();
-                }
-            }
+    DetectedAgent {
+        def: def.clone(),
+        detected,
+        detection_detail,
+    }
+}
 
-            DetectedAgent {
-                def: def.clone(),
-                detected,
-                detection_detail: detail,
-            }
-        })
-        .collect()
+/// The detail string for `method` when it matches, or `None` when it does not.
+fn detection_hit(method: &DetectMethod) -> Option<String> {
+    match method {
+        DetectMethod::Dir { dir } => {
+            let expanded = expand_tilde(dir);
+            expanded.exists().then(|| expanded.display().to_string())
+        }
+        DetectMethod::Command { command } => which::which(command)
+            .is_ok()
+            .then(|| format!("{command} (command)")),
+    }
+}
+
+/// The first directory `methods` probes, expanded, ignoring command probes.
+fn first_probed_dir(methods: &[DetectMethod]) -> Option<String> {
+    methods.iter().find_map(|m| match m {
+        DetectMethod::Dir { dir } => Some(expand_tilde(dir).display().to_string()),
+        DetectMethod::Command { .. } => None,
+    })
 }
 
 /// Get only the detected agents (with fallback to claude-code).
@@ -300,12 +291,12 @@ pub fn agent_global_agent_dir(agent: &AgentDef) -> Option<PathBuf> {
     agent.global_agent_path.as_ref().map(|p| expand_tilde(p))
 }
 
-/// Resolve the project-level preamble/instructions file for an agent (if configured).
+/// Resolve the project-level instructions file for an agent (if configured).
 pub fn agent_project_instructions_file(agent: &AgentDef) -> Option<PathBuf> {
     agent.instructions_path.as_ref().map(PathBuf::from)
 }
 
-/// Resolve the global preamble/instructions file for an agent (if configured).
+/// Resolve the global instructions file for an agent (if configured).
 pub fn agent_global_instructions_file(agent: &AgentDef) -> Option<PathBuf> {
     agent
         .global_instructions_path

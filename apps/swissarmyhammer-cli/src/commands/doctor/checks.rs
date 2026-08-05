@@ -8,7 +8,7 @@ use super::types::*;
 use super::utils::*;
 use anyhow::Result;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Check names constants to avoid typos and improve maintainability
 #[allow(dead_code)]
@@ -176,6 +176,11 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
     Ok(())
 }
 
+/// How many `PATH` entries the "claude not found" fix hint quotes before it
+/// elides the rest with an ellipsis. Enough to recognise the `PATH` in play
+/// without printing a screenful.
+const MAX_PATH_ENTRIES_IN_HINT: usize = 3;
+
 /// Check Claude Code MCP configuration
 ///
 /// Verifies that swissarmyhammer is properly configured as an MCP server
@@ -196,13 +201,13 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
             message: "Claude Code command not found in PATH".to_string(),
             fix: Some(format!(
                 "Install Claude Code from https://claude.ai/code or ensure the 'claude' command is in your PATH\nCurrent PATH: {}",
-                env::split_paths(&path_var).take(3).map(|p| p.display().to_string()).collect::<Vec<_>>().join(if cfg!(windows) { ";" } else { ":" }) + "..."
+                env::split_paths(&path_var).take(MAX_PATH_ENTRIES_IN_HINT).map(|p| p.display().to_string()).collect::<Vec<_>>().join(if cfg!(windows) { ";" } else { ":" }) + "..."
             )),
         });
         return Ok(());
     }
 
-    checks.push(check_claude_mcp_list(&claude_path));
+    checks.push(check_claude_mcp_list(claude_path.as_deref()));
     Ok(())
 }
 
@@ -217,19 +222,17 @@ fn find_claude_binary() -> Option<PathBuf> {
 }
 
 /// Run `claude mcp list` and return a Check for whether sah is configured.
-fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
+fn check_claude_mcp_list(claude_path: Option<&Path>) -> Check {
     use std::process::Command;
 
-    let fallback_path = std::path::Path::new("claude");
-    let display_path = claude_path.as_deref().unwrap_or(fallback_path);
-    let command_path = claude_path.as_deref().unwrap_or(fallback_path);
+    let resolved_path = claude_path.unwrap_or_else(|| Path::new("claude"));
 
     // Claude Code is optional infrastructure: failures to invoke `claude mcp
     // list` (binary present but unexecutable, or non-zero exit) downgrade to
     // Warning so `sah doctor` stays useful on hosts where Claude isn't a
     // first-class dependency. Matches the optional-tool pattern used by
     // `check_single_lsp_server`.
-    let output = match Command::new(command_path).arg("mcp").arg("list").output() {
+    let output = match Command::new(resolved_path).arg("mcp").arg("list").output() {
         Ok(o) => o,
         Err(e) => {
             return Check {
@@ -237,7 +240,7 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
                 status: CheckStatus::Warning,
                 message: format!(
                     "Found claude at {:?} but failed to execute it: {}",
-                    display_path, e
+                    resolved_path, e
                 ),
                 fix: Some(
                     "Check that Claude Code is properly installed and executable".to_string(),
@@ -265,7 +268,7 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
             status: CheckStatus::Ok,
             message: format!(
                 "swissarmyhammer is configured in Claude Code (found claude at: {:?})",
-                display_path
+                resolved_path
             ),
             fix: None,
         }
@@ -395,15 +398,14 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
 /// Check the full sah install stack for every doctor-enabled detected agent at
 /// project and user scope.
 ///
-/// This is the agent-agnostic replacement for the old, Claude-specific,
-/// project-only preamble check. It loads the host's agents config and delegates
+/// It loads the host's agents config and delegates
 /// to [`check_install_stack_with`], which runs
 /// [`mirdan::status::check_all_doctored`] across [`InitScope::Project`] and
 /// [`InitScope::User`] and converts each applicable [`ComponentStatus`] into a
 /// doctor [`Check`] via [`mirdan::status::to_check`]. Only agents whose
 /// `AgentDef.doctor` is `true` (per `agents_default.yaml`) participate. The
 /// check name produced by `to_check` already encodes agent, scope, and
-/// component (e.g. `"Claude Code · user · Preamble"`), so project and user
+/// component (e.g. `"Claude Code · user · Permissions"`), so project and user
 /// rows are distinct.
 ///
 /// [`ComponentState::NotApplicable`] statuses are skipped entirely rather than
@@ -642,13 +644,12 @@ mod tests {
     }
 
     /// With an isolated HOME that contains a detectable Claude Code layout, the
-    /// install stack must report both project and user rows per component, map an
-    /// installed user-scope preamble to Ok, and map a missing user-scope
+    /// install stack must report both project and user rows per component, map a
+    /// deployed user-scope skill directory to Ok, and map a missing user-scope
     /// permissions file to Warning.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_check_install_stack_user_scope_rows() {
-        use mirdan::status::PREAMBLE_MARKER;
         use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
         let env = IsolatedTestEnvironment::new().expect("isolated env");
@@ -659,27 +660,25 @@ mod tests {
         let claude_dir = home.join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
 
-        // Install the user-scope preamble (Ok), leave user-scope permissions
+        // Deploy a user-scope skill (Ok), leave user-scope permissions
         // (`~/.claude/settings.json`) missing (Warning).
-        fs::write(
-            claude_dir.join("CLAUDE.md"),
-            format!("{}\n\nnotes\n", PREAMBLE_MARKER),
-        )
-        .unwrap();
+        let user_skill_dir = claude_dir.join("skills");
+        fs::create_dir_all(&user_skill_dir).unwrap();
+        fs::write(user_skill_dir.join("a-skill"), "x").unwrap();
 
         let mut checks = Vec::new();
         check_install_stack(&mut checks).expect("install stack should not error");
 
-        // User-scope preamble is installed -> Ok.
-        let user_preamble = checks
+        // User-scope skills are installed -> Ok.
+        let user_skills = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Preamble")
-            .expect("expected a user-scope Preamble row");
+            .find(|c| c.name == "Claude Code · user · Skills")
+            .expect("expected a user-scope Skills row");
         assert_eq!(
-            user_preamble.status,
+            user_skills.status,
             CheckStatus::Ok,
-            "installed preamble should be Ok, got: {}",
-            user_preamble.message
+            "installed skills should be Ok, got: {}",
+            user_skills.message
         );
 
         // User-scope permissions are missing -> Warning with an actionable fix.
@@ -699,35 +698,35 @@ mod tests {
             .contains("sah init user"));
 
         // Both project and user rows are present for the agent.
-        let project_preamble = checks
+        let project_skills = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Preamble")
-            .expect("expected a project-scope Preamble row");
+            .find(|c| c.name == "Claude Code · project · Skills")
+            .expect("expected a project-scope Skills row");
         assert!(
             checks
                 .iter()
-                .any(|c| c.name == "Claude Code · user · Preamble"),
-            "expected a user-scope Preamble row"
+                .any(|c| c.name == "Claude Code · user · Skills"),
+            "expected a user-scope Skills row"
         );
 
-        // Scope-pair policy: project-scope preamble is missing on disk, but the
-        // user-scope preamble is installed — the project row demotes to Ok
-        // with no fix, and the message names the user scope.
+        // Scope-pair policy: the project-scope skill directory is missing on
+        // disk, but the user-scope one is installed — the project row demotes
+        // to Ok with no fix, and the message names the user scope.
         assert_eq!(
-            project_preamble.status,
+            project_skills.status,
             CheckStatus::Ok,
-            "project-missing preamble should demote to Ok when user scope is installed; got: {}",
-            project_preamble.message
+            "project-missing skills should demote to Ok when user scope is installed; got: {}",
+            project_skills.message
         );
         assert!(
-            project_preamble.fix.is_none(),
+            project_skills.fix.is_none(),
             "demoted project row should have no fix hint; got: {:?}",
-            project_preamble.fix
+            project_skills.fix
         );
         assert!(
-            project_preamble.message.contains("user"),
+            project_skills.message.contains("user"),
             "demoted project row should reference the user scope; got: {}",
-            project_preamble.message
+            project_skills.message
         );
     }
 

@@ -32,15 +32,7 @@ const SERVER_NAME: &str = "code-context";
 /// is retained for signature parity with the other consumers (and forwarded to
 /// the installer by the caller), but does not gate skill selection.
 pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
-    mirdan::install::Profile {
-        mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
-        skills: Some(skills_selector()),
-        agents: None,
-        validators: None,
-        statusline: false,
-        preamble: false,
-        edit_redirect: false,
-    }
+    mirdan::install::Profile::tool(SERVER_NAME, skills_selector())
 }
 
 /// The skills-only selector, shared by [`profile`] and the `code-context skill`

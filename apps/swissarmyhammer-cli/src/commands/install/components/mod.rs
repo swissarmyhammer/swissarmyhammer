@@ -1,8 +1,8 @@
 //! Composable `Initializable` components for sah init/deinit.
 //!
 //! Most of sah's install lifecycle — the MCP server, builtin skills, builtin
-//! agents, the statusline, and the CLAUDE.md preamble — is installed
-//! declaratively through sah's [`Profile`](mirdan::install::Profile) via
+//! agents, and the statusline — is installed declaratively through sah's
+//! [`Profile`](mirdan::install::Profile) via
 //! [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`]
 //! (see [`crate::commands::profile`]). The only install concern left here is
 //! [`ProjectStructure`]: creating (and optionally removing) the `.sah/` +
@@ -18,6 +18,12 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 // ── ProjectStructure (priority 40) ───────────────────────────────────
 
+/// Where [`ProjectStructure`] sits in the ascending `InitRegistry` ordering.
+///
+/// It runs after the profile's per-agent settings, and `sah init` registers
+/// only one other component (the kanban tool, at 55), which must follow it.
+const PROJECT_STRUCTURE_PRIORITY: i32 = 40;
+
 /// Creates/removes the `.sah/` and `.prompts/` project directories.
 ///
 /// # User-scope behavior
@@ -28,8 +34,8 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 ///
 /// * `sah init --user` is a **per-agent config install** — it edits each
 ///   detected agent's global settings (Claude `~/.claude/settings.json`,
-///   the global `CLAUDE.md` preamble, statusline config, deployed agent
-///   definitions). All of those are handled by sah's
+///   statusline config, deployed agent definitions). All of those are
+///   handled by sah's
 ///   [`Profile`](mirdan::install::Profile); user scope has no shared runtime
 ///   artifacts of its own.
 /// * Runtime state — `.sah/workflows/`, prompt overrides, kanban boards,
@@ -75,17 +81,18 @@ impl Initializable for ProjectStructure {
         "structure"
     }
 
-    /// Component priority: 40 (runs after per-agent settings, before the preamble).
+    /// Component priority: [`PROJECT_STRUCTURE_PRIORITY`] — it runs after the
+    /// profile's per-agent settings.
     fn priority(&self) -> i32 {
-        40
+        PROJECT_STRUCTURE_PRIORITY
     }
 
     /// Only applicable to project and local scope installations.
     ///
     /// User scope is intentionally excluded — see the struct-level
     /// documentation on [`ProjectStructure`] for the rationale. In short:
-    /// `sah init --user` installs per-agent config (settings, preamble,
-    /// statusline, agents) but has no shared runtime artifacts of its own;
+    /// `sah init --user` installs per-agent config (settings, statusline,
+    /// agents) but has no shared runtime artifacts of its own;
     /// sah's runtime state (`.sah/workflows/`, prompts, kanban, indexes)
     /// is project-local.
     fn is_applicable(&self, scope: &InitScope) -> bool {
