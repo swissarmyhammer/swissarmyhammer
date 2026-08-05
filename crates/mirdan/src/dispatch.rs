@@ -116,8 +116,18 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
                 )
             } else {
                 handle_deploy_result(
-                    install::run_install(package, agent_filter, *global, *git, skill.as_deref())
-                        .await,
+                    install::run_install(
+                        package,
+                        agent_filter,
+                        *global,
+                        if *git {
+                            install::InstallMode::ForceGit
+                        } else {
+                            install::InstallMode::Auto
+                        },
+                        skill.as_deref(),
+                    )
+                    .await,
                 )
             }
         }

@@ -91,19 +91,9 @@ Do the work in the task and subtasks. After changing any symbol's signature or b
 
 ### Self-review
 
-Review your own work before you hand it off:
+Do NOT -- self review, you should have all the validators preloaded and keep them in mind as you code.
 
-```json
-{"op": "review working"}
-```
-
-Fix every finding. A finding is a requirement. Do not rank findings. Do not defer findings. Do not label findings.
-
-Run the review again. Repeat until the review is clean.
-
-One self-review run costs about 15 minutes. One full implement→test→review pass costs about 50 minutes. Each finding you fix here removes a pass.
-
-When the review is clean `/double-check` your work and implement the feedback. Only then hand off for the formal `/review`.
+Let the `/review` skill and step take care of reviewing.
 
 ### Leave the task in `doing` for review
 

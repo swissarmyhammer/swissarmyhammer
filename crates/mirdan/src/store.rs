@@ -160,23 +160,25 @@ pub fn create_skill_link(store_path: &Path, link_path: &Path) -> Result<(), Regi
         // Try junction first (doesn't require elevated privileges)
         if let Err(_) = std::os::windows::fs::symlink_dir(&relative, link_path) {
             // Fallback: copy the directory
-            copy_dir_for_fallback(store_path, link_path)?;
+            copy_dir_recursive(store_path, link_path)?;
         }
     }
 
     Ok(())
 }
 
-/// Copy a directory recursively (fallback for systems without symlink support).
-#[cfg(windows)]
-fn copy_dir_for_fallback(src: &Path, dst: &Path) -> Result<(), RegistryError> {
+/// Recursively copy a directory, creating `dst` and every subdirectory.
+///
+/// The single directory-copy implementation: the installer's store writes and
+/// the Windows no-symlink fallback both use it.
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), RegistryError> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if src_path.is_dir() {
-            copy_dir_for_fallback(&src_path, &dst_path)?;
+            copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path)?;
         }

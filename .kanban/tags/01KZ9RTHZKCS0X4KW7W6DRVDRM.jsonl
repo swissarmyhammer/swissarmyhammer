@@ -1,0 +1,1 @@
+{"id":"01KZ9RTHZMT8FBGAYEYSM4D3DN","timestamp":"2026-08-05T20:11:19.412103Z","op":"create","item_id":"01KZ9RTHZKCS0X4KW7W6DRVDRM","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: fbca04\n+tag_name: design\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: fbca04\n-tag_name: design\n","transaction_id":null}

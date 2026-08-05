@@ -139,7 +139,7 @@ pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String>
 pub async fn install_package(spec: String) -> Result<String, String> {
     info!(spec, "install requested from GUI");
 
-    mirdan::install::run_install(&spec, None, true, false, None)
+    mirdan::install::run_install(&spec, None, true, mirdan::install::InstallMode::Auto, None)
         .await
         .map(|_results| format!("Installed {spec}"))
         .map_err(|e| {

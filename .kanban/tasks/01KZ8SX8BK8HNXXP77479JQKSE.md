@@ -46,8 +46,26 @@ comments:
     - evidence: 7 files — builtin/skills/implement/SKILL.md, crates/swissarmyhammer-skills/tests/implement_rules_and_self_review_guidance.rs, crates/swissarmyhammer-tools/src/mcp/op_tool_helpers.rs, crates/swissarmyhammer-tools/src/mcp/tools/review/description.md, crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs, crates/swissarmyhammer-tools/src/mcp/tools/review/validators.rs
     - next: formal /review
   timestamp: 2026-08-05T12:50:45.043992+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz933c65jdra01ejswf0akms
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD. Engine counts: 4 findings, 4 confirmed, 3 refuted. All 4 findings point to test lines from older commits (git blame: 0ecaff64a, b34eb9ced, e6a384008, 945a7583f). The review skill rule drops findings that change tests that already exist. 0 findings remain.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-05T13:51:39.717443+00:00
+- actor: claude-code
+  id: 01kz9345vmzjyxqrs2se2gjs15
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 7 files (dump validators op, docs, skill, guard tests)
+    - test: red — mirdan coverage guard; cause: intentional user edit to builtin/agents/implementer/AGENT.md; fix on ^8x5vy5k per user decision (keep the edit, adjust roster)
+    - implement (^8x5vy5k): changed — 1 file; all affected packages green
+    - commit: 0da24b61a
+    - review: clean — engine 4 findings, all on pre-existing test lines, dropped by the pre-existing-test rule
+    - result: ^79jqkse done, ^8x5vy5k done
+  timestamp: 2026-08-05T13:52:06.004079+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffab80
 title: Add `dump validators` op to the review tool
 ---
 # Goal

@@ -20,6 +20,20 @@ comments:
   id: 01kywq5ea9ytqkxaxaapf33aj7
   text: 'Correction to my previous comment: the resolver-convergence card is **^m4eb4bf**, not ^kt2p9xr. I cited the id before creating the card and guessed. ^kt2p9xr does not exist.'
   timestamp: 2026-07-31T18:32:11.337167+00:00
+- actor: claude-code
+  id: 01kz9rtt32my9h7ac9wrewpnvq
+  text: |-
+    Decision recorded from ^t1y1c37 (the install.rs split): the split subsumed this card. The self-reviews of the split fixed every item here, across the new `crates/mirdan/src/install/` modules:
+
+    - `FRONTMATTER_DELIMITER` is now a named constant in `install/package.rs` (`read_frontmatter`). The `DEFAULT_VERSION` literal ("0.0.0") remains at its sites — no review pass flagged it, and the sites carry different semantics (plugin fallback vs missing frontmatter version).
+    - `PackageType` dispatch is collapsed: one `deploy_by_type` in `install/package.rs` (was 3 sites) and one `uninstall_by_type` in `install/uninstall.rs` (was 2 sites).
+    - `deploy_skill_to_agents_at` / `deploy_agent_to_agents_at` are unified behind `deploy_via_store` + `deploy_to_agent_dirs`; the redundant async wrappers `deploy_skill` / `deploy_agent` are deleted.
+    - Nesting fixed: `run_uninstall` (helpers `setup_lockfile`, `uninstall_by_type`, `uninstall_git_source_matches`), `remove_matching_store_entries` (helper `remove_store_entry_if_named` + shared `remove_empty_dirs_up_to`), `deploy_plugin` (helper `register_plugin_mcp_servers`), `uninstall_tool` (helper `unregister_mcp_from_agents`), `uninstall_agent_at` (helpers `remove_agent_symlinks`, `remove_agent_store_entry_if_unreferenced`).
+    - `read_skill_frontmatter_name` now delegates to the shared `read_frontmatter`.
+    - `uninstall_skill` has a doc comment.
+
+    Acceptance checks from this card all pass: `cargo nextest run -p mirdan` 419/419, `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. This card can close when ^t1y1c37 passes its formal review.
+  timestamp: 2026-08-05T20:11:27.714657+00:00
 position_column: todo
 position_ordinal: be80
 title: 'mirdan install.rs cleanup: constants, dispatch dedup, nesting'

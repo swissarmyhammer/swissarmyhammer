@@ -84,7 +84,14 @@ pub async fn run_interactive_search() -> Result<(), RegistryError> {
         .map_err(|e| RegistryError::Io(io::Error::other(e)))??;
 
     if let Some(name) = selected {
-        let results = crate::install::run_install(&name, None, false, false, None).await?;
+        let results = crate::install::run_install(
+            &name,
+            None,
+            false,
+            crate::install::InstallMode::Auto,
+            None,
+        )
+        .await?;
         crate::format_deploy_results(&results);
         println!("\nTo remove: mirdan uninstall {}", name);
     }

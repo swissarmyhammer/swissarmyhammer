@@ -51,8 +51,8 @@ pub fn handle_url(_app: &AppHandle, url: String) {
             &spec, // passed verbatim — mirdan classifies it
             None,  // agent_filter
             true,  // global
-            false, // git
-            None,  // skill_select
+            mirdan::install::InstallMode::Auto,
+            None, // skill_select
         ));
 
         match result {
