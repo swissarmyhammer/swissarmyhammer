@@ -201,6 +201,21 @@ comments:
 
     The two-line body-field fix is uncommitted in the working tree. Everything else in this card is already committed.
   timestamp: 2026-08-02T11:42:08.301673+00:00
+- actor: claude-code
+  id: 01kz8vza1fa7nw7rdemppn1fw1
+  text: |-
+    ### review — findings
+    - evidence: 5 findings — crates/swissarmyhammer-entity/src/io.rs:103, crates/swissarmyhammer-entity/src/io.rs:251, crates/swissarmyhammer-entity/src/io.rs:280, crates/swissarmyhammer-entity/src/io.rs:376, crates/swissarmyhammer-entity/src/io.rs:381
+    - next: address the panic-documentation and duplication findings in crates/swissarmyhammer-entity/src/io.rs, then re-run /review 01KZ12TC1S447C5SRH18AX9JRQ
+  timestamp: 2026-08-05T11:47:06.415683+00:00
+- actor: claude-code
+  id: 01kz8w7xv6arve199zt0xwy8ye
+  text: |
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-entity/src/io.rs — added `# Panics` doc sections to `write_entity`, `trash_entity_files`, `restore_entity_files`; extracted `yaml_error(path, e)` helper and replaced all 4 verbatim `.map_err(|e| EntityError::Yaml {...})` call sites; extracted `build_entity_from_yaml(entity_type, id, yaml_map)` helper and replaced the duplicated entity-construction block in `parse_frontmatter_body` and `parse_plain_yaml`. All 5 review findings checked `[x]` on the card.
+    - verification: `cargo fmt --all` exit 0 (no diff); `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings; `cargo nextest run -p swissarmyhammer-entity` exit 0, 327 tests run, 327 passed, 0 skipped
+    - next: ready for /review
+  timestamp: 2026-08-05T11:51:48.838727+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Regression test that a real kanban card with a markdown table in a comment parses
@@ -270,3 +285,11 @@ All four cards read correctly with the binary built from `main`.
 `parse_frontmatter` in `swissarmyhammer-common` still splits on the `---\n` substring. ^tv3692e owns that. The bare `find("---")` copies in `swissarmyhammer-config::model` and in `mirdan` are owned by ^0zer2xf.
 
 #bug
+
+## Review Findings (2026-08-05 06:07)
+
+- [x] `crates/swissarmyhammer-entity/src/io.rs:103` — Public function panics without documentation. The function panics if `path` has no parent directory via `.expect()` on line 118, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no parent directory.".
+- [x] `crates/swissarmyhammer-entity/src/io.rs:251` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 256 and 266, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no filename.".
+- [x] `crates/swissarmyhammer-entity/src/io.rs:280` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 288 and 304, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no filename.".
+- [x] `crates/swissarmyhammer-entity/src/io.rs:376` — YAML serialization error handler repeated verbatim 4 times across the file — `.map_err(|e| EntityError::Yaml { path: path.to_path_buf(), source: e })` appears in parse_frontmatter_body, parse_plain_yaml, format_frontmatter_body, and format_plain_yaml. Each occurrence can drift independently if the error format changes, inflating maintenance burden. Extract a helper function `fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError { EntityError::Yaml { path: path.to_path_buf(), source: e } }` and replace all four occurrences with `.map_err(|e| yaml_error(path, e))`.
+- [x] `crates/swissarmyhammer-entity/src/io.rs:381` — Entity building from YAML map is verbatim-duplicated: lines 381–384 (parse_frontmatter_body) and lines 421–424 (parse_plain_yaml) both execute identical code: `let mut entity = Entity::new(entity_type, id); for (k, v) in yaml_map { flatten_into(&mut entity, &k, v); }`. This block could drift out of sync if one function is updated but the other is not. Extract a helper function `fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity` and call it from both parse_frontmatter_body and parse_plain_yaml after their respective YAML parsing steps.

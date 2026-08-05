@@ -100,6 +100,10 @@ pub async fn read_entity(
 /// Each write gets a unique temp filename, so concurrent writes
 /// to the same entity won't collide. The temp file is cleaned up
 /// if the rename step fails.
+///
+/// # Panics
+///
+/// Panics if `path` has no parent directory.
 pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
@@ -248,6 +252,10 @@ fn reconcile_read_results(results: Vec<(PathBuf, Result<Entity>)>) -> Result<Vec
 /// to the corresponding trash directory, preserving the full history.
 /// Creates the trash directory if it doesn't exist.
 /// Silently succeeds if source files don't exist.
+///
+/// # Panics
+///
+/// Panics if `path` has no filename.
 pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     fs::create_dir_all(trash_dir).await?;
 
@@ -277,6 +285,10 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
 /// the changelog (.jsonl) from the trash directory back to the original location.
 /// Creates the destination directory if it doesn't exist.
 /// Returns an error if the source files are not found in trash.
+///
+/// # Panics
+///
+/// Panics if `path` has no filename.
 pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     // Ensure the destination directory exists
     if let Some(parent) = path.parent() {
@@ -343,6 +355,27 @@ pub fn parse_entity_text(
 
 // --- Internal helpers ---
 
+/// Wrap a YAML parse/serialize error as an [`EntityError::Yaml`].
+fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError {
+    EntityError::Yaml {
+        path: path.to_path_buf(),
+        source: e,
+    }
+}
+
+/// Build an [`Entity`] from a decoded YAML map, flattening nested objects.
+///
+/// Shared by [`parse_frontmatter_body`] and [`parse_plain_yaml`]: both parse
+/// their content into a `HashMap<String, Value>` and then need the same
+/// construction step.
+fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity {
+    let mut entity = Entity::new(entity_type, id);
+    for (k, v) in yaml_map {
+        flatten_into(&mut entity, &k, v);
+    }
+    entity
+}
+
 /// Parse a frontmatter+body file into an Entity.
 ///
 /// The frontmatter is the YAML between the opening and closing delimiter lines
@@ -373,15 +406,9 @@ fn parse_frontmatter_body(
     // trailing newline would re-chomp a block scalar that ends the mapping,
     // silently dropping that field's trailing newline.
     let yaml_map: HashMap<String, Value> =
-        serde_yaml_ng::from_str(frontmatter).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::from_str(frontmatter).map_err(|e| yaml_error(path, e))?;
 
-    let mut entity = Entity::new(entity_type, id);
-    for (k, v) in yaml_map {
-        flatten_into(&mut entity, &k, v);
-    }
+    let mut entity = build_entity_from_yaml(entity_type, id, yaml_map);
     // Body field comes from the markdown body, not the frontmatter
     entity.set(body_field, Value::String(body.to_string()));
 
@@ -413,15 +440,9 @@ fn parse_plain_yaml(
     let entity_type = entity_type.as_ref();
     let id = id.as_ref();
     let yaml_map: HashMap<String, Value> =
-        serde_yaml_ng::from_str(content).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::from_str(content).map_err(|e| yaml_error(path, e))?;
 
-    let mut entity = Entity::new(entity_type, id);
-    for (k, v) in yaml_map {
-        flatten_into(&mut entity, &k, v);
-    }
+    let entity = build_entity_from_yaml(entity_type, id, yaml_map);
 
     Ok(entity)
 }
@@ -455,10 +476,7 @@ fn format_frontmatter_body(
 
     let frontmatter_value = Value::Object(frontmatter_map);
     let frontmatter_yaml =
-        serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| yaml_error(path, e))?;
 
     Ok(format!("---\n{}---\n{}", frontmatter_yaml, body))
 }
@@ -472,10 +490,7 @@ fn format_plain_yaml(entity: &Entity, path: &Path) -> Result<String> {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
     );
-    serde_yaml_ng::to_string(&map_value).map_err(|e| EntityError::Yaml {
-        path: path.to_path_buf(),
-        source: e,
-    })
+    serde_yaml_ng::to_string(&map_value).map_err(|e| yaml_error(path, e))
 }
 
 // --- Attachment helpers ---
