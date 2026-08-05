@@ -37,6 +37,11 @@ pub fn sanitize_dir_name(name: &str) -> String {
 /// - Global scope: `~/<dir_name>/`
 ///
 /// The single implementation behind every per-kind store accessor.
+///
+/// # Panics
+///
+/// Global scope requires a resolvable home directory. Panics when none can be
+/// determined (e.g. containerized or embedded environments without `$HOME`).
 fn store_dir(global: bool, dir_name: &str) -> PathBuf {
     if global {
         dirs::home_dir()
@@ -51,6 +56,10 @@ fn store_dir(global: bool, dir_name: &str) -> PathBuf {
 ///
 /// - Project scope: `.skills/`
 /// - Global scope: `~/.skills/`
+///
+/// # Panics
+///
+/// Global scope panics when no home directory can be determined.
 pub fn skill_store_dir(global: bool) -> PathBuf {
     store_dir(global, ".skills")
 }
@@ -59,6 +68,10 @@ pub fn skill_store_dir(global: bool) -> PathBuf {
 ///
 /// - Project scope: `.agents/`
 /// - Global scope: `~/.agents/`
+///
+/// # Panics
+///
+/// Global scope panics when no home directory can be determined.
 pub fn agent_store_dir(global: bool) -> PathBuf {
     store_dir(global, ".agents")
 }
@@ -67,6 +80,10 @@ pub fn agent_store_dir(global: bool) -> PathBuf {
 ///
 /// - Project scope: `.tools/`
 /// - Global scope: `~/.tools/`
+///
+/// # Panics
+///
+/// Global scope panics when no home directory can be determined.
 pub fn tool_store_dir(global: bool) -> PathBuf {
     store_dir(global, ".tools")
 }
@@ -78,6 +95,10 @@ pub fn tool_store_dir(global: bool) -> PathBuf {
 ///
 /// Validators deploy store-only (no symlink): the validator engine's loader
 /// reads this directory directly, the same way the tool store is read.
+///
+/// # Panics
+///
+/// Global scope panics when no home directory can be determined.
 pub fn validators_store_dir(global: bool) -> PathBuf {
     store_dir(global, ".validators")
 }
@@ -199,7 +220,7 @@ pub fn remove_if_exists(path: &Path) -> Result<(), RegistryError> {
 /// Check whether any agent skill directory still has a symlink pointing to the
 /// given store path. Used to decide if the store entry can be removed during
 /// uninstall.
-pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[PathBuf]) -> bool {
+pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[&Path]) -> bool {
     let canonical_store = match std::fs::canonicalize(store_path) {
         Ok(p) => p,
         Err(_) => return false, // store path doesn't exist, so not referenced
@@ -287,7 +308,7 @@ pub fn is_safe_relative_path(path: &str) -> bool {
 /// After removing entries, the store directory itself is removed if it is empty.
 pub fn remove_store_entries(
     store_dir: &Path,
-    names: &[String],
+    names: &[&str],
     link_dirs: &[PathBuf],
     symlink_policies: &[SymlinkPolicy],
     kind: &str,
@@ -613,16 +634,13 @@ mod tests {
         let link = agent_dir.join("my-skill");
         std::os::unix::fs::symlink(std::fs::canonicalize(&store).unwrap(), &link).unwrap();
 
-        assert!(store_entry_still_referenced(
-            &store,
-            std::slice::from_ref(&agent_dir)
-        ));
+        assert!(store_entry_still_referenced(&store, &[agent_dir.as_path()]));
 
         // Remove the symlink
         std::fs::remove_file(&link).unwrap();
         assert!(!store_entry_still_referenced(
             &store,
-            std::slice::from_ref(&agent_dir)
+            &[agent_dir.as_path()]
         ));
     }
 
@@ -810,11 +828,7 @@ mod tests {
     /// and a links dir, with symlinks pointing from links to store.
     #[cfg(unix)]
     fn setup_skill_structure(root: &Path) -> (PathBuf, PathBuf) {
-        let store_dir = root.join(".skills");
-        let agent_skill_dir = root.join(".github").join("copilot").join("skills");
-        std::fs::create_dir_all(&store_dir).unwrap();
-        std::fs::create_dir_all(&agent_skill_dir).unwrap();
-        (store_dir, agent_skill_dir)
+        setup_store_structure(root, ".skills", ".github/copilot/skills")
     }
 
     /// Create a skill in the store and symlink it into the agent dir.
@@ -824,11 +838,28 @@ mod tests {
         agent_skill_dir: &Path,
         name: &str,
     ) -> (PathBuf, PathBuf) {
+        create_linked_store_entry(store_dir, agent_skill_dir, name, "SKILL.md", "# Test skill")
+    }
+
+    /// Create an entry named `name` in the store, write `content` to
+    /// `filename` inside it, and symlink it into the link directory.
+    /// Returns the (store entry, symlink) path pair.
+    ///
+    /// The single implementation behind [`create_skill_symlink`] and
+    /// [`create_store_entry_with_symlink`].
+    #[cfg(unix)]
+    fn create_linked_store_entry(
+        store_dir: &Path,
+        link_dir: &Path,
+        name: &str,
+        filename: &str,
+        content: &str,
+    ) -> (PathBuf, PathBuf) {
         let store_path = store_dir.join(name);
         std::fs::create_dir_all(&store_path).unwrap();
-        std::fs::write(store_path.join("SKILL.md"), "# Test skill").unwrap();
+        std::fs::write(store_path.join(filename), content).unwrap();
 
-        let link_path = agent_skill_dir.join(name);
+        let link_path = link_dir.join(name);
         std::os::unix::fs::symlink(&store_path, &link_path).unwrap();
 
         (store_path, link_path)
@@ -986,14 +1017,7 @@ mod tests {
         link_dir: &Path,
         name: &str,
     ) -> (PathBuf, PathBuf) {
-        let store_path = store_dir.join(name);
-        std::fs::create_dir_all(&store_path).unwrap();
-        std::fs::write(store_path.join("AGENT.md"), "# Test agent").unwrap();
-
-        let link_path = link_dir.join(name);
-        std::os::unix::fs::symlink(&store_path, &link_path).unwrap();
-
-        (store_path, link_path)
+        create_linked_store_entry(store_dir, link_dir, name, "AGENT.md", "# Test agent")
     }
 
     #[cfg(unix)]
@@ -1008,7 +1032,7 @@ mod tests {
         assert!(store_path.exists());
         assert!(link_path.exists());
 
-        let names = vec!["tester".to_string()];
+        let names = ["tester"];
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![SymlinkPolicy::LastSegment];
 
@@ -1041,7 +1065,7 @@ mod tests {
             create_store_entry_with_symlink(&store_dir, &link_dir, "custom-agent");
 
         // Only remove "tester"
-        let names = vec!["tester".to_string()];
+        let names = ["tester"];
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![SymlinkPolicy::LastSegment];
 
@@ -1085,7 +1109,7 @@ mod tests {
         std::os::unix::fs::symlink(&store_path, &link_a).unwrap();
         std::os::unix::fs::symlink(&store_path, &link_b).unwrap();
 
-        let names = vec!["reviewer".to_string()];
+        let names = ["reviewer"];
         let link_dirs = vec![link_dir_a.clone(), link_dir_b.clone()];
         let policies = vec![SymlinkPolicy::LastSegment, SymlinkPolicy::LastSegment];
 
@@ -1114,7 +1138,7 @@ mod tests {
         std::fs::create_dir_all(&store_path).unwrap();
         std::fs::write(store_path.join("AGENT.md"), "# Implementer").unwrap();
 
-        let names = vec!["implementer".to_string()];
+        let names = ["implementer"];
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![SymlinkPolicy::LastSegment];
 
@@ -1144,7 +1168,7 @@ mod tests {
         std::fs::create_dir_all(&real_dir).unwrap();
         std::fs::write(real_dir.join("AGENT.md"), "# Custom").unwrap();
 
-        let names = vec!["tester".to_string()];
+        let names = ["tester"];
         let link_dirs = vec![link_dir.clone()];
         let policies = vec![SymlinkPolicy::LastSegment];
 

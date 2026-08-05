@@ -143,6 +143,48 @@ comments:
     - next: formal /review (task stays in doing)
     task: ^t1y1c37
   timestamp: 2026-08-05T21:57:01.037052+00:00
+- actor: claude-code
+  id: 01kza04e8vg51586f46q6sh880
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD — 17 findings (17 confirmed, 12 refuted, 0 skipped); no file over the prompt cap. Files: apps/mirdan-app/src/commands.rs:32,35,36,37,38,39,45,48,49,50,51; crates/mirdan/src/install/package.rs:486; crates/mirdan/src/store.rs:43,202,290,812,984
+    - next: correct the 17 open items in "## Review Findings (2026-08-05 17:02)", then run /review again
+  timestamp: 2026-08-05T22:19:03.323535+00:00
+- actor: claude-code
+  id: 01kza05a6kskj6egf4p23k4tx8
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 8 files, all 35 prior findings fixed and checked
+    - test: green — cargo nextest --workspace, 13536/13536; fmt + clippy clean
+    - commit: 093972220
+    - review: findings — 17 confirmed, 0 skipped; acceptance (no prompt-cap skip) PASS; open items in apps/mirdan-app/src/commands.rs (11 doc comments), crates/mirdan/src/install/package.rs:486 (case-sensitivity divergence), crates/mirdan/src/store.rs (5 items)
+  timestamp: 2026-08-05T22:19:31.923006+00:00
+- actor: claude-code
+  id: 01kza0sj6rbfpzzks460v155p1
+  text: |-
+    ### Findings pass 2 — all 17 items of "Review Findings (2026-08-05 17:02)" corrected
+
+    **apps/mirdan-app/src/commands.rs (11 items).** Each public field of `PackageInfo` and `SearchResult` now has a doc comment. All 13 fields have documentation.
+
+    **crates/mirdan/src/install/package.rs:486 (1 item).** The two install paths now agree. Correction at the source: `parse_package_type` (crates/mirdan/src/package_type.rs) lowercases the input before the match. The archive path and the metadata-only path both accept capitalized registry types (e.g. "Tool"). TDD sequence: the new test `test_parse_package_type_is_case_insensitive` in install/tests.rs was RED (`None` != `Some(Tool)`), then GREEN after the change. The old assertion `parse_package_type("Tool") == None` asserted the removed behavior — it moved into the new test with the opposite expectation.
+
+    **crates/mirdan/src/store.rs (5 items).**
+    - store.rs:43 — The panic is now documented, per the finding's second remedy. `store_dir` and its four public wrappers (`skill/agent/tool/validators_store_dir`) each carry a `# Panics` section for the missing-home-directory case. The public API stays stable, per the task instruction.
+    - store.rs:202 — `store_entry_still_referenced` takes `agent_skill_dirs: &[&Path]`. The one production caller (`remove_agent_store_entry_if_unreferenced` in install/uninstall.rs) and the two test call sites now pass path references.
+    - store.rs:290 — `remove_store_entries` takes `names: &[&str]`. The five test call sites now pass string-literal arrays. No production caller exists outside store.rs.
+    - store.rs:812 — `setup_skill_structure` is a thin wrapper: `setup_store_structure(root, ".skills", ".github/copilot/skills")`.
+    - store.rs:984 — One helper `create_linked_store_entry(store_dir, link_dir, name, filename, content)` holds the create-write-symlink logic. `create_skill_symlink` and `create_store_entry_with_symlink` are one-expression wrappers around it.
+
+    **Verification.** `cargo nextest run -E 'rdeps(mirdan)'` — 3218 passed, 0 skipped. `cargo fmt --all` applied. `cargo clippy --workspace --all-targets -- -D warnings` clean. All 17 checklist items are now `- [x]` on the card.
+  timestamp: 2026-08-05T22:30:35.480076+00:00
+- actor: claude-code
+  id: 01kza0sqe562gv6zvzx4kd5dya
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — apps/mirdan-app/src/commands.rs, crates/mirdan/src/package_type.rs, crates/mirdan/src/store.rs, crates/mirdan/src/install/uninstall.rs, crates/mirdan/src/install/tests.rs (+ cargo fmt touch-ups); 17/17 findings checked; nextest rdeps(mirdan) 3218/3218, 0 skipped; fmt applied; clippy -D warnings clean
+    - next: formal /review (task stays in doing)
+    task: ^t1y1c37
+  timestamp: 2026-08-05T22:30:40.837623+00:00
 position_column: doing
 position_ordinal: '8380'
 title: crates/mirdan/src/install.rs is too large for the review engine — duplication can never read it
@@ -220,3 +262,23 @@ Consider also whether the engine should treat "a file no validator could read" a
 - [x] `crates/mirdan/src/store.rs:83` — validators_store_dir is near-identical to the three other store_dir functions, differing only by the directory name parameter. Extract shared helper function as noted in line 38 finding.
 - [x] `crates/mirdan/src/store.rs:83` — Function `validators_store_dir` reimplements the identical pattern from `skill_store_dir` (line 38), differing only in directory name—should parameterize shared logic rather than duplicate across four functions. Refactor to use a single parameterized helper function for all four store directory accessors.
 - [x] `crates/mirdan/src/store.rs:210` — Function exceeds cognitive complexity gate (24 vs. 15) and condition-nesting depth gate (6 vs. 4). The combination of nested loops (2 deep) and deeply nested conditionals with 8 branches makes control flow hard to follow and verify. Refactor to reduce nesting by extracting the symlink-checking logic into a helper function, or use early returns and guard clauses to flatten the conditional structure. For example, extract the `symlink_metadata` check into `is_symlink_to_target(path, canonical_store) -> bool`.
+
+## Review Findings (2026-08-05 17:02)
+
+- [x] `apps/mirdan-app/src/commands.rs:32` — Public struct field `pub name: String` in PackageInfo lacks a doc comment. All public items must have documentation. Add a doc comment above the field, e.g., `/// The name of the package.`.
+- [x] `apps/mirdan-app/src/commands.rs:35` — Public struct field `pub description: String` in PackageInfo lacks a doc comment. Add a doc comment describing what the description field contains.
+- [x] `apps/mirdan-app/src/commands.rs:36` — Public struct field `pub package_type: String` in PackageInfo lacks a doc comment. Add a doc comment describing the package type field.
+- [x] `apps/mirdan-app/src/commands.rs:37` — Public struct field `pub version: String` in PackageInfo lacks a doc comment. Add a doc comment for the version field.
+- [x] `apps/mirdan-app/src/commands.rs:38` — Public struct field `pub targets: Vec<String>` in PackageInfo lacks a doc comment. Add a doc comment explaining what targets represents.
+- [x] `apps/mirdan-app/src/commands.rs:39` — Public struct field `pub store_path: Option<String>` in PackageInfo lacks a doc comment. Add a doc comment for the store_path field.
+- [x] `apps/mirdan-app/src/commands.rs:45` — Public struct field `pub name: String` in SearchResult lacks a doc comment. Add a doc comment describing the package name.
+- [x] `apps/mirdan-app/src/commands.rs:48` — Public struct field `pub description: String` in SearchResult lacks a doc comment. Add a doc comment for the description field.
+- [x] `apps/mirdan-app/src/commands.rs:49` — Public struct field `pub author: String` in SearchResult lacks a doc comment. Add a doc comment describing the author field.
+- [x] `apps/mirdan-app/src/commands.rs:50` — Public struct field `pub package_type: String` in SearchResult lacks a doc comment. Add a doc comment for the package_type field.
+- [x] `apps/mirdan-app/src/commands.rs:51` — Public struct field `pub downloads: u64` in SearchResult lacks a doc comment. Add a doc comment explaining the downloads field.
+- [x] `crates/mirdan/src/install/package.rs:486` — package_type is now checked case-insensitively at line 486 (`eq_ignore_ascii_case("tool")`), but the same token is handled case-sensitively at line 452 (`parse_package_type` returns `None` for capitalized forms). The diff treats the same token inconsistently across two install paths (metadata-only vs. archive), creating divergent behavior when the registry returns capitalized type strings like "Tool". Make the archive path consistent: either update `parse_package_type` to be case-insensitive, or add a case-insensitive check in `install_from_archive` (line 449-452) matching the one at line 486, so capitalized registry package_type values are accepted in both paths.
+- [x] `crates/mirdan/src/store.rs:43` — Panics on expected failure mode: `dirs::home_dir().expect()` panics when the home directory is not found. This is an expected failure mode that can occur in containerized or embedded environments, not a bug. Rule: never panic on expected failure modes. Return `Result<PathBuf, RegistryError>` from `store_dir` to allow callers to handle the error gracefully, or document that this function requires a writable home directory and will panic if it's missing.
+- [x] `crates/mirdan/src/store.rs:202` — Parameter `agent_skill_dirs: &[PathBuf]` uses concrete type instead of generic. Should accept borrowed paths `&[&Path]` for better API flexibility, consistent with rule guidance to use `&Path` not `&PathBuf`. Change parameter type to `agent_skill_dirs: &[&Path]` to allow callers to pass slices of references without requiring owned PathBuf allocations.
+- [x] `crates/mirdan/src/store.rs:290` — Parameter `names: &[String]` uses concrete type instead of generic. Should accept borrowed strings `&[&str]` for better API flexibility, consistent with rule guidance to use `&str` not `&String`. Change parameter type to `names: &[&str]` to allow callers to pass string slices without requiring String allocation or borrowing.
+- [x] `crates/mirdan/src/store.rs:812` — setup_skill_structure duplicates the logic of setup_store_structure (line 970)—both join path components from root, create directories, and return the pair. Should call the parameterized generic version. Replace setup_skill_structure with: `setup_store_structure(root, ".skills", ".github/copilot/skills")`.
+- [x] `crates/mirdan/src/store.rs:984` — create_store_entry_with_symlink reimplements the logic already present in create_skill_symlink (line 822). Both create a store directory, write a metadata file, and establish a symlink—this shared capability should be consolidated into one parameterized function instead of duplicated. Extract a shared helper function with signature `fn create_store_entry_with_symlink_generic(store_dir: &Path, link_dir: &Path, name: &str, filename: &str, content: &str) -> (PathBuf, PathBuf)` and have both call it with appropriate arguments, or have one call the other with customized parameters.

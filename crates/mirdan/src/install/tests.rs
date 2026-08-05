@@ -1992,8 +1992,38 @@ fn test_parse_package_type_from_string() {
         Some(PackageType::Plugin)
     );
     assert_eq!(package_type::parse_package_type("unknown"), None);
-    assert_eq!(package_type::parse_package_type("Tool"), None);
     assert_eq!(package_type::parse_package_type(""), None);
+}
+
+/// The registry may return `package_type` in any casing; parsing must accept
+/// capitalized forms so the archive install path matches the metadata-only
+/// path, which already compares case-insensitively.
+#[test]
+fn test_parse_package_type_is_case_insensitive() {
+    assert_eq!(
+        package_type::parse_package_type("Tool"),
+        Some(PackageType::Tool)
+    );
+    assert_eq!(
+        package_type::parse_package_type("TOOL"),
+        Some(PackageType::Tool)
+    );
+    assert_eq!(
+        package_type::parse_package_type("Skill"),
+        Some(PackageType::Skill)
+    );
+    assert_eq!(
+        package_type::parse_package_type("Validator"),
+        Some(PackageType::Validator)
+    );
+    assert_eq!(
+        package_type::parse_package_type("Plugin"),
+        Some(PackageType::Plugin)
+    );
+    assert_eq!(
+        package_type::parse_package_type("Agent"),
+        Some(PackageType::Agent)
+    );
 }
 
 #[test]

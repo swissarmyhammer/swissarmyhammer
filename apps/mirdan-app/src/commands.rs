@@ -29,25 +29,36 @@ fn log_and_stringify_error(spec: &str, action: &str, e: impl std::fmt::Display) 
 /// Serializable package info returned to the frontend.
 #[derive(Debug, Serialize)]
 pub struct PackageInfo {
+    /// Display name of the installed package.
     pub name: String,
     /// Lockfile key / source URL — use this for uninstall and update, not `name`.
     pub source: String,
+    /// Human-readable description from the package manifest.
     pub description: String,
+    /// Package kind ("skill", "agent", "tool", "plugin", or "validator").
     pub package_type: String,
+    /// Installed version string.
     pub version: String,
+    /// Agents the package is deployed to (e.g. "claude-code").
     pub targets: Vec<String>,
+    /// Filesystem path of the store entry, when one exists (for "Show in Finder").
     pub store_path: Option<String>,
 }
 
 /// A registry search result returned to the frontend.
 #[derive(Debug, Serialize)]
 pub struct SearchResult {
+    /// Display name of the package on the registry.
     pub name: String,
     /// Qualified name for install routing (e.g. "owner/repo/skill").
     pub qualified_name: String,
+    /// Human-readable description from the registry entry.
     pub description: String,
+    /// Author or publisher of the package.
     pub author: String,
+    /// Package kind ("skill", "agent", "tool", "plugin", or "validator").
     pub package_type: String,
+    /// Total download count reported by the registry.
     pub downloads: u64,
 }
 

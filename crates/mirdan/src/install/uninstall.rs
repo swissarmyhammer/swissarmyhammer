@@ -647,8 +647,9 @@ fn remove_agent_store_entry_if_unreferenced(
             }
         })
         .collect();
+    let all_agent_dir_refs: Vec<&Path> = all_agent_dirs.iter().map(PathBuf::as_path).collect();
 
-    if !store::store_entry_still_referenced(&store_path, &all_agent_dirs) {
+    if !store::store_entry_still_referenced(&store_path, &all_agent_dir_refs) {
         remove_and_log_store_entry(&store_path)?;
     }
     Ok(())

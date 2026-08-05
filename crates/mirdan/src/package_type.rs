@@ -58,9 +58,11 @@ pub fn detect_package_type(dir: &Path) -> Option<PackageType> {
 
 /// Parse a package type from a string (e.g. from API response).
 ///
-/// Accepts lowercase type names: "skill", "validator", "tool", "plugin".
+/// Accepts the type names "skill", "validator", "tool", "plugin", and
+/// "agent" in any ASCII casing — the registry may return the type
+/// capitalized (e.g. "Tool").
 pub fn parse_package_type(s: &str) -> Option<PackageType> {
-    match s {
+    match s.to_ascii_lowercase().as_str() {
         "skill" => Some(PackageType::Skill),
         "validator" => Some(PackageType::Validator),
         "tool" => Some(PackageType::Tool),
