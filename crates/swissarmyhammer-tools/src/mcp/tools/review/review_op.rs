@@ -1180,7 +1180,9 @@ impl From<ReviewReport> for ReviewResponse {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use swissarmyhammer_validators::review::{synthesize, FleetTally, ReviewReport};
+    use swissarmyhammer_validators::review::{
+        synthesize, FleetTally, ReviewReport, TasksAttempted, TasksFailed,
+    };
 
     /// Build a string-typed progress token for tests.
     fn token(s: &str) -> ProgressToken {
@@ -1276,6 +1278,10 @@ mod tests {
         /// Pairs each producer completes.
         const PAIRS_PER_PRODUCER: usize = 25;
         const TOTAL_PAIRS: usize = PRODUCERS * PAIRS_PER_PRODUCER;
+        /// A keep-alive window far longer than the test can run, so no
+        /// keep-alive re-send can add a duplicate param to the sequence
+        /// asserted below.
+        const TEST_KEEP_ALIVE_VERY_LONG: std::time::Duration = std::time::Duration::from_secs(3600);
 
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1284,9 +1290,7 @@ mod tests {
             param_tx,
             None,
             Some(token("concurrent")),
-            // Far longer than the test can run, so no keep-alive re-send can
-            // add a duplicate param to the sequence asserted below.
-            std::time::Duration::from_secs(3600),
+            TEST_KEEP_ALIVE_VERY_LONG,
         ));
 
         event_tx
@@ -1968,7 +1972,7 @@ mod tests {
     /// A report carrying the given fan-out task tally and no findings, built
     /// through the engine's own `synthesize` (the one construction path a
     /// `ReviewReport` has now that its fields are encapsulated).
-    fn report_with_tally(attempted: usize, failed: usize) -> ReviewReport {
+    fn report_with_tally(attempted: TasksAttempted, failed: TasksFailed) -> ReviewReport {
         synthesize(vec![], &FleetTally::new(attempted, failed), &[], "now")
     }
 
@@ -2011,7 +2015,7 @@ mod tests {
         // the run's report is returned as-is, never refused as a tool error;
         // `synthesize` already stamps the loud INCOMPLETE banner so an all-failed
         // run cannot be mistaken for a clean pass.
-        let report = report_with_tally(60, 60);
+        let report = report_with_tally(TasksAttempted(60), TasksFailed(60));
         assert!(
             report.markdown().contains("results are INCOMPLETE"),
             "an all-failed report must render the INCOMPLETE banner: {}",
@@ -2026,7 +2030,7 @@ mod tests {
         // A majority (not all) failing is the same "no retry, return flagged"
         // contract — the threshold that used to gate the refusal no longer
         // matters at all: every failure rate is returned.
-        let report = report_with_tally(10, 7);
+        let report = report_with_tally(TasksAttempted(10), TasksFailed(7));
         assert!(
             report.markdown().contains("results are INCOMPLETE"),
             "a majority-failed report must render the INCOMPLETE banner: {}",
@@ -2041,7 +2045,7 @@ mod tests {
         // A minority of tasks failed (1 of 10) — the report is returned with the
         // gap flagged, exactly as a majority/all-failed run is: there is no
         // separate threshold behavior left at this boundary.
-        let report = report_with_tally(10, 1);
+        let report = report_with_tally(TasksAttempted(10), TasksFailed(1));
         assert!(
             report.markdown().contains("results are INCOMPLETE"),
             "any non-zero failure must render the INCOMPLETE banner: {}",
@@ -2052,7 +2056,7 @@ mod tests {
 
     #[test]
     fn a_fully_successful_review_report_carries_no_incomplete_banner() {
-        let report = report_with_tally(8, 0);
+        let report = report_with_tally(TasksAttempted(8), TasksFailed(0));
         assert!(
             !report.markdown().contains("INCOMPLETE"),
             "a clean run must not render the banner: {}",
@@ -2065,7 +2069,7 @@ mod tests {
     fn a_run_that_attempted_no_tasks_carries_no_incomplete_banner() {
         // An empty diff attempts no fan-out tasks — there is no failure rate to
         // speak of, so no banner renders.
-        let report = report_with_tally(0, 0);
+        let report = report_with_tally(TasksAttempted(0), TasksFailed(0));
         assert!(!report.markdown().contains("INCOMPLETE"));
         assert_eq!(report.counts().tasks_attempted(), 0);
         assert_eq!(report.counts().tasks_failed(), 0);
@@ -2135,7 +2139,7 @@ mod tests {
     /// public-field era, values readable back through the getters.
     #[test]
     fn review_response_wire_shape_and_getters_survive_encapsulation() {
-        let response = ReviewResponse::from(report_with_tally(10, 1));
+        let response = ReviewResponse::from(report_with_tally(TasksAttempted(10), TasksFailed(1)));
 
         let json = serde_json::to_value(&response).expect("serializes");
         assert!(json["markdown"].is_string(), "markdown key present: {json}");

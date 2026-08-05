@@ -35,7 +35,9 @@ pub use scope::{
     batch_work_list, scope_review, FileWork, LineAnnotation, ProbeNames, RuleNames, Scope,
     ScopeSpec, SkippedFile, ValidatorWork, WorkList,
 };
-pub use synthesize::{run_review, synthesize, FleetTally, ReviewCounts, ReviewReport};
+pub use synthesize::{
+    run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,
+};
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{
     render_verify_prompt, run_guard, verify_findings, Candidate, GuardOutcome, VerifyOutcome,

@@ -2594,7 +2594,10 @@ mod tests {
         }];
         let report = crate::review::synthesize::synthesize(
             verified,
-            &crate::review::synthesize::FleetTally::new(1, 0),
+            &crate::review::synthesize::FleetTally::new(
+                crate::review::synthesize::TasksAttempted(1),
+                crate::review::synthesize::TasksFailed(0),
+            ),
             &[],
             "2026-04-11 13:08",
         );
@@ -2736,7 +2739,10 @@ mod tests {
         }];
         let report = crate::review::synthesize::synthesize(
             verified,
-            &crate::review::synthesize::FleetTally::new(1, 0),
+            &crate::review::synthesize::FleetTally::new(
+                crate::review::synthesize::TasksAttempted(1),
+                crate::review::synthesize::TasksFailed(0),
+            ),
             &[],
             "2026-08-03 12:00",
         );

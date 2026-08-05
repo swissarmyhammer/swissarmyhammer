@@ -44,6 +44,20 @@ use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
 
+/// How many fan-out `(validator, file)` tasks a run submitted.
+///
+/// Newtype over `usize` so [`FleetTally::new`]'s two counts cannot be
+/// transposed at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TasksAttempted(pub usize);
+
+/// How many fan-out tasks failed and degraded to zero findings.
+///
+/// Newtype over `usize` so [`FleetTally::new`]'s two counts cannot be
+/// transposed at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TasksFailed(pub usize);
+
 /// The fan-out task tally synthesis carries into the report.
 ///
 /// `attempted` is how many `(validator, file)` tasks [`run_fleet`] submitted;
@@ -61,8 +75,11 @@ pub struct FleetTally {
 
 impl FleetTally {
     /// A tally of `attempted` tasks of which `failed` failed.
-    pub fn new(attempted: usize, failed: usize) -> Self {
-        Self { attempted, failed }
+    pub fn new(attempted: TasksAttempted, failed: TasksFailed) -> Self {
+        Self {
+            attempted: attempted.0,
+            failed: failed.0,
+        }
     }
 
     /// How many fan-out tasks were attempted.
@@ -78,7 +95,10 @@ impl FleetTally {
 
 impl From<&FleetOutcome> for FleetTally {
     fn from(outcome: &FleetOutcome) -> Self {
-        Self::new(outcome.attempted(), outcome.failed())
+        Self::new(
+            TasksAttempted(outcome.attempted()),
+            TasksFailed(outcome.failed()),
+        )
     }
 }
 
@@ -594,7 +614,12 @@ pub async fn run_review(
     // tally rides into the report so the tool boundary can flag/fail an incomplete
     // run; the engine itself stays a pure data barrier and never errors on it. Any
     // oversized files stage 2 excluded ride in too, as a named gap.
-    let report = synthesize(verified, &FleetTally::new(attempted, failed), &skipped, now);
+    let report = synthesize(
+        verified,
+        &FleetTally::new(TasksAttempted(attempted), TasksFailed(failed)),
+        &skipped,
+        now,
+    );
 
     Ok(report)
 }
@@ -655,6 +680,33 @@ mod tests {
     /// it keeps the `FleetTally::new` arguments from reading as bare literals.
     const ATTEMPTED_TASKS: usize = 8;
 
+    /// The batch budget the oversized-file fixtures pretend the packer
+    /// enforced. The magnitude mirrors the real default budget so the
+    /// rendered gap message carries a realistic byte count (asserted
+    /// verbatim below).
+    const TEST_BATCH_BUDGET_BYTES: usize = 393_216;
+
+    /// A rendered file block larger than [`TEST_BATCH_BUDGET_BYTES`] — the
+    /// size that forces the packer to skip the file.
+    const TEST_OVERSIZE_RENDERED_BYTES: usize = 500_000;
+
+    /// A second over-budget rendered size, distinct from
+    /// [`TEST_OVERSIZE_RENDERED_BYTES`], for fixtures where two validators
+    /// skip the same file with different per-pair sizes.
+    const TEST_OVERSIZE_ALT_RENDERED_BYTES: usize = 400_000;
+
+    /// A minimal budget for fixtures where only the over-budget relationship
+    /// matters, never the magnitude.
+    const TEST_TINY_BUDGET_BYTES: usize = 5;
+
+    /// A rendered size over [`TEST_TINY_BUDGET_BYTES`].
+    const TEST_TINY_OVERSIZE_BYTES: usize = 10;
+
+    /// A second rendered size over [`TEST_TINY_BUDGET_BYTES`], distinct from
+    /// [`TEST_TINY_OVERSIZE_BYTES`] to show per-pair sizes never affect
+    /// per-path grouping.
+    const TEST_TINY_OVERSIZE_ALT_BYTES: usize = 12;
+
     /// A confirmed finding builder with the load-bearing fields set.
     fn confirmed(
         file: &str,
@@ -707,7 +759,10 @@ mod tests {
         // incomplete — the magnitude is immaterial.
         let report = synthesize(
             vec![],
-            &FleetTally::new(ATTEMPTED_TASKS, ATTEMPTED_TASKS),
+            &FleetTally::new(
+                TasksAttempted(ATTEMPTED_TASKS),
+                TasksFailed(ATTEMPTED_TASKS),
+            ),
             &[],
             NOW,
         );
@@ -732,7 +787,12 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), &[], NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
+            &[],
+            NOW,
+        );
 
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
         assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
@@ -781,8 +841,8 @@ mod tests {
         let skipped = vec![SkippedFile::for_test(
             "src/huge.rs",
             "duplication",
-            500_000,
-            393_216,
+            TEST_OVERSIZE_RENDERED_BYTES,
+            TEST_BATCH_BUDGET_BYTES,
         )];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
@@ -792,12 +852,16 @@ mod tests {
             report.markdown
         );
         assert!(
-            report.markdown.contains("500000"),
+            report
+                .markdown
+                .contains(&TEST_OVERSIZE_RENDERED_BYTES.to_string()),
             "the file's size must be named: {}",
             report.markdown
         );
         assert!(
-            report.markdown.contains("393216"),
+            report
+                .markdown
+                .contains(&TEST_BATCH_BUDGET_BYTES.to_string()),
             "the batch budget must be named: {}",
             report.markdown
         );
@@ -815,8 +879,18 @@ mod tests {
         // the skip becomes one CONFIRMED checklist finding per path, so every
         // consumer that gates on findings fails without special handling.
         let skipped = vec![
-            SkippedFile::for_test("src/huge.rs", "duplication", 500_000, 393_216),
-            SkippedFile::for_test("src/huge.rs", "dead-code", 400_000, 393_216),
+            SkippedFile::for_test(
+                "src/huge.rs",
+                "duplication",
+                TEST_OVERSIZE_RENDERED_BYTES,
+                TEST_BATCH_BUDGET_BYTES,
+            ),
+            SkippedFile::for_test(
+                "src/huge.rs",
+                "dead-code",
+                TEST_OVERSIZE_ALT_RENDERED_BYTES,
+                TEST_BATCH_BUDGET_BYTES,
+            ),
         ];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
@@ -847,9 +921,24 @@ mod tests {
         // counts carry the skipped paths — distinct, sorted — next to the
         // `skipped` tally.
         let skipped = vec![
-            SkippedFile::for_test("src/z.rs", "v", 10, 5),
-            SkippedFile::for_test("src/a.rs", "v", 10, 5),
-            SkippedFile::for_test("src/a.rs", "w", 12, 5),
+            SkippedFile::for_test(
+                "src/z.rs",
+                "v",
+                TEST_TINY_OVERSIZE_BYTES,
+                TEST_TINY_BUDGET_BYTES,
+            ),
+            SkippedFile::for_test(
+                "src/a.rs",
+                "v",
+                TEST_TINY_OVERSIZE_BYTES,
+                TEST_TINY_BUDGET_BYTES,
+            ),
+            SkippedFile::for_test(
+                "src/a.rs",
+                "w",
+                TEST_TINY_OVERSIZE_ALT_BYTES,
+                TEST_TINY_BUDGET_BYTES,
+            ),
         ];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
@@ -860,8 +949,18 @@ mod tests {
     #[test]
     fn skipped_files_render_sorted_by_path_regardless_of_input_order() {
         let skipped = vec![
-            SkippedFile::for_test("src/z.rs", "v", 10, 5),
-            SkippedFile::for_test("src/a.rs", "v", 10, 5),
+            SkippedFile::for_test(
+                "src/z.rs",
+                "v",
+                TEST_TINY_OVERSIZE_BYTES,
+                TEST_TINY_BUDGET_BYTES,
+            ),
+            SkippedFile::for_test(
+                "src/a.rs",
+                "v",
+                TEST_TINY_OVERSIZE_BYTES,
+                TEST_TINY_BUDGET_BYTES,
+            ),
         ];
         let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
 
@@ -886,10 +985,15 @@ mod tests {
         let skipped = vec![SkippedFile::for_test(
             "src/huge.rs",
             "duplication",
-            1_000,
-            100,
+            TEST_TINY_OVERSIZE_BYTES,
+            TEST_TINY_BUDGET_BYTES,
         )];
-        let report = synthesize(verified, &FleetTally::new(1, 0), &skipped, NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::new(TasksAttempted(1), TasksFailed(0)),
+            &skipped,
+            NOW,
+        );
 
         assert!(
             report.markdown.contains("src/huge.rs"),
@@ -916,7 +1020,12 @@ mod tests {
     fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
         // Tasks ran and found nothing — that is a clean review, not an empty
         // scope, so the marker must not appear.
-        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), &[], NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
+            &[],
+            NOW,
+        );
         assert!(
             !report.markdown.contains("Nothing in scope"),
             "a clean attempted run is not an empty scope: {:?}",
