@@ -192,8 +192,9 @@ fn require_filename(path: &Path) -> Result<&std::ffi::OsStr> {
 
 /// Compute the live and trash-relative paths of `path`'s `.jsonl` changelog.
 ///
-/// Shared by [`move_changelog_to_trash`] and [`move_changelog_from_trash`].
-/// Returns `(live_log_path, trash_log_path)`.
+/// Shared by [`trash_entity_files`] and [`restore_entity_files`], which each
+/// pass the pair to [`move_changelog_between_paths`] in the direction they
+/// need. Returns `(live_log_path, trash_log_path)`.
 fn changelog_trash_paths(path: &Path, trash_dir: &Path) -> Result<(PathBuf, PathBuf)> {
     let log_path = path.with_extension("jsonl");
     let log_filename = require_filename(&log_path)?;
@@ -201,20 +202,13 @@ fn changelog_trash_paths(path: &Path, trash_dir: &Path) -> Result<(PathBuf, Path
     Ok((log_path, trash_log_path))
 }
 
-/// Move `path`'s `.jsonl` changelog file into `trash_dir`, ignoring a
-/// missing changelog (never created, or already moved). Used by
-/// [`trash_entity_files`].
-async fn move_changelog_to_trash(path: &Path, trash_dir: &Path) -> Result<()> {
-    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
-    rename_ignore_not_found(&log_path, &trash_log_path).await
-}
-
-/// Move `path`'s `.jsonl` changelog file back out of `trash_dir`, ignoring a
-/// missing changelog (never created, or already moved). Used by
-/// [`restore_entity_files`].
-async fn move_changelog_from_trash(path: &Path, trash_dir: &Path) -> Result<()> {
-    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
-    rename_ignore_not_found(&trash_log_path, &log_path).await
+/// Move a changelog file from `src` to `dest`, ignoring a missing `src`
+/// (never created, or already moved).
+///
+/// Shared by [`trash_entity_files`], which passes `(live, trash)`, and
+/// [`restore_entity_files`], which passes `(trash, live)`.
+async fn move_changelog_between_paths(src: &Path, dest: &Path) -> Result<()> {
+    rename_ignore_not_found(src, dest).await
 }
 
 /// Read all entities from a directory.
@@ -334,7 +328,8 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     }
 
     // Move changelog (try-rename, ignore NotFound to avoid TOCTOU race)
-    move_changelog_to_trash(path, trash_dir).await?;
+    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
+    move_changelog_between_paths(&log_path, &trash_log_path).await?;
 
     Ok(())
 }
@@ -366,7 +361,8 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     }
 
     // Move changelog back from trash
-    move_changelog_from_trash(path, trash_dir).await?;
+    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
+    move_changelog_between_paths(&trash_log_path, &log_path).await?;
 
     Ok(())
 }
@@ -1749,18 +1745,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_entity_files_errors_when_path_has_no_filename() {
+    async fn restore_entity_files_errors_when_path_has_no_parent_directory() {
         let dir = tempfile::tempdir().unwrap();
         let trash_dir = dir.path().join(".trash").join("tags");
         fs::create_dir_all(&trash_dir).await.unwrap();
 
-        // The filesystem root has no filename component — `restore_entity_files`
+        // The filesystem root has no parent directory — `restore_entity_files`
         // must report this as a typed error rather than panicking.
         let result = restore_entity_files(Path::new("/"), &trash_dir).await;
 
         assert!(
             result.is_err(),
-            "restore should fail with a typed error, not panic, when path has no filename"
+            "restore should fail with a typed error, not panic, when path has no parent directory"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_errors_when_path_has_no_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash_dir = dir.path().join(".trash").join("tags");
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        // "." has a parent (the empty path) but no filename component —
+        // `restore_entity_files` must report this as a typed error rather
+        // than failing later, at the OS level, when the rename runs.
+        let result = restore_entity_files(Path::new("."), &trash_dir).await;
+
+        assert!(
+            result.is_err(),
+            "restore should fail with a typed error, not an OS-level rename failure, when path has no filename"
         );
         assert!(matches!(
             result.unwrap_err(),

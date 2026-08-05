@@ -288,85 +288,64 @@ comments:
     - evidence: crates/swissarmyhammer-entity/src/error.rs (new EntityError::InvalidPath variant), crates/swissarmyhammer-entity/src/io.rs (write_entity/trash_entity_files/restore_entity_files converted from panics to typed errors; new helpers require_parent/require_filename/invalid_path_error/temp_file_path/changelog_trash_paths/move_changelog_to_trash/move_changelog_from_trash; 4 new tests), apps/kanban-cli/src/commands/serve.rs (EntityError::InvalidPath classifier arm, InvalidRequest). cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields: 2194 passed, 0 skipped. cargo clippy --workspace --all-targets -- -D warnings: exit 0. cargo fmt --all --check: clean.
     - next: ready for /review
   timestamp: 2026-08-05T13:15:34.871975+00:00
+- actor: claude-code
+  id: 01kz912h01xbbb68yp9efvdxy2
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — crates/swissarmyhammer-entity/src/error.rs, crates/swissarmyhammer-entity/src/io.rs, apps/kanban-cli/src/commands/serve.rs; converted write_entity/restore_entity_files panics to typed EntityError::InvalidPath, 4 rounds of self-review
+    - test: green — cargo nextest -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields, 2194 passed, 0 skipped
+    - commit: daf45ed6b
+    - review: pending (dispatching now, scoped to daf45ed6b~1..daf45ed6b)
+  timestamp: 2026-08-05T13:16:14.721131+00:00
+- actor: claude-code
+  id: 01kz91trcw56m8hvxthh99p02e
+  text: |-
+    ### review — findings
+    - evidence: `review sha daf45ed6b~1..daf45ed6b` returned 6 findings; 2 in scope (io.rs:207 duplicate move_changelog_to_trash/move_changelog_from_trash, io.rs:1752 asymmetric restore_entity_files test coverage), 4 dropped as pre-existing untouched test code (io.rs:1298, io.rs:1385, io.rs:1585, io.rs:1879)
+    - next: implement fixes for the 2 open findings, then re-review scoped to the new commit
+  timestamp: 2026-08-05T13:29:28.732495+00:00
+- actor: claude-code
+  id: 01kz91vbccyb0aqtc1meejc6qg
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — crates/swissarmyhammer-entity/src/error.rs, crates/swissarmyhammer-entity/src/io.rs, apps/kanban-cli/src/commands/serve.rs (converted 2 panics to typed errors, 4 rounds self-review)
+    - test: green — cargo nextest -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields, 2194 passed, 0 skipped
+    - commit: daf45ed6b
+    - review: findings — crates/swissarmyhammer-entity/src/io.rs:207 (move_changelog_to_trash/move_changelog_from_trash near-duplicate), crates/swissarmyhammer-entity/src/io.rs:1752 (restore_entity_files test coverage asymmetric vs write_entity)
+  timestamp: 2026-08-05T13:29:48.172125+00:00
+- actor: claude-code
+  id: 01kz92qe1ey611q4am6ex849ap
+  text: |
+    Implemented the 2 open findings from the 2026-08-05 08:16 review round.
+
+    ## io.rs:207 — collapsed the duplicate direction wrappers
+
+    `move_changelog_to_trash`/`move_changelog_from_trash` deleted. Replaced with a single `async fn move_changelog_between_paths(src: &Path, dest: &Path) -> Result<()>` that wraps `rename_ignore_not_found(src, dest)`. `trash_entity_files` and `restore_entity_files` now call `changelog_trash_paths(path, trash_dir)` directly and pass the pair to `move_changelog_between_paths` in the direction each needs: `(log_path, trash_log_path)` for trash, `(trash_log_path, log_path)` for restore. `changelog_trash_paths`'s doc comment updated to point at the new shared function instead of the two deleted ones.
+
+    Note: a prior implement pass on this same card (see 2026-08-05 13:15 comment) had recorded this exact finding as a "true conflict" against a different round's finding that offered "two named functions" as an acceptable fix. This round's task instructions explicitly directed the single-function extraction, resolving that conflict — not something I decided on my own.
+
+    ## io.rs:1752 — added the missing require_filename-isolating test
+
+    Renamed the existing `restore_entity_files_errors_when_path_has_no_filename` (which used `Path::new("/")`, actually exercising `require_parent`, checked first) to `restore_entity_files_errors_when_path_has_no_parent_directory`. Added a new `restore_entity_files_errors_when_path_has_no_filename` using `Path::new(".")`, mirroring `write_entity`'s test pair. Verified by hand that `Path::new(".").parent()` is `Some("")` and `fs::create_dir_all("")` returns `Ok(())` (probed with `rustc`), so the `.` case reaches and fails at `require_filename` inside `restore_entity_files`, not at the earlier `create_dir_all` step — confirming the test isolates the intended branch.
+
+    ## Self-review
+
+    `review working` returned 5 new findings (io.rs:67, io.rs:342, io.rs:580, io.rs:654, io.rs:1381 — undocumented error variants on `read_entity`/`restore_entity_files`/`copy_attachment`, a path-traversal concern in an unrelated attachment-metadata function, and a magic-number-16 in an unrelated pre-existing test). Checked each against this round's diff hunks (io.rs lines ~192-212, ~328-334, ~361-365, ~1745-1786): none of the 5 fall inside them. All 5 are pre-existing, untouched by this round's diff — dropped explicitly per the task's scope-discipline instruction, not fixed.
+
+    ## Verification
+
+    - `cargo fmt --all` — exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, 0 warnings.
+    - `cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields` — 2195 tests run, 2195 passed, 0 skipped.
+
+    Both checkboxes above are now checked. Task left in `doing`, ready for `/review`.
+
+    ### implement — changed
+    - evidence: crates/swissarmyhammer-entity/src/io.rs (38 insertions, 21 deletions per `git diff --stat`) — extracted `move_changelog_between_paths(src, dest)` replacing `move_changelog_to_trash`/`move_changelog_from_trash`; renamed `restore_entity_files_errors_when_path_has_no_filename` → `restore_entity_files_errors_when_path_has_no_parent_directory` and added a new `restore_entity_files_errors_when_path_has_no_filename` test using `Path::new(".")`. `cargo fmt --all` exit 0 (no diff); `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings; `cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-cli -p swissarmyhammer-fields` exit 0, 2195 passed, 0 skipped.
+    - next: ready for /review
+  timestamp: 2026-08-05T13:45:08.398575+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Regression test that a real kanban card with a markdown table in a comment parses
 ---
-`sah tool kanban task get` reads four cards on this board with an empty `title` and an empty `position.column`. The ordinal falls back to `'80'`, and the description starts at the literal text `|---|`.
-
-Reproduce it:
-
-```
-sah tool kanban --cwd /Users/wballard/github/swissarmyhammer/swissarmyhammer-main task get --id 01KYT6GXEAP93V439V2P4MP9N6
-```
-
-## The four cards
-
-- `01KYT6GXEAP93V439V2P4MP9N6` (^p4mp9n6)
-- `01KYYK8SAAPFM1AY6XRA2EF9WH`
-- `01KYYN9JQVYVXXPHS4AJ4D2613`
-- `01KYYSBQZ3RC6WDMQY6TV3692E` (^tv3692e)
-
-## The files on disk are correct
-
-Each of the four `.md` files has exactly two lines that are three hyphens at column 0: line 1 and the closing line. `position_column`, `position_ordinal` and `title` are all present at the end of the frontmatter, after a long `comments:` block.
-
-Example, `01KYT6GXEAP93V439V2P4MP9N6.md`:
-
-- line 1 `---`, line 103 `---`
-- line 100 `position_column: review`
-- line 101 `position_ordinal: '8280'`
-- line 102 `title: Lowercase the remaining capitalized MCP error Display messages outside the kanban tool`
-- line 13 `    |---|---|`, a markdown table separator inside a comment block scalar
-
-Do not repair the files. The parser reads them incorrectly. The bytes are good.
-
-## Cause
-
-The old `parse_frontmatter_body` in `crates/swissarmyhammer-entity/src/io.rs` split on the bare substring:
-
-```rust
-let parts: Vec<&str> = content.splitn(3, "---").collect();
-```
-
-That substring matches inside `    |---|---|` at line 13. The frontmatter stops there, the remainder `|---|` becomes the description, and the three fields at the end of the frontmatter are never read.
-
-Commit `42e32c3a3 fix(entity): parse frontmatter on line boundaries, not substring` replaced that split with the line-anchored `split_frontmatter_body` in `crates/swissarmyhammer-common/src/frontmatter.rs`. `42e32c3a3` is an ancestor of `main`.
-
-## The source on main is correct. The installed binary is not.
-
-The installed `/Users/wballard/.cargo/bin/sah` was built from a worktree that does not hold `42e32c3a3`. The sibling worktree on branch `review` at `c5a5e7ae5` does not hold that commit, and `split_frontmatter_body` does not exist there.
-
-Proof:
-
-| binary | ^p4mp9n6 title | column | ordinal |
-|---|---|---|---|
-| `~/.cargo/bin/sah` | empty | empty | `80` |
-| `target/debug/sah` built from `main` | correct | `review` | `8280` |
-
-All four cards read correctly with the binary built from `main`.
-
-## Work
-
-1. Add a read-side regression test on the real card bytes. Every test in `io.rs` today is a round trip that formats an entity and reads it back. None reads a literal card file. Add a fixture taken from `01KYT6GXEAP93V439V2P4MP9N6.md` and assert `title`, `position_column` and `position_ordinal` all read their true values, and that the body does not start with `|---|`.
-2. Prove the test is red against the substring split and green against the line-anchored split.
-3. Install `sah` from `main` so the CLI holds the fix.
-
-## Not in scope
-
-`parse_frontmatter` in `swissarmyhammer-common` still splits on the `---\n` substring. ^tv3692e owns that. The bare `find("---")` copies in `swissarmyhammer-config::model` and in `mirdan` are owned by ^0zer2xf.
-
-#bug
-
-## Review Findings (2026-08-05 06:07)
-
-- [x] `crates/swissarmyhammer-entity/src/io.rs:103` — Public function panics without documentation. The function panics if `path` has no parent directory via `.expect()` on line 118, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no parent directory.".
-- [x] `crates/swissarmyhammer-entity/src/io.rs:251` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 256 and 266, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no filename.".
-- [x] `crates/swissarmyhammer-entity/src/io.rs:280` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 288 and 304, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., "Panics if `path` has no filename.".
-- [x] `crates/swissarmyhammer-entity/src/io.rs:376` — YAML serialization error handler repeated verbatim 4 times across the file — `.map_err(|e| EntityError::Yaml { path: path.to_path_buf(), source: e })` appears in parse_frontmatter_body, parse_plain_yaml, format_frontmatter_body, and format_plain_yaml. Each occurrence can drift independently if the error format changes, inflating maintenance burden. Extract a helper function `fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError { EntityError::Yaml { path: path.to_path_buf(), source: e } }` and replace all four occurrences with `.map_err(|e| yaml_error(path, e))`.
-- [x] `crates/swissarmyhammer-entity/src/io.rs:381` — Entity building from YAML map is verbatim-duplicated: lines 381–384 (parse_frontmatter_body) and lines 421–424 (parse_plain_yaml) both execute identical code: `let mut entity = Entity::new(entity_type, id); for (k, v) in yaml_map { flatten_into(&mut entity, &k, v); }`. This block could drift out of sync if one function is updated but the other is not. Extract a helper function `fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity` and call it from both parse_frontmatter_body and parse_plain_yaml after their respective YAML parsing steps.
-
-## Review Findings (2026-08-05 06:52)
-
-- [x] `crates/swissarmyhammer-entity/src/io.rs:122` — Public function write_entity panics on invalid input (path with no parent directory) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Either handle the case where path has no parent gracefully, or return an error result if that condition makes the operation impossible. This aligns with the pattern used elsewhere in the file (e.g., copy_attachment validates inputs and returns errors rather than panicking).
-- [x] `crates/swissarmyhammer-entity/src/io.rs:300` — Public function restore_entity_files panics on invalid input (path with no filename) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Use the Result error mechanism for all input validation.
+`sah tool kanban task get` reads four cards on this board with an empty `title` and an empty `position.column`. The ordinal falls back to `'80'`, and the description starts at the literal text `|---|`.\n\nReproduce it:\n\n```\nsah tool kanban --cwd /Users/wballard/github/swissarmyhammer/swissarmyhammer-main task get --id 01KYT6GXEAP93V439V2P4MP9N6\n```\n\n## The four cards\n\n- `01KYT6GXEAP93V439V2P4MP9N6` (^p4mp9n6)\n- `01KYYK8SAAPFM1AY6XRA2EF9WH`\n- `01KYYN9JQVYVXXPHS4AJ4D2613`\n- `01KYYSBQZ3RC6WDMQY6TV3692E` (^tv3692e)\n\n## The files on disk are correct\n\nEach of the four `.md` files has exactly two lines that are three hyphens at column 0: line 1 and the closing line. `position_column`, `position_ordinal` and `title` are all present at the end of the frontmatter, after a long `comments:` block.\n\nExample, `01KYT6GXEAP93V439V2P4MP9N6.md`:\n\n- line 1 `---`, line 103 `---`\n- line 100 `position_column: review`\n- line 101 `position_ordinal: '8280'`\n- line 102 `title: Lowercase the remaining capitalized MCP error Display messages outside the kanban tool`\n- line 13 `    |---|---|`, a markdown table separator inside a comment block scalar\n\nDo not repair the files. The parser reads them incorrectly. The bytes are good.\n\n## Cause\n\nThe old `parse_frontmatter_body` in `crates/swissarmyhammer-entity/src/io.rs` split on the bare substring:\n\n```rust\nlet parts: Vec<&str> = content.splitn(3, \"---\").collect();\n```\n\nThat substring matches inside `    |---|---|` at line 13. The frontmatter stops there, the remainder `|---|` becomes the description, and the three fields at the end of the frontmatter are never read.\n\nCommit `42e32c3a3 fix(entity): parse frontmatter on line boundaries, not substring` replaced that split with the line-anchored `split_frontmatter_body` in `crates/swissarmyhammer-common/src/frontmatter.rs`. `42e32c3a3` is an ancestor of `main`.\n\n## The source on main is correct. The installed binary is not.\n\nThe installed `/Users/wballard/.cargo/bin/sah` was built from a worktree that does not hold `42e32c3a3`. The sibling worktree on branch `review` at `c5a5e7ae5` does not hold that commit, and `split_frontmatter_body` does not exist there.\n\nProof:\n\n| binary | ^p4mp9n6 title | column | ordinal |\n|---|---|---|---|\n| `~/.cargo/bin/sah` | empty | empty | `80` |\n| `target/debug/sah` built from `main` | correct | `review` | `8280` |\n\nAll four cards read correctly with the binary built from `main`.\n\n## The work\n\n1. Add a read-side regression test on the real card bytes. Every test in `io.rs` today is a round trip that formats an entity and reads it back. None reads a literal card file. Add a fixture taken from `01KYT6GXEAP93V439V2P4MP9N6.md` and assert `title`, `position_column` and `position_ordinal` all read their true values, and that the body does not start with `|---|`.\n2. Prove the test is red against the substring split and green against the line-anchored split.\n3. Install `sah` from `main` so the CLI holds the fix.\n\n## Not in scope\n\n`parse_frontmatter` in `swissarmyhammer-common` still splits on the `---\\n` substring. ^tv3692e owns that. The bare `find(\"---\")` copies in `swissarmyhammer-config::model` and in `mirdan` are owned by ^0zer2xf.\n\n#bug\n\n## Review Findings (2026-08-05 06:07)\n\n- [x] `crates/swissarmyhammer-entity/src/io.rs:103` — Public function panics without documentation. The function panics if `path` has no parent directory via `.expect()` on line 118, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., \"Panics if `path` has no parent directory.\".\n- [x] `crates/swissarmyhammer-entity/src/io.rs:251` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 256 and 266, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., \"Panics if `path` has no filename.\".\n- [x] `crates/swissarmyhammer-entity/src/io.rs:280` — Public function panics without documentation. The function panics if `path` has no filename via `.expect()` on lines 288 and 304, but the doc comment does not document this panic condition. Add a `# Panics` section to the doc comment stating the condition under which panic occurs, e.g., \"Panics if `path` has no filename.\".\n- [x] `crates/swissarmyhammer-entity/src/io.rs:376` — YAML serialization error handler repeated verbatim 4 times across the file — `.map_err(|e| EntityError::Yaml { path: path.to_path_buf(), source: e })` appears in parse_frontmatter_body, parse_plain_yaml, format_frontmatter_body, and format_plain_yaml. Each occurrence can drift independently if the error format changes, inflating maintenance burden. Extract a helper function `fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError { EntityError::Yaml { path: path.to_path_buf(), source: e } }` and replace all four occurrences with `.map_err(|e| yaml_error(path, e))`.\n- [x] `crates/swissarmyhammer-entity/src/io.rs:381` — Entity building from YAML map is verbatim-duplicated: lines 381–384 (parse_frontmatter_body) and lines 421–424 (parse_plain_yaml) both execute identical code: `let mut entity = Entity::new(entity_type, id); for (k, v) in yaml_map { flatten_into(&mut entity, &k, v); }`. This block could drift out of sync if one function is updated but the other is not. Extract a helper function `fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity` and call it from both parse_frontmatter_body and parse_plain_yaml after their respective YAML parsing steps.\n\n## Review Findings (2026-08-05 06:52)\n\n- [x] `crates/swissarmyhammer-entity/src/io.rs:122` — Public function write_entity panics on invalid input (path with no parent directory) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Either handle the case where path has no parent gracefully, or return an error result if that condition makes the operation impossible. This aligns with the pattern used elsewhere in the file (e.g., copy_attachment validates inputs and returns errors rather than panicking).\n- [x] `crates/swissarmyhammer-entity/src/io.rs:300` — Public function restore_entity_files panics on invalid input (path with no filename) instead of returning a Result error. According to the error-handling rule, panics must be reserved for internal invariant violations, never for expected failure modes or bad input. Return a descriptive error instead of panicking. Use the Result error mechanism for all input validation.\n\n## Review Findings (2026-08-05 08:16)\n\nScope: `daf45ed6b~1..daf45ed6b`. The engine returned 6 findings; 4 (io.rs:1298, io.rs:1385, io.rs:1585, io.rs:1879 — magic-number naming in test code) map to pre-existing lines this commit did not touch (confirmed against the diff hunk ranges) and are dropped per the review skill's scoping rule and its \"never refactor existing tests\" exemption. The 2 findings below fall inside this commit's actual diff and are recorded.\n\n- [x] `crates/swissarmyhammer-entity/src/io.rs:207` — move_changelog_to_trash and move_changelog_from_trash are near-duplicate async functions that differ only in the order of arguments passed to rename_ignore_not_found. Both functions perform identical logic (call changelog_trash_paths, then call rename_ignore_not_found) with arguments reversed. This violates the rule that blocks differing only by a substituted value (parameter order) should be one function with an argument. Extract a single generic function such as `async fn move_changelog_between_paths(src: &Path, dest: &Path) -> Result<()>` that wraps rename_ignore_not_found, then call it with arguments in the appropriate order from the two call sites (trash_entity_files line 337 and restore_entity_files line 369). Alternatively, keep thin directional wrappers if semantic clarity is paramount, but consolidate the shared implementation to prevent drift.\n- [x] `crates/swissarmyhammer-entity/src/io.rs:1752` — Paired operations write_entity and restore_entity_files both enforce require_parent and require_filename validations, but restore_entity_files's test coverage is asymmetric. write_entity has isolated tests for each validation (require_parent at line 1692 using \"/\", require_filename at line 1712 using \".\"), but restore_entity_files has only one validation test (line 1752 using \"/\"). Since require_parent is checked first in restore_entity_files (line 352), the \"/\" test fails at require_parent and never reaches the require_filename check. The test is documented as checking \"path has no filename\" but actually tests require_parent failure. No test exercises restore_entity_files's require_filename validation in isolation. Add a second validation error test for restore_entity_files using Path::new(\".\") to isolate and exercise the require_filename check failure, mirroring write_entity's test structure at line 1712. This ensures symmetric coverage of both validation requirements across the paired write/restore operations.
