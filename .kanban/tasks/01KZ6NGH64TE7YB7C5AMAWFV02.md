@@ -123,8 +123,43 @@ comments:
     - evidence: 12 files. New `crates/mirdan/src/tool_install.rs` (`ToolInstall` trait, `Lifecycle`, `run_lifecycle`, `run_lifecycle_command`, `declare_tool_install!`); `crates/mirdan/src/lib.rs`; `crates/mirdan/src/test_support.rs`; the three CLI registries and their `main.rs`; `apps/code-context-cli/src/commands/skill.rs`; `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs`. `cargo nextest run --workspace` — 13527 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo fmt --all -- --check` clean. `review working` clean after five passes. `sah doctor` and `mirdan doctor` still print zero Preamble rows; `shelltool init local` / `deinit local` smoke-tested with the real binary.
     - next: ready for `/review`. Card stays in `doing`.
   timestamp: 2026-08-05T03:44:58.083101+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kz81p70r7hsvgfbddsnbcj46
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha ce3a263d5~1..ce3a263d5` (round 2). counts: 0 findings, 0 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped.
+    - scope: 13 files, +881/-587, including the new `crates/mirdan/src/tool_install.rs` (304 lines).
+
+    **No file was skipped.** The engine reported `skipped: 0` and returned no "not reviewed" warning block. The round-1 skip of `crates/mirdan/src/install.rs` ("567352 rendered bytes, over the 476042-byte batch budget; not reviewed by: duplication") did not recur, because `crates/mirdan/src/install.rs` is not in this commit at all — `git show --stat ce3a263d5` does not list it. The file remains unread by the duplication validator from round 1; that gap is not closed by this commit, it is only out of scope for it.
+
+    **Prior findings verified in code, not by checkbox.**
+
+    1. `apps/kanban-cli/src/commands/registry.rs:34` and 2. `apps/shelltool-cli/src/commands/registry.rs:35` — duplicated `profile()` bodies across three registries. Fixed. All three registries now expand `mirdan::declare_tool_install!`; the hand-written `pub fn profile()` is gone from each. Only the parameters differ: kanban `server: "kanban", skills: Selector::All`; shelltool `server: "shelltool", skills: Selector::Single(SKILL_NAME.to_string())`; code-context `server: "code-context", skills: Selector::All`. This is the "parameterized by skill selector" remedy the findings asked for. `apps/code-context-cli/src/commands/skill.rs` now calls `CodeContextInstall::skills()` so the skills-only install cannot diverge from the full install.
+
+    3. `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:159` — duplicated `.sah/` and `.prompts/` removal blocks. Fixed exactly as prescribed. `fn remove_directory_if_exists(root: &Path, dir_name: &str, component: &str, reporter: &dyn InitReporter) -> Option<InitResult>` now exists, and `deinit` calls it from `for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME]`, returning on the first failure. New tests `test_remove_directory_if_exists_removes_and_reports` and `test_remove_directory_if_exists_ignores_missing_directory` cover it.
+
+    **Provenance:** no findings this round, so there is no flagged line to place inside or outside the diff hunks.
+
+    - next: none — task complete.
+  timestamp: 2026-08-05T04:07:45.432699+00:00
+- actor: claude-code
+  id: 01kz81qj1mxke54czhmvjw4ejt
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 13 files. All three round-1 findings fixed. Findings 1+2 were one duplication this card caused (removing `Profile.preamble` left three identical `profile()` wrappers) — fixed once via a new `crates/mirdan/src/tool_install.rs` (`ToolInstall` trait, `Lifecycle`, `run_lifecycle`/`run_lifecycle_command`, `declare_tool_install!`), with the three CLIs dropping `any_init_error`/`run_init`/`run_deinit` from their `main.rs`. Finding 3 collapsed the `.sah/`/`.prompts/` blocks into `remove_directory_if_exists`.
+    - latent bug fixed on the way: `ProjectStructure::init` resolved its root git-root-then-CWD while `deinit` used CWD only, so `sah deinit --remove-directory` from a subdirectory left the real workspace behind. Both now share `workspace_root()`, with a regression test that runs from a subdirectory.
+    - test: green — `cargo nextest run --workspace` 13527 passed, 0 failed, 0 skipped; clippy clean; fmt clean. Real binaries exercised in isolated temp dirs with HOME overridden: sah/kanban/code-context/shelltool init+deinit all exit 0; the subdirectory regression confirmed fixed; `sah doctor` and `mirdan doctor` print no Preamble row.
+    - commit: ce3a263d5
+    - review: clean — `review sha ce3a263d5~1..ce3a263d5`, 0 findings (0 confirmed, 0 refuted, 9 attempted, 0 skipped). All three prior findings verified fixed in code against `git show ce3a263d5:<path>`, not taken from the checkboxes.
+    - task moved to done by the review gate.
+
+    ### Still open after this card — the install.rs duplication coverage gap
+
+    Round 2 did NOT close the round-1 gap; it only avoided it. `crates/mirdan/src/install.rs` is not among this commit's 13 files, so nothing was skipped this run — but the file remains unread by the `duplication` validator, on every pass, because at 567352 rendered bytes it exceeds the 476042-byte batch budget. The engine's own remedy, "narrow the scope", does not work: a `review file` run limited to that single path still exceeds the cap. The file has to be split before duplication can ever cover it. Tracked separately.
+  timestamp: 2026-08-05T04:08:29.492874+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffaa80
 title: Doctor's Preamble check is stale — nothing installs the preamble anymore, so it always reports Missing
 ---
 `sah doctor` / `mirdan doctor` unconditionally reports a `Missing` (Warning) row for the `Preamble` component on every doctor-enabled agent, at both project and user scope. This looks like a false positive: no install profile in the codebase writes the preamble anymore.
