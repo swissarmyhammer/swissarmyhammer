@@ -36,28 +36,102 @@ fn detected_agents_or_error() -> Result<Vec<crate::agents::DetectedAgent>, Vec<I
     }
 }
 
+/// A declarative agent-config change, bundling the three things that vary
+/// between the public appliers: the reporter verb, the strategy method to
+/// dispatch to, and the per-agent message format.
+///
+/// The public appliers ([`register_mcp_server`], [`unregister_mcp_server`],
+/// [`deny_tool`], [`allow_tool`]) each construct one variant and delegate to
+/// [`apply_strategy_action`], so the shared iteration and reporting logic
+/// lives in exactly one place.
+#[derive(Debug, Clone, Copy)]
+enum StrategyAction<'a> {
+    /// Register `server_name` → `entry` as an MCP server.
+    RegisterMcp {
+        server_name: &'a str,
+        entry: &'a McpServerEntry,
+    },
+    /// Unregister `server_name` as an MCP server.
+    UnregisterMcp { server_name: &'a str },
+    /// Deny `tool` in the agent's permission config.
+    DenyTool { tool: &'a str },
+    /// Allow `tool` (remove a prior deny) in the agent's permission config.
+    AllowTool { tool: &'a str },
+}
+
+impl StrategyAction<'_> {
+    /// Reporter Action verb for this change.
+    fn verb(&self) -> &'static str {
+        match self {
+            Self::RegisterMcp { .. } => "Registered",
+            Self::UnregisterMcp { .. } => "Removed",
+            Self::DenyTool { .. } => "Configured",
+            Self::AllowTool { .. } => "Removed",
+        }
+    }
+
+    /// Dispatch this change to the matching method on `agent`'s strategy.
+    fn apply(
+        &self,
+        strategy: &dyn AgentConfigStrategy,
+        agent: &AgentDef,
+        scope: InitScope,
+    ) -> Result<bool, RegistryError> {
+        match self {
+            Self::RegisterMcp { server_name, entry } => {
+                strategy.register_mcp(agent, scope, server_name, entry)
+            }
+            Self::UnregisterMcp { server_name } => {
+                strategy.unregister_mcp(agent, scope, server_name)
+            }
+            Self::DenyTool { tool } => strategy.deny_tool(agent, scope, tool),
+            Self::AllowTool { tool } => strategy.allow_tool(agent, scope, tool),
+        }
+    }
+
+    /// Reporter Action message describing what changed for `agent`.
+    fn message(&self, agent: &AgentDef) -> String {
+        match self {
+            Self::RegisterMcp { server_name, .. } => {
+                format!("{server_name} MCP server for {}", agent.name)
+            }
+            Self::UnregisterMcp { server_name } => {
+                format!("{server_name} MCP server from {}", agent.name)
+            }
+            Self::DenyTool { tool } => {
+                format!(
+                    "{tool} tool denied for {} — use the shell tool instead",
+                    agent.name
+                )
+            }
+            Self::AllowTool { tool } => format!("{tool} deny rule for {}", agent.name),
+        }
+    }
+}
+
 /// Apply `action` to every detected agent's strategy, emitting an Action event
-/// (with `verb`) for each agent that changed and a Warning for each error, then
-/// aggregate into a single `InitResult`.
+/// for each agent that changed and a Warning for each error, then aggregate
+/// into a single `InitResult`.
 ///
 /// A thin strategy-dispatching adapter over [`for_each_detected_agent`], which
 /// owns the iteration, event emission, and aggregation.
-fn for_each_agent_strategy(
+fn apply_strategy_action(
     scope: InitScope,
     reporter: &dyn InitReporter,
-    verb: &str,
-    action: impl Fn(&dyn AgentConfigStrategy, &AgentDef) -> Result<bool, RegistryError>,
-    action_message: impl Fn(&AgentDef) -> String,
+    action: StrategyAction<'_>,
 ) -> Vec<InitResult> {
+    let verb = action.verb();
     for_each_detected_agent(
         scope,
         reporter,
         |agent, _global| {
             let strategy = strategy::strategy_for(agent);
-            Ok(action(strategy.as_ref(), agent)?.then(|| AgentAction {
-                verb: verb.to_string(),
-                message: action_message(agent),
-            }))
+            Ok(action
+                .apply(strategy.as_ref(), agent, scope)?
+                .then(|| AgentAction {
+                    verb: verb.to_string(),
+                    message: action.message(agent),
+                }))
         },
         |changed| {
             InitResult::ok(
@@ -70,6 +144,7 @@ fn for_each_agent_strategy(
 
 /// A per-agent change produced by a [`for_each_detected_agent`] closure: the
 /// reporter `verb` and human-readable `message` describing what changed.
+#[derive(Debug, Clone)]
 pub(crate) struct AgentAction {
     /// Reporter Action verb (e.g. `"Installed"`, `"Removed"`, `"Registered"`).
     pub(crate) verb: String,
@@ -138,12 +213,10 @@ pub fn register_mcp_server(
     entry: &McpServerEntry,
     reporter: &dyn InitReporter,
 ) -> Vec<InitResult> {
-    for_each_agent_strategy(
+    apply_strategy_action(
         scope,
         reporter,
-        "Registered",
-        |strategy, agent| strategy.register_mcp(agent, scope, server_name, entry),
-        |agent| format!("{server_name} MCP server for {}", agent.name),
+        StrategyAction::RegisterMcp { server_name, entry },
     )
 }
 
@@ -154,42 +227,23 @@ pub fn unregister_mcp_server(
     server_name: &str,
     reporter: &dyn InitReporter,
 ) -> Vec<InitResult> {
-    for_each_agent_strategy(
+    apply_strategy_action(
         scope,
         reporter,
-        "Removed",
-        |strategy, agent| strategy.unregister_mcp(agent, scope, server_name),
-        |agent| format!("{server_name} MCP server from {}", agent.name),
+        StrategyAction::UnregisterMcp { server_name },
     )
 }
 
 /// Deny `tool` across every detected agent at `scope`, dispatching to each
 /// agent's strategy. Agents with no permission mechanism are silently skipped.
 pub fn deny_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
-    for_each_agent_strategy(
-        scope,
-        reporter,
-        "Configured",
-        |strategy, agent| strategy.deny_tool(agent, scope, tool),
-        |agent| {
-            format!(
-                "{tool} tool denied for {} — use the shell tool instead",
-                agent.name
-            )
-        },
-    )
+    apply_strategy_action(scope, reporter, StrategyAction::DenyTool { tool })
 }
 
 /// Allow `tool` (remove a prior deny) across every detected agent at `scope`,
 /// dispatching to each agent's strategy.
 pub fn allow_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
-    for_each_agent_strategy(
-        scope,
-        reporter,
-        "Removed",
-        |strategy, agent| strategy.allow_tool(agent, scope, tool),
-        |agent| format!("{tool} deny rule for {}", agent.name),
-    )
+    apply_strategy_action(scope, reporter, StrategyAction::AllowTool { tool })
 }
 
 #[cfg(test)]

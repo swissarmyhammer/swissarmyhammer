@@ -1847,6 +1847,78 @@ async fn test_install_tool_from_metadata_rejects_non_tool() {
     std::env::set_current_dir(old_dir).unwrap();
 }
 
+/// Rejecting a non-tool package is an input-applicability failure, so it must
+/// surface as `RegistryError::Validation` — `NotFound` is reserved for actual
+/// registry misses.
+#[tokio::test]
+#[serial]
+async fn test_install_tool_from_metadata_non_tool_is_validation_error() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    let version_detail = crate::registry::types::VersionDetail {
+        name: "some-skill".to_string(),
+        version: "1.0.0".to_string(),
+        package_type: Some("skill".to_string()),
+        download_url: "https://example.com/download".to_string(),
+        integrity: None,
+        size: None,
+        published_at: "2026-01-01T00:00:00Z".to_string(),
+        description: None,
+        author: None,
+        license: None,
+        tags: None,
+        mcp: None,
+        tool_md: None,
+    };
+
+    let result = install_tool_from_metadata("some-skill", &version_detail, None, false).await;
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, RegistryError::Validation(_)),
+        "non-tool rejection must be a Validation error, got: {err:?}"
+    );
+}
+
+/// Regression: registry `package_type` casing must not affect tool detection —
+/// a capitalized `"Tool"` installs the same way as `"tool"`.
+#[tokio::test]
+#[serial]
+async fn test_install_tool_from_metadata_accepts_capitalized_tool_type() {
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+
+    let mcp = crate::registry::types::McpConfig {
+        command: "npx".to_string(),
+        args: vec!["-y".to_string(), "@test/server".to_string()],
+        env: std::collections::BTreeMap::new(),
+    };
+
+    let version_detail = crate::registry::types::VersionDetail {
+        name: "cased-tool".to_string(),
+        version: "1.0.0".to_string(),
+        package_type: Some("Tool".to_string()),
+        download_url: "https://example.com/download".to_string(),
+        integrity: None,
+        size: None,
+        published_at: "2026-01-01T00:00:00Z".to_string(),
+        description: None,
+        author: None,
+        license: None,
+        tags: None,
+        mcp: Some(mcp),
+        tool_md: None,
+    };
+
+    let result = install_tool_from_metadata("cased-tool", &version_detail, None, false).await;
+    assert!(
+        result.is_ok(),
+        "capitalized 'Tool' package_type must install as a tool: {result:?}"
+    );
+}
+
 #[tokio::test]
 #[serial]
 async fn test_install_tool_from_mcp_config_then_uninstall() {

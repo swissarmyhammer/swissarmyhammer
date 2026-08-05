@@ -31,18 +31,28 @@ pub fn sanitize_dir_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Return a central store directory named `dir_name`.
+///
+/// - Project scope: `<dir_name>/` (relative to the CWD)
+/// - Global scope: `~/<dir_name>/`
+///
+/// The single implementation behind every per-kind store accessor.
+fn store_dir(global: bool, dir_name: &str) -> PathBuf {
+    if global {
+        dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(dir_name)
+    } else {
+        PathBuf::from(dir_name)
+    }
+}
+
 /// Return the central skill store directory.
 ///
 /// - Project scope: `.skills/`
 /// - Global scope: `~/.skills/`
 pub fn skill_store_dir(global: bool) -> PathBuf {
-    if global {
-        dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".skills")
-    } else {
-        PathBuf::from(".skills")
-    }
+    store_dir(global, ".skills")
 }
 
 /// Return the central agent (subagent) store directory.
@@ -50,13 +60,7 @@ pub fn skill_store_dir(global: bool) -> PathBuf {
 /// - Project scope: `.agents/`
 /// - Global scope: `~/.agents/`
 pub fn agent_store_dir(global: bool) -> PathBuf {
-    if global {
-        dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".agents")
-    } else {
-        PathBuf::from(".agents")
-    }
+    store_dir(global, ".agents")
 }
 
 /// Return the central tool store directory.
@@ -64,13 +68,7 @@ pub fn agent_store_dir(global: bool) -> PathBuf {
 /// - Project scope: `.tools/`
 /// - Global scope: `~/.tools/`
 pub fn tool_store_dir(global: bool) -> PathBuf {
-    if global {
-        dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".tools")
-    } else {
-        PathBuf::from(".tools")
-    }
+    store_dir(global, ".tools")
 }
 
 /// Return the central validator store directory.
@@ -81,13 +79,7 @@ pub fn tool_store_dir(global: bool) -> PathBuf {
 /// Validators deploy store-only (no symlink): the validator engine's loader
 /// reads this directory directly, the same way the tool store is read.
 pub fn validators_store_dir(global: bool) -> PathBuf {
-    if global {
-        dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".validators")
-    } else {
-        PathBuf::from(".validators")
-    }
+    store_dir(global, ".validators")
 }
 
 /// Compute the symlink name for a sanitized package path, given a policy.
@@ -214,28 +206,28 @@ pub fn store_entry_still_referenced(store_path: &Path, agent_skill_dirs: &[PathB
     };
 
     for skill_dir in agent_skill_dirs {
-        let entries = match std::fs::read_dir(skill_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(entries) = std::fs::read_dir(skill_dir) else {
+            continue;
         };
-
         for entry in entries.flatten() {
-            let path = entry.path();
-            // Check if it's a symlink
-            if let Ok(meta) = std::fs::symlink_metadata(&path) {
-                if meta.file_type().is_symlink() {
-                    // Resolve the symlink target
-                    if let Ok(target) = std::fs::canonicalize(&path) {
-                        if target == canonical_store {
-                            return true;
-                        }
-                    }
-                }
+            if is_symlink_to_target(&entry.path(), &canonical_store) {
+                return true;
             }
         }
     }
 
     false
+}
+
+/// Check whether `path` is a symlink whose resolved target is `canonical_target`.
+fn is_symlink_to_target(path: &Path, canonical_target: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_symlink() {
+        return false;
+    }
+    std::fs::canonicalize(path).is_ok_and(|target| target == canonical_target)
 }
 
 /// Validate that a name is safe to use as a filesystem path component.

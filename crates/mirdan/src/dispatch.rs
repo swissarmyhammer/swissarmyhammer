@@ -8,43 +8,36 @@ use crate::{
 };
 use crate::{Cli, Commands, NewKind};
 
-/// Map a registry result to a process exit code (0 = success, 1 = error).
-fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
+/// Map a command result to a process exit code: run `on_ok` on the success
+/// value and return 0, or print `Error: <e>` to stderr and return 1.
+///
+/// The single error-reporting site behind every dispatch handler.
+fn handle_result<T, E: std::fmt::Display>(result: Result<T, E>, on_ok: impl FnOnce(T)) -> i32 {
     match result {
-        Ok(()) => 0,
+        Ok(value) => {
+            on_ok(value);
+            0
+        }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             1
         }
     }
+}
+
+/// Map a registry result to a process exit code (0 = success, 1 = error).
+fn handle_registry_result(result: Result<(), RegistryError>) -> i32 {
+    handle_result(result, |()| {})
 }
 
 /// Like [`handle_registry_result`] but for commands that return a status message.
 fn handle_registry_result_msg(result: Result<String, RegistryError>) -> i32 {
-    match result {
-        Ok(msg) => {
-            println!("{msg}");
-            0
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            1
-        }
-    }
+    handle_result(result, |msg| println!("{msg}"))
 }
 
 /// Handle a deploy result: print each entry, then return an exit code.
 fn handle_deploy_result(result: Result<Vec<DeployResult>, RegistryError>) -> i32 {
-    match result {
-        Ok(results) => {
-            format_deploy_results(&results);
-            0
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            1
-        }
-    }
+    handle_result(result, |results| format_deploy_results(&results))
 }
 
 /// Format deploy results to stdout/stderr, preserving the original CLI output style.
@@ -185,13 +178,9 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
 
         Commands::Doctor { verbose } => doctor::run_doctor(*verbose).await,
 
-        Commands::Completion { shell } => match completions::print_completion(*shell) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
-            }
-        },
+        Commands::Completion { shell } => {
+            handle_result(completions::print_completion(*shell), |()| {})
+        }
 
         Commands::Start => return None,
     };

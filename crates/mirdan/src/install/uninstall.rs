@@ -375,18 +375,7 @@ pub async fn run_uninstall_mcp(
 
     let mut results = Vec::new();
 
-    let removed =
-        unregister_mcp_from_agents(&target_agents, name, global, |agent, config_path| {
-            results.push(crate::DeployResult::removed(
-                config_path,
-                format!(
-                    "Removed MCP server '{}' from {} ({})",
-                    name,
-                    agent.def.name,
-                    config_path.display()
-                ),
-            ));
-        })?;
+    let removed = unregister_and_report_mcp(&target_agents, name, global, "Removed", &mut results)?;
 
     // Update lockfile (same home fallback as `run_uninstall`, so a global
     // MCP server recorded in the HOME lockfile is found and cleaned up).
@@ -416,12 +405,37 @@ pub async fn run_uninstall_mcp(
     Ok(results)
 }
 
+/// Unregister `name` from every agent's MCP config and push one user-visible
+/// [`crate::DeployResult`] per config changed, with `action_verb` naming the
+/// change (`"Removed"` or `"Unregistered"`). Returns the number of configs
+/// changed.
+///
+/// The single unregister-and-report site behind [`run_uninstall_mcp`] and
+/// [`uninstall_tool`]: the two differ only in the verb of the message.
+fn unregister_and_report_mcp(
+    agents: &[DetectedAgent],
+    name: &str,
+    global: bool,
+    action_verb: &str,
+    results: &mut Vec<crate::DeployResult>,
+) -> Result<usize, RegistryError> {
+    unregister_mcp_from_agents(agents, name, global, |agent, config_path| {
+        results.push(crate::DeployResult::removed(
+            config_path,
+            format!(
+                "{action_verb} MCP server '{name}' from {} ({})",
+                agent.def.name,
+                config_path.display()
+            ),
+        ));
+    })
+}
+
 /// Unregister `name` from each agent's MCP config file, calling `on_removed`
 /// with the agent and its config path for each config that changed. Returns
 /// the number of configs changed.
 ///
-/// The single unregister loop behind [`run_uninstall_mcp`] and
-/// [`uninstall_tool`]: the two differ only in how they report a removal.
+/// The single unregister loop behind [`unregister_and_report_mcp`].
 fn unregister_mcp_from_agents(
     agents: &[DetectedAgent],
     name: &str,
@@ -502,17 +516,8 @@ pub(crate) fn uninstall_tool(
     let mut results = Vec::new();
 
     // 1. Unregister from each agent's MCP config
-    let mut removed = unregister_mcp_from_agents(&agents, name, global, |agent, config_path| {
-        results.push(crate::DeployResult::removed(
-            config_path,
-            format!(
-                "Unregistered MCP server '{}' from {} ({})",
-                name,
-                agent.def.name,
-                config_path.display()
-            ),
-        ));
-    })?;
+    let mut removed =
+        unregister_and_report_mcp(&agents, name, global, "Unregistered", &mut results)?;
 
     // 2. Remove from tool store
     let store_path = store::tool_store_dir(global).join(&sanitized);

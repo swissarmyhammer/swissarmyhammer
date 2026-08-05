@@ -24,6 +24,33 @@ const MIN_QUERY_LEN: usize = 2;
 const LINES_PER_RESULT: usize = 4;
 /// Fixed overhead lines: header(3) + prompt(2) + gap before footer(1) + footer(2).
 const OVERHEAD_LINES: usize = 8;
+/// How long `event::poll` blocks between re-renders when no query is pending.
+const POLL_IDLE_TIMEOUT_MS: u64 = 100;
+/// Queries at or below this length get the longer debounce — short queries
+/// are more ambiguous, so give the user more time to keep typing.
+const DEBOUNCE_SHORT_QUERY_LEN: usize = 3;
+/// Debounce before firing a short (ambiguous) query.
+const DEBOUNCE_SHORT_QUERY_MS: u64 = 250;
+/// Debounce before firing a longer (more specific) query.
+const DEBOUNCE_LONG_QUERY_MS: u64 = 150;
+/// Terminal width assumed when the real size cannot be queried.
+const DEFAULT_TERMINAL_COLS: u16 = 80;
+/// Terminal height assumed when the real size cannot be queried.
+const DEFAULT_TERMINAL_ROWS: u16 = 24;
+/// Always show at least this many result cards, even on tiny terminals.
+const MIN_DISPLAY_RESULTS: usize = 2;
+/// Never request more than this many result cards, even on tall terminals.
+const MAX_DISPLAY_RESULTS: usize = 20;
+/// Horizontal margin around result content: the 4-character left indent of a
+/// result card plus 2 characters of right padding.
+const LEFT_MARGIN_WIDTH: usize = 6;
+/// Spacing between a result name and its right-aligned download count.
+const RESULT_SPACING_WIDTH: usize = 2;
+/// Truncation with a ".." ellipsis only applies above this width; narrower
+/// budgets are hard-cut instead.
+const MIN_TRUNCATION_LEN: usize = 3;
+/// Display width of the ".." ellipsis appended to truncated strings.
+const ELLIPSIS_WIDTH: usize = 2;
 
 /// Run the search command with a query string (non-interactive).
 pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
@@ -195,13 +222,13 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
 /// (debounce expired) or simply re-rendering.
 fn compute_poll_timeout(state: &SearchState, needs_query: bool) -> Duration {
     if !needs_query {
-        return Duration::from_millis(100);
+        return Duration::from_millis(POLL_IDLE_TIMEOUT_MS);
     }
     // Adaptive debounce: longer for short queries (more ambiguous)
-    let debounce = if state.query.len() <= 3 {
-        Duration::from_millis(250)
+    let debounce = if state.query.len() <= DEBOUNCE_SHORT_QUERY_LEN {
+        Duration::from_millis(DEBOUNCE_SHORT_QUERY_MS)
     } else {
-        Duration::from_millis(150)
+        Duration::from_millis(DEBOUNCE_LONG_QUERY_MS)
     };
     let elapsed = state.last_keypress.elapsed();
     debounce.saturating_sub(elapsed)
@@ -278,9 +305,9 @@ fn fetch_and_apply_results(
     state.render(stdout)?;
 
     let snapshot = state.query.clone();
-    let (_cols, rows) = terminal::size().unwrap_or((80, 24));
+    let (_cols, rows) = terminal::size().unwrap_or((DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS));
     let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
-    let max_results = max_results.clamp(2, 20);
+    let max_results = max_results.clamp(MIN_DISPLAY_RESULTS, MAX_DISPLAY_RESULTS);
 
     let response = handle.block_on(client.fuzzy_search(&snapshot, Some(max_results)));
 
@@ -314,9 +341,9 @@ fn render(
     loading: bool,
     error_msg: &Option<String>,
 ) -> Result<(), RegistryError> {
-    let (cols, _rows) = terminal::size().unwrap_or((80, 24));
+    let (cols, _rows) = terminal::size().unwrap_or((DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS));
     let w = cols as usize;
-    let content_w = w.saturating_sub(6); // 4-char left margin
+    let content_w = w.saturating_sub(LEFT_MARGIN_WIDTH);
 
     execute!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
     render_header(stdout)?;
@@ -417,7 +444,7 @@ fn render_result_card(
         SetAttribute(Attribute::Bold)
     )?;
     let dl_display = format!("{} dl", dl);
-    let name_budget = content_w.saturating_sub(dl_display.len() + 2);
+    let name_budget = content_w.saturating_sub(dl_display.len() + RESULT_SPACING_WIDTH);
     let name = tui_truncate(&result.name, name_budget);
     let pad = content_w.saturating_sub(name.len() + dl_display.len());
     raw_line(
@@ -476,11 +503,11 @@ fn tui_truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    if max > 3 {
+    if max > MIN_TRUNCATION_LEN {
         let end = s
             .char_indices()
             .map(|(i, _)| i)
-            .take(max - 2)
+            .take(max - ELLIPSIS_WIDTH)
             .last()
             .unwrap_or(0);
         format!("{}..", &s[..end])

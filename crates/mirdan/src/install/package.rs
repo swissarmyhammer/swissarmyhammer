@@ -478,15 +478,16 @@ pub(crate) async fn install_tool_from_metadata(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
-    // Verify this is actually a tool
+    // Verify this is actually a tool. The registry may return the type in any
+    // casing, so compare case-insensitively.
     let is_tool = version_detail
         .package_type
         .as_deref()
-        .map(|t| t == "tool")
+        .map(|t| t.eq_ignore_ascii_case("tool"))
         .unwrap_or(false);
 
     if !is_tool {
-        return Err(RegistryError::NotFound(format!(
+        return Err(RegistryError::Validation(format!(
             "package '{}' has no downloadable artifact and is not a tool",
             name
         )));

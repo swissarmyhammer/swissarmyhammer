@@ -5,6 +5,27 @@ use tracing::{debug, error, info};
 
 use mirdan::registry::RegistryClient;
 
+/// Maximum number of registry search results returned to the frontend.
+const MAX_REGISTRY_SEARCH_RESULTS: usize = 20;
+
+/// Maximum recursion depth for store directory traversal. The store structure
+/// is normally `~/.skills/owner/repo/skill/SKILL.md` (3 levels); the margin
+/// guards against symlink cycles or unexpectedly deep nesting.
+const MAX_STORE_SEARCH_DEPTH: u32 = 5;
+
+/// Format the success message for a completed package action
+/// (e.g. `"Installed"`, `"Uninstalled"`).
+fn format_action_result(spec: &str, verb: &str) -> String {
+    format!("{verb} {spec}")
+}
+
+/// Log a failed package action and convert the error to the string the
+/// frontend displays. `action` names the operation (e.g. `"install"`).
+fn log_and_stringify_error(spec: &str, action: &str, e: impl std::fmt::Display) -> String {
+    error!(spec, "{action} failed: {e}");
+    e.to_string()
+}
+
 /// Serializable package info returned to the frontend.
 #[derive(Debug, Serialize)]
 pub struct PackageInfo {
@@ -59,11 +80,8 @@ pub async fn uninstall_package(spec: String) -> Result<String, String> {
 
     mirdan::install::run_uninstall(&spec, None, true)
         .await
-        .map(|_results| format!("Uninstalled {spec}"))
-        .map_err(|e| {
-            error!(spec, "uninstall failed: {e}");
-            e.to_string()
-        })
+        .map(|_results| format_action_result(&spec, "Uninstalled"))
+        .map_err(|e| log_and_stringify_error(&spec, "uninstall", e))
 }
 
 /// Update a package (or all packages if spec is empty).
@@ -79,10 +97,7 @@ pub async fn update_package(spec: String) -> Result<String, String> {
 
     mirdan::outdated::run_update(name, None, true)
         .await
-        .map_err(|e| {
-            error!(spec, "update failed: {e}");
-            e.to_string()
-        })
+        .map_err(|e| log_and_stringify_error(&spec, "update", e))
 }
 
 /// Get the filesystem path for a package (for "Show in Finder").
@@ -105,10 +120,13 @@ pub async fn search_registry(query: String) -> Result<Vec<SearchResult>, String>
         debug!("registry auth failed, falling back to unauthenticated: {e}");
         RegistryClient::default()
     });
-    let response = client.fuzzy_search(&query, Some(20)).await.map_err(|e| {
-        error!(query = %query, error = %e, "search_registry failed");
-        e.to_string()
-    })?;
+    let response = client
+        .fuzzy_search(&query, Some(MAX_REGISTRY_SEARCH_RESULTS))
+        .await
+        .map_err(|e| {
+            error!(query = %query, error = %e, "search_registry failed");
+            e.to_string()
+        })?;
 
     info!(
         query = %query,
@@ -141,11 +159,8 @@ pub async fn install_package(spec: String) -> Result<String, String> {
 
     mirdan::install::run_install(&spec, None, true, mirdan::install::InstallMode::Auto, None)
         .await
-        .map(|_results| format!("Installed {spec}"))
-        .map_err(|e| {
-            error!(spec, "install failed: {e}");
-            e.to_string()
-        })
+        .map(|_results| format_action_result(&spec, "Installed"))
+        .map_err(|e| log_and_stringify_error(&spec, "install", e))
 }
 
 /// Open a URL or path using the system default handler.
@@ -159,17 +174,14 @@ pub fn open_external(target: String) -> Result<(), String> {
 /// Checks both global and project stores, walking recursively to find
 /// a directory containing SKILL.md whose frontmatter name matches.
 fn find_store_path(name: &str) -> Option<String> {
-    let global_store = mirdan::store::skill_store_dir(true);
-    if let Some(path) = find_in_store(&global_store, name, 5) {
-        return Some(path.to_string_lossy().to_string());
-    }
+    search_store(name, true).or_else(|| search_store(name, false))
+}
 
-    let project_store = mirdan::store::skill_store_dir(false);
-    if let Some(path) = find_in_store(&project_store, name, 5) {
-        return Some(path.to_string_lossy().to_string());
-    }
-
-    None
+/// Search one skill store (global or project scope) for `name`, returning
+/// the matching directory as a display string.
+fn search_store(name: &str, global: bool) -> Option<String> {
+    let store = mirdan::store::skill_store_dir(global);
+    find_in_store(&store, name, MAX_STORE_SEARCH_DEPTH).map(|p| p.to_string_lossy().to_string())
 }
 
 /// Recursively search a store directory for a skill matching the given name.
@@ -184,26 +196,34 @@ fn find_in_store(dir: &std::path::Path, name: &str, max_depth: u32) -> Option<st
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            if path.join("SKILL.md").exists() {
-                // Check if the directory name or frontmatter name matches
-                let dir_name = path.file_name()?.to_string_lossy();
-                if dir_name == name {
-                    return Some(path);
-                }
-                // Check frontmatter name
-                if let Some(fm_name) = mirdan::list::read_frontmatter_name(&path.join("SKILL.md")) {
-                    if fm_name == name {
-                        return Some(path);
-                    }
-                }
-            } else if let Some(found) = find_in_store(&path, name, max_depth - 1) {
+        if !path.is_dir() {
+            continue;
+        }
+        if !path.join("SKILL.md").exists() {
+            if let Some(found) = find_in_store(&path, name, max_depth - 1) {
                 return Some(found);
             }
+            continue;
+        }
+        if skill_metadata_matches(&path, name) {
+            return Some(path);
         }
     }
 
     None
+}
+
+/// Check whether the skill directory at `path` matches `name` — by its
+/// directory name or by the `name` field in its SKILL.md frontmatter.
+fn skill_metadata_matches(path: &std::path::Path, name: &str) -> bool {
+    if path
+        .file_name()
+        .is_some_and(|dir_name| dir_name.to_string_lossy() == name)
+    {
+        return true;
+    }
+    mirdan::list::read_frontmatter_name(&path.join("SKILL.md"))
+        .is_some_and(|fm_name| fm_name == name)
 }
 
 #[cfg(test)]
