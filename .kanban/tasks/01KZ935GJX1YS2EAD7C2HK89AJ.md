@@ -106,10 +106,26 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/doctor.rs. Worked the one open finding (doctor.rs:308 duplicate match blocks). The fixture contract is now the fallible `verify_fixture_contract` (`Err` carries the degraded FixtureOutcome), `check_fixtures` is a thin match wrapper, and the duplicated match on `run_fixture` is the one shared helper `run_and_count_fixture(spec, fixture) -> Result<usize, FixtureOutcome>` called with `?` at both sites — the exact shape the finding named. Pure refactor, no behavior change; the existing fixture-path tests are the safety net. Finding flipped to [x]. cargo nextest run -p swissarmyhammer-validators: 417 passed, 0 failed. cargo fmt run. cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings: clean.
     - next: test
   timestamp: 2026-08-06T15:12:50.350083+00:00
+- actor: claude-code
+  id: 01kzbthda4gt9ersaa2hn7rjy3
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (73e106f10) — 0 findings, 9 validators attempted, 0 failed; all prior checklist items checked
+    - next: none — task moved to done
+  timestamp: 2026-08-06T15:19:45.732043+00:00
+- actor: claude-code
+  id: 01kzbtj2mvthd2fdngy7kf9nya
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — worked the doctor.rs:308 finding; verify_fixture_contract + run_and_count_fixture shared helpers in doctor.rs
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3155 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 73e106f10
+    - review: clean — 0 findings; task moved to done
+  timestamp: 2026-08-06T15:20:07.579165+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb180
 title: Make the review engine doctorable per project and project type
 ---
 `sah doctor` must report the review engine state for the current project.
