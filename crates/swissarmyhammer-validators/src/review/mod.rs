@@ -20,6 +20,7 @@ pub mod scope;
 pub mod synthesize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod tool_install;
 pub mod tool_output;
 pub mod tool_rules;
 pub mod types;
@@ -37,11 +38,16 @@ pub use probes::{
     ProbeResult, ProbeResults, ProbeRow, CATALOG,
 };
 pub use scope::{
-    batch_work_list, scope_review, FileWork, LineAnnotation, ProbeNames, RuleNames, Scope,
-    ScopeSpec, SkippedFile, ValidatorWork, WorkList,
+    batch_work_list, detected_project_type_keys, scope_review, FileWork, LineAnnotation,
+    ProbeNames, RuleNames, Scope, ScopeSpec, SkippedFile, ValidatorWork, WorkList,
 };
 pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,
+};
+pub use tool_install::{
+    ensure_tool_installed, install_command_pins_version, install_missing_tools,
+    install_project_tool_rules, install_tool_commands, InstallAgentRequest, InstallAttempt,
+    PoolInstallAgent, ToolInstallAgent, ToolInstallOutcome, ToolRuleInstall,
 };
 pub use tool_output::parse_tool_stdout;
 pub use tool_rules::{

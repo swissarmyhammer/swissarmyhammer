@@ -42,6 +42,7 @@ use crate::review::fleet::{
 use crate::review::scope::{
     batch_work_list, detected_project_type_keys, scope_review, Scope, SkippedFile, WorkList,
 };
+use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
 use crate::review::tool_rules::{execute_tool_runs, plan_tool_rules, ToolReport};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
@@ -622,6 +623,23 @@ pub async fn run_review(
     // every batch's fan-out so a superseded prompt rule is skipped per file;
     // an unhealthy tool suppresses nothing, and the report notes the fallback.
     let project_types = detected_project_type_keys(repo_path);
+
+    // Stage 2a: install what the matched tool rules need before planning them.
+    // The lifecycle tries each `install.commands` entry in order and, when all
+    // of them fail, spends one bounded agent turn; the doctor check confirms
+    // every attempt. Planning re-runs that same check, so an installed tool is
+    // planned as healthy and a tool that is still missing falls back on its own.
+    let installer = PoolInstallAgent::new(pool);
+    let installs = install_missing_tools(&work, loader, &project_types, Some(&installer)).await;
+    tracing::info!(
+        tool_rules = installs.len(),
+        still_missing = installs
+            .iter()
+            .filter(|install| !install.outcome().tool_present())
+            .count(),
+        "review run: tool-rule install lifecycle finished"
+    );
+
     let tool_plan = plan_tool_rules(&work, loader, &project_types);
     let tool_outcome = execute_tool_runs(tool_plan.runs(), repo_path, progress);
     let tool_attempted = tool_plan.runs().len();

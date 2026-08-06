@@ -661,7 +661,7 @@ struct MatchedValidators {
 /// Detection failure (an unreadable or vanished root) logs a warning and
 /// resolves to no types, so a `project_types`-keyed validator simply does not
 /// match rather than failing the review.
-pub(crate) fn detected_project_type_keys(repo_path: &Path) -> Vec<String> {
+pub fn detected_project_type_keys(repo_path: &Path) -> Vec<String> {
     match detect_projects(repo_path, None) {
         Ok(projects) => {
             let keys: BTreeSet<String> = projects

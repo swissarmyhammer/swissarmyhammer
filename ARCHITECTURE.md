@@ -540,6 +540,8 @@ CLI programs generate their clap command trees from the operation/command schema
 
 CLI programs that integrate with Claude Code provide `init [project|local|user]` and `deinit` subcommands. These run all `Initializable` components in priority order for the given scope — registering the MCP server, creating project structure, deploying builtin skills/agents, and configuring Claude Code settings.
 
+A component covers an install concern the declarative `mirdan::install::Profile` cannot express. `ValidatorTools` is one: it pre-installs the command-line tools the review engine's tool rules need, through `swissarmyhammer_validators::review::install_project_tool_rules`. mirdan is the shared installer for every tool CLI, so it must not depend on the review engine; reading a tool rule's `install.commands` means parsing the validator stack, which only the review engine can do.
+
 ### Doctor Pattern
 
 Every CLI has a `doctor` subcommand that prints one diagnostic report of `Check` rows. Checks get into that report by one of two paths.

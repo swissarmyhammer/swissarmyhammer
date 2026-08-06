@@ -30,7 +30,19 @@ const RUST_ANALYZER_INITIAL_LOAD_WAIT_SECS: u64 = 3;
 /// Bounded retry budget for polling a routed live-LSP op until rust-analyzer is
 /// warm enough to return the real cross-reference / rename (hang-safe: the loop
 /// is finite, never an unbounded wait on a server that never resolves).
-const WARM_UP_MAX_ATTEMPTS: u32 = 20;
+///
+/// 120 attempts at [`WARM_UP_POLL_INTERVAL`] gives 60s of polling on top of the
+/// initial [`RUST_ANALYZER_INITIAL_LOAD_WAIT_SECS`] settle — matching the
+/// load-tolerant 60s deadline this crate's sibling `ra_pull_readiness.rs` uses
+/// for the same "real rust-analyzer, cold under CI load" scenario. The prior
+/// budget of 20 attempts (10s of polling, ~13s total) was tuned for an idle
+/// machine: under full `--workspace` parallelism a cold rust-analyzer is
+/// CPU-starved and routinely still indexing past 13s, so these routing tests
+/// failed intermittently and load-dependently even though `lsp-ipc-serial`
+/// already caps this crate's tests to one real analyzer at a time (see
+/// `.config/nextest.toml`) — the contention comes from every other package's
+/// tests sharing the same CPU, not from a second concurrent analyzer.
+const WARM_UP_MAX_ATTEMPTS: u32 = 120;
 
 /// Poll interval between warm-up attempts.
 const WARM_UP_POLL_INTERVAL: Duration = Duration::from_millis(500);

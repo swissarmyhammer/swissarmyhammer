@@ -206,19 +206,58 @@ pub fn check_review_engine_with(
     let mut rulesets = loader.list_rulesets();
     rulesets.sort_by(|a, b| a.name().cmp(b.name()));
 
-    let mut sets = Vec::with_capacity(rulesets.len());
-    let mut tool_rules = Vec::new();
-    for ruleset in rulesets {
-        let applies = criteria_applies(ruleset.manifest.match_criteria.as_ref(), project_types);
-        sets.push(SetStatus {
+    let sets = rulesets
+        .iter()
+        .map(|ruleset| SetStatus {
             name: ruleset.name().to_string(),
             source: ruleset.source.clone(),
-            applies,
-        });
-        if !applies {
+            applies: criteria_applies(ruleset.manifest.match_criteria.as_ref(), project_types),
+        })
+        .collect();
+
+    let tool_rules = project_tool_rules(loader, project_types)
+        .into_iter()
+        .map(|matched| check_tool_rule(matched.ruleset, matched.rule, matched.spec))
+        .collect();
+
+    ReviewEngineStatus {
+        project_types: project_types.to_vec(),
+        sets,
+        tool_rules,
+    }
+}
+
+/// One tool rule that serves the detected project types, with its owning set.
+pub(crate) struct ProjectToolRule<'a> {
+    /// The owning validator set — the doctor reads its `fixtures/` directory.
+    pub ruleset: &'a RuleSet,
+    /// The tool rule.
+    pub rule: &'a Rule,
+    /// The rule's `tool` block.
+    pub spec: &'a ToolSpec,
+}
+
+/// Every tool rule the loaded sets declare for `project_types`, in set order.
+///
+/// A rule contributes only when its set's `match` AND its own fit the detected
+/// project types — the same intersection the review engine matches on. This is
+/// the ONE selection pass over the loader: [`check_review_engine_with`]
+/// diagnoses these rules and
+/// [`install_project_tool_rules`](crate::review::tool_install::install_project_tool_rules)
+/// installs their tools, so doctor can never report a rule the installer
+/// skipped.
+pub(crate) fn project_tool_rules<'a>(
+    loader: &'a ValidatorLoader,
+    project_types: &[String],
+) -> Vec<ProjectToolRule<'a>> {
+    let mut rulesets = loader.list_rulesets();
+    rulesets.sort_by(|a, b| a.name().cmp(b.name()));
+
+    let mut matched = Vec::new();
+    for ruleset in rulesets {
+        if !criteria_applies(ruleset.manifest.match_criteria.as_ref(), project_types) {
             continue;
         }
-
         for rule in &ruleset.rules {
             let Some(spec) = &rule.tool else {
                 continue;
@@ -226,15 +265,14 @@ pub fn check_review_engine_with(
             if !criteria_applies(rule.match_criteria.as_ref(), project_types) {
                 continue;
             }
-            tool_rules.push(check_tool_rule(ruleset, rule, spec));
+            matched.push(ProjectToolRule {
+                ruleset,
+                rule,
+                spec,
+            });
         }
     }
-
-    ReviewEngineStatus {
-        project_types: project_types.to_vec(),
-        sets,
-        tool_rules,
-    }
+    matched
 }
 
 /// Whether an optional match criteria's project-type constraint fits the
@@ -277,7 +315,12 @@ pub(crate) fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -
 ///
 /// A rule without a doctor block is treated as present — the fixture run is
 /// then the only health evidence.
-fn check_presence(spec: &ToolSpec) -> ToolPresence {
+///
+/// Crate-visible so the install lifecycle
+/// ([`crate::review::tool_install`]) decides presence with the same function,
+/// before and after every install attempt — "installed" can never mean two
+/// things.
+pub(crate) fn check_presence(spec: &ToolSpec) -> ToolPresence {
     let Some(doctor) = &spec.doctor else {
         return ToolPresence::Present;
     };

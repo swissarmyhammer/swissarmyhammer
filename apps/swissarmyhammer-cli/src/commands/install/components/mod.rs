@@ -8,7 +8,12 @@
 //! [`ProjectStructure`]: creating (and optionally removing) the `.sah/` +
 //! `.prompts/` project workspace, which is not expressible as profile data
 //! because it is a project-local filesystem scaffold rather than a per-agent
-//! config edit.
+//! config edit — and [`ValidatorTools`], which pre-installs the command-line
+//! tools the review engine's tool rules need. The profile installer cannot
+//! carry that: reading a tool rule's `install.commands` means parsing the
+//! validator stack, which only the review engine
+//! ([`swissarmyhammer_validators`]) can do, and mirdan is the shared installer
+//! for every tool CLI and must not link it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +21,10 @@ use std::path::{Path, PathBuf};
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
+use swissarmyhammer_validators::review::{
+    detected_project_type_keys, install_project_tool_rules, ToolRuleInstall,
+};
+use swissarmyhammer_validators::ValidatorLoader;
 
 // ── ProjectStructure (priority 40) ───────────────────────────────────
 
@@ -171,6 +180,146 @@ impl Initializable for ProjectStructure {
 
         vec![InitResult::ok(self.name(), "Project directories removed")]
     }
+}
+
+// ── ValidatorTools (priority 60) ─────────────────────────────────────
+
+/// Where [`ValidatorTools`] sits in the ascending `InitRegistry` ordering.
+///
+/// It runs last: the validator sets it reads are materialized by the profile's
+/// validators step, and the kanban tool (55) has no bearing on it.
+const VALIDATOR_TOOLS_PRIORITY: i32 = 60;
+
+/// Pre-installs the command-line tools the review engine's tool rules need.
+///
+/// Runs the deterministic half of the install lifecycle
+/// ([`install_project_tool_rules`]) over every tool rule that serves the
+/// detected project types: for each one whose `doctor.check_command` fails, it
+/// tries the rule's `install.commands` in order and re-runs that check after
+/// each. No agent turn — `sah init` never spends an LLM call. A tool it cannot
+/// install is a warning, never an error: the review degrades onto the
+/// superseded prompt rule, and `sah doctor` reports the row.
+///
+/// # Uninstall
+///
+/// `deinit` deliberately removes nothing. The tools are ordinary developer
+/// tools — `ruff`, `jq`, a language server — that the user's other work also
+/// uses, so `sah deinit` uninstalling them would take away more than sah put
+/// there.
+#[derive(Debug)]
+pub struct ValidatorTools;
+
+impl Initializable for ValidatorTools {
+    /// The component name for the runner-tool pre-install.
+    fn name(&self) -> &str {
+        "validator-tools"
+    }
+
+    /// Human-readable label for this component.
+    fn display_name(&self) -> &str {
+        "Review runner tools"
+    }
+
+    /// Component category: tool installation.
+    fn category(&self) -> &str {
+        "tools"
+    }
+
+    /// Component priority: [`VALIDATOR_TOOLS_PRIORITY`] — it runs last.
+    fn priority(&self) -> i32 {
+        VALIDATOR_TOOLS_PRIORITY
+    }
+
+    /// Pre-install the runner tools for the workspace under installation.
+    ///
+    /// Root resolution stays here — the CLI is rooted at the process working
+    /// directory by design — and the work itself is the loader-free
+    /// [`install_tool_rules_with`], which tests drive with a synthetic loader.
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let root = match workspace_root() {
+            Ok(root) => root,
+            Err(e) => return vec![InitResult::error(self.name(), e)],
+        };
+
+        let loader = match swissarmyhammer_validators::load_rules() {
+            Ok(loader) => loader,
+            Err(e) => {
+                return vec![InitResult::error(
+                    self.name(),
+                    format!("failed to load the validator stack: {e}"),
+                )]
+            }
+        };
+        let project_types = detected_project_type_keys(&root);
+
+        vec![install_tool_rules_with(
+            self.name(),
+            &loader,
+            &project_types,
+            reporter,
+        )]
+    }
+
+    /// Uninstall nothing — see the struct-level documentation.
+    fn deinit(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
+        vec![InitResult::skipped(
+            self.name(),
+            "Runner tools are shared developer tools and are left installed",
+        )]
+    }
+}
+
+/// Pre-install every runner tool `loader` declares for `project_types` and
+/// collapse the outcomes into one lifecycle result.
+///
+/// The injectable core of [`ValidatorTools::init`]: tests drive it with a
+/// synthetic loader and type list, so they never depend on what the host has
+/// installed. A tool that is still missing afterwards is a
+/// [`InitResult::warning`] naming it — never an error, because a missing tool
+/// degrades the review onto its prompt rule instead of blocking it.
+fn install_tool_rules_with(
+    component: &str,
+    loader: &ValidatorLoader,
+    project_types: &[String],
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    let installs = install_project_tool_rules(loader, project_types);
+    if installs.is_empty() {
+        return InitResult::skipped(component, "No tool rule serves this project");
+    }
+
+    let missing: Vec<String> = installs
+        .iter()
+        .filter(|install| !install.outcome().tool_present())
+        .map(tool_rule_label)
+        .collect();
+
+    reporter.emit(&InitEvent::Action {
+        verb: "Checked".to_string(),
+        message: format!("{} review runner tool(s)", installs.len()),
+    });
+
+    if missing.is_empty() {
+        return InitResult::ok(
+            component,
+            format!("{} review runner tool(s) ready", installs.len()),
+        );
+    }
+
+    InitResult::warning(
+        component,
+        format!(
+            "{} review runner tool(s) are still missing ({}); \
+their prompt rules run instead — run `sah doctor` for the install commands",
+            missing.len(),
+            missing.join(", ")
+        ),
+    )
+}
+
+/// One tool rule's `<set>/<rule>` label, for the install report.
+fn tool_rule_label(install: &ToolRuleInstall) -> String {
+    format!("{}/{}", install.set_name(), install.rule_name())
 }
 
 /// Resolve the project root this component acts on: the git repository root,
@@ -359,6 +508,123 @@ mod tests {
 
         assert!(failure.is_none(), "a missing directory is not a failure");
         assert!(reporter.messages.lock().unwrap().is_empty());
+    }
+
+    /// A validator set holding one tool rule whose doctor check passes only
+    /// once `marker` exists, with `install_commands` as its install list.
+    ///
+    /// Built through the real parser so the test drives the same rule shape a
+    /// shipped `rules/*.md` file produces.
+    fn tool_rule_loader(marker: &Path, install_commands: &[&str]) -> ValidatorLoader {
+        let commands: String = install_commands
+            .iter()
+            .map(|command| format!("      - \"{command}\"\n"))
+            .collect();
+        // A raw literal, never a `\`-continued one: a line continuation strips
+        // the next line's leading whitespace, which would silently flatten the
+        // YAML nesting and drop the `tool` block's keys.
+        let rule = format!(
+            r#"---
+name: marker-check
+description: A rule whose tool is a marker file.
+tool:
+  scope: files
+  run: "true"
+  doctor:
+    check_command: "test -f {marker}"
+  install:
+    commands:
+{commands}---
+Never runs.
+"#,
+            marker = marker.display(),
+        );
+
+        let root = marker
+            .parent()
+            .expect("the marker path has a parent directory");
+        let set_dir = root.join("tool-set");
+        fs::create_dir_all(set_dir.join("rules")).expect("create rules dir");
+        fs::write(
+            set_dir.join("VALIDATOR.md"),
+            "---\nname: tool-set\ndescription: A set carrying tool rules.\n---\n",
+        )
+        .expect("write manifest");
+        fs::write(set_dir.join("rules").join("marker-check.md"), rule).expect("write rule");
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_rulesets_directory(
+                root,
+                swissarmyhammer_validators::validators::types::ValidatorSource::Project,
+            )
+            .expect("load rulesets");
+        loader
+    }
+
+    /// With a working install command, the component installs the runner tool
+    /// and reports it ready.
+    #[test]
+    fn test_validator_tools_installs_a_missing_runner_tool() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let marker = temp.path().join("installed-tool");
+        let loader = tool_rule_loader(&marker, &[&format!("touch '{}'", marker.display())]);
+        let reporter = RecordingReporter::default();
+
+        let result = install_tool_rules_with("validator-tools", &loader, &[], &reporter);
+
+        assert_eq!(result.status, InitStatus::Ok, "{}", result.message);
+        assert!(marker.exists(), "the install command must have run");
+        assert!(result.message.contains('1'), "{}", result.message);
+    }
+
+    /// With every install command failing, the component warns and names the
+    /// rule — a missing runner tool degrades the review, never blocks install.
+    #[test]
+    fn test_validator_tools_warns_when_a_runner_tool_stays_missing() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let marker = temp.path().join("never-installed");
+        let loader = tool_rule_loader(&marker, &["echo 'no such package' >&2; exit 1"]);
+        let reporter = RecordingReporter::default();
+
+        let result = install_tool_rules_with("validator-tools", &loader, &[], &reporter);
+
+        assert!(!marker.exists());
+        assert_eq!(result.status, InitStatus::Warning, "{}", result.message);
+        assert!(
+            result.message.contains("tool-set/marker-check"),
+            "the warning must name the rule; got '{}'",
+            result.message
+        );
+    }
+
+    /// A project with no tool rule at all is skipped, not reported as ready.
+    #[test]
+    fn test_validator_tools_skips_a_project_with_no_tool_rule() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+
+        let loader = ValidatorLoader::new();
+        let reporter = RecordingReporter::default();
+
+        let result = install_tool_rules_with("validator-tools", &loader, &[], &reporter);
+
+        assert_eq!(result.status, InitStatus::Skipped, "{}", result.message);
+    }
+
+    /// `deinit` never uninstalls a shared developer tool.
+    #[test]
+    fn test_validator_tools_deinit_uninstalls_nothing() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+        use swissarmyhammer_common::reporter::NullReporter;
+
+        let results = ValidatorTools.deinit(&InitScope::Project, &NullReporter);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, InitStatus::Skipped);
     }
 
     /// The component's own lifecycle round-trips, and both halves target the

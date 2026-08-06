@@ -158,6 +158,11 @@ When a review needs a tool rule and the tool is missing:
    doctor keeps a warning. A missing tool degrades the review. It never blocks
    the review.
 
+`sah init` runs steps 1 and 2 for every tool rule of the detected project
+types, so the tools are already there the first time a review needs them. It
+never runs step 3 — install never spends an agent turn. A tool `sah init`
+could not install is a warning that names the rule, never an error.
+
 ## Doctor
 
 The review engine is doctorable. `sah doctor` reports, for this project:

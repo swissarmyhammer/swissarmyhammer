@@ -328,9 +328,48 @@ pub fn plan_tool_rules(
     project_types: &[String],
 ) -> ToolPlan {
     let mut plan = ToolPlan::default();
+    for matched in matched_tool_rules(work, loader, project_types) {
+        plan_rule_by_health(
+            &mut plan,
+            matched.ruleset.name(),
+            matched.ruleset,
+            matched.rule,
+            matched.spec,
+            matched.files,
+        );
+    }
+    plan
+}
+
+/// One tool rule the work-list matched, with the files it matched.
+pub(crate) struct MatchedToolRule<'a> {
+    /// The owning validator set. The doctor reads its `fixtures/` directory,
+    /// and its name is the validator name the work-list keys on.
+    pub ruleset: &'a RuleSet,
+    /// The matched tool rule.
+    pub rule: &'a Rule,
+    /// The rule's `tool` block.
+    pub spec: &'a ToolSpec,
+    /// The changed files this rule matched, repo-relative, in work-list order.
+    pub files: Vec<String>,
+}
+
+/// Every tool rule the work-list matches, with the files each one matched.
+///
+/// The ONE matching pass over the work-list: [`plan_tool_rules`] plans from it
+/// and [`install_missing_tools`](crate::review::tool_install::install_missing_tools)
+/// installs from it, so the engine can never install a tool for a rule it will
+/// not run, or run a rule it never tried to install.
+///
+/// A tool rule with no matched file is left out entirely.
+pub(crate) fn matched_tool_rules<'a>(
+    work: &WorkList,
+    loader: &'a ValidatorLoader,
+    project_types: &[String],
+) -> Vec<MatchedToolRule<'a>> {
+    let mut matched = Vec::new();
     for validator in work.validators() {
-        let name = validator.validator_name();
-        let Some(ruleset) = loader.get_ruleset(name) else {
+        let Some(ruleset) = loader.get_ruleset(validator.validator_name()) else {
             continue;
         };
         for rule in &ruleset.rules {
@@ -341,10 +380,15 @@ pub fn plan_tool_rules(
             if files.is_empty() {
                 continue;
             }
-            plan_rule_by_health(&mut plan, name, ruleset, rule, spec, files);
+            matched.push(MatchedToolRule {
+                ruleset,
+                rule,
+                spec,
+                files,
+            });
         }
     }
-    plan
+    matched
 }
 
 /// The subset of the validator's files this tool rule matches: the same
@@ -574,9 +618,29 @@ mod tests {
     /// per line containing `TODO`, and exits 0 whether or not it found any.
     const TODO_SCRIPT: &str = r#"for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }' "$f"; done"#;
 
+    /// The placeholder install command the planner tests never run — they only
+    /// assert on the plan, never on the install lifecycle.
+    const UNUSED_INSTALL_COMMAND: &str = "brew install fake-tool@1.0.0";
+
     /// A tool rule named `docs-tool` superseding `missing-docs`, with the
     /// given run script and doctor check command.
     fn tool_rule(run: &str, check_command: &str, match_criteria: Option<ValidatorMatch>) -> Rule {
+        tool_rule_with_install(
+            run,
+            check_command,
+            match_criteria,
+            vec![UNUSED_INSTALL_COMMAND.to_string()],
+        )
+    }
+
+    /// A tool rule named `docs-tool` superseding `missing-docs`, with the given
+    /// run script, doctor check command, and install commands.
+    fn tool_rule_with_install(
+        run: &str,
+        check_command: &str,
+        match_criteria: Option<ValidatorMatch>,
+        install_commands: Vec<String>,
+    ) -> Rule {
         Rule {
             name: "docs-tool".to_string(),
             description: "docs by tool".to_string(),
@@ -591,7 +655,7 @@ mod tests {
                     check_version_command: None,
                 }),
                 install: Some(ToolInstall {
-                    commands: vec!["brew install fake-tool".to_string()],
+                    commands: install_commands,
                 }),
             }),
             ..Rule::default()
@@ -730,6 +794,106 @@ mod tests {
             .suppression()
             .suppressed_rules("docs", "src/other.rs")
             .is_empty());
+    }
+
+    /// A doctor check that passes only once `marker` exists — a missing tool
+    /// that an install command can make present.
+    fn marker_check_command(marker: &Path) -> String {
+        format!("test -f '{}'", marker.display())
+    }
+
+    /// An install command that creates `marker`, standing in for a real one.
+    fn marker_install_command(marker: &Path) -> String {
+        format!("touch '{}'", marker.display())
+    }
+
+    /// Acceptance: with the tool absent and a working install command, the
+    /// engine installs it and then plans the runner over the changed files.
+    #[tokio::test]
+    async fn a_missing_tool_with_a_working_install_command_is_installed_and_then_planned() {
+        let base = tempfile::tempdir().unwrap();
+        write_tool_rule_fixtures(base.path(), "docs-tool");
+        let marker = base.path().join("installed-tool");
+        let loader = loader_of(docs_ruleset(
+            base.path(),
+            vec![
+                prompt_rule(),
+                tool_rule_with_install(
+                    TODO_SCRIPT,
+                    &marker_check_command(&marker),
+                    None,
+                    vec![marker_install_command(&marker)],
+                ),
+            ],
+        ));
+        let work = docs_work(&["src/lib.rs"]);
+
+        // Before the install stage the tool is missing, so the rule falls back.
+        let before = plan_tool_rules(&work, &loader, &[]);
+        assert!(before.runs().is_empty());
+        assert_eq!(before.fallbacks().len(), 1);
+
+        let installs =
+            crate::review::tool_install::install_missing_tools(&work, &loader, &[], None).await;
+
+        assert_eq!(installs.len(), 1);
+        assert_eq!(installs[0].set_name(), "docs");
+        assert_eq!(installs[0].rule_name(), "docs-tool");
+        assert!(
+            installs[0].outcome().tool_present(),
+            "the install command must make the doctor check pass; got {:?}",
+            installs[0].outcome()
+        );
+
+        // The planner re-runs the same doctor check, so the rule is now healthy.
+        let after = plan_tool_rules(&work, &loader, &[]);
+        assert_eq!(after.runs().len(), 1, "the installed tool must be planned");
+        assert_eq!(after.runs()[0].rule(), "docs-tool");
+        assert!(after.fallbacks().is_empty());
+        assert!(after
+            .suppression()
+            .suppressed_rules("docs", "src/lib.rs")
+            .contains("missing-docs"));
+    }
+
+    /// Acceptance: with every install command failing, the run completes on the
+    /// prompt fallback — the missing tool degrades the review, never blocks it.
+    #[tokio::test]
+    async fn a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback() {
+        let base = tempfile::tempdir().unwrap();
+        write_tool_rule_fixtures(base.path(), "docs-tool");
+        let marker = base.path().join("never-installed");
+        let loader = loader_of(docs_ruleset(
+            base.path(),
+            vec![
+                prompt_rule(),
+                tool_rule_with_install(
+                    TODO_SCRIPT,
+                    &marker_check_command(&marker),
+                    None,
+                    vec!["echo 'no such package' >&2; exit 1".to_string()],
+                ),
+            ],
+        ));
+        let work = docs_work(&["src/lib.rs"]);
+
+        let installs =
+            crate::review::tool_install::install_missing_tools(&work, &loader, &[], None).await;
+
+        assert_eq!(installs.len(), 1);
+        assert!(
+            !installs[0].outcome().tool_present(),
+            "every install command failed, so the tool stays missing"
+        );
+
+        let plan = plan_tool_rules(&work, &loader, &[]);
+        assert!(plan.runs().is_empty());
+        assert_eq!(plan.fallbacks().len(), 1);
+        assert_eq!(plan.fallbacks()[0].supersedes(), Some("missing-docs"));
+        assert!(
+            plan.suppression().is_empty(),
+            "the superseded prompt rule must still run for every file"
+        );
     }
 
     /// A run over `script` with `scope` and `files`, for the execute tests.
