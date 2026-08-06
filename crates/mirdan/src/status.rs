@@ -19,6 +19,7 @@ use crate::agents::{
     agent_global_skill_dir, agent_project_agent_dir, agent_project_mcp_config,
     agent_project_settings_file, agent_project_skill_dir, AgentDef, AgentsConfig,
 };
+use crate::install::SUPERSEDED_NATIVE_DENY_TOOLS;
 use crate::registry::RegistryError;
 use crate::table;
 
@@ -619,19 +620,29 @@ fn dir_non_empty(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// True when the settings JSON at `path` lists `"Bash"` under `permissions.deny`.
+/// True when the settings JSON at `path` denies **every** superseded native
+/// under `permissions.deny`.
 ///
-/// This is the **single source of truth** for "is the sah Bash-deny permission
+/// This is the **single source of truth** for "is the sah deny permission
 /// installed at this path?" and is consumed by both `mirdan::status` and the
-/// sah-cli install layer so detection and installation cannot drift.
+/// sah-cli install layer so detection and installation cannot drift. The roster
+/// is [`SUPERSEDED_NATIVE_DENY_TOOLS`] — the same constant the installer writes
+/// — so a partially written deny reads as missing, not as installed.
 pub fn permissions_present(path: &Path) -> bool {
     let Some(root) = read_json(path) else {
         return false;
     };
-    root.get("permissions")
+    let Some(deny) = root
+        .get("permissions")
         .and_then(|p| p.get("deny"))
         .and_then(|d| d.as_array())
-        .is_some_and(|deny| deny.iter().filter_map(|v| v.as_str()).any(|s| s == "Bash"))
+    else {
+        return false;
+    };
+    let denied: Vec<&str> = deny.iter().filter_map(|v| v.as_str()).collect();
+    SUPERSEDED_NATIVE_DENY_TOOLS
+        .iter()
+        .all(|tool| denied.contains(tool))
 }
 
 /// Read and parse JSON at `path`, returning `None` on any error or missing file.
@@ -938,15 +949,67 @@ mod tests {
             ComponentState::Missing
         );
 
+        let full_deny: Vec<&str> = SUPERSEDED_NATIVE_DENY_TOOLS
+            .iter()
+            .copied()
+            .chain(std::iter::once("WebFetch"))
+            .collect();
         std::fs::write(
             &settings,
-            r#"{"permissions": {"deny": ["Bash", "WebFetch"]}}"#,
+            serde_json::json!({ "permissions": { "deny": full_deny } }).to_string(),
         )
         .unwrap();
         assert_eq!(
             state_of(&agent, Component::Permissions),
             ComponentState::Installed
         );
+    }
+
+    /// The probe is all-or-nothing over the superseded-native roster: a settings
+    /// file that denies only part of the set is not installed. Each iteration
+    /// leaves exactly one tool out.
+    #[test]
+    fn permissions_present_false_when_deny_set_is_partial() {
+        let dir = TempDir::new().unwrap();
+        let settings = dir.path().join("settings.json");
+
+        for omitted in SUPERSEDED_NATIVE_DENY_TOOLS {
+            let partial: Vec<&str> = SUPERSEDED_NATIVE_DENY_TOOLS
+                .iter()
+                .copied()
+                .filter(|tool| tool != omitted)
+                .collect();
+            std::fs::write(
+                &settings,
+                serde_json::json!({ "permissions": { "deny": partial } }).to_string(),
+            )
+            .unwrap();
+
+            assert!(
+                !permissions_present(&settings),
+                "a deny set missing {omitted} must not read as installed"
+            );
+        }
+    }
+
+    /// A project-scope settings file that denies the whole roster reports the
+    /// Permissions component as installed — the doctor row a correct `sah init`
+    /// must produce.
+    #[test]
+    fn project_permissions_state_is_installed_after_full_deny() {
+        let dir = TempDir::new().unwrap();
+        let agent = temp_agent(dir.path());
+        let settings = component_path(&agent, Component::Permissions, InitScope::Project)
+            .expect("the agent defines a project settings path");
+        std::fs::write(
+            &settings,
+            serde_json::json!({ "permissions": { "deny": SUPERSEDED_NATIVE_DENY_TOOLS } })
+                .to_string(),
+        )
+        .unwrap();
+
+        let status = check_component(&agent, Component::Permissions, InitScope::Project);
+        assert_eq!(status.state, ComponentState::Installed);
     }
 
     #[test]
