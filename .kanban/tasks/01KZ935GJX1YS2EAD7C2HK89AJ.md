@@ -48,6 +48,40 @@ comments:
 
     3. Your fixture semantics (cwd = fixtures dir, files scope gets the fixture name as "$@", fail >= 1 / pass = 0 via parse_tool_stdout, nonzero exit = Failed and rule unused) match the README contract. One forward pointer: ^b01gtzg ships the first real fixtures — when it lands, the "Fixture checks pass in doctor" acceptance there exercises your FixtureOutcome path end to end on this repo.
   timestamp: 2026-08-06T14:19:59.356045+00:00
+- actor: claude-code
+  id: 01kzbrmjxj3svw1n5951axgvgc
+  text: |-
+    ### review — findings
+    - evidence: 8 findings kept of 11 confirmed (engine counts: 11 confirmed, 28 refuted) on `review sha HEAD~1..HEAD` (a3ec46719) — crates/swissarmyhammer-validators/src/doctor.rs:410, src/lib.rs:29, src/lib.rs:30, src/lib.rs:31, src/lib.rs:32, src/lib.rs:33, src/validators/types.rs:298, src/validators/types.rs:374. 3 findings dropped by the review skill rule: they ask for a refactor of test code that existed before this commit (types.rs:1019, 1487, 1603).
+    - next: implement the 8 open findings, then run /review ^2hk89aj again
+  timestamp: 2026-08-06T14:46:32.626453+00:00
+- actor: claude-code
+  id: 01kzbrn5zr1mk2wygxfxaz8b0c
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 8 files (validators: doctor.rs new, lib.rs, types.rs, review/scope.rs, Cargo.toml; cli: doctor/checks.rs, doctor/mod.rs, Cargo.toml)
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3155 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: a3ec46719
+    - review: findings — 8 open: doctor.rs:410 (named constant), lib.rs:29-33 (module doc comments), types.rs:298 (apply_defaults duplicates), types.rs:374 (matches near-duplicates)
+  timestamp: 2026-08-06T14:46:52.152802+00:00
+- actor: claude-code
+  id: 01kzbsa8394tsjmn110y4wdjrs
+  text: |-
+    Worked all 8 review findings:
+
+    - doctor.rs — the capacity increment `1` is now the named constant `PROJECT_TYPES_ROWS`, defined with the other module constants and used in `to_checks`.
+    - lib.rs — all five public modules (`builtin`, `doctor`, `error`, `review`, `validators`) now carry doc comments at their declarations. The `doctor` comment names the status API: `check_review_engine` -> `ReviewEngineStatus` -> `to_checks`.
+    - types.rs — `ValidatorFrontmatter::apply_defaults` and `RuleFrontmatter::apply_defaults` now call one shared helper, `apply_name_and_description(name, description, path, kind)`. `Validator::matches` and `RuleSet::matches` now call one shared helper, `matches_trigger_and_criteria(trigger_matcher, match_criteria, owner, ctx)`. The now-unused private method `Validator::matches_trigger_regex` is deleted.
+
+    Discovery for the next agent: outer doc comments on a `pub mod` declaration make rustdoc re-resolve the module's inner `//!` doc links in the parent (crate-root) scope. Six inner links did not resolve there and produced new `cargo doc` warnings. Fix: give those links explicit crate-anchored targets, e.g. `[`Check`](swissarmyhammer_doctor::Check)` in doctor.rs and `[`probes`](crate::review::probes)` in review/mod.rs, plus `[`ValidatorPartialAdapter`](crate::validators::ValidatorPartialAdapter)` in validators/mod.rs. The explicit target does not trip the redundant-explicit-link lint in this dual-scope case. Verified with a warning-list diff: the `cargo doc` warning set is byte-identical to the pre-change baseline (35 pre-existing warnings, zero new).
+  timestamp: 2026-08-06T14:58:22.441312+00:00
+- actor: claude-code
+  id: 01kzbsaejk9vsgq6szwpca1eq9
+  text: |-
+    ### implement — changed
+    - evidence: 5 files — crates/swissarmyhammer-validators/src/doctor.rs (PROJECT_TYPES_ROWS constant + inner-doc link anchor), src/lib.rs (doc comments on the 5 public modules), src/validators/types.rs (shared apply_name_and_description + shared matches_trigger_and_criteria, private matches_trigger_regex method deleted), src/validators/mod.rs and src/review/mod.rs (crate-anchored inner-doc links so the new module docs add zero cargo doc warnings). All 8 findings flipped to [x]. cargo nextest run -p swissarmyhammer-validators: 417 passed. cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-cli --all-targets -- -D warnings: clean. cargo fmt run. cargo doc warning set identical to baseline.
+    - next: test
+  timestamp: 2026-08-06T14:58:29.075317+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
@@ -71,3 +105,16 @@ Acceptance:
 - Removing a tool from PATH flips its row to missing with install commands shown.
 
 #tool-validators
+
+## Review Findings (2026-08-06 09:22)
+
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:410` — Hardcoded capacity increment `1` for the project-types row should be a named constant to prevent off-by-one errors if the count of always-included rows changes. Define `const PROJECT_TYPES_ROWS: usize = 1;` near the top of the module (e.g., near line 35 with other constants) and use it: `Vec::with_capacity(PROJECT_TYPES_ROWS + status.sets.len() + status.tool_rules.len())`.
+- [x] `crates/swissarmyhammer-validators/src/lib.rs:29` — Public module `builtin` has no doc comment. All public items require documentation. Add a doc comment explaining the module's purpose.
+- [x] `crates/swissarmyhammer-validators/src/lib.rs:30` — Public module `doctor` has no doc comment. All public items require documentation. Add a doc comment explaining the module's purpose and how to use the review-engine status API.
+- [x] `crates/swissarmyhammer-validators/src/lib.rs:31` — Public module `error` has no doc comment. All public items require documentation. Add a doc comment explaining the module's purpose.
+- [x] `crates/swissarmyhammer-validators/src/lib.rs:32` — Public module `review` has no doc comment. All public items require documentation. Add a doc comment explaining the module's purpose.
+- [x] `crates/swissarmyhammer-validators/src/lib.rs:33` — Public module `validators` has no doc comment. All public items require documentation. Add a doc comment explaining the module's purpose.
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:298` — ValidatorFrontmatter::apply_defaults (lines 298-299) and RuleFrontmatter::apply_defaults (lines 846-847) are verbatim duplicates that differ only by the string literal passed to default_description. Both call the same two helper functions in the same sequence with different kind strings ('Validator' vs 'Rule'). This is code that could drift if the initialization pattern needs to change. Extract a shared method that takes the kind string as a parameter: `fn apply_name_and_description(&mut self, path: &Path, kind: &str)` that both frontmatter types call, eliminating the duplication.
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:374` — Validator::matches and RuleSet::matches are near-verbatim duplicates. Both follow identical logic: check trigger_matcher, check match_criteria, return success. They differ only in field access (frontmatter vs manifest) and the method vs function call pattern for trigger_matcher. This is one function with type-specific field access that could drift if bugs are fixed in one place but not the other. Extract a shared helper function that accepts the trigger_matcher and match_criteria as parameters, or implement a trait that both Validator and RuleSet conform to, so the matching logic lives in one place.
+
+Note: The engine reported 3 more findings about `timeout` constants in the test module of `types.rs` (lines 1019, 1487, 1603). That test code existed before this commit. The review skill rule drops findings that ask for a refactor of tests that already existed. These 3 findings are dropped for that written rule.

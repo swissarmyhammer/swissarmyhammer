@@ -2,7 +2,8 @@
 //!
 //! Mirrors the `mirdan::status` pattern: this module produces plain fact
 //! structs about the review engine for one workspace and converts them into
-//! doctor [`Check`] rows. `sah doctor` consumes the conversion; any other
+//! doctor [`Check`](swissarmyhammer_doctor::Check) rows. `sah doctor`
+//! consumes the conversion; any other
 //! surface can consume the facts directly.
 //!
 //! The contract is the Doctor section of `builtin/validators/README.md`.
@@ -34,6 +35,10 @@ use crate::validators::ValidatorLoader;
 
 /// The check name for the detected project types row.
 pub const PROJECT_TYPES_CHECK_NAME: &str = "Validator Project Types";
+
+/// The number of always-included rows [`to_checks`] emits — the one detected
+/// project-types row.
+const PROJECT_TYPES_ROWS: usize = 1;
 
 /// The directory inside a validator set that carries tool-rule fixtures.
 const FIXTURES_DIR_NAME: &str = "fixtures";
@@ -407,7 +412,8 @@ fn command_failure_detail(output: &Output) -> String {
 /// tool rule. A missing tool or a failing fixture is a Warning — a degraded
 /// review never blocks — with the install commands as the fix.
 pub fn to_checks(status: &ReviewEngineStatus) -> Vec<Check> {
-    let mut checks = Vec::with_capacity(1 + status.sets.len() + status.tool_rules.len());
+    let mut checks =
+        Vec::with_capacity(PROJECT_TYPES_ROWS + status.sets.len() + status.tool_rules.len());
     checks.push(project_types_check(&status.project_types));
     checks.extend(status.sets.iter().map(set_check));
     checks.extend(status.tool_rules.iter().map(tool_rule_check));

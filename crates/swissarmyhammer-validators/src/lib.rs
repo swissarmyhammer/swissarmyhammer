@@ -26,10 +26,23 @@
 //! - [`execute_agents`] — fan a batch of prompts out to a shared
 //!   [`validators::AgentPool`] and collect their results.
 
+/// Builtin RuleSets and YAML includes embedded in the binary at build time.
 pub mod builtin;
+/// Review-engine status facts for doctor surfaces.
+///
+/// Call [`doctor::check_review_engine`] with a workspace root to get a
+/// [`doctor::ReviewEngineStatus`] — the detected project types, each
+/// validator set with its applicability, and each tool rule with its tool
+/// presence and fixture result. Convert the facts into doctor check rows
+/// with [`doctor::to_checks`].
 pub mod doctor;
+/// The crate error type, [`AvpError`], for load, parse, and match failures.
 pub mod error;
+/// The local multi-agent review pipeline: scope resolution, probes, fleet
+/// prompts, tool output parsing, verification, and synthesis.
 pub mod review;
+/// The rules-as-data model: [`ValidatorLoader`], the [`validators::types`]
+/// data model, the parser, and the shared [`AgentPool`].
 pub mod validators;
 
 pub use builtin::load_builtins;

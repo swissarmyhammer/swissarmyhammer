@@ -1,11 +1,14 @@
 //! The local multi-agent review pipeline's shared data model.
 //!
 //! This module is the home for the types that flow through the review pipeline
-//! end to end: fleet agents emit [`types::Finding`]s, the verifier wraps them in
-//! [`types::VerifiedFinding`]s, and synthesis renders them. [`types::parse_findings`]
+//! end to end: fleet agents emit [`types::Finding`](crate::review::types::Finding)s,
+//! the verifier wraps them in
+//! [`types::VerifiedFinding`](crate::review::types::VerifiedFinding)s, and
+//! synthesis renders them.
+//! [`types::parse_findings`](crate::review::types::parse_findings)
 //! turns a raw agent response back into a `Vec<Finding>`.
 //!
-//! [`probes`] is the engine-run code_context probe catalog + runner: the
+//! [`probes`](crate::review::probes) is the engine-run code_context probe catalog + runner: the
 //! ground-truth evidence the engine injects into review (rather than asking the
 //! agent to call a tool it might skip).
 

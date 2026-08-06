@@ -33,7 +33,8 @@
 //!
 //! # Partial Support
 //!
-//! Validators support Liquid template partials via the unified [`ValidatorPartialAdapter`],
+//! Validators support Liquid template partials via the unified
+//! [`ValidatorPartialAdapter`](crate::validators::ValidatorPartialAdapter),
 //! which follows the same pattern as prompts and rules. Use `{% include 'partial-name' %}`
 //! in validator bodies to include shared content from the `_partials/` directory.
 //!

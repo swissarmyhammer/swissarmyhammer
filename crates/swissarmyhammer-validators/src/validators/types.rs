@@ -235,6 +235,21 @@ fn default_description(description: &mut String, kind: &str, name: &str) {
     }
 }
 
+/// The one shared name-then-description defaulting sequence behind
+/// [`ValidatorFrontmatter::apply_defaults`] and
+/// [`RuleFrontmatter::apply_defaults`]: an empty `name` defaults to the file
+/// stem, then an empty `description` defaults to `"{kind}: {name}"`. Only the
+/// `kind` label differs per caller, so the sequence cannot drift between them.
+fn apply_name_and_description(
+    name: &mut String,
+    description: &mut String,
+    path: &std::path::Path,
+    kind: &str,
+) {
+    default_name_from_path(name, path);
+    default_description(description, kind, name);
+}
+
 /// YAML frontmatter for a validator file.
 ///
 /// # Sensible Defaults
@@ -295,8 +310,7 @@ impl ValidatorFrontmatter {
         path: &std::path::Path,
         source_code_patterns: Option<&[String]>,
     ) {
-        default_name_from_path(&mut self.name, path);
-        default_description(&mut self.description, "Validator", &self.name);
+        apply_name_and_description(&mut self.name, &mut self.description, path, "Validator");
 
         // Default match criteria to source code files (if patterns provided)
         if self.match_criteria.is_none() {
@@ -372,29 +386,27 @@ impl Validator {
     /// 4. If project types are specified in match criteria, a detected
     ///    workspace project type matches
     pub fn matches(&self, ctx: &MatchContext) -> bool {
-        // Check triggerMatcher regex if present
-        if !self.matches_trigger_regex(ctx) {
-            return false;
-        }
-
-        // Check match criteria if present
-        if let Some(match_criteria) = &self.frontmatter.match_criteria {
-            if !matches_criteria(match_criteria, ctx) {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    /// Check if the event context matches the `triggerMatcher` regex.
-    fn matches_trigger_regex(&self, ctx: &MatchContext) -> bool {
-        matches_trigger_regex(
+        matches_trigger_and_criteria(
             self.frontmatter.trigger_matcher.as_deref(),
-            ctx,
+            self.frontmatter.match_criteria.as_ref(),
             &self.frontmatter.name,
+            ctx,
         )
     }
+}
+
+/// The one shared match evaluation behind [`Validator::matches`] and
+/// [`RuleSet::matches`]: the optional `triggerMatcher` regex must accept the
+/// event context, then the optional match criteria must accept the context.
+/// An absent matcher or absent criteria accepts everything.
+fn matches_trigger_and_criteria(
+    trigger_matcher: Option<&str>,
+    match_criteria: Option<&ValidatorMatch>,
+    owner: &str,
+    ctx: &MatchContext,
+) -> bool {
+    matches_trigger_regex(trigger_matcher, ctx, owner)
+        && match_criteria.is_none_or(|criteria| matches_criteria(criteria, ctx))
 }
 
 /// Check if the event context matches the optional `triggerMatcher` regex.
@@ -843,8 +855,7 @@ pub struct RuleFrontmatter {
 impl RuleFrontmatter {
     /// Apply defaults based on the file path.
     pub fn apply_defaults(&mut self, path: &std::path::Path) {
-        default_name_from_path(&mut self.name, path);
-        default_description(&mut self.description, "Rule", &self.name);
+        apply_name_and_description(&mut self.name, &mut self.description, path, "Rule");
     }
 }
 
@@ -918,21 +929,12 @@ impl RuleSet {
     /// 4. If project types are specified in match criteria, a detected
     ///    workspace project type matches
     pub fn matches(&self, ctx: &MatchContext) -> bool {
-        if !matches_trigger_regex(
+        matches_trigger_and_criteria(
             self.manifest.trigger_matcher.as_deref(),
-            ctx,
+            self.manifest.match_criteria.as_ref(),
             &self.manifest.name,
-        ) {
-            return false;
-        }
-
-        if let Some(match_criteria) = &self.manifest.match_criteria {
-            if !matches_criteria(match_criteria, ctx) {
-                return false;
-            }
-        }
-
-        true
+            ctx,
+        )
     }
 }
 
