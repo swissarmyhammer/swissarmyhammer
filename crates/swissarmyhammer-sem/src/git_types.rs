@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// The git scope a diff targets: the working tree, the staged index, one
 /// commit, or a commit range.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DiffScope {
     /// Uncommitted changes in the working tree, compared against `HEAD`.
     Working,
@@ -26,7 +27,7 @@ pub enum DiffScope {
 }
 
 /// What happened to a file in a diff.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FileStatus {
     /// The file is new in the diff.
@@ -41,7 +42,7 @@ pub enum FileStatus {
 
 /// One file's change in a diff: its path, status, and the content on each
 /// side.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
     /// The file's path, relative to the repository root.
@@ -62,7 +63,8 @@ pub struct FileChange {
 }
 
 /// Metadata for one commit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
     /// The full commit sha.
     pub sha: String,
@@ -74,4 +76,83 @@ pub struct CommitInfo {
     pub date: String,
     /// The full commit message.
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Compile-time check that a type implements `Hash`.
+    fn assert_hash<T: std::hash::Hash>() {}
+
+    #[test]
+    fn diff_scope_serde_round_trip() {
+        let scopes = vec![
+            DiffScope::Working,
+            DiffScope::Staged,
+            DiffScope::Commit {
+                sha: "abc123".to_string(),
+            },
+            DiffScope::Range {
+                from: "abc123".to_string(),
+                to: "def456".to_string(),
+            },
+        ];
+        for scope in scopes {
+            let json = serde_json::to_string(&scope).expect("serialize DiffScope");
+            let back: DiffScope = serde_json::from_str(&json).expect("deserialize DiffScope");
+            assert_eq!(scope, back);
+        }
+    }
+
+    #[test]
+    fn diff_scope_unit_variants_serialize_lowercase() {
+        // Enum variants follow the module convention FileStatus set:
+        // lowercase on the wire.
+        assert_eq!(
+            serde_json::to_string(&DiffScope::Working).expect("serialize"),
+            "\"working\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DiffScope::Staged).expect("serialize"),
+            "\"staged\""
+        );
+    }
+
+    #[test]
+    fn file_status_is_usable_in_hash_collections() {
+        let mut set = HashSet::new();
+        set.insert(FileStatus::Added);
+        set.insert(FileStatus::Added);
+        set.insert(FileStatus::Modified);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn every_type_implements_hash() {
+        assert_hash::<DiffScope>();
+        assert_hash::<FileStatus>();
+        assert_hash::<FileChange>();
+        assert_hash::<CommitInfo>();
+    }
+
+    #[test]
+    fn commit_info_serializes_fields_as_camel_case() {
+        let info = CommitInfo {
+            sha: "abc123def456".to_string(),
+            short_sha: "abc123d".to_string(),
+            author: "A. Author".to_string(),
+            date: "2026-08-06".to_string(),
+            message: "a commit".to_string(),
+        };
+        let json = serde_json::to_value(&info).expect("serialize CommitInfo");
+        assert_eq!(json["shortSha"], "abc123d");
+        assert!(
+            json.get("short_sha").is_none(),
+            "snake_case key must not appear on the wire"
+        );
+        let back: CommitInfo = serde_json::from_value(json).expect("deserialize CommitInfo");
+        assert_eq!(info, back);
+    }
 }

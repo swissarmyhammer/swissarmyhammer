@@ -164,6 +164,29 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. All 3 findings from 2026-08-06 13:53 worked and checked: DiffScope gets `PartialEq, Eq` (:3), DiffScope gets a doc comment (:4), CommitInfo gets `PartialEq, Eq` (:33). Full-file sweep per the rules: module doc added; FileStatus, FileChange, and all variants and fields get doc comments; every comparable public type now derives PartialEq + Eq (FileStatus and FileChange already had them). Verification: cargo nextest run -p swissarmyhammer-sem 297/297 pass; cargo clippy -p swissarmyhammer-sem --all-targets -- -D warnings clean; cargo check --workspace --all-targets clean; cargo fmt --check clean.
     - next: test
   timestamp: 2026-08-06T19:06:02.634387+00:00
+- actor: claude-code
+  id: 01kzc86qx39jjps9e91sn86xy7
+  text: |-
+    ### review — findings
+    - evidence: 4 findings — crates/swissarmyhammer-sem/src/git_types.rs:8, git_types.rs:8, git_types.rs:29, git_types.rs:65 (scope: review sha HEAD~1..HEAD, checkpoint 7b5cf81a4; counts: 4 confirmed, 3 refuted, 0 failed; skipped_files empty — no new ^tsram0q evidence)
+    - next: implement the 4 open findings in git_types.rs, then re-review
+  timestamp: 2026-08-06T19:18:36.195225+00:00
+- actor: claude-code
+  id: 01kzc87gvcvpnyv1xq3kqcrj62
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — worked the 3 git_types.rs findings (DiffScope derives + doc, CommitInfo derives) with full-file sweep; 1 file
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-sem)', 3470 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 7b5cf81a4
+    - review: findings — 4 open, all crates/swissarmyhammer-sem/src/git_types.rs: :8 ×2 (DiffScope Serialize/Deserialize), :29 (FileStatus Hash), :65 (CommitInfo serde rename_all camelCase). No over-cap flags (skipped_files empty).
+  timestamp: 2026-08-06T19:19:01.740730+00:00
+- actor: claude-code
+  id: 01kzc8n7wvsbqw9hrb83d6109h
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. All 4 findings from 2026-08-06 14:10 worked and checked. Before the camelCase change, a workspace grep confirmed NO consumer serializes the sem CommitInfo — no wire contract or persisted format depends on the current casing, so no conflict. Changes (TDD, RED confirmed with 11 compile errors first): DiffScope gets `Hash, Serialize, Deserialize` plus `#[serde(rename_all = "lowercase")]` to match the module's enum convention (FileStatus); FileStatus gets `Hash` (:29); FileChange gets `Hash` (full-file sweep — every Eq type now carries Hash); CommitInfo gets `Hash` and `#[serde(rename_all = "camelCase")]` (:65) to match FileChange. New test module pins the contract: DiffScope serde round trip, lowercase variant wire form, FileStatus in a HashSet, Hash on all four types, CommitInfo `shortSha` on the wire with round trip. Verification: cargo nextest run -p swissarmyhammer-sem git_types 5/5 pass; cargo nextest run -E 'rdeps(swissarmyhammer-sem)' 3475/3475 pass; cargo fmt --check clean; cargo clippy -p swissarmyhammer-sem --all-targets -- -D warnings clean.
+    - next: test
+  timestamp: 2026-08-06T19:26:31.323853+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
@@ -274,3 +297,13 @@ mod send_sync_assertions {
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:3` — Public enum `DiffScope` is missing `PartialEq` and `Eq` implementations. These are standard traits for any public data type and allow downstream crates to compare instances for equality; without them, those operations are impossible without re-implementing locally. Add `PartialEq, Eq` to the derive macro: `#[derive(Debug, Clone, PartialEq, Eq)]`.
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:4` — Public enum `DiffScope` lacks documentation explaining the different scope targets for git operations. Add a doc comment like `/// Represents different git scope targets (working tree, staged, commit, range)` before the enum definition.
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:33` — Public struct `CommitInfo` is missing `PartialEq` and `Eq` implementations. These are standard traits for public data structures and are necessary for equality comparisons; without them, downstream crates cannot effectively work with this type in collections or comparison contexts. Add `PartialEq, Eq` to the derive macro: `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`.
+
+## Review Findings (2026-08-06 14:10)
+
+> Scope: checkpoint 7b5cf81a4 (HEAD~1..HEAD at review time).
+> Note: 0 over-cap flags this pass — `skipped_files` was empty; nothing new to record on ^tsram0q.
+
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:8` — DiffScope's derives are added in this change but omit Serialize/Deserialize, while CommitInfo (line 65, also modified in this commit) includes these derives. FileStatus (line 29, pre-existing) and FileChange (line 44, pre-existing) both have Serialize/Deserialize. Since all git-facing types in this module represent serializable diff metadata, DiffScope should follow the same pattern. Add Serialize, Deserialize to the DiffScope derive list on line 8 to maintain consistency with CommitInfo and other git-facing types in the module.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:8` — DiffScope is missing Serialize and Deserialize derives. Other data types in this module (FileStatus line 29, FileChange line 44, CommitInfo line 65) implement these for consistency across the semantic diff data model. Add Serialize and Deserialize to the derive list: `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`. Also add `serde` import if not present for this to work.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:29` — FileStatus implements Eq but not Hash. Rust convention requires that types implementing Eq also implement Hash for safe use in collections. Add Hash to the derive list: `#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]`.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:65` — CommitInfo has snake_case field names (short_sha on line 70, author, date, message) and is serializable, but lacks the #[serde(rename_all = "camelCase")] attribute that FileChange (line 45) applies for consistent snake_case-to-camelCase serialization. Both are git-facing types with matching serialization structure. Add #[serde(rename_all = "camelCase")] after line 65 to ensure CommitInfo fields serialize as camelCase (shortSha) like FileChange, maintaining consistency across git-facing types.
