@@ -69,6 +69,17 @@ impl ValidatorMatch {
             .iter()
             .any(|wanted| detected.iter().any(|key| key.eq_ignore_ascii_case(wanted)))
     }
+
+    /// Whether an optional match criteria's project-type constraint fits the
+    /// detected project types. Absent criteria applies everywhere.
+    ///
+    /// The ONE answer to that question: the doctor's set-applicability row and
+    /// the review engine's tool-rule selection both ask it here, so a set and
+    /// the rules inside it can never be judged applicable by two different
+    /// tests.
+    pub fn criteria_applies(criteria: Option<&Self>, detected: &[String]) -> bool {
+        criteria.is_none_or(|c| c.project_types_match(detected))
+    }
 }
 
 /// Define a builder method that stores an `impl Into<String>` value into an

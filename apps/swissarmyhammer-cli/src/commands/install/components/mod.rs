@@ -84,12 +84,6 @@ impl ProjectStructure {
     pub fn new(remove_directory: bool) -> Self {
         Self { remove_directory }
     }
-
-    /// The project root both lifecycle halves act on, or the single errored
-    /// result they both report when it cannot be resolved.
-    fn root_or_error(&self) -> Result<PathBuf, Vec<InitResult>> {
-        workspace_root().map_err(|e| vec![InitResult::error(self.name(), e)])
-    }
 }
 
 impl Initializable for ProjectStructure {
@@ -135,7 +129,7 @@ impl Initializable for ProjectStructure {
     /// itself is root-explicit so it is unit-testable without touching the
     /// process CWD.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match self.root_or_error() {
+        let root = match resolve_workspace_root(self.name()) {
             Ok(root) => root,
             Err(failure) => return failure,
         };
@@ -165,7 +159,7 @@ impl Initializable for ProjectStructure {
             )];
         }
 
-        let root = match self.root_or_error() {
+        let root = match resolve_workspace_root(self.name()) {
             Ok(root) => root,
             Err(failure) => return failure,
         };
@@ -236,9 +230,9 @@ impl Initializable for ValidatorTools {
     /// directory by design — and the work itself is the loader-free
     /// [`install_tool_rules_with`], which tests drive with a synthetic loader.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match workspace_root() {
+        let root = match resolve_workspace_root(self.name()) {
             Ok(root) => root,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
+            Err(failure) => return failure,
         };
 
         let loader = match swissarmyhammer_validators::load_rules() {
@@ -322,12 +316,23 @@ fn tool_rule_label(install: &ToolRuleInstall) -> String {
     format!("{}/{}", install.set_name(), install.rule_name())
 }
 
-/// Resolve the project root this component acts on: the git repository root,
+/// Resolve the project root the components act on: the git repository root,
 /// else the process working directory.
 ///
 /// [`ProjectStructure::init`] and [`ProjectStructure::deinit`] must agree on
 /// this, or a `deinit` run from a subdirectory would look for a workspace that
-/// `init` created at the git root.
+/// `init` created at the git root. [`ValidatorTools::init`] reads the same root
+/// so it detects the project types of the workspace `sah init` is installing.
+/// The project root `component` acts on, or the single errored result it
+/// reports when the root cannot be resolved.
+///
+/// The ONE conversion from a failed root resolution to a lifecycle result:
+/// every component that needs the root reports the failure in the same shape,
+/// so that shape changes in one place.
+fn resolve_workspace_root(component: &str) -> Result<PathBuf, Vec<InitResult>> {
+    workspace_root().map_err(|e| vec![InitResult::error(component, e)])
+}
+
 fn workspace_root() -> Result<PathBuf, String> {
     if let Some(root) = swissarmyhammer_common::utils::find_git_repository_root() {
         return Ok(root);

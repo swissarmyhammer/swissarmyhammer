@@ -424,7 +424,7 @@ pub fn install_project_tool_rules(
     loader: &ValidatorLoader,
     project_types: &[String],
 ) -> Vec<ToolRuleInstall> {
-    crate::doctor::project_tool_rules(loader, project_types)
+    crate::review::tool_rules::project_tool_rules(loader, project_types)
         .into_iter()
         .map(|matched| ToolRuleInstall {
             set_name: matched.ruleset.name().to_string(),

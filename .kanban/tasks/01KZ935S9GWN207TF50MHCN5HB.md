@@ -57,6 +57,63 @@ comments:
     - fix applied: `crates/swissarmyhammer-diagnostics/tests/leader_follower_request_ipc.rs` — `WARM_UP_MAX_ATTEMPTS` raised from 20 to 120 (10s of poll budget to 60s). Two tests (`follower_multi_step_rename_gets_real_leader_edits_under_one_lock`, `follower_request_with_document_gets_real_definition_without_leader_preopen`) failed on the first full-workspace run: each drives a real `rust-analyzer` and polls until it warms up, but the old ~13s total budget (3s initial settle + 20×500ms poll) was tuned for an idle machine. Under full `--workspace` parallelism (13650 tests across the whole suite contending CPU) the analyzer stayed cold past that window even though the `lsp-ipc-serial` nextest test-group already caps this crate's LSP tests to one real analyzer at a time — the contention is from every other package's tests sharing the CPU, not a second analyzer. The sibling test `ra_pull_readiness.rs` in the same crate already uses a 60s deadline for the identical "real rust-analyzer, cold under CI load" scenario, so the fix matches that existing, already load-tolerant precedent. Verified: isolated run passed before and after; the full `cargo nextest run --workspace` after the fix is 13650/13650 green with 0 failures.
     - next: none.
   timestamp: 2026-08-06T21:50:58.764397+00:00
+- actor: claude-code
+  id: 01kzchk5n1ykwbzrdne22z2d8z
+  text: |-
+    Check-in from the watching session (2026-08-06):
+
+    Verified f55618b02 against the contract — every invariant lands: install.commands in order with a doctor re-check after each, exit-0-but-check-fails is not success, the install agent is one bounded turn whose claim loses to doctor (the real-AgentPool test proving that is exactly right), still-missing tools fall back with a warning, and the version-pin guard arms itself when ^b01gtzg ships the first builtin tool rules.
+
+    Two deviations from the card's letter, both ACCEPTED as better than written:
+    1. Registration via the ValidatorTools Initializable component instead of the mirdan Profile manifest. The dependency argument is decisive — mirdan must not link the review engine into every tool CLI. The card's intent (sah init pre-installs runner tools) is fully met. Reviewers: do not flag this as scope miss.
+    2. Your README addition (sah init runs steps 1-2 only, never an agent turn; failure = warning naming the rule) is adopted as contract text.
+
+    Nothing to fix from my side.
+  timestamp: 2026-08-06T22:02:40.673771+00:00
+- actor: claude-code
+  id: 01kzcj6et7anym5887p0yfa78w
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (f55618b02) — 4 findings, 4 confirmed, 5 refuted, 18 attempted, 0 failed, 0 skipped. 3 recorded: apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:239, crates/swissarmyhammer-validators/src/doctor.rs:206, crates/swissarmyhammer-validators/src/doctor.rs:249.
+    - dropped: 1 finding on crates/swissarmyhammer-diagnostics/tests/leader_follower_request_ipc.rs:147 (name the literal `8` as a constant). The file is pre-existing test code modified by this commit only at `WARM_UP_MAX_ATTEMPTS`; the `0..8u32` loop was already there. The review skill's blanket exception drops any finding that asks to restyle test code that already existed.
+    - no over-prompt-cap or batch-budget flags in this run, so nothing to log on ^tsram0q.
+    - next: /implement the 3 findings, then re-review.
+  timestamp: 2026-08-06T22:13:12.647901+00:00
+- actor: claude-code
+  id: 01kzcj72h5vmmf8hfzswr6c0rf
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 13 files, new crates/swissarmyhammer-validators/src/review/tool_install.rs
+    - test: green — cargo nextest run --workspace 13650 passed, fmt clean, clippy clean
+    - commit: f55618b02
+    - review: findings — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:239, crates/swissarmyhammer-validators/src/doctor.rs:206, crates/swissarmyhammer-validators/src/doctor.rs:249
+  timestamp: 2026-08-06T22:13:32.837967+00:00
+- actor: claude-code
+  id: 01kzcjqrjyrf90pm0rf7pxr530
+  text: |-
+    Findings pass 1 — all three closed.
+
+    Finding 1 (components/mod.rs:239, duplicated workspace-root error handling): added the module-level `resolve_workspace_root(component: &str) -> Result<PathBuf, Vec<InitResult>>` beside `workspace_root`, and deleted `ProjectStructure::root_or_error`. All three sites that resolve the root — `ProjectStructure::init`, `ProjectStructure::deinit`, `ValidatorTools::init` — now call it, so the failure-to-lifecycle-result shape lives in one place. `workspace_root`'s doc names `ValidatorTools::init` as a third caller that must agree on the root.
+
+    Finding 2 (doctor.rs:206, duplicated `list_rulesets()` + `sort_by(name)`): the correct fix is to delete the sort, not to extract it. `ValidatorLoader::rulesets` is a `BTreeMap` keyed by `ruleset.name()` (both insert sites use that key), so `list_rulesets()` ALREADY enumerates in name order and both sorts were no-ops. Extracting a `sorted_rulesets` helper would have kept dead work and split the ordering guarantee across two modules once finding 3 moved `project_tool_rules` out of doctor.rs. Instead the order is centralized where it is decided: `list_rulesets`'s doc now states the name-order contract and that callers must read the order from there and never re-sort. `grep` confirms no `sort_by(|a, b| a.name()...)` on rulesets remains anywhere in the workspace.
+
+    Finding 3 (doctor.rs:249, selection pass must live in one place): `ProjectToolRule` and `project_tool_rules` moved verbatim into `review/tool_rules.rs`, beside `MatchedToolRule` / `matched_tool_rules`. `doctor::check_review_engine_with` and `tool_install::install_project_tool_rules` now import the same function from that one home. The module doc names it as the third selection — the workspace-wide one, for the surfaces with no work-list.
+
+    Shared predicate: `criteria_applies` was used by BOTH the moved selection and doctor's set-applicability row, so parking it in either module would have re-split it. It became `ValidatorMatch::criteria_applies(Option<&Self>, &[String])` in `validators/types.rs`, next to the `project_types_match` it wraps — the canonical home for "does this match criteria apply".
+
+    New coverage: `project_tool_rules_reports_the_sets_in_name_order` loads two sets last-name-first and asserts the selection comes back in name order. It is the guard the deleted sort used to be; the sets side was already guarded by `test_sets_are_sorted_by_name`.
+
+    Nothing changed in ARCHITECTURE.md: it names the public re-export `swissarmyhammer_validators::review::install_project_tool_rules`, which is untouched, and the documented mirdan-must-not-depend-on-the-review-engine boundary is unaffected — the move is entirely inside the review engine.
+
+    Tests: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1148 passed, 0 failed, 0 skipped (validators --lib 450, up one for the new test). `cargo check --workspace --all-targets` clean, `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean, `cargo fmt --all --check` clean.
+  timestamp: 2026-08-06T22:22:39.710778+00:00
+- actor: claude-code
+  id: 01kzcjqyetm64r09e54me4c4kh
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/validators/types.rs, crates/swissarmyhammer-validators/src/validators/loader.rs. All 3 review findings checked off. Tests: nextest -p swissarmyhammer-validators -p swissarmyhammer-cli 1148 passed / 0 failed / 0 skipped; workspace check + clippy + fmt clean.
+    - next: /review
+  timestamp: 2026-08-06T22:22:45.722198+00:00
 depends_on:
 - 01KZ935GJX1YS2EAD7C2HK89AJ
 position_column: doing
@@ -79,3 +136,9 @@ Acceptance:
 - With all installs failing, the review completes on the prompt fallback and doctor shows the warning.
 
 #tool-validators
+
+## Review Findings (2026-08-06 16:52)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:239` — Duplicated workspace-root error-handling pattern: ValidatorTools::init inlines the same `workspace_root().map_err()` error conversion that ProjectStructure has already extracted as the `root_or_error` helper method (lines 90–92). The pattern repeats verbatim, differing only in expression form (match statement vs method wrapper). This creates maintenance burden if the error-handling shape ever changes—both sites must be kept in sync. Extract a module-level helper function `fn resolve_workspace_root<T: Initializable>(component: &T) -> Result<PathBuf, Vec<InitResult>> { workspace_root().map_err(|e| vec![InitResult::error(component.name(), e)]) }` and call it from both ProjectStructure and ValidatorTools. Alternatively, add this as a default method to the Initializable trait (though that lives in another crate). Either approach eliminates the duplicate and makes the error handling single-source.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:206` — Duplicated ruleset-fetching and sorting pattern: `check_review_engine_with` (lines 206–207) and `project_tool_rules` (lines 253–254) both begin with the identical sequence: `let mut rulesets = loader.list_rulesets();` followed immediately by `rulesets.sort_by(|a, b| a.name().cmp(b.name()));`. Both functions need sorted rulesets as their foundation, yet neither extracts this common operation. The duplication creates maintenance burden if the sort order or fetch method ever changes. Extract a module-level helper function `fn sorted_rulesets(loader: &ValidatorLoader) -> Vec<RuleSet> { let mut rulesets = loader.list_rulesets(); rulesets.sort_by(|a, b| a.name().cmp(b.name())); rulesets }` and call it from both check_review_engine_with and project_tool_rules. This eliminates the duplicate and makes the expected ordering explicit and centralized.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:249` — The new `project_tool_rules` function duplicates or closely parallels the existing `plan_tool_rules` function in tool_rules.rs. The comment explicitly states this is 'the ONE selection pass over the loader' — selection logic should exist in exactly one place, not duplicated across modules. Both doctor and installer need to see the same rules to stay in sync; this should be in tool_rules.rs where all tool-rule utilities live. Move the `project_tool_rules` logic into tool_rules.rs (or rename/generalize `plan_tool_rules` if it already exists there) so both doctor and installer import the same function. Ensure the single implementation is at the canonical location for tool-rule utilities, not split across doctor.rs and tool_rules.rs.

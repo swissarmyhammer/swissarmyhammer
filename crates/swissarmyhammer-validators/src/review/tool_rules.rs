@@ -21,6 +21,10 @@
 //!   script judged the code; a nonzero exit is a [`ToolRunError`] carrying the
 //!   raw stderr, and no findings are read.
 //!
+//! [`project_tool_rules`] is the third selection: the workspace-wide one, for
+//! the surfaces that have no work-list — the doctor's tool-rule rows and the
+//! `sah init` pre-install.
+//!
 //! Tool findings are deterministic, so they skip adversarial verification:
 //! each one becomes a CONFIRMED [`VerifiedFinding`] directly.
 //!
@@ -37,7 +41,7 @@ use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSen
 use crate::review::scope::{ValidatorWork, WorkList};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::types::{Finding, VerifiedFinding};
-use crate::validators::types::{MatchContext, Rule, ToolScope, ToolSpec};
+use crate::validators::types::{MatchContext, Rule, ToolScope, ToolSpec, ValidatorMatch};
 use crate::validators::{RuleSet, ValidatorLoader};
 
 /// Why a tool finding is confirmed without the adversarial verify pass.
@@ -411,6 +415,60 @@ fn matched_rule_files(
             rule.matches(ruleset, &ctx)
         })
         .collect()
+}
+
+/// One tool rule that serves the detected project types, with its owning set.
+pub(crate) struct ProjectToolRule<'a> {
+    /// The owning validator set — the doctor reads its `fixtures/` directory.
+    pub ruleset: &'a RuleSet,
+    /// The tool rule.
+    pub rule: &'a Rule,
+    /// The rule's `tool` block.
+    pub spec: &'a ToolSpec,
+}
+
+/// Every tool rule the loaded sets declare for `project_types`, in set-name
+/// order.
+///
+/// The workspace-wide counterpart of [`matched_tool_rules`]: the surfaces that
+/// call it have no work-list, so a rule is selected on project type alone. It
+/// contributes only when its set's `match` AND its own fit the detected project
+/// types — the same intersection the review engine matches on.
+///
+/// The ONE selection pass over the loader, and it lives here with the rest of
+/// the tool-rule utilities:
+/// [`check_review_engine_with`](crate::doctor::check_review_engine_with)
+/// diagnoses these rules and
+/// [`install_project_tool_rules`](crate::review::tool_install::install_project_tool_rules)
+/// installs their tools, so doctor can never report a rule the installer
+/// skipped.
+pub(crate) fn project_tool_rules<'a>(
+    loader: &'a ValidatorLoader,
+    project_types: &[String],
+) -> Vec<ProjectToolRule<'a>> {
+    let mut matched = Vec::new();
+    for ruleset in loader.list_rulesets() {
+        if !ValidatorMatch::criteria_applies(
+            ruleset.manifest.match_criteria.as_ref(),
+            project_types,
+        ) {
+            continue;
+        }
+        for rule in &ruleset.rules {
+            let Some(spec) = &rule.tool else {
+                continue;
+            };
+            if !ValidatorMatch::criteria_applies(rule.match_criteria.as_ref(), project_types) {
+                continue;
+            }
+            matched.push(ProjectToolRule {
+                ruleset,
+                rule,
+                spec,
+            });
+        }
+    }
+    matched
 }
 
 /// Run the doctor health check ONCE for a matched tool rule and record the
@@ -794,6 +852,31 @@ mod tests {
             .suppression()
             .suppressed_rules("docs", "src/other.rs")
             .is_empty());
+    }
+
+    /// The workspace-wide selection reports its rules in set-name order, and
+    /// that order does not depend on the order the sets were loaded in. It is
+    /// the order the doctor rows and the `sah init` pre-install both read, so
+    /// nothing along the way re-sorts.
+    #[test]
+    fn project_tool_rules_reports_the_sets_in_name_order() {
+        let base = tempfile::tempdir().unwrap();
+        let mut loader = ValidatorLoader::new();
+        // Loaded last-name-first, so load order is not name order.
+        for name in ["zeta-set", "alpha-set"] {
+            let mut ruleset = crate::review::test_support::ruleset(name, "*.rs", &[]);
+            ruleset.rules = vec![tool_rule(TODO_SCRIPT, TOOL_PRESENT, None)];
+            ruleset.base_path = PathBuf::from(base.path());
+            loader.add_builtin_ruleset(ruleset);
+        }
+
+        let selected = project_tool_rules(&loader, &[]);
+
+        let sets: Vec<&str> = selected
+            .iter()
+            .map(|selected| selected.ruleset.name())
+            .collect();
+        assert_eq!(sets, ["alpha-set", "zeta-set"]);
     }
 
     /// A doctor check that passes only once `marker` exists — a missing tool

@@ -30,7 +30,10 @@ use swissarmyhammer_doctor::{Check, CheckStatus};
 use crate::error::AvpError;
 use crate::review::scope::detected_project_type_keys;
 use crate::review::tool_output::parse_tool_stdout;
-use crate::validators::types::{Rule, RuleSet, ToolScope, ToolSpec, ValidatorSource};
+use crate::review::tool_rules::project_tool_rules;
+use crate::validators::types::{
+    Rule, RuleSet, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
+};
 use crate::validators::ValidatorLoader;
 
 /// The check name for the detected project types row.
@@ -203,15 +206,16 @@ pub fn check_review_engine_with(
     loader: &ValidatorLoader,
     project_types: &[String],
 ) -> ReviewEngineStatus {
-    let mut rulesets = loader.list_rulesets();
-    rulesets.sort_by(|a, b| a.name().cmp(b.name()));
-
-    let sets = rulesets
-        .iter()
+    let sets = loader
+        .list_rulesets()
+        .into_iter()
         .map(|ruleset| SetStatus {
             name: ruleset.name().to_string(),
             source: ruleset.source.clone(),
-            applies: criteria_applies(ruleset.manifest.match_criteria.as_ref(), project_types),
+            applies: ValidatorMatch::criteria_applies(
+                ruleset.manifest.match_criteria.as_ref(),
+                project_types,
+            ),
         })
         .collect();
 
@@ -225,63 +229,6 @@ pub fn check_review_engine_with(
         sets,
         tool_rules,
     }
-}
-
-/// One tool rule that serves the detected project types, with its owning set.
-pub(crate) struct ProjectToolRule<'a> {
-    /// The owning validator set — the doctor reads its `fixtures/` directory.
-    pub ruleset: &'a RuleSet,
-    /// The tool rule.
-    pub rule: &'a Rule,
-    /// The rule's `tool` block.
-    pub spec: &'a ToolSpec,
-}
-
-/// Every tool rule the loaded sets declare for `project_types`, in set order.
-///
-/// A rule contributes only when its set's `match` AND its own fit the detected
-/// project types — the same intersection the review engine matches on. This is
-/// the ONE selection pass over the loader: [`check_review_engine_with`]
-/// diagnoses these rules and
-/// [`install_project_tool_rules`](crate::review::tool_install::install_project_tool_rules)
-/// installs their tools, so doctor can never report a rule the installer
-/// skipped.
-pub(crate) fn project_tool_rules<'a>(
-    loader: &'a ValidatorLoader,
-    project_types: &[String],
-) -> Vec<ProjectToolRule<'a>> {
-    let mut rulesets = loader.list_rulesets();
-    rulesets.sort_by(|a, b| a.name().cmp(b.name()));
-
-    let mut matched = Vec::new();
-    for ruleset in rulesets {
-        if !criteria_applies(ruleset.manifest.match_criteria.as_ref(), project_types) {
-            continue;
-        }
-        for rule in &ruleset.rules {
-            let Some(spec) = &rule.tool else {
-                continue;
-            };
-            if !criteria_applies(rule.match_criteria.as_ref(), project_types) {
-                continue;
-            }
-            matched.push(ProjectToolRule {
-                ruleset,
-                rule,
-                spec,
-            });
-        }
-    }
-    matched
-}
-
-/// Whether an optional match criteria's project-type constraint fits the
-/// detected project types. Absent criteria applies everywhere.
-fn criteria_applies(
-    criteria: Option<&crate::validators::types::ValidatorMatch>,
-    project_types: &[String],
-) -> bool {
-    criteria.is_none_or(|c| c.project_types_match(project_types))
 }
 
 /// Produce the doctor facts for one tool rule: presence, version, fixtures.

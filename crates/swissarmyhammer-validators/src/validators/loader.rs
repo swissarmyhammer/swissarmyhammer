@@ -411,7 +411,12 @@ impl ValidatorLoader {
         self.rulesets.get(name)
     }
 
-    /// List all loaded RuleSets.
+    /// List all loaded RuleSets, in set-name order.
+    ///
+    /// `rulesets` is a `BTreeMap` keyed by the set name, so the enumeration is
+    /// already sorted by name and identical across processes and loader
+    /// instances. This is the ONE place the order is decided: a caller that
+    /// needs sets in name order reads them from here and never re-sorts.
     pub fn list_rulesets(&self) -> Vec<&RuleSet> {
         self.rulesets.values().collect()
     }
