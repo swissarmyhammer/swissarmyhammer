@@ -283,6 +283,7 @@ fn classify_entity_error_kind(err: &swissarmyhammer_entity::EntityError) -> Erro
         | EntityError::AttachmentNotFound { .. }
         | EntityError::AttachmentSourceNotFound { .. }
         | EntityError::AttachmentTooLarge { .. }
+        | EntityError::InvalidPath { .. }
         | EntityError::ChangelogEntryNotFound { .. } => ErrorClass::InvalidRequest,
 
         EntityError::ValidationFailed { .. }

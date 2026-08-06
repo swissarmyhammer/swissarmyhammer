@@ -100,10 +100,13 @@ pub async fn read_entity(
 /// Each write gets a unique temp filename, so concurrent writes
 /// to the same entity won't collide. The temp file is cleaned up
 /// if the rename step fails.
+///
+/// Returns [`EntityError::InvalidPath`] if `path` has no parent directory or
+/// no filename component.
 pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
+    let parent = require_parent(path)?;
+    require_filename(path)?;
+    fs::create_dir_all(parent).await?;
 
     let content = if let Some(ref body_field) = entity_def.body_field {
         format_frontmatter_body(entity, body_field, path)?
@@ -113,14 +116,21 @@ pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) 
 
     // Use a ULID-based temp filename to avoid collisions with concurrent writers.
     // The temp file lives in the same directory as the target for atomic rename.
-    let temp_path = path
-        .parent()
-        .expect("entity path must have a parent directory")
-        .join(format!("{TEMP_FILE_PREFIX}{}", Ulid::new()));
+    let temp_path = temp_file_path(parent);
     fs::write(&temp_path, content.as_bytes()).await?;
 
     // If rename fails, clean up the temp file before propagating the error.
     rename_or_cleanup(&temp_path, path).await
+}
+
+/// Build a ULID-named temp file path inside `dir`, dotted with
+/// [`TEMP_FILE_PREFIX`] so it's excluded from entity directory scans.
+///
+/// Shared by every atomic-write path in this module (write via temp file +
+/// rename): each call gets a unique name, so concurrent writers targeting
+/// the same directory never collide.
+fn temp_file_path(dir: &Path) -> PathBuf {
+    dir.join(format!("{TEMP_FILE_PREFIX}{}", Ulid::new()))
 }
 
 /// Rename `temp_path` to `dest`, cleaning up the temp file if the rename fails.
@@ -146,6 +156,59 @@ async fn rename_ignore_not_found(src: &Path, dest: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Build the [`EntityError::InvalidPath`] error for a path that failed one
+/// of the structural checks below ([`require_parent`], [`require_filename`]).
+fn invalid_path_error(path: &Path, reason: &'static str) -> EntityError {
+    EntityError::InvalidPath {
+        path: path.to_path_buf(),
+        reason: reason.to_string(),
+    }
+}
+
+/// Return `path`'s parent directory, or [`EntityError::InvalidPath`] if it
+/// has none (e.g. the filesystem root, or an empty path).
+fn require_parent(path: &Path) -> Result<&Path> {
+    path.parent()
+        .ok_or_else(|| invalid_path_error(path, "path has no parent directory"))
+}
+
+/// Return `path`'s filename component, or [`EntityError::InvalidPath`] if it
+/// has none (e.g. the filesystem root, or a path ending in `.`/`..`).
+///
+/// Shared by [`write_entity`] and the trash/restore moves, which each
+/// extract a filename (the trash/restore moves do so twice: data file, then
+/// changelog, via [`changelog_trash_paths`]).
+///
+/// A path with a filename always has a parent (possibly empty) — the two
+/// checks can never disagree, because `Path::parent` and `Path::file_name`
+/// both bottom out at the same non-poppable components (an empty path, or a
+/// path that terminates in a root or prefix).
+fn require_filename(path: &Path) -> Result<&std::ffi::OsStr> {
+    path.file_name()
+        .ok_or_else(|| invalid_path_error(path, "path has no filename"))
+}
+
+/// Compute the live and trash-relative paths of `path`'s `.jsonl` changelog.
+///
+/// Shared by [`trash_entity_files`] and [`restore_entity_files`], which each
+/// pass the pair to [`move_changelog_between_paths`] in the direction they
+/// need. Returns `(live_log_path, trash_log_path)`.
+fn changelog_trash_paths(path: &Path, trash_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+    let log_path = path.with_extension("jsonl");
+    let log_filename = require_filename(&log_path)?;
+    let trash_log_path = trash_dir.join(log_filename);
+    Ok((log_path, trash_log_path))
+}
+
+/// Move a changelog file from `src` to `dest`, ignoring a missing `src`
+/// (never created, or already moved).
+///
+/// Shared by [`trash_entity_files`], which passes `(live, trash)`, and
+/// [`restore_entity_files`], which passes `(trash, live)`.
+async fn move_changelog_between_paths(src: &Path, dest: &Path) -> Result<()> {
+    rename_ignore_not_found(src, dest).await
 }
 
 /// Read all entities from a directory.
@@ -248,25 +311,25 @@ fn reconcile_read_results(results: Vec<(PathBuf, Result<Entity>)>) -> Result<Vec
 /// to the corresponding trash directory, preserving the full history.
 /// Creates the trash directory if it doesn't exist.
 /// Silently succeeds if source files don't exist.
+///
+/// Returns [`EntityError::InvalidPath`] if `path` has no filename. Unlike
+/// [`write_entity`] and [`restore_entity_files`], this does not also require
+/// `path` to have a parent directory: nothing here is created relative to
+/// `path` (the trash directory is a separate, caller-supplied argument), and
+/// — per [`require_filename`] — a path with a filename always has a parent.
 pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     fs::create_dir_all(trash_dir).await?;
 
     // Move data file (try-rename, ignore NotFound to avoid TOCTOU race)
     {
-        let filename = path.file_name().expect("entity path must have a filename");
+        let filename = require_filename(path)?;
         let dest = trash_dir.join(filename);
         rename_ignore_not_found(path, &dest).await?;
     }
 
     // Move changelog (try-rename, ignore NotFound to avoid TOCTOU race)
-    let log_path = path.with_extension("jsonl");
-    {
-        let log_filename = log_path
-            .file_name()
-            .expect("changelog path must have a filename");
-        let log_dest = trash_dir.join(log_filename);
-        rename_ignore_not_found(&log_path, &log_dest).await?;
-    }
+    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
+    move_changelog_between_paths(&log_path, &trash_log_path).await?;
 
     Ok(())
 }
@@ -276,16 +339,17 @@ pub async fn trash_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
 /// Inverse of [`trash_entity_files`]. Moves both the data file (.yaml/.md) and
 /// the changelog (.jsonl) from the trash directory back to the original location.
 /// Creates the destination directory if it doesn't exist.
-/// Returns an error if the source files are not found in trash.
+/// Returns an error if the source files are not found in trash, or
+/// [`EntityError::InvalidPath`] if `path` has no parent directory or no
+/// filename component.
 pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     // Ensure the destination directory exists
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
+    let parent = require_parent(path)?;
+    fs::create_dir_all(parent).await?;
 
     // Move data file back from trash — error if missing (nothing to restore)
     {
-        let filename = path.file_name().expect("entity path must have a filename");
+        let filename = require_filename(path)?;
         let src = trash_dir.join(filename);
         match fs::rename(&src, path).await {
             Ok(()) => {}
@@ -297,14 +361,8 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     }
 
     // Move changelog back from trash
-    let log_path = path.with_extension("jsonl");
-    {
-        let log_filename = log_path
-            .file_name()
-            .expect("changelog path must have a filename");
-        let log_src = trash_dir.join(log_filename);
-        rename_ignore_not_found(&log_src, &log_path).await?;
-    }
+    let (log_path, trash_log_path) = changelog_trash_paths(path, trash_dir)?;
+    move_changelog_between_paths(&trash_log_path, &log_path).await?;
 
     Ok(())
 }
@@ -343,6 +401,27 @@ pub fn parse_entity_text(
 
 // --- Internal helpers ---
 
+/// Wrap a YAML parse/serialize error as an [`EntityError::Yaml`].
+fn yaml_error(path: &Path, e: serde_yaml_ng::Error) -> EntityError {
+    EntityError::Yaml {
+        path: path.to_path_buf(),
+        source: e,
+    }
+}
+
+/// Build an [`Entity`] from a decoded YAML map, flattening nested objects.
+///
+/// Shared by [`parse_frontmatter_body`] and [`parse_plain_yaml`]: both parse
+/// their content into a `HashMap<String, Value>` and then need the same
+/// construction step.
+fn build_entity_from_yaml(entity_type: &str, id: &str, yaml_map: HashMap<String, Value>) -> Entity {
+    let mut entity = Entity::new(entity_type, id);
+    for (k, v) in yaml_map {
+        flatten_into(&mut entity, &k, v);
+    }
+    entity
+}
+
 /// Parse a frontmatter+body file into an Entity.
 ///
 /// The frontmatter is the YAML between the opening and closing delimiter lines
@@ -373,15 +452,9 @@ fn parse_frontmatter_body(
     // trailing newline would re-chomp a block scalar that ends the mapping,
     // silently dropping that field's trailing newline.
     let yaml_map: HashMap<String, Value> =
-        serde_yaml_ng::from_str(frontmatter).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::from_str(frontmatter).map_err(|e| yaml_error(path, e))?;
 
-    let mut entity = Entity::new(entity_type, id);
-    for (k, v) in yaml_map {
-        flatten_into(&mut entity, &k, v);
-    }
+    let mut entity = build_entity_from_yaml(entity_type, id, yaml_map);
     // Body field comes from the markdown body, not the frontmatter
     entity.set(body_field, Value::String(body.to_string()));
 
@@ -413,15 +486,9 @@ fn parse_plain_yaml(
     let entity_type = entity_type.as_ref();
     let id = id.as_ref();
     let yaml_map: HashMap<String, Value> =
-        serde_yaml_ng::from_str(content).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::from_str(content).map_err(|e| yaml_error(path, e))?;
 
-    let mut entity = Entity::new(entity_type, id);
-    for (k, v) in yaml_map {
-        flatten_into(&mut entity, &k, v);
-    }
+    let entity = build_entity_from_yaml(entity_type, id, yaml_map);
 
     Ok(entity)
 }
@@ -455,10 +522,7 @@ fn format_frontmatter_body(
 
     let frontmatter_value = Value::Object(frontmatter_map);
     let frontmatter_yaml =
-        serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| EntityError::Yaml {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        serde_yaml_ng::to_string(&frontmatter_value).map_err(|e| yaml_error(path, e))?;
 
     Ok(format!("---\n{}---\n{}", frontmatter_yaml, body))
 }
@@ -472,10 +536,7 @@ fn format_plain_yaml(entity: &Entity, path: &Path) -> Result<String> {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
     );
-    serde_yaml_ng::to_string(&map_value).map_err(|e| EntityError::Yaml {
-        path: path.to_path_buf(),
-        source: e,
-    })
+    serde_yaml_ng::to_string(&map_value).map_err(|e| yaml_error(path, e))
 }
 
 // --- Attachment helpers ---
@@ -556,7 +617,7 @@ pub async fn copy_attachment(
     fs::create_dir_all(&dest_dir).await?;
 
     let dest = dest_dir.join(&stored_name);
-    let temp_path = dest_dir.join(format!("{TEMP_FILE_PREFIX}{}", Ulid::new()));
+    let temp_path = temp_file_path(&dest_dir);
 
     // Copy to temp file, then atomic rename
     fs::copy(source, &temp_path).await?;
@@ -1603,6 +1664,125 @@ mod tests {
             "error message should mention restore from trash, got: {msg}"
         );
         assert!(matches!(err, EntityError::RestoreFromTrashFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn read_entity_returns_io_error_when_path_has_no_filename() {
+        // Unlike `write_entity` (and the trash/restore moves), `read_entity`
+        // performs no structural path validation of its own — it delegates
+        // straight to `fs::read_to_string`, and never derives a second path
+        // (a temp file, a trash-relative filename) from `path` the way the
+        // write side does. So a degenerate path surfaces as whatever
+        // `fs::read_to_string` reports — a generic `EntityError::Io` — not
+        // `EntityError::InvalidPath`. This test pins that asymmetry down so
+        // it stays intentional and visible rather than an untested gap.
+        let entity_def = tag_entity_def();
+
+        let result = read_entity(Path::new("/"), "tag", "root", &entity_def).await;
+
+        assert!(result.is_err(), "reading a directory must fail");
+        assert!(matches!(result.unwrap_err(), EntityError::Io(_)));
+    }
+
+    #[tokio::test]
+    async fn write_entity_errors_when_path_has_no_parent_directory() {
+        let entity_def = tag_entity_def();
+        let mut entity = Entity::new("tag", "root");
+        entity.set("tag_name", Value::String("bug".into()));
+
+        // The filesystem root has no parent directory — `write_entity` must
+        // report this as a typed error rather than panicking.
+        let result = write_entity(Path::new("/"), &entity, &entity_def).await;
+
+        assert!(
+            result.is_err(),
+            "write should fail with a typed error, not panic, when path has no parent directory"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn write_entity_errors_when_path_has_no_filename() {
+        let entity_def = tag_entity_def();
+        let mut entity = Entity::new("tag", "current-dir");
+        entity.set("tag_name", Value::String("bug".into()));
+
+        // "." has a parent (the empty path) but no filename component —
+        // `write_entity` must report this as a typed error rather than
+        // failing later, at the OS level, when the atomic rename runs.
+        let result = write_entity(Path::new("."), &entity, &entity_def).await;
+
+        assert!(
+            result.is_err(),
+            "write should fail with a typed error, not an OS-level rename failure, when path has no filename"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn trash_entity_files_errors_when_path_has_no_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash_dir = dir.path().join(".trash").join("tags");
+
+        // The filesystem root has no filename component — `trash_entity_files`
+        // must report this as a typed error rather than panicking.
+        let result = trash_entity_files(Path::new("/"), &trash_dir).await;
+
+        assert!(
+            result.is_err(),
+            "trash should fail with a typed error, not panic, when path has no filename"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_errors_when_path_has_no_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash_dir = dir.path().join(".trash").join("tags");
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        // The filesystem root has no parent directory — `restore_entity_files`
+        // must report this as a typed error rather than panicking.
+        let result = restore_entity_files(Path::new("/"), &trash_dir).await;
+
+        assert!(
+            result.is_err(),
+            "restore should fail with a typed error, not panic, when path has no parent directory"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_entity_files_errors_when_path_has_no_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash_dir = dir.path().join(".trash").join("tags");
+        fs::create_dir_all(&trash_dir).await.unwrap();
+
+        // "." has a parent (the empty path) but no filename component —
+        // `restore_entity_files` must report this as a typed error rather
+        // than failing later, at the OS level, when the rename runs.
+        let result = restore_entity_files(Path::new("."), &trash_dir).await;
+
+        assert!(
+            result.is_err(),
+            "restore should fail with a typed error, not an OS-level rename failure, when path has no filename"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            EntityError::InvalidPath { .. }
+        ));
     }
 
     #[test]

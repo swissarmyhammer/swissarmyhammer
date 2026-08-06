@@ -85,6 +85,11 @@ pub enum EntityError {
     #[error("cannot restore from trash: data file not found at {path}")]
     RestoreFromTrashFailed { path: PathBuf },
 
+    /// A path required to have a parent directory or a filename component,
+    /// but did not (e.g. the filesystem root, or an empty path).
+    #[error("invalid path {path}: {reason}")]
+    InvalidPath { path: PathBuf, reason: String },
+
     /// Attachment source file not found.
     #[error("attachment source file not found: {path}")]
     AttachmentSourceNotFound { path: PathBuf },
