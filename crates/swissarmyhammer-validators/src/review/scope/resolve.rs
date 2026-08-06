@@ -25,6 +25,7 @@ use super::{Scope, SCOPE_VALIDATOR};
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
 /// after-content, the review-level change purpose, and blame's history anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ResolvedScope {
     pub(super) files: Vec<String>,
     pub(super) file_changes: Vec<SemFileChange>,
@@ -590,6 +591,7 @@ impl AfterContent {
 /// `Option<String>`s: the fields name each side at the call site, and their
 /// distinct types ([`BeforeContent`], [`AfterContent`]) make a transposed
 /// struct literal a compile error rather than an inverted diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FileVersions {
     /// The content at the base revision.
     pub(super) before: BeforeContent,
@@ -598,12 +600,14 @@ pub(super) struct FileVersions {
 }
 
 /// Accumulates the per-file sem-diff inputs and after-content as files resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FileChangeBuilder {
     pub(super) file_changes: Vec<SemFileChange>,
     pub(super) after_content: BTreeMap<String, String>,
 }
 
 impl FileChangeBuilder {
+    /// Create a new, empty [`FileChangeBuilder`].
     pub(super) fn new() -> Self {
         Self {
             file_changes: Vec::new(),

@@ -79,10 +79,72 @@ comments:
     - evidence: 13/13 findings worked and checked. 15 files — split: swissarmyhammer-validators review/scope.rs (+ NEW scope/resolve.rs, scope/batch.rs, scope/tests.rs, scope/tests_matching.rs), review/fleet.rs (+ NEW fleet/render.rs, fleet/prime.rs), swissarmyhammer-tools review/review_op.rs (+ NEW review_op/backend.rs, review_op/progress.rs, review_op/response.rs, review_op/tests.rs); fixed: doctor.rs (degraded message unification), synthesize.rs (helpers + 5-stage doc), tool_rules.rs (planner helpers), drive.rs + test_support.rs (shared write_tool_rule_fixtures), review_op response (PartialEq/Eq), fleet/tests.rs (ForkAttachment import). Tests: nextest rdeps(swissarmyhammer-validators) 3171/3171 pass; fmt clean; clippy -D warnings clean.
     - next: test
   timestamp: 2026-08-06T17:11:53.930069+00:00
+- actor: claude-code
+  id: 01kzc4rwmcg5958smn5zzefehv
+  text: |-
+    ### review — findings
+    - evidence: 15 findings on checkpoint 503b74346 (HEAD~1..HEAD) — review_op.rs:1, review_op/backend.rs:26, doctor.rs:1, drive.rs:1, fleet.rs:1, fleet/prime.rs:124, scope.rs:1, scope/batch.rs:120, scope/resolve.rs:1, scope/resolve.rs:28, scope/resolve.rs:593, scope/resolve.rs:601, scope/resolve.rs:607, synthesize.rs:1, tool_rules.rs:1. All 13 prior findings are checked. 5 engine findings were dropped per the review skill's exception for test code that existed before the commit. Engine warnings: 6/67 review tasks failed; 13 files were over the prompt cap.
+    - next: the implementer must correct the 15 open findings. The task stays in review.
+  timestamp: 2026-08-06T18:18:36.556333+00:00
+- actor: claude-code
+  id: 01kzc4swy6rryj6rdt8zjpwv6g
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — worked all 13 findings from 2026-08-06 10:57 checklist; split scope.rs/fleet.rs/review_op.rs into submodules; 15 files
+    - test: green — cargo nextest run, 3171 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 503b74346
+    - review: findings — 15 open: review_op.rs:1, review_op/backend.rs:26, doctor.rs:1, drive.rs:1, fleet.rs:1, fleet/prime.rs:124, scope.rs:1, scope/batch.rs:120, scope/resolve.rs:1,28,593,601,607, synthesize.rs:1, tool_rules.rs:1. Note: batch budget shrank 164176 → 54338 bytes between passes; 8 of 15 are further over-cap split requests, incl. files cited in iteration 1 (scope.rs, fleet.rs, review_op.rs)
+  timestamp: 2026-08-06T18:19:09.638202+00:00
+- actor: claude-code
+  id: 01kzc5bry42125fq54sr9s3add
+  text: |-
+    Progress on the 2026-08-06 12:15 findings. Point fixes are complete:
+
+    - scope/batch.rs: batch_work_list is now generic (`F: Fn(&FileWork) -> usize`). The call sites pass `&fn` and compile with no change.
+    - fleet/prime.rs: the three functions (submit_prime, confirm_saved_state, pin_prefix) now log the run name with one field: `run = %name`. Before, two functions used `validator` and one used `scope`.
+    - review_op/backend.rs: a compile-time assertion module for AgentHandle is added. IMPORTANT: the finding asks for a Send+Sync assertion, but AgentHandle cannot be Sync. The compiler shows the cause: `agent_client_protocol::ErasedConnectTo` (upstream crate, version 0.12.1) has only the `Send` supertrait, so `DynConnectTo<Client>` is `!Sync`. The rust trait rule requires "all applicable traits" — Sync is not applicable to this type. The fix asserts `Send` at compile time and documents why Sync is structurally unavailable. This is a deviation from the finding's literal code, forced by the upstream type contract.
+
+    The eight module-split findings are in work now (scope.rs, scope/resolve.rs, fleet.rs, synthesize.rs, drive.rs, tool_rules.rs, doctor.rs, review_op.rs). Target: each production file lands well under the 54KB prompt budget.
+  timestamp: 2026-08-06T18:28:55.364218+00:00
+- actor: claude-code
+  id: 01kzc5q95bb47qzx9vwqk6qm62
+  text: |-
+    STOP before splitting again — from the watching session (2026-08-06):
+
+    The 8 over-cap findings in the 12:15 section are not caused by your code. The batch budget CHANGED between rounds: 164176 bytes in round 1, 54338 bytes in round 2. That is why fleet.rs and scope.rs are "over the cap" again right after you split them, and why untouched doctor.rs is suddenly over. Splitting adds files to the diff, a bigger diff shrinks the budget, a smaller budget flags more files. This loop cannot converge. The budget instability is now its own card: ^tsram0q.
+
+    Recommendation for this card:
+    - Fix the 7 point findings — they are real: backend.rs:26 (Send+Sync assertion), prime.rs:124 (log field naming), batch.rs:120 (impl Fn generic), resolve.rs:28/593/601 (derives), resolve.rs:607 (doc comment).
+    - Do NOT act on the 8 over-cap split findings (review_op.rs:1, doctor.rs:1, drive.rs:1, fleet.rs:1, scope.rs:1, resolve.rs:1, synthesize.rs:1, tool_rules.rs:1). Check them off with a note pointing at ^tsram0q — the remedy is fixing the budget computation, not splitting converged modules a second time.
+    - Then run /review again. If round 3 still flags over-cap files, that is ^tsram0q evidence, not new work for this card.
+  timestamp: 2026-08-06T18:35:12.427285+00:00
+- actor: claude-code
+  id: 01kzc6h36bcfvc151nw8ctrq01
+  text: |-
+    Work log for the 2026-08-06 12:15 findings, after the coordinator stop order (18:35 comment):
+
+    The 8 over-cap split findings are NOT actioned. Cause: the review batch budget changed between rounds (164176 → 54338 bytes), so splits cannot converge. Card ^tsram0q tracks the budget instability. All split work from this session was reverted — scope.rs, fleet.rs, fleet/tests.rs, synthesize.rs, drive.rs, tool_rules.rs, doctor.rs, and review_op.rs are byte-equal to HEAD again, and all new split files were deleted. Each of the 8 items is checked in the description with the note "not actioned — prompt-cap budget instability, see ^tsram0q".
+
+    The 7 point findings are fixed:
+    - backend.rs:26 — compile-time assertion module for AgentHandle. DEVIATION, verified with the compiler: AgentHandle cannot be Sync because the upstream `agent_client_protocol::ErasedConnectTo` trait (v0.12.1) has only the `Send` supertrait, so `DynConnectTo<Client>` is `!Sync`. The assertion covers `Send` (the load-bearing bound — the handle moves across tasks) and the module doc records why Sync is not applicable. The rust trait rule requires "all applicable traits"; Sync is not applicable here.
+    - prime.rs:124 — all three functions (submit_prime, confirm_saved_state, pin_prefix) now log the run with one uniform field: `run = %name` (the finding's second option; the value is the run, not a validator).
+    - batch.rs:120 — batch_work_list is generic: `<F: Fn(&FileWork) -> usize>`. The 10 call sites (synthesize.rs, fleet/tests.rs, scope/tests.rs) drop the now-needless `&` (clippy needless_borrows_for_generic_args under -D warnings).
+    - resolve.rs:28, :593, :601 — ResolvedScope, FileVersions, and FileChangeBuilder all derive `Debug, Clone, PartialEq, Eq`. To make the full derive set possible, `swissarmyhammer_sem::git_types::FileChange` (a workspace type held in two of the structs) now derives `PartialEq, Eq` — its fields are String, FileStatus, and Option<String>, all Eq-able. The other types in resolve.rs (GitRefSpec, FilePath, BeforeContent, AfterContent) already carried full derives.
+    - resolve.rs:607 — FileChangeBuilder::new() has a doc comment; no other public item in the file is undocumented.
+
+    Verification: cargo fmt --check clean; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools -p swissarmyhammer-sem --all-targets -- -D warnings clean; cargo nextest run -E 'rdeps(swissarmyhammer-validators)' → 3173/3173 pass, 0 skipped.
+  timestamp: 2026-08-06T18:49:18.283109+00:00
+- actor: claude-code
+  id: 01kzc6haks5mec2z1ze2qmjfc4
+  text: |-
+    ### implement — changed
+    - evidence: 8 files — crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/backend.rs (Send assertion + !Sync cause documented), crates/swissarmyhammer-validators/src/review/fleet/prime.rs (uniform `run = %name`), crates/swissarmyhammer-validators/src/review/scope/batch.rs (generic `F: Fn(&FileWork) -> usize`), crates/swissarmyhammer-validators/src/review/scope/resolve.rs (derives + doc), crates/swissarmyhammer-sem/src/git_types.rs (FileChange + PartialEq/Eq), plus call-site `&` removals in synthesize.rs, fleet/tests.rs, scope/tests.rs. 15/15 findings checked: 7 point findings fixed; 8 over-cap split findings not actioned — prompt-cap budget instability, see ^tsram0q — and split work reverted to HEAD. fmt clean; clippy -D warnings clean; nextest rdeps(swissarmyhammer-validators) 3173/3173 pass.
+    - next: test
+  timestamp: 2026-08-06T18:49:25.881524+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
-position_ordinal: '8280'
+position_ordinal: '8480'
 title: Tool-runner execution path in the review engine
 ---
 Run tool rules in the review engine. No LLM reads the code for a tool rule.
@@ -130,3 +192,52 @@ Acceptance:
 - [x] `crates/swissarmyhammer-validators/src/review/synthesize.rs:257` — The `synthesize` function has cognitive complexity 15, meeting the gate of 15 or more. Complex functions are harder to understand, test, and modify, increasing maintenance burden. Extract tool-error rendering (lines 330–343) and tool-fallback rendering (lines 345–359) into separate helper functions. This clarifies the pipeline and brings complexity under the gate.
 - [x] `crates/swissarmyhammer-validators/src/review/synthesize.rs:544` — The `run_review` function documentation describes a 4-stage pipeline but omits the tool-rule execution stage that occurs between `scope_review` (stage 1) and `batch_work_list` (stage 2) in the actual implementation. The numbered stages in the doc comment do not match the code execution order, making the documentation incorrect for readers trying to understand the pipeline. Update the `run_review` function's doc comment to insert a new numbered stage 2 describing tool-rule planning and execution, and renumber the subsequent stages accordingly (batch_work_list becomes stage 3, fleet becomes stage 4, synthesize becomes stage 5).
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:325` — Function exceeds cognitive complexity gate: 19 measured vs. gate 15. The function has nested loops (validator → rule → file), multiple early-return guards, deeply-nested filtering logic, and branching on tool rule health status — all combining to make the control flow difficult to follow. Extract the tool-rule planning logic into smaller helpers: one to match a single rule against files, one to check health and build runs/fallbacks. This refactoring flattens the nesting and pushes detail into named functions.
+
+## Review Findings (2026-08-06 12:15)
+
+> Scope: checkpoint 503b74346 (HEAD~1..HEAD at review time).
+> ⚠️ 6/67 review tasks failed — results are INCOMPLETE.
+> ⚠️ 13 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op.rs` — 120346 rendered bytes, over the 54338-byte batch budget; not reviewed by: duplication, reuse (narrow the scope)
+> - `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/tests.rs` — 114624 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/doctor.rs` — 99338 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/drive.rs` — 156931 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/fleet.rs` — 127833 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/fleet/tests.rs` — 158703 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/scope.rs` — 227165 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/scope/resolve.rs` — 83595 rendered bytes, over the 54338-byte batch budget; not reviewed by: reuse (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/scope/tests.rs` — 118827 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/scope/tests_matching.rs` — 123243 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/synthesize.rs` — 157073 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/test_support.rs` — 169765 rendered bytes, over the 54338-byte batch budget; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (narrow the scope)
+> - `crates/swissarmyhammer-validators/src/review/tool_rules.rs` — 100176 rendered bytes, over the 54338-byte batch budget; not reviewed by: duplication, reuse (narrow the scope)
+>
+> Note: 5 engine findings were dropped per the review skill's written exception — each had, as its subject, a change to test code that existed before this commit (`review_op/tests.rs:1`, `fleet/tests.rs:1`, `scope/tests.rs:1`, `scope/tests_matching.rs:1`, `test_support.rs:1` — all are test modules whose code the split moved, or pre-existing test fixtures).
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op.rs:1` — This file exceeds the review prompt cap — 120346 rendered bytes against the 54338-byte batch budget — so these validators could not review it: duplication, reuse. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/backend.rs:26` — Public struct AgentHandle contains reference types (DynConnectTo trait object, broadcast::Receiver) and lacks compile-time Send+Sync assertions; downstream consumers cannot add these bounds due to orphan rules. Add a compile-time assertion after the Debug impl block (line 74):
+```rust
+#[cfg(test)]
+mod send_sync_assertions {
+    use super::*;
+    const _: () = {
+        const fn assert_send_sync<T: Send + Sync>() {}
+        const fn check() {
+            assert_send_sync::<AgentHandle>();
+        }
+    };
+}
+```.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:1` — This file exceeds the review prompt cap — 99338 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:1` — This file exceeds the review prompt cap — 156931 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/fleet.rs:1` — This file exceeds the review prompt cap — 127833 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/fleet/prime.rs:124` — The `name` parameter (representing the run being primed) is logged with inconsistent field names across functions that operate on the same entity: `validator = %name` in submit_prime (lines 55, 63) and confirm_saved_state (lines 85, 95), but `scope = %name` in pin_prefix (lines 124, 135). Same parameter, same semantic meaning (the run), inconsistent field naming makes log queries and analysis fragile. Use `validator = %name` consistently across all three functions (submit_prime, confirm_saved_state, pin_prefix), or choose a more semantically accurate field name such as `run = %name` and apply it uniformly.
+- [x] `crates/swissarmyhammer-validators/src/review/scope.rs:1` — This file exceeds the review prompt cap — 227165 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/scope/batch.rs:120` — Parameter uses trait object &dyn Fn instead of generic impl Fn, making the API less flexible and forcing callers to construct trait object references. Change to generic parameter: `pub fn batch_work_list<F: Fn(&FileWork) -> usize>(work: &WorkList, budget: usize, cost: F)`. Allows callers to pass function pointers, closures, or any Fn-implementing type without requiring reference construction.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:1` — This file exceeds the review prompt cap — 83595 rendered bytes against the 54338-byte batch budget — so these validators could not review it: reuse. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:28` — New public type ResolvedScope has non-empty representation but lacks Debug (explicitly required for all public types with non-empty representation) and other applicable traits (Clone, PartialEq, Eq). Add `#[derive(Debug, Clone, PartialEq, Eq)]` above the struct definition.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:593` — New public type FileVersions has non-empty representation but lacks Debug and other applicable traits (Clone, PartialEq, Eq). Add `#[derive(Debug, Clone, PartialEq, Eq)]` above the struct definition.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:601` — New public type FileChangeBuilder has non-empty representation but lacks Debug and other applicable traits (Clone, PartialEq, Eq). Add `#[derive(Debug, Clone, PartialEq, Eq)]` above the struct definition.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:607` — Public function `FileChangeBuilder::new()` lacks documentation. Every other public method in the file is documented; this inconsistency violates Rust documentation conventions for public items. Add a doc comment such as `/// Create a new, empty [`FileChangeBuilder`].` before the `new()` function definition.
+- [x] `crates/swissarmyhammer-validators/src/review/synthesize.rs:1` — This file exceeds the review prompt cap — 157073 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1` — This file exceeds the review prompt cap — 100176 rendered bytes against the 54338-byte batch budget — so these validators could not review it: duplication, reuse. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q

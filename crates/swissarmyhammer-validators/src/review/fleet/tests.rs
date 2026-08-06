@@ -410,7 +410,7 @@ fn a_short_line_file_the_raw_byte_budget_admits_is_measured_by_its_rendered_size
 
     let work = WorkList::new("purpose".to_string(), vec![validator_work("v", vec![file])]);
     let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, BUDGET, &rendered_file_block_bytes);
+        crate::review::scope::batch_work_list(&work, BUDGET, rendered_file_block_bytes);
 
     assert!(
         batches.is_empty(),
@@ -449,7 +449,7 @@ fn one_validators_oversized_file_does_not_cost_the_other_validators_that_file() 
         ],
     );
     let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, BUDGET, &rendered_file_block_bytes);
+        crate::review::scope::batch_work_list(&work, BUDGET, rendered_file_block_bytes);
 
     assert_eq!(batches.len(), 1, "the affordable pair still reviews");
     assert_eq!(
@@ -499,7 +499,7 @@ fn every_prompt_a_packed_batch_sends_fits_inside_the_agent_prompt_cap() {
     let framing = prompt_framing_bytes(&work, &loader);
     let budget = FleetConfig::default().file_payload_budget(framing);
     let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, budget, &rendered_file_block_bytes);
+        crate::review::scope::batch_work_list(&work, budget, rendered_file_block_bytes);
 
     assert!(
         skipped.is_empty(),

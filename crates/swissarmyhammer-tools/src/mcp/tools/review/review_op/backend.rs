@@ -73,6 +73,32 @@ impl std::fmt::Debug for AgentHandle {
     }
 }
 
+/// Compile-time assertions of [`AgentHandle`]'s auto traits, so a field change
+/// that silently loses `Send` fails the build instead of a downstream spawn.
+///
+/// `Send` is the load-bearing bound: the handle is minted by an [`AgentFactory`]
+/// future and moved across tasks into the engine driver. `Sync` is structurally
+/// unavailable and therefore not asserted: the upstream
+/// `agent_client_protocol::ConnectTo` trait is `Send`-only, so the type-erased
+/// `DynConnectTo<Client>` component (a `Box<dyn ErasedConnectTo>` inside) is
+/// `!Sync` by that crate's contract. The handle is consumed by value through
+/// [`AgentHandle::into_parts`], never shared by reference, so `Sync` is not an
+/// applicable trait for it.
+#[cfg(test)]
+mod send_sync_assertions {
+    use super::*;
+
+    const _: () = {
+        const fn assert_send<T: Send>() {}
+        const fn check() {
+            assert_send::<AgentHandle>();
+        }
+        // Reference `check` so the assertion item is not dead code; the bound
+        // is enforced when `check`'s body type-checks.
+        let _ = check;
+    };
+}
+
 /// A factory that mints a fresh [`AgentHandle`] for one review run.
 ///
 /// The review tool resolves its agent through this seam rather than constructing

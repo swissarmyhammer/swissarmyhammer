@@ -638,7 +638,7 @@ pub async fn run_review(
     // the rest of the scope.
     let framing = prompt_framing_bytes(&work, loader);
     let budget = fleet_config.file_payload_budget(framing);
-    let (batches, skipped) = batch_work_list(&work, budget, &rendered_file_block_bytes);
+    let (batches, skipped) = batch_work_list(&work, budget, rendered_file_block_bytes);
 
     tracing::info!(
         validators = work.validators().len(),

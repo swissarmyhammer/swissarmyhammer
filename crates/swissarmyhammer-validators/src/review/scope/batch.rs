@@ -114,10 +114,10 @@ impl SkippedFile {
 ///
 /// This never errors: a caller that wants a hard stop on an oversized file
 /// checks the returned skip list itself.
-pub fn batch_work_list(
+pub fn batch_work_list<F: Fn(&FileWork) -> usize>(
     work: &WorkList,
     budget: usize,
-    cost: &dyn Fn(&FileWork) -> usize,
+    cost: F,
 ) -> (Vec<WorkList>, Vec<SkippedFile>) {
     // Step 1: cost every (validator, file) pair once, dropping the pairs no
     // batch could ever carry and keeping the largest surviving cost per path.

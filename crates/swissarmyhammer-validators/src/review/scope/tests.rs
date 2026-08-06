@@ -1043,7 +1043,7 @@ fn batch_work_list_packs_whole_files_within_the_byte_budget() {
         )],
     };
 
-    let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 25, raw_source_bytes);
 
     assert_eq!(
         batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -1067,7 +1067,7 @@ fn batch_work_list_skips_a_single_file_over_the_budget_and_packs_the_rest() {
         validators: vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
     };
 
-    let (batches, skipped) = batch_work_list(&work, 32, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 32, raw_source_bytes);
 
     assert_eq!(
         batches.iter().map(batch_paths).collect::<Vec<_>>(),
@@ -1093,7 +1093,7 @@ fn batch_work_list_small_diff_is_exactly_one_batch() {
         validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
     };
 
-    let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 32 * 1024, raw_source_bytes);
 
     assert_eq!(batches.len(), 1, "a small diff is a single batch");
     assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
@@ -1113,7 +1113,7 @@ fn batch_work_list_projects_each_validator_onto_its_batch_files() {
         ],
     };
 
-    let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 25, raw_source_bytes);
 
     assert_eq!(batches.len(), 2);
     assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
@@ -1135,7 +1135,7 @@ fn batch_work_list_keeps_a_shared_file_atomic_in_one_batch() {
         ],
     };
 
-    let (batches, skipped) = batch_work_list(&work, 25, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 25, raw_source_bytes);
 
     assert_eq!(batches.len(), 1, "the one distinct file is one batch");
     assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
@@ -1153,7 +1153,7 @@ fn batch_work_list_empty_work_yields_no_batches() {
         change_purpose: "p".to_string(),
         validators: vec![],
     };
-    let (batches, skipped) = batch_work_list(&work, 32 * 1024, &raw_source_bytes);
+    let (batches, skipped) = batch_work_list(&work, 32 * 1024, raw_source_bytes);
     assert!(batches.is_empty());
     assert!(skipped.is_empty());
 }

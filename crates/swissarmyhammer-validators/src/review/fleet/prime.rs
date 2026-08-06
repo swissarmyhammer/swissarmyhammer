@@ -52,7 +52,7 @@ async fn submit_prime(pool: &AgentPool, name: &str, prefix: String) -> Option<Se
         Ok(Ok(turn)) => Some(turn),
         Ok(Err(err)) => {
             tracing::warn!(
-                validator = %name,
+                run = %name,
                 error = %err,
                 "prefix prime turn failed; falling back to monolithic prompts"
             );
@@ -60,7 +60,7 @@ async fn submit_prime(pool: &AgentPool, name: &str, prefix: String) -> Option<Se
         }
         Err(_) => {
             tracing::warn!(
-                validator = %name,
+                run = %name,
                 "prefix prime result was dropped; falling back to monolithic prompts"
             );
             None
@@ -82,7 +82,7 @@ async fn confirm_saved_state(
         Ok(status) => status,
         Err(err) => {
             tracing::warn!(
-                validator = %name,
+                run = %name,
                 session = %turn.session_id,
                 error = %err,
                 "prefix state-status check failed; falling back to monolithic prompts"
@@ -92,7 +92,7 @@ async fn confirm_saved_state(
     };
     if !status.saved || status.prompt_tokens.is_some_and(|tokens| tokens == 0) {
         tracing::warn!(
-            validator = %name,
+            run = %name,
             session = %turn.session_id,
             saved = status.saved,
             prompt_tokens = ?status.prompt_tokens,
@@ -121,7 +121,7 @@ async fn pin_prefix(
     match pool.pin_session_scoped(&turn.session_id).await {
         Ok((pin, guard)) => {
             tracing::info!(
-                scope = %name,
+                run = %name,
                 session = %turn.session_id,
                 prefix_tokens = ?status.prompt_tokens,
                 born_pinned = status.pinned,
@@ -132,7 +132,7 @@ async fn pin_prefix(
         }
         Err(err) => {
             tracing::warn!(
-                scope = %name,
+                run = %name,
                 session = %turn.session_id,
                 error = %err,
                 "failed to pin primed prefix state; falling back to monolithic prompts"
