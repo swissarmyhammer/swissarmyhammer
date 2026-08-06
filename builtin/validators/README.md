@@ -128,9 +128,10 @@ Rules for tool rules:
 - A finding from a tool is a requirement. Fix it or suppress it in code.
 - Exemptions live in the tool configuration or in an inline suppression
   (for example `#[allow(missing_docs)]`, `# noqa`). They do not live in prose.
-- When a tool needs a configuration file, the engine writes one to a temporary
-  path and passes it with a flag. The engine never changes the project's own
-  lint configuration.
+- When a tool needs a configuration file, the `run` script writes one to a
+  temporary path and passes it with a flag — the script owns its whole
+  invocation, config included. Never change the project's own lint
+  configuration.
 
 ### Fixtures
 
