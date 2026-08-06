@@ -29,8 +29,8 @@ use swissarmyhammer_templating::TemplateEngine;
 use crate::error::AvpError;
 
 use super::types::{
-    Rule, RuleFrontmatter, RuleSet, RuleSetManifest, Validator, ValidatorFrontmatter,
-    ValidatorSource,
+    Rule, RuleFrontmatter, RuleLoadFailure, RuleSet, RuleSetManifest, Validator,
+    ValidatorFrontmatter, ValidatorSource,
 };
 
 /// Length of the YAML frontmatter opening delimiter "---".
@@ -355,6 +355,12 @@ pub fn check_manifest_frontmatter(content: &str, dir_path: &Path) -> Vec<String>
 
 /// Parse a rule from a rule file within a RuleSet.
 ///
+/// A rule with a `tool` block in its frontmatter is a tool rule; a rule
+/// without one is a prompt rule. A rule-level `match` block (the same
+/// [`super::types::ValidatorMatch`] struct the set manifest uses, including
+/// `@file_groups` references when an expander is provided) narrows the set's
+/// match.
+///
 /// # Format
 ///
 /// ```markdown
@@ -373,11 +379,17 @@ pub fn check_manifest_frontmatter(content: &str, dir_path: &Path) -> Vec<String>
 ///
 /// * `content` - The full rule file content
 /// * `path` - The path to the rule file (for error messages and defaults)
+/// * `expander` - Optional YAML expander for `@` references in the rule's
+///   `match` block
 ///
 /// # Returns
 ///
 /// A parsed `Rule` or an error if parsing fails.
-pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
+pub fn parse_rule<C: DirectoryConfig>(
+    content: &str,
+    path: &Path,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<Rule, AvpError> {
     // Extract frontmatter and body
     let (frontmatter_str, body) = extract_frontmatter(content, path)?;
 
@@ -385,11 +397,19 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
     let rendered = render_frontmatter(frontmatter_str);
 
     // Parse YAML frontmatter
-    let yaml_value: serde_yaml_ng::Value =
+    let mut yaml_value: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
         })?;
+
+    // Expand includes (e.g. `@file_groups/...` in a rule-level `match`)
+    if let Some(exp) = expander {
+        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to expand YAML includes: {}", e),
+        })?;
+    }
 
     // Deserialize to typed frontmatter
     let mut frontmatter: RuleFrontmatter =
@@ -406,6 +426,9 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
         description: frontmatter.description,
         body: body.to_string(),
         timeout: frontmatter.timeout,
+        match_criteria: frontmatter.match_criteria,
+        supersedes: frontmatter.supersedes,
+        tool: frontmatter.tool,
     })
 }
 
@@ -434,8 +457,11 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
 /// - VALIDATOR.md is missing
 /// - VALIDATOR.md is invalid
 /// - rules/ directory is missing
-/// - Any rule file is invalid
 /// - Duplicate rule names are found
+///
+/// A rule file that fails to parse does **not** fail the set: the rule is
+/// skipped and recorded in the returned set's `rule_failures`, so the lint
+/// surface (`check validators`) reports it instead of dropping the whole set.
 pub fn parse_ruleset_directory<C: DirectoryConfig>(
     dir_path: &Path,
     source: ValidatorSource,
@@ -491,6 +517,7 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
 
     // Collect all .md files in rules/ directory
     let mut rules = Vec::new();
+    let mut rule_failures = Vec::new();
     let mut rule_names = std::collections::HashSet::new();
 
     let entries = std::fs::read_dir(&rules_dir).map_err(|e| AvpError::Validator {
@@ -531,7 +558,20 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
             message: format!("failed to read rule file: {}", e),
         })?;
 
-        let rule = parse_rule(&rule_content, &path)?;
+        // A malformed rule (e.g. a bad `tool` block) never drops the whole
+        // set: skip the rule, record the failure so the lint surface reports
+        // it, and keep loading the rest of the set.
+        let rule = match parse_rule(&rule_content, &path, expander) {
+            Ok(rule) => rule,
+            Err(e) => {
+                tracing::warn!("Failed to parse rule at {}: {}", path.display(), e);
+                rule_failures.push(RuleLoadFailure {
+                    path: path.clone(),
+                    error: e.to_string(),
+                });
+                continue;
+            }
+        };
 
         // Check for duplicate rule names
         if !rule_names.insert(rule.name.clone()) {
@@ -550,6 +590,7 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
     Ok(RuleSet {
         manifest,
         rules,
+        rule_failures,
         manifest_body,
         source,
         base_path: dir_path.to_path_buf(),
@@ -559,7 +600,16 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validators::types::DEFAULT_VALIDATOR_TIMEOUT_SECONDS;
+    use crate::validators::types::{ToolScope, DEFAULT_VALIDATOR_TIMEOUT_SECONDS};
+
+    /// Parse a rule with no `@` include expansion — the common test shape.
+    fn parse_rule_plain(content: &str, path: &std::path::Path) -> Result<Rule, AvpError> {
+        parse_rule(
+            content,
+            path,
+            None::<&YamlExpander<swissarmyhammer_directory::ValidatorsConfig>>,
+        )
+    }
 
     #[test]
     fn test_parse_validator_basic() {
@@ -920,7 +970,7 @@ description: "Rule at {{ version }}"
 
 Body.
 "#;
-        let rule = parse_rule(content, Path::new("test-rule.md")).unwrap();
+        let rule = parse_rule_plain(content, Path::new("test-rule.md")).unwrap();
         assert_eq!(rule.description, format!("Rule at {}", crate::VERSION));
     }
 
@@ -1008,7 +1058,7 @@ timeout: 60
 
 Check for API keys, passwords, and tokens.
 "#;
-        let rule = parse_rule(content, std::path::Path::new("no-secrets.md")).unwrap();
+        let rule = parse_rule_plain(content, std::path::Path::new("no-secrets.md")).unwrap();
         assert_eq!(rule.name, "no-secrets");
         assert_eq!(rule.description, "Detect hardcoded secrets");
         assert_eq!(rule.timeout, Some(60));
@@ -1024,7 +1074,7 @@ description: ""
 
 Check the code.
 "#;
-        let rule = parse_rule(content, std::path::Path::new("check-code.md")).unwrap();
+        let rule = parse_rule_plain(content, std::path::Path::new("check-code.md")).unwrap();
         assert_eq!(rule.name, "check-code");
         assert_eq!(rule.description, "Rule: check-code");
         assert!(rule.timeout.is_none());
@@ -1040,7 +1090,7 @@ timeout: 120
 
 Body content here.
 "#;
-        let rule = parse_rule(content, std::path::Path::new("my-rule.md")).unwrap();
+        let rule = parse_rule_plain(content, std::path::Path::new("my-rule.md")).unwrap();
         assert_eq!(rule.name, "my-rule");
         assert_eq!(rule.description, "My custom rule");
         assert_eq!(rule.timeout, Some(120));
@@ -1402,7 +1452,7 @@ name: [invalid
 
 Body.
 "#;
-        let result = parse_rule(content, std::path::Path::new("test.md"));
+        let result = parse_rule_plain(content, std::path::Path::new("test.md"));
         assert!(result.is_err());
     }
 
@@ -1563,5 +1613,180 @@ Body.
         let match_criteria = manifest.match_criteria.unwrap();
         assert!(match_criteria.files.contains(&"*.rs".to_string()));
         assert!(match_criteria.files.contains(&"*.ts".to_string()));
+    }
+
+    /// The README's tool-rule example shape parses into a tool rule: `tool`
+    /// block, `supersedes`, and a rule-level `match` with `project_types`.
+    #[test]
+    fn test_parse_tool_rule_full_block() {
+        let content = r#"---
+name: missing-docs-python
+description: Public items need docs — checked by ruff, not by prompt.
+match:
+  files:
+    - "**/*.py"
+  project_types:
+    - python
+supersedes: missing-docs
+tool:
+  scope: files
+  run: |
+    ruff check --select D1 --output-format json "$@" |
+      jq -c '.[] | {file: .filename, line: .location.row, message: .message}'
+  doctor:
+    check_command: "which ruff jq"
+    check_version_command: "ruff --version"
+  install:
+    commands: ["uv tool install ruff", "pipx install ruff"]
+---
+"#;
+        let rule = parse_rule_plain(content, Path::new("missing-docs-python.md")).unwrap();
+
+        assert!(rule.is_tool_rule());
+        assert_eq!(rule.supersedes.as_deref(), Some("missing-docs"));
+
+        let match_criteria = rule.match_criteria.as_ref().unwrap();
+        assert_eq!(match_criteria.files, vec!["**/*.py"]);
+        assert_eq!(match_criteria.project_types, vec!["python"]);
+
+        let tool = rule.tool.as_ref().unwrap();
+        assert_eq!(tool.scope, ToolScope::Files);
+        assert!(tool.run.contains("ruff check --select D1"));
+        let doctor = tool.doctor.as_ref().unwrap();
+        assert_eq!(doctor.check_command, "which ruff jq");
+        assert_eq!(
+            doctor.check_version_command.as_deref(),
+            Some("ruff --version")
+        );
+        let install = tool.install.as_ref().unwrap();
+        assert_eq!(
+            install.commands,
+            vec!["uv tool install ruff", "pipx install ruff"]
+        );
+    }
+
+    /// A rule without a `tool` block stays a prompt rule with no tool fields —
+    /// existing prompt rules parse unchanged.
+    #[test]
+    fn test_parse_prompt_rule_has_no_tool_fields() {
+        let content = "---\nname: prompt\ndescription: A prompt rule\n---\nBody.";
+        let rule = parse_rule_plain(content, Path::new("prompt.md")).unwrap();
+
+        assert!(!rule.is_tool_rule());
+        assert!(rule.tool.is_none());
+        assert!(rule.supersedes.is_none());
+        assert!(rule.match_criteria.is_none());
+    }
+
+    /// A `workspace` scope parses to [`ToolScope::Workspace`].
+    #[test]
+    fn test_parse_tool_rule_workspace_scope() {
+        let content = r#"---
+name: clippy
+description: Clippy over the workspace
+tool:
+  scope: workspace
+  run: cargo clippy --message-format json
+---
+"#;
+        let rule = parse_rule_plain(content, Path::new("clippy.md")).unwrap();
+        assert_eq!(rule.tool.unwrap().scope, ToolScope::Workspace);
+    }
+
+    /// The tool block accepts no mapping/output configuration: an unknown key
+    /// (like `format`) is rejected with a clear error naming the file.
+    #[test]
+    fn test_parse_tool_rule_rejects_output_configuration_keys() {
+        let content = r#"---
+name: bad
+description: Carries a forbidden output key
+tool:
+  scope: files
+  run: ruff check "$@"
+  format: json
+---
+"#;
+        let err = parse_rule_plain(content, Path::new("bad.md")).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("bad.md"),
+            "error names the file: {message}"
+        );
+        assert!(
+            message.contains("format"),
+            "error names the bad key: {message}"
+        );
+    }
+
+    /// A rule-level `match` expands `@file_groups` references the same way the
+    /// set manifest does.
+    #[test]
+    fn test_parse_rule_match_expands_file_groups() {
+        let content = r#"---
+name: expanded-rule
+description: Rule-level match with an include
+match:
+  files:
+    - "@file_groups/source_code"
+---
+
+Body.
+"#;
+        let mut expander = swissarmyhammer_directory::YamlExpander::<
+            swissarmyhammer_directory::ValidatorsConfig,
+        >::new();
+        expander
+            .add_builtin("file_groups/source_code", "\n- \"*.rs\"\n- \"*.ts\"\n")
+            .unwrap();
+
+        let rule = parse_rule(content, Path::new("expanded-rule.md"), Some(&expander)).unwrap();
+
+        let match_criteria = rule.match_criteria.unwrap();
+        assert!(match_criteria.files.contains(&"*.rs".to_string()));
+        assert!(match_criteria.files.contains(&"*.ts".to_string()));
+    }
+
+    /// A malformed tool block skips that one rule and records one clear
+    /// failure — it never drops the rest of the set.
+    #[test]
+    fn test_malformed_tool_block_does_not_break_the_set() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("mixed-set");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: mixed-set\ndescription: Test\n---\nBody.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/good.md"),
+            "---\nname: good\ndescription: Good rule\n---\nBody.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/bad-tool.md"),
+            "---\nname: bad-tool\ndescription: Bad tool block\ntool:\n  scope: nonsense\n  run: x\n---\nBody.",
+        )
+        .unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::ValidatorsConfig>(
+            &dir,
+            ValidatorSource::Project,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(ruleset.rules.len(), 1);
+        assert_eq!(ruleset.rules[0].name, "good");
+        assert_eq!(ruleset.rule_failures.len(), 1);
+        let failure = &ruleset.rule_failures[0];
+        assert!(failure.path.ends_with("bad-tool.md"));
+        assert!(
+            failure.error.contains("bad-tool.md"),
+            "failure names the file: {}",
+            failure.error
+        );
     }
 }

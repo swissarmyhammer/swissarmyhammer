@@ -17,6 +17,7 @@ pub mod scope;
 pub mod synthesize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod tool_output;
 pub mod types;
 pub mod verify;
 
@@ -38,6 +39,7 @@ pub use scope::{
 pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,
 };
+pub use tool_output::parse_tool_stdout;
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{
     render_verify_prompt, run_guard, verify_findings, Candidate, GuardOutcome, VerifyOutcome,

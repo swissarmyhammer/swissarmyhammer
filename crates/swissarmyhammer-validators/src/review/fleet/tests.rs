@@ -71,8 +71,10 @@ fn ruleset_with_body(name: &str, mandate: &str, body: &str, rules: &[(&str, &str
                 description: format!("{rname} description"),
                 body: body.to_string(),
                 timeout: None,
+                ..Rule::default()
             })
             .collect(),
+        rule_failures: vec![],
         manifest_body: body.to_string(),
         source: ValidatorSource::Builtin,
         base_path: PathBuf::from("/test"),

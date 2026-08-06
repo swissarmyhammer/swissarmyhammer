@@ -350,7 +350,9 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             description: "rule".to_string(),
             body: "body".to_string(),
             timeout: None,
+            ..Rule::default()
         }],
+        rule_failures: vec![],
         manifest_body: String::new(),
         source: ValidatorSource::Builtin,
         base_path: PathBuf::from("/test"),

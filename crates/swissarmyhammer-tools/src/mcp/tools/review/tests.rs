@@ -332,6 +332,90 @@ async fn list_validators_surfaces_user_and_project_layers_with_probes() {
     assert_eq!(project_row["probes"], json!(["callers"]));
 }
 
+/// Write a RuleSet whose single rule is a tool rule (a `tool` block plus
+/// `supersedes` in the rule frontmatter).
+fn write_tool_rule_ruleset(base: &Path, name: &str, glob: &str) {
+    let dir = base.join(name);
+    std::fs::create_dir_all(dir.join("rules")).unwrap();
+    std::fs::write(
+        dir.join("VALIDATOR.md"),
+        format!(
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n---\n\n# {name}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rules/docs-tool.md"),
+        "---\nname: docs-tool\ndescription: Docs by tool\nsupersedes: missing-docs\ntool:\n  scope: files\n  run: ruff check \"$@\"\n  doctor:\n    check_command: which ruff\n---\n",
+    )
+    .unwrap();
+}
+
+/// `get validator` and a `rules: true` listing expose a tool rule's `tool`
+/// block and `supersedes`, and a prompt rule row carries neither key.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn get_validator_exposes_tool_block_and_supersedes() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py");
+    write_ruleset(&project_validators, "prompt-set", "**/*.py", &[]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("get validator"));
+    args.insert("name".to_string(), json!("tooled-set"));
+    let result = tool.execute(args, &context).await.expect("get validator");
+    let detail: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    let rule = &detail["rules"][0];
+    assert_eq!(rule["name"], json!("docs-tool"));
+    assert_eq!(rule["supersedes"], json!("missing-docs"));
+    assert_eq!(rule["tool"]["scope"], json!("files"));
+    assert_eq!(rule["tool"]["run"], json!("ruff check \"$@\""));
+    assert_eq!(rule["tool"]["doctor"]["check_command"], json!("which ruff"));
+
+    // A prompt rule carries neither `tool` nor `supersedes`.
+    let mut prompt_args = serde_json::Map::new();
+    prompt_args.insert("op".to_string(), json!("get validator"));
+    prompt_args.insert("name".to_string(), json!("prompt-set"));
+    let prompt = tool
+        .execute(prompt_args, &context)
+        .await
+        .expect("get validator");
+    let prompt: serde_json::Value = serde_json::from_str(&extract_text(&prompt)).unwrap();
+    let prompt_rule = &prompt["rules"][0];
+    assert!(prompt_rule.get("tool").is_none(), "{prompt_rule}");
+    assert!(prompt_rule.get("supersedes").is_none(), "{prompt_rule}");
+
+    // The `rules: true` listing carries the same tool block.
+    let mut list_args = serde_json::Map::new();
+    list_args.insert("op".to_string(), json!("list validators"));
+    list_args.insert("match".to_string(), json!("pkg/tool.py"));
+    list_args.insert("rules".to_string(), json!(true));
+    let listed = tool
+        .execute(list_args, &context)
+        .await
+        .expect("list validators");
+    let listed: serde_json::Value = serde_json::from_str(&extract_text(&listed)).unwrap();
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == json!("tooled-set"))
+        .expect("the tooled set is listed");
+    assert_eq!(row["rules"][0]["tool"]["scope"], json!("files"));
+    assert_eq!(row["rules"][0]["supersedes"], json!("missing-docs"));
+}
+
 /// The Rust source path the `match` filter targets in the pairing tests. Nothing
 /// reads it from disk — validator matching is a pure glob test over the path.
 const RUST_MATCH_TARGET: &str = "src/lib.rs";

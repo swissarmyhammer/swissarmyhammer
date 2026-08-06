@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use swissarmyhammer_validators::review::probe_exists;
 use swissarmyhammer_validators::validators::{
-    compile_glob_patterns, matches_any_pattern, MatchContext, ValidatorLoader, ValidatorMatch,
+    compile_glob_patterns, matches_any_pattern, MatchContext, ToolSpec, ValidatorLoader,
+    ValidatorMatch,
 };
 use swissarmyhammer_validators::{load_rules, AvpError, RuleSet};
 
@@ -93,6 +94,13 @@ pub struct RuleDetail {
     pub name: String,
     /// The rule's markdown body verbatim.
     pub body: String,
+    /// The prompt rule this tool rule replaces when its tool is healthy.
+    /// Absent on prompt rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    /// The tool block. Present only on tool rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolSpec>,
 }
 
 /// A `get validator` response — one RuleSet's full detail.
@@ -168,6 +176,8 @@ fn rule_details(ruleset: &RuleSet) -> Vec<RuleDetail> {
         .map(|rule| RuleDetail {
             name: rule.name.clone(),
             body: rule.body.clone(),
+            supersedes: rule.supersedes.clone(),
+            tool: rule.tool.clone(),
         })
         .collect()
 }
@@ -500,7 +510,7 @@ pub fn check_validators() -> Result<CheckValidatorsResponse, ValidatorOpError> {
 
 /// Lint one RuleSet, appending any problems found.
 fn lint_ruleset(ruleset: &RuleSet, path: &str, errors: &mut Vec<ValidatorProblem>) {
-    // Globs must compile.
+    // Globs must compile — the set's and every rule-level narrowing `match`.
     for glob in match_globs(ruleset) {
         if glob::Pattern::new(&glob).is_err() {
             errors.push(ValidatorProblem {
@@ -508,6 +518,30 @@ fn lint_ruleset(ruleset: &RuleSet, path: &str, errors: &mut Vec<ValidatorProblem
                 problem: format!("invalid match glob '{glob}'"),
             });
         }
+    }
+    for rule in &ruleset.rules {
+        let rule_globs = rule
+            .match_criteria
+            .as_ref()
+            .map(|criteria| criteria.files.as_slice())
+            .unwrap_or_default();
+        for glob in rule_globs {
+            if glob::Pattern::new(glob).is_err() {
+                errors.push(ValidatorProblem {
+                    path: path.to_string(),
+                    problem: format!("rule '{}': invalid match glob '{glob}'", rule.name),
+                });
+            }
+        }
+    }
+
+    // A rule file that failed to parse (e.g. a malformed `tool` block) was
+    // skipped, never dropped silently: report each one here.
+    for failure in &ruleset.rule_failures {
+        errors.push(ValidatorProblem {
+            path: failure.path.display().to_string(),
+            problem: format!("failed to parse rule: {}", failure.error),
+        });
     }
 
     // A review validator matches by changed file, never by a hook-event string;

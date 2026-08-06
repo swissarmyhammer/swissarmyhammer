@@ -541,7 +541,7 @@ pub struct RuleSetManifest {
     pub metadata: RuleSetMetadata,
 
     /// Match criteria for filtering which work triggers this RuleSet.
-    /// Rules inherit this and cannot override.
+    /// Rules inherit this; a rule-level `match` narrows it (intersection).
     #[serde(default, rename = "match")]
     pub match_criteria: Option<ValidatorMatch>,
 
@@ -599,8 +599,12 @@ impl RuleSetManifest {
 /// Individual rule within a RuleSet.
 ///
 /// Rules contain the actual validation logic and can override certain
-/// RuleSet defaults (timeout) while inheriting match criteria.
-#[derive(Debug, Clone)]
+/// RuleSet defaults (timeout). Rules inherit the set's match criteria; a
+/// rule-level `match` narrows it (the rule applies to the intersection).
+///
+/// A rule with a [`ToolSpec`] is a tool rule — a language tool reports the
+/// findings instead of an LLM. A rule without one is a prompt rule.
+#[derive(Debug, Clone, Default)]
 pub struct Rule {
     /// Unique identifier for this rule within the RuleSet.
     pub name: String,
@@ -613,6 +617,15 @@ pub struct Rule {
 
     /// Override timeout (if None, inherits from RuleSet).
     pub timeout: Option<u32>,
+
+    /// Optional rule-level match criteria that narrows the set's match.
+    pub match_criteria: Option<ValidatorMatch>,
+
+    /// The prompt rule this tool rule replaces when its tool is healthy.
+    pub supersedes: Option<String>,
+
+    /// The tool block. Present on tool rules, absent on prompt rules.
+    pub tool: Option<ToolSpec>,
 }
 
 impl Rule {
@@ -620,6 +633,96 @@ impl Rule {
     pub fn effective_timeout(&self, ruleset: &RuleSet) -> u32 {
         self.timeout.unwrap_or(ruleset.manifest.timeout)
     }
+
+    /// Whether this rule is a tool rule (its frontmatter carries a `tool` block).
+    pub fn is_tool_rule(&self) -> bool {
+        self.tool.is_some()
+    }
+
+    /// Check if this rule matches the given context, narrow-only.
+    ///
+    /// A rule matches when its set matches AND its own optional `match`
+    /// criteria matches — the intersection. Both sides run through the same
+    /// [`matches_criteria`] evaluation the set-level [`RuleSet::matches`] uses,
+    /// so a rule never matches a file its set does not match.
+    pub fn matches(&self, ruleset: &RuleSet, ctx: &MatchContext) -> bool {
+        if !ruleset.matches(ctx) {
+            return false;
+        }
+
+        match &self.match_criteria {
+            Some(criteria) => matches_criteria(criteria, ctx),
+            None => true,
+        }
+    }
+}
+
+/// Which inputs a tool rule's `run` script receives.
+///
+/// - `files`: the script receives the changed files as its arguments (`"$@"`).
+/// - `workspace`: the script runs one time at the workspace root with no
+///   arguments; the engine keeps only the findings in changed files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolScope {
+    /// The script receives the changed files as arguments (`"$@"`).
+    Files,
+    /// The script runs once at the workspace root with no arguments.
+    Workspace,
+}
+
+/// The doctor commands that prove a tool rule's tools are usable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolDoctor {
+    /// The command that shows every tool the pipe needs is installed
+    /// (for example `which ruff jq`).
+    pub check_command: String,
+
+    /// The command that shows the main tool's version
+    /// (for example `ruff --version`).
+    #[serde(default)]
+    pub check_version_command: Option<String>,
+}
+
+/// The install commands for a tool rule's tool, in order of preference.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolInstall {
+    /// The install commands to try, in order. Each command should pin the
+    /// tool version — an unpinned tool can change its rules and break the gate.
+    #[serde(default)]
+    pub commands: Vec<String>,
+}
+
+/// The `tool` block of a tool rule's frontmatter.
+///
+/// A rule with a `tool` block is a tool rule: a language tool examines the
+/// code and reports the findings instead of an LLM. There is no output,
+/// format, jq, regex, or filter configuration and no `exit.findings` key —
+/// the `run` pipe is the mapping, and unknown keys are rejected at parse time.
+///
+/// The script's contract is its stdout: one finding per line, either
+/// `path:line: message` or a `{"file": ..., "line": ..., "message": ...}`
+/// JSON object per line (what `jq -c` emits). Empty stdout means clean.
+/// Exit 0 means the script judged the code; a nonzero exit means the script
+/// broke and no findings are read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolSpec {
+    /// Which inputs the `run` script receives.
+    pub scope: ToolScope,
+
+    /// The shell script that runs the tool — the pipeline is the mapping.
+    pub run: String,
+
+    /// The commands that prove the script's tools are installed.
+    #[serde(default)]
+    pub doctor: Option<ToolDoctor>,
+
+    /// How to install the tool when it is missing.
+    #[serde(default)]
+    pub install: Option<ToolInstall>,
 }
 
 /// Frontmatter for individual rule files.
@@ -634,6 +737,20 @@ pub struct RuleFrontmatter {
     /// Optional timeout override.
     #[serde(default)]
     pub timeout: Option<u32>,
+
+    /// Optional rule-level match criteria. Narrows the set's match — the rule
+    /// applies to the intersection, and never matches a file its set does not
+    /// match.
+    #[serde(default, rename = "match")]
+    pub match_criteria: Option<ValidatorMatch>,
+
+    /// The prompt rule this tool rule replaces when its tool is healthy.
+    #[serde(default)]
+    pub supersedes: Option<String>,
+
+    /// The tool block. Present on tool rules, absent on prompt rules.
+    #[serde(default)]
+    pub tool: Option<ToolSpec>,
 }
 
 impl RuleFrontmatter {
@@ -653,11 +770,26 @@ impl RuleFrontmatter {
     }
 }
 
+/// A rule file inside a RuleSet that failed to parse, retained for reporting.
+///
+/// A malformed rule (for example a bad `tool` block) never drops the whole
+/// set: the set loads with its parseable rules, and each failure is recorded
+/// here so the lint surface (`check validators` / `sah doctor`) can name the
+/// offending file and its parse problem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuleLoadFailure {
+    /// The rule file that failed to parse.
+    pub path: PathBuf,
+
+    /// The parse problem, formatted for display.
+    pub error: String,
+}
+
 /// A RuleSet package containing a manifest and multiple rules.
 ///
 /// - VALIDATOR.md contains the manifest with shared configuration
 /// - rules/ directory contains individual rule files
-/// - All rules in a RuleSet share the same match criteria
+/// - Rules inherit the set's match criteria; a rule-level `match` narrows it
 #[derive(Debug, Clone)]
 pub struct RuleSet {
     /// Parsed manifest from VALIDATOR.md.
@@ -665,6 +797,10 @@ pub struct RuleSet {
 
     /// Rules loaded from the rules/ directory.
     pub rules: Vec<Rule>,
+
+    /// Rule files that failed to parse and were skipped, retained so a
+    /// malformed rule is reported instead of silently dropped.
+    pub rule_failures: Vec<RuleLoadFailure>,
 
     /// The VALIDATOR.md prose body — everything after the frontmatter's closing
     /// `---`, trimmed. This is authored validator-WIDE guidance (intent, scope,
@@ -1280,6 +1416,7 @@ mod tests {
                 once: false,
             },
             rules: vec![],
+            rule_failures: vec![],
             manifest_body: String::new(),
             source: ValidatorSource::Builtin,
             base_path: PathBuf::from("/test"),
@@ -1392,6 +1529,7 @@ mod tests {
             description: "Test".to_string(),
             body: "Body".to_string(),
             timeout: Some(60),
+            ..Rule::default()
         };
         assert_eq!(rule.effective_timeout(&rs), 60);
     }
@@ -1404,8 +1542,107 @@ mod tests {
             description: "Test".to_string(),
             body: "Body".to_string(),
             timeout: None,
+            ..Rule::default()
         };
         assert_eq!(rule.effective_timeout(&rs), 30);
+    }
+
+    /// A rule-level `match` narrows the set's match: the rule applies to the
+    /// intersection, evaluated through the same `matches_criteria` path the
+    /// set-level `RuleSet::matches` uses.
+    #[test]
+    fn test_rule_match_narrows_set_match() {
+        let rs = make_ruleset(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.rs".to_string(), "**/*.py".to_string()],
+                project_types: vec![],
+            }),
+            None,
+        );
+        let rule = Rule {
+            name: "python-only".to_string(),
+            match_criteria: Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.py".to_string()],
+                project_types: vec![],
+            }),
+            ..Rule::default()
+        };
+
+        // The set matches .rs, but the rule narrows to .py only.
+        let rust_ctx = MatchContext::new().with_file("src/main.rs");
+        assert!(rs.matches(&rust_ctx));
+        assert!(!rule.matches(&rs, &rust_ctx));
+
+        // Both the set and the rule match .py.
+        let python_ctx = MatchContext::new().with_file("scripts/tool.py");
+        assert!(rs.matches(&python_ctx));
+        assert!(rule.matches(&rs, &python_ctx));
+    }
+
+    /// A rule never matches a file its set does not match, even when the
+    /// rule-level `match` matches it — narrow-only, never widen.
+    #[test]
+    fn test_rule_match_never_widens_set_match() {
+        let rs = make_ruleset(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.rs".to_string()],
+                project_types: vec![],
+            }),
+            None,
+        );
+        let rule = Rule {
+            name: "js-widening".to_string(),
+            match_criteria: Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.js".to_string()],
+                project_types: vec![],
+            }),
+            ..Rule::default()
+        };
+
+        let js_ctx = MatchContext::new().with_file("web/app.js");
+        assert!(!rs.matches(&js_ctx));
+        assert!(!rule.matches(&rs, &js_ctx));
+    }
+
+    /// A rule without its own `match` inherits the set's match unchanged.
+    #[test]
+    fn test_rule_without_match_inherits_set_match() {
+        let rs = make_ruleset(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.rs".to_string()],
+                project_types: vec![],
+            }),
+            None,
+        );
+        let rule = Rule {
+            name: "inheriting".to_string(),
+            ..Rule::default()
+        };
+
+        assert!(rule.matches(&rs, &MatchContext::new().with_file("src/main.rs")));
+        assert!(!rule.matches(&rs, &MatchContext::new().with_file("web/app.js")));
+    }
+
+    #[test]
+    fn test_rule_is_tool_rule() {
+        let prompt_rule = Rule::default();
+        assert!(!prompt_rule.is_tool_rule());
+
+        let tool_rule = Rule {
+            tool: Some(ToolSpec {
+                scope: ToolScope::Files,
+                run: "ruff check \"$@\"".to_string(),
+                doctor: None,
+                install: None,
+            }),
+            ..Rule::default()
+        };
+        assert!(tool_rule.is_tool_rule());
     }
 
     #[test]

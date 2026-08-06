@@ -677,6 +677,56 @@ mod tests {
         assert_eq!(shared.description(), "Project version");
     }
 
+    /// Write a RuleSet whose single rule is a tool rule with the full block.
+    fn write_tool_ruleset(base: &Path, name: &str, run: &str) {
+        let dir = base.join(name);
+        fs::create_dir_all(dir.join("rules")).unwrap();
+        fs::write(
+            dir.join("VALIDATOR.md"),
+            format!("---\nname: {name}\ndescription: Tool ruleset\nmatch:\n  files:\n    - \"**/*.py\"\n---\n\n# {name}\n"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("rules/docs-tool.md"),
+            format!(
+                "---\nname: docs-tool\ndescription: Docs by tool\nsupersedes: missing-docs\ntool:\n  scope: files\n  run: {run}\n  doctor:\n    check_command: which ruff\n---\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A tool rule loads through the same layer precedence as a prompt rule:
+    /// the project layer's version of a same-named set wins, and the loaded
+    /// rule carries its tool block and supersedes.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn tool_rule_loads_by_the_existing_layer_precedence() {
+        let home = TempDir::new().unwrap();
+        let user_validators = home.path().join(".validators");
+        write_tool_ruleset(&user_validators, "tooled", "user-runner \"$@\"");
+
+        let project_root = TempDir::new().unwrap();
+        fs::create_dir_all(project_root.path().join(".git")).unwrap();
+        let project_validators = project_root.path().join(".validators");
+        write_tool_ruleset(&project_validators, "tooled", "project-runner \"$@\"");
+
+        let _env = EnvVarGuard::set("HOME", home.path());
+        let _cwd = CwdGuard::change_to(project_root.path());
+
+        let mut loader = ValidatorLoader::new();
+        loader.load_all().unwrap();
+
+        let ruleset = loader.get_ruleset("tooled").expect("tooled ruleset loads");
+        assert_eq!(ruleset.source, ValidatorSource::Project);
+
+        let rule = &ruleset.rules[0];
+        assert!(rule.is_tool_rule());
+        assert_eq!(rule.supersedes.as_deref(), Some("missing-docs"));
+        let tool = rule.tool.as_ref().unwrap();
+        assert_eq!(tool.run.trim(), "project-runner \"$@\"");
+        assert_eq!(tool.doctor.as_ref().unwrap().check_command, "which ruff");
+    }
+
     #[test]
     fn list_ruleset_names_returns_sorted_order() {
         let dir = TempDir::new().unwrap();

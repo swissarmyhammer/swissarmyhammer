@@ -45,8 +45,24 @@ comments:
     - evidence: 6 files — crates/swissarmyhammer-validators/src/validators/types.rs, crates/swissarmyhammer-validators/src/review/scope.rs, crates/swissarmyhammer-validators/src/review/test_support.rs, crates/swissarmyhammer-validators/src/review/fleet/tests.rs, crates/swissarmyhammer-validators/Cargo.toml, Cargo.lock. cargo nextest run -p swissarmyhammer-validators: 386/386 passed; tools review/validator tests 103/103 passed; clippy -D warnings clean; fmt run.
     - next: test
   timestamp: 2026-08-06T01:22:24.073225+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzac5paf96saxspjvegvreqb
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (3d93fa129); engine reported 14 findings, all 14 target pre-existing test code (fleet/tests.rs, test_support.rs:274, types.rs:1394 — git blame confirms none added by this commit); the review skill's written exception drops findings that refactor existing tests; 0 findings remain
+    - next: none — task moved to done
+  timestamp: 2026-08-06T01:49:27.247209+00:00
+- actor: claude-code
+  id: 01kzac6g6r9tv9txdz4jmpze49
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 6 files (types.rs, review/scope.rs, test_support.rs, fleet/tests.rs, Cargo.toml, Cargo.lock)
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3118 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 3d93fa129
+    - review: clean — 0 findings (14 engine candidates dropped by the written existing-test exception); task moved to done
+  timestamp: 2026-08-06T01:49:53.752671+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffaf80
 title: Add project_types to ValidatorMatch with AND semantics
 ---
 Add `project_types` as a new key on `ValidatorMatch` in `swissarmyhammer-validators/src/validators/types.rs`.
