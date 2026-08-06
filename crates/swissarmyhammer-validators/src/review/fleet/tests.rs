@@ -298,7 +298,7 @@ async fn run_fleet_and_unpin(
     loader: &ValidatorLoader,
     pool: &AgentPool,
 ) -> FleetOutcome {
-    let outcome = run_fleet(work, loader, pool, None).await;
+    let outcome = run_fleet(work, loader, pool, &ToolSuppression::default(), None).await;
     if let Some(guard) = outcome.prime {
         unpin_prefix_session(guard).await;
     }
@@ -1176,7 +1176,9 @@ async fn fan_out_two_validators_two_files_submits_one_prime_and_one_fork_per_val
     let agent_probe = Arc::clone(&agent);
 
     let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await.findings
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None)
+            .await
+            .findings
     })
     .await;
 
@@ -1280,7 +1282,9 @@ async fn one_rule_with_many_instances_reports_them_all_on_the_first_pass() {
     ]);
 
     let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await.findings
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None)
+            .await
+            .findings
     })
     .await;
 
@@ -1380,7 +1384,9 @@ async fn followup_sweep_continues_while_findings_arrive_and_stops_when_dry() {
     let probe = Arc::clone(&agent);
 
     let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await.findings
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None)
+            .await
+            .findings
     })
     .await;
 
@@ -1440,7 +1446,7 @@ async fn followup_sweep_drives_the_session_forward_not_reforking_the_first_pass(
     let probe = Arc::clone(&agent);
 
     with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await;
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await;
     })
     .await;
 
@@ -1499,7 +1505,7 @@ async fn followup_sweep_stops_at_the_cap_when_never_dry() {
     let probe = Arc::clone(&agent);
 
     with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await;
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await;
     })
     .await;
 
@@ -1530,7 +1536,9 @@ async fn empty_first_pass_spends_no_followup_sweeps() {
     let probe = Arc::clone(&agent);
 
     let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await.findings
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None)
+            .await
+            .findings
     })
     .await;
 
@@ -1576,7 +1584,7 @@ async fn multi_rule_validator_forks_one_task_carrying_all_rules_against_one_prim
     let agent_probe = Arc::clone(&agent);
 
     let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await
     })
     .await;
 
@@ -1641,7 +1649,7 @@ async fn fan_out_logs_the_rule_names_being_applied_per_validator() {
 
     let agent = forking_agent(vec![]);
     let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await
     })
     .await;
 
@@ -1696,7 +1704,7 @@ async fn prefix_is_primed_once_per_run_and_validators_fork_suffix_only() {
     // Drive the prime lifecycle the way `run_review` does: run the fleet,
     // then release the returned shared-prime guard once the run drains.
     let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        let outcome = run_fleet(&work, &loader, &pool, None).await;
+        let outcome = run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await;
         if let Some(guard) = outcome.prime {
             unpin_prefix_session(guard).await;
         }
@@ -2126,7 +2134,14 @@ async fn fleet_emits_progress_events_per_validator_file_pair_including_failed_ta
 
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     let tally = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        let mut outcome = run_fleet(&work, &loader, &pool, Some(&progress_tx)).await;
+        let mut outcome = run_fleet(
+            &work,
+            &loader,
+            &pool,
+            &ToolSuppression::default(),
+            Some(&progress_tx),
+        )
+        .await;
         if let Some(guard) = outcome.prime.take() {
             unpin_prefix_session(guard).await;
         }
@@ -2227,7 +2242,14 @@ async fn fleet_emits_findings_events_per_completed_validator_task() {
 
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     with_pool(agent, PoolConfig::remote(3), move |pool| async move {
-        let mut outcome = run_fleet(&work, &loader, &pool, Some(&progress_tx)).await;
+        let mut outcome = run_fleet(
+            &work,
+            &loader,
+            &pool,
+            &ToolSuppression::default(),
+            Some(&progress_tx),
+        )
+        .await;
         if let Some(guard) = outcome.prime.take() {
             unpin_prefix_session(guard).await;
         }
@@ -2313,7 +2335,9 @@ async fn prefix_pin_is_released_when_the_fanout_future_is_dropped_mid_collect() 
     let agent_probe = Arc::clone(&agent);
 
     with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        let fanout = tokio::spawn(async move { run_fleet(&work, &loader, &pool, None).await });
+        let fanout = tokio::spawn(async move {
+            run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await
+        });
 
         // Wait until the prefix is pinned and the wedged validator fork is in
         // flight — the run is now mid-collect.
@@ -2381,7 +2405,14 @@ async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
 
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        let mut outcome = run_fleet(&work, &loader, &pool, Some(&progress_tx)).await;
+        let mut outcome = run_fleet(
+            &work,
+            &loader,
+            &pool,
+            &ToolSuppression::default(),
+            Some(&progress_tx),
+        )
+        .await;
         if let Some(guard) = outcome.prime.take() {
             unpin_prefix_session(guard).await;
         }
@@ -2523,7 +2554,7 @@ async fn validator_missing_from_loader_is_skipped_not_panicked() {
     let agent_probe = Arc::clone(&agent);
 
     let outcome = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-        run_fleet(&work, &loader, &pool, None).await
+        run_fleet(&work, &loader, &pool, &ToolSuppression::default(), None).await
     })
     .await;
 

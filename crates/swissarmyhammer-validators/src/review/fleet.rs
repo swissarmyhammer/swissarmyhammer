@@ -67,11 +67,16 @@
 //! - [`render_fleet_prompt`] (degraded fallback): the change purpose, the
 //!   validator's own files, and the validator suffix, in one fresh-session prompt.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::review::probes::{render_probe_evidence, ProbeResult};
-use crate::review::scope::{FileWork, LineAnnotation, ValidatorWork, WorkList};
+use crate::review::scope::{
+    FileWork, LineAnnotation, ProbeNames, RuleNames, ValidatorWork, WorkList,
+};
+use crate::review::tool_rules::ToolSuppression;
 use crate::review::types::{parse_findings, Finding};
+use crate::validators::types::Rule;
 use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
     ValidatorLoader,
@@ -425,11 +430,13 @@ pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
+    suppressed: &ToolSuppression,
     progress: Option<&ReviewProgressSender>,
 ) -> FleetOutcome {
-    // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset)
-    // skips the prime entirely — an empty run never prompts the agent.
-    let plan = plan_fan_out(work, loader);
+    // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset,
+    // or every rule covered by a healthy tool rule) skips the prime entirely —
+    // an empty run never prompts the agent.
+    let plan = plan_fan_out(work, loader, suppressed);
     if plan.is_empty() {
         return FleetOutcome::default();
     }
@@ -459,12 +466,26 @@ pub async fn run_fleet(
     }
 }
 
-/// Plan the fan-out: one [`ValidatorTask`] per validator the `loader` knows,
-/// in work-list order. A validator with no matching RuleSet in the loader is
-/// logged and skipped (never rendered with empty instructions); each planned
-/// validator's rule names are logged so the fan-out shows exactly what ran.
-fn plan_fan_out<'w>(work: &'w WorkList, loader: &'w ValidatorLoader) -> Vec<ValidatorTask<'w>> {
-    let mut plan: Vec<ValidatorTask<'w>> = Vec::new();
+/// Plan the fan-out: one [`ValidatorTask`] per validator (and per group of its
+/// files with the same suppressed-rule set), in work-list order. A validator
+/// with no matching RuleSet in the loader is logged and skipped (never
+/// rendered with empty instructions); each planned task's rule names are
+/// logged so the fan-out shows exactly what ran.
+///
+/// Tool rules never enter a task's prompt — an LLM must not read them. On top
+/// of that, `suppressed` names the prompt rules a healthy tool rule supersedes
+/// per `(validator, file)`: the validator's files are grouped by their
+/// suppressed set, each group becomes its own task carrying only the prompt
+/// rules that still apply, and a group with no prompt rule left submits no LLM
+/// task at all (its review already happened in the tool runner). With no tool
+/// rules and no suppression the plan is exactly the old one-task-per-validator
+/// shape.
+fn plan_fan_out(
+    work: &WorkList,
+    loader: &ValidatorLoader,
+    suppressed: &ToolSuppression,
+) -> Vec<ValidatorTask> {
+    let mut plan: Vec<ValidatorTask> = Vec::new();
     for validator in work.validators() {
         let Some(ruleset) = loader.get_ruleset(validator.validator_name()) else {
             tracing::warn!(
@@ -473,16 +494,64 @@ fn plan_fan_out<'w>(work: &'w WorkList, loader: &'w ValidatorLoader) -> Vec<Vali
             );
             continue;
         };
-        let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
-        tracing::info!(
-            validator = %validator.validator_name(),
-            files = validator.files().len(),
-            rules = ?rule_names,
-            "fleet fan-out: forking one task per validator against the shared prime"
-        );
-        plan.push(ValidatorTask { validator, ruleset });
+        for (skip_set, files) in group_files_by_suppression(validator, suppressed) {
+            let rules: Vec<Rule> = ruleset
+                .rules
+                .iter()
+                .filter(|rule| !rule.is_tool_rule() && !skip_set.contains(&rule.name))
+                .cloned()
+                .collect();
+            if rules.is_empty() && !ruleset.rules.is_empty() {
+                tracing::info!(
+                    validator = %validator.validator_name(),
+                    files = files.len(),
+                    "fleet fan-out: every rule for these files is a tool rule or superseded \
+                     by a healthy one; no LLM task"
+                );
+                continue;
+            }
+            let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+            tracing::info!(
+                validator = %validator.validator_name(),
+                files = files.len(),
+                rules = ?rule_names,
+                "fleet fan-out: forking one task per validator against the shared prime"
+            );
+            let task_validator = ValidatorWork::new(
+                validator.validator_name(),
+                RuleNames::new(rules.iter().map(|rule| rule.name.clone())),
+                ProbeNames::new(validator.probes().iter().cloned()),
+                files.into_iter().cloned(),
+            )
+            .with_shared_probe_results(validator.shared_probe_results().iter().cloned());
+            let task_ruleset = RuleSet {
+                rules,
+                ..ruleset.clone()
+            };
+            plan.push(ValidatorTask {
+                validator: task_validator,
+                ruleset: task_ruleset,
+            });
+        }
     }
     plan
+}
+
+/// Group a validator's files by their suppressed prompt-rule set, preserving
+/// the validator's file order inside each group.
+///
+/// The common case — no suppression — yields exactly one group with an empty
+/// key, so the plan stays one task per validator.
+fn group_files_by_suppression<'v>(
+    validator: &'v ValidatorWork,
+    suppressed: &ToolSuppression,
+) -> Vec<(BTreeSet<String>, Vec<&'v FileWork>)> {
+    let mut groups: BTreeMap<BTreeSet<String>, Vec<&FileWork>> = BTreeMap::new();
+    for file in validator.files() {
+        let key = suppressed.suppressed_rules(validator.validator_name(), file.path());
+        groups.entry(key).or_default().push(file);
+    }
+    groups.into_iter().collect()
 }
 
 /// Submit every planned validator task to the pool, returning the in-flight
@@ -493,13 +562,13 @@ fn plan_fan_out<'w>(work: &'w WorkList, loader: &'w ValidatorLoader) -> Vec<Vali
 /// suffix. With a live `prime` each task forks the shared prefix and sends just
 /// the suffix; without one (priming failed) each task degrades to a
 /// self-contained monolithic prompt on a fresh session.
-fn submit_fan_out<'w>(
-    plan: Vec<ValidatorTask<'w>>,
+fn submit_fan_out(
+    plan: Vec<ValidatorTask>,
     work: &WorkList,
     pool: &AgentPool,
     prime: &Option<SessionPinGuard>,
     progress: Option<&ReviewProgressSender>,
-) -> Vec<PendingValidator<'w>> {
+) -> Vec<PendingValidator> {
     plan.into_iter()
         .map(|task| {
             tracing::debug!(
@@ -518,13 +587,13 @@ fn submit_fan_out<'w>(
                     },
                 );
             }
-            let suffix = render_validator_suffix(task.validator, task.ruleset);
+            let suffix = render_validator_suffix(&task.validator, &task.ruleset);
             let rx = match prime {
                 Some(guard) => Submitted::Forked(pool.submit_forked(guard.session_id(), suffix)),
                 None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
                     work.change_purpose(),
-                    task.validator,
-                    task.ruleset,
+                    &task.validator,
+                    &task.ruleset,
                 ))),
             };
             PendingValidator { task, rx }
@@ -542,7 +611,7 @@ fn submit_fan_out<'w>(
 /// the run's shared-prime pin released on cancellation: dropping the `run_fleet`
 /// future drops this collect mid-await.
 async fn collect_fan_out(
-    pending: Vec<PendingValidator<'_>>,
+    pending: Vec<PendingValidator>,
     work: &WorkList,
     pool: &AgentPool,
     progress: Option<&ReviewProgressSender>,
@@ -565,8 +634,8 @@ async fn collect_fan_out(
                 collect_forked_task(
                     rx.await,
                     work.change_purpose(),
-                    pending.task.validator,
-                    pending.task.ruleset,
+                    &pending.task.validator,
+                    &pending.task.ruleset,
                     &files,
                     pool,
                 )
@@ -610,14 +679,18 @@ async fn collect_fan_out(
 /// One planned validator task: the work-list/ruleset context needed to render its
 /// prompt, attribute its findings, and (on fork failure) re-render the monolithic
 /// fallback.
-struct ValidatorTask<'w> {
-    validator: &'w ValidatorWork,
-    ruleset: &'w RuleSet,
+///
+/// Owned rather than borrowed: [`plan_fan_out`] filters tool rules (and
+/// suppressed prompt rules) out of the ruleset and may narrow the validator to
+/// a file group, so each task carries its own filtered copies.
+struct ValidatorTask {
+    validator: ValidatorWork,
+    ruleset: RuleSet,
 }
 
 /// A submitted [`ValidatorTask`]: its context plus the in-flight receiver.
-struct PendingValidator<'w> {
-    task: ValidatorTask<'w>,
+struct PendingValidator {
+    task: ValidatorTask,
     rx: Submitted,
 }
 
@@ -1288,7 +1361,9 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
     render_focus_files(&mut out, validator.files());
 
     out.push_str("## Rules\n\n");
-    for rule in &ruleset.rules {
+    // Tool rules never render: no LLM reads a tool rule's body — the tool
+    // runner ([`crate::review::tool_rules`]) executes them instead.
+    for rule in ruleset.rules.iter().filter(|rule| !rule.is_tool_rule()) {
         let _ = writeln!(out, "### Rule: {}\n", rule.name);
         out.push_str(rule.body.trim());
         out.push_str("\n\n");

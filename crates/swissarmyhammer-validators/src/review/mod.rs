@@ -21,6 +21,7 @@ pub mod synthesize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod tool_output;
+pub mod tool_rules;
 pub mod types;
 pub mod verify;
 
@@ -43,6 +44,10 @@ pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,
 };
 pub use tool_output::parse_tool_stdout;
+pub use tool_rules::{
+    execute_tool_runs, plan_tool_rules, ToolFallback, ToolOutcome, ToolPlan, ToolReport, ToolRun,
+    ToolRunError, ToolSuppression,
+};
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{
     render_verify_prompt, run_guard, verify_findings, Candidate, GuardOutcome, VerifyOutcome,

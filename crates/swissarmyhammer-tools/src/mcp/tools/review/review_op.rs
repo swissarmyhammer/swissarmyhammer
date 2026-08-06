@@ -1973,7 +1973,13 @@ mod tests {
     /// through the engine's own `synthesize` (the one construction path a
     /// `ReviewReport` has now that its fields are encapsulated).
     fn report_with_tally(attempted: TasksAttempted, failed: TasksFailed) -> ReviewReport {
-        synthesize(vec![], &FleetTally::new(attempted, failed), &[], "now")
+        synthesize(
+            vec![],
+            &FleetTally::new(attempted, failed),
+            &[],
+            &swissarmyhammer_validators::review::ToolReport::default(),
+            "now",
+        )
     }
 
     /// Parity guard: the `backend` modifier influences ONLY the pool's worker

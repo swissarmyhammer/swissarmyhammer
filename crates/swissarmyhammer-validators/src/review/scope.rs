@@ -2643,6 +2643,7 @@ mod tests {
                 crate::review::synthesize::TasksFailed(0),
             ),
             &[],
+            &crate::review::ToolReport::default(),
             "2026-04-11 13:08",
         );
         assert!(
@@ -2788,6 +2789,7 @@ mod tests {
                 crate::review::synthesize::TasksFailed(0),
             ),
             &[],
+            &crate::review::ToolReport::default(),
             "2026-08-03 12:00",
         );
         let expected_citation = format!("`src/big.rs:{changed_line}`");

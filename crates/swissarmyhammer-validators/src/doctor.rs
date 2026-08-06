@@ -160,6 +160,22 @@ impl ToolRuleStatus {
     pub fn on_prompt_fallback(&self) -> bool {
         !self.usable()
     }
+
+    /// Why the rule is not usable, for a fallback note. Empty for a usable
+    /// rule.
+    pub fn degraded_detail(&self) -> String {
+        match (&self.presence, &self.fixtures) {
+            (ToolPresence::Missing { detail }, _) => format!("tool missing: {detail}"),
+            (ToolPresence::Present, FixtureOutcome::Failed { detail }) => {
+                format!("fixtures failed: {detail}")
+            }
+            (ToolPresence::Present, FixtureOutcome::MissingFixtures { detail }) => {
+                format!("fixtures missing: {detail}")
+            }
+            (ToolPresence::Present, FixtureOutcome::Skipped) => "fixture check skipped".to_string(),
+            (ToolPresence::Present, FixtureOutcome::Passed) => String::new(),
+        }
+    }
 }
 
 /// Produce the review-engine facts for the workspace at `workspace_root`.
@@ -231,7 +247,11 @@ fn criteria_applies(
 }
 
 /// Produce the doctor facts for one tool rule: presence, version, fixtures.
-fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> ToolRuleStatus {
+///
+/// Crate-visible so the review engine's tool-rule planner
+/// ([`crate::review::tool_rules`]) reuses the same health decision doctor
+/// reports — "healthy" can never mean two different things.
+pub(crate) fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> ToolRuleStatus {
     let presence = check_presence(spec);
     let (version, fixtures) = match &presence {
         ToolPresence::Present => (check_version(spec), check_fixtures(ruleset, rule, spec)),
@@ -410,7 +430,7 @@ fn fixture_label(fixture: &Path) -> String {
 
 /// Summarize a failed command: its stderr when present, its exit status
 /// otherwise.
-fn command_failure_detail(output: &Output) -> String {
+pub(crate) fn command_failure_detail(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if stderr.is_empty() {
         format!("exited with {}", output.status)
@@ -537,11 +557,20 @@ fn install_fix(rule: &ToolRuleStatus) -> Option<String> {
     ))
 }
 
-/// Run a tool-rule shell snippet the way the engine does: `sh -c <script>`
+/// Run a tool-rule shell snippet the way the engine does: `bash -c <script>`
 /// with `args` as the script's positional parameters (`"$@"`).
-fn run_shell(script: &str, cwd: Option<&Path>, args: &[&OsStr]) -> std::io::Result<Output> {
-    let mut command = std::process::Command::new("sh");
-    command.arg("-c").arg(script).arg("sh").args(args);
+///
+/// The ONE shell runner for tool-rule scripts — the doctor's fixture checks
+/// and the review engine's tool runs ([`crate::review::tool_rules`]) both go
+/// through it, so a script can never pass its fixtures under one shell and
+/// run under another.
+pub(crate) fn run_shell(
+    script: &str,
+    cwd: Option<&Path>,
+    args: &[&OsStr],
+) -> std::io::Result<Output> {
+    let mut command = std::process::Command::new("bash");
+    command.arg("-c").arg(script).arg("bash").args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }

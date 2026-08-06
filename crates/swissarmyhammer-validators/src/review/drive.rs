@@ -1321,4 +1321,256 @@ mod tests {
         assert_eq!(report.counts().findings(), 1);
         assert_eq!(report.counts().confirmed(), 1);
     }
+
+    // ---- tool rules: the tool reviews the code, not an LLM ------------------
+
+    use crate::validators::types::{Rule, ToolDoctor, ToolScope, ToolSpec};
+    use crate::validators::ValidatorLoader;
+
+    /// A `files`-scope script that reports one `path:line: message` finding per
+    /// line containing `TODO`, exits 0 either way, and — when an `explode`
+    /// marker file exists in the working directory (planted at the repo root by
+    /// the tool-error test, never in the fixtures directory) — breaks with a
+    /// nonzero exit and stderr instead.
+    const TODO_TOOL_SCRIPT: &str = r#"
+if [ -f explode ]; then echo "the linter exploded" >&2; exit 3; fi
+for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }' "$f"; done
+"#;
+
+    /// The prompt rule body the tool rule supersedes — a marker the tests can
+    /// look for in prompts.
+    const PROMPT_RULE_BODY: &str = "Report public items without documentation.";
+
+    /// The tool rule body marker: no LLM prompt may ever carry it.
+    const TOOL_RULE_BODY: &str = "TOOL RULE BODY - an LLM must never read this";
+
+    /// A loader holding one `docs` ruleset over `*.rs`: the `missing-docs`
+    /// prompt rule plus the `docs-tool` tool rule superseding it, based at
+    /// `base` (where the doctor health check reads `fixtures/`).
+    fn tool_rule_loader(base: &std::path::Path, check_command: &str) -> ValidatorLoader {
+        let mut ruleset = ruleset("docs", "*.rs", &[]);
+        ruleset.base_path = base.to_path_buf();
+        ruleset.rules = vec![
+            Rule {
+                name: "missing-docs".to_string(),
+                description: "docs by prompt".to_string(),
+                body: PROMPT_RULE_BODY.to_string(),
+                ..Rule::default()
+            },
+            Rule {
+                name: "docs-tool".to_string(),
+                description: "docs by tool".to_string(),
+                body: TOOL_RULE_BODY.to_string(),
+                supersedes: Some("missing-docs".to_string()),
+                tool: Some(ToolSpec {
+                    scope: ToolScope::Files,
+                    run: TODO_TOOL_SCRIPT.to_string(),
+                    doctor: Some(ToolDoctor {
+                        check_command: check_command.to_string(),
+                        check_version_command: None,
+                    }),
+                    install: None,
+                }),
+                ..Rule::default()
+            },
+        ];
+        let mut loader = ValidatorLoader::new();
+        loader.add_builtin_ruleset(ruleset);
+        loader
+    }
+
+    /// Write the fixture pair the doctor health check demands for `docs-tool`.
+    fn write_tool_fixtures(base: &std::path::Path) {
+        let fixtures = base.join("fixtures");
+        std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
+        std::fs::write(fixtures.join("docs-tool.fail.rs"), "// TODO: fail\n")
+            .expect("write fail fixture");
+        std::fs::write(fixtures.join("docs-tool.pass.rs"), "fn clean() {}\n")
+            .expect("write pass fixture");
+    }
+
+    /// A repo whose `src/lib.rs` carries a TODO marker on line 2, committed so
+    /// the file scope resolves against a valid HEAD.
+    fn todo_repo() -> (crate::review::test_support::TestRepo, Connection) {
+        let repo = crate::review::test_support::TestRepo::new();
+        repo.write("src/lib.rs", "fn a() {}\n// TODO: fix this\n");
+        repo.commit("initial");
+        (repo, crate::review::test_support::index_conn())
+    }
+
+    /// Drive `review file src/lib.rs` over `agent` with `loader`.
+    async fn drive_file_review(
+        agent: Arc<ScriptedAgent>,
+        notification_rx: broadcast::Receiver<SessionNotification>,
+        repo: &crate::review::test_support::TestRepo,
+        conn: &Connection,
+        loader: &crate::validators::ValidatorLoader,
+    ) -> crate::review::synthesize::ReviewReport {
+        let embedder = model_embedding::mock::MockEmbedder::new(crate::review::test_support::DIM);
+        tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            run_review_over_agent(
+                DynConnectTo::new(ScriptedAdapter::new(agent)),
+                notification_rx,
+                Scope::File("src/lib.rs".to_string()),
+                repo.path(),
+                loader,
+                conn,
+                &embedder,
+                PoolConfig::remote(TEST_POOL_WORKERS),
+                FleetConfig::default(),
+                None,
+                TEST_NOW,
+            ),
+        )
+        .await
+        .expect("the review file pipeline must not hang")
+        .expect("the review file pipeline must produce a report")
+    }
+
+    /// Acceptance: with the tool present and healthy, `review file` reports the
+    /// tool's findings and issues ZERO LLM validator calls for the pair — the
+    /// tool rule supersedes the only prompt rule, so no fleet task exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_file_runs_a_healthy_tool_rule_with_zero_llm_calls() {
+        let (repo, conn) = todo_repo();
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        write_tool_fixtures(base.path());
+        let loader = tool_rule_loader(base.path(), "true");
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(vec![], notify_tx, true);
+
+        let report =
+            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:2`"),
+            "the tool finding must render as a checklist item: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("TODO left in code"),
+            "the tool's message must be the finding's claim: {}",
+            report.markdown()
+        );
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().confirmed(), 1);
+        assert_eq!(report.counts().tool_errors(), 0);
+        assert_eq!(
+            agent.seen_prompts(),
+            Vec::<String>::new(),
+            "no LLM prompt may run for a pair a healthy tool rule covers"
+        );
+    }
+
+    /// Acceptance: with the tool absent, the superseded prompt rule runs as an
+    /// ordinary LLM task and the report notes the fallback. The tool rule's
+    /// body never reaches any prompt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_file_falls_back_to_the_prompt_rule_when_the_tool_is_missing() {
+        let (repo, conn) = todo_repo();
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        write_tool_fixtures(base.path());
+        // `false` as the doctor check: the tool is "missing".
+        let loader = tool_rule_loader(base.path(), "false");
+
+        let script = vec![
+            (
+                "undocumented-item-claim".to_string(),
+                ScriptedReply::Text(verdict_json(true, "the missing docs are real")),
+            ),
+            (
+                "# Validator: docs".to_string(),
+                ScriptedReply::Text(shared_findings_json(
+                    "src/lib.rs",
+                    1,
+                    "missing-docs",
+                    "undocumented-item-claim",
+                )),
+            ),
+        ];
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(script, notify_tx, true);
+
+        let report =
+            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            "the prompt rule's confirmed finding must render: {}",
+            report.markdown()
+        );
+        assert!(
+            report
+                .markdown()
+                .contains("prompt rule 'missing-docs' ran instead"),
+            "the report must note the prompt fallback: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("docs-tool"),
+            "the fallback note must name the unavailable tool rule: {}",
+            report.markdown()
+        );
+        let prompts = agent.seen_prompts();
+        assert!(
+            prompts.iter().any(|p| p.contains(PROMPT_RULE_BODY)),
+            "the superseded prompt rule must run as a normal LLM task"
+        );
+        assert!(
+            prompts.iter().all(|p| !p.contains(TOOL_RULE_BODY)),
+            "no LLM prompt may ever carry a tool rule's body"
+        );
+    }
+
+    /// Acceptance: a tool run that exits nonzero is reported as a tool error —
+    /// not as clean and not as findings — with the raw stderr in the report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_file_reports_a_nonzero_tool_exit_as_a_tool_error() {
+        let (repo, conn) = todo_repo();
+        // The marker file makes the run script break AT THE REPO ROOT only;
+        // the doctor's fixture runs execute in the fixtures directory, where
+        // no marker exists, so the rule is healthy and the run is attempted.
+        std::fs::write(repo.path().join("explode"), "").expect("write explode marker");
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        write_tool_fixtures(base.path());
+        let loader = tool_rule_loader(base.path(), "true");
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(vec![], notify_tx, true);
+
+        let report =
+            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+
+        assert_eq!(
+            report.counts().tool_errors(),
+            1,
+            "a broken tool run must count as a tool error: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().findings(),
+            0,
+            "a broken tool run must contribute no findings: {}",
+            report.markdown()
+        );
+        assert!(
+            report
+                .markdown()
+                .contains("tool rule 'docs/docs-tool' failed"),
+            "the report must name the broken tool rule: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("the linter exploded"),
+            "the raw stderr must reach the report: {}",
+            report.markdown()
+        );
+        assert!(
+            !report.markdown().contains("Nothing in scope to review."),
+            "a broken tool run must never read as an empty scope: {}",
+            report.markdown()
+        );
+    }
 }

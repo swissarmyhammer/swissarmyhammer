@@ -39,7 +39,10 @@ use crate::review::fleet::{
     prompt_framing_bytes, rendered_file_block_bytes, run_fleet, FleetConfig, FleetOutcome,
     ReviewProgressSender,
 };
-use crate::review::scope::{batch_work_list, scope_review, Scope, SkippedFile, WorkList};
+use crate::review::scope::{
+    batch_work_list, detected_project_type_keys, scope_review, Scope, SkippedFile, WorkList,
+};
+use crate::review::tool_rules::{execute_tool_runs, plan_tool_rules, ToolReport};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
@@ -130,6 +133,10 @@ pub struct ReviewCounts {
     /// The skipped file paths — distinct, sorted. The structured twin of
     /// `skipped`: orchestrators gate on this list without parsing markdown.
     skipped_files: Vec<String>,
+    /// How many tool-rule runs broke (nonzero exit or a stdout-contract
+    /// violation). A non-zero value means those rules judged nothing: the
+    /// run is a tool error, not clean and not findings.
+    tool_errors: usize,
 }
 
 impl ReviewCounts {
@@ -174,6 +181,12 @@ impl ReviewCounts {
     /// parsing markdown.
     pub fn skipped_files(&self) -> &[String] {
         &self.skipped_files
+    }
+
+    /// How many tool-rule runs broke. A non-zero value means those rules
+    /// judged nothing: the run is a tool error, not clean and not findings.
+    pub fn tool_errors(&self) -> usize {
+        self.tool_errors
     }
 }
 
@@ -233,6 +246,11 @@ impl ReviewReport {
 /// skipped path also enters the finding stream as one CONFIRMED finding, so a
 /// review that contains an over-cap file can never end clean.
 ///
+/// `tools` carries the run's tool-rule facts: each broken tool run is
+/// rendered as a tool error (its raw stderr, never findings and never a clean
+/// result) and counted in [`ReviewCounts::tool_errors`]; each tool rule on its
+/// prompt fallback is noted so the reader knows the prompt rule ran instead.
+///
 /// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
 /// caller) — it is collected once up front so a caller need not materialize a
 /// `Vec` just to hand it over.
@@ -240,6 +258,7 @@ pub fn synthesize(
     verified: impl IntoIterator<Item = VerifiedFinding>,
     tally: &FleetTally,
     skipped: &[SkippedFile],
+    tools: &ToolReport,
     now: &str,
 ) -> ReviewReport {
     // The skip list is per (validator, file) pair, but the reader cares about
@@ -271,6 +290,7 @@ pub fn synthesize(
         // it.
         skipped: by_path.len(),
         skipped_files: by_path.keys().map(|path| (*path).to_string()).collect(),
+        tool_errors: tools.errors().len(),
         ..ReviewCounts::default()
     };
 
@@ -307,10 +327,41 @@ pub fn synthesize(
         }
     }
 
+    // A broken tool run is a tool error, never findings and never a clean
+    // result: name the rule and carry its raw stderr so the diagnosing agent
+    // reads exactly what the tool said.
+    for error in tools.errors() {
+        let _ = writeln!(
+            markdown,
+            "\n> ⚠️ tool rule '{}/{}' failed — the tool judged nothing, so its findings are missing:",
+            error.validator(),
+            error.rule()
+        );
+        for line in error.detail().lines() {
+            let _ = writeln!(markdown, "> {line}");
+        }
+    }
+
+    // Note every tool rule on its prompt fallback: the reader must know the
+    // prompt rule reviewed those files, not the tool.
+    for fallback in tools.fallbacks() {
+        let note = match fallback.supersedes() {
+            Some(prompt_rule) => format!("prompt rule '{prompt_rule}' ran instead"),
+            None => "no prompt rule is named to run instead".to_string(),
+        };
+        let _ = writeln!(
+            markdown,
+            "\n> tool rule '{}/{}' is unavailable ({}); {note}.",
+            fallback.validator(),
+            fallback.rule(),
+            fallback.detail()
+        );
+    }
+
     // Say so explicitly when the resolved scope was empty (zero fan-out tasks,
-    // nothing skipped either): a bare findings header would read identically to
-    // a genuinely clean review.
-    if tally.attempted == 0 && kept.is_empty() && skipped.is_empty() {
+    // zero tool activity, nothing skipped either): a bare findings header
+    // would read identically to a genuinely clean review.
+    if tally.attempted == 0 && kept.is_empty() && skipped.is_empty() && tools.is_inert() {
         let _ = writeln!(markdown, "\nNothing in scope to review.");
     }
 
@@ -336,6 +387,7 @@ pub fn synthesize(
         refuted = counts.refuted,
         tasks_attempted = counts.tasks_attempted,
         tasks_failed = counts.tasks_failed,
+        tool_errors = counts.tool_errors,
         "review synthesis complete"
     );
 
@@ -550,6 +602,18 @@ pub async fn run_review(
     // the run's FIRST events, emitted long before any fleet work exists.
     let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
+    // Tool-rule stage: run every healthy tool rule ONCE for the whole run,
+    // before any batching — tools have no prompt budget, and a workspace-scope
+    // tool must not run once per batch. The plan's suppression map rides into
+    // every batch's fan-out so a superseded prompt rule is skipped per file;
+    // an unhealthy tool suppresses nothing, and the report notes the fallback.
+    let project_types = detected_project_type_keys(repo_path);
+    let tool_plan = plan_tool_rules(&work, loader, &project_types);
+    let tool_outcome = execute_tool_runs(tool_plan.runs(), repo_path, progress);
+    let tool_attempted = tool_plan.runs().len();
+    let (_, tool_fallbacks, suppression) = tool_plan.into_parts();
+    let (tool_findings, tool_errors) = tool_outcome.into_parts();
+
     // Stage 2: split the work-list into budgeted batches (whole-file
     // granularity). The budget is the agent's prompt cap less the run's framing
     // (change purpose + payload header + the largest validator suffix), and it
@@ -589,7 +653,7 @@ pub async fn run_review(
 
         // Fan out this batch: one shared prime over its files, forked per
         // validator. The outcome carries the tally and the batch's prime pin.
-        let fleet = run_fleet(batch, loader, pool, progress).await;
+        let fleet = run_fleet(batch, loader, pool, &suppression, progress).await;
         attempted += fleet.attempted();
         failed += fleet.failed();
         let (fleet_findings, prime) = fleet.into_parts();
@@ -610,14 +674,20 @@ pub async fn run_review(
         verified.extend(outcome.verified);
     }
 
+    // Tool findings are already CONFIRMED — deterministic tool output skips
+    // the adversarial verify pass — so they join the verified stream directly.
+    verified.extend(tool_findings);
+
     // Stage 4: synthesize the merged, deduped, ordered, dated report. The summed
     // tally rides into the report so the tool boundary can flag/fail an incomplete
     // run; the engine itself stays a pure data barrier and never errors on it. Any
-    // oversized files stage 2 excluded ride in too, as a named gap.
+    // oversized files stage 2 excluded ride in too, as a named gap, along with
+    // the run's tool-rule facts (broken runs and prompt fallbacks).
     let report = synthesize(
         verified,
         &FleetTally::new(TasksAttempted(attempted), TasksFailed(failed)),
         &skipped,
+        &ToolReport::new(tool_attempted, tool_errors, tool_fallbacks),
         now,
     );
 
@@ -764,6 +834,7 @@ mod tests {
                 TasksFailed(ATTEMPTED_TASKS),
             ),
             &[],
+            &ToolReport::default(),
             NOW,
         );
 
@@ -791,6 +862,7 @@ mod tests {
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
+            &ToolReport::default(),
             NOW,
         );
 
@@ -801,7 +873,13 @@ mod tests {
 
     #[test]
     fn renders_dated_header_with_the_input_timestamp_verbatim() {
-        let report = synthesize(vec![], &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
         assert!(
             report
                 .markdown
@@ -816,7 +894,13 @@ mod tests {
         // Zero attempted tasks means the resolved scope was empty — the report
         // must say so explicitly instead of rendering a bare findings header
         // that reads identically to a genuinely clean review.
-        let report = synthesize(vec![], &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
         assert!(
             report
                 .markdown
@@ -844,7 +928,13 @@ mod tests {
             TEST_OVERSIZE_RENDERED_BYTES,
             TEST_BATCH_BUDGET_BYTES,
         )];
-        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &skipped,
+            &ToolReport::default(),
+            NOW,
+        );
 
         assert!(
             report.markdown.contains("src/huge.rs"),
@@ -892,7 +982,13 @@ mod tests {
                 TEST_BATCH_BUDGET_BYTES,
             ),
         ];
-        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &skipped,
+            &ToolReport::default(),
+            NOW,
+        );
 
         assert!(
             report.markdown.contains("- [ ] `src/huge.rs:1`"),
@@ -940,7 +1036,13 @@ mod tests {
                 TEST_TINY_BUDGET_BYTES,
             ),
         ];
-        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &skipped,
+            &ToolReport::default(),
+            NOW,
+        );
 
         assert_eq!(report.counts.skipped_files, ["src/a.rs", "src/z.rs"]);
         assert_eq!(report.counts.skipped, 2);
@@ -962,7 +1064,13 @@ mod tests {
                 TEST_TINY_BUDGET_BYTES,
             ),
         ];
-        let report = synthesize(vec![], &FleetTally::default(), &skipped, NOW);
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &skipped,
+            &ToolReport::default(),
+            NOW,
+        );
 
         let a = report.markdown.find("src/a.rs").unwrap();
         let z = report.markdown.find("src/z.rs").unwrap();
@@ -992,6 +1100,7 @@ mod tests {
             verified,
             &FleetTally::new(TasksAttempted(1), TasksFailed(0)),
             &skipped,
+            &ToolReport::default(),
             NOW,
         );
 
@@ -1024,6 +1133,7 @@ mod tests {
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
+            &ToolReport::default(),
             NOW,
         );
         assert!(
@@ -1048,7 +1158,13 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let _report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let _report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         // The synthesis summary reports the rendered-finding + per-verdict tallies.
         assert!(logs_contain("review synthesis complete"));
@@ -1071,7 +1187,13 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         // The refuted finding does not appear in the rendered markdown.
         assert!(
@@ -1103,7 +1225,13 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![one.clone(), one], &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            vec![one.clone(), one],
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         // Collapsed to a single checklist item.
         let occurrences = report.markdown.matches("src/a.rs:42").count();
@@ -1137,7 +1265,13 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![dup, dead], &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            vec![dup, dead],
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         // Both findings survive — cross-validator findings are never merged.
         assert!(
@@ -1184,7 +1318,13 @@ mod tests {
                 )
             })
             .collect();
-        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         // Every occurrence survives as its own checklist item, one per file:line.
         for line in lines {
@@ -1214,7 +1354,13 @@ mod tests {
             confirmed("src/a.rs", 10, "dead-code", None, "First concern", None),
             confirmed("src/b.rs", 20, "style", None, "Second concern", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         assert!(
             !report.markdown.contains("### Blockers")
@@ -1260,7 +1406,13 @@ mod tests {
             ),
             confirmed("path/to/file.rs", 88, "style", None, "Minor issue", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
@@ -1280,7 +1432,13 @@ mod tests {
             confirmed("src/a.rs", 90, "v", None, "a90 concern", None),
             confirmed("src/a.rs", 9, "v", None, "a9 concern", None),
         ];
-        let report = synthesize(verified, &FleetTally::default(), &[], NOW);
+        let report = synthesize(
+            verified,
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
 
         let a9 = report.markdown.find("src/a.rs:9`").unwrap();
         let a90 = report.markdown.find("src/a.rs:90`").unwrap();
@@ -1391,5 +1549,95 @@ mod tests {
         );
         assert_eq!(candidates[0].source_slice, "");
         assert!(candidates[0].probe_results.is_empty());
+    }
+
+    // ---- tool-rule facts in the report ------------------------------------
+
+    use crate::review::tool_rules::{ToolFallback, ToolRunError};
+
+    #[test]
+    fn a_tool_error_renders_the_rule_and_its_raw_stderr_and_counts() {
+        let tools = ToolReport::new(
+            1,
+            vec![ToolRunError::for_test(
+                "docs",
+                "docs-tool",
+                "line one of stderr\nline two of stderr",
+            )],
+            vec![],
+        );
+
+        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+
+        assert_eq!(report.counts().tool_errors(), 1);
+        assert!(
+            report
+                .markdown
+                .contains("tool rule 'docs/docs-tool' failed"),
+            "the error block must name the rule: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("> line one of stderr"),
+            "every raw stderr line must render, quoted: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("> line two of stderr"),
+            "every raw stderr line must render, quoted: {}",
+            report.markdown
+        );
+        assert!(
+            !report.markdown.contains("Nothing in scope to review."),
+            "a tool error must never read as an empty scope: {}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn a_tool_fallback_without_a_superseded_rule_says_none_is_named() {
+        let tools = ToolReport::new(
+            0,
+            vec![],
+            vec![ToolFallback::for_test(
+                "docs",
+                "docs-tool",
+                None,
+                "tool missing: no ruff",
+            )],
+        );
+
+        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+
+        assert!(
+            report
+                .markdown
+                .contains("tool rule 'docs/docs-tool' is unavailable (tool missing: no ruff)"),
+            "the fallback note must name the rule and the reason: {}",
+            report.markdown
+        );
+        assert!(
+            report
+                .markdown
+                .contains("no prompt rule is named to run instead"),
+            "a fallback without supersedes must say so: {}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn an_inert_tool_report_keeps_the_nothing_in_scope_marker() {
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &[],
+            &ToolReport::default(),
+            NOW,
+        );
+        assert!(
+            report.markdown.contains("Nothing in scope to review."),
+            "an empty run with inert tools is an empty scope: {}",
+            report.markdown
+        );
     }
 }
