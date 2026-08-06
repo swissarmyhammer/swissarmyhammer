@@ -449,7 +449,7 @@ Tools that handle multiple verbs on the same noun (like the kanban tool handling
 
 1. **Every tool implements all three traits.** Use `impl_default_doctorable!` / `impl_empty_initializable!` if a tool has no custom health checks or lifecycle, but never skip the traits.
 2. **init/deinit runs `Initializable` components in priority order.** Don't add setup logic outside the `Initializable` trait.
-3. **Doctor collects from the tool registry.** Don't add health checks outside the `Doctorable` trait.
+3. **Doctor collects from the tool registry.** A tool must not hide health checks outside its `Doctorable` implementation. A library that is not a tool takes the other path: it reports status facts, and the CLI converts them to check rows. See the Doctor Pattern in section 4.
 
 ---
 
@@ -542,7 +542,23 @@ CLI programs that integrate with Claude Code provide `init [project|local|user]`
 
 ### Doctor Pattern
 
-Every CLI has a `doctor` subcommand that runs all `Doctorable` health checks. System-level checks (PATH, file permissions, LSP servers) combine with per-tool checks from the `McpTool` registry for a unified diagnostic report.
+Every CLI has a `doctor` subcommand that prints one diagnostic report of `Check` rows. Checks get into that report by one of two paths.
+
+**`Doctorable` — the component checks itself.** The component implements `Doctorable` and returns its rows from `run_health_checks()`. The doctor reads the `McpTool` registry and collects from every tool. It adds the system-level checks (PATH, file permissions, LSP servers) to make the report. Use this path when the component is in the registry and the check needs only what the component holds.
+
+**Fact producer — the library reports facts and the CLI makes the rows.** A library that more than one surface reads does not implement `Doctorable`. It gives plain status structs and a conversion to `Check` rows:
+
+- The producer function returns a status struct. Facts only — no format, no color, no exit code.
+- A conversion function (`to_checks()`, `statuses_to_checks()`) makes the `Check` rows. The filter and the status policy stay in that one function, so every consumer gets the same policy.
+- The producer splits into a thin loader and a `_with` core. The loader reads the host — config files, the workspace root, the validator directories. The `_with` core takes those inputs as arguments. Tests drive the `_with` core with synthetic inputs, so they do not depend on what the host has installed.
+- The CLI wires the loader into its check list, and turns a load failure into one Error row. A broken library never stops the doctor run.
+
+Two shipped modules use the fact-producer path:
+
+- `mirdan::status` — `check_all_doctored()` reports the install status of each sah-managed component, for each doctor-enabled agent, in each scope. `statuses_to_checks()` makes the rows; it drops the not-applicable rows and applies the scope-pair policy. `mirdan::doctor::MirdanDoctor` and the `commands::doctor::checks` module of `swissarmyhammer-cli` both consume it; the CLI seam is `check_install_stack_with`. The `mirdan status` command reads the same facts with no doctor.
+- `swissarmyhammer-validators::doctor` — `check_review_engine()` reports the detected project types, the applicability of each validator set, and the tool presence, tool version, and fixture result of each tool rule. `to_checks()` makes the rows, and `check_review_engine_with()` is the test seam. The `commands::doctor::checks` module of `swissarmyhammer-cli` consumes it.
+
+Use the fact producer when the facts have a consumer other than doctor, or when the owning crate must not depend on the tool registry. Use `Doctorable` in all other cases.
 
 ### Dual-Mode Tauri Apps
 
