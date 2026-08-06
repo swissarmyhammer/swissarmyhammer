@@ -291,47 +291,60 @@ fn check_version(spec: &ToolSpec) -> Option<String> {
 /// produce none. Any broken run — nonzero exit, unparseable stdout — is a
 /// failure with its detail.
 fn check_fixtures(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> FixtureOutcome {
+    match verify_fixture_contract(ruleset, rule, spec) {
+        Ok(()) => FixtureOutcome::Passed,
+        Err(outcome) => outcome,
+    }
+}
+
+/// The fixture contract as a fallible check: `Ok` means both fixtures
+/// behaved, `Err` carries the degraded outcome to report.
+fn verify_fixture_contract(
+    ruleset: &RuleSet,
+    rule: &Rule,
+    spec: &ToolSpec,
+) -> Result<(), FixtureOutcome> {
     let fixtures_dir = ruleset.base_path.join(FIXTURES_DIR_NAME);
     let fail_fixture = find_fixture(&fixtures_dir, &rule.name, FAIL_FIXTURE_KIND);
     let pass_fixture = find_fixture(&fixtures_dir, &rule.name, PASS_FIXTURE_KIND);
 
     let (Some(fail_fixture), Some(pass_fixture)) = (fail_fixture, pass_fixture) else {
-        return FixtureOutcome::MissingFixtures {
+        return Err(FixtureOutcome::MissingFixtures {
             detail: format!(
                 "expected {name}.{FAIL_FIXTURE_KIND}.* and {name}.{PASS_FIXTURE_KIND}.* under {dir}",
                 name = rule.name,
                 dir = fixtures_dir.display(),
             ),
-        };
+        });
     };
 
-    let fail_count = match run_fixture(spec, &fail_fixture) {
-        Ok(count) => count,
-        Err(detail) => return FixtureOutcome::Failed { detail },
-    };
+    let fail_count = run_and_count_fixture(spec, &fail_fixture)?;
     if fail_count == 0 {
-        return FixtureOutcome::Failed {
+        return Err(FixtureOutcome::Failed {
             detail: format!(
                 "the fail fixture {} produced no findings; at least one is required",
                 fixture_label(&fail_fixture),
             ),
-        };
+        });
     }
 
-    let pass_count = match run_fixture(spec, &pass_fixture) {
-        Ok(count) => count,
-        Err(detail) => return FixtureOutcome::Failed { detail },
-    };
+    let pass_count = run_and_count_fixture(spec, &pass_fixture)?;
     if pass_count != 0 {
-        return FixtureOutcome::Failed {
+        return Err(FixtureOutcome::Failed {
             detail: format!(
                 "the pass fixture {} produced {pass_count} finding(s); none are allowed",
                 fixture_label(&pass_fixture),
             ),
-        };
+        });
     }
 
-    FixtureOutcome::Passed
+    Ok(())
+}
+
+/// Run one fixture and count its findings, mapping a broken run to the
+/// `Failed` outcome so the caller can use `?`.
+fn run_and_count_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, FixtureOutcome> {
+    run_fixture(spec, fixture).map_err(|detail| FixtureOutcome::Failed { detail })
 }
 
 /// Find the fixture file named `<rule>.<kind>.<any extension>` in `dir`.

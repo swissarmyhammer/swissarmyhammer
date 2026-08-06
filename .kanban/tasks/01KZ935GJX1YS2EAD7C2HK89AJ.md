@@ -82,6 +82,30 @@ comments:
     - evidence: 5 files — crates/swissarmyhammer-validators/src/doctor.rs (PROJECT_TYPES_ROWS constant + inner-doc link anchor), src/lib.rs (doc comments on the 5 public modules), src/validators/types.rs (shared apply_name_and_description + shared matches_trigger_and_criteria, private matches_trigger_regex method deleted), src/validators/mod.rs and src/review/mod.rs (crate-anchored inner-doc links so the new module docs add zero cargo doc warnings). All 8 findings flipped to [x]. cargo nextest run -p swissarmyhammer-validators: 417 passed. cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-cli --all-targets -- -D warnings: clean. cargo fmt run. cargo doc warning set identical to baseline.
     - next: test
   timestamp: 2026-08-06T14:58:29.075317+00:00
+- actor: claude-code
+  id: 01kzbsxhtyzhg63jc7jb1awkbf
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (2497c2465) — 1 finding, 1 confirmed, 0 refuted — crates/swissarmyhammer-validators/src/doctor.rs:308
+    - prior checklist (2026-08-06 09:22): all 8 items checked
+    - next: implement the fix for the doctor.rs:308 duplication, then run /review again
+  timestamp: 2026-08-06T15:08:55.006128+00:00
+- actor: claude-code
+  id: 01kzbsy9ad2sy94mkj7rb0hf8x
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — worked all 8 findings from 2026-08-06 09:22 checklist; 5 files
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3155 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 2497c2465
+    - review: findings — 1 open: doctor.rs:308 (duplicate match expression at 308-311 and 321-324 → shared helper)
+  timestamp: 2026-08-06T15:09:19.053418+00:00
+- actor: claude-code
+  id: 01kzbt4qnea28bwhe3baa5rh3c
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/doctor.rs. Worked the one open finding (doctor.rs:308 duplicate match blocks). The fixture contract is now the fallible `verify_fixture_contract` (`Err` carries the degraded FixtureOutcome), `check_fixtures` is a thin match wrapper, and the duplicated match on `run_fixture` is the one shared helper `run_and_count_fixture(spec, fixture) -> Result<usize, FixtureOutcome>` called with `?` at both sites — the exact shape the finding named. Pure refactor, no behavior change; the existing fixture-path tests are the safety net. Finding flipped to [x]. cargo nextest run -p swissarmyhammer-validators: 417 passed, 0 failed. cargo fmt run. cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings: clean.
+    - next: test
+  timestamp: 2026-08-06T15:12:50.350083+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
@@ -118,3 +142,7 @@ Acceptance:
 - [x] `crates/swissarmyhammer-validators/src/validators/types.rs:374` — Validator::matches and RuleSet::matches are near-verbatim duplicates. Both follow identical logic: check trigger_matcher, check match_criteria, return success. They differ only in field access (frontmatter vs manifest) and the method vs function call pattern for trigger_matcher. This is one function with type-specific field access that could drift if bugs are fixed in one place but not the other. Extract a shared helper function that accepts the trigger_matcher and match_criteria as parameters, or implement a trait that both Validator and RuleSet conform to, so the matching logic lives in one place.
 
 Note: The engine reported 3 more findings about `timeout` constants in the test module of `types.rs` (lines 1019, 1487, 1603). That test code existed before this commit. The review skill rule drops findings that ask for a refactor of tests that already existed. These 3 findings are dropped for that written rule.
+
+## Review Findings (2026-08-06 10:05)
+
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:308` — The match expression at lines 308–311 is verbatim duplicated at lines 321–324, differing only in the fixture argument and the assigned variable name. These are one function with an argument, not two separate blocks. Extract a shared helper function, e.g. `fn run_and_count_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, FixtureOutcome>`, and call it twice: `let fail_count = run_and_count_fixture(spec, &fail_fixture)?;` and `let pass_count = run_and_count_fixture(spec, &pass_fixture)?;`. This prevents the match logic from drifting across the two call sites.
