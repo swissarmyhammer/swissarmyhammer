@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::validators::ForkAttachment;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

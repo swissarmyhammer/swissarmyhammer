@@ -34,11 +34,11 @@ use std::path::Path;
 
 use crate::doctor::{check_tool_rule, command_failure_detail, run_shell};
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
-use crate::review::scope::WorkList;
+use crate::review::scope::{ValidatorWork, WorkList};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::types::{Finding, VerifiedFinding};
-use crate::validators::types::{MatchContext, ToolScope, ToolSpec};
-use crate::validators::ValidatorLoader;
+use crate::validators::types::{MatchContext, Rule, ToolScope, ToolSpec};
+use crate::validators::{RuleSet, ValidatorLoader};
 
 /// Why a tool finding is confirmed without the adversarial verify pass.
 const TOOL_FINDING_REASON: &str =
@@ -337,59 +337,86 @@ pub fn plan_tool_rules(
             let Some(spec) = &rule.tool else {
                 continue;
             };
-            let files: Vec<String> = validator
-                .files()
-                .iter()
-                .map(|file| file.path().to_string())
-                .filter(|path| {
-                    let ctx = MatchContext::new()
-                        .with_file(path.clone())
-                        .with_project_types(project_types.iter().cloned());
-                    rule.matches(ruleset, &ctx)
-                })
-                .collect();
+            let files = matched_rule_files(validator, ruleset, rule, project_types);
             if files.is_empty() {
                 continue;
             }
-
-            let status = check_tool_rule(ruleset, rule, spec);
-            if status.usable() {
-                if let Some(superseded) = &rule.supersedes {
-                    for file in &files {
-                        plan.suppression.insert(name, file, superseded);
-                    }
-                }
-                tracing::info!(
-                    validator = %name,
-                    rule = %rule.name,
-                    files = ?files,
-                    "tool rule is healthy; the tool reviews these files instead of an LLM"
-                );
-                plan.runs.push(ToolRun {
-                    validator: name.to_string(),
-                    rule: rule.name.clone(),
-                    spec: spec.clone(),
-                    files,
-                });
-            } else {
-                let detail = status.degraded_detail();
-                tracing::warn!(
-                    validator = %name,
-                    rule = %rule.name,
-                    detail = %detail,
-                    supersedes = ?rule.supersedes,
-                    "tool rule is not usable; the superseded prompt rule runs instead"
-                );
-                plan.fallbacks.push(ToolFallback {
-                    validator: name.to_string(),
-                    rule: rule.name.clone(),
-                    supersedes: rule.supersedes.clone(),
-                    detail,
-                });
-            }
+            plan_rule_by_health(&mut plan, name, ruleset, rule, spec, files);
         }
     }
     plan
+}
+
+/// The subset of the validator's files this tool rule matches: the same
+/// per-file `ValidatorMatch` intersection (set `match` ∩ rule `match`) prompt
+/// rules use, evaluated with the workspace's detected `project_types`.
+fn matched_rule_files(
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    rule: &Rule,
+    project_types: &[String],
+) -> Vec<String> {
+    validator
+        .files()
+        .iter()
+        .map(|file| file.path().to_string())
+        .filter(|path| {
+            let ctx = MatchContext::new()
+                .with_file(path.clone())
+                .with_project_types(project_types.iter().cloned());
+            rule.matches(ruleset, &ctx)
+        })
+        .collect()
+}
+
+/// Run the doctor health check ONCE for a matched tool rule and record the
+/// verdict on the plan: a healthy rule becomes a [`ToolRun`] (plus one
+/// suppression entry per matched file for its `supersedes` prompt rule), an
+/// unhealthy one a [`ToolFallback`] that suppresses nothing.
+fn plan_rule_by_health(
+    plan: &mut ToolPlan,
+    validator: &str,
+    ruleset: &RuleSet,
+    rule: &Rule,
+    spec: &ToolSpec,
+    files: Vec<String>,
+) {
+    let status = check_tool_rule(ruleset, rule, spec);
+    if !status.usable() {
+        let detail = status.degraded_detail();
+        tracing::warn!(
+            validator = %validator,
+            rule = %rule.name,
+            detail = %detail,
+            supersedes = ?rule.supersedes,
+            "tool rule is not usable; the superseded prompt rule runs instead"
+        );
+        plan.fallbacks.push(ToolFallback {
+            validator: validator.to_string(),
+            rule: rule.name.clone(),
+            supersedes: rule.supersedes.clone(),
+            detail,
+        });
+        return;
+    }
+
+    if let Some(superseded) = &rule.supersedes {
+        for file in &files {
+            plan.suppression.insert(validator, file, superseded);
+        }
+    }
+    tracing::info!(
+        validator = %validator,
+        rule = %rule.name,
+        files = ?files,
+        "tool rule is healthy; the tool reviews these files instead of an LLM"
+    );
+    plan.runs.push(ToolRun {
+        validator: validator.to_string(),
+        rule: rule.name.clone(),
+        spec: spec.clone(),
+        files,
+    });
 }
 
 /// Execute every planned tool run at the workspace root.
@@ -533,7 +560,8 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use crate::review::scope::{FileWork, ProbeNames, RuleNames, ValidatorWork};
+    use crate::review::scope::{FileWork, ProbeNames, RuleNames};
+    use crate::review::test_support::write_tool_rule_fixtures;
     use crate::validators::types::{Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch};
 
     /// A shell probe that always succeeds — "the tool is installed".
@@ -545,14 +573,6 @@ mod tests {
     /// A `files`-scope script that reports one `path:line: message` finding
     /// per line containing `TODO`, and exits 0 whether or not it found any.
     const TODO_SCRIPT: &str = r#"for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }' "$f"; done"#;
-
-    /// Write the two fixtures the doctor health check demands for `rule`.
-    fn write_fixtures(base: &Path, rule: &str) {
-        let fixtures = base.join("fixtures");
-        std::fs::create_dir_all(&fixtures).unwrap();
-        std::fs::write(fixtures.join(format!("{rule}.fail.rs")), "// TODO: fail\n").unwrap();
-        std::fs::write(fixtures.join(format!("{rule}.pass.rs")), "fn clean() {}\n").unwrap();
-    }
 
     /// A tool rule named `docs-tool` superseding `missing-docs`, with the
     /// given run script and doctor check command.
@@ -623,7 +643,7 @@ mod tests {
     #[test]
     fn plan_includes_a_healthy_tool_rule_and_suppresses_the_superseded_rule_per_file() {
         let base = tempfile::tempdir().unwrap();
-        write_fixtures(base.path(), "docs-tool");
+        write_tool_rule_fixtures(base.path(), "docs-tool");
         let loader = loader_of(docs_ruleset(
             base.path(),
             vec![prompt_rule(), tool_rule(TODO_SCRIPT, TOOL_PRESENT, None)],
@@ -646,7 +666,7 @@ mod tests {
     #[test]
     fn plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing() {
         let base = tempfile::tempdir().unwrap();
-        write_fixtures(base.path(), "docs-tool");
+        write_tool_rule_fixtures(base.path(), "docs-tool");
         let loader = loader_of(docs_ruleset(
             base.path(),
             vec![prompt_rule(), tool_rule(TODO_SCRIPT, TOOL_MISSING, None)],
@@ -683,7 +703,7 @@ mod tests {
     #[test]
     fn plan_narrows_a_tool_rule_to_the_files_its_own_match_covers() {
         let base = tempfile::tempdir().unwrap();
-        write_fixtures(base.path(), "docs-tool");
+        write_tool_rule_fixtures(base.path(), "docs-tool");
         // The set matches *.rs; the rule narrows to src/covered.rs only.
         let narrowed = ValidatorMatch {
             files: vec!["src/covered.rs".to_string()],

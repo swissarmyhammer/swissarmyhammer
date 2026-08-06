@@ -485,47 +485,38 @@ fn set_check(set: &SetStatus) -> Check {
 }
 
 /// One tool rule's health row.
+///
+/// A degraded row's message is [`ToolRuleStatus::degraded_detail`] — the SAME
+/// string the review engine renders for the rule's prompt fallback — plus the
+/// [`fallback_note`] suffix, so doctor and the engine can never describe the
+/// same degradation two different ways.
 fn tool_rule_check(rule: &ToolRuleStatus) -> Check {
     let name = tool_rule_check_name(&rule.set_name, &rule.rule_name);
-    match (&rule.presence, &rule.fixtures) {
-        (ToolPresence::Missing { detail }, _) => Check {
-            name,
-            status: CheckStatus::Warning,
-            message: format!("tool missing ({detail}){}", fallback_note(rule)),
-            fix: install_fix(rule),
-        },
-        (ToolPresence::Present, FixtureOutcome::Passed) => Check {
+    if rule.usable() {
+        return Check {
             name,
             status: CheckStatus::Ok,
             message: format!("tool present{}; fixtures pass", version_note(rule)),
             fix: None,
-        },
-        (ToolPresence::Present, FixtureOutcome::Failed { detail }) => Check {
-            name,
-            status: CheckStatus::Warning,
-            message: format!(
-                "fixtures failed: {detail}; the tool rule is not used{}",
-                fallback_note(rule)
-            ),
-            fix: install_fix(rule),
-        },
-        (ToolPresence::Present, FixtureOutcome::MissingFixtures { detail }) => Check {
-            name,
-            status: CheckStatus::Warning,
-            message: format!("fixtures missing: {detail}"),
-            fix: Some(format!(
-                "Add {rule}.{FAIL_FIXTURE_KIND}.* and {rule}.{PASS_FIXTURE_KIND}.* to the set's {FIXTURES_DIR_NAME}/ directory",
-                rule = rule.rule_name,
-            )),
-        },
-        // Unreachable by construction — Skipped is only produced with a
-        // missing tool — but the match must be total.
-        (ToolPresence::Present, FixtureOutcome::Skipped) => Check {
-            name,
-            status: CheckStatus::Warning,
-            message: format!("fixture check skipped{}", fallback_note(rule)),
-            fix: install_fix(rule),
-        },
+        };
+    }
+    Check {
+        name,
+        status: CheckStatus::Warning,
+        message: format!("{}{}", rule.degraded_detail(), fallback_note(rule)),
+        fix: degraded_fix(rule),
+    }
+}
+
+/// The fix for a degraded row: missing fixtures ask for the fixture pair,
+/// every other degradation asks for the rule's install commands.
+fn degraded_fix(rule: &ToolRuleStatus) -> Option<String> {
+    match &rule.fixtures {
+        FixtureOutcome::MissingFixtures { .. } => Some(format!(
+            "Add {rule}.{FAIL_FIXTURE_KIND}.* and {rule}.{PASS_FIXTURE_KIND}.* to the set's {FIXTURES_DIR_NAME}/ directory",
+            rule = rule.rule_name,
+        )),
+        _ => install_fix(rule),
     }
 }
 
@@ -1034,8 +1025,16 @@ Python only.
             tool_row.message
         );
         assert!(
-            tool_row.message.contains("not used"),
-            "a fixture failure row must say the rule is not used; got '{}'",
+            tool_row.message.contains("prompt fallback"),
+            "a fixture failure row must carry the fallback note; got '{}'",
+            tool_row.message
+        );
+        // The row's core detail is degraded_detail() verbatim, so doctor and
+        // the review engine can never describe the same degradation two ways.
+        let rule = &status.tool_rules[0];
+        assert!(
+            tool_row.message.starts_with(&rule.degraded_detail()),
+            "the row message must start with degraded_detail(); got '{}'",
             tool_row.message
         );
     }

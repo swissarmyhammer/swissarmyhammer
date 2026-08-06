@@ -1379,16 +1379,6 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         loader
     }
 
-    /// Write the fixture pair the doctor health check demands for `docs-tool`.
-    fn write_tool_fixtures(base: &std::path::Path) {
-        let fixtures = base.join("fixtures");
-        std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
-        std::fs::write(fixtures.join("docs-tool.fail.rs"), "// TODO: fail\n")
-            .expect("write fail fixture");
-        std::fs::write(fixtures.join("docs-tool.pass.rs"), "fn clean() {}\n")
-            .expect("write pass fixture");
-    }
-
     /// A repo whose `src/lib.rs` carries a TODO marker on line 2, committed so
     /// the file scope resolves against a valid HEAD.
     fn todo_repo() -> (crate::review::test_support::TestRepo, Connection) {
@@ -1435,7 +1425,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
     async fn review_file_runs_a_healthy_tool_rule_with_zero_llm_calls() {
         let (repo, conn) = todo_repo();
         let base = tempfile::tempdir().expect("tool rule base dir");
-        write_tool_fixtures(base.path());
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "docs-tool");
         let loader = tool_rule_loader(base.path(), "true");
 
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
@@ -1471,7 +1461,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
     async fn review_file_falls_back_to_the_prompt_rule_when_the_tool_is_missing() {
         let (repo, conn) = todo_repo();
         let base = tempfile::tempdir().expect("tool rule base dir");
-        write_tool_fixtures(base.path());
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "docs-tool");
         // `false` as the doctor check: the tool is "missing".
         let loader = tool_rule_loader(base.path(), "false");
 
@@ -1534,7 +1524,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         // no marker exists, so the rule is healthy and the run is attempted.
         std::fs::write(repo.path().join("explode"), "").expect("write explode marker");
         let base = tempfile::tempdir().expect("tool rule base dir");
-        write_tool_fixtures(base.path());
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "docs-tool");
         let loader = tool_rule_loader(base.path(), "true");
 
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);

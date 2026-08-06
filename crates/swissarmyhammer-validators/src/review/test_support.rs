@@ -34,6 +34,19 @@ use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 /// copy of its matching logic.
 pub use crate::review::scope::engine_matched_validator_names;
 
+/// Write the fixture pair the doctor health check demands for the tool rule
+/// named `rule`: a `fixtures/<rule>.fail.rs` carrying a TODO marker (the tool
+/// must flag it) and a `fixtures/<rule>.pass.rs` that is clean (the tool must
+/// stay silent). Shared by every tool-rule test that needs a healthy rule.
+pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
+    let fixtures = base.join("fixtures");
+    std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
+    std::fs::write(fixtures.join(format!("{rule}.fail.rs")), "// TODO: fail\n")
+        .expect("write fail fixture");
+    std::fs::write(fixtures.join(format!("{rule}.pass.rs")), "fn clean() {}\n")
+        .expect("write pass fixture");
+}
+
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
 

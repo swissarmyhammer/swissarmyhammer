@@ -327,36 +327,8 @@ pub fn synthesize(
         }
     }
 
-    // A broken tool run is a tool error, never findings and never a clean
-    // result: name the rule and carry its raw stderr so the diagnosing agent
-    // reads exactly what the tool said.
-    for error in tools.errors() {
-        let _ = writeln!(
-            markdown,
-            "\n> ⚠️ tool rule '{}/{}' failed — the tool judged nothing, so its findings are missing:",
-            error.validator(),
-            error.rule()
-        );
-        for line in error.detail().lines() {
-            let _ = writeln!(markdown, "> {line}");
-        }
-    }
-
-    // Note every tool rule on its prompt fallback: the reader must know the
-    // prompt rule reviewed those files, not the tool.
-    for fallback in tools.fallbacks() {
-        let note = match fallback.supersedes() {
-            Some(prompt_rule) => format!("prompt rule '{prompt_rule}' ran instead"),
-            None => "no prompt rule is named to run instead".to_string(),
-        };
-        let _ = writeln!(
-            markdown,
-            "\n> tool rule '{}/{}' is unavailable ({}); {note}.",
-            fallback.validator(),
-            fallback.rule(),
-            fallback.detail()
-        );
-    }
+    render_tool_errors(&mut markdown, tools);
+    render_tool_fallbacks(&mut markdown, tools);
 
     // Say so explicitly when the resolved scope was empty (zero fan-out tasks,
     // zero tool activity, nothing skipped either): a bare findings header
@@ -392,6 +364,41 @@ pub fn synthesize(
     );
 
     ReviewReport { markdown, counts }
+}
+
+/// Render each broken tool run as a tool error block: never findings and
+/// never a clean result. Each block names the rule and carries the raw stderr
+/// so the diagnosing agent reads exactly what the tool said.
+fn render_tool_errors(markdown: &mut String, tools: &ToolReport) {
+    for error in tools.errors() {
+        let _ = writeln!(
+            markdown,
+            "\n> ⚠️ tool rule '{}/{}' failed — the tool judged nothing, so its findings are missing:",
+            error.validator(),
+            error.rule()
+        );
+        for line in error.detail().lines() {
+            let _ = writeln!(markdown, "> {line}");
+        }
+    }
+}
+
+/// Render one note per tool rule on its prompt fallback: the reader must know
+/// the prompt rule reviewed those files, not the tool.
+fn render_tool_fallbacks(markdown: &mut String, tools: &ToolReport) {
+    for fallback in tools.fallbacks() {
+        let note = match fallback.supersedes() {
+            Some(prompt_rule) => format!("prompt rule '{prompt_rule}' ran instead"),
+            None => "no prompt rule is named to run instead".to_string(),
+        };
+        let _ = writeln!(
+            markdown,
+            "\n> tool rule '{}/{}' is unavailable ({}); {note}.",
+            fallback.validator(),
+            fallback.rule(),
+            fallback.detail()
+        );
+    }
 }
 
 /// Collapse only *exact* repeats, preserving first-seen order.
@@ -548,20 +555,27 @@ fn sentence(text: &str) -> String {
 ///
 /// 1. [`scope_review`] — resolve `scope` into the per-validator [`WorkList`]
 ///    (deterministic, LLM-free).
-/// 2. [`batch_work_list`] — split the work-list into budgeted batches at
+/// 2. [`plan_tool_rules`] + [`execute_tool_runs`] — plan every matched tool
+///    rule ONCE for the whole run and execute the healthy ones at the
+///    workspace root, before any batching. Tool findings join the verified
+///    stream as CONFIRMED (deterministic tool output skips the adversarial
+///    verify pass), and the plan's suppression map rides into every batch's
+///    fan-out so a superseded prompt rule is skipped per file; an unhealthy
+///    tool suppresses nothing and is reported as a prompt fallback.
+/// 3. [`batch_work_list`] — split the work-list into budgeted batches at
 ///    whole-file granularity so no single prompt overflows the agent's prompt
 ///    cap. The budget is [`FleetConfig::file_payload_budget`] — the cap less the
 ///    run's measured framing — and it is spent in RENDERED bytes. A small diff
 ///    is one batch; a large one is several. A (validator, file) pair whose
 ///    rendered block alone exceeds the budget is excluded and reported as a
 ///    named gap (see [`SkippedFile`]), never a hard error.
-/// 3. For **each batch**, independently: [`run_fleet`] fans every validator out
+/// 4. For **each batch**, independently: [`run_fleet`] fans every validator out
 ///    across the shared `pool` over that batch's files (its own shared prime,
 ///    forked per validator), then [`verify_findings`] pairs each candidate back
 ///    with its file's ground-truth context ([`build_candidates`]) and runs the
 ///    adversarial refute pass on the **same** `pool` — forking that batch's prime
 ///    while it stays pinned, then releasing the pin once the batch has drained.
-/// 4. [`synthesize`] — merge every batch's confirmed [`VerifiedFinding`]s and
+/// 5. [`synthesize`] — merge every batch's confirmed [`VerifiedFinding`]s and
 ///    turn them into the dated, deduped, ordered [`ReviewReport`] (synthesis dedups
 ///    by `file:line`, so cross-batch findings collapse the same as within a batch).
 ///
@@ -602,7 +616,7 @@ pub async fn run_review(
     // the run's FIRST events, emitted long before any fleet work exists.
     let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
-    // Tool-rule stage: run every healthy tool rule ONCE for the whole run,
+    // Stage 2: run every healthy tool rule ONCE for the whole run,
     // before any batching — tools have no prompt budget, and a workspace-scope
     // tool must not run once per batch. The plan's suppression map rides into
     // every batch's fan-out so a superseded prompt rule is skipped per file;
@@ -614,7 +628,7 @@ pub async fn run_review(
     let (_, tool_fallbacks, suppression) = tool_plan.into_parts();
     let (tool_findings, tool_errors) = tool_outcome.into_parts();
 
-    // Stage 2: split the work-list into budgeted batches (whole-file
+    // Stage 3: split the work-list into budgeted batches (whole-file
     // granularity). The budget is the agent's prompt cap less the run's framing
     // (change purpose + payload header + the largest validator suffix), and it
     // is spent in RENDERED bytes — measured by running the fleet's own file
@@ -637,7 +651,7 @@ pub async fn run_review(
         "review run: scoped work-list ready, batched, fanning out"
     );
 
-    // Stage 3: run the full fan-out → verify pipeline independently per batch,
+    // Stage 4: run the full fan-out → verify pipeline independently per batch,
     // accumulating every batch's verified findings and summing the task tally.
     let mut verified: Vec<VerifiedFinding> = Vec::new();
     let mut attempted = 0usize;
@@ -678,7 +692,7 @@ pub async fn run_review(
     // the adversarial verify pass — so they join the verified stream directly.
     verified.extend(tool_findings);
 
-    // Stage 4: synthesize the merged, deduped, ordered, dated report. The summed
+    // Stage 5: synthesize the merged, deduped, ordered, dated report. The summed
     // tally rides into the report so the tool boundary can flag/fail an incomplete
     // run; the engine itself stays a pure data barrier and never errors on it. Any
     // oversized files stage 2 excluded ride in too, as a named gap, along with
