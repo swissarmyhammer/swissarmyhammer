@@ -320,6 +320,32 @@ pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoa
     loader
 }
 
+/// Write a RuleSet under `base/<name>/` whose single rule (`docs-tool`) is a
+/// tool rule carrying the full block: `supersedes: missing-docs`,
+/// `scope: files`, `run`, and a `doctor.check_command`. The set matches `glob`.
+///
+/// The one on-disk tool-rule fixture, shared by the loader's layer-precedence
+/// test and the tools crate's review-tool tests, so the written shape can
+/// never drift between them.
+pub fn write_tool_rule_ruleset(base: &Path, name: &str, glob: &str, run: &str) {
+    let dir = base.join(name);
+    std::fs::create_dir_all(dir.join("rules")).unwrap();
+    std::fs::write(
+        dir.join("VALIDATOR.md"),
+        format!(
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n---\n\n# {name}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rules/docs-tool.md"),
+        format!(
+            "---\nname: docs-tool\ndescription: Docs by tool\nsupersedes: missing-docs\ntool:\n  scope: files\n  run: {run}\n  doctor:\n    check_command: which ruff\n---\n"
+        ),
+    )
+    .unwrap();
+}
+
 /// A single-rule RuleSet named `name` that matches `file_glob` and declares
 /// `probes`.
 ///

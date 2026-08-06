@@ -353,8 +353,9 @@ fn rules_file_path() -> PathBuf {
 /// Render the dumped RuleSets as one markdown document.
 ///
 /// Each validator gets a heading with its name, then its description and source
-/// layer, then each rule's name and verbatim body. An empty set states that no
-/// rules apply.
+/// layer, then each rule's name, the prompt rule it supersedes (when the rule
+/// declares one), and its verbatim body. An empty set states that no rules
+/// apply.
 fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String {
     let mut doc = String::from("# Review rules\n\n");
     if !extensions.is_empty() {
@@ -372,7 +373,11 @@ fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String
             ruleset.source
         ));
         for rule in rule_details(ruleset) {
-            doc.push_str(&format!("### {}\n\n{}\n\n", rule.name, rule.body));
+            doc.push_str(&format!("### {}\n\n", rule.name));
+            if let Some(supersedes) = &rule.supersedes {
+                doc.push_str(&format!("Supersedes: {supersedes}\n\n"));
+            }
+            doc.push_str(&format!("{}\n\n", rule.body));
         }
     }
     doc
@@ -508,31 +513,38 @@ pub fn check_validators() -> Result<CheckValidatorsResponse, ValidatorOpError> {
     })
 }
 
-/// Lint one RuleSet, appending any problems found.
-fn lint_ruleset(ruleset: &RuleSet, path: &str, errors: &mut Vec<ValidatorProblem>) {
-    // Globs must compile — the set's and every rule-level narrowing `match`.
-    for glob in match_globs(ruleset) {
-        if glob::Pattern::new(&glob).is_err() {
+/// Report every glob in `globs` that does not compile.
+///
+/// `context` prefixes the problem message (empty for a set-level glob, the
+/// rule name for a rule-level narrowing `match`), so the set loop and the
+/// per-rule loop share one validation body.
+fn validate_glob_patterns(
+    globs: &[String],
+    path: &str,
+    context: &str,
+    errors: &mut Vec<ValidatorProblem>,
+) {
+    for glob in globs {
+        if glob::Pattern::new(glob).is_err() {
             errors.push(ValidatorProblem {
                 path: path.to_string(),
-                problem: format!("invalid match glob '{glob}'"),
+                problem: format!("{context}invalid match glob '{glob}'"),
             });
         }
     }
+}
+
+/// Lint one RuleSet, appending any problems found.
+fn lint_ruleset(ruleset: &RuleSet, path: &str, errors: &mut Vec<ValidatorProblem>) {
+    // Globs must compile — the set's and every rule-level narrowing `match`.
+    validate_glob_patterns(&match_globs(ruleset), path, "", errors);
     for rule in &ruleset.rules {
         let rule_globs = rule
             .match_criteria
             .as_ref()
             .map(|criteria| criteria.files.as_slice())
             .unwrap_or_default();
-        for glob in rule_globs {
-            if glob::Pattern::new(glob).is_err() {
-                errors.push(ValidatorProblem {
-                    path: path.to_string(),
-                    problem: format!("rule '{}': invalid match glob '{glob}'", rule.name),
-                });
-            }
-        }
+        validate_glob_patterns(rule_globs, path, &format!("rule '{}': ", rule.name), errors);
     }
 
     // A rule file that failed to parse (e.g. a malformed `tool` block) was

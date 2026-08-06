@@ -677,38 +677,28 @@ mod tests {
         assert_eq!(shared.description(), "Project version");
     }
 
-    /// Write a RuleSet whose single rule is a tool rule with the full block.
-    fn write_tool_ruleset(base: &Path, name: &str, run: &str) {
-        let dir = base.join(name);
-        fs::create_dir_all(dir.join("rules")).unwrap();
-        fs::write(
-            dir.join("VALIDATOR.md"),
-            format!("---\nname: {name}\ndescription: Tool ruleset\nmatch:\n  files:\n    - \"**/*.py\"\n---\n\n# {name}\n"),
-        )
-        .unwrap();
-        fs::write(
-            dir.join("rules/docs-tool.md"),
-            format!(
-                "---\nname: docs-tool\ndescription: Docs by tool\nsupersedes: missing-docs\ntool:\n  scope: files\n  run: {run}\n  doctor:\n    check_command: which ruff\n---\n"
-            ),
-        )
-        .unwrap();
-    }
-
     /// A tool rule loads through the same layer precedence as a prompt rule:
     /// the project layer's version of a same-named set wins, and the loaded
-    /// rule carries its tool block and supersedes.
+    /// rule carries its tool block and supersedes. The on-disk tool-rule shape
+    /// is the shared `test_support` fixture, never a local copy.
     #[test]
     #[serial_test::serial(cwd)]
     fn tool_rule_loads_by_the_existing_layer_precedence() {
+        use crate::review::test_support::write_tool_rule_ruleset;
+
         let home = TempDir::new().unwrap();
         let user_validators = home.path().join(".validators");
-        write_tool_ruleset(&user_validators, "tooled", "user-runner \"$@\"");
+        write_tool_rule_ruleset(&user_validators, "tooled", "**/*.py", "user-runner \"$@\"");
 
         let project_root = TempDir::new().unwrap();
         fs::create_dir_all(project_root.path().join(".git")).unwrap();
         let project_validators = project_root.path().join(".validators");
-        write_tool_ruleset(&project_validators, "tooled", "project-runner \"$@\"");
+        write_tool_rule_ruleset(
+            &project_validators,
+            "tooled",
+            "**/*.py",
+            "project-runner \"$@\"",
+        );
 
         let _env = EnvVarGuard::set("HOME", home.path());
         let _cwd = CwdGuard::change_to(project_root.path());

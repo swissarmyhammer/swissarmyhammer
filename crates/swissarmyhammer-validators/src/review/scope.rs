@@ -699,7 +699,7 @@ fn match_validators_and_files(
     for file in files {
         let ctx = MatchContext::new()
             .with_file(file.clone())
-            .with_project_types(project_types.to_vec());
+            .with_project_types(project_types.iter().cloned());
         let rulesets = loader.matching_rulesets(&ctx);
         if rulesets.is_empty() {
             continue;

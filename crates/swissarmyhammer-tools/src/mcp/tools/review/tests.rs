@@ -24,7 +24,7 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 // the shared embedding dimension.
 use swissarmyhammer_validators::review::test_support::{
     body as dup_body, dup_emb, engine_matched_validator_names, on_disk_index_conn, seed_chunk,
-    ScriptedAdapter, ScriptedAgent, ScriptedReply, TestRepo, DIM,
+    write_tool_rule_ruleset, ScriptedAdapter, ScriptedAgent, ScriptedReply, TestRepo, DIM,
 };
 use tokio::sync::broadcast;
 
@@ -332,24 +332,10 @@ async fn list_validators_surfaces_user_and_project_layers_with_probes() {
     assert_eq!(project_row["probes"], json!(["callers"]));
 }
 
-/// Write a RuleSet whose single rule is a tool rule (a `tool` block plus
-/// `supersedes` in the rule frontmatter).
-fn write_tool_rule_ruleset(base: &Path, name: &str, glob: &str) {
-    let dir = base.join(name);
-    std::fs::create_dir_all(dir.join("rules")).unwrap();
-    std::fs::write(
-        dir.join("VALIDATOR.md"),
-        format!(
-            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n---\n\n# {name}\n"
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("rules/docs-tool.md"),
-        "---\nname: docs-tool\ndescription: Docs by tool\nsupersedes: missing-docs\ntool:\n  scope: files\n  run: ruff check \"$@\"\n  doctor:\n    check_command: which ruff\n---\n",
-    )
-    .unwrap();
-}
+/// The tool-rule `run` script every seeded tool rule in these tests carries.
+/// The tests assert on exposure (`tool.run` round-trips through the ops), never
+/// on execution, so one fixed script serves every seeding call.
+const TOOL_RULE_RUN: &str = "ruff check \"$@\"";
 
 /// `get validator` and a `rules: true` listing expose a tool rule's `tool`
 /// block and `supersedes`, and a prompt rule row carries neither key.
@@ -361,7 +347,7 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
     let project = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project.path().join(".git")).unwrap();
     let project_validators = project.path().join(".validators");
-    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py");
+    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN);
     write_ruleset(&project_validators, "prompt-set", "**/*.py", &[]);
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
@@ -380,7 +366,7 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
     assert_eq!(rule["name"], json!("docs-tool"));
     assert_eq!(rule["supersedes"], json!("missing-docs"));
     assert_eq!(rule["tool"]["scope"], json!("files"));
-    assert_eq!(rule["tool"]["run"], json!("ruff check \"$@\""));
+    assert_eq!(rule["tool"]["run"], json!(TOOL_RULE_RUN));
     assert_eq!(rule["tool"]["doctor"]["check_command"], json!("which ruff"));
 
     // A prompt rule carries neither `tool` nor `supersedes`.
@@ -414,6 +400,41 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
         .expect("the tooled set is listed");
     assert_eq!(row["rules"][0]["tool"]["scope"], json!("files"));
     assert_eq!(row["rules"][0]["supersedes"], json!("missing-docs"));
+}
+
+/// `dump validators` on a path matched by a tool-rule validator renders the
+/// rule's `supersedes` into the markdown, so the dumped rules file shows the
+/// same rule relationship the structured API (`get validator`,
+/// `list validators`) exposes.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_renders_tool_rule_supersedes() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("dump validators"));
+    args.insert("paths".to_string(), json!(["pkg/tool.py"]));
+    let result = tool.execute(args, &context).await.expect("dump validators");
+    let response: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    // Builtin validators match *.py too; the seeded set must be among them.
+    let validators = response["validators"].as_array().expect("validators array");
+    assert!(validators.contains(&json!("tooled-set")), "{validators:?}");
+    let rules_path = response["path"].as_str().expect("rules file path");
+    let markdown = std::fs::read_to_string(rules_path).expect("read dumped rules file");
+    assert!(markdown.contains("### docs-tool"), "{markdown}");
+    assert!(markdown.contains("Supersedes: missing-docs"), "{markdown}");
 }
 
 /// The Rust source path the `match` filter targets in the pairing tests. Nothing

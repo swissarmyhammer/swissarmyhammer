@@ -108,14 +108,14 @@ impl MatchContext {
     }
 
     /// Set the accumulated changed files.
-    pub fn with_changed_files(mut self, files: Vec<String>) -> Self {
-        self.changed_files = Some(files);
+    pub fn with_changed_files<I: IntoIterator<Item = String>>(mut self, files: I) -> Self {
+        self.changed_files = Some(files.into_iter().collect());
         self
     }
 
     /// Set the detected project type keys for the workspace.
-    pub fn with_project_types(mut self, project_types: Vec<String>) -> Self {
-        self.project_types = Some(project_types);
+    pub fn with_project_types<I: IntoIterator<Item = String>>(mut self, project_types: I) -> Self {
+        self.project_types = Some(project_types.into_iter().collect());
         self
     }
 

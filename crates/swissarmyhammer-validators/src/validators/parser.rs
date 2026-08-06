@@ -66,6 +66,65 @@ fn render_frontmatter(frontmatter: &str) -> String {
         .unwrap_or_else(|_| frontmatter.to_string())
 }
 
+/// Parse rendered frontmatter into a YAML value, naming `validator_id` in any
+/// error.
+///
+/// The one place frontmatter YAML is parsed, so validator files, RuleSet
+/// manifests, and rule files all report a malformed frontmatter the same way.
+fn parse_yaml_frontmatter(
+    rendered: &str,
+    validator_id: &str,
+) -> Result<serde_yaml_ng::Value, AvpError> {
+    serde_yaml_ng::from_str(rendered).map_err(|e| AvpError::Validator {
+        validator: validator_id.to_string(),
+        message: format!("failed to parse YAML frontmatter: {}", e),
+    })
+}
+
+/// Expand `@path/to/file` includes in a frontmatter YAML value when an
+/// expander is provided, naming `validator_id` in any error.
+///
+/// The one place includes are expanded, so validator files, RuleSet manifests,
+/// and rule files all expand `@file_groups/...` references identically.
+fn expand_yaml_includes<C: DirectoryConfig>(
+    yaml_value: serde_yaml_ng::Value,
+    expander: Option<&YamlExpander<C>>,
+    validator_id: &str,
+) -> Result<serde_yaml_ng::Value, AvpError> {
+    let Some(exp) = expander else {
+        return Ok(yaml_value);
+    };
+    exp.expand(yaml_value).map_err(|e| AvpError::Validator {
+        validator: validator_id.to_string(),
+        message: format!("failed to expand YAML includes: {}", e),
+    })
+}
+
+/// Run one frontmatter string through the full parse pipeline: Liquid render,
+/// YAML parse ([`parse_yaml_frontmatter`]), `@` include expansion
+/// ([`expand_yaml_includes`]), and typed deserialization.
+///
+/// `validator_id` names the file in every error; `what` names the deserialize
+/// target in its error message (`"frontmatter"` or `"manifest"`).
+fn parse_frontmatter_block<T, C>(
+    frontmatter_str: &str,
+    validator_id: &str,
+    what: &str,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<T, AvpError>
+where
+    T: serde::de::DeserializeOwned,
+    C: DirectoryConfig,
+{
+    let rendered = render_frontmatter(frontmatter_str);
+    let yaml_value = parse_yaml_frontmatter(&rendered, validator_id)?;
+    let yaml_value = expand_yaml_includes(yaml_value, expander, validator_id)?;
+    serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
+        validator: validator_id.to_string(),
+        message: format!("failed to deserialize {}: {}", what, e),
+    })
+}
+
 /// Parse a validator from markdown content with YAML frontmatter.
 ///
 /// # Format
@@ -155,30 +214,13 @@ fn parse_validator_internal<C: DirectoryConfig>(
     // Split on frontmatter delimiters
     let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
 
-    // Render Liquid template variables before YAML parsing
-    let rendered = render_frontmatter(frontmatter_str);
-
-    // Parse YAML frontmatter
-    let mut yaml_value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to parse YAML frontmatter: {}", e),
-        })?;
-
-    // Expand includes if an expander is provided
-    if let Some(exp) = expander {
-        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to expand YAML includes: {}", e),
-        })?;
-    }
-
-    // Deserialize to typed frontmatter
-    let mut frontmatter: ValidatorFrontmatter =
-        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to deserialize frontmatter: {}", e),
-        })?;
+    // Render, parse, expand, and deserialize the frontmatter
+    let mut frontmatter: ValidatorFrontmatter = parse_frontmatter_block(
+        frontmatter_str,
+        &path.display().to_string(),
+        "frontmatter",
+        expander,
+    )?;
 
     // Load source code patterns from expander for defaults
     let source_code_patterns: Option<Vec<String>> = expander.and_then(|exp| {
@@ -270,30 +312,13 @@ pub fn parse_ruleset_manifest<C: DirectoryConfig>(
     // Extract frontmatter and body (body is unused for manifest, but validates format)
     let (frontmatter_str, _body) = extract_frontmatter(content, dir_path)?;
 
-    // Render Liquid template variables before YAML parsing
-    let rendered = render_frontmatter(frontmatter_str);
-
-    // Parse YAML frontmatter
-    let mut yaml_value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
-            validator: format!("{}/VALIDATOR.md", dir_path.display()),
-            message: format!("failed to parse YAML frontmatter: {}", e),
-        })?;
-
-    // Expand includes if an expander is provided
-    if let Some(exp) = expander {
-        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
-            validator: format!("{}/VALIDATOR.md", dir_path.display()),
-            message: format!("failed to expand YAML includes: {}", e),
-        })?;
-    }
-
-    // Deserialize to typed manifest
-    let mut manifest: RuleSetManifest =
-        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
-            validator: format!("{}/VALIDATOR.md", dir_path.display()),
-            message: format!("failed to deserialize manifest: {}", e),
-        })?;
+    // Render, parse, expand, and deserialize the manifest frontmatter
+    let mut manifest: RuleSetManifest = parse_frontmatter_block(
+        frontmatter_str,
+        &format!("{}/VALIDATOR.md", dir_path.display()),
+        "manifest",
+        expander,
+    )?;
 
     // Apply defaults (name from directory, description, version)
     manifest.apply_defaults(dir_path);
@@ -393,30 +418,14 @@ pub fn parse_rule<C: DirectoryConfig>(
     // Extract frontmatter and body
     let (frontmatter_str, body) = extract_frontmatter(content, path)?;
 
-    // Render Liquid template variables before YAML parsing
-    let rendered = render_frontmatter(frontmatter_str);
-
-    // Parse YAML frontmatter
-    let mut yaml_value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(&rendered).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to parse YAML frontmatter: {}", e),
-        })?;
-
-    // Expand includes (e.g. `@file_groups/...` in a rule-level `match`)
-    if let Some(exp) = expander {
-        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to expand YAML includes: {}", e),
-        })?;
-    }
-
-    // Deserialize to typed frontmatter
-    let mut frontmatter: RuleFrontmatter =
-        serde_yaml_ng::from_value(yaml_value).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to deserialize frontmatter: {}", e),
-        })?;
+    // Render, parse, expand (e.g. `@file_groups/...` in a rule-level `match`),
+    // and deserialize the frontmatter
+    let mut frontmatter: RuleFrontmatter = parse_frontmatter_block(
+        frontmatter_str,
+        &path.display().to_string(),
+        "frontmatter",
+        expander,
+    )?;
 
     // Apply defaults (name from file stem, description)
     frontmatter.apply_defaults(path);
@@ -467,23 +476,10 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
     source: ValidatorSource,
     expander: Option<&YamlExpander<C>>,
 ) -> Result<RuleSet, AvpError> {
-    // Verify directory exists
-    if !dir_path.is_dir() {
-        return Err(AvpError::Validator {
-            validator: dir_path.display().to_string(),
-            message: "not a directory".to_string(),
-        });
-    }
+    let rules_dir = require_ruleset_layout(dir_path)?;
 
-    // Load and parse VALIDATOR.md manifest
+    // Load and parse the VALIDATOR.md manifest
     let manifest_path = dir_path.join("VALIDATOR.md");
-    if !manifest_path.exists() {
-        return Err(AvpError::Validator {
-            validator: dir_path.display().to_string(),
-            message: "missing VALIDATOR.md manifest".to_string(),
-        });
-    }
-
     let manifest_content =
         std::fs::read_to_string(&manifest_path).map_err(|e| AvpError::Validator {
             validator: manifest_path.display().to_string(),
@@ -498,22 +494,6 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
     let manifest_body = extract_frontmatter(&manifest_content, dir_path)
         .map(|(_, body)| body.trim().to_string())
         .unwrap_or_default();
-
-    // Load rules from rules/ directory
-    let rules_dir = dir_path.join("rules");
-    if !rules_dir.exists() {
-        return Err(AvpError::Validator {
-            validator: dir_path.display().to_string(),
-            message: "missing rules/ directory".to_string(),
-        });
-    }
-
-    if !rules_dir.is_dir() {
-        return Err(AvpError::Validator {
-            validator: dir_path.display().to_string(),
-            message: "rules/ is not a directory".to_string(),
-        });
-    }
 
     // Collect all .md files in rules/ directory
     let mut rules = Vec::new();
@@ -532,56 +512,18 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
         })?;
 
         let path = entry.path();
-
-        // Skip non-files and non-.md files
-        if !path.is_file() {
+        if !is_rule_file(&path) {
             continue;
         }
 
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-
-        // Skip partials
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with('_'))
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        // Parse the rule
-        let rule_content = std::fs::read_to_string(&path).map_err(|e| AvpError::Validator {
-            validator: path.display().to_string(),
-            message: format!("failed to read rule file: {}", e),
-        })?;
-
-        // A malformed rule (e.g. a bad `tool` block) never drops the whole
-        // set: skip the rule, record the failure so the lint surface reports
-        // it, and keep loading the rest of the set.
-        let rule = match parse_rule(&rule_content, &path, expander) {
-            Ok(rule) => rule,
-            Err(e) => {
-                tracing::warn!("Failed to parse rule at {}: {}", path.display(), e);
-                rule_failures.push(RuleLoadFailure {
-                    path: path.clone(),
-                    error: e.to_string(),
-                });
-                continue;
-            }
-        };
-
-        // Check for duplicate rule names
-        if !rule_names.insert(rule.name.clone()) {
-            return Err(AvpError::Validator {
-                validator: dir_path.display().to_string(),
-                message: format!("duplicate rule name '{}' in RuleSet", rule.name),
-            });
-        }
-
-        rules.push(rule);
+        parse_rule_in_set(
+            &path,
+            dir_path,
+            expander,
+            &mut rules,
+            &mut rule_failures,
+            &mut rule_names,
+        )?;
     }
 
     // Sort rules by name for deterministic ordering
@@ -595,6 +537,89 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
         source,
         base_path: dir_path.to_path_buf(),
     })
+}
+
+/// Verify the RuleSet directory layout and return its `rules/` directory.
+///
+/// Checks, in order: `dir_path` is a directory, `VALIDATOR.md` exists,
+/// `rules/` exists, and `rules/` is a directory. Each failure is one
+/// [`AvpError::Validator`] naming the set directory.
+fn require_ruleset_layout(dir_path: &Path) -> Result<PathBuf, AvpError> {
+    let layout_error = |message: &str| AvpError::Validator {
+        validator: dir_path.display().to_string(),
+        message: message.to_string(),
+    };
+
+    if !dir_path.is_dir() {
+        return Err(layout_error("not a directory"));
+    }
+    if !dir_path.join("VALIDATOR.md").exists() {
+        return Err(layout_error("missing VALIDATOR.md manifest"));
+    }
+
+    let rules_dir = dir_path.join("rules");
+    if !rules_dir.exists() {
+        return Err(layout_error("missing rules/ directory"));
+    }
+    if !rules_dir.is_dir() {
+        return Err(layout_error("rules/ is not a directory"));
+    }
+
+    Ok(rules_dir)
+}
+
+/// Whether a `rules/` directory entry is a rule file: a `.md` file whose name
+/// does not start with `_` (partials are template includes, not rules).
+fn is_rule_file(path: &Path) -> bool {
+    path.is_file()
+        && path.extension().and_then(|s| s.to_str()) == Some("md")
+        && !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('_'))
+            .unwrap_or(false)
+}
+
+/// Parse one rule file into the set being built.
+///
+/// A malformed rule (e.g. a bad `tool` block) never drops the whole set: the
+/// rule is skipped and recorded in `rule_failures`, so the lint surface
+/// (`check validators`) reports it. A duplicate rule name is a set-level
+/// error, because two same-named rules cannot both be addressed.
+fn parse_rule_in_set<C: DirectoryConfig>(
+    path: &Path,
+    dir_path: &Path,
+    expander: Option<&YamlExpander<C>>,
+    rules: &mut Vec<Rule>,
+    rule_failures: &mut Vec<RuleLoadFailure>,
+    rule_names: &mut std::collections::HashSet<String>,
+) -> Result<(), AvpError> {
+    let rule_content = std::fs::read_to_string(path).map_err(|e| AvpError::Validator {
+        validator: path.display().to_string(),
+        message: format!("failed to read rule file: {}", e),
+    })?;
+
+    let rule = match parse_rule(&rule_content, path, expander) {
+        Ok(rule) => rule,
+        Err(e) => {
+            tracing::warn!("Failed to parse rule at {}: {}", path.display(), e);
+            rule_failures.push(RuleLoadFailure {
+                path: path.to_path_buf(),
+                error: e.to_string(),
+            });
+            return Ok(());
+        }
+    };
+
+    if !rule_names.insert(rule.name.clone()) {
+        return Err(AvpError::Validator {
+            validator: dir_path.display().to_string(),
+            message: format!("duplicate rule name '{}' in RuleSet", rule.name),
+        });
+    }
+
+    rules.push(rule);
+    Ok(())
 }
 
 #[cfg(test)]
