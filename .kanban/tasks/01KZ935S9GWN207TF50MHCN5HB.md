@@ -114,6 +114,63 @@ comments:
     - evidence: 6 files — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/validators/types.rs, crates/swissarmyhammer-validators/src/validators/loader.rs. All 3 review findings checked off. Tests: nextest -p swissarmyhammer-validators -p swissarmyhammer-cli 1148 passed / 0 failed / 0 skipped; workspace check + clippy + fmt clean.
     - next: /review
   timestamp: 2026-08-06T22:22:45.722198+00:00
+- actor: claude-code
+  id: 01kzckq6de9z9gm1ay9agccet5
+  text: |
+    ### review — findings
+    - scope: `review sha HEAD~1..HEAD` (9e9a49f01)
+    - prior 3 findings verified closed: `resolve_workspace_root` exists at components/mod.rs:332 and serves all 3 call sites; the duplicate ruleset sorts are gone from doctor.rs and `list_rulesets` documents name order on the BTreeMap; `project_tool_rules` lives once in review/tool_rules.rs:445, imported by doctor.rs:33 and tool_install.rs:427.
+    - counts: 7 findings, 7 confirmed, 1 refuted, 18 attempted, 0 failed, 0 skipped.
+    - recorded: 3 findings — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:132, :162, :233 (the residual match block around resolve_workspace_root repeats verbatim at all three sites).
+    - dropped under the review skill's existing-test exception: 4 findings on crates/swissarmyhammer-validators/src/validators/types.rs:1500, :1616, :1823, :1844 (named constants for hardcoded timeouts in tests that already existed; this commit added only `criteria_applies` to that file).
+    - no over-cap or batch-budget flags in this run, so nothing to log on ^tsram0q.
+    - next: close the 3 mod.rs findings, then re-review.
+  timestamp: 2026-08-06T22:39:49.678760+00:00
+- actor: claude-code
+  id: 01kzckqw96gerqmskq1h1b756m
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 6 files; the 3 prior findings are closed and verified
+    - test: green — cargo nextest run --workspace 13651 passed, fmt clean, clippy clean
+    - commit: 9e9a49f01
+    - review: findings — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:132, mod.rs:162, mod.rs:233 (the match block around the extracted call is repeated verbatim at three sites)
+  timestamp: 2026-08-06T22:40:12.070241+00:00
+- actor: claude-code
+  id: 01kzckzbpvry74cgyx7qm44s3h
+  text: |-
+    Findings pass 2 — the three mod.rs findings are closed at the root.
+
+    What the last pass got wrong: it extracted only the `map_err` half. `resolve_workspace_root(&str) -> Result<PathBuf, Vec<InitResult>>` returned a `Result` that the caller still had to open, so each of the three call sites kept the same 4-line `match ... { Ok(root) => root, Err(failure) => return failure }` block. Removing a duplicated expression left the duplicated control flow behind. That is the shape the finding names.
+
+    The fix inverts the direction. `resolve_workspace_root` is deleted. In its place:
+
+        fn with_workspace_root(
+            component: &str,
+            work: impl FnOnce(PathBuf) -> Vec<InitResult>,
+        ) -> Vec<InitResult>
+
+    The helper now owns BOTH halves — the resolution and the branch on its failure. Each lifecycle body passes itself in as `work` and never sees a `Result`:
+    - `ProjectStructure::init`
+    - `ProjectStructure::deinit`
+    - `ValidatorTools::init`
+
+    There is exactly one `match` on the root in the file, inside `with_workspace_root`. What repeats at the three sites is the single line `with_workspace_root(self.name(), |root| {` — a forwarding call with no logic in it, which cannot drift. The duplication cannot come back in another shape because there is no branch left at a call site to copy.
+
+    Two doc repairs found while working the file:
+    - The doc block above the old `resolve_workspace_root` had absorbed `workspace_root`'s own paragraph, and `workspace_root` was left with no doc at all. Each function now carries its own.
+    - `ProjectStructure::init` and `ValidatorTools::init` both said "Root resolution stays here". It does not any more; both now name `with_workspace_root` as where they read the root.
+
+    Behavior is unchanged, and the existing guard proves it: `test_project_structure_round_trips_from_a_subdirectory` drives `init` then `deinit` from a subdirectory of a real repository and asserts both halves target the repository root — it passes through the closure form.
+
+    Tests: `cargo nextest run -p swissarmyhammer-cli` 698 passed, 0 failed, 0 skipped (24 of them the components module). `cargo clippy -p swissarmyhammer-cli --all-targets --all-features -- -D warnings` clean, `cargo fmt --all` clean. `rg resolve_workspace_root` shows no caller left in the CLI; the two remaining hits are an unrelated same-named function in swissarmyhammer-tools/src/mcp/server.rs.
+  timestamp: 2026-08-06T22:44:17.243990+00:00
+- actor: claude-code
+  id: 01kzckzgstscs8ztbxtkyg3k3m
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. `resolve_workspace_root` replaced by `with_workspace_root(component, work)`, which owns the resolve-and-branch control flow; all 3 match blocks removed. All 3 review findings checked off. Tests: nextest -p swissarmyhammer-cli 698 passed / 0 failed / 0 skipped; clippy -D warnings clean; fmt clean.
+    - next: /review
+  timestamp: 2026-08-06T22:44:22.458962+00:00
 depends_on:
 - 01KZ935GJX1YS2EAD7C2HK89AJ
 position_column: doing
@@ -142,3 +199,9 @@ Acceptance:
 - [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:239` — Duplicated workspace-root error-handling pattern: ValidatorTools::init inlines the same `workspace_root().map_err()` error conversion that ProjectStructure has already extracted as the `root_or_error` helper method (lines 90–92). The pattern repeats verbatim, differing only in expression form (match statement vs method wrapper). This creates maintenance burden if the error-handling shape ever changes—both sites must be kept in sync. Extract a module-level helper function `fn resolve_workspace_root<T: Initializable>(component: &T) -> Result<PathBuf, Vec<InitResult>> { workspace_root().map_err(|e| vec![InitResult::error(component.name(), e)]) }` and call it from both ProjectStructure and ValidatorTools. Alternatively, add this as a default method to the Initializable trait (though that lives in another crate). Either approach eliminates the duplicate and makes the error handling single-source.
 - [x] `crates/swissarmyhammer-validators/src/doctor.rs:206` — Duplicated ruleset-fetching and sorting pattern: `check_review_engine_with` (lines 206–207) and `project_tool_rules` (lines 253–254) both begin with the identical sequence: `let mut rulesets = loader.list_rulesets();` followed immediately by `rulesets.sort_by(|a, b| a.name().cmp(b.name()));`. Both functions need sorted rulesets as their foundation, yet neither extracts this common operation. The duplication creates maintenance burden if the sort order or fetch method ever changes. Extract a module-level helper function `fn sorted_rulesets(loader: &ValidatorLoader) -> Vec<RuleSet> { let mut rulesets = loader.list_rulesets(); rulesets.sort_by(|a, b| a.name().cmp(b.name())); rulesets }` and call it from both check_review_engine_with and project_tool_rules. This eliminates the duplicate and makes the expected ordering explicit and centralized.
 - [x] `crates/swissarmyhammer-validators/src/doctor.rs:249` — The new `project_tool_rules` function duplicates or closely parallels the existing `plan_tool_rules` function in tool_rules.rs. The comment explicitly states this is 'the ONE selection pass over the loader' — selection logic should exist in exactly one place, not duplicated across modules. Both doctor and installer need to see the same rules to stay in sync; this should be in tool_rules.rs where all tool-rule utilities live. Move the `project_tool_rules` logic into tool_rules.rs (or rename/generalize `plan_tool_rules` if it already exists there) so both doctor and installer import the same function. Ensure the single implementation is at the canonical location for tool-rule utilities, not split across doctor.rs and tool_rules.rs.
+
+## Review Findings (2026-08-06 17:30)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:132` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This pattern appears three times across two structs (ProjectStructure and ValidatorTools) with identical error handling logic, inflating surface area for maintenance. Extract a helper function `fn get_initializable_root(component: &dyn Initializable) -> Result<PathBuf, Vec<InitResult>>` that wraps the call to `resolve_workspace_root(component.name())`, then replace all three blocks with a single invocation. Alternatively, check if the `?` operator can be used if the error type is compatible with the function's return type.
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:162` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This block is the second occurrence of three identical blocks. Extract shared helper function (see line 132 finding).
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:233` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This block is the third occurrence of three identical blocks across different structs. Extract shared helper function (see line 132 finding).

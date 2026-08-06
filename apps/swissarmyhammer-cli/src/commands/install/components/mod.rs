@@ -122,32 +122,28 @@ impl Initializable for ProjectStructure {
 
     /// Create the project directory structure with .prompts, .sah, and workflows.
     ///
-    /// Resolves the project root (git root, else the current directory) and
-    /// delegates the actual creation to the root-explicit
-    /// [`create_workspace_structure`]. Root resolution stays here because the
-    /// CLI is rooted at the process working directory by design; the creation
-    /// itself is root-explicit so it is unit-testable without touching the
-    /// process CWD.
+    /// Reads the project root through [`with_workspace_root`] and delegates the
+    /// actual creation to the root-explicit [`create_workspace_structure`].
+    /// Root resolution is a lifecycle concern because the CLI is rooted at the
+    /// process working directory by design; the creation itself is
+    /// root-explicit so it is unit-testable without touching the process CWD.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match resolve_workspace_root(self.name()) {
-            Ok(root) => root,
-            Err(failure) => return failure,
-        };
+        with_workspace_root(self.name(), |root| {
+            let sah_root = match create_workspace_structure(&root) {
+                Ok(sah_root) => sah_root,
+                Err(e) => return vec![InitResult::error(self.name(), e)],
+            };
 
-        let sah_root = match create_workspace_structure(&root) {
-            Ok(sah_root) => sah_root,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
-        };
+            reporter.emit(&InitEvent::Action {
+                verb: "Created".to_string(),
+                message: format!("workspace structure at {}", sah_root.display()),
+            });
 
-        reporter.emit(&InitEvent::Action {
-            verb: "Created".to_string(),
-            message: format!("workspace structure at {}", sah_root.display()),
-        });
-
-        vec![InitResult::ok(
-            self.name(),
-            "Workspace structure initialized",
-        )]
+            vec![InitResult::ok(
+                self.name(),
+                "Workspace structure initialized",
+            )]
+        })
     }
 
     /// Remove `.sah/` and `.prompts/` directories if `remove_directory` is true.
@@ -159,20 +155,17 @@ impl Initializable for ProjectStructure {
             )];
         }
 
-        let root = match resolve_workspace_root(self.name()) {
-            Ok(root) => root,
-            Err(failure) => return failure,
-        };
-
-        for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME] {
-            if let Some(failure) =
-                remove_directory_if_exists(&root, dir_name, self.name(), reporter)
-            {
-                return vec![failure];
+        with_workspace_root(self.name(), |root| {
+            for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME] {
+                if let Some(failure) =
+                    remove_directory_if_exists(&root, dir_name, self.name(), reporter)
+                {
+                    return vec![failure];
+                }
             }
-        }
 
-        vec![InitResult::ok(self.name(), "Project directories removed")]
+            vec![InitResult::ok(self.name(), "Project directories removed")]
+        })
     }
 }
 
@@ -226,32 +219,30 @@ impl Initializable for ValidatorTools {
 
     /// Pre-install the runner tools for the workspace under installation.
     ///
-    /// Root resolution stays here — the CLI is rooted at the process working
-    /// directory by design — and the work itself is the loader-free
-    /// [`install_tool_rules_with`], which tests drive with a synthetic loader.
+    /// Reads the project root through [`with_workspace_root`] — the CLI is
+    /// rooted at the process working directory by design — and leaves the work
+    /// itself to the loader-free [`install_tool_rules_with`], which tests drive
+    /// with a synthetic loader.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match resolve_workspace_root(self.name()) {
-            Ok(root) => root,
-            Err(failure) => return failure,
-        };
+        with_workspace_root(self.name(), |root| {
+            let loader = match swissarmyhammer_validators::load_rules() {
+                Ok(loader) => loader,
+                Err(e) => {
+                    return vec![InitResult::error(
+                        self.name(),
+                        format!("failed to load the validator stack: {e}"),
+                    )]
+                }
+            };
+            let project_types = detected_project_type_keys(&root);
 
-        let loader = match swissarmyhammer_validators::load_rules() {
-            Ok(loader) => loader,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("failed to load the validator stack: {e}"),
-                )]
-            }
-        };
-        let project_types = detected_project_type_keys(&root);
-
-        vec![install_tool_rules_with(
-            self.name(),
-            &loader,
-            &project_types,
-            reporter,
-        )]
+            vec![install_tool_rules_with(
+                self.name(),
+                &loader,
+                &project_types,
+                reporter,
+            )]
+        })
     }
 
     /// Uninstall nothing — see the struct-level documentation.
@@ -316,23 +307,33 @@ fn tool_rule_label(install: &ToolRuleInstall) -> String {
     format!("{}/{}", install.set_name(), install.rule_name())
 }
 
-/// Resolve the project root the components act on: the git repository root,
-/// else the process working directory.
+/// Run `work` on the project root, or report the failure to resolve it as
+/// `component`'s single errored result.
+///
+/// The ONE place the "resolve the root, else report" control flow lives. Every
+/// lifecycle body that needs the root — [`ProjectStructure::init`],
+/// [`ProjectStructure::deinit`], [`ValidatorTools::init`] — passes itself here
+/// as `work` instead of resolving and branching on its own, so neither the
+/// resolution nor the failure shape is written twice, and a change to either
+/// happens in this function alone.
+fn with_workspace_root(
+    component: &str,
+    work: impl FnOnce(PathBuf) -> Vec<InitResult>,
+) -> Vec<InitResult> {
+    match workspace_root() {
+        Ok(root) => work(root),
+        Err(e) => vec![InitResult::error(component, e)],
+    }
+}
+
+/// The project root the components act on: the git repository root, else the
+/// process working directory.
 ///
 /// [`ProjectStructure::init`] and [`ProjectStructure::deinit`] must agree on
 /// this, or a `deinit` run from a subdirectory would look for a workspace that
 /// `init` created at the git root. [`ValidatorTools::init`] reads the same root
 /// so it detects the project types of the workspace `sah init` is installing.
-/// The project root `component` acts on, or the single errored result it
-/// reports when the root cannot be resolved.
-///
-/// The ONE conversion from a failed root resolution to a lifecycle result:
-/// every component that needs the root reports the failure in the same shape,
-/// so that shape changes in one place.
-fn resolve_workspace_root(component: &str) -> Result<PathBuf, Vec<InitResult>> {
-    workspace_root().map_err(|e| vec![InitResult::error(component, e)])
-}
-
+/// [`with_workspace_root`] is how all three read it.
 fn workspace_root() -> Result<PathBuf, String> {
     if let Some(root) = swissarmyhammer_common::utils::find_git_repository_root() {
         return Ok(root);
