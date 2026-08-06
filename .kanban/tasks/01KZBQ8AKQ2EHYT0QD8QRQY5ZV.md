@@ -39,6 +39,47 @@ comments:
     - next: hand back to the caller for review/commit.
     task: ^qrqy5zv
   timestamp: 2026-08-06T14:56:16.267745+00:00
+- actor: claude-code
+  id: 01kzbsjveqmg1ae4rgkjmqje0v
+  text: |
+    ### review — findings
+    - evidence: 1 finding (1 confirmed, 0 refuted) on scope `review sha HEAD~1..HEAD` (915b7d542) — apps/swissarmyhammer-cli/src/commands/install/deinit.rs:108
+    - next: fix the finding in the `## Review Findings (2026-08-06 09:57)` section, then re-run /review
+  timestamp: 2026-08-06T15:03:04.407157+00:00
+- actor: claude-code
+  id: 01kzbskr489fwwc552vjbyqtkh
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 4 files, 145 insertions, 47 deletions (mirdan profile.rs, status.rs, edit_redirect_tests.rs, profile_tests.rs)
+    - test: green — cargo fmt --check clean; cargo clippy --workspace --all-targets -D warnings clean; cargo nextest run -E 'rdeps(mirdan)' 3231 passed, 0 failed, 0 skipped. Blast radius fixed one reverse-dependency test in apps/swissarmyhammer-cli/src/commands/install/deinit.rs
+    - commit: 915b7d542
+    - review: findings — apps/swissarmyhammer-cli/src/commands/install/deinit.rs:108 (test_deinit_removes_bash_from_profile_managed_settings seeds all four SUPERSEDED_NATIVE_DENY_TOOLS but asserts only Bash is absent; must loop the constant and assert each of the four)
+  timestamp: 2026-08-06T15:03:33.768385+00:00
+- actor: claude-code
+  id: 01kzbt2sdnnvcfp638cc5231fs
+  text: |-
+    Fixed the review finding in `apps/swissarmyhammer-cli/src/commands/install/deinit.rs`. The finding, word for word: the test `test_deinit_removes_bash_from_profile_managed_settings` seeds all four tools from `SUPERSEDED_NATIVE_DENY_TOOLS` but only asserts that 'Bash' is removed; the assertion must loop over the constant and assert each of the four is absent.
+
+    The cause is a hardcoded single tool name where the constant drives the behavior. I removed that cause from the whole file, not only the named line:
+
+    - `test_deinit_removes_bash_from_profile_managed_settings` is renamed `test_deinit_removes_superseded_natives_from_profile_managed_settings`. It now loops `SUPERSEDED_NATIVE_DENY_TOOLS` and asserts each entry is absent.
+    - The sibling test had the same partial-assertion shape: `test_deinit_does_not_reallow_bash` seeded only `["Bash"]` into `settings.local.json` and asserted only `Bash` survives, although the sticky-file contract holds for every entry of the roster. It is renamed `test_deinit_does_not_reallow_superseded_natives`, seeds the whole roster, and loops the constant to assert each entry survives.
+    - Both tests seeded the tool names as JSON string literals. The literals are gone: a new fixture helper, `seed_superseded_deny(home, file_name)`, builds `permissions.deny` from the constant, so a tool added to the roster is seeded too. A second helper, `deny_entries(path)`, reads the array back. The helpers also keep the two tests free of duplicated read/parse code.
+
+    TDD record (RED observed for each assertion loop, then reverted):
+    - Removal direction: temporarily made `apply_edit_redirect_at` skip `Read` on removal. RED: "Read must be removed from settings.json's permissions.deny by deinit (it is part of SUPERSEDED_NATIVE_DENY_TOOLS), got [\"Read\"]". The old Bash-only assertion passed under the same break — this is exactly the silent breakage the finding names.
+    - Sticky direction: temporarily simulated a deinit that strips `Read` from `settings.local.json`. RED: "Read must remain in settings.local.json's permissions.deny after deinit (the serve-time deny is sticky), got [\"Bash\", \"Edit\", \"Write\"]". A Bash-only assertion would have passed.
+    - GREEN after both reverts: 14 deinit tests run, 14 passed.
+
+    No production code changed — the finding is about test assertions, and the removal logic already iterates the constant correctly.
+  timestamp: 2026-08-06T15:11:46.613150+00:00
+- actor: claude-code
+  id: 01kzbt36t9xk312ht5g58b63b9
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/deinit.rs (132 lines changed). `cargo fmt` applied. `cargo clippy --workspace --all-targets -- -D warnings`: clean. `cargo nextest run -E 'rdeps(mirdan)'`: 3231 tests run, 3231 passed, 0 skipped. Review finding checked off in the `## Review Findings (2026-08-06 09:57)` section.
+    - next: /review
+  timestamp: 2026-08-06T15:12:00.329886+00:00
 position_column: doing
 position_ordinal: '8380'
 title: 'One deny set for superseded natives: add Bash + Read, make the doctor probe agree'
@@ -95,3 +136,7 @@ Accepted consequences, agreed with the user:
 - Use `/tdd` — write failing tests first, then implement to make them pass.
 
 #mirdan #init-doctor #bug
+
+## Review Findings (2026-08-06 09:57)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/install/deinit.rs:108` — The test `test_deinit_removes_bash_from_profile_managed_settings` seeds all four tools from `SUPERSEDED_NATIVE_DENY_TOOLS` (line 94) but only asserts that 'Bash' is removed (line 108). Since the code removes all four tools via iteration over the constant, the test assertion should verify all four are gone to prevent silent breakage if the removal logic ever skips Edit, Read, or Write. Replace the single Bash assertion with a loop that iterates over `SUPERSEDED_NATIVE_DENY_TOOLS` and asserts each tool is absent: `for tool in SUPERSEDED_NATIVE_DENY_TOOLS { assert!(!deny.iter().any(|v| v.as_str() == Some(tool)), "{tool} must be removed"); }`.
