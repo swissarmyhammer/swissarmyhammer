@@ -129,7 +129,7 @@ impl Initializable for ProjectStructure {
     /// root-explicit so it is unit-testable without touching the process CWD.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         with_workspace_root(self.name(), |root| {
-            let sah_root = match create_workspace_structure(&root) {
+            let sah_root = match create_workspace_structure(root) {
                 Ok(sah_root) => sah_root,
                 Err(e) => return vec![InitResult::error(self.name(), e)],
             };
@@ -158,7 +158,7 @@ impl Initializable for ProjectStructure {
         with_workspace_root(self.name(), |root| {
             for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME] {
                 if let Some(failure) =
-                    remove_directory_if_exists(&root, dir_name, self.name(), reporter)
+                    remove_directory_if_exists(root, dir_name, self.name(), reporter)
                 {
                     return vec![failure];
                 }
@@ -234,7 +234,7 @@ impl Initializable for ValidatorTools {
                     )]
                 }
             };
-            let project_types = detected_project_type_keys(&root);
+            let project_types = detected_project_type_keys(root);
 
             vec![install_tool_rules_with(
                 self.name(),
@@ -316,12 +316,15 @@ fn tool_rule_label(install: &ToolRuleInstall) -> String {
 /// as `work` instead of resolving and branching on its own, so neither the
 /// resolution nor the failure shape is written twice, and a change to either
 /// happens in this function alone.
+///
+/// `work` borrows the root rather than owning it: every lifecycle body only
+/// reads the path, and each function it hands the root to takes `&Path`.
 fn with_workspace_root(
     component: &str,
-    work: impl FnOnce(PathBuf) -> Vec<InitResult>,
+    work: impl FnOnce(&Path) -> Vec<InitResult>,
 ) -> Vec<InitResult> {
     match workspace_root() {
-        Ok(root) => work(root),
+        Ok(root) => work(&root),
         Err(e) => vec![InitResult::error(component, e)],
     }
 }

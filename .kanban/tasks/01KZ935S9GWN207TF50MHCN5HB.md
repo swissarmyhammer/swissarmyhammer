@@ -171,6 +171,54 @@ comments:
     - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. `resolve_workspace_root` replaced by `with_workspace_root(component, work)`, which owns the resolve-and-branch control flow; all 3 match blocks removed. All 3 review findings checked off. Tests: nextest -p swissarmyhammer-cli 698 passed / 0 failed / 0 skipped; clippy -D warnings clean; fmt clean.
     - next: /review
   timestamp: 2026-08-06T22:44:22.458962+00:00
+- actor: claude-code
+  id: 01kzcmsdpgfxkpype0jsd8ya9f
+  text: |
+    ### review — findings
+    - scope: review sha HEAD~1..HEAD (fdd366639)
+    - prior findings verified closed: with_workspace_root is the one owner at components/mod.rs:319, called at 131/158/227 with no local branch; the list_rulesets re-sort pair is gone (loader.rs:418 owns the order); project_tool_rules lives once at tool_rules.rs:445 and both doctor.rs:33 and tool_install.rs:427 import it.
+    - evidence: 1 finding, 1 confirmed, 3 refuted, 9 attempted — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:321
+    - next: take the &Path signature finding on with_workspace_root, then re-review.
+  timestamp: 2026-08-06T22:58:31.248939+00:00
+- actor: claude-code
+  id: 01kzcmt7ns4s01f5s73e5wfckr
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs; the 3 prior findings are closed and verified in the tree
+    - test: green — cargo nextest run --workspace 13651 passed, fmt clean, clippy clean
+    - commit: fdd366639
+    - review: findings — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:321 (with_workspace_root takes PathBuf where &Path fits)
+    - guardrail: no repeat. Each round names a different cause at a different line. No no-change round.
+  timestamp: 2026-08-06T22:58:57.849647+00:00
+- actor: claude-code
+  id: 01kzcmzwaz82ent3cnwxfa01mv
+  text: |-
+    Findings pass 3 — the `&Path` finding is closed, and the whole file is swept for the same cause.
+
+    The finding: `with_workspace_root` took `work: impl FnOnce(PathBuf) -> Vec<InitResult>` where `&Path` fits. The rust api-design rule states it word for word: "Accept generics, not concrete types. `&str` not `&String`, `&[T]` not `&Vec<T>`, `impl IntoIterator` not `&Vec<T>`, `AsRef<Path>` not `&PathBuf`."
+
+    The fix:
+    - `work: impl FnOnce(&Path) -> Vec<InitResult>`, and the body calls `work(&root)`. The higher-ranked bound is free here because the return type borrows nothing from the path.
+    - The three call sites drop the `&` on the call they forward the root to: `create_workspace_structure(root)` in `ProjectStructure::init`, `remove_directory_if_exists(root, ...)` in `ProjectStructure::deinit`, `detected_project_type_keys(root)` in `ValidatorTools::init`. Each of those three functions already took `&Path`, so the owned `PathBuf` was re-borrowed at every site — the closure parameter was the only owned link in the chain.
+    - The doc on `with_workspace_root` now records that `work` borrows the root and that each function it hands the root to takes `&Path`.
+
+    The sweep over the whole file, per the "one example of a cause" rule: every other parameter in the file is already borrowed or generic. `remove_directory_if_exists(root: &Path, dir_name: &str, component: &str, reporter: &dyn InitReporter)`, `create_workspace_structure(root: &Path)`, `install_tool_rules_with(component: &str, loader: &ValidatorLoader, project_types: &[String], reporter: &dyn InitReporter)` — a slice, not `&Vec<String>` — `tool_rule_label(install: &ToolRuleInstall)`, and the test helper `tool_rule_loader(marker: &Path, install_commands: &[&str])`. Line 321 was the single owned-where-borrowed parameter in the file.
+
+    Two owned values that stay owned, and why they are not the same defect:
+    - `workspace_root() -> Result<PathBuf, String>` and `create_workspace_structure(...) -> Result<PathBuf, String>` are RETURN types. They hand back a value the caller owns; there is nothing to borrow from.
+    - `SwissarmyhammerDirectory::from_custom_root(root.to_path_buf())` inside `create_workspace_structure` takes an owned `PathBuf` by that type's own signature, in another crate. Changing that is a different API, not this file.
+
+    Behavior is unchanged, and the existing guard proves it through the new closure shape: `test_project_structure_round_trips_from_a_subdirectory` drives `init` then `deinit` from a subdirectory of a real repository and asserts both halves target the repository root.
+
+    Tests: `cargo nextest run -p swissarmyhammer-cli` 698 passed, 0 failed, 0 skipped — the same count as the previous pass, as a pure signature change should give. `cargo clippy -p swissarmyhammer-cli --all-targets --all-features -- -D warnings` clean, `cargo fmt --all --check` clean.
+  timestamp: 2026-08-06T23:02:02.847956+00:00
+- actor: claude-code
+  id: 01kzcn01z3z2ye8b9w11kqe739
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. `with_workspace_root` now takes `work: impl FnOnce(&Path) -> Vec<InitResult>` and calls `work(&root)`; the three call sites pass `root` without the `&`. The file is swept: line 321 held the only owned-where-borrowed parameter. The 1 open review finding is checked off. Tests: nextest -p swissarmyhammer-cli 698 passed / 0 failed / 0 skipped; clippy -D warnings clean; fmt clean.
+    - next: /review
+  timestamp: 2026-08-06T23:02:08.611474+00:00
 depends_on:
 - 01KZ935GJX1YS2EAD7C2HK89AJ
 position_column: doing
@@ -205,3 +253,7 @@ Acceptance:
 - [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:132` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This pattern appears three times across two structs (ProjectStructure and ValidatorTools) with identical error handling logic, inflating surface area for maintenance. Extract a helper function `fn get_initializable_root(component: &dyn Initializable) -> Result<PathBuf, Vec<InitResult>>` that wraps the call to `resolve_workspace_root(component.name())`, then replace all three blocks with a single invocation. Alternatively, check if the `?` operator can be used if the error type is compatible with the function's return type.
 - [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:162` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This block is the second occurrence of three identical blocks. Extract shared helper function (see line 132 finding).
 - [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:233` — Verbatim duplication: the resolve_workspace_root match pattern is repeated identically at lines 132, 162, and 233. This block is the third occurrence of three identical blocks across different structs. Extract shared helper function (see line 132 finding).
+
+## Review Findings (2026-08-06 17:51)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:321` — Function accepts concrete `PathBuf` type when generic reference type `&Path` is more appropriate. All callers only borrow the path; passing owned value is unnecessary and not idiomatic. Change signature to `work: impl FnOnce(&Path) -> Vec<InitResult>` and call site to `work(&root)` at line 324. Update all three callers to remove the `&` when passing root to downstream functions (e.g., `create_workspace_structure(root)` instead of `create_workspace_structure(&root)`).
