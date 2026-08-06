@@ -141,6 +141,29 @@ comments:
     - evidence: 8 files — crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/backend.rs (Send assertion + !Sync cause documented), crates/swissarmyhammer-validators/src/review/fleet/prime.rs (uniform `run = %name`), crates/swissarmyhammer-validators/src/review/scope/batch.rs (generic `F: Fn(&FileWork) -> usize`), crates/swissarmyhammer-validators/src/review/scope/resolve.rs (derives + doc), crates/swissarmyhammer-sem/src/git_types.rs (FileChange + PartialEq/Eq), plus call-site `&` removals in synthesize.rs, fleet/tests.rs, scope/tests.rs. 15/15 findings checked: 7 point findings fixed; 8 over-cap split findings not actioned — prompt-cap budget instability, see ^tsram0q — and split work reverted to HEAD. fmt clean; clippy -D warnings clean; nextest rdeps(swissarmyhammer-validators) 3173/3173 pass.
     - next: test
   timestamp: 2026-08-06T18:49:25.881524+00:00
+- actor: claude-code
+  id: 01kzc77qxt0s7cgnqwzpvbsggw
+  text: |-
+    ### review — findings
+    - evidence: 3 findings — crates/swissarmyhammer-sem/src/git_types.rs:3, crates/swissarmyhammer-sem/src/git_types.rs:4, crates/swissarmyhammer-sem/src/git_types.rs:33 (scope: HEAD~1..HEAD, checkpoint 1c6407b3b; engine counts: 4 findings, 4 confirmed, 13 refuted; 1 finding dropped per the review skill's test-code exception — scope/tests.rs:155 targets test lines that predate this commit; 0 over-cap flags, no new ^tsram0q evidence)
+    - next: resolve the 3 open findings in git_types.rs, then re-run /review ^cbnfe97
+  timestamp: 2026-08-06T19:01:40.410162+00:00
+- actor: claude-code
+  id: 01kzc78j443bc4pmme3af4afx7
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 7 point findings fixed; 8 over-cap findings checked as not actioned per the watching session's direction (budget instability → ^tsram0q); second-round split work reverted; 8 files
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators) | rdeps(swissarmyhammer-sem)', 3470 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 1c6407b3b
+    - review: findings — 3 open, all crates/swissarmyhammer-sem/src/git_types.rs: :3 (DiffScope PartialEq/Eq), :4 (DiffScope doc comment), :33 (CommitInfo PartialEq/Eq). No fresh over-cap flags this pass (skipped_files empty).
+  timestamp: 2026-08-06T19:02:07.236237+00:00
+- actor: claude-code
+  id: 01kzc7fr0aew95z2d8fvwkywq1
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. All 3 findings from 2026-08-06 13:53 worked and checked: DiffScope gets `PartialEq, Eq` (:3), DiffScope gets a doc comment (:4), CommitInfo gets `PartialEq, Eq` (:33). Full-file sweep per the rules: module doc added; FileStatus, FileChange, and all variants and fields get doc comments; every comparable public type now derives PartialEq + Eq (FileStatus and FileChange already had them). Verification: cargo nextest run -p swissarmyhammer-sem 297/297 pass; cargo clippy -p swissarmyhammer-sem --all-targets -- -D warnings clean; cargo check --workspace --all-targets clean; cargo fmt --check clean.
+    - next: test
+  timestamp: 2026-08-06T19:06:02.634387+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
@@ -241,3 +264,13 @@ mod send_sync_assertions {
 - [x] `crates/swissarmyhammer-validators/src/review/scope/resolve.rs:607` — Public function `FileChangeBuilder::new()` lacks documentation. Every other public method in the file is documented; this inconsistency violates Rust documentation conventions for public items. Add a doc comment such as `/// Create a new, empty [`FileChangeBuilder`].` before the `new()` function definition.
 - [x] `crates/swissarmyhammer-validators/src/review/synthesize.rs:1` — This file exceeds the review prompt cap — 157073 rendered bytes against the 54338-byte batch budget — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1` — This file exceeds the review prompt cap — 100176 rendered bytes against the 54338-byte batch budget — so these validators could not review it: duplication, reuse. Split the file into smaller modules that fit the review prompt cap. — not actioned — prompt-cap budget instability, see ^tsram0q
+
+## Review Findings (2026-08-06 13:53)
+
+> Scope: checkpoint 1c6407b3b (HEAD~1..HEAD at review time).
+> Note: 1 engine finding was dropped per the review skill's written exception — its subject was a change to test code that existed before this commit (`scope/tests.rs:155` — the padding lines predate this commit; the commit's only change to that file was the `raw_source_bytes` call-site update).
+> Note: 0 over-cap flags this pass — `skipped_files` was empty; nothing new to record on ^tsram0q.
+
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:3` — Public enum `DiffScope` is missing `PartialEq` and `Eq` implementations. These are standard traits for any public data type and allow downstream crates to compare instances for equality; without them, those operations are impossible without re-implementing locally. Add `PartialEq, Eq` to the derive macro: `#[derive(Debug, Clone, PartialEq, Eq)]`.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:4` — Public enum `DiffScope` lacks documentation explaining the different scope targets for git operations. Add a doc comment like `/// Represents different git scope targets (working tree, staged, commit, range)` before the enum definition.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:33` — Public struct `CommitInfo` is missing `PartialEq` and `Eq` implementations. These are standard traits for public data structures and are necessary for equality comparisons; without them, downstream crates cannot effectively work with this type in collections or comparison contexts. Add `PartialEq, Eq` to the derive macro: `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`.
