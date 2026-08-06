@@ -355,19 +355,32 @@ impl ReviewTool {
         self
     }
 
-    /// Resolve the repository root from the MCP session work-dir (never
+    /// The workspace root the MCP session work-dir names (never
     /// `current_dir()`): the explicit `working_dir`, then its git root.
+    ///
+    /// `None` when the session carries no working directory. The loader-read
+    /// ops take it as-is and fail closed — no root resolves no project types,
+    /// so a `project_types`-keyed validator does not match.
+    fn workspace_root(&self, context: &ToolContext) -> Option<std::path::PathBuf> {
+        let working_dir = context.working_dir.clone()?;
+        Some(find_git_repository_root_from(&working_dir).unwrap_or(working_dir))
+    }
+
+    /// Resolve the repository root the three `review` ops need.
+    ///
+    /// The same [`Self::workspace_root`] resolution, but a missing session
+    /// working directory is an error: the engine cannot diff a workspace it
+    /// cannot locate.
     fn resolve_repo_path(
         &self,
         context: &ToolContext,
     ) -> Result<std::path::PathBuf, rmcp::ErrorData> {
-        let working_dir = context.working_dir.clone().ok_or_else(|| {
+        self.workspace_root(context).ok_or_else(|| {
             rmcp::ErrorData::internal_error(
                 "review tool requires a session working directory (working_dir is unset)",
                 None,
             )
-        })?;
-        Ok(find_git_repository_root_from(&working_dir).unwrap_or(working_dir))
+        })
     }
 
     /// Dispatch one of the three `review` ops: build the scope, resolve inputs,
@@ -584,12 +597,14 @@ impl McpTool for ReviewTool {
                 // — the same treatment an empty `op` gets above.
                 let include_rules = bool_arg(&args, "rules", false)
                     .map_err(|e| rmcp::ErrorData::invalid_params(e, None))?;
+                let workspace_root = self.workspace_root(context);
                 let summaries = validators::list_validators(
                     string_arg(&args, "source").as_deref(),
                     string_arg(&args, "match")
                         .as_deref()
                         .filter(|value| !value.is_empty()),
                     include_rules,
+                    workspace_root.as_deref(),
                 )
                 .map_err(validator_op_error)?;
                 json_result(&summaries)
@@ -601,8 +616,9 @@ impl McpTool for ReviewTool {
                         None,
                     )
                 })?;
-                let response =
-                    validators::dump_validators(paths_value).map_err(validator_op_error)?;
+                let workspace_root = self.workspace_root(context);
+                let response = validators::dump_validators(paths_value, workspace_root.as_deref())
+                    .map_err(validator_op_error)?;
                 json_result(&response)
             }
             "get validator" => {

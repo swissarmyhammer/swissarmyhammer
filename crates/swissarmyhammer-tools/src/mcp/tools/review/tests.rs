@@ -207,18 +207,22 @@ fn review_command_tree_covers_all_operations() {
 // fixtures
 // ---------------------------------------------------------------------------
 
-/// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`, with
-/// the given file glob and probe list. The single rule carries the shared
-/// fixture body `Check the code.`.
-fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
-    write_ruleset_with_rule_body(base, name, glob, probes, "Check the code.");
-}
+/// The shared fixture rule body a RuleSet carries when a test does not need a
+/// distinct one.
+const DEFAULT_RULE_BODY: &str = "Check the code.";
 
-/// Write a minimal RuleSet whose single rule carries `body`.
+/// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`.
 ///
-/// A distinct body per RuleSet lets the `dump validators` tests count each rule
-/// body exactly once in the produced markdown.
-fn write_ruleset_with_rule_body(base: &Path, name: &str, glob: &str, probes: &[&str], body: &str) {
+/// `match_yaml` is the indented YAML body of the frontmatter `match:` key, so
+/// ONE writer backs every match shape the fixtures need — a file glob alone, a
+/// glob plus a tool, a glob plus a workspace project type.
+fn write_ruleset_with_match(
+    base: &Path,
+    name: &str,
+    match_yaml: &str,
+    probes: &[&str],
+    body: &str,
+) {
     let dir = base.join(name);
     std::fs::create_dir_all(dir.join("rules")).unwrap();
     let probes_yaml = if probes.is_empty() {
@@ -230,7 +234,7 @@ fn write_ruleset_with_rule_body(base: &Path, name: &str, glob: &str, probes: &[&
     std::fs::write(
         dir.join("VALIDATOR.md"),
         format!(
-            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n{probes_yaml}---\n\n# {name}\n"
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n{match_yaml}{probes_yaml}---\n\n# {name}\n"
         ),
     )
     .unwrap();
@@ -241,26 +245,63 @@ fn write_ruleset_with_rule_body(base: &Path, name: &str, glob: &str, probes: &[&
     .unwrap();
 }
 
+/// The `match:` YAML body selecting one file glob.
+fn files_match_yaml(glob: &str) -> String {
+    format!("  files:\n    - \"{glob}\"\n")
+}
+
+/// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`, with
+/// the given file glob and probe list. The single rule carries the shared
+/// fixture body [`DEFAULT_RULE_BODY`].
+fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
+    write_ruleset_with_rule_body(base, name, glob, probes, DEFAULT_RULE_BODY);
+}
+
+/// Write a minimal RuleSet whose single rule carries `body`.
+///
+/// A distinct body per RuleSet lets the `dump validators` tests count each rule
+/// body exactly once in the produced markdown.
+fn write_ruleset_with_rule_body(base: &Path, name: &str, glob: &str, probes: &[&str], body: &str) {
+    write_ruleset_with_match(base, name, &files_match_yaml(glob), probes, body);
+}
+
 /// Write a RuleSet whose match criteria pin it to a TOOL as well as a file glob.
 ///
 /// The review engine matches by changed file with no tool name in context, so it
 /// never pairs such a validator with a file — the fixture that proves the tool's
 /// `match` filter uses the engine matcher rather than a glob test of its own.
 fn write_tool_scoped_ruleset(base: &Path, name: &str, glob: &str, tool: &str) {
-    let dir = base.join(name);
-    std::fs::create_dir_all(dir.join("rules")).unwrap();
-    std::fs::write(
-        dir.join("VALIDATOR.md"),
-        format!(
-            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n  tools:\n    - {tool}\n---\n\n# {name}\n"
+    write_ruleset_with_match(
+        base,
+        name,
+        &format!("{}  tools:\n    - {tool}\n", files_match_yaml(glob)),
+        &[],
+        DEFAULT_RULE_BODY,
+    );
+}
+
+/// Write a RuleSet whose match criteria pin it to a workspace PROJECT TYPE as
+/// well as a file glob — the shape the tool rules use.
+///
+/// Such a set matches only when the caller resolved the workspace's detected
+/// project type keys into the match context.
+fn write_project_type_scoped_ruleset(
+    base: &Path,
+    name: &str,
+    glob: &str,
+    project_type: &str,
+    body: &str,
+) {
+    write_ruleset_with_match(
+        base,
+        name,
+        &format!(
+            "{}  project_types:\n    - {project_type}\n",
+            files_match_yaml(glob)
         ),
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("rules/check.md"),
-        "---\nname: check\ndescription: Check\n---\n\nCheck the code.\n",
-    )
-    .unwrap();
+        &[],
+        body,
+    );
 }
 
 /// Write a malformed RuleSet under `base/<name>/`: a VALIDATOR.md whose
@@ -947,6 +988,78 @@ const RUST_RULE_BODY: &str = "Obey the Rust fixture rule.";
 /// The distinct typescript rule body the dump tests count in the produced
 /// markdown.
 const TS_RULE_BODY: &str = "Obey the TS fixture rule.";
+
+/// The name of the `project_types: [rust]` keyed RuleSet the workspace tests
+/// seed.
+const PROJECT_TYPE_RULESET_NAME: &str = "rust-workspace-rules";
+/// The distinct rule body the `project_types`-keyed RuleSet carries.
+const PROJECT_TYPE_RULE_BODY: &str = "Obey the rust-workspace fixture rule.";
+/// A minimal Cargo manifest — the marker that makes a seeded workspace a
+/// detected `rust` project.
+const RUST_MANIFEST: (&str, &str) = (
+    "Cargo.toml",
+    "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+);
+/// A minimal Python manifest — the marker that makes a seeded workspace a
+/// detected `python` project, and NOT a rust one.
+const PYTHON_MANIFEST: (&str, &str) = (
+    "pyproject.toml",
+    "[project]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+);
+
+/// Seed a workspace whose only project manifest is `manifest`, carrying one
+/// `project_types: [rust]` keyed RuleSet, then return the validator names a
+/// `dump validators` call over a Rust path in it reports.
+async fn dumped_validator_names_in_workspace(manifest: (&str, &str)) -> Vec<String> {
+    let (manifest_name, manifest_body) = manifest;
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    std::fs::write(project.path().join(manifest_name), manifest_body).unwrap();
+    write_project_type_scoped_ruleset(
+        &project.path().join(".validators"),
+        PROJECT_TYPE_RULESET_NAME,
+        "**/*.rs",
+        "rust",
+        PROJECT_TYPE_RULE_BODY,
+    );
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let response = dump_validators_call(project.path(), json!(["src/lib.rs"]))
+        .await
+        .expect("dump validators");
+    read_and_remove_rules_file(&response);
+    response["validators"]
+        .as_array()
+        .expect("validators is an array")
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A `project_types`-keyed validator — the shape every tool rule uses — must
+/// reach the `dump validators` surface when the session workspace carries that
+/// project type, and must stay out of it when the workspace does not.
+///
+/// Without workspace project-type resolution the keyed set fails closed
+/// everywhere, so the rules-up-front dump silently omits every tool rule.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn dump_validators_matches_a_project_types_keyed_validator_only_in_that_workspace() {
+    let seeded = PROJECT_TYPE_RULESET_NAME.to_string();
+
+    let in_rust = dumped_validator_names_in_workspace(RUST_MANIFEST).await;
+    assert!(
+        in_rust.contains(&seeded),
+        "a rust workspace must dump the `project_types: [rust]` keyed validator: {in_rust:?}"
+    );
+
+    let in_python = dumped_validator_names_in_workspace(PYTHON_MANIFEST).await;
+    assert!(
+        !in_python.contains(&seeded),
+        "a non-rust workspace must not dump the `project_types: [rust]` keyed validator: {in_python:?}"
+    );
+}
 
 /// Seed the two-extension fixture the dump tests share: one Rust-matching and
 /// one TypeScript-matching RuleSet, each with a distinct rule body.

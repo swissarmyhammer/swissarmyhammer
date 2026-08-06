@@ -28,7 +28,7 @@ use swissarmyhammer_validators::validators::{
     compile_glob_patterns, matches_any_pattern, MatchContext, ToolSpec, ValidatorLoader,
     ValidatorMatch,
 };
-use swissarmyhammer_validators::{load_rules, AvpError, RuleSet};
+use swissarmyhammer_validators::{load_rules, workspace_project_types, AvpError, RuleSet};
 
 use crate::mcp::op_tool_helpers::{forgiving_string_list, is_glob_pattern};
 
@@ -197,15 +197,23 @@ fn summary(ruleset: &RuleSet, include_rules: bool) -> ValidatorSummary {
     }
 }
 
-/// The names of the RuleSets the engine pairs with one concrete file path.
+/// The names of the RuleSets the engine pairs with one concrete file path in a
+/// workspace carrying `project_types`.
 ///
-/// This is the engine's own matcher — a [`MatchContext`] carrying the file, run
-/// through [`ValidatorLoader::matching_rulesets`] — which is exactly how
-/// `scope_review` pairs each changed file with its validators. Answering a
-/// path-shaped `match` through it means the tool cannot drift from the set a
-/// review run will actually enforce on that file.
-fn engine_matched_names(loader: &ValidatorLoader, path: &str) -> BTreeSet<String> {
-    let ctx = MatchContext::new().with_file(path.to_string());
+/// This is the engine's own matcher — a [`MatchContext`] carrying the file and
+/// the workspace's detected project type keys, run through
+/// [`ValidatorLoader::matching_rulesets`] — which is exactly how `scope_review`
+/// pairs each changed file with its validators. Answering a path-shaped `match`
+/// through it means the tool cannot drift from the set a review run will
+/// actually enforce on that file.
+fn engine_matched_names(
+    loader: &ValidatorLoader,
+    path: &str,
+    project_types: &[String],
+) -> BTreeSet<String> {
+    let ctx = MatchContext::new()
+        .with_file(path.to_string())
+        .with_project_types(project_types.iter().cloned());
     loader
         .matching_rulesets(&ctx)
         .into_iter()
@@ -264,6 +272,11 @@ fn passes_filters(
 /// so one call with a path-shaped `match_filter` returns the full rule text a
 /// review run will enforce on that file.
 ///
+/// `workspace_root` is the session working directory's root — never the process
+/// current directory. It resolves the project types a path-shaped
+/// `match_filter` is answered against; a `None` root fails closed, so a
+/// `project_types`-keyed RuleSet does not match.
+///
 /// # Errors
 ///
 /// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails (user/project
@@ -272,13 +285,15 @@ pub fn list_validators(
     source: Option<&str>,
     match_filter: Option<&str>,
     include_rules: bool,
+    workspace_root: Option<&Path>,
 ) -> Result<Vec<ValidatorSummary>, ValidatorOpError> {
     let loader = load_rules()?;
     // A path-shaped `match` is answered by the engine matcher, once for the whole
     // stack rather than per row.
+    let project_types = workspace_project_types(workspace_root);
     let engine_matched = match_filter
         .filter(|needle| !is_glob_pattern(needle))
-        .map(|path| engine_matched_names(&loader, path));
+        .map(|path| engine_matched_names(&loader, path, &project_types));
 
     let mut summaries: Vec<ValidatorSummary> = loader
         .list_rulesets()
@@ -392,12 +407,18 @@ fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String
 /// run enforces. The validator set is deduplicated across paths: rules match by
 /// file pattern, so one example file per distinct extension gives the full set.
 ///
+/// `workspace_root` is the session working directory's root — never the process
+/// current directory. Its detected project types are resolved once for the whole
+/// call, so a `project_types`-keyed RuleSet (the shape every tool rule uses)
+/// reaches the dump in a matching workspace. A `None` root fails closed.
+///
 /// # Errors
 ///
 /// Returns a [`ValidatorOpError`] when `paths` is empty or malformed, when
 /// [`load_rules`] fails, or when the file cannot be written.
 pub fn dump_validators(
     paths_value: &serde_json::Value,
+    workspace_root: Option<&Path>,
 ) -> Result<DumpValidatorsResponse, ValidatorOpError> {
     let paths = path_list(paths_value)?;
     if paths.is_empty() {
@@ -405,11 +426,12 @@ pub fn dump_validators(
     }
 
     let loader = load_rules()?;
+    let project_types = workspace_project_types(workspace_root);
 
     let mut matched: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut names: BTreeSet<String> = BTreeSet::new();
     for path in &paths {
-        let path_names = engine_matched_names(&loader, path);
+        let path_names = engine_matched_names(&loader, path, &project_types);
         names.extend(path_names.iter().cloned());
         matched.insert(path.clone(), path_names.into_iter().collect());
     }

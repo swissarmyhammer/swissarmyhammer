@@ -33,7 +33,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create and start an MCP server in stdio mode
 //! let library = TemplateLibrary::new();
-//! let handle = start_mcp_server(McpServerMode::Stdio, Some(library), None, None).await?;
+//! let handle = start_mcp_server(McpServerMode::Stdio, Some(library), None).await?;
 //!
 //! // Server is now running and handling requests
 //! # Ok(())

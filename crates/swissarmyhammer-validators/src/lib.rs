@@ -21,10 +21,14 @@
 //!
 //! - [`load_rules`] — load every builtin/user/project RuleSet with the correct
 //!   directory precedence into a ready [`validators::ValidatorLoader`].
-//! - [`match_rules`] — given just a file path, return the RuleSets whose match
-//!   criteria select that file.
+//! - [`match_rules`] — given a file path and its workspace root, return the
+//!   RuleSets whose match criteria select that file.
+//! - [`workspace_project_types`] — resolve an optional workspace root into the
+//!   detected project type keys a match context carries.
 //! - [`execute_agents`] — fan a batch of prompts out to a shared
 //!   [`validators::AgentPool`] and collect their results.
+
+use std::path::Path;
 
 /// Builtin RuleSets and YAML includes embedded in the binary at build time.
 pub mod builtin;
@@ -81,24 +85,51 @@ pub fn load_rules() -> Result<ValidatorLoader, AvpError> {
     Ok(loader)
 }
 
-/// Return the RuleSets that match a given file path.
+/// Return the RuleSets that match a given file path in a given workspace.
 ///
-/// This is the decoupled, standalone rule-matching surface: it takes nothing but
-/// a file path — no hook event, no tool name, no ACP-hook context — loads the
-/// full rule stack via [`load_rules`], and returns the owned RuleSets whose match
-/// criteria select `file_path` (by glob).
+/// This is the decoupled, standalone rule-matching surface: it takes a file path
+/// and the workspace root that file belongs to — no hook event, no tool name, no
+/// ACP-hook context — loads the full rule stack via [`load_rules`], and returns
+/// the owned RuleSets whose match criteria select `file_path`.
+///
+/// `workspace_root` is resolved once per call into the workspace's detected
+/// project type keys with [`review::detected_project_type_keys`], the same
+/// helper the review scope stage uses, so a RuleSet keyed on
+/// `match.project_types` is evaluated against the real workspace. Pass the
+/// session working directory's root; never the process current directory.
+///
+/// A `None` root fails closed: no project types resolve, so a
+/// `project_types`-keyed RuleSet does not match.
 ///
 /// # Errors
 ///
 /// Returns an [`AvpError`] if [`load_rules`] fails.
-pub fn match_rules(file_path: impl Into<String>) -> Result<Vec<RuleSet>, AvpError> {
+pub fn match_rules(
+    file_path: impl Into<String>,
+    workspace_root: Option<&Path>,
+) -> Result<Vec<RuleSet>, AvpError> {
     let loader = load_rules()?;
-    let ctx = MatchContext::new().with_file(file_path);
+    let ctx = MatchContext::new()
+        .with_file(file_path)
+        .with_project_types(workspace_project_types(workspace_root));
     Ok(loader
         .matching_rulesets(&ctx)
         .into_iter()
         .cloned()
         .collect())
+}
+
+/// The detected project type keys of the workspace at `workspace_root`.
+///
+/// The ONE place a rule-matching surface turns an optional workspace root into
+/// match-context project types: a root resolves through
+/// [`review::detected_project_type_keys`], and no root resolves to no types so a
+/// `project_types`-keyed RuleSet fails closed instead of matching an unknown
+/// workspace.
+pub fn workspace_project_types(workspace_root: Option<&Path>) -> Vec<String> {
+    workspace_root
+        .map(review::detected_project_type_keys)
+        .unwrap_or_default()
 }
 
 /// Fan a batch of prompts out to a shared agent pool and collect their results.
