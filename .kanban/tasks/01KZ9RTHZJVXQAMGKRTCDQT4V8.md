@@ -67,8 +67,25 @@ comments:
     - evidence: 4 files — crates/swissarmyhammer-validators/src/review/synthesize.rs, crates/swissarmyhammer-validators/src/review/scope.rs, crates/swissarmyhammer-validators/src/review/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/review/review_op.rs; 4/4 findings checked; nextest 3112 green, clippy -D warnings clean
     - next: formal /review
   timestamp: 2026-08-05T23:52:40.157803+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kza6kpg81xfawx8wkg05r9ga
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (27fadbd96). Engine counts: 8 findings, 8 confirmed, 34 refuted, 27 attempted, 0 failed, 0 skipped. All 8 findings ask for a refactor of test code that existed before this commit (review_op.rs:1379, 1383, 1384, 1506, 1673, 2018, 2033, 2079 — fixture literals in pre-existing tests). The review skill's written exception drops each of them. Effective new findings: 0. All 4 prior checklist items are checked. Acceptance check passed: skipped = 0, no file over the prompt cap.
+    - next: none — task moved review → done.
+  timestamp: 2026-08-06T00:12:14.728307+00:00
+- actor: claude-code
+  id: 01kza6m7af4gbkkhwwef80d69x
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 4 files, all 4 prior findings fixed (named constants, TasksAttempted/TasksFailed newtypes)
+    - test: green — cargo nextest --workspace, 13545/13545; fmt + clippy clean
+    - commit: 27fadbd96
+    - review: clean — 0 effective findings (8 engine findings on pre-existing test lines dropped by the written rule); skipped 0
+    - result: ^cdqt4v8 done
+  timestamp: 2026-08-06T00:12:31.951622+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffae80
 title: 'review engine: escalate "a file no validator could read" beyond a warning'
 ---
 Design question recorded from ^t1y1c37, not built there.
