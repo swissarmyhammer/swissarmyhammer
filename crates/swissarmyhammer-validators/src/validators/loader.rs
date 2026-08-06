@@ -688,7 +688,8 @@ mod tests {
 
         let home = TempDir::new().unwrap();
         let user_validators = home.path().join(".validators");
-        write_tool_rule_ruleset(&user_validators, "tooled", "**/*.py", "user-runner \"$@\"");
+        write_tool_rule_ruleset(&user_validators, "tooled", "**/*.py", "user-runner \"$@\"")
+            .expect("write user tool ruleset");
 
         let project_root = TempDir::new().unwrap();
         fs::create_dir_all(project_root.path().join(".git")).unwrap();
@@ -698,7 +699,8 @@ mod tests {
             "tooled",
             "**/*.py",
             "project-runner \"$@\"",
-        );
+        )
+        .expect("write project tool ruleset");
 
         let _env = EnvVarGuard::set("HOME", home.path());
         let _cwd = CwdGuard::change_to(project_root.path());

@@ -347,7 +347,8 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
     let project = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project.path().join(".git")).unwrap();
     let project_validators = project.path().join(".validators");
-    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN);
+    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN)
+        .expect("write tool ruleset");
     write_ruleset(&project_validators, "prompt-set", "**/*.py", &[]);
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
@@ -414,7 +415,8 @@ async fn dump_validators_renders_tool_rule_supersedes() {
     let project = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project.path().join(".git")).unwrap();
     let project_validators = project.path().join(".validators");
-    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN);
+    write_tool_rule_ruleset(&project_validators, "tooled-set", "**/*.py", TOOL_RULE_RUN)
+        .expect("write tool ruleset");
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
     let mut registry = ToolRegistry::new();

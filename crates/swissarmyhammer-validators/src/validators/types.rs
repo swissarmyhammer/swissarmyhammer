@@ -27,7 +27,7 @@ pub const DEFAULT_VALIDATOR_TIMEOUT_SECONDS: u32 = 30;
 /// The keys combine with an implicit AND: every present key must match. An
 /// absent (empty) key matches everything. The values inside one key combine
 /// with OR.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidatorMatch {
     /// Tool names to match (e.g., ["Write", "Edit"]).
     #[serde(default)]
@@ -54,13 +54,43 @@ impl ValidatorMatch {
     }
 }
 
+/// Define a builder method that stores an `impl Into<String>` value into an
+/// `Option<String>` field and returns `self`.
+///
+/// One macro body backs every string-setting builder, so the setter logic
+/// cannot drift between methods. The doc comment travels with the invocation.
+macro_rules! builder_into {
+    ($(#[$doc:meta])* $name:ident, $field:ident) => {
+        $(#[$doc])*
+        pub fn $name(mut self, value: impl Into<String>) -> Self {
+            self.$field = Some(value.into());
+            self
+        }
+    };
+}
+
+/// Define a builder method that collects an `IntoIterator<Item = String>` into
+/// an `Option<Vec<String>>` field and returns `self`.
+///
+/// One macro body backs every collection-setting builder, so the setter logic
+/// cannot drift between methods. The doc comment travels with the invocation.
+macro_rules! builder_iter {
+    ($(#[$doc:meta])* $name:ident, $field:ident) => {
+        $(#[$doc])*
+        pub fn $name<I: IntoIterator<Item = String>>(mut self, value: I) -> Self {
+            self.$field = Some(value.into_iter().collect());
+            self
+        }
+    };
+}
+
 /// Context for matching validators against a unit of work.
 ///
 /// This encapsulates the information needed to decide whether a validator
 /// applies: an optional tool name, a single file path, an accumulated set of
 /// changed files, and a free-form event context string for `triggerMatcher`
 /// regex matching. It carries no hook-event semantics.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MatchContext {
     /// The tool name (for tool-pattern matching).
     pub tool_name: Option<String>,
@@ -89,35 +119,35 @@ impl MatchContext {
         Self::default()
     }
 
-    /// Set the tool name.
-    pub fn with_tool(mut self, tool_name: impl Into<String>) -> Self {
-        self.tool_name = Some(tool_name.into());
-        self
-    }
+    builder_into!(
+        /// Set the tool name.
+        with_tool,
+        tool_name
+    );
 
-    /// Set the file path.
-    pub fn with_file(mut self, file_path: impl Into<String>) -> Self {
-        self.file_path = Some(file_path.into());
-        self
-    }
+    builder_into!(
+        /// Set the file path.
+        with_file,
+        file_path
+    );
 
-    /// Set the event context for `triggerMatcher`.
-    pub fn with_event_context(mut self, context: impl Into<String>) -> Self {
-        self.event_context = Some(context.into());
-        self
-    }
+    builder_into!(
+        /// Set the event context for `triggerMatcher`.
+        with_event_context,
+        event_context
+    );
 
-    /// Set the accumulated changed files.
-    pub fn with_changed_files<I: IntoIterator<Item = String>>(mut self, files: I) -> Self {
-        self.changed_files = Some(files.into_iter().collect());
-        self
-    }
+    builder_iter!(
+        /// Set the accumulated changed files.
+        with_changed_files,
+        changed_files
+    );
 
-    /// Set the detected project type keys for the workspace.
-    pub fn with_project_types<I: IntoIterator<Item = String>>(mut self, project_types: I) -> Self {
-        self.project_types = Some(project_types.into_iter().collect());
-        self
-    }
+    builder_iter!(
+        /// Set the detected project type keys for the workspace.
+        with_project_types,
+        project_types
+    );
 
     /// Create from a JSON value, extracting tool name, file path, and event
     /// context from the conventional field names.
@@ -160,6 +190,34 @@ fn default_timeout() -> u32 {
     DEFAULT_VALIDATOR_TIMEOUT_SECONDS
 }
 
+/// Default an empty `name` to the file stem of `path` (falling back to
+/// "unnamed" when the stem is not valid UTF-8 or is absent).
+///
+/// The one shared name-defaulting body behind
+/// [`ValidatorFrontmatter::apply_defaults`] and
+/// [`RuleFrontmatter::apply_defaults`], so the stem extraction cannot drift
+/// between them.
+fn default_name_from_path(name: &mut String, path: &std::path::Path) {
+    if name.is_empty() {
+        *name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+    }
+}
+
+/// Default an empty `description` to `"{kind}: {name}"`.
+///
+/// The one shared description-defaulting body behind every `apply_defaults`
+/// implementation — only the `kind` label ("Validator", "RuleSet", "Rule")
+/// differs per caller.
+fn default_description(description: &mut String, kind: &str, name: &str) {
+    if description.is_empty() {
+        *description = format!("{kind}: {name}");
+    }
+}
+
 /// YAML frontmatter for a validator file.
 ///
 /// # Sensible Defaults
@@ -170,7 +228,7 @@ fn default_timeout() -> u32 {
 /// - `description`: Defaults to "Validator: {name}"
 /// - `match.files`: Defaults to source code patterns when `match` is omitted
 /// - `timeout`: Defaults to 30 seconds
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidatorFrontmatter {
     /// Unique name for the validator.
     /// Defaults to the file stem if not provided.
@@ -220,19 +278,8 @@ impl ValidatorFrontmatter {
         path: &std::path::Path,
         source_code_patterns: Option<&[String]>,
     ) {
-        // Default name to file stem
-        if self.name.is_empty() {
-            self.name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unnamed")
-                .to_string();
-        }
-
-        // Default description
-        if self.description.is_empty() {
-            self.description = format!("Validator: {}", self.name);
-        }
+        default_name_from_path(&mut self.name, path);
+        default_description(&mut self.description, "Validator", &self.name);
 
         // Default match criteria to source code files (if patterns provided)
         if self.match_criteria.is_none() {
@@ -273,7 +320,7 @@ impl std::fmt::Display for ValidatorSource {
 /// Validators are loaded from markdown files with YAML frontmatter.
 /// The frontmatter contains configuration (match criteria)
 /// while the body contains instructions for the validation agent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Validator {
     /// Parsed YAML frontmatter containing validator configuration.
     pub frontmatter: ValidatorFrontmatter,
@@ -450,7 +497,7 @@ fn matches_project_types(match_criteria: &ValidatorMatch, ctx: &MatchContext) ->
 ///
 /// The LLM returns just passed/failed with a message. The validator name
 /// is known by the calling code from the validator's frontmatter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status")]
 pub enum ValidatorResult {
     /// Validation passed.
@@ -461,20 +508,34 @@ pub enum ValidatorResult {
     Failed { message: String },
 }
 
-impl ValidatorResult {
-    /// Create a passing result.
-    pub fn pass(message: impl Into<String>) -> Self {
-        Self::Passed {
-            message: message.into(),
+/// Define a [`ValidatorResult`] factory method that wraps a message in the
+/// named enum variant.
+///
+/// One macro body backs both factories, so the construction logic cannot
+/// drift between them. The doc comment travels with the invocation.
+macro_rules! result_method {
+    ($(#[$doc:meta])* $name:ident, $variant:ident) => {
+        $(#[$doc])*
+        pub fn $name(message: impl Into<String>) -> Self {
+            Self::$variant {
+                message: message.into(),
+            }
         }
-    }
+    };
+}
 
-    /// Create a failing result.
-    pub fn fail(message: impl Into<String>) -> Self {
-        Self::Failed {
-            message: message.into(),
-        }
-    }
+impl ValidatorResult {
+    result_method!(
+        /// Create a passing result.
+        pass,
+        Passed
+    );
+
+    result_method!(
+        /// Create a failing result.
+        fail,
+        Failed
+    );
 
     /// Check if the validation passed.
     pub fn passed(&self) -> bool {
@@ -491,7 +552,7 @@ impl ValidatorResult {
 }
 
 /// Result of executing a validator, paired with validator metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutedValidator {
     /// Name of the validator that was executed.
     pub name: String,
@@ -499,15 +560,29 @@ pub struct ExecutedValidator {
     pub result: ValidatorResult,
 }
 
-impl ExecutedValidator {
+/// Access to the [`ValidatorResult`] carried by an execution record.
+///
+/// Every container that pairs a result with metadata implements the one
+/// accessor; `passed()` and `message()` are shared default delegations, so
+/// the delegation logic cannot drift between containers.
+pub trait HasValidatorResult {
+    /// The result this record carries.
+    fn result(&self) -> &ValidatorResult;
+
     /// Check if the validation passed.
-    pub fn passed(&self) -> bool {
-        self.result.passed()
+    fn passed(&self) -> bool {
+        self.result().passed()
     }
 
     /// Get the message from the result.
-    pub fn message(&self) -> &str {
-        self.result.message()
+    fn message(&self) -> &str {
+        self.result().message()
+    }
+}
+
+impl HasValidatorResult for ExecutedValidator {
+    fn result(&self) -> &ValidatorResult {
+        &self.result
     }
 }
 
@@ -516,7 +591,7 @@ impl ExecutedValidator {
 // ============================================================================
 
 /// Metadata for a RuleSet, containing version and other package-level information.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSetMetadata {
     /// Semantic version (e.g., "1.0.0").
     #[serde(default)]
@@ -528,7 +603,7 @@ pub struct RuleSetMetadata {
 /// The manifest defines shared configuration for all rules in the RuleSet:
 /// common match criteria, default timeout (rules can override),
 /// and metadata like name, version, tags.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSetManifest {
     /// Unique identifier for this RuleSet.
     pub name: String,
@@ -586,9 +661,7 @@ impl RuleSetManifest {
                 .to_string();
         }
 
-        if self.description.is_empty() {
-            self.description = format!("RuleSet: {}", self.name);
-        }
+        default_description(&mut self.description, "RuleSet", &self.name);
 
         if self.metadata.version.is_empty() {
             self.metadata.version = "1.0.0".to_string();
@@ -604,7 +677,7 @@ impl RuleSetManifest {
 ///
 /// A rule with a [`ToolSpec`] is a tool rule — a language tool reports the
 /// findings instead of an LLM. A rule without one is a prompt rule.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rule {
     /// Unique identifier for this rule within the RuleSet.
     pub name: String,
@@ -726,7 +799,7 @@ pub struct ToolSpec {
 }
 
 /// Frontmatter for individual rule files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleFrontmatter {
     /// Rule identifier within the RuleSet.
     pub name: String,
@@ -756,17 +829,8 @@ pub struct RuleFrontmatter {
 impl RuleFrontmatter {
     /// Apply defaults based on the file path.
     pub fn apply_defaults(&mut self, path: &std::path::Path) {
-        if self.name.is_empty() {
-            self.name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unnamed")
-                .to_string();
-        }
-
-        if self.description.is_empty() {
-            self.description = format!("Rule: {}", self.name);
-        }
+        default_name_from_path(&mut self.name, path);
+        default_description(&mut self.description, "Rule", &self.name);
     }
 }
 
@@ -790,7 +854,7 @@ pub struct RuleLoadFailure {
 /// - VALIDATOR.md contains the manifest with shared configuration
 /// - rules/ directory contains individual rule files
 /// - Rules inherit the set's match criteria; a rule-level `match` narrows it
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSet {
     /// Parsed manifest from VALIDATOR.md.
     pub manifest: RuleSetManifest,
@@ -859,7 +923,7 @@ impl RuleSet {
 }
 
 /// Result of executing a single rule within a RuleSet session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleResult {
     /// Name of the rule that was executed.
     pub rule_name: String,
@@ -867,20 +931,14 @@ pub struct RuleResult {
     pub result: ValidatorResult,
 }
 
-impl RuleResult {
-    /// Check if the rule validation passed.
-    pub fn passed(&self) -> bool {
-        self.result.passed()
-    }
-
-    /// Get the message from the result.
-    pub fn message(&self) -> &str {
-        self.result.message()
+impl HasValidatorResult for RuleResult {
+    fn result(&self) -> &ValidatorResult {
+        &self.result
     }
 }
 
 /// Result of executing an entire RuleSet in a single agent session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutedRuleSet {
     /// Name of the RuleSet that was executed.
     pub ruleset_name: String,

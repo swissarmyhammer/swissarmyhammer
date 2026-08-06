@@ -519,12 +519,13 @@ pub fn check_validators() -> Result<CheckValidatorsResponse, ValidatorOpError> {
 /// rule name for a rule-level narrowing `match`), so the set loop and the
 /// per-rule loop share one validation body.
 fn validate_glob_patterns(
-    globs: &[String],
+    globs: &[impl AsRef<str>],
     path: &str,
     context: &str,
     errors: &mut Vec<ValidatorProblem>,
 ) {
-    for glob in globs {
+    for glob_item in globs {
+        let glob = glob_item.as_ref();
         if glob::Pattern::new(glob).is_err() {
             errors.push(ValidatorProblem {
                 path: path.to_string(),
