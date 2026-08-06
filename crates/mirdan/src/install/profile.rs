@@ -801,41 +801,45 @@ pub(crate) fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, Re
     Ok(changed)
 }
 
-// ── Edit-surface redirect (close the write surface) ──────────────────
+// ── Edit-surface redirect (close the superseded-native surface) ──────
 //
 // An MCP server cannot disable a host's *native* built-in tools, so closing
-// the editing surface — forcing every mutation through the served `files` MCP
-// replacement, so diagnostics always ride the result — ships as an installable
-// Claude Code settings fragment that `permissions.deny`s the native
-// mutators (`Edit`, `Write`). The deny alone closes the surface:
-// the model is steered to the served `files` replacement, exactly as `shell`
-// supersedes the native `Bash` with a plain deny and no redirect hook. (An
-// earlier version also installed a `PreToolUse` redirect hook; it was redundant
-// once `files` is served as the replacement, and it dead-ended wherever that
-// replacement isn't mounted — so it was dropped.)
+// the surface sah supersedes — forcing every shell command through the served
+// `shell` tool and every file operation through the served `files` tool, so
+// diagnostics always ride the result — ships as an installable Claude Code
+// settings fragment that `permissions.deny`s those natives. The deny alone
+// closes the surface: the model is steered to the served replacements, and no
+// redirect hook is needed. (An earlier version also installed a `PreToolUse`
+// redirect hook; it was redundant once `files` is served as the replacement,
+// and it dead-ended wherever that replacement isn't mounted — so it was
+// dropped.)
 //
 // The deny is a plain Claude-shaped settings key, harmless on agents that don't
 // read it — so the fragment is a no-op there rather than an error.
 
-/// The native Claude Code mutator tools the redirect fragment denies, so every
-/// mutation is forced through the served `files` MCP replacement. Kept as data
-/// (not spelled into control flow) so the deny list derives from one source.
-pub const EDIT_REDIRECT_DENY_TOOLS: &[&str] = &["Edit", "Write"];
-
-/// The installable Claude Code settings fragment that closes the write surface.
+/// The native Claude Code tools sah supersedes, denied by the redirect fragment.
 ///
-/// Denies the native `Edit`/`Write` tools — and nothing else. The
-/// model is steered to the served `files` MCP replacement, exactly as `shell`
-/// replaces the native `Bash` with a plain `permissions.deny` and no redirect
-/// hook. The deny alone closes the surface; a `PreToolUse` redirect would be
-/// redundant and breaks wherever the replacement isn't mounted (the host's own
-/// write attempts, nested contexts). This is the single source of truth for the
-/// fragment's shape; [`apply_edit_redirect_at`] merges its parts into a real
-/// settings file without clobbering unrelated keys.
+/// The deny forces `Bash` to the served `shell` tool and `Read`/`Edit`/`Write`
+/// to the served `files` tool. Kept as data (not spelled into control flow) so
+/// the installer that writes the deny and the
+/// [`permissions_present`](crate::status::permissions_present) detector that
+/// reads it back derive from one source and cannot drift.
+pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Bash", "Edit", "Read", "Write"];
+
+/// The installable Claude Code settings fragment that closes the superseded
+/// surface.
+///
+/// Denies the natives in [`SUPERSEDED_NATIVE_DENY_TOOLS`] — and nothing else.
+/// The model is steered to the served `shell` and `files` MCP replacements. The
+/// deny alone closes the surface; a `PreToolUse` redirect would be redundant and
+/// breaks wherever the replacement isn't mounted (the host's own write attempts,
+/// nested contexts). This is the single source of truth for the fragment's
+/// shape; [`apply_edit_redirect_at`] merges its parts into a real settings file
+/// without clobbering unrelated keys.
 pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
     serde_json::json!({
         "permissions": {
-            "deny": EDIT_REDIRECT_DENY_TOOLS,
+            "deny": SUPERSEDED_NATIVE_DENY_TOOLS,
         }
     })
 }
@@ -851,9 +855,10 @@ const POINTER_KEY_DENY: &str = "deny";
 /// Merge the edit-redirect fragment into the settings file at `path`, or strip
 /// it when `install` is false.
 ///
-/// On install, the three deny entries are added idempotently (existing unrelated
-/// deny entries are preserved, and re-running adds nothing). On removal, exactly
-/// those entries are taken back out and unrelated keys are left intact. A missing
+/// On install, every deny entry of [`SUPERSEDED_NATIVE_DENY_TOOLS`] is added
+/// idempotently (existing unrelated deny entries are preserved, and re-running
+/// adds nothing). On removal, exactly those entries are taken back out and
+/// unrelated keys are left intact. A missing
 /// file is created on install and a no-op on removal. Returns `Ok(true)` when the
 /// file changed.
 pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool, RegistryError> {

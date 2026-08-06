@@ -231,7 +231,7 @@ fn init_profile_statusline_install_and_deinit() {
     );
 }
 
-/// `init_profile` with `edit_redirect: true` merges the native-mutator deny
+/// `init_profile` with `edit_redirect: true` merges the superseded-native deny
 /// into the detected agent's settings file (no `PreToolUse` redirect hook),
 /// preserving unrelated keys; `deinit_profile` strips the deny back out.
 #[test]
@@ -272,9 +272,9 @@ fn init_profile_installs_edit_redirect_and_deinit_removes() {
         serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
     // Unrelated key preserved.
     assert_eq!(settings["model"], serde_json::json!("opus"));
-    // Native mutators denied.
+    // Every superseded native denied.
     let deny = settings["permissions"]["deny"].as_array().unwrap();
-    for tool in EDIT_REDIRECT_DENY_TOOLS {
+    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
         assert!(
             deny.iter().any(|v| v == &serde_json::json!(tool)),
             "{tool} must be denied; got {deny:?}"
@@ -304,7 +304,7 @@ fn init_profile_installs_edit_redirect_and_deinit_removes() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    for tool in EDIT_REDIRECT_DENY_TOOLS {
+    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
         assert!(
             !deny.iter().any(|v| v == &serde_json::json!(tool)),
             "{tool} deny must be removed on deinit"

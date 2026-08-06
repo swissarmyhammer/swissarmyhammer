@@ -2,19 +2,18 @@ use super::*;
 use serde_json::json;
 
 /// The generated fragment must be valid Claude Code settings JSON: it denies
-/// the native edit tools and installs **no** `PreToolUse` hook. The
-/// deny alone closes the native write surface — the model is steered to the
-/// served `files` replacement, mirroring how `shell` replaces `Bash` with a
-/// plain deny and no redirect hook.
+/// every native sah supersedes and installs **no** `PreToolUse` hook. The deny
+/// alone closes the surface — the model is steered to the served `shell` and
+/// `files` replacements.
 #[test]
-fn fragment_denies_native_edit_tools_without_hook() {
+fn fragment_denies_superseded_natives_without_hook() {
     let fragment = desired_edit_redirect_fragment();
 
-    // Deny entries: Edit, Write (order matches the constant).
+    // Deny entries: one per superseded native (order matches the constant).
     let deny = fragment["permissions"]["deny"]
         .as_array()
         .expect("permissions.deny must be an array");
-    for tool in EDIT_REDIRECT_DENY_TOOLS {
+    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
         assert!(
             deny.iter().any(|v| v == &json!(tool)),
             "deny must contain {tool}; got {deny:?}"
@@ -48,7 +47,7 @@ fn apply_edit_redirect_at_is_idempotent() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     // The deny is present and not duplicated by the second install.
     let deny = written["permissions"]["deny"].as_array().unwrap();
-    for tool in EDIT_REDIRECT_DENY_TOOLS {
+    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
         assert_eq!(
             deny.iter().filter(|v| *v == &json!(tool)).count(),
             1,
@@ -98,6 +97,37 @@ fn apply_edit_redirect_at_preserves_unrelated_keys() {
     assert!(written["hooks"]["PostToolUse"].is_array());
 }
 
+/// The deny set is the exact roster of natives sah supersedes: `Bash` (served
+/// as `shell`) and `Read`/`Edit`/`Write` (served as `files`). Pinned so a silent
+/// change to the roster fails a test instead of shipping.
+#[test]
+fn superseded_deny_set_is_exactly_the_four_natives() {
+    assert_eq!(
+        SUPERSEDED_NATIVE_DENY_TOOLS,
+        ["Bash", "Edit", "Read", "Write"],
+        "the superseded-native deny set must hold exactly the four natives sah replaces"
+    );
+}
+
+/// The installer and the doctor probe must agree: a settings file the fragment
+/// wrote reads back as installed. Regression test for `sah doctor` reporting
+/// `Permissions ┆ missing` right after a successful `sah init`.
+#[test]
+fn edit_redirect_install_satisfies_permissions_detector() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".claude/settings.json");
+
+    assert!(
+        apply_edit_redirect_at(&path, true).unwrap(),
+        "install must write the fragment"
+    );
+
+    assert!(
+        crate::status::permissions_present(&path),
+        "the fragment the installer wrote must satisfy the doctor's permissions probe"
+    );
+}
+
 /// Removal strips the deny but leaves unrelated entries; removal on a missing
 /// file is a no-op. No hooks are ever written, so none are left behind.
 #[test]
@@ -118,7 +148,7 @@ fn apply_edit_redirect_at_removes_cleanly() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    for tool in EDIT_REDIRECT_DENY_TOOLS {
+    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
         assert!(
             !deny.iter().any(|v| v == &json!(tool)),
             "{tool} deny must be removed"
