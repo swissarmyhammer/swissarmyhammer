@@ -462,11 +462,82 @@ fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut 
     checks.extend(statuses_to_checks(&statuses));
 }
 
+/// Check the review engine for the current workspace.
+///
+/// Delegates to [`swissarmyhammer_validators::doctor::check_review_engine`],
+/// the `mirdan::status`-style fact producer: it loads the full validator
+/// stack, detects the workspace's project types, and reports the detected
+/// project types, every validator set's applicability, and every tool rule's
+/// health (tool present or missing, version, fixture result, install
+/// commands). The facts convert to rows via
+/// [`swissarmyhammer_validators::doctor::to_checks`].
+///
+/// The workspace root is the surrounding Git repository when present,
+/// otherwise the current directory — the same resolution the review engine
+/// itself uses. A validator-stack load failure is one Error row; it never
+/// aborts the doctor pipeline.
+pub fn check_review_engine(checks: &mut Vec<Check>) -> Result<()> {
+    let workspace_root = swissarmyhammer_common::utils::find_git_repository_root()
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    match swissarmyhammer_validators::doctor::check_review_engine(&workspace_root) {
+        Ok(status) => checks.extend(swissarmyhammer_validators::doctor::to_checks(&status)),
+        Err(e) => checks.push(Check {
+            name: "Review Engine".to_string(),
+            status: CheckStatus::Error,
+            message: format!("Failed to load validators: {}", e),
+            fix: Some(
+                "Check ~/.validators and ./.validators for malformed validator sets".to_string(),
+            ),
+        }),
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// The review-engine section must always report the detected project
+    /// types row and one row per loaded validator set (builtins load even in
+    /// an isolated environment).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_check_review_engine_reports_project_types_and_set_rows() {
+        use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let mut checks = Vec::new();
+        check_review_engine(&mut checks).expect("review engine checks");
+
+        // Positive control: the section produced rows at all.
+        assert!(
+            !checks.is_empty(),
+            "review engine section produced no checks"
+        );
+
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name == swissarmyhammer_validators::doctor::PROJECT_TYPES_CHECK_NAME),
+            "the detected project types row must be present; got {:?}",
+            checks.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.starts_with("Validator Set · ")),
+            "at least one validator set row must be present (builtins always load); got {:?}",
+            checks.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     #[serial_test::serial(path_env)]

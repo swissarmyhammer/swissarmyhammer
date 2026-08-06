@@ -50,6 +50,10 @@ swissarmyhammer-templating = { workspace = true }
 # the workspace under review.
 swissarmyhammer-project-detection = { workspace = true }
 
+# The doctor `Check` row type: the `doctor` module produces review-engine
+# status facts and converts them into checks, mirroring `mirdan::status`.
+swissarmyhammer-doctor = { workspace = true }
+
 # ACP agent connection driven by the shared agent pool
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }

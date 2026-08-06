@@ -52,6 +52,23 @@ impl ValidatorMatch {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty() && self.files.is_empty() && self.project_types.is_empty()
     }
+
+    /// Check the `project_types` key alone against a detected key set.
+    ///
+    /// Empty `project_types` matches everything. Keys compare
+    /// case-insensitively against `detected` (the `PROJECT_TYPE_SPECS` spec
+    /// keys, e.g. "rust"). This is the project-level applicability question
+    /// the doctor surface asks — "does this criteria's project constraint fit
+    /// this workspace?" — independent of any file or tool context.
+    pub fn project_types_match(&self, detected: &[String]) -> bool {
+        if self.project_types.is_empty() {
+            return true;
+        }
+
+        self.project_types
+            .iter()
+            .any(|wanted| detected.iter().any(|key| key.eq_ignore_ascii_case(wanted)))
+    }
 }
 
 /// Define a builder method that stores an `impl Into<String>` value into an
@@ -487,10 +504,7 @@ fn matches_project_types(match_criteria: &ValidatorMatch, ctx: &MatchContext) ->
         return false;
     };
 
-    match_criteria
-        .project_types
-        .iter()
-        .any(|wanted| detected.iter().any(|key| key.eq_ignore_ascii_case(wanted)))
+    match_criteria.project_types_match(detected)
 }
 
 /// Result of running a validator.

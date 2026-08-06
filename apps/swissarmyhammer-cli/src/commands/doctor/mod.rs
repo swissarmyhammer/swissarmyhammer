@@ -88,6 +88,7 @@ impl Doctor {
         self.run_tool_health_checks().await?;
         self.run_configuration_checks()?;
         self.run_install_stack_checks()?;
+        self.run_review_engine_checks()?;
 
         // Return exit code without printing results
         Ok(self.get_exit_code())
@@ -146,6 +147,17 @@ impl Doctor {
     /// present, so user-scope rows surface even from `~`.
     fn run_install_stack_checks(&mut self) -> Result<()> {
         checks::check_install_stack(&mut self.checks)?;
+        Ok(())
+    }
+
+    /// Run the review-engine checks for the current workspace.
+    ///
+    /// Reports the detected project types, each validator set's
+    /// applicability, and each tool rule's health (tool present or missing,
+    /// version, fixture result, install commands) — the Doctor contract in
+    /// `builtin/validators/README.md`.
+    fn run_review_engine_checks(&mut self) -> Result<()> {
+        checks::check_review_engine(&mut self.checks)?;
         Ok(())
     }
 
@@ -339,6 +351,29 @@ mod tests {
                 name
             );
         }
+    }
+
+    /// The full pipeline must include the review-engine section: the detected
+    /// project types row proves `check_review_engine` is wired in.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_run_diagnostics_includes_review_engine_rows() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let mut doctor = Doctor::new();
+        doctor
+            .run_diagnostics_without_output()
+            .await
+            .expect("diagnostics");
+
+        assert!(
+            doctor
+                .checks
+                .iter()
+                .any(|c| c.name == swissarmyhammer_validators::doctor::PROJECT_TYPES_CHECK_NAME),
+            "the review-engine project types row must be in the pipeline output"
+        );
     }
 
     /// In a user-mode install (no surrounding Git repository), doctor must not

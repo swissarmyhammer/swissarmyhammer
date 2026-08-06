@@ -111,10 +111,26 @@ comments:
     - commands: `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` → 3139 passed, 0 failed, 0 skipped. `cargo fmt --check` clean. `cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings` clean.
     - next: test
   timestamp: 2026-08-06T12:55:18.126121+00:00
+- actor: claude-code
+  id: 01kzbk9h802mkg0sq2pc1prng5
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 1e04d5600). The engine reported 19 findings. The written test-refactor exception removed all 19 — each finding points at test code that this commit did not add (tests.rs tokio attributes and concurrency values, test_support.rs seed_symbol fixture, types.rs test-module timeout values at old lines 1415/1531/1739/1759 shifted +58). Zero findings recorded. All prior checklist items in the 06:23 and 07:11 sections are checked.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-06T13:13:07.584437+00:00
+- actor: claude-code
+  id: 01kzbkada51am41xfsvn80zt50
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — worked all 21 findings from 2026-08-06 07:11 checklist; builder_into!/builder_iter!/result_method! macros, HasValidatorResult trait, shared defaulting helpers, PartialEq/Eq derives, glob param &[impl AsRef<str>], Result-returning write_tool_rule_ruleset
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3139 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 1e04d5600
+    - review: clean — 0 findings (19 engine candidates all dropped by the written existing-test exception); task moved to done
+  timestamp: 2026-08-06T13:13:36.325729+00:00
 depends_on:
 - 01KZ9497ZJ3WRCAG1Z6YGT2RRE
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb080
 title: 'Tool-rule schema: same rule metadata, added tool block'
 ---
 Add the `tool` rule kind. A tool rule is a normal rule file in `rules/` with the same core metadata, plus a `tool` block in frontmatter. There is NO separate runner file, directory, schema, or matcher.

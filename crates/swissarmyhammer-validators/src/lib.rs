@@ -27,6 +27,7 @@
 //!   [`validators::AgentPool`] and collect their results.
 
 pub mod builtin;
+pub mod doctor;
 pub mod error;
 pub mod review;
 pub mod validators;
