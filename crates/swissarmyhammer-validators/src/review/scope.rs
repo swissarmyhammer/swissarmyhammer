@@ -45,6 +45,8 @@ use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use ::ignore::gitignore::Gitignore;
 
+use swissarmyhammer_project_detection::{detect_projects, spec_for};
+
 use crate::error::AvpError;
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
 use crate::review::ignore::{
@@ -562,8 +564,10 @@ pub async fn scope_review(
     // changed entity across the whole diff) so probes run over the real diff.
     let grouped = group_entities_by_file(diff.changes);
 
-    // Match validators per file via the shared `matching_rulesets` code path.
-    let matched = match_validators_and_files(&resolved.files, loader);
+    // Match validators per file via the shared `matching_rulesets` code path,
+    // with the workspace's detected project types resolved once for the run.
+    let project_types = detected_project_type_keys(repo_path);
+    let matched = match_validators_and_files(&resolved.files, loader, &project_types);
 
     // Run probes ONCE over the whole change set with the union of every declared
     // probe name. This is the N+M guarantee: each distinct `(file, probe)` is
@@ -651,13 +655,51 @@ struct MatchedValidators {
     validators: BTreeMap<String, MatchedValidator>,
 }
 
+/// The distinct detected project type keys for the workspace at `repo_path`
+/// (e.g. "rust", "python"), resolved once per review run from the
+/// `PROJECT_TYPE_SPECS` detection.
+///
+/// Detection failure (an unreadable or vanished root) logs a warning and
+/// resolves to no types, so a `project_types`-keyed validator simply does not
+/// match rather than failing the review.
+fn detected_project_type_keys(repo_path: &Path) -> Vec<String> {
+    match detect_projects(repo_path, None) {
+        Ok(projects) => {
+            let keys: BTreeSet<String> = projects
+                .iter()
+                .map(|project| spec_for(project.project_type).key.to_string())
+                .collect();
+            keys.into_iter().collect()
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %repo_path.display(),
+                "review scope: project type detection failed; \
+                 project_types match keys will not match"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Match every resolved file against the loader's validators via the shared
 /// `matching_rulesets` code path, accumulating each validator's matched files.
-fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> MatchedValidators {
+///
+/// `project_types` carries the workspace's detected project type keys, so a
+/// validator keyed on `match.project_types` is evaluated against the workspace
+/// under review.
+fn match_validators_and_files(
+    files: &[String],
+    loader: &ValidatorLoader,
+    project_types: &[String],
+) -> MatchedValidators {
     let mut matched_files: BTreeSet<String> = BTreeSet::new();
     let mut validators: BTreeMap<String, MatchedValidator> = BTreeMap::new();
     for file in files {
-        let ctx = MatchContext::new().with_file(file.clone());
+        let ctx = MatchContext::new()
+            .with_file(file.clone())
+            .with_project_types(project_types.to_vec());
         let rulesets = loader.matching_rulesets(&ctx);
         if rulesets.is_empty() {
             continue;
@@ -682,10 +724,12 @@ fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> Mat
 /// A thin wrapper over `match_validators_and_files` — the pairing every review
 /// run performs — so a test (in this crate or downstream, behind the
 /// `test-support` feature) can assert against the engine itself instead of a
-/// re-implementation that could drift from it.
+/// re-implementation that could drift from it. It carries no workspace, so it
+/// resolves no project types: a validator keyed on `match.project_types` does
+/// not pair here.
 #[cfg(any(test, feature = "test-support"))]
 pub fn engine_matched_validator_names(file: &str, loader: &ValidatorLoader) -> Vec<String> {
-    match_validators_and_files(&[file.to_string()], loader)
+    match_validators_and_files(&[file.to_string()], loader, &[])
         .validators
         .into_keys()
         .collect()
@@ -3219,6 +3263,59 @@ mod tests {
         // The summary still fires, reporting zero matched validators.
         assert!(logs_contain("review scope resolved"));
         assert!(logs_contain("validators=[]"));
+    }
+
+    // ---- scope_review: project-type matching ------------------------------
+
+    /// A single-rule RuleSet matching `file_glob` files in workspaces with any
+    /// of the named detected project types.
+    fn project_typed_ruleset(name: &str, file_glob: &str, project_types: &[&str]) -> RuleSet {
+        let mut rs = ruleset(name, file_glob, &[]);
+        rs.manifest
+            .match_criteria
+            .as_mut()
+            .expect("the ruleset fixture always carries match criteria")
+            .project_types = project_types.iter().map(|t| t.to_string()).collect();
+        rs
+    }
+
+    #[tokio::test]
+    async fn scope_review_resolves_workspace_project_types_for_matching() {
+        let repo = TestRepo::new();
+        repo.write(
+            "Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+        );
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        repo.write("src/lib.rs", "fn placeholder() {}\n\nfn added() {}\n");
+
+        let conn = index_conn();
+        let embedder = MockEmbedder::new(DIM);
+
+        let mut loader = ValidatorLoader::new();
+        // The repo carries a Cargo.toml, so the rust-keyed validator applies.
+        loader.add_builtin_ruleset(project_typed_ruleset("rust-keyed", "*.rs", &["rust"]));
+        // No python markers exist, so the python-keyed validator does not.
+        loader.add_builtin_ruleset(project_typed_ruleset("python-keyed", "*.rs", &["python"]));
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+
+        let names: Vec<&str> = work
+            .validators
+            .iter()
+            .map(|v| v.validator_name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"rust-keyed"),
+            "a rust-keyed validator must match in a rust workspace, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"python-keyed"),
+            "a python-keyed validator must not match in a non-python workspace, got {names:?}"
+        );
     }
 
     // ---- scope_review: probe dedupe --------------------------------------

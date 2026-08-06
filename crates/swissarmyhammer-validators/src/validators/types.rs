@@ -18,12 +18,15 @@ pub const DEFAULT_VALIDATOR_TIMEOUT_SECONDS: u32 = 30;
 
 /// Match criteria for filtering when a validator should run.
 ///
-/// Both `tools` and `files` support pattern matching:
+/// The keys support pattern or value matching:
 /// - `tools`: Regex patterns matched against tool names (case-insensitive)
 /// - `files`: Glob patterns matched against file paths (case-insensitive)
+/// - `project_types`: Detected project type keys matched against the
+///   workspace's detected types (case-insensitive)
 ///
-/// If both are specified, both must match for the validator to run.
-/// If neither is specified (empty), the validator matches everything.
+/// The keys combine with an implicit AND: every present key must match. An
+/// absent (empty) key matches everything. The values inside one key combine
+/// with OR.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ValidatorMatch {
     /// Tool names to match (e.g., ["Write", "Edit"]).
@@ -33,12 +36,21 @@ pub struct ValidatorMatch {
     /// File glob patterns to match (e.g., ["*.ts", "src/**/*.rs"]).
     #[serde(default)]
     pub files: Vec<String>,
+
+    /// Detected project type keys to match (e.g., ["rust", "python"]).
+    ///
+    /// The keys are the `PROJECT_TYPE_SPECS` spec keys from
+    /// `swissarmyhammer-project-detection`, resolved for the workspace under
+    /// review. When present, the workspace must have at least one of the named
+    /// types detected.
+    #[serde(default)]
+    pub project_types: Vec<String>,
 }
 
 impl ValidatorMatch {
     /// Check if this match criteria is empty (matches everything).
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty() && self.files.is_empty()
+        self.tools.is_empty() && self.files.is_empty() && self.project_types.is_empty()
     }
 }
 
@@ -63,6 +75,12 @@ pub struct MatchContext {
     /// against any of these paths (the review fleet uses this to scope a
     /// validator to the files that changed).
     pub changed_files: Option<Vec<String>>,
+
+    /// Detected project type keys for the workspace (e.g., ["rust", "python"]),
+    /// resolved from the `PROJECT_TYPE_SPECS` detection. `None` when the caller
+    /// did not resolve project types; a validator that requires `project_types`
+    /// then does not match, mirroring the other required-but-absent keys.
+    pub project_types: Option<Vec<String>>,
 }
 
 impl MatchContext {
@@ -92,6 +110,12 @@ impl MatchContext {
     /// Set the accumulated changed files.
     pub fn with_changed_files(mut self, files: Vec<String>) -> Self {
         self.changed_files = Some(files);
+        self
+    }
+
+    /// Set the detected project type keys for the workspace.
+    pub fn with_project_types(mut self, project_types: Vec<String>) -> Self {
+        self.project_types = Some(project_types);
         self
     }
 
@@ -126,6 +150,7 @@ impl MatchContext {
             file_path,
             event_context,
             changed_files: None,
+            project_types: None,
         }
     }
 }
@@ -215,6 +240,7 @@ impl ValidatorFrontmatter {
                 self.match_criteria = Some(ValidatorMatch {
                     tools: vec![],
                     files: patterns.to_vec(),
+                    project_types: vec![],
                 });
             }
         }
@@ -279,6 +305,8 @@ impl Validator {
     /// 1. If `triggerMatcher` is specified, the event context matches the regex
     /// 2. If tools are specified in match criteria, the tool name matches
     /// 3. If files are specified in match criteria, a file path matches a glob
+    /// 4. If project types are specified in match criteria, a detected
+    ///    workspace project type matches
     pub fn matches(&self, ctx: &MatchContext) -> bool {
         // Check triggerMatcher regex if present
         if !self.matches_trigger_regex(ctx) {
@@ -287,10 +315,7 @@ impl Validator {
 
         // Check match criteria if present
         if let Some(match_criteria) = &self.frontmatter.match_criteria {
-            if !matches_tools(match_criteria, ctx) {
-                return false;
-            }
-            if !matches_files(match_criteria, ctx) {
+            if !matches_criteria(match_criteria, ctx) {
                 return false;
             }
         }
@@ -339,6 +364,18 @@ fn matches_trigger_regex(trigger_matcher: Option<&str>, ctx: &MatchContext, owne
     }
 }
 
+/// Check if the context satisfies every present key of the match criteria.
+///
+/// The keys combine with an implicit AND: `tools`, `files`, and
+/// `project_types` must each match when present. An absent (empty) key
+/// matches everything. This is the one shared evaluation both
+/// [`Validator::matches`] and [`RuleSet::matches`] run.
+fn matches_criteria(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+    matches_tools(match_criteria, ctx)
+        && matches_files(match_criteria, ctx)
+        && matches_project_types(match_criteria, ctx)
+}
+
 /// Check if the tool name matches any of the tool patterns.
 ///
 /// Empty `tools` matches everything. Patterns are treated as anchored,
@@ -384,6 +421,29 @@ fn matches_files(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
         return false;
     };
     matches_any_pattern(path, &compiled)
+}
+
+/// Check if a detected workspace project type matches any of the
+/// `project_types` keys.
+///
+/// Empty `project_types` matches everything. The keys compare
+/// case-insensitively against the context's detected project type keys (the
+/// `PROJECT_TYPE_SPECS` spec keys, e.g. "rust"). If project types are required
+/// but the context carries none — unresolved (`None`) or detected empty — the
+/// criteria does not match.
+fn matches_project_types(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
+    if match_criteria.project_types.is_empty() {
+        return true;
+    }
+
+    let Some(detected) = &ctx.project_types else {
+        return false;
+    };
+
+    match_criteria
+        .project_types
+        .iter()
+        .any(|wanted| detected.iter().any(|key| key.eq_ignore_ascii_case(wanted)))
 }
 
 /// Result of running a validator.
@@ -641,6 +701,8 @@ impl RuleSet {
     /// 1. If `triggerMatcher` is specified, the event context matches the regex
     /// 2. If tools are specified in match criteria, the tool name matches
     /// 3. If files are specified in match criteria, a file path matches a glob
+    /// 4. If project types are specified in match criteria, a detected
+    ///    workspace project type matches
     pub fn matches(&self, ctx: &MatchContext) -> bool {
         if !matches_trigger_regex(
             self.manifest.trigger_matcher.as_deref(),
@@ -651,10 +713,7 @@ impl RuleSet {
         }
 
         if let Some(match_criteria) = &self.manifest.match_criteria {
-            if !matches_tools(match_criteria, ctx) {
-                return false;
-            }
-            if !matches_files(match_criteria, ctx) {
+            if !matches_criteria(match_criteria, ctx) {
                 return false;
             }
         }
@@ -765,8 +824,16 @@ mod tests {
         let with_tools = ValidatorMatch {
             tools: vec!["Write".to_string()],
             files: vec![],
+            project_types: vec![],
         };
         assert!(!with_tools.is_empty());
+
+        let with_project_types = ValidatorMatch {
+            tools: vec![],
+            files: vec![],
+            project_types: vec!["rust".to_string()],
+        };
+        assert!(!with_project_types.is_empty());
     }
 
     #[test]
@@ -782,6 +849,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write".to_string(), "Edit".to_string()],
                 files: vec![],
+                project_types: vec![],
             }),
             None,
         );
@@ -803,6 +871,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write|Edit".to_string(), "Bash.*".to_string()],
                 files: vec![],
+                project_types: vec![],
             }),
             None,
         );
@@ -822,6 +891,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
+                project_types: vec![],
             }),
             None,
         );
@@ -842,6 +912,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.rs".to_string()],
+                project_types: vec![],
             }),
             None,
         );
@@ -865,6 +936,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec![],
+                project_types: vec![],
             }),
             None,
         );
@@ -872,6 +944,114 @@ mod tests {
         assert!(validator
             .matches(&MatchContext::new().with_changed_files(vec!["anything.txt".to_string()])));
         assert!(validator.matches(&MatchContext::new()));
+    }
+
+    #[test]
+    fn test_validator_files_only_ignores_workspace_project_types() {
+        // Regression: a files-only match behaves exactly as before, whatever
+        // project types the context carries.
+        let validator = make_validator(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["*.rs".to_string()],
+                project_types: vec![],
+            }),
+            None,
+        );
+
+        assert!(validator.matches(
+            &MatchContext::new()
+                .with_file("main.rs")
+                .with_project_types(vec!["python".to_string()])
+        ));
+        assert!(!validator.matches(
+            &MatchContext::new()
+                .with_file("main.py")
+                .with_project_types(vec!["rust".to_string()])
+        ));
+    }
+
+    #[test]
+    fn test_validator_matches_files_and_project_types_requires_both() {
+        let validator = make_validator(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["**/*.py".to_string()],
+                project_types: vec!["python".to_string()],
+            }),
+            None,
+        );
+
+        // Both criteria hold -> match.
+        assert!(validator.matches(
+            &MatchContext::new()
+                .with_file("src/app.py")
+                .with_project_types(vec!["python".to_string()])
+        ));
+        // File matches but the workspace is not python -> no match.
+        assert!(!validator.matches(
+            &MatchContext::new()
+                .with_file("src/app.py")
+                .with_project_types(vec!["rust".to_string()])
+        ));
+        // Workspace is python but the file does not match -> no match.
+        assert!(!validator.matches(
+            &MatchContext::new()
+                .with_file("src/app.rs")
+                .with_project_types(vec!["python".to_string()])
+        ));
+    }
+
+    #[test]
+    fn test_validator_matches_project_types_only() {
+        let validator = make_validator(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec![],
+                project_types: vec!["rust".to_string(), "python".to_string()],
+            }),
+            None,
+        );
+
+        // Any one of the named types (OR) -> every file matches.
+        assert!(validator.matches(
+            &MatchContext::new()
+                .with_file("README.md")
+                .with_project_types(vec!["rust".to_string()])
+        ));
+        // Case-insensitive comparison.
+        assert!(validator.matches(
+            &MatchContext::new()
+                .with_file("README.md")
+                .with_project_types(vec!["Rust".to_string()])
+        ));
+        // Non-matching workspace -> no file matches.
+        assert!(!validator.matches(
+            &MatchContext::new()
+                .with_file("README.md")
+                .with_project_types(vec!["go".to_string()])
+        ));
+        // No detected types at all -> no match.
+        assert!(!validator.matches(
+            &MatchContext::new()
+                .with_file("README.md")
+                .with_project_types(vec![])
+        ));
+        // Unresolved project types (no context value) -> no match.
+        assert!(!validator.matches(&MatchContext::new().with_file("README.md")));
+    }
+
+    #[test]
+    fn test_validator_match_project_types_serde_default() {
+        // A manifest without the key parses unchanged.
+        let parsed: ValidatorMatch = serde_yaml_ng::from_str("files:\n  - \"*.py\"\n").unwrap();
+        assert!(parsed.project_types.is_empty());
+        assert_eq!(parsed.files, vec!["*.py"]);
+
+        // A manifest with the key parses into the field.
+        let parsed: ValidatorMatch =
+            serde_yaml_ng::from_str("files:\n  - \"*.py\"\nproject_types:\n  - python\n").unwrap();
+        assert_eq!(parsed.project_types, vec!["python"]);
     }
 
     #[test]
@@ -929,6 +1109,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Bash".to_string()],
                 files: vec![],
+                project_types: vec![],
             }),
             Some("deploy_.*".to_string()),
         );
@@ -1046,6 +1227,7 @@ mod tests {
             match_criteria: Some(ValidatorMatch {
                 tools: vec!["Bash".to_string()],
                 files: vec!["*.sh".to_string()],
+                project_types: vec![],
             }),
             trigger_matcher: None,
             tags: vec!["custom".to_string()],
@@ -1117,6 +1299,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write".to_string(), "Edit".to_string()],
                 files: vec![],
+                project_types: vec![],
             }),
             None,
         );
@@ -1132,6 +1315,7 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
+                project_types: vec![],
             }),
             None,
         );
@@ -1161,12 +1345,36 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string()],
+                project_types: vec![],
             }),
             None,
         );
         assert!(rs.matches(&MatchContext::new().with_changed_files(vec!["app.ts".to_string()])));
         assert!(!rs.matches(&MatchContext::new().with_changed_files(vec!["app.py".to_string()])));
         assert!(!rs.matches(&MatchContext::new().with_changed_files(vec![])));
+    }
+
+    #[test]
+    fn test_ruleset_matches_project_types() {
+        let rs = make_ruleset(
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec![],
+                project_types: vec!["python".to_string()],
+            }),
+            None,
+        );
+        assert!(rs.matches(
+            &MatchContext::new()
+                .with_file("app.py")
+                .with_project_types(vec!["python".to_string()])
+        ));
+        assert!(!rs.matches(
+            &MatchContext::new()
+                .with_file("app.py")
+                .with_project_types(vec!["rust".to_string()])
+        ));
+        assert!(!rs.matches(&MatchContext::new().with_file("app.py")));
     }
 
     #[test]

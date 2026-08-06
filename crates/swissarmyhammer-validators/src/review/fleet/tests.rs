@@ -56,6 +56,7 @@ fn ruleset_with_body(name: &str, mandate: &str, body: &str, rules: &[(&str, &str
             match_criteria: Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.rs".to_string()],
+                project_types: vec![],
             }),
             trigger_matcher: None,
             tags: vec![],

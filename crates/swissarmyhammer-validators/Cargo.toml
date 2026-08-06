@@ -45,6 +45,11 @@ dirs = { workspace = true }
 # Templating / partials for the rules-as-data loader
 swissarmyhammer-templating = { workspace = true }
 
+# Workspace project-type detection: the review scope resolves the detected
+# project types once per run so `match.project_types` keys evaluate against
+# the workspace under review.
+swissarmyhammer-project-detection = { workspace = true }
+
 # ACP agent connection driven by the shared agent pool
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }

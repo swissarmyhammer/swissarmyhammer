@@ -337,6 +337,7 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             match_criteria: Some(ValidatorMatch {
                 tools: vec![],
                 files: vec![file_glob.to_string()],
+                project_types: vec![],
             }),
             trigger_matcher: None,
             tags: vec![],

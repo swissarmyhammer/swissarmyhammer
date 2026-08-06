@@ -8621,6 +8621,7 @@ dependencies = [
  "swissarmyhammer-code-context",
  "swissarmyhammer-directory",
  "swissarmyhammer-git",
+ "swissarmyhammer-project-detection",
  "swissarmyhammer-sem",
  "swissarmyhammer-templating",
  "tempfile",
