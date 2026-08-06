@@ -187,6 +187,30 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. All 4 findings from 2026-08-06 14:10 worked and checked. Before the camelCase change, a workspace grep confirmed NO consumer serializes the sem CommitInfo — no wire contract or persisted format depends on the current casing, so no conflict. Changes (TDD, RED confirmed with 11 compile errors first): DiffScope gets `Hash, Serialize, Deserialize` plus `#[serde(rename_all = "lowercase")]` to match the module's enum convention (FileStatus); FileStatus gets `Hash` (:29); FileChange gets `Hash` (full-file sweep — every Eq type now carries Hash); CommitInfo gets `Hash` and `#[serde(rename_all = "camelCase")]` (:65) to match FileChange. New test module pins the contract: DiffScope serde round trip, lowercase variant wire form, FileStatus in a HashSet, Hash on all four types, CommitInfo `shortSha` on the wire with round trip. Verification: cargo nextest run -p swissarmyhammer-sem git_types 5/5 pass; cargo nextest run -E 'rdeps(swissarmyhammer-sem)' 3475/3475 pass; cargo fmt --check clean; cargo clippy -p swissarmyhammer-sem --all-targets -- -D warnings clean.
     - next: test
   timestamp: 2026-08-06T19:26:31.323853+00:00
+- actor: claude-code
+  id: 01kzc989dtb6zaqk968g353f82
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (checkpoint 5734aa85f) — 2 findings: crates/swissarmyhammer-sem/src/git_types.rs:1, crates/swissarmyhammer-sem/src/git_types.rs:32
+    - 0 over-cap flags this pass — `skipped_files` was empty; no new evidence for ^tsram0q
+    - next: correct the 2 open findings in the 2026-08-06 14:29 section, then run /review again
+  timestamp: 2026-08-06T19:36:55.482158+00:00
+- actor: claude-code
+  id: 01kzc9906ja2vz8cx56x7rsbt2
+  text: |-
+    ### finish iteration 5 — findings
+    - implement: changed — worked the 4 git_types.rs findings (DiffScope Serialize/Deserialize + lowercase, Hash sweep, CommitInfo camelCase) with pinning tests; 1 file
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-sem)', 3475 passed, 0 failed; fmt clean; clippy -D warnings clean
+    - commit: 5734aa85f
+    - review: findings — 2 open, both crates/swissarmyhammer-sem/src/git_types.rs: :1 (missing # Examples in crate-level docs), :32 (missing Display on FileStatus). No over-cap flags (skipped_files empty).
+  timestamp: 2026-08-06T19:37:18.802011+00:00
+- actor: claude-code
+  id: 01kzc9q87s3wrm4h7yr67r177g
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. The 2 findings from 2026-08-06 14:29 are done and checked. Finding :1 — the module docs now have an `# Examples` section with a doctest that constructs `DiffScope::Working`, `DiffScope::Commit`, a `FileStatus` variant, and a `FileChange` instance; the example uses no `.unwrap()`. Finding :32 — `FileStatus` now implements `Display` with lowercase variant names (`added`, `modified`, `deleted`, `renamed`); a test pins that the Display form equals the serde wire form. Full-file sweep so no item stays for a next round: `DiffScope` also implements `Display` (git revision syntax: `working`, `staged`, the sha, `from..to`); all four public types now derive `PartialOrd, Ord`; `FileStatus` also derives `Copy` (a workspace grep found no `.clone()` call on a `FileStatus` value, so no clippy `clone_on_copy` risk). `Default`, `From`, and `AsRef` are not applicable — these types have no natural default value or canonical conversion. TDD: RED first (14 compile errors for the missing Display/Ord/Copy), then GREEN. Verification: cargo nextest run -p swissarmyhammer-sem git_types 10/10 pass; cargo test --doc -p swissarmyhammer-sem git_types 1/1 pass; cargo nextest run -E 'rdeps(swissarmyhammer-sem)' 3480/3480 pass; cargo clippy -p swissarmyhammer-sem -p swissarmyhammer-validators -p swissarmyhammer-tools -p swissarmyhammer-git --all-targets -- -D warnings clean; cargo fmt --check clean.
+    - next: test
+  timestamp: 2026-08-06T19:45:05.785687+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
 position_column: doing
@@ -307,3 +331,11 @@ mod send_sync_assertions {
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:8` — DiffScope is missing Serialize and Deserialize derives. Other data types in this module (FileStatus line 29, FileChange line 44, CommitInfo line 65) implement these for consistency across the semantic diff data model. Add Serialize and Deserialize to the derive list: `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`. Also add `serde` import if not present for this to work.
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:29` — FileStatus implements Eq but not Hash. Rust convention requires that types implementing Eq also implement Hash for safe use in collections. Add Hash to the derive list: `#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]`.
 - [x] `crates/swissarmyhammer-sem/src/git_types.rs:65` — CommitInfo has snake_case field names (short_sha on line 70, author, date, message) and is serializable, but lacks the #[serde(rename_all = "camelCase")] attribute that FileChange (line 45) applies for consistent snake_case-to-camelCase serialization. Both are git-facing types with matching serialization structure. Add #[serde(rename_all = "camelCase")] after line 65 to ensure CommitInfo fields serialize as camelCase (shortSha) like FileChange, maintaining consistency across git-facing types.
+
+## Review Findings (2026-08-06 14:29)
+
+> Scope: checkpoint 5734aa85f (HEAD~1..HEAD at review time).
+> Note: 0 over-cap flags this pass — `skipped_files` was empty; nothing new to record on ^tsram0q.
+
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:1` — Crate-level docs lack examples showing common use cases, which reduces discoverability for users of this module. Add an `# Examples` section to the crate-level docs showing how to construct `DiffScope::Working`, `DiffScope::Commit`, `FileStatus` variants, and `FileChange` instances.
+- [x] `crates/swissarmyhammer-sem/src/git_types.rs:32` — `FileStatus` enum does not implement `Display`, making it harder to log or display these values to users in human-readable form. Implement `Display` for `FileStatus` to show variant names in lowercase (e.g., `"added"`, `"modified"`, `"deleted"`, `"renamed"`).
