@@ -635,6 +635,11 @@ fn filter_by_select(
 mod tests {
     use super::*;
 
+    use crate::frontmatter::fixtures::{
+        write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+        OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
+
     // --- classify_source tests ---
 
     #[test]
@@ -1052,9 +1057,61 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // The frontmatter reader and its delimiter rule are tested once, in
-    // `crate::frontmatter`. What belongs here is the discovery that reads
-    // through it, which the integration tests below cover.
+    // The frontmatter reader and its delimiter rule are stated once, in
+    // `crate::frontmatter`. Discovery is pinned against the same four fixtures
+    // anyway, because it is the one reader whose input this repository does
+    // not control: a third-party repository writes the package files a scan
+    // walks, so the delimiter rule must hold on the discovery path itself and
+    // not only on the reader it delegates to.
+
+    #[test]
+    fn test_scan_dir_keeps_every_key_past_a_three_hyphen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+        let packages = scan.into_packages();
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(
+            packages[0].name, "test-skill",
+            "a three-hyphen run inside the description must not cut the frontmatter short"
+        );
+    }
+
+    #[test]
+    fn test_scan_dir_skips_a_skill_whose_opening_line_carries_trailing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn test_scan_dir_skips_a_skill_whose_opening_line_is_four_hyphens() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn test_scan_dir_skips_a_skill_with_no_closing_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
 
     #[test]
     fn test_scan_dir_for_package_names_a_skill_from_its_frontmatter() {

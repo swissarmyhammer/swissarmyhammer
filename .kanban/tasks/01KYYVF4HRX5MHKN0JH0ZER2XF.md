@@ -441,8 +441,29 @@ comments:
     - evidence: 3 files — crates/mirdan/src/git_source.rs, crates/mirdan/src/list.rs, crates/mirdan/src/new.rs. 8 new tests: 7 RED first (1 by assertion, 6 by missing contract), 1 sibling coverage. All 4 round-4 findings checked. `cargo nextest run --workspace`: 13641 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo doc -p mirdan --no-deps`: zero warnings in changed files. `cargo fmt --all --check`: clean.
     - next: /review
   timestamp: 2026-08-07T18:50:59.344767+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kzesjn7kzwzdqfpdyykwr4f5
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 134f9d8cf), round 5. counts: 0 findings, 0 confirmed, 0 refuted. 9 review tasks attempted, 0 failed, 0 skipped.
+    - closure check: all 26 prior findings verified closed against the code at 134f9d8cf, not against the resolution notes. Round 1 (6): `discover_packages` is 24 lines at nesting depth 1 (list.rs:86); `PackageFilter` replaces the four bools (list.rs:41); no substring frontmatter split survives under `crates/mirdan/src` — the only textual hit is a doc comment at frontmatter/fixtures.rs:35; all 27 `#[test]` functions in list.rs carry the `test_` prefix. Round 2 (11): `parse_git_source` is a three-step `or_else` chain (git_source.rs:100); `git_source::discover_packages` is flat at depth 1 (git_source.rs:372); `frontmatter.rs` owns read-split-parse and info.rs:166 and install/package.rs:308 both delegate; the four `scan_*` functions are gone in favour of `scan_package_dirs` over four `PackageScan` rows (list.rs:464); all four mcp_config.rs signatures take `&ServersKey` and `&ToolName`. Round 3 (5): `InstallSource` derives `Clone` (git_source.rs:16); `subpath_stays_inside` allows only `Normal` and `CurDir` (git_source.rs:452) and `RepoScan::contains` canonicalizes both sides at all three walk sites (git_source.rs:501); `read_frontmatter` returns `FrontmatterMetadata` (install/package.rs:308); `merge_packages` is depth 1 with `add_unique_targets` beside it (list.rs:563); new.rs:151 joins `package_type::VALIDATOR_RULES_DIR`. Round 4 (4): git_source.rs:338 reads `git clone failed`; `ScopedStore` rows drive one `scan_scoped_store` (list.rs:162); `add_unique_targets` takes `impl IntoIterator<Item = String>` (list.rs:578); `check_base_dir_not_exists` (new.rs:38) is called from all four `run_new_*` functions.
+    - next: none. Task moved to `done`.
+  timestamp: 2026-08-07T19:00:41.331048+00:00
+- actor: claude-code
+  id: 01kzeskse4z9gv0cyh2fwwnrns
+  text: |-
+    ### finish iteration 5 — clean
+    - implement: changed — 3 files; two lowercased error messages, `scan_scoped_store` replaces two near-identical walkers, `add_unique_targets` takes `impl IntoIterator`, `check_base_dir_not_exists` plus `check_package_name` replace eight copied blocks; 8 new tests, 7 RED first
+    - test: green — cargo nextest run --workspace, 13641 passed, 0 failed, 0 skipped; clippy -D warnings clean; cargo fmt --all --check clean
+    - commit: 134f9d8cf
+    - review: clean — zero findings, 9 tasks attempted, 0 failed. All 26 prior findings verified closed against the code at 134f9d8cf.
+
+    Task moved to `done` by the review gate.
+
+    Finding count per round: 6, 11, 5, 4, 0. Five commits: 60f6a1247, 6f5504fd2, a95954c6c, e1e3946ec, 134f9d8cf.
+  timestamp: 2026-08-07T19:01:18.404178+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb180
 title: mirdan list.rs carries the frontmatter substring-split defect
 ---
 `crates/mirdan/src/list.rs` has a private `parse_frontmatter` with the same defect ^fpcbeth and ^a2ef9wh fixed elsewhere.

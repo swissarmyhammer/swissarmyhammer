@@ -97,19 +97,93 @@ comments:
 
     `^nk1yr64`, a duplicate follow-up card the earlier pass filed for these same copies, is archived.
   timestamp: 2026-08-07T15:43:50.255180+00:00
-position_column: todo
-position_ordinal: e480
+- actor: claude-code
+  id: 01kzet8dt9s0f9wv6668myz9nx
+  text: |-
+    ### applier.rs error decision — the answer ^nk1yr64 asked for
+
+    `^nk1yr64` asked what `crates/mirdan/src/install/applier.rs` returns in place of its `.expect("SKILL.md must open with frontmatter")` panic. The answer at HEAD:
+
+    `frontmatter_map` returns `Result<serde_yaml_ng::Mapping, String>`. The error is a plain `String`, because the function is a `#[cfg(test)]` helper and has no production error type to carry. Two error strings:
+
+    - Bad or absent delimiter: `"SKILL.md must open and close its frontmatter with a line of exactly three hyphens"`, from `split_frontmatter_body(md).ok_or(...)`.
+    - YAML the parser rejects, which includes a duplicate key: `"frontmatter must be a YAML mapping with no duplicate keys: {e}"`.
+
+    No `.expect` remains. Both call sites in `test_deployed_skills_keep_every_source_frontmatter_key` do `unwrap_or_else(|e| panic!("{source_md:?}: {e}"))`, so the failure names the file the bad frontmatter came from. The old `.expect` did not.
+  timestamp: 2026-08-07T19:12:34.633411+00:00
+- actor: claude-code
+  id: 01kzet969mpp3p5gwp8kfg1fhy
+  text: |-
+    ### acceptance audit against HEAD, not against the resolution comment
+
+    The earlier resolution comment (2026-08-07T15:43) was written before three more iterations landed on ^0zer2xf. Two things it says are no longer true of the code:
+
+    - The fixtures moved. `crates/mirdan/src/frontmatter_fixtures.rs` is now `crates/mirdan/src/frontmatter/fixtures.rs`, a `#[cfg(test)]` child of the new `crates/mirdan/src/frontmatter.rs` module. That module is now the single reader: `parse`, `parse_file`, `read_file`, `field`, `metadata_field`, `file_field`, `file_metadata_field`. Every named site delegates to it.
+    - `git_source::extract_name_from_frontmatter` is deleted as dead (commit `a95954c6c`). The resolution comment counts it as a covered site with a `None` contract. It no longer exists, and the four tests that covered it went with it. In its place `a95954c6c` left a comment saying the delimiter rule "are tested once, in `crate::frontmatter`".
+
+    That deletion opened the one real gap.
+
+    | acceptance item | holds at HEAD? |
+    |---|---|
+    | No frontmatter split of mirdan's own remains | Yes. `rg 'strip_prefix\("---"\)\|find\("---"\)\|find\("\\n---"\)' crates/mirdan/` returns only a doc comment in `fixtures.rs`. Every site calls `split_frontmatter_body`, directly or through `crate::frontmatter`. |
+    | RED first, one test per site | Was NO for `git_source.rs`. Yes for the other four sites: `install/tests.rs` (4, `read_frontmatter`), `mcp_config.rs` (4), `info.rs` (4), `install/applier.rs` (4), plus 4 in `frontmatter.rs` itself. |
+    | `----` or `---x` opens nothing | Same gap, git_source only. |
+    | No closing delimiter is rejected | Same gap, git_source only. |
+    | No behavior change for well-formed input; existing tests unedited | Yes. This pass edited no pre-existing test and no production line. |
+
+    `read_skill_frontmatter_name` in `install/uninstall.rs` stays covered by delegation to `read_frontmatter`, as the merged `^nk1yr64` recorded. That reader takes input mirdan itself writes into its own store, so delegation is enough there.
+
+    ### gap closed
+
+    `git_source` is the one reader whose input this repository does not control -- a third-party repository writes the package files a scan walks. The delimiter rule must therefore hold on the discovery path itself, not only on the reader it delegates to. Four tests added to `crates/mirdan/src/git_source.rs`, against the production path `RepoScan::scan_dir` and the same four shared fixtures:
+
+    - `test_scan_dir_keeps_every_key_past_a_three_hyphen_run`
+    - `test_scan_dir_skips_a_skill_whose_opening_line_carries_trailing_text`
+    - `test_scan_dir_skips_a_skill_whose_opening_line_is_four_hyphens`
+    - `test_scan_dir_skips_a_skill_with_no_closing_delimiter`
+
+    ### RED proved, not assumed
+
+    The production code was already correct, so a new test passes on the first run and proves nothing. To show the tests bite, the pre-fix split from `60f6a1247^` (`starts_with("---")`, then `rest.find("---")`) was put back into `scan_dir`, the tests were run, and the production call was restored.
+
+    RED: 3 of 4 failed, each for the predicted reason.
+
+    - `keeps_every_key_past_a_three_hyphen_run`: 0 packages, not 1. The indented `---` in the `description` block scalar cut the frontmatter before `name`, so discovery found no name and skipped the package.
+    - `skips_a_skill_whose_opening_line_carries_trailing_text`: not empty. `---description: leaked` was read as an opener, so a file that opens no block was discovered.
+    - `skips_a_skill_with_no_closing_delimiter`: not empty. The `---` inside the value was read as the close, so a partial mapping parsed and gave a name.
+
+    `skips_a_skill_whose_opening_line_is_four_hyphens` passed on the old code too. The leftover `-` makes the YAML unparseable, so it is a pin, not a RED case -- the same reading the earlier pass recorded for its own `----` case.
+
+    GREEN after restore: 7 of 7 pass in `git_source::tests::test_scan_dir`.
+
+    The comment `a95954c6c` left is replaced. It said the rule is tested once in `crate::frontmatter`; it now says why discovery is pinned as well.
+  timestamp: 2026-08-07T19:12:59.700556+00:00
+- actor: claude-code
+  id: 01kzetjygdn8da1yenz2npnahw
+  text: |-
+    ### implement — changed
+    - evidence: 1 code file — `crates/mirdan/src/git_source.rs` (+60/-3, tests only: 4 new tests, 1 fixtures import, 1 comment rewritten). No production line changed. Card description updated: `install.rs` -> `install/package.rs` and `install/uninstall.rs`, `frontmatter_map` -> `install/applier.rs`, `extract_name_from_frontmatter` -> `RepoScan::scan_dir`, acceptance item 1 -> `install/`.
+    - RED: `cargo nextest run -p mirdan git_source::tests::test_scan_dir` against the reinstated pre-fix split — 7 run, 4 passed, 3 failed. GREEN after restore — 7 passed.
+    - `cargo nextest run --workspace`: 13645 passed, 0 failed, 0 skipped.
+    - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo fmt --all`: no change to the new code.
+    - discovery, unrelated: the first workspace run failed `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes`. It passes alone and it passed on the second full run. It is a load-sensitive flake in a broadcast-lag test, with no path to mirdan. It is not tracked here; file it separately if it repeats.
+    - next: `/review`.
+  timestamp: 2026-08-07T19:18:19.405908+00:00
+position_column: doing
+position_ordinal: '8380'
 title: Four more mirdan frontmatter substring splits beyond list.rs
 ---
 ^0zer2xf covers `mirdan/src/list.rs` only. Four more production sites in `mirdan` carry the same bare `---` substring split.
 
+File paths below are the paths that exist at HEAD. `install.rs` is now the `install/` module, and `git_source::extract_name_from_frontmatter` is deleted, so the discovery function that read through it names the site.
+
 | function | file | what it reads |
 |---|---|---|
-| `read_frontmatter` | `crates/mirdan/src/install.rs` | `SKILL.md`, `VALIDATOR.md`, `TOOL.md`, `AGENT.md` on local package detect and on git-clone install |
-| `read_skill_frontmatter_name` | `crates/mirdan/src/install.rs` | `SKILL.md` in the nested skill store, for uninstall |
+| `read_frontmatter` | `crates/mirdan/src/install/package.rs` | `SKILL.md`, `VALIDATOR.md`, `TOOL.md`, `AGENT.md` on local package detect and on git-clone install |
+| `read_skill_frontmatter_name` | `crates/mirdan/src/install/uninstall.rs` | `SKILL.md` in the nested skill store, for uninstall |
 | `parse_yaml_frontmatter` | `crates/mirdan/src/mcp_config.rs` | `TOOL.md`, feeding `parse_tool_frontmatter` — the MCP server command, args and env |
 | `read_frontmatter_field` | `crates/mirdan/src/info.rs` | `version` and `description` from `VALIDATOR.md` and `SKILL.md` |
-| `extract_name_from_frontmatter` | `crates/mirdan/src/git_source.rs` | package files found while scanning a cloned third-party git repository |
+| `RepoScan::scan_dir` | `crates/mirdan/src/git_source.rs` | package files found while scanning a cloned third-party git repository |
 
 Each does `strip_prefix("---")` then `find("---")`. Both gates are weaker than the canonical `split_frontmatter_body`: the opener accepts `---anything`, and `find("---")` matches a three-hyphen run anywhere, including inside a block scalar.
 
@@ -121,12 +195,12 @@ Failure is silent in every case:
 
 - `read_frontmatter_field` returns `"unknown"`, so `mirdan info` prints a wrong version.
 - `read_skill_frontmatter_name` mis-parses the name, `remove_dir_all` never runs, and uninstall leaves the skill installed.
-- `extract_name_from_frontmatter` makes the package invisible to discovery. This one reads third-party content, so it is fully outside this repository's control.
+- `RepoScan::scan_dir` makes the package invisible to discovery. This one reads third-party content, so it is fully outside this repository's control.
 - `parse_yaml_frontmatter` reads `TOOL.md` command lines and args, where `--` and `---` runs are ordinary text.
 
-## Also in the file, test scope only
+## Also in the module, test scope only
 
-`frontmatter_map` in the `#[cfg(test)]` module of `install.rs` does `strip_prefix("---")` then `find("\n---")`. It is anchored on the left only: `\n---xyz` still matches. It reads no production document. Converge it with the others so the file holds one rule.
+`frontmatter_map` in the `#[cfg(test)]` module of `crates/mirdan/src/install/applier.rs` does `strip_prefix("---")` then `find("\n---")`. It is anchored on the left only: `\n---xyz` still matches. It reads no production document. Converge it with the others so the module holds one rule.
 
 ## Required change
 
@@ -136,7 +210,7 @@ Coordinate with ^0zer2xf: whichever card lands first, the other must not add a s
 
 ## Acceptance
 
-- No frontmatter split of mirdan's own remains in `install.rs`, `mcp_config.rs`, `info.rs` or `git_source.rs`.
+- No frontmatter split of mirdan's own remains in `install/`, `mcp_config.rs`, `info.rs` or `git_source.rs`.
 - RED first, one test per site: a package file whose `description` block scalar holds a three-hyphen run keeps every frontmatter key.
 - A first line of `----` or `---x` is not read as an opening delimiter.
 - A file with no closing delimiter line is rejected.
