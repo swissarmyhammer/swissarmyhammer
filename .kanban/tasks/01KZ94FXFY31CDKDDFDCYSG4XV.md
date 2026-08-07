@@ -1,10 +1,61 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kzdgzgwen69vx89gcvkj2h24
+  text: |-
+    ### research
+
+    Picked up. Explored the probe engine and the existing test detection.
+
+    **Where the structural test detection already is.** `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs` holds `ComplexitySpec` — one data row per grammar — with `is_test_definition()`. It marks a definition as a test from an attribute (`#[test]`, `@Test`, `[Test]`, `[[test]]`), a name+signature convention (`func TestX(t *testing.T)`, `def test_foo`), or a call target (Elixir `test "..." do`). The file name is never read. `FunctionComplexity::is_test` is the public face of it. The census must REUSE this, not copy a second grammar table.
+
+    **Why the census computation goes in `swissarmyhammer-sem`, not in the validators crate.** The validators crate carries no `tree-sitter` dependency, and sem is the one place grammar tables live. This mirrors `complexity`: the computation (`cognitive_complexity`) is in sem, the probe wrapper is in `probes.rs`. The census gets a new submodule `complexity/test_census.rs` (sibling-directory module, the same shape as `review/scope.rs` + `review/scope/`), so it can read `ComplexitySpec`'s private fields directly.
+
+    **No second parse.** `cognitive_complexity(path, source)` parses internally, so the probe cannot call it — a `TreeSitterProbe` is handed a parse and must never make one (the `PARSE_EVENT` ledger test asserts one parse per file per revision). The new entry point therefore takes an existing `&ParsedCode`.
+
+    **Language coverage is bounded by what the detector can see.** Python's `def test_foo` is NOT detected today (`PYTHON_SPEC.test_name_prefix` is `None`), and the JS/TS family only detects a `@Test` decorator, never jest's `it(...)`/`test(...)`. Mapping those languages in the census would report "no suspect tests" for a file full of tests — a silent false negative. So the census table maps only languages whose detection works, and every unmapped language gets a not-computed row that tells the agent to judge from the source. Follow-up cards for the two detection gaps.
+
+    **Wire-up touch points found**: `builtin/validators/test-integrity/VALIDATOR.md` (`probes:`), `builtin/validators/test-integrity/rules/no-test-cheating.md` (consume rows), and `crates/swissarmyhammer-validators/src/builtin/mod.rs` — where `test_test_integrity_reuse_and_duplication_are_unaffected_by_the_merge` currently asserts `test_integrity.manifest.probes.is_empty()`.
+  timestamp: 2026-08-07T07:11:11.246203+00:00
+- actor: claude-code
+  id: 01kzdhx8w35q0my48fhrastg5s
+  text: |-
+    ### implementation
+
+    **The census lives in sem, the probe wraps it.** `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs` holds `test_census(&ParsedCode, source) -> Option<Vec<TestCensus>>`, mirroring how `cognitive_complexity` sits in sem and the `complexity` probe wraps it. It takes a parse the caller already holds, so the probe makes no second parse and the `PARSE_EVENT` ledger test still reads one parse per file per revision.
+
+    **Two refactors in `complexity.rs`, both to reuse rather than copy:**
+    - `collect_functions` now delegates to a new `for_each_function(node, source, spec, depth, visit)`. The census walks the same definitions the scorer does, off the same `ComplexitySpec.function_kinds`, instead of writing a second walk.
+    - `is_test_definition`'s two attribute traversals (the preceding-sibling run and the container recursion) became `definition_attributes(node, spec) -> Vec<Node>`, and `attribute_marks_test` now sits on a new `attribute_marker_name(node, source)`. Collecting the nodes and naming the marker is what lets the test marker and the census's skip markers be read off ONE traversal. `attribute_marks_test` keeps its exact contract.
+
+    **The vocabulary table.** `TEST_CENSUS_SPECS` maps rust, go, java, ruby — one row each, over `CENSUS_SPEC_DEFAULTS`. A row names the body field, the identifier kinds, the comment kinds, the assertion words, the skip markers, the skip words, and the catch kinds. Assertion matching is a case-free SUBSTRING match on identifier text, so one word `assert` covers `assert_eq!`, `assertEquals`, and `XCTAssertTrue` with no per-framework list. It is deliberately generous: a census that accuses an honest test is worse than one that misses a lazy one.
+
+    **Node kinds were measured, not guessed.** A throwaway test printed the s-expression of each sample under each grammar before the table was written, then was deleted. Three findings changed the design:
+    - Rust comments are `line_comment`, not `comment`.
+    - Go wraps real statements in a `statement_list` but puts a comment-only body's comment DIRECTLY in the `block`, so "every statement is a comment" works with no unwrap field.
+    - Ruby attaches NO `body` node at all to `def test_empty; end`, and puts a comment-only body's comment as a sibling of the method name. So a missing body reads as empty, and `body_statements` excludes the definition's own name/parameters — a no-op for every grammar that does have a body node.
+
+    **Kind is `Candidate`, following `inverse-pairs`.** The measurement is exact and must not be recounted, but whether it is cheating is judgment: a `#[should_panic]` test asserts through the panic, and a test whose assertions live in a shared helper measures zero and is honest. A guard-able Fact would turn each of those into a confirmed wrong finding.
+
+    **Every test was proven able to fail.** All 12 sem tests passed on the first run, so three rounds of mutation removed each behavior in turn (empty the assertion words, empty the skip markers, empty the catch kinds, return the node for a missing body, drop the comments-only branch, accept every function as a test, fall back to a spec for an unmapped language, and swap the NoAssertions push) and confirmed exactly the expected test went red each time. The three probe tests were written against a `run` returning `Vec::new()` and watched fail before the body was written.
+
+    **Files:** `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs` (new), `complexity.rs`, `code/mod.rs`, `crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs`, `review/mod.rs`, `src/builtin/mod.rs`, `builtin/validators/test-integrity/VALIDATOR.md`, `builtin/validators/test-integrity/rules/no-test-cheating.md`.
+
+    **Discovered work, filed as cards:** ^n3exwfs (pytest `def test_foo` is not a recognized test definition), ^s0xv14n (jest `it(...)`/`test(...)` is not either) — both are why those languages are left out of the census table rather than mapped blind. ^bz86ssx (two `mirdan` tests fail under the parallel suite and pass alone; unrelated to this change, confirmed by running them isolated).
+  timestamp: 2026-08-07T07:27:26.083748+00:00
+- actor: claude-code
+  id: 01kzdhxhzh4dq9t2dqdjtmt84e
+  text: |-
+    ### implement — changed
+    - evidence: 8 files — crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs (new), complexity.rs, code/mod.rs, crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs, review/mod.rs, src/builtin/mod.rs, builtin/validators/test-integrity/VALIDATOR.md, builtin/validators/test-integrity/rules/no-test-cheating.md. `cargo test -p swissarmyhammer-sem -p swissarmyhammer-validators` 323 + 482 + 2 + 2 passed, 0 failed. `cargo clippy --workspace --all-targets` 0 warnings, `cargo fmt --all --check` clean, `cargo doc -p swissarmyhammer-sem` adds no new warning. `check validators` ok, 14 validators, 0 errors.
+    - next: /review
+  timestamp: 2026-08-07T07:27:35.409932+00:00
 depends_on:
 - 01KZ94F228KKTWT5T9Y59VJJVY
-position_column: todo
-position_ordinal: ff8980
+position_column: doing
+position_ordinal: '8480'
 title: Assertion census probe for test-integrity
 ---
 A TreeSitterProbe that measures test bodies.

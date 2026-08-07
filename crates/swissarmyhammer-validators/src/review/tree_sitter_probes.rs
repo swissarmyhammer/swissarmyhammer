@@ -31,7 +31,7 @@
 
 use std::collections::BTreeMap;
 
-use swissarmyhammer_sem::parser::plugins::code::{parse_code, ParsedCode};
+use swissarmyhammer_sem::parser::plugins::code::{parse_code, test_census, ParsedCode, TestCensus};
 
 use crate::review::probes::{
     is_function_entity_type, not_computed_row, per_file_results, FileChange, ProbeKind,
@@ -57,6 +57,17 @@ pub const TREE_SITTER_NOT_PARSED: &str =
 /// [`TREE_SITTER_NOT_PARSED`] does.
 pub const INVERSE_PAIRS_NOT_DIFFED: &str = "inverse pairs not computed — this file has no base \
      revision to compare against; judge from the source";
+
+/// The detail an `assertion-census` row carries when a file's tests cannot be
+/// measured.
+///
+/// A language the census has no vocabulary for — or whose test definitions the
+/// grammar roster does not recognize — must read as **unknown**, never as "every
+/// test in this file asserts something". Emitting this row keeps the result
+/// non-empty for the same reason [`TREE_SITTER_NOT_PARSED`] does.
+pub const ASSERTION_CENSUS_NOT_MEASURED: &str =
+    "assertion census not computed — this language has \
+     no test vocabulary mapping; judge from the source";
 
 /// Which revision of a file under review a parse belongs to.
 ///
@@ -578,13 +589,83 @@ impl TreeSitterProbe for InversePairProbe {
 /// The one [`InversePairProbe`] the catalog registers.
 static INVERSE_PAIR_PROBE: InversePairProbe = InversePairProbe;
 
+/// The name validators declare to pull [`AssertionCensusProbe`]'s rows.
+const ASSERTION_CENSUS_PROBE_NAME: &str = "assertion-census";
+
+/// The `assertion-census` probe: one row per test function in the file whose
+/// body measured something suspect — no assertion, a skip marker, an empty or
+/// commented-out body, or a caught failure nothing is asserted about.
+///
+/// A test is identified from the marker at its **definition** — the attribute,
+/// the framework name+signature convention, the call-based definition — through
+/// the same roster the complexity scorer's test exemption reads. The file name
+/// is never consulted, so a helper beside the tests is not one of them.
+///
+/// The rows are [`ProbeKind::Candidate`] and never a guard-able fact. The
+/// measurement is exact, but whether it makes the test *cheating* is the
+/// agent's call: a `#[should_panic]` test asserts through the panic, and a test
+/// whose assertions live in a shared helper is honest while measuring zero.
+#[derive(Debug)]
+struct AssertionCensusProbe;
+
+impl sealed::Sealed for AssertionCensusProbe {}
+
+impl TreeSitterProbe for AssertionCensusProbe {
+    fn name(&self) -> &'static str {
+        ASSERTION_CENSUS_PROBE_NAME
+    }
+
+    fn kind(&self) -> ProbeKind {
+        ProbeKind::Candidate
+    }
+
+    fn run(&self, context: &TreeSitterProbeContext<'_>) -> Vec<ProbeRow> {
+        let after = context.after();
+        let Some(measured) = test_census(after.parsed(), after.source()) else {
+            return vec![not_computed_row(
+                context.path(),
+                ASSERTION_CENSUS_NOT_MEASURED,
+            )];
+        };
+        measured
+            .iter()
+            .filter(|test| !test.defects.is_empty())
+            .map(|test| suspect_test_row(context.path(), test))
+            .collect()
+    }
+}
+
+/// One suspect test as an evidence row: where it is, and every measure its body
+/// yielded.
+fn suspect_test_row(path: &str, test: &TestCensus) -> ProbeRow {
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: Some(test.name.clone()),
+        line: Some(test.start_line as u32),
+        similarity: None,
+        detail: Some(
+            test.defects
+                .iter()
+                .map(|defect| defect.detail())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+    }
+}
+
+/// The one [`AssertionCensusProbe`] the catalog registers.
+static ASSERTION_CENSUS_PROBE: AssertionCensusProbe = AssertionCensusProbe;
+
 /// Every registered [`TreeSitterProbe`].
 ///
 /// The single source of truth the probe catalog builds its tree-sitter rows
 /// from: a probe's name and kind are read off the implementation, never
 /// restated beside it. Adding a probe is adding one entry here.
-pub(crate) static TREE_SITTER_PROBES: &[&'static dyn TreeSitterProbe] =
-    &[&FUNCTION_COUNT_PROBE, &INVERSE_PAIR_PROBE];
+pub(crate) static TREE_SITTER_PROBES: &[&'static dyn TreeSitterProbe] = &[
+    &FUNCTION_COUNT_PROBE,
+    &INVERSE_PAIR_PROBE,
+    &ASSERTION_CENSUS_PROBE,
+];
 
 #[cfg(test)]
 mod tests {
@@ -592,8 +673,9 @@ mod tests {
 
     use super::{
         function_count, prime_parse_cache, run_tree_sitter_probe, sealed, ParseCache, Revision,
-        TreeSitterProbe, TreeSitterProbeContext, INVERSE_PAIRS_NOT_DIFFED,
-        INVERSE_PAIRS_PROBE_NAME, PARSE_EVENT, TREE_SITTER_NOT_PARSED,
+        TreeSitterProbe, TreeSitterProbeContext, ASSERTION_CENSUS_NOT_MEASURED,
+        ASSERTION_CENSUS_PROBE_NAME, INVERSE_PAIRS_NOT_DIFFED, INVERSE_PAIRS_PROBE_NAME,
+        PARSE_EVENT, TREE_SITTER_NOT_PARSED,
     };
     use crate::review::probes::{
         catalog, run_probes, FileChange, ProbeKind, ProbeOp, ProbeResult, ProbeRow,
@@ -892,14 +974,20 @@ mod tests {
         pub fn to_json(value: u8) -> u8 { value + 1 }\n\
         pub fn from_json(value: u8) -> u8 { value }\n";
 
-    /// The `inverse-pairs` rows a real review produces for [`CHANGED_FILE`].
-    async fn inverse_pair_rows(before: &str, after: &str) -> Vec<ProbeRow> {
-        let work = reviewed_work(before, after, &[INVERSE_PAIRS_PROBE_NAME]).await;
+    /// The rows one declared probe produces for [`CHANGED_FILE`] in a real
+    /// review of a real repository.
+    async fn reviewed_probe_rows(before: &str, after: &str, probe: &str) -> Vec<ProbeRow> {
+        let work = reviewed_work(before, after, &[probe]).await;
         changed_file_work(&work)
             .probe_results()
             .iter()
             .flat_map(|result| result.rows.iter().cloned())
             .collect()
+    }
+
+    /// The `inverse-pairs` rows a real review produces for [`CHANGED_FILE`].
+    async fn inverse_pair_rows(before: &str, after: &str) -> Vec<ProbeRow> {
+        reviewed_probe_rows(before, after, INVERSE_PAIRS_PROBE_NAME).await
     }
 
     #[tokio::test]
@@ -976,6 +1064,87 @@ mod tests {
             results[0].rows[0].detail.as_deref(),
             Some(INVERSE_PAIRS_NOT_DIFFED),
             "an undiffable file must not read as a pair that is whole"
+        );
+    }
+
+    /// One test that asserts and one that only runs code, so a census run
+    /// separates the honest test from the fixture that proves nothing.
+    const ASSERTING_AND_HOLLOW_TESTS: &str = "\
+        #[test]\n\
+        fn asserts() { assert_eq!(one(), 1); }\n\
+        #[test]\n\
+        fn proves_nothing() { let value = one(); drop(value); }\n\
+        pub fn one() -> u8 { 1 }\n";
+
+    /// [`ASSERTING_AND_HOLLOW_TESTS`] with the asserting test marked
+    /// `#[ignore]`, so the runner never runs it.
+    const IGNORED_TEST: &str = "\
+        #[test]\n\
+        #[ignore]\n\
+        fn asserts() { assert_eq!(one(), 1); }\n\
+        pub fn one() -> u8 { 1 }\n";
+
+    /// The `assertion-census` rows a real review produces for [`CHANGED_FILE`].
+    async fn assertion_census_rows(before: &str, after: &str) -> Vec<ProbeRow> {
+        reviewed_probe_rows(before, after, ASSERTION_CENSUS_PROBE_NAME).await
+    }
+
+    #[tokio::test]
+    async fn a_test_that_asserts_nothing_is_the_only_row_the_census_reports() {
+        let rows = assertion_census_rows(ONE_FUNCTION, ASSERTING_AND_HOLLOW_TESTS).await;
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "a test that asserts must not be reported, got: {rows:?}"
+        );
+        assert_eq!(rows[0].symbol.as_deref(), Some("proves_nothing"));
+        let detail = rows[0]
+            .detail
+            .as_deref()
+            .expect("the row states what it measured");
+        assert!(
+            detail.contains("no assertion"),
+            "the row must state the measure, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_test_marked_ignore_is_reported_although_it_asserts() {
+        let rows = assertion_census_rows(ONE_FUNCTION, IGNORED_TEST).await;
+
+        assert_eq!(rows.len(), 1, "one row for the one skipped test: {rows:?}");
+        assert_eq!(rows[0].symbol.as_deref(), Some("asserts"));
+        let detail = rows[0]
+            .detail
+            .as_deref()
+            .expect("the row states what it measured");
+        assert!(
+            detail.contains("skipped"),
+            "the row must state the measure, got: {detail}"
+        );
+    }
+
+    /// A language whose tests the census cannot recognize must read as
+    /// **unknown**, never as a file whose tests all assert.
+    #[tokio::test]
+    async fn a_language_with_no_census_mapping_reports_one_not_computed_row() {
+        let change = FileChange::default().with_sources([(
+            "test_thing.py".to_string(),
+            "def test_nothing():\n    pass\n".to_string(),
+        )]);
+
+        let results = probe_results(&[ASSERTION_CENSUS_PROBE_NAME], &change).await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].rows.len(),
+            1,
+            "exactly one row, got: {results:?}"
+        );
+        assert_eq!(
+            results[0].rows[0].detail.as_deref(),
+            Some(ASSERTION_CENSUS_NOT_MEASURED)
         );
     }
 }

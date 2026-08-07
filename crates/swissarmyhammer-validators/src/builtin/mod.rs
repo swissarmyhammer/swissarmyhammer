@@ -107,12 +107,11 @@ mod tests {
     ];
 
     /// The focused review-time integrity validator migrated from the old
-    /// multi-rule `security-rules` and `test-integrity` sets. In-file (no
-    /// probes), with no `trigger`. Its `no-secrets` / `injection` /
-    /// `command-safety` siblings were later merged into `code-security`
-    /// (see [`MERGED_VALIDATORS`]); `test-integrity` also matches
-    /// `@file_groups/test_files`, so it cannot merge with a source-only set and
-    /// stayed whole.
+    /// multi-rule `security-rules` and `test-integrity` sets, with no
+    /// `trigger`. Its `no-secrets` / `injection` / `command-safety` siblings
+    /// were later merged into `code-security` (see [`MERGED_VALIDATORS`]);
+    /// `test-integrity` also matches `@file_groups/test_files`, so it cannot
+    /// merge with a source-only set and stayed whole.
     const SAFETY_VALIDATORS: &[&str] = &["test-integrity"];
 
     /// Language-scoped review validators migrated from the skill's
@@ -325,7 +324,6 @@ mod tests {
         let test_integrity = loader
             .get_ruleset("test-integrity")
             .expect("test-integrity should still load unchanged");
-        assert!(test_integrity.manifest.probes.is_empty());
         assert_eq!(
             test_integrity.rules.len(),
             2,
@@ -386,7 +384,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_safety_validators_load_with_no_probes() {
+    fn test_safety_validators_load_with_catalog_probes() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
@@ -396,12 +394,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("safety validator '{name}' should be loaded"));
             assert_eq!(ruleset.name(), *name);
 
-            // An in-file judgment — no engine probes.
-            assert!(
-                ruleset.manifest.probes.is_empty(),
-                "safety validator '{name}' must declare no probes, got: {:?}",
-                ruleset.manifest.probes
-            );
+            // Whatever it declares must be a real catalog name.
+            for declared in &ruleset.manifest.probes {
+                assert!(
+                    crate::review::probe_exists(declared),
+                    "{name} declares probe '{declared}' which is not in the catalog"
+                );
+            }
 
             // Each carries at least one rule.
             assert!(
@@ -409,6 +408,42 @@ mod tests {
                 "{name} should carry at least one rule"
             );
         }
+    }
+
+    /// `test-integrity` declares the `assertion-census` probe, and its
+    /// `no-test-cheating` rule is what reads those rows. The three halves are
+    /// asserted together because each is useless without the others: a
+    /// declaration no probe answers to, or a probe no rule reads, leaves the
+    /// rule counting assertions from prose alone.
+    #[test]
+    fn test_test_integrity_declares_the_assertion_census_probe_its_rule_reads() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let test_integrity = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
+
+        assert_eq!(
+            test_integrity.manifest.probes,
+            vec!["assertion-census".to_string()],
+            "test-integrity should declare exactly [assertion-census], got: {:?}",
+            test_integrity.manifest.probes
+        );
+        assert!(
+            crate::review::probe_exists("assertion-census"),
+            "the probe test-integrity declares must be in the catalog"
+        );
+        let census_rule = test_integrity
+            .rules
+            .iter()
+            .find(|rule| rule.name == "no-test-cheating")
+            .expect("the rule that reads the probe's rows must be in the ruleset");
+        assert!(
+            census_rule.body.contains("assertion-census"),
+            "no-test-cheating must read the probe's rows by name, got: {}",
+            census_rule.body
+        );
     }
 
     #[test]

@@ -16,6 +16,10 @@ pub use complexity::{
     cognitive_complexity, FileComplexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
     NESTING_DEPTH_THRESHOLD,
 };
+/// What each test function in a file actually measures — zero assertions, a
+/// skip marker, an empty body — so a reviewer reads rows instead of counting
+/// assertion calls by eye. See [`complexity::test_census`].
+pub use complexity::{test_census, TestCensus, TestDefect};
 
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;

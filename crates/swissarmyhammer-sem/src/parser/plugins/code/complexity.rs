@@ -146,6 +146,10 @@ use tree_sitter::Node;
 
 use super::parse_code;
 
+mod test_census;
+
+pub use test_census::{test_census, TestCensus, TestDefect};
+
 /// The cognitive-complexity score at or above which a function is flagged. The
 /// Sonar default.
 pub const COGNITIVE_COMPLEXITY_THRESHOLD: u32 = 15;
@@ -1077,6 +1081,23 @@ fn collect_functions(
     depth: u32,
     out: &mut Vec<FunctionComplexity>,
 ) {
+    for_each_function(node, source, spec, depth, &mut |function| {
+        out.push(score_function(function, source, spec));
+    });
+}
+
+/// Visit every function definition at or under `node`, in source order.
+///
+/// The one place "what counts as a function definition here" is decided, so the
+/// scorer and the [`test_census`] read the same set of definitions off the same
+/// [`ComplexitySpec`] row rather than each walking the tree its own way.
+fn for_each_function<'t>(
+    node: Node<'t>,
+    source: &str,
+    spec: &ComplexitySpec,
+    depth: u32,
+    visit: &mut dyn FnMut(Node<'t>),
+) {
     if depth > MAX_TRAVERSAL_DEPTH {
         // Stop descending rather than risk the native call stack. A function
         // nested this deep in surrounding structure is unreachable in any
@@ -1087,11 +1108,11 @@ fn collect_functions(
         .function_kinds
         .contains(&effective_kind(node, spec, source))
     {
-        out.push(score_function(node, source, spec));
+        visit(node);
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_functions(child, source, spec, depth + 1, out);
+        for_each_function(child, source, spec, depth + 1, visit);
     }
 }
 
@@ -1303,43 +1324,58 @@ fn is_test_definition(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bo
         }
     }
 
+    definition_attributes(node, spec)
+        .into_iter()
+        .any(|attribute| attribute_marks_test(attribute, source))
+}
+
+/// Every attribute/annotation/decorator node the grammar attaches to the
+/// definition at `node`.
+///
+/// Two placements, both of which every mapped grammar uses one of: a contiguous
+/// run of preceding siblings (Rust's `#[attr]`, Python's decorator inside the
+/// shared `decorated_definition` wrapper, TypeScript's decorator as a
+/// `class_body` sibling), and a named child of the definition itself —
+/// directly (JavaScript's bare `decorator`) or through however many
+/// [`ComplexitySpec::attribute_container_kinds`] wrapper levels the grammar
+/// nests (PHP two deep, `attribute_list` > `attribute_group` > `attribute`;
+/// Java/C#/C/C++ one).
+///
+/// Collecting the nodes rather than answering one question about them is what
+/// lets the test marker and the [`test_census`]'s skip markers be read off the
+/// same traversal.
+fn definition_attributes<'t>(node: Node<'t>, spec: &ComplexitySpec) -> Vec<Node<'t>> {
+    let mut attributes = Vec::new();
     let mut sibling = node.prev_named_sibling();
     while let Some(current) = sibling {
         if !spec.attribute_kinds.contains(&current.kind()) {
             break;
         }
-        if attribute_marks_test(current, source) {
-            return true;
-        }
+        attributes.push(current);
         sibling = current.prev_named_sibling();
     }
-
     let mut cursor = node.walk();
-    let found = node
-        .named_children(&mut cursor)
-        .any(|child| node_carries_test_attribute(child, spec, source));
+    for child in node.named_children(&mut cursor) {
+        collect_attributes(child, spec, &mut attributes);
+    }
     drop(cursor);
-    found
+    attributes
 }
 
-/// Whether `node` is a test-marking attribute itself, or (through however
-/// many [`ComplexitySpec::attribute_container_kinds`] wrapper levels the
-/// grammar nests) contains one. Recurses through consecutive container
-/// levels generically — PHP nests two deep (`attribute_list` >
-/// `attribute_group` > `attribute`), Java/C#/C/C++ nest one.
-fn node_carries_test_attribute(node: Node<'_>, spec: &ComplexitySpec, source: &str) -> bool {
+/// Push `node` onto `out` when it is an attribute, or descend into it when it
+/// is one of the wrapper levels a grammar nests attributes inside.
+fn collect_attributes<'t>(node: Node<'t>, spec: &ComplexitySpec, out: &mut Vec<Node<'t>>) {
     if spec.attribute_kinds.contains(&node.kind()) {
-        return attribute_marks_test(node, source);
+        out.push(node);
+        return;
     }
     if spec.attribute_container_kinds.contains(&node.kind()) {
         let mut cursor = node.walk();
-        let found = node
-            .named_children(&mut cursor)
-            .any(|child| node_carries_test_attribute(child, spec, source));
+        for child in node.named_children(&mut cursor) {
+            collect_attributes(child, spec, out);
+        }
         drop(cursor);
-        return found;
     }
-    false
 }
 
 /// Whether one attribute/annotation/decorator node names the `test` marker,
@@ -1351,9 +1387,19 @@ fn node_carries_test_attribute(node: Node<'_>, spec: &ComplexitySpec, source: &s
 /// C#/PHP's capitalized one), so `#[serial_test::serial]` and
 /// `#[test_case(..)]` are not tests.
 fn attribute_marks_test(node: Node<'_>, source: &str) -> bool {
-    let Some(text) = node_text(node, source) else {
-        return false;
-    };
+    attribute_marker_name(node, source).is_some_and(|last| last.eq_ignore_ascii_case("test"))
+}
+
+/// The marker one attribute/annotation/decorator node names: its last
+/// `.`/`::`/`\`-separated path segment, with the grammar's punctuation and any
+/// argument list stripped.
+///
+/// `#[tokio::test]` reduces to `test`, `#[ignore]` to `ignore`, and
+/// `@Disabled("flaky")` to `Disabled` — so one comparison recognizes a marker
+/// however the language spells it, and `#[test_case(..)]` reduces to
+/// `test_case` rather than to `test`.
+fn attribute_marker_name<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str> {
+    let text = node_text(node, source)?;
     let inner = text
         .trim()
         .trim_start_matches('#')
@@ -1362,9 +1408,7 @@ fn attribute_marks_test(node: Node<'_>, source: &str) -> bool {
         .trim_end_matches(']')
         .trim();
     let path = inner.split('(').next().unwrap_or(inner).trim();
-    path.rsplit(['.', ':', '\\'])
-        .next()
-        .is_some_and(|last| last.eq_ignore_ascii_case("test"))
+    path.rsplit(['.', ':', '\\']).next()
 }
 
 /// Whether the definition is a name+signature test by
