@@ -4,14 +4,80 @@
 //! JSON configuration files (e.g. `.mcp.json`, `.cursor/mcp.json`).
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
+use crate::frontmatter;
 use crate::registry::RegistryError;
+
+/// Declare a newtype that wraps one string and nothing else.
+///
+/// [`ServersKey`] and [`ToolName`] are the same code twice, so the macro is
+/// their single source. A copy of these six impl blocks for each type could
+/// drift; one expansion cannot.
+macro_rules! string_newtype {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(String);
+
+        impl $name {
+            /// Wrap `value`.
+            pub fn new(value: impl AsRef<str>) -> Self {
+                Self(value.as_ref().to_string())
+            }
+
+            /// The wrapped string.
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self::new(value)
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+    };
+}
+
+string_newtype! {
+    /// The JSON object key an agent config stores its MCP servers under, such
+    /// as `mcpServers` or Zed's `context_servers`.
+    ///
+    /// This names a key in the config file, never a server. Keeping it apart
+    /// from [`ToolName`] in the type system is what stops the two from being
+    /// passed in the wrong order.
+    ServersKey
+}
+
+string_newtype! {
+    /// The name one MCP server is registered under inside a [`ServersKey`]
+    /// object, such as `sah`.
+    ToolName
+}
 
 /// An MCP server entry as written to agent config files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,8 +180,8 @@ pub fn parse_tool_frontmatter(
 /// accept the plain shape.
 pub fn set_mcp_server_entry(
     root: &mut Value,
-    servers_key: &str,
-    tool_name: &str,
+    servers_key: &ServersKey,
+    tool_name: &ToolName,
     entry: &McpServerEntry,
     extras: &BTreeMap<String, Value>,
 ) -> Result<bool, RegistryError> {
@@ -124,7 +190,7 @@ pub fn set_mcp_server_entry(
     })?;
 
     let servers = obj
-        .entry(servers_key)
+        .entry(servers_key.as_str())
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
     let servers_map = servers
@@ -145,7 +211,7 @@ pub fn set_mcp_server_entry(
         }
     }
 
-    if servers_map.get(tool_name) == Some(&serialized) {
+    if servers_map.get(tool_name.as_str()) == Some(&serialized) {
         return Ok(false);
     }
     servers_map.insert(tool_name.to_string(), serialized);
@@ -157,11 +223,15 @@ pub fn set_mcp_server_entry(
 ///
 /// Returns `false` (no error) when `servers_key` is absent, is not an
 /// object, or does not contain `tool_name`.
-pub fn remove_mcp_server_entry(root: &mut Value, servers_key: &str, tool_name: &str) -> bool {
+pub fn remove_mcp_server_entry(
+    root: &mut Value,
+    servers_key: &ServersKey,
+    tool_name: &ToolName,
+) -> bool {
     root.as_object_mut()
-        .and_then(|obj| obj.get_mut(servers_key))
+        .and_then(|obj| obj.get_mut(servers_key.as_str()))
         .and_then(|servers| servers.as_object_mut())
-        .map(|servers_map| servers_map.remove(tool_name).is_some())
+        .map(|servers_map| servers_map.remove(tool_name.as_str()).is_some())
         .unwrap_or(false)
 }
 
@@ -177,8 +247,8 @@ pub fn remove_mcp_server_entry(root: &mut Value, servers_key: &str, tool_name: &
 /// that accept the plain shape.
 pub fn register_mcp_server(
     config_path: &Path,
-    servers_key: &str,
-    tool_name: &str,
+    servers_key: &ServersKey,
+    tool_name: &ToolName,
     entry: &McpServerEntry,
     extras: &BTreeMap<String, Value>,
 ) -> Result<(), RegistryError> {
@@ -192,8 +262,8 @@ pub fn register_mcp_server(
 /// Returns `true` if the entry was found and removed, `false` if not found.
 pub fn unregister_mcp_server(
     config_path: &Path,
-    servers_key: &str,
-    tool_name: &str,
+    servers_key: &ServersKey,
+    tool_name: &ToolName,
 ) -> Result<bool, RegistryError> {
     if !config_path.exists() {
         return Ok(false);
@@ -209,28 +279,16 @@ pub fn unregister_mcp_server(
 
 /// Parse raw YAML frontmatter from a markdown file, returning the YAML Value.
 ///
-/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
-/// three hyphens delimits the block. A three-hyphen run inside a value -- a
-/// `--` flag or a `---` separator in a TOOL.md command line -- stays in the
-/// frontmatter instead of cutting it short, and an opening line of `----` or
-/// `---x` opens nothing.
+/// Only a line that is exactly three hyphens delimits the block, so a `--`
+/// flag or a `---` separator in a TOOL.md command line stays in the
+/// frontmatter instead of cutting it short.
 ///
 /// # Errors
 ///
 /// Returns an error when the file cannot be read, the frontmatter block is
 /// missing or unterminated, or the YAML does not parse.
 pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml_ng::Value, RegistryError> {
-    let content = std::fs::read_to_string(path)?;
-
-    let (frontmatter, _body) = split_frontmatter_body(&content).ok_or_else(|| {
-        RegistryError::Validation(format!(
-            "{} must open and close YAML frontmatter with a line of exactly three hyphens",
-            path.display()
-        ))
-    })?;
-
-    serde_yaml_ng::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))
+    frontmatter::read_file(path)
 }
 
 /// Read the plugin name from `.claude-plugin/plugin.json`.
@@ -330,7 +388,7 @@ pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter_fixtures::{
+    use crate::frontmatter::fixtures::{
         write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
         OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
     };
@@ -420,8 +478,8 @@ mcp:
 
         register_mcp_server(
             &config_path,
-            "mcpServers",
-            "my-tool",
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("my-tool"),
             &entry,
             &BTreeMap::new(),
         )
@@ -455,8 +513,8 @@ mcp:
 
         register_mcp_server(
             &config_path,
-            "mcpServers",
-            "new-tool",
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("new-tool"),
             &entry,
             &BTreeMap::new(),
         )
@@ -483,7 +541,12 @@ mcp:
         )
         .unwrap();
 
-        let removed = unregister_mcp_server(&config_path, "mcpServers", "my-tool").unwrap();
+        let removed = unregister_mcp_server(
+            &config_path,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("my-tool"),
+        )
+        .unwrap();
         assert!(removed);
 
         let content = std::fs::read_to_string(&config_path).unwrap();
@@ -499,7 +562,12 @@ mcp:
 
         std::fs::write(&config_path, r#"{"mcpServers": {}}"#).unwrap();
 
-        let removed = unregister_mcp_server(&config_path, "mcpServers", "nonexistent").unwrap();
+        let removed = unregister_mcp_server(
+            &config_path,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("nonexistent"),
+        )
+        .unwrap();
         assert!(!removed);
     }
 
@@ -508,7 +576,12 @@ mcp:
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("nonexistent.json");
 
-        let removed = unregister_mcp_server(&config_path, "mcpServers", "tool").unwrap();
+        let removed = unregister_mcp_server(
+            &config_path,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("tool"),
+        )
+        .unwrap();
         assert!(!removed);
     }
 
@@ -565,8 +638,8 @@ mcp:
 
         register_mcp_server(
             &config_path,
-            "context_servers",
-            "sah",
+            &ServersKey::new("context_servers"),
+            &ToolName::new("sah"),
             &entry,
             &BTreeMap::new(),
         )
@@ -590,6 +663,21 @@ mcp:
     }
 
     #[test]
+    fn test_servers_key_and_tool_name_carry_their_string() {
+        assert_eq!(
+            ServersKey::new("context_servers").as_str(),
+            "context_servers"
+        );
+        assert_eq!(ToolName::new("sah").as_str(), "sah");
+    }
+
+    #[test]
+    fn test_servers_key_and_tool_name_display_their_string() {
+        assert_eq!(ServersKey::new("mcpServers").to_string(), "mcpServers");
+        assert_eq!(ToolName::new("my-tool").to_string(), "my-tool");
+    }
+
+    #[test]
     fn test_set_mcp_server_entry_creates_servers_key_when_missing() {
         let mut root = json!({});
         let entry = McpServerEntry {
@@ -597,8 +685,14 @@ mcp:
             args: vec!["serve".to_string()],
             env: BTreeMap::new(),
         };
-        let changed =
-            set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+        let changed = set_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert!(changed);
         assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
         assert_eq!(root["mcpServers"]["sah"]["args"], json!(["serve"]));
@@ -612,9 +706,22 @@ mcp:
             env: BTreeMap::new(),
         };
         let mut root = json!({});
-        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
-        let changed =
-            set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+        set_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let changed = set_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert!(!changed);
     }
 
@@ -629,7 +736,14 @@ mcp:
             args: vec![],
             env: BTreeMap::new(),
         };
-        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+        set_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert_eq!(root["mcpServers"]["other"]["command"], "node");
         assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
         assert_eq!(root["otherKey"], "value");
@@ -640,7 +754,11 @@ mcp:
         let mut root = json!({
             "mcpServers": { "sah": { "command": "sah" }, "other": { "command": "n" } }
         });
-        let removed = remove_mcp_server_entry(&mut root, "mcpServers", "sah");
+        let removed = remove_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+        );
         assert!(removed);
         assert!(!root["mcpServers"].as_object().unwrap().contains_key("sah"));
         assert!(root["mcpServers"]["other"].is_object());
@@ -649,13 +767,21 @@ mcp:
     #[test]
     fn test_remove_mcp_server_entry_returns_false_when_absent() {
         let mut root = json!({"mcpServers": {"other": {"command": "node"}}});
-        assert!(!remove_mcp_server_entry(&mut root, "mcpServers", "sah"));
+        assert!(!remove_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah")
+        ));
     }
 
     #[test]
     fn test_remove_mcp_server_entry_returns_false_when_servers_key_missing() {
         let mut root = json!({"otherKey": "value"});
-        assert!(!remove_mcp_server_entry(&mut root, "mcpServers", "sah"));
+        assert!(!remove_mcp_server_entry(
+            &mut root,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah")
+        ));
     }
 
     #[test]
@@ -728,7 +854,14 @@ mcp:
         let mut extras = BTreeMap::new();
         extras.insert("source".to_string(), Value::String("custom".to_string()));
 
-        register_mcp_server(&config_path, "context_servers", "sah", &entry, &extras).unwrap();
+        register_mcp_server(
+            &config_path,
+            &ServersKey::new("context_servers"),
+            &ToolName::new("sah"),
+            &entry,
+            &extras,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -751,7 +884,14 @@ mcp:
             env: BTreeMap::new(),
         };
 
-        register_mcp_server(&config_path, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+        register_mcp_server(
+            &config_path,
+            &ServersKey::new("mcpServers"),
+            &ToolName::new("sah"),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -792,7 +932,14 @@ mcp:
         let mut extras = BTreeMap::new();
         extras.insert("source".to_string(), Value::String("custom".to_string()));
 
-        register_mcp_server(&config_path, "context_servers", "sah", &entry, &extras).unwrap();
+        register_mcp_server(
+            &config_path,
+            &ServersKey::new("context_servers"),
+            &ToolName::new("sah"),
+            &entry,
+            &extras,
+        )
+        .unwrap();
 
         // File round-trips as strict JSON (the JSONC has been re-serialized).
         let content = std::fs::read_to_string(&config_path).unwrap();

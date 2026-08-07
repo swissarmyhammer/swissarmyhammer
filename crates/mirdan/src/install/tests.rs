@@ -1,6 +1,6 @@
 use swissarmyhammer_common::lifecycle::InitScope;
 
-use crate::frontmatter_fixtures::{
+use crate::frontmatter::fixtures::{
     write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
     OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
 };

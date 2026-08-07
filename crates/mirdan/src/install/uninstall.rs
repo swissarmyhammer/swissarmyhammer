@@ -9,7 +9,7 @@ use crate::agents::{
 };
 use crate::git_source;
 use crate::lockfile::Lockfile;
-use crate::mcp_config;
+use crate::mcp_config::{self, ServersKey, ToolName};
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::store;
@@ -454,7 +454,11 @@ fn unregister_mcp_from_agents(
         let Some(config_path) = config_path else {
             continue;
         };
-        if mcp_config::unregister_mcp_server(&config_path, &mcp_cfg.servers_key, name)? {
+        if mcp_config::unregister_mcp_server(
+            &config_path,
+            &ServersKey::new(&mcp_cfg.servers_key),
+            &ToolName::new(name),
+        )? {
             on_removed(agent, &config_path);
             removed += 1;
         }

@@ -257,7 +257,7 @@ mod applier_tests {
 
     use super::super::{init_profile, Profile, Selector};
     use super::*;
-    use crate::frontmatter_fixtures::{
+    use crate::frontmatter::fixtures::{
         NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS, OPENING_LINE_WITH_TRAILING_TEXT,
         THREE_HYPHEN_RUN_IN_DESCRIPTION,
     };

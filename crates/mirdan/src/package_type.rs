@@ -28,6 +28,25 @@ pub enum PackageType {
     Agent,
 }
 
+impl PackageType {
+    /// The manifest file that marks a directory as a package of this type,
+    /// relative to the package directory.
+    ///
+    /// This is the one statement of which file names which type.
+    /// [`detect_package_type`] reads it, and so does every scanner that walks a
+    /// directory of packages, so a manifest name cannot drift between the code
+    /// that finds a package and the code that reads it.
+    pub fn manifest_file(self) -> &'static str {
+        match self {
+            PackageType::Skill => "SKILL.md",
+            PackageType::Validator => "VALIDATOR.md",
+            PackageType::Tool => "TOOL.md",
+            PackageType::Plugin => ".claude-plugin/plugin.json",
+            PackageType::Agent => "AGENT.md",
+        }
+    }
+}
+
 impl fmt::Display for PackageType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -40,24 +59,31 @@ impl fmt::Display for PackageType {
     }
 }
 
+/// The directory a validator package must hold beside its manifest.
+pub const VALIDATOR_RULES_DIR: &str = "rules";
+
 /// Detect package type from a directory's contents.
 ///
-/// Detection order:
+/// Each type is recognized by the presence of its
+/// [`manifest_file`](PackageType::manifest_file). Detection order:
 /// 1. SKILL.md present -> Skill
 /// 2. VALIDATOR.md present AND rules/ directory exists -> Validator
 /// 3. TOOL.md present -> Tool
 /// 4. .claude-plugin/plugin.json present -> Plugin
-/// 5. Otherwise -> None
+/// 5. AGENT.md present -> Agent
+/// 6. Otherwise -> None
 pub fn detect_package_type(dir: &Path) -> Option<PackageType> {
-    if dir.join("SKILL.md").exists() {
+    if dir.join(PackageType::Skill.manifest_file()).exists() {
         Some(PackageType::Skill)
-    } else if dir.join("VALIDATOR.md").exists() && dir.join("rules").is_dir() {
+    } else if dir.join(PackageType::Validator.manifest_file()).exists()
+        && dir.join(VALIDATOR_RULES_DIR).is_dir()
+    {
         Some(PackageType::Validator)
-    } else if dir.join("TOOL.md").exists() {
+    } else if dir.join(PackageType::Tool.manifest_file()).exists() {
         Some(PackageType::Tool)
-    } else if dir.join(".claude-plugin").join("plugin.json").exists() {
+    } else if dir.join(PackageType::Plugin.manifest_file()).exists() {
         Some(PackageType::Plugin)
-    } else if dir.join("AGENT.md").exists() {
+    } else if dir.join(PackageType::Agent.manifest_file()).exists() {
         Some(PackageType::Agent)
     } else {
         None
@@ -181,6 +207,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detect_package_type(dir.path()), Some(PackageType::Plugin));
+    }
+
+    #[test]
+    fn test_manifest_file_is_what_detect_package_type_looks_for() {
+        for package_type in [
+            PackageType::Skill,
+            PackageType::Validator,
+            PackageType::Tool,
+            PackageType::Plugin,
+            PackageType::Agent,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = dir.path().join(package_type.manifest_file());
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            std::fs::write(&manifest, r#"{"name": "test"}"#).unwrap();
+            if package_type == PackageType::Validator {
+                std::fs::create_dir(dir.path().join("rules")).unwrap();
+            }
+
+            assert_eq!(detect_package_type(dir.path()), Some(package_type));
+        }
     }
 
     #[test]

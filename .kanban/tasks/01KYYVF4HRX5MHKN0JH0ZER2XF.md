@@ -188,6 +188,99 @@ comments:
     - evidence: 13 files — crates/mirdan/src/{list.rs, mcp_config.rs, info.rs, git_source.rs, package_type.rs, dispatch.rs, outdated.rs, lib.rs, frontmatter_fixtures.rs}, crates/mirdan/src/install/{package.rs, applier.rs, tests.rs}, apps/mirdan-app/src/commands.rs. 20 new tests, 12 RED first, 4 pins, 4 RED by missing contract. All 6 findings checked. `cargo nextest run --workspace`: 13607 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo fmt --all`.
     - next: /review
   timestamp: 2026-08-07T15:44:14.731277+00:00
+- actor: claude-code
+  id: 01kzefcpqc42stnqgr6maj55fe
+  text: |
+    ### review — findings
+
+    - scope: `review sha HEAD~1..HEAD` (commit 6f5504fd2), round 2
+    - counts: 11 findings, 11 confirmed, 3 refuted, 27 attempted, 0 failed
+    - round 1: all six items verified closed. `PackageFilter` at list.rs:42; `discover_packages` decomposed into `scan_skill_stores`, `scan_agent_skill_dirs`, `scan_validator_dirs`, `scan_tool_dirs`, `scan_agent_plugin_dirs`, `lockfile_keys`, `enrich_sources_from_lockfiles`; no `strip_prefix("---")` split remains in mirdan production code; every test function in list.rs carries the `test_` prefix.
+    - evidence: crates/mirdan/src/git_source.rs:100, crates/mirdan/src/git_source.rs:355, crates/mirdan/src/info.rs:168, crates/mirdan/src/install/package.rs:310, crates/mirdan/src/list.rs:382, crates/mirdan/src/list.rs:408, crates/mirdan/src/list.rs:434, crates/mirdan/src/list.rs:460, crates/mirdan/src/mcp_config.rs:117, crates/mirdan/src/mcp_config.rs:160, crates/mirdan/src/mcp_config.rs:180
+    - next: apply the 11 new findings; task stays in `review`.
+  timestamp: 2026-08-07T16:02:40.492882+00:00
+- actor: claude-code
+  id: 01kzefdrs51y0vc8zrshpmb434
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 13 files; 20 new tests, 12 RED first; all six round-1 findings closed
+    - test: green — cargo nextest run --workspace, 13607 passed, 0 failed, 0 skipped; clippy -D warnings clean; cargo fmt --all
+    - commit: 6f5504fd2
+    - review: findings — 11 new, 11 confirmed, 3 refuted, 27 attempted, 0 failed. crates/mirdan/src/git_source.rs:100, crates/mirdan/src/git_source.rs:355, crates/mirdan/src/info.rs:168, crates/mirdan/src/install/package.rs:310, crates/mirdan/src/list.rs:382, crates/mirdan/src/list.rs:408, crates/mirdan/src/list.rs:434, crates/mirdan/src/list.rs:460, crates/mirdan/src/mcp_config.rs:117, crates/mirdan/src/mcp_config.rs:160, crates/mirdan/src/mcp_config.rs:180
+    - round-1 verification: all six prior findings confirmed closed by the reviewer
+
+    Note: the checkpoint commit swept an unrelated edit to `builtin/skills/finish/SKILL.md` into this task's range. That edit is not task scope.
+  timestamp: 2026-08-07T16:03:15.365288+00:00
+- actor: claude-code
+  id: 01kzefv17rg2p20193wdy2wtkf
+  text: |-
+    Picked the card back up from `review` with eleven open findings from round 2. Research for the fix.
+
+    **Findings 3+4 (git_source.rs:514 / info.rs:168 / install/package.rs:310, the split-parse-extract wrapper).** Round 1 consolidated the *split* call. Five readers still each carry the parse-and-extract wrapper around it:
+
+    | site | contract |
+    |---|---|
+    | `list.rs::parse_frontmatter` | `Option<Value>` |
+    | `mcp_config.rs::parse_yaml_frontmatter` | `Result<Value, RegistryError>` |
+    | `install/package.rs::read_frontmatter` | `Result<(name, version)>`, distinct error for a missing `name` |
+    | `info.rs::read_frontmatter_field` | `String`, `"unknown"` fallback |
+    | `git_source.rs::extract_name_from_frontmatter` | `Option<String>`, takes content not a path |
+
+    A new `crate::frontmatter` module owns read-split-parse once and the two field lookups (top level, and `metadata.<field>` first with a top-level fallback -- the shape `info.rs`, `list.rs`, and `package.rs` all wanted for `version`). Each site keeps a wrapper that states only its own error contract, so every existing test keeps its target. `frontmatter_fixtures.rs` becomes `frontmatter::fixtures`, which puts the delimiter rule and the four files that state it in one module.
+
+    **Findings 5-8 (list.rs:382/:408/:434/:460, the four scan walkers).** The four differ in three things only: the manifest file, the package type, and whether a `rules/` directory must also be there. A `PackageScan` row carries those, and one `scan_package_dirs` walker reads them. The manifest name is not a fourth field: `PackageType` already knows its manifest in `detect_package_type`, so `PackageType::manifest_file()` states it once and `detect_package_type`, the `list.rs` scans, `git_source::scan_dir_for_package`, and the two `match pkg_type` version tables in `install/package.rs` all read it from there.
+
+    Two behaviour differences between the four are deliberate and stay: `scan_skills` names a package after its directory, while `scan_skills_recursive` prefers the frontmatter name; and plugins read their name from `plugin.json`, carry no description, and version `latest`. `scan_skills_recursive` is a recursive store walker, not one of the four, and keeps its own shape.
+
+    None of the four walkers has a direct unit test today, so the generic walker gets one for each of the four types plus the validator `rules/` requirement.
+
+    **Findings 9-11 (mcp_config.rs, the `ServersKey`/`ToolName` newtypes).** Four signatures carry the adjacent pair, not three: `unregister_mcp_server` has it too. `agents::McpConfig::servers_key` stays a `String` -- it is a serde field read from `builtin/agents/*.yaml`, and retyping it reaches `agents.rs`, `status.rs`, `sync.rs`, and `deploy.rs`, none of which a finding names. Call sites wrap at the boundary. The two newtypes are the same code twice, so one `macro_rules!` writes both; the duplication rule names a macro as the single source.
+
+    Call sites to update: `install/profile.rs` (2), `install/deploy.rs` (2), `install/package.rs` (1), `install/uninstall.rs` (1), `strategy/mod.rs` (3), plus eight tests in `mcp_config.rs`.
+
+    **Finding 1 (git_source.rs:100, `parse_git_source`, cognitive complexity 19).** Three shapes in one function. Each becomes a parser returning `Option<GitSource>`, and the function is an `or_else` chain ending in the one error. The repeated `parts[n].chars().all(...)` test becomes one predicate.
+
+    **Finding 2 (git_source.rs:355, `discover_packages`, complexity 23, nesting 5).** The subpath branch returns its own result, so it becomes `discover_in_subpath`. The priority-directory walk is `read_dir` inside `is_dir` inside a loop -- the `is_dir()` guard is redundant, because `read_dir` on a non-directory fails, so dropping it and extracting `scan_child_dirs` flattens three levels to one.
+  timestamp: 2026-08-07T16:10:30.008697+00:00
+- actor: claude-code
+  id: 01kzej5qc1arh9ctd567cv632a
+  text: |-
+    All eleven round-2 findings closed. RED first for every new contract.
+
+    **RED runs.**
+    - `PackageType::manifest_file()` — `cargo nextest run -p mirdan --lib package_type::` failed to compile: `no method named manifest_file found for enum PackageType`. GREEN: 14 of 14.
+    - `crate::frontmatter` — the module's fourteen tests failed to compile with `cannot find function parse / parse_file / read_file / field / metadata_field / file_field / file_metadata_field in this scope`. GREEN: 14 of 14.
+    - `scan_package_dirs` and the four `PackageScan` rows — the nine new `list.rs` tests failed to compile against the absent symbols. GREEN: all pass.
+    - `ServersKey` / `ToolName` — the two new `mcp_config.rs` tests failed to compile: `cannot find ServersKey in this scope`.
+
+    Twenty-three tests added: 14 in `frontmatter`, 9 in `list.rs` for the generic walker, 3 in `git_source.rs` for `scan_dir_for_package`, 2 in `mcp_config.rs` for the newtypes, 1 in `package_type.rs` binding `manifest_file()` to detection. Not one pre-existing test's assertion changed; the tests that changed are only the ones whose function signature changed.
+
+    **Two discoveries worth keeping.**
+
+    1. Consolidating the readers made two symbols dead, and clippy caught it under `-D warnings` before I did: `git_source::extract_name_from_frontmatter` and `frontmatter::str_field`. Once `scan_dir_for_package` read by path through `frontmatter::file_field`, the content-taking pair had no production caller left and survived only through its own tests. Deleted both. The lesson for the next agent: after routing a reader through a shared helper, check whether the old wrapper still has a non-test caller -- a wrapper kept alive only by its tests is dead code that reads as covered.
+
+    2. The three `git_source` tests that fed content strings to the deleted wrapper became `scan_dir_for_package` tests instead of being dropped. They now assert the same three shapes -- a named skill, frontmatter with no name, no frontmatter at all -- through the production discovery path rather than through a wrapper that no longer exists.
+
+    **What did not work.** The first draft kept `extract_name_from_frontmatter` as a one-line alias for `str_field` and had `scan_dir_for_package` read the file itself. That keeps every test valid but leaves a wrapper whose only content is a field name, and it re-adds the read the shared module exists to own. Delegating by path is shorter and leaves nothing to drift.
+
+    **Blast radius.** Four `mcp_config` signatures changed; nine call sites across `install/profile.rs`, `install/deploy.rs`, `install/package.rs`, `install/uninstall.rs`, and `strategy/mod.rs` were updated. `cargo check --workspace --all-targets` confirms no other crate calls them. `list::read_frontmatter_name` keeps its signature; its one out-of-crate caller, `apps/mirdan-app/src/commands.rs`, is unaffected. `PackageType` gained a method, which breaks nothing.
+
+    **Verification, all from the repo root.**
+    - `cargo nextest run --workspace` — 13628 passed, 0 failed, 0 skipped.
+    - `cargo clippy --workspace --all-targets --all-features -- -D warnings` — zero errors.
+    - `cargo clippy -p mirdan -p mirdan-app -- -W missing_docs` — zero findings in any file this change touched. The remaining ones in the crate are in `registry/types.rs` and other untouched files.
+    - `cargo doc -p mirdan --no-deps` — one `links to private item` warning remains, at `git_source.rs:217` for `[checkout_ref]`. It predates this change; the two I introduced by linking `[frontmatter]` from public docs are fixed.
+    - `cargo fmt --all`.
+
+    **Note on process.** Two sub agents did the mechanical parts in parallel: the `ServersKey`/`ToolName` migration with its nine call sites, and the `install/package.rs` rewiring. Both edited `install/package.rs` -- one the MCP call site, the other `read_frontmatter` and the version tables. Both changes are present and the file compiles, but a concurrent whole-file write is a real clobber risk; give overlapping files to one agent next time.
+  timestamp: 2026-08-07T16:51:17.505343+00:00
+- actor: claude-code
+  id: 01kzej5zrartv2ezwtrwnxhv5y
+  text: |-
+    ### implement — changed
+    - evidence: 15 files — crates/mirdan/src/{frontmatter.rs (new), frontmatter/fixtures.rs (moved from frontmatter_fixtures.rs), list.rs, git_source.rs, info.rs, mcp_config.rs, package_type.rs, lib.rs}, crates/mirdan/src/install/{package.rs, applier.rs, profile.rs, deploy.rs, uninstall.rs}, crates/mirdan/src/strategy/mod.rs. 23 new tests, every new contract RED first. All 11 findings checked. `cargo nextest run --workspace`: 13628 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: zero errors. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo fmt --all`.
+    - next: /review
+  timestamp: 2026-08-07T16:51:26.090752+00:00
 position_column: doing
 position_ordinal: '8380'
 title: mirdan list.rs carries the frontmatter substring-split defect
@@ -254,3 +347,37 @@ All six findings are closed. Each finding was applied to the whole cause, not on
 - The naming finding named three test functions. A fourth, `a_file_with_no_closing_delimiter_line_reads_no_frontmatter`, had the same defect and was renamed too.
 
 This work also satisfies ^t7gabdj.
+
+## Review Findings (2026-08-07 10:45)
+
+> Scope: `HEAD~1..HEAD` (commit 6f5504fd2). Round 2. Every round-1 item above is verified closed.
+
+- [x] `crates/mirdan/src/git_source.rs:100` — Function `parse_git_source` exceeds cognitive complexity gate. Cognitive complexity 19 exceeds threshold of 15, making the function difficult to understand and maintain. Refactor to reduce complexity: extract common parsing logic for SSH URLs, HTTPS URLs, and GitHub shorthand into separate helper functions; consider a state machine or parsing strategy pattern.
+- [x] `crates/mirdan/src/git_source.rs:355` — Function `discover_packages` exceeds both cognitive complexity and condition-nesting depth gates. Cognitive complexity 23 exceeds 15, and condition-nesting depth 5 exceeds 4, creating deeply nested control flow that is hard to reason about. Refactor to reduce nesting: extract the priority-directory scan into a separate function; flatten conditional logic by reversing guards early; consider extracting the deduplication logic into a helper to reduce decision points.
+- [x] `crates/mirdan/src/info.rs:168` — Function duplicates frontmatter parsing logic repeated in `git_source.rs::extract_name_from_frontmatter` (line 514) and `install/package.rs::read_frontmatter` (line 310). The pattern—split frontmatter, parse YAML, extract field, convert to string—is identical across all three. Duplication creates maintenance burden when the frontmatter split rule changes (as this change did). Consolidate frontmatter parsing into a shared helper function. The core logic of splitting and YAML parsing is identical; only the field names, error handling strategy (Option vs String vs Result), and return type vary. Extract this to a single function and parameterize the differences.
+- [x] `crates/mirdan/src/install/package.rs:310` — Function duplicates frontmatter parsing logic repeated in `git_source.rs::extract_name_from_frontmatter` (line 514) and `info.rs::read_frontmatter_field` (line 168). All three implement the same sequence: split frontmatter with `split_frontmatter_body`, parse YAML with `serde_yaml_ng::from_str`, extract field(s), convert to string. The duplication creates sync risk when the split rule or YAML parsing changes. Extract frontmatter parsing to a shared helper that handles the split-parse-extract sequence. Parameterize for field names and error handling (return Option, String with default, or Result). Have `read_frontmatter` delegate to this helper, eliminating the verbatim duplication.
+- [x] `crates/mirdan/src/list.rs:382` — scan_skills (line 382), scan_validators (line 408), and scan_tools (line 434) are near-identical blocks differing only in manifest filename, package type, and one optional directory check. These should be extracted into a single generic scanning function parameterized by manifest name, package type, and optional validation predicates. Extract a generic function `scan_package_type_dir(dir, manifest_file, package_type, extra_check_fn, location, packages)` and call it from scan_skills, scan_validators, and scan_tools, eliminating ~70 lines of duplicated logic.
+- [x] `crates/mirdan/src/list.rs:408` — scan_validators is a near-duplicate of scan_skills (line 382) and scan_tools (line 434). The structure, error handling, and metadata extraction are identical; only the manifest filename, optional rules check, and package type differ. Consolidate into the generic function referenced in the line 382 finding.
+- [x] `crates/mirdan/src/list.rs:434` — scan_tools is a near-duplicate of scan_skills (line 382) and scan_validators (line 408). Identical structure and logic; differs only in manifest filename and package type. Extract into the shared generic function.
+- [x] `crates/mirdan/src/list.rs:460` — scan_plugins shares the same directory-scanning and package-creation boilerplate with scan_skills (line 382), scan_validators (line 408), and scan_tools (line 434). All four follow: read_dir with match/error handling, flatten entries, is_dir check, manifest file existence check, metadata extraction, then InstalledPackage construction and push. Refactor the directory scanning and package creation boilerplate into a generic helper function that accepts: a validation predicate (for manifest check), a metadata extractor function/closure, and the package type, eliminating the repeated read_dir→flatten→is_dir→manifest→push pattern across all four functions.
+- [x] `crates/mirdan/src/mcp_config.rs:117` — Adjacent `&str` parameters with different semantic meanings should use newtypes. `servers_key` (a JSON config object key like "mcpServers") and `tool_name` (a tool identifier like "my-tool") have distinct semantic roles and should not be conflatable at the type level. Create newtype wrappers: `pub struct ServersKey(String)` and `pub struct ToolName(String)`, then update the function signature to `set_mcp_server_entry(..., servers_key: ServersKey, tool_name: ToolName, ...)`. This prevents accidental parameter swapping.
+- [x] `crates/mirdan/src/mcp_config.rs:160` — Adjacent `&str` parameters with different semantic meanings should use newtypes. In `remove_mcp_server_entry`, `servers_key` (config key) and `tool_name` (tool identifier) have distinct roles and should not be conflatable. Use ServersKey and ToolName newtypes (create once, reuse across all functions that need them).
+- [x] `crates/mirdan/src/mcp_config.rs:180` — Adjacent `&str` parameters with different semantic meanings should use newtypes. `servers_key` and `tool_name` in `register_mcp_server` have the same semantic distinction issue. Use ServersKey and ToolName newtypes in the function signature.
+
+## Resolution round 2 (2026-08-07)
+
+All eleven findings are closed. Each was applied to the whole cause, not only the named line.
+
+**The two complexity findings.** `parse_git_source` is now an `or_else` chain over `parse_ssh_source`, `parse_url_source`, and `parse_shorthand_source`, each returning `Option<GitSource>`, ending in the one error. `split_once_owned` and `is_shorthand_segment` carry the repeated pieces. `git_source::discover_packages` lost its subpath branch to `discover_in_subpath` and its priority-directory walk to `scan_child_dirs`; the `dir.is_dir()` guard before `read_dir` was redundant, so dropping it flattened three nesting levels to one.
+
+**The two duplication findings on the split-parse-extract sequence.** A new module, `crates/mirdan/src/frontmatter.rs`, owns read-split-parse once: `parse`, `parse_file`, `read_file`, `field`, `metadata_field`, `file_field`, `file_metadata_field`. Every reader now delegates and holds no parsing of its own -- `list.rs`, `info.rs`, `mcp_config.rs`, `install/package.rs`, and `git_source.rs`. Each keeps only the wrapper that states its own error contract (`Option`, `"unknown"`, `RegistryError`). `frontmatter_fixtures.rs` moved to `frontmatter::fixtures`, so the delimiter rule and the four files that state it live in one module.
+
+Two things fell out of the consolidation and were deleted, not left dead: `git_source::extract_name_from_frontmatter` (scanning now calls `frontmatter::file_field` by path) and `frontmatter::str_field`, its only caller. Their delimiter tests are covered once in `frontmatter`'s own tests; the three content-shape tests they carried became `scan_dir_for_package` tests, which read through the production path instead of the deleted wrapper.
+
+**The four scan-walker findings.** One `scan_package_dirs` walker reads a `PackageScan` row. Four rows -- `SKILL_SCAN`, `VALIDATOR_SCAN`, `TOOL_SCAN`, `PLUGIN_SCAN` -- carry the package type, the directories a package must hold beside its manifest, and the metadata reader. The manifest name is not a fifth field: `PackageType::manifest_file()` now states each manifest once, and `detect_package_type`, the `list.rs` scans, `git_source::scan_dir_for_package`, `info::show_package_at`, and the two version tables in `install/package.rs` all read it from there. `package_type::VALIDATOR_RULES_DIR` names the `rules/` directory once.
+
+**The three newtype findings.** `ServersKey` and `ToolName` are declared by one `string_newtype!` macro, so the two are one source rather than two copies. Four signatures take them, not three: `unregister_mcp_server` carried the same adjacent pair. Nine call sites wrap at the boundary across `install/profile.rs`, `install/deploy.rs`, `install/package.rs`, `install/uninstall.rs`, and `strategy/mod.rs`. `agents::McpConfig::servers_key` stays a `String`: it is a serde field read from `builtin/agents/*.yaml`.
+
+**Causes removed beyond the named lines.** `info::show_local_info` held the same read-version, read-description, print-three-lines block three times; it is now `show_package_at`. `info` named `"unknown"` twice and now has one `UNKNOWN`. `install/package.rs` named `"0.0.0"` four times and now has one `DEFAULT_VERSION`. `list.rs` named `"latest"` twice and now has one `UNKNOWN_VERSION`.
+
+**Not changed, and why.** `install/applier.rs::frontmatter_map` still calls `split_frontmatter_body` itself. It is a `#[cfg(test)]` helper that parses into `serde_yaml_ng::Mapping` rather than `Value`, because the duplicate-key rejection it asserts is a property of `Mapping`. Routing it through the shared reader would drop that check. No finding names it.

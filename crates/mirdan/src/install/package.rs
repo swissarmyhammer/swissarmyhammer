@@ -5,18 +5,21 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use indicatif::{ProgressBar, ProgressStyle};
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
 use crate::agents;
+use crate::frontmatter;
 use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
-use crate::mcp_config;
+use crate::mcp_config::{self, ServersKey, ToolName};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 
 use super::deploy::{
     deploy_agent_to_agents, deploy_plugin, deploy_skill_to_agents, deploy_tool, deploy_validator,
 };
+
+/// The version recorded for a package whose manifest names none.
+const DEFAULT_VERSION: &str = "0.0.0";
 
 /// How [`run_install`] resolves a package spec to its source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,15 +133,12 @@ async fn run_install_local(
 
     // Read name and version from frontmatter (or plugin.json for plugins)
     let (name, version) = match pkg_type {
-        PackageType::Skill => read_frontmatter(&dir.join("SKILL.md"))?,
-        PackageType::Validator => read_frontmatter(&dir.join("VALIDATOR.md"))?,
-        PackageType::Tool => read_frontmatter(&dir.join("TOOL.md"))?,
         PackageType::Plugin => {
             let plugin_name =
-                mcp_config::read_plugin_json(&dir.join(".claude-plugin/plugin.json"))?;
-            (plugin_name, "0.0.0".to_string())
+                mcp_config::read_plugin_json(&dir.join(PackageType::Plugin.manifest_file()))?;
+            (plugin_name, DEFAULT_VERSION.to_string())
         }
-        PackageType::Agent => read_frontmatter(&dir.join("AGENT.md"))?,
+        manifest_type => read_frontmatter(&dir.join(manifest_type.manifest_file()))?,
     };
 
     tracing::debug!("Installing {} from local path ({})...", name, pkg_type);
@@ -196,19 +196,10 @@ async fn run_install_git(
 
         // Read version from frontmatter (or plugin.json for plugins)
         let version = match pkg.package_type {
-            PackageType::Skill => read_frontmatter(&pkg.path.join("SKILL.md"))
+            PackageType::Plugin => DEFAULT_VERSION.to_string(),
+            manifest_type => read_frontmatter(&pkg.path.join(manifest_type.manifest_file()))
                 .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Validator => read_frontmatter(&pkg.path.join("VALIDATOR.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Tool => read_frontmatter(&pkg.path.join("TOOL.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Plugin => "0.0.0".to_string(),
-            PackageType::Agent => read_frontmatter(&pkg.path.join("AGENT.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
+                .unwrap_or_else(|_| DEFAULT_VERSION.to_string()),
         };
 
         record_locked_package(
@@ -298,40 +289,22 @@ fn log_installed(
 
 /// Read name and version from YAML frontmatter of a markdown file.
 ///
-/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
-/// three hyphens delimits the block. A three-hyphen run inside a value stays
-/// in the frontmatter instead of cutting it short, and an opening line of
-/// `----` or `---x` opens nothing.
+/// The [`frontmatter`] module makes the split and the parse. A manifest that
+/// names no version gets [`DEFAULT_VERSION`].
 ///
 /// # Errors
 ///
 /// Returns an error when the file cannot be read, the frontmatter is missing
 /// or unterminated, the YAML does not parse, or the `name` key is absent.
 pub(crate) fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
-    let content = std::fs::read_to_string(path)?;
+    let yaml = frontmatter::read_file(path)?;
 
-    let (frontmatter, _body) = split_frontmatter_body(&content).ok_or_else(|| {
-        RegistryError::Validation(format!(
-            "{} must open and close YAML frontmatter with a line of exactly three hyphens",
-            path.display()
-        ))
-    })?;
-
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))?;
-
-    let name = yaml
-        .get("name")
-        .and_then(|v| v.as_str())
+    let name = frontmatter::field(&yaml, "name")
         .ok_or_else(|| RegistryError::Validation("missing 'name' in frontmatter".to_string()))?
         .to_string();
 
-    let version = yaml
-        .get("metadata")
-        .and_then(|m| m.get("version"))
-        .and_then(|v| v.as_str())
-        .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
-        .unwrap_or("0.0.0")
+    let version = frontmatter::metadata_field(&yaml, "version")
+        .unwrap_or(DEFAULT_VERSION)
         .to_string();
 
     Ok((name, version))
@@ -603,8 +576,8 @@ fn register_mcp_server_across_agents(
         };
         mcp_config::register_mcp_server(
             &config_path,
-            &mcp_cfg.servers_key,
-            name,
+            &ServersKey::new(&mcp_cfg.servers_key),
+            &ToolName::new(name),
             entry,
             &mcp_cfg.entry_extras,
         )?;
@@ -709,7 +682,7 @@ pub async fn run_install_mcp(
         name,
         LockedPackage {
             package_type: PackageType::Tool,
-            version: "0.0.0".to_string(),
+            version: DEFAULT_VERSION.to_string(),
             resolved: format!("mcp:{}", entry.command),
             integrity: String::new(),
             installed_at: chrono::Utc::now().to_rfc3339(),

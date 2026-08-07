@@ -4,12 +4,15 @@
 
 use std::path::Path;
 
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
-
 use crate::agents::{self, agent_project_skill_dir};
+use crate::frontmatter;
 use crate::lockfile::Lockfile;
+use crate::package_type::PackageType;
 use crate::registry::{RegistryClient, RegistryError};
 use crate::store;
+
+/// What the info command prints for a value it cannot determine.
+const UNKNOWN: &str = "unknown";
 
 /// Run the info command.
 ///
@@ -64,14 +67,7 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
     // Check validator dirs (skip when --agent is set: validators are not agent-scoped)
     if agent_filter.is_none() {
         let local_val = crate::install::validators_dir(false).join(&sanitized);
-        if local_val.exists() && local_val.join("VALIDATOR.md").exists() {
-            let version = read_frontmatter_field(&local_val.join("VALIDATOR.md"), "version");
-            let description =
-                read_frontmatter_field(&local_val.join("VALIDATOR.md"), "description");
-
-            println!("{}@{} (local validator)\n", name, version);
-            println!("  Description: {}", description);
-            println!("  Path:        {}", local_val.display());
+        if show_package_at(name, &local_val, PackageType::Validator, "local validator") {
             return true;
         }
     }
@@ -82,14 +78,8 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
         for agent in &agents {
             let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
             let skill_dir = agent_project_skill_dir(&agent.def).join(&link_name);
-            if skill_dir.exists() && skill_dir.join("SKILL.md").exists() {
-                let version = read_frontmatter_field(&skill_dir.join("SKILL.md"), "version");
-                let description =
-                    read_frontmatter_field(&skill_dir.join("SKILL.md"), "description");
-
-                println!("{}@{} (local skill, {})\n", name, version, agent.def.name);
-                println!("  Description: {}", description);
-                println!("  Path:        {}", skill_dir.display());
+            let label = format!("local skill, {}", agent.def.name);
+            if show_package_at(name, &skill_dir, PackageType::Skill, &label) {
                 return true;
             }
         }
@@ -97,17 +87,28 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
 
     // Also check the central store directly as a fallback
     let store_path = store::skill_store_dir(false).join(&sanitized);
-    if store_path.exists() && store_path.join("SKILL.md").exists() {
-        let version = read_frontmatter_field(&store_path.join("SKILL.md"), "version");
-        let description = read_frontmatter_field(&store_path.join("SKILL.md"), "description");
+    show_package_at(name, &store_path, PackageType::Skill, "local skill, store")
+}
 
-        println!("{}@{} (local skill, store)\n", name, version);
-        println!("  Description: {}", description);
-        println!("  Path:        {}", store_path.display());
-        return true;
+/// Print the package of `package_type` installed at `dir`, and answer whether
+/// one was there.
+///
+/// `label` names where the package was found, and prints in the parentheses
+/// after the version.
+fn show_package_at(name: &str, dir: &Path, package_type: PackageType, label: &str) -> bool {
+    let manifest = dir.join(package_type.manifest_file());
+    if !manifest.exists() {
+        return false;
     }
 
-    false
+    let version = read_frontmatter_field(&manifest, "version");
+    let description = read_frontmatter_field(&manifest, "description");
+
+    println!("{}@{} ({})\n", name, version, label);
+    println!("  Description: {}", description);
+    println!("  Path:        {}", dir.display());
+
+    true
 }
 
 /// Show info from the remote registry.
@@ -115,7 +116,7 @@ async fn show_registry_info(name: &str) -> Result<(), RegistryError> {
     let client = RegistryClient::new();
     let detail = client.package_info(name).await?;
 
-    let pkg_type = detail.package_type.as_deref().unwrap_or("unknown");
+    let pkg_type = detail.package_type.as_deref().unwrap_or(UNKNOWN);
 
     println!(
         "{}@{} (registry, {})\n",
@@ -155,44 +156,21 @@ async fn show_registry_info(name: &str) -> Result<(), RegistryError> {
 
 /// Read a specific field from YAML frontmatter.
 ///
-/// Checks top-level fields first, then falls back to `metadata.<field>`.
+/// Checks `metadata.<field>` first, then falls back to the top-level field.
 ///
-/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
-/// three hyphens delimits the block. A three-hyphen run inside a value -- a
-/// table separator or a horizontal rule indented in a `description: >-` block
-/// scalar -- stays in the frontmatter instead of cutting it short, and an
-/// opening line of `----` or `---x` opens nothing.
+/// The [`frontmatter`] module makes the split and the parse, so the delimiter
+/// rule it documents holds here too.
 ///
-/// Returns `"unknown"` when the file will not read, when it carries no
+/// Returns [`UNKNOWN`] when the file will not read, when it carries no
 /// frontmatter block, or when the field is absent.
 fn read_frontmatter_field(path: &Path, field: &str) -> String {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return "unknown".to_string(),
-    };
-
-    let Some((frontmatter, _body)) = split_frontmatter_body(&content) else {
-        return "unknown".to_string();
-    };
-
-    if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter) {
-        if let Some(value) = yaml
-            .get("metadata")
-            .and_then(|m| m.get(field))
-            .and_then(|v| v.as_str())
-            .or_else(|| yaml.get(field).and_then(|v| v.as_str()))
-        {
-            return value.to_string();
-        }
-    }
-
-    "unknown".to_string()
+    frontmatter::file_metadata_field(path, field).unwrap_or_else(|| UNKNOWN.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter_fixtures::{
+    use crate::frontmatter::fixtures::{
         write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
         OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
     };

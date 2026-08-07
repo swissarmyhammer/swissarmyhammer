@@ -27,7 +27,7 @@ use serde_json::json;
 use swissarmyhammer_common::lifecycle::InitScope;
 
 use crate::agents::{self, AgentDef};
-use crate::mcp_config::{self, McpServerEntry};
+use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 
@@ -255,8 +255,13 @@ fn set_mcp_local_scope(
 ) -> Result<bool, RegistryError> {
     let mut root = settings::read_json(claude_json)?;
     let entry_value = mcp_config::ensure_project_entry(&mut root, project_key);
-    let changed =
-        mcp_config::set_mcp_server_entry(entry_value, "mcpServers", server_name, entry, extras)?;
+    let changed = mcp_config::set_mcp_server_entry(
+        entry_value,
+        &ServersKey::new("mcpServers"),
+        &ToolName::new(server_name),
+        entry,
+        extras,
+    )?;
     if changed {
         settings::write_json(claude_json, &root)?;
     }
@@ -297,7 +302,11 @@ fn prune_local_scope_entry(root: &mut serde_json::Value, key: &str, server_name:
         None => return false,
     };
 
-    let changed = mcp_config::remove_mcp_server_entry(entry, "mcpServers", server_name);
+    let changed = mcp_config::remove_mcp_server_entry(
+        entry,
+        &ServersKey::new("mcpServers"),
+        &ToolName::new(server_name),
+    );
 
     let should_remove = entry
         .get("mcpServers")
@@ -390,8 +399,8 @@ fn generic_register_mcp(
     let mut root = settings::read_json(&path)?;
     let changed = mcp_config::set_mcp_server_entry(
         &mut root,
-        &mcp_cfg.servers_key,
-        server_name,
+        &ServersKey::new(&mcp_cfg.servers_key),
+        &ToolName::new(server_name),
         entry,
         &mcp_cfg.entry_extras,
     )?;
@@ -415,7 +424,11 @@ fn generic_unregister_mcp(
     let Some(path) = agent_mcp_config_path(agent, scope) else {
         return Ok(false);
     };
-    mcp_config::unregister_mcp_server(&path, &mcp_cfg.servers_key, server_name)
+    mcp_config::unregister_mcp_server(
+        &path,
+        &ServersKey::new(&mcp_cfg.servers_key),
+        &ToolName::new(server_name),
+    )
 }
 
 #[cfg(test)]

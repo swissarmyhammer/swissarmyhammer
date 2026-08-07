@@ -2,12 +2,11 @@
 
 use std::path::Path;
 
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
-
 use crate::agents::{self, agent_project_skill_dir, DetectedAgent};
+use crate::frontmatter;
 use crate::lockfile::Lockfile;
 use crate::mcp_config;
-use crate::package_type::PackageType;
+use crate::package_type::{self, PackageType};
 use crate::registry::RegistryError;
 use crate::store;
 use crate::table;
@@ -155,9 +154,7 @@ fn scan_skill_stores(packages: &mut Vec<InstalledPackage>) {
 fn scan_agent_skill_dirs(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
     for agent in target_agents(agent_filter) {
         let skill_dir = agent_project_skill_dir(&agent.def);
-        if skill_dir.exists() {
-            scan_skills(&skill_dir, &agent.def.name, packages);
-        }
+        scan_package_dirs(&skill_dir, &agent.def.name, &SKILL_SCAN, packages);
     }
 }
 
@@ -168,16 +165,19 @@ fn scan_validator_dirs(packages: &mut Vec<InstalledPackage>) {
         (crate::install::validators_dir(true), "~/.validators/"),
     ];
     for (dir, location) in locations {
-        if dir.exists() {
-            scan_validators(&dir, location, packages);
-        }
+        scan_package_dirs(&dir, location, &VALIDATOR_SCAN, packages);
     }
 }
 
 /// Scan the project and global tool stores.
 fn scan_tool_dirs(packages: &mut Vec<InstalledPackage>) {
-    scan_tools(&store::tool_store_dir(false), ".tools/", packages);
-    scan_tools(&store::tool_store_dir(true), "~/.tools/", packages);
+    let locations = [
+        (store::tool_store_dir(false), ".tools/"),
+        (store::tool_store_dir(true), "~/.tools/"),
+    ];
+    for (dir, location) in locations {
+        scan_package_dirs(&dir, location, &TOOL_SCAN, packages);
+    }
 }
 
 /// Scan every target agent's plugin directories.
@@ -207,9 +207,7 @@ fn scan_one_agents_plugin_dirs(agent: &DetectedAgent, packages: &mut Vec<Install
         let Some(plugin_dir) = plugin_dir else {
             continue;
         };
-        if plugin_dir.exists() {
-            scan_plugins(&plugin_dir, &target, packages);
-        }
+        scan_package_dirs(&plugin_dir, &target, &PLUGIN_SCAN, packages);
     }
 }
 
@@ -378,154 +376,164 @@ fn scan_skills_recursive(
     }
 }
 
-/// Scan a directory for skill packages (subdirs containing SKILL.md).
-fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("SKILL.md").exists() {
-            let skill_md = path.join("SKILL.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&skill_md);
-            let version = read_frontmatter_version(&skill_md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Skill,
-                version,
-                targets: vec![agent_name.to_string()],
-            });
-        }
-    }
+/// The display fields [`scan_package_dirs`] records for one package.
+struct PackageMetadata {
+    /// The display name.
+    name: String,
+    /// The description, empty when the package carries none.
+    description: String,
+    /// The version, [`UNKNOWN_VERSION`] when the package carries none.
+    version: String,
 }
 
-/// Scan a directory for validator packages (subdirs containing VALIDATOR.md + rules/).
-fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("VALIDATOR.md").exists() && path.join("rules").is_dir() {
-            let md = path.join("VALIDATOR.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&md);
-            let version = read_frontmatter_version(&md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Validator,
-                version,
-                targets: vec![location.to_string()],
-            });
-        }
-    }
-}
-
-/// Scan a directory for tool packages (subdirs containing TOOL.md).
-fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("TOOL.md").exists() {
-            let md = path.join("TOOL.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&md);
-            let version = read_frontmatter_version(&md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Tool,
-                version,
-                targets: vec![location.to_string()],
-            });
-        }
-    }
-}
-
-/// Scan a directory for plugin packages (subdirs containing .claude-plugin/plugin.json).
-fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join(".claude-plugin").join("plugin.json").exists() {
-            let name = mcp_config::read_plugin_json(&path.join(".claude-plugin/plugin.json"))
-                .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description: String::new(),
-                package_type: PackageType::Plugin,
-                version: "latest".to_string(),
-                targets: vec![agent_name.to_string()],
-            });
-        }
-    }
-}
-
-/// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
+/// How [`scan_package_dirs`] recognizes one kind of package and reads its
+/// display fields.
 ///
-/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
-/// three hyphens delimits the block. A three-hyphen run inside a value -- a
-/// description that writes `---` as a separator, a horizontal rule indented in
-/// a block scalar -- stays in the frontmatter instead of cutting it short, and
-/// an opening line of `----` or `---x` opens nothing.
-///
-/// Returns `None` when the file will not read, when it carries no frontmatter
-/// block, or when the block holds YAML the parser rejects. Every caller reads
-/// one optional field, so a missing block and a malformed one need no
-/// distinction here.
-fn parse_frontmatter(path: &Path) -> Option<serde_yaml_ng::Value> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let (frontmatter, _body) = split_frontmatter_body(&content)?;
-    serde_yaml_ng::from_str(frontmatter).ok()
+/// The four kinds mirdan lists differ in exactly these three things. Stating
+/// each kind as one row keeps the walk itself written once.
+struct PackageScan {
+    /// The type every package this scan recognizes carries. Its
+    /// [`manifest_file`](PackageType::manifest_file) is what marks a directory
+    /// as a package of this kind.
+    package_type: PackageType,
+    /// Directories a package must hold besides its manifest, relative to the
+    /// package directory.
+    required_dirs: &'static [&'static str],
+    /// Reads the display fields out of a recognized package directory, given
+    /// that directory and its manifest path relative to it.
+    read_metadata: fn(&Path, &str) -> PackageMetadata,
 }
+
+/// Recognizes a skill: a directory holding a `SKILL.md`.
+const SKILL_SCAN: PackageScan = PackageScan {
+    package_type: PackageType::Skill,
+    required_dirs: &[],
+    read_metadata: manifest_metadata,
+};
+
+/// Recognizes a validator: a directory holding a `VALIDATOR.md` beside a
+/// `rules/` directory.
+const VALIDATOR_SCAN: PackageScan = PackageScan {
+    package_type: PackageType::Validator,
+    required_dirs: &[package_type::VALIDATOR_RULES_DIR],
+    read_metadata: manifest_metadata,
+};
+
+/// Recognizes a tool: a directory holding a `TOOL.md`.
+const TOOL_SCAN: PackageScan = PackageScan {
+    package_type: PackageType::Tool,
+    required_dirs: &[],
+    read_metadata: manifest_metadata,
+};
+
+/// Recognizes a plugin: a directory holding a `.claude-plugin/plugin.json`.
+const PLUGIN_SCAN: PackageScan = PackageScan {
+    package_type: PackageType::Plugin,
+    required_dirs: &[],
+    read_metadata: plugin_manifest_metadata,
+};
+
+/// Scan the immediate subdirectories of `dir` for the packages `scan`
+/// recognizes, recording each one against `target`.
+///
+/// A `dir` that is missing, or is not a directory, holds no subdirectory to
+/// check, so it adds nothing.
+fn scan_package_dirs(
+    dir: &Path,
+    target: &str,
+    scan: &PackageScan,
+    packages: &mut Vec<InstalledPackage>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let manifest = scan.package_type.manifest_file();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join(manifest).exists() {
+            continue;
+        }
+        if !scan
+            .required_dirs
+            .iter()
+            .all(|required| path.join(required).is_dir())
+        {
+            continue;
+        }
+
+        let metadata = (scan.read_metadata)(&path, manifest);
+        packages.push(InstalledPackage {
+            source: metadata.name.clone(),
+            name: metadata.name,
+            description: metadata.description,
+            package_type: scan.package_type,
+            version: metadata.version,
+            targets: vec![target.to_string()],
+        });
+    }
+}
+
+/// Read the display fields of a package whose manifest opens with YAML
+/// frontmatter.
+///
+/// The name is the directory name. A package deployed into an agent directory
+/// is addressed by that directory, so the frontmatter name is not read here --
+/// [`scan_skills_recursive`], which walks the store, prefers it instead.
+fn manifest_metadata(package_dir: &Path, manifest: &str) -> PackageMetadata {
+    let manifest_path = package_dir.join(manifest);
+    PackageMetadata {
+        name: dir_name(package_dir),
+        description: read_frontmatter_description(&manifest_path),
+        version: read_frontmatter_version(&manifest_path),
+    }
+}
+
+/// Read the display fields of a plugin, whose manifest is JSON rather than
+/// frontmatter.
+///
+/// A plugin manifest carries a name and nothing else this listing shows, so
+/// the description is empty and the version is [`UNKNOWN_VERSION`]. A manifest
+/// that will not read, or names nothing, falls back to the directory name.
+fn plugin_manifest_metadata(package_dir: &Path, manifest: &str) -> PackageMetadata {
+    PackageMetadata {
+        name: mcp_config::read_plugin_json(&package_dir.join(manifest))
+            .unwrap_or_else(|_| dir_name(package_dir)),
+        description: String::new(),
+        version: UNKNOWN_VERSION.to_string(),
+    }
+}
+
+/// The terminal segment of `dir`, or empty when it has none.
+fn dir_name(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// What the listing shows for a package whose manifest names no version.
+const UNKNOWN_VERSION: &str = "latest";
 
 /// Read name from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
+///
+/// Only a line that is exactly three hyphens delimits the block, so a
+/// description that writes `---` as a separator does not cut the frontmatter
+/// short, and an opening line of `----` or `---x` opens nothing.
 pub fn read_frontmatter_name(path: &Path) -> Option<String> {
-    parse_frontmatter(path)?
-        .get("name")?
-        .as_str()
-        .map(|s| s.to_string())
+    frontmatter::file_field(path, "name")
 }
 
-/// Read description from YAML frontmatter.
+/// Read description from YAML frontmatter, empty when the file names none.
 fn read_frontmatter_description(path: &Path) -> String {
-    parse_frontmatter(path)
-        .and_then(|y| y.get("description")?.as_str().map(|s| s.to_string()))
-        .unwrap_or_default()
+    frontmatter::file_field(path, "description").unwrap_or_default()
 }
 
 /// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
 ///
-/// Checks `metadata.version` first, then top-level `version`. Falls back to "latest".
+/// Checks `metadata.version` first, then top-level `version`. Falls back to
+/// [`UNKNOWN_VERSION`].
 fn read_frontmatter_version(path: &Path) -> String {
-    parse_frontmatter(path)
-        .and_then(|yaml| {
-            yaml.get("metadata")
-                .and_then(|m| m.get("version"))
-                .and_then(|v| v.as_str())
-                .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "latest".to_string())
+    frontmatter::file_metadata_field(path, "version").unwrap_or_else(|| UNKNOWN_VERSION.to_string())
 }
 
 /// Merge packages with the same name (combining targets).
@@ -579,6 +587,158 @@ metadata:
         std::fs::write(&path, "# No frontmatter").unwrap();
 
         assert_eq!(read_frontmatter_version(&path), "latest");
+    }
+
+    #[test]
+    fn test_scan_package_dirs_reads_a_skill_named_after_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("my-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: a-different-name\ndescription: A test skill\nmetadata:\n  version: \"1.0.0\"\n---\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), "Claude Code", &SKILL_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        // An agent directory names a skill by its directory, not its frontmatter.
+        assert_eq!(packages[0].name, "my-skill");
+        assert_eq!(packages[0].description, "A test skill");
+        assert_eq!(packages[0].version, "1.0.0");
+        assert_eq!(packages[0].package_type, PackageType::Skill);
+        assert_eq!(packages[0].targets, vec!["Claude Code"]);
+    }
+
+    #[test]
+    fn test_scan_package_dirs_reads_a_validator_only_beside_a_rules_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let validator = dir.path().join("my-validator");
+        std::fs::create_dir_all(&validator).unwrap();
+        std::fs::write(
+            validator.join("VALIDATOR.md"),
+            "---\nname: my-validator\ndescription: A test validator\nmetadata:\n  version: \"2.0.0\"\n---\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), ".validators/", &VALIDATOR_SCAN, &mut packages);
+        assert!(
+            packages.is_empty(),
+            "a VALIDATOR.md with no rules/ directory beside it is not a package"
+        );
+
+        std::fs::create_dir(validator.join("rules")).unwrap();
+        scan_package_dirs(dir.path(), ".validators/", &VALIDATOR_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-validator");
+        assert_eq!(packages[0].description, "A test validator");
+        assert_eq!(packages[0].version, "2.0.0");
+        assert_eq!(packages[0].package_type, PackageType::Validator);
+    }
+
+    #[test]
+    fn test_scan_package_dirs_reads_a_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("my-tool");
+        std::fs::create_dir_all(&tool).unwrap();
+        std::fs::write(
+            tool.join("TOOL.md"),
+            "---\nname: my-tool\ndescription: A test tool\nmetadata:\n  version: \"3.0.0\"\n---\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), ".tools/", &TOOL_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-tool");
+        assert_eq!(packages[0].description, "A test tool");
+        assert_eq!(packages[0].version, "3.0.0");
+        assert_eq!(packages[0].package_type, PackageType::Tool);
+    }
+
+    #[test]
+    fn test_scan_package_dirs_reads_a_plugin_name_out_of_its_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("plugin-dir");
+        std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin.join(".claude-plugin/plugin.json"),
+            r#"{"name": "my-plugin"}"#,
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), "Claude Code", &PLUGIN_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-plugin");
+        assert_eq!(packages[0].description, "");
+        assert_eq!(packages[0].version, UNKNOWN_VERSION);
+        assert_eq!(packages[0].package_type, PackageType::Plugin);
+    }
+
+    #[test]
+    fn test_scan_package_dirs_names_a_plugin_after_its_directory_when_the_json_has_no_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("plugin-dir");
+        std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin.join(".claude-plugin/plugin.json"),
+            r#"{"description": "no name"}"#,
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), "Claude Code", &PLUGIN_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "plugin-dir");
+    }
+
+    #[test]
+    fn test_scan_package_dirs_skips_a_directory_carrying_no_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("not-a-skill")).unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), "Claude Code", &SKILL_SCAN, &mut packages);
+
+        assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn test_scan_package_dirs_reads_nothing_from_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(
+            &dir.path().join("absent"),
+            "Claude Code",
+            &SKILL_SCAN,
+            &mut packages,
+        );
+
+        assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn test_scan_package_dirs_falls_back_to_the_unknown_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("bare-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# No frontmatter\n").unwrap();
+
+        let mut packages = Vec::new();
+        scan_package_dirs(dir.path(), "Claude Code", &SKILL_SCAN, &mut packages);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].version, UNKNOWN_VERSION);
+        assert_eq!(packages[0].description, "");
     }
 
     #[test]

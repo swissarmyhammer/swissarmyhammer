@@ -20,7 +20,7 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
-use crate::mcp_config::{self, McpServerEntry};
+use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -961,8 +961,8 @@ fn register_mcp_server_at(
         |mcp_cfg, config_path| {
             mcp_config::register_mcp_server(
                 config_path,
-                &mcp_cfg.servers_key,
-                server_name,
+                &ServersKey::new(&mcp_cfg.servers_key),
+                &ToolName::new(server_name),
                 entry,
                 &mcp_cfg.entry_extras,
             )?;
@@ -986,7 +986,11 @@ fn unregister_mcp_server_at(
         "Removed",
         "from",
         |mcp_cfg, config_path| {
-            mcp_config::unregister_mcp_server(config_path, &mcp_cfg.servers_key, server_name)
+            mcp_config::unregister_mcp_server(
+                config_path,
+                &ServersKey::new(&mcp_cfg.servers_key),
+                &ToolName::new(server_name),
+            )
         },
     )
 }

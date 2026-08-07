@@ -6,9 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use url::Url;
 
+use crate::frontmatter;
 use crate::package_type::{self, PackageType};
 use crate::registry::RegistryError;
 
@@ -101,98 +101,107 @@ pub fn parse_git_source(
     spec: &str,
     skill_override: Option<&str>,
 ) -> Result<GitSource, RegistryError> {
-    let select = skill_override.map(|s| s.to_string());
+    parse_ssh_source(spec, skill_override)
+        .or_else(|| parse_url_source(spec, skill_override))
+        .or_else(|| parse_shorthand_source(spec, skill_override))
+        .ok_or_else(|| {
+            RegistryError::Validation(format!("cannot parse '{}' as a git source", spec))
+        })
+}
 
-    // SSH URL: git@host:owner/repo.git
-    if spec.starts_with("git@") {
-        let display = spec
-            .strip_prefix("git@")
-            .and_then(|s| s.strip_suffix(".git"))
-            .unwrap_or(spec)
-            .replace(':', "/");
-        return Ok(GitSource {
-            clone_url: spec.to_string(),
-            git_ref: None,
-            subpath: None,
-            select,
-            display_name: display,
-        });
+/// Parse an SSH spec, `git@host:owner/repo.git`.
+///
+/// Returns `None` when `spec` does not open with `git@`.
+fn parse_ssh_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    let rest = spec.strip_prefix("git@")?;
+    let display = rest.strip_suffix(".git").unwrap_or(rest).replace(':', "/");
+
+    Some(GitSource {
+        clone_url: spec.to_string(),
+        git_ref: None,
+        subpath: None,
+        select: select.map(str::to_string),
+        display_name: display,
+    })
+}
+
+/// Parse a full URL spec, with an optional `#ref` fragment naming a branch,
+/// tag, or commit.
+///
+/// Returns `None` when `spec` is not a URL.
+fn parse_url_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    let mut url = Url::parse(spec).ok()?;
+    let git_ref = url.fragment().map(|f| f.to_string());
+    url.set_fragment(None);
+
+    let mut clone_url = url.to_string();
+    // Ensure .git suffix for GitHub/GitLab
+    if (clone_url.contains("github.com") || clone_url.contains("gitlab.com"))
+        && !clone_url.ends_with(".git")
+    {
+        clone_url = format!("{}.git", clone_url.trim_end_matches('/'));
     }
 
-    // Try parsing as a URL
-    if let Ok(mut url) = Url::parse(spec) {
-        let git_ref = url.fragment().map(|f| f.to_string());
-        url.set_fragment(None);
+    let display = url
+        .path()
+        .trim_start_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
 
-        let mut clone_url = url.to_string();
-        // Ensure .git suffix for GitHub/GitLab
-        if (clone_url.contains("github.com") || clone_url.contains("gitlab.com"))
-            && !clone_url.ends_with(".git")
-        {
-            clone_url = format!("{}.git", clone_url.trim_end_matches('/'));
-        }
+    Some(GitSource {
+        clone_url,
+        git_ref,
+        subpath: None,
+        select: select.map(str::to_string),
+        display_name: display,
+    })
+}
 
-        let display = url
-            .path()
-            .trim_start_matches('/')
-            .trim_end_matches(".git")
-            .to_string();
-
-        return Ok(GitSource {
-            clone_url,
-            git_ref,
-            subpath: None,
-            select,
-            display_name: display,
-        });
+/// Parse a GitHub shorthand spec: `owner/repo`, `owner/repo@skill`, or
+/// `owner/repo#ref`.
+///
+/// `select` is the `--skill` flag, which takes precedence over an inline
+/// `@skill` suffix. Returns `None` when `spec` carries a space or a URL
+/// scheme, or when the base is not one `owner/repo` pair.
+fn parse_shorthand_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    if spec.contains(' ') || spec.contains("://") {
+        return None;
     }
 
-    // GitHub shorthand: owner/repo, owner/repo@skill, owner/repo#ref
-    // Must contain exactly one `/` and no spaces
-    if !spec.contains(' ') && !spec.contains("://") {
-        // Split off #ref first
-        let (base, git_ref) = if let Some((b, r)) = spec.split_once('#') {
-            (b, Some(r.to_string()))
-        } else {
-            (spec, None)
-        };
+    let (base, git_ref) = split_once_owned(spec, '#');
+    let (base, shorthand_select) = split_once_owned(base, '@');
 
-        // Split off @skill-name (for shorthand like owner/repo@skill)
-        let (base, shorthand_select) = if let Some((b, s)) = base.split_once('@') {
-            (b, Some(s.to_string()))
-        } else {
-            (base, None)
-        };
-
-        // --skill override takes precedence over inline @skill
-        let final_select = select.or(shorthand_select);
-
-        // Validate it looks like owner/repo
-        let parts: Vec<&str> = base.split('/').collect();
-        if parts.len() == 2
-            && !parts[0].is_empty()
-            && !parts[1].is_empty()
-            && parts[0]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-            && parts[1]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-        {
-            return Ok(GitSource {
-                clone_url: format!("https://github.com/{}.git", base),
-                git_ref,
-                subpath: None,
-                select: final_select,
-                display_name: base.to_string(),
-            });
-        }
+    let (owner, repo) = base.split_once('/')?;
+    if !is_shorthand_segment(owner) || !is_shorthand_segment(repo) {
+        return None;
     }
 
-    Err(RegistryError::Validation(format!(
-        "cannot parse '{}' as a git source",
-        spec
-    )))
+    Some(GitSource {
+        clone_url: format!("https://github.com/{}.git", base),
+        git_ref,
+        subpath: None,
+        select: select.map(str::to_string).or(shorthand_select),
+        display_name: base.to_string(),
+    })
+}
+
+/// Split `spec` at the first `separator`, owning the tail.
+///
+/// Returns the whole of `spec` and `None` when `separator` is absent.
+fn split_once_owned(spec: &str, separator: char) -> (&str, Option<String>) {
+    match spec.split_once(separator) {
+        Some((head, tail)) => (head, Some(tail.to_string())),
+        None => (spec, None),
+    }
+}
+
+/// Whether `segment` is a usable owner or repository name in GitHub
+/// shorthand.
+fn is_shorthand_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
 /// Clone a git repository into a temporary directory.
@@ -357,44 +366,22 @@ pub fn discover_packages(
     subpath: Option<&str>,
     select: Option<&str>,
 ) -> Result<Vec<DiscoveredPackage>, RegistryError> {
+    if let Some(sub) = subpath {
+        return discover_in_subpath(repo_dir, sub, select);
+    }
+
     let mut packages = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
 
-    // 1. If subpath given, look only there
-    if let Some(sub) = subpath {
-        let target = repo_dir.join(sub);
-        if target.is_dir() {
-            scan_dir_for_package(&target, &mut packages, &mut seen_names);
-            if !packages.is_empty() {
-                return filter_by_select(packages, select);
-            }
-        }
-        return Err(RegistryError::Validation(format!(
-            "subpath '{}' not found or contains no packages",
-            sub
-        )));
-    }
-
-    // 2. Check root
+    // 1. Check root
     scan_dir_for_package(repo_dir, &mut packages, &mut seen_names);
 
-    // 3. Check priority directories
+    // 2. Check priority directories
     for dir_name in PRIORITY_DIRS {
-        let dir = repo_dir.join(dir_name);
-        if dir.is_dir() {
-            // Each subdirectory in a priority dir might be a package
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        scan_dir_for_package(&path, &mut packages, &mut seen_names);
-                    }
-                }
-            }
-        }
+        scan_child_dirs(&repo_dir.join(dir_name), &mut packages, &mut seen_names);
     }
 
-    // 4. If still nothing, recursive scan
+    // 3. If still nothing, recursive scan
     if packages.is_empty() {
         scan_recursive(repo_dir, &mut packages, &mut seen_names, 0);
     }
@@ -409,6 +396,56 @@ pub fn discover_packages(
     filter_by_select(packages, select)
 }
 
+/// Discover packages under one subpath of a cloned repository.
+///
+/// The subpath names one package directory, so the search stops there instead
+/// of falling back to the priority directories or a recursive scan.
+///
+/// # Errors
+///
+/// Returns an error when the subpath is not a directory, when it holds no
+/// package, or when `select` names no package it holds.
+fn discover_in_subpath(
+    repo_dir: &Path,
+    subpath: &str,
+    select: Option<&str>,
+) -> Result<Vec<DiscoveredPackage>, RegistryError> {
+    let mut packages = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    scan_dir_for_package(&repo_dir.join(subpath), &mut packages, &mut seen_names);
+
+    if packages.is_empty() {
+        return Err(RegistryError::Validation(format!(
+            "subpath '{}' not found or contains no packages",
+            subpath
+        )));
+    }
+
+    filter_by_select(packages, select)
+}
+
+/// Check each immediate subdirectory of `dir` for a package.
+///
+/// A `dir` that is missing, or is not a directory, holds no subdirectory to
+/// check, so it adds nothing.
+fn scan_child_dirs(
+    dir: &Path,
+    packages: &mut Vec<DiscoveredPackage>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_dir_for_package(&path, packages, seen);
+        }
+    }
+}
+
 /// Check a single directory for a package and add it if found.
 fn scan_dir_for_package(
     dir: &Path,
@@ -416,31 +453,12 @@ fn scan_dir_for_package(
     seen: &mut std::collections::HashSet<String>,
 ) {
     if let Some(pkg_type) = package_type::detect_package_type(dir) {
+        // Every type but Plugin names itself in the frontmatter of its
+        // manifest; a plugin names itself in the JSON of its.
         let name = match pkg_type {
-            PackageType::Skill => {
-                let md_file = dir.join("SKILL.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
-            PackageType::Validator => {
-                let md_file = dir.join("VALIDATOR.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
-            PackageType::Tool => {
-                let md_file = dir.join("TOOL.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
             PackageType::Plugin => extract_name_from_plugin_json(dir),
-            PackageType::Agent => {
-                let md_file = dir.join("AGENT.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
+            manifest_type => {
+                frontmatter::file_field(&dir.join(manifest_type.manifest_file()), "name")
             }
         };
 
@@ -501,24 +519,6 @@ fn scan_recursive(
     }
 }
 
-/// Extract the `name` field from YAML frontmatter.
-///
-/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
-/// three hyphens delimits the block. A three-hyphen run inside a value stays
-/// in the frontmatter instead of cutting it short, and an opening line of
-/// `----` or `---x` opens nothing. This reads third-party repositories, whose
-/// package files this repository does not control.
-///
-/// Returns `None` when the text carries no frontmatter block, when the block
-/// holds YAML the parser rejects, or when `name` is absent.
-fn extract_name_from_frontmatter(content: &str) -> Option<String> {
-    let (frontmatter, _body) = split_frontmatter_body(content)?;
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
-    yaml.get("name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
 /// Filter packages by the `--skill` select option.
 fn filter_by_select(
     packages: Vec<DiscoveredPackage>,
@@ -543,41 +543,6 @@ fn filter_by_select(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter_fixtures::{
-        NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS, OPENING_LINE_WITH_TRAILING_TEXT,
-        THREE_HYPHEN_RUN_IN_DESCRIPTION,
-    };
-
-    // --- extract_name_from_frontmatter tests ---
-
-    #[test]
-    fn test_extract_name_reads_past_a_three_hyphen_run() {
-        assert_eq!(
-            extract_name_from_frontmatter(THREE_HYPHEN_RUN_IN_DESCRIPTION),
-            Some("test-skill".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_name_rejects_an_opening_line_with_trailing_text() {
-        assert_eq!(
-            extract_name_from_frontmatter(OPENING_LINE_WITH_TRAILING_TEXT),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_name_rejects_an_opening_line_of_four_hyphens() {
-        assert_eq!(
-            extract_name_from_frontmatter(OPENING_LINE_OF_FOUR_HYPHENS),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_name_rejects_a_file_with_no_closing_delimiter() {
-        assert_eq!(extract_name_from_frontmatter(NO_CLOSING_DELIMITER), None);
-    }
 
     // --- classify_source tests ---
 
@@ -949,26 +914,54 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- extract_name_from_frontmatter tests ---
+    // The frontmatter reader and its delimiter rule are tested once, in
+    // `crate::frontmatter`. What belongs here is the discovery that reads
+    // through it, which the integration tests below cover.
 
     #[test]
-    fn test_extract_name_valid() {
-        let content = "---\nname: my-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
-        assert_eq!(
-            extract_name_from_frontmatter(content),
-            Some("my-skill".to_string())
-        );
+    fn test_scan_dir_for_package_names_a_skill_from_its_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("SKILL.md"),
+            "---\nname: my-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-skill");
+        assert_eq!(packages[0].package_type, PackageType::Skill);
     }
 
     #[test]
-    fn test_extract_name_no_frontmatter() {
-        assert_eq!(extract_name_from_frontmatter("# Just markdown"), None);
+    fn test_scan_dir_for_package_skips_a_skill_whose_frontmatter_names_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("SKILL.md"),
+            "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n",
+        )
+        .unwrap();
+
+        let mut packages = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+
+        assert!(packages.is_empty());
     }
 
     #[test]
-    fn test_extract_name_no_name_field() {
-        let content = "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
-        assert_eq!(extract_name_from_frontmatter(content), None);
+    fn test_scan_dir_for_package_skips_a_skill_carrying_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("SKILL.md"), "# Just markdown").unwrap();
+
+        let mut packages = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+
+        assert!(packages.is_empty());
     }
 
     // --- integration tests (require network) ---
@@ -1043,8 +1036,8 @@ mod tests {
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
         for pkg in &packages {
-            let content = std::fs::read_to_string(pkg.path.join("SKILL.md")).unwrap();
-            let name = extract_name_from_frontmatter(&content);
+            let name =
+                frontmatter::file_field(&pkg.path.join(PackageType::Skill.manifest_file()), "name");
             assert_eq!(
                 name.as_deref(),
                 Some(pkg.name.as_str()),
