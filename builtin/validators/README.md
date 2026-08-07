@@ -153,6 +153,13 @@ Each tool rule ships two fixture files in the set's `fixtures/` directory:
 - `fixtures/<name>.fail.<ext>` — the tool must report at least one finding.
 - `fixtures/<name>.pass.<ext>` — the tool must report zero findings.
 
+The two fixtures must cover the same kinds. The fail fixture holds one
+undocumented item of every kind the pass fixture documents — the type, the
+class, the interface, the enumeration, the method, and the function. A pass
+fixture that documents six kinds against a fail fixture that holds only a
+function proves nothing about the other five: a tool that stops reporting a
+whole kind still passes that pair.
+
 Doctor runs the tool rule against both fixtures, with the `fixtures/` directory
 as the working directory. A `files`-scope script gets the fixture file name as
 its argument; a `workspace`-scope script gets none. Doctor counts only the

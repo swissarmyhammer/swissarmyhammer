@@ -4,7 +4,7 @@
 //! are modules here. The doctor runs the rule's script in this directory and
 //! reads the findings of each fixture file on its own.
 
-/// The failing fixture: it holds the undocumented public item the tool must
+/// The failing fixture: it holds the undocumented public items the tool must
 /// report.
 #[path = "missing-docs-rust.fail.rs"]
 pub mod fail;

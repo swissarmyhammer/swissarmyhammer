@@ -1,9 +1,12 @@
 //! The failing fixture of the `missing-docs-rust` tool rule.
 //!
-//! It holds one undocumented public item. The tool must report it. A tool
-//! upgrade that stops reporting it makes the doctor mark the rule unusable.
+//! It holds one undocumented public item of every kind the passing fixture
+//! documents. The tool must report each one. A tool upgrade that stops
+//! reporting a kind makes the doctor mark the rule unusable.
 
-/// A documented public struct, so the fixture fails only on the item below.
+/// A documented public struct, so the fixture fails only on the items below.
 pub struct DocumentedNeighbor;
 
 pub struct UndocumentedItem;
+
+pub fn undocumented_function() {}
