@@ -1,4 +1,39 @@
 ---
+comments:
+- actor: claude-code
+  id: 01kzeb6ftdm3hhvzjncsym57v1
+  text: |
+    ### path correction before pickup
+
+    This card names `crates/mirdan/src/install.rs`. That file no longer exists — `install` is now a directory module. Verified live sites, 2026-08-07:
+
+    | card says | actual |
+    |---|---|
+    | `crates/mirdan/src/install.rs` | `crates/mirdan/src/install/applier.rs:443` |
+    | `crates/mirdan/src/mcp_config.rs` | `crates/mirdan/src/mcp_config.rs:214` — confirmed |
+    | `crates/mirdan/src/info.rs` | `crates/mirdan/src/info.rs:169` — confirmed |
+    | `crates/mirdan/src/git_source.rs` | `crates/mirdan/src/git_source.rs:510` — confirmed |
+
+    The shared splitter is `swissarmyhammer_common::frontmatter::split_frontmatter_body` at `crates/swissarmyhammer-common/src/frontmatter.rs:82`. `crates/mirdan/Cargo.toml:25` already depends on `swissarmyhammer-common`, so no manifest change is needed.
+  timestamp: 2026-08-07T14:49:22.509387+00:00
+- actor: claude-code
+  id: 01kzebg9vdpzk6fcy4bpr1c4bg
+  text: |-
+    ### site map — corrected
+
+    The file paths in the description are stale. `install.rs` is now the `install/` module. Verified locations:
+
+    | function | file:line |
+    |---|---|
+    | `read_frontmatter` | `crates/mirdan/src/install/package.rs:307` |
+    | `read_skill_frontmatter_name` | `crates/mirdan/src/install/uninstall.rs:347` — already delegates to `read_frontmatter`, so it is fixed by that site |
+    | `frontmatter_map` (test helper) | `crates/mirdan/src/install/applier.rs:440` |
+    | `parse_yaml_frontmatter` | `crates/mirdan/src/mcp_config.rs:202` |
+    | `read_frontmatter_field` | `crates/mirdan/src/info.rs:157` |
+    | `extract_name_from_frontmatter` | `crates/mirdan/src/git_source.rs:504` |
+
+    Canonical splitter: `swissarmyhammer_common::frontmatter::split_frontmatter_body`, at `crates/swissarmyhammer-common/src/frontmatter.rs:55`.
+  timestamp: 2026-08-07T14:54:44.077882+00:00
 position_column: todo
 position_ordinal: e480
 title: Four more mirdan frontmatter substring splits beyond list.rs

@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
+
 use crate::agents::{self, agent_project_skill_dir};
 use crate::lockfile::Lockfile;
 use crate::mcp_config;
@@ -13,12 +15,21 @@ use crate::table;
 /// An installed package found during scanning.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
+    /// Display name: the frontmatter `name`, or the terminal path segment when
+    /// the package carries none. Never a full path.
     pub name: String,
     /// The lockfile key (source URL or name) used for install/uninstall operations.
     pub source: String,
+    /// The frontmatter `description`, or empty when the package carries none.
     pub description: String,
+    /// Which kind of package this is, and so which manifest file was read.
     pub package_type: PackageType,
+    /// The frontmatter `metadata.version` or `version`, or "latest" when the
+    /// package carries neither.
     pub version: String,
+    /// Where the package was found: a store location such as `global`, or the
+    /// name of the agent whose directory holds it. One package merged from
+    /// several locations carries one entry for each.
     pub targets: Vec<String>,
 }
 
@@ -400,12 +411,20 @@ fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackag
 }
 
 /// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
+///
+/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
+/// three hyphens delimits the block. A three-hyphen run inside a value -- a
+/// description that writes `---` as a separator, a horizontal rule indented in
+/// a block scalar -- stays in the frontmatter instead of cutting it short, and
+/// an opening line of `----` or `---x` opens nothing.
+///
+/// Returns `None` when the file will not read, when it carries no frontmatter
+/// block, or when the block holds YAML the parser rejects. Every caller reads
+/// one optional field, so a missing block and a malformed one need no
+/// distinction here.
 fn parse_frontmatter(path: &Path) -> Option<serde_yaml_ng::Value> {
     let content = std::fs::read_to_string(path).ok()?;
-    let content = content.trim();
-    let rest = content.strip_prefix("---")?;
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
+    let (frontmatter, _body) = split_frontmatter_body(&content)?;
     serde_yaml_ng::from_str(frontmatter).ok()
 }
 
@@ -641,6 +660,64 @@ metadata:
         std::fs::write(&path, "# No frontmatter").unwrap();
 
         assert_eq!(read_frontmatter_description(&path), "");
+    }
+
+    #[test]
+    fn three_hyphen_run_in_a_description_keeps_every_frontmatter_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: test-skill\ndescription: Uses --- as a separator\nmetadata:\n  version: \"1.2.3\"\n---\n# Test\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_name(&path).as_deref(), Some("test-skill"));
+        assert_eq!(
+            read_frontmatter_description(&path),
+            "Uses --- as a separator"
+        );
+        assert_eq!(read_frontmatter_version(&path), "1.2.3");
+    }
+
+    #[test]
+    fn an_opening_line_of_more_than_three_hyphens_is_not_a_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, "----\nname: test-skill\n---\n# Test\n").unwrap();
+
+        assert_eq!(read_frontmatter_name(&path), None);
+        assert_eq!(read_frontmatter_version(&path), "latest");
+    }
+
+    #[test]
+    fn an_opening_line_with_text_after_the_hyphens_is_not_a_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---description: leaked\nname: test-skill\n---\n# Test\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_name(&path), None);
+        assert_eq!(read_frontmatter_description(&path), "");
+        assert_eq!(read_frontmatter_version(&path), "latest");
+    }
+
+    #[test]
+    fn a_file_with_no_closing_delimiter_line_reads_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: test-skill\ndescription: Uses --- as a separator\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_frontmatter_name(&path), None);
+        assert_eq!(read_frontmatter_description(&path), "");
+        assert_eq!(read_frontmatter_version(&path), "latest");
     }
 
     #[test]

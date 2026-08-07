@@ -80,15 +80,38 @@ comments:
     - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/deinit.rs (132 lines changed). `cargo fmt` applied. `cargo clippy --workspace --all-targets -- -D warnings`: clean. `cargo nextest run -E 'rdeps(mirdan)'`: 3231 tests run, 3231 passed, 0 skipped. Review finding checked off in the `## Review Findings (2026-08-06 09:57)` section.
     - next: /review
   timestamp: 2026-08-06T15:12:00.329886+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kzbt94gy99x82hv2wzwf6e4s
+  text: |-
+    ### commit — changed
+    - evidence: c48169ae2 test(install): loop SUPERSEDED_NATIVE_DENY_TOOLS in deinit tests
+    - next: none
+  timestamp: 2026-08-06T15:15:14.590531+00:00
+- actor: claude-code
+  id: 01kzbtgwz5v8gjdnqbxmgxykgy
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (c48169ae2) — 0 findings, 0 confirmed, 1 refuted, 9 attempted. Prior finding at apps/swissarmyhammer-cli/src/commands/install/deinit.rs:108 is resolved — the test now loops `SUPERSEDED_NATIVE_DENY_TOOLS` and asserts each tool is absent (deinit.rs:130-135). Its checklist item is checked.
+    - next: none — task moved to done.
+  timestamp: 2026-08-06T15:19:28.997713+00:00
+- actor: claude-code
+  id: 01kzbtjzzbsqhk7ygy1m5apys3
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file, 78 insertions, 54 deletions (apps/swissarmyhammer-cli/src/commands/install/deinit.rs); both deinit tests now seed and loop SUPERSEDED_NATIVE_DENY_TOOLS through shared fixture helpers
+    - test: green — cargo fmt --check clean; cargo clippy --workspace --all-targets -D warnings clean; cargo nextest run -E 'rdeps(mirdan)' 3231 passed, 0 failed, 0 skipped (verified first-hand by the orchestrator, not only by the sub agent)
+    - commit: c48169ae2
+    - review: clean — zero new findings, prior finding checked, task moved to done
+  timestamp: 2026-08-06T15:20:37.611010+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb080
 title: 'One deny set for superseded natives: add Bash + Read, make the doctor probe agree'
 ---
 ## What
 
 `sah doctor` reports `Claude Code · project · Permissions ┆ missing at .claude/settings.json` although `sah init` wrote the permissions. The installer and the detector do not agree, and the deny set does not contain all the natives that sah supersedes.
 
-Evidence on disk today:
+Evidence on disk before the fix:
 
 | File | `permissions.deny` | Writer |
 |---|---|---|
@@ -98,9 +121,9 @@ Evidence on disk today:
 
 Two defects:
 
-1. **The detector probes for the wrong tool.** `permissions_present` (`crates/mirdan/src/status.rs:627`) returns true only when `permissions.deny` contains `"Bash"`. The init-time fragment (`desired_edit_redirect_fragment`, `crates/mirdan/src/install/profile.rs:835`) writes `EDIT_REDIRECT_DENY_TOOLS = ["Edit", "Write"]` (`profile.rs:823`) and never writes `"Bash"`. Thus a correct install always reports `Missing`. The `"Bash"` deny comes from a different mechanism — serve-time `mirdan::install::deny_tool` at `crates/swissarmyhammer-tools/src/mcp/server.rs:1171` — which uses `InitScope::Local` and so writes `settings.local.json`. `STATUS_SCOPES` (`status.rs:413`) is `[Project, User]` only, so the doctor never reads that file.
+1. **The detector probes for the wrong tool.** `permissions_present` (`crates/mirdan/src/status.rs`) returned true only when `permissions.deny` contains `"Bash"`. The init-time fragment (`desired_edit_redirect_fragment`, `crates/mirdan/src/install/profile.rs`) writes `EDIT_REDIRECT_DENY_TOOLS = ["Edit", "Write"]` and never writes `"Bash"`. Thus a correct install always reports `Missing`. The `"Bash"` deny comes from a different mechanism — serve-time `mirdan::install::deny_tool` at `crates/swissarmyhammer-tools/src/mcp/server.rs:1171` — which uses `InitScope::Local` and so writes `settings.local.json`. `STATUS_SCOPES` (`status.rs:413`) is `[Project, User]` only, so the doctor never reads that file.
 
-2. **The deny set is incomplete.** sah supersedes `Bash` with the `shell` tool and `Read`/`Edit`/`Write` with the `files` tool, but the init-time fragment denies only `Edit` and `Write`. The model can still call native `Bash` and native `Read`.
+2. **The deny set is incomplete.** sah supersedes `Bash` with the `shell` tool and `Read`/`Edit`/`Write` with the `files` tool, but the init-time fragment denied only `Edit` and `Write`. The model could still call native `Bash` and native `Read`.
 
 Fix: make one constant the single source of truth for the whole superseded-native set, and make the detector check that whole set.
 
@@ -108,7 +131,7 @@ Do this:
 
 1. In `crates/mirdan/src/install/profile.rs`, rename `EDIT_REDIRECT_DENY_TOOLS` to `SUPERSEDED_NATIVE_DENY_TOOLS` and set it to `&["Bash", "Edit", "Read", "Write"]`. Update the doc comment: the deny forces `Bash` to the served `shell` tool and `Read`/`Edit`/`Write` to the served `files` tool. Keep the `edit_redirect` profile flag and the `apply_edit_redirect_at` / `desired_edit_redirect_fragment` function names as they are — renaming those is not part of this task.
 2. In `crates/mirdan/src/status.rs`, change `permissions_present` to return true only when `permissions.deny` contains **every** entry of `SUPERSEDED_NATIVE_DENY_TOOLS`. Import the constant; do not respell the tool names.
-3. Update the mechanical uses of the old constant name in `crates/mirdan/src/install/profile_tests.rs:277` and `:307`, and in `crates/mirdan/src/install/edit_redirect_tests.rs:17`, `:51`, `:121`. These loops already iterate the constant, so they need the new name only.
+3. Update the mechanical uses of the old constant name in `crates/mirdan/src/install/profile_tests.rs` and `crates/mirdan/src/install/edit_redirect_tests.rs`. These loops already iterate the constant, so they need the new name only.
 
 Accepted consequences, agreed with the user:
 
@@ -117,19 +140,23 @@ Accepted consequences, agreed with the user:
 
 ## Acceptance Criteria
 
-- [ ] `SUPERSEDED_NATIVE_DENY_TOOLS` in `crates/mirdan/src/install/profile.rs` equals `["Bash", "Edit", "Read", "Write"]`, and `EDIT_REDIRECT_DENY_TOOLS` no longer exists in the workspace (`rg EDIT_REDIRECT_DENY_TOOLS crates/` returns nothing).
-- [ ] `permissions_present` returns `true` for a settings file whose `permissions.deny` holds all four tools, and `false` when any one of the four is absent.
-- [ ] Installing the fragment with `apply_edit_redirect_at(path, true)` then calling `permissions_present(path)` returns `true` — installer and detector agree.
-- [ ] `deinit_profile` still strips exactly the four entries and keeps unrelated `deny` entries and unrelated settings keys (the existing test at `crates/mirdan/src/install/profile_tests.rs:295`).
-- [ ] `cargo test -p mirdan` passes with no new warnings.
+- [x] `SUPERSEDED_NATIVE_DENY_TOOLS` in `crates/mirdan/src/install/profile.rs:827` equals `["Bash", "Edit", "Read", "Write"]`, and `EDIT_REDIRECT_DENY_TOOLS` no longer exists in the workspace (`rg EDIT_REDIRECT_DENY_TOOLS crates/ apps/` returns nothing).
+- [x] `permissions_present` returns `true` for a settings file whose `permissions.deny` holds all four tools, and `false` when any one of the four is absent.
+- [x] Installing the fragment with `apply_edit_redirect_at(path, true)` then calling `permissions_present(path)` returns `true` — installer and detector agree.
+- [x] `deinit_profile` still strips exactly the four entries and keeps unrelated `deny` entries and unrelated settings keys.
+- [x] `cargo nextest run -E 'rdeps(mirdan)'` passes with no new warnings. (This criterion first said `cargo test -p mirdan`; plain `cargo test` is forbidden in this workspace, so the nextest blast-radius run replaces it.)
 
 ## Tests
 
-- [ ] `crates/mirdan/src/install/edit_redirect_tests.rs`: add `edit_redirect_install_satisfies_permissions_detector` — write a temp settings file, call `apply_edit_redirect_at(path, true)`, assert `crate::status::permissions_present(path)` is `true`. This test fails before the fix (the fragment holds no `"Bash"`) and passes after. It is the regression test for the reported doctor bug.
-- [ ] `crates/mirdan/src/install/edit_redirect_tests.rs`: add `superseded_deny_set_is_exactly_the_four_natives` — assert the constant equals `["Bash", "Edit", "Read", "Write"]`, so a silent change to the set fails a test.
-- [ ] `crates/mirdan/src/status.rs` (inline `mod tests`, line 670): add `permissions_present_false_when_deny_set_is_partial` — for each tool in the set, write a settings file that holds the other three and assert `permissions_present` is `false`.
-- [ ] `crates/mirdan/src/status.rs` (inline `mod tests`): add `project_permissions_state_is_installed_after_full_deny` — write `.claude/settings.json` with all four denies, call `check_component(&agent, Component::Permissions, InitScope::Project)` and assert `.state == ComponentState::Installed`. Follow the `check_component` pattern at `status.rs:1035`.
-- [ ] Run `cargo test -p mirdan` — all tests pass.
+- [x] `crates/mirdan/src/install/edit_redirect_tests.rs`: `edit_redirect_install_satisfies_permissions_detector` — write a temp settings file, call `apply_edit_redirect_at(path, true)`, assert `crate::status::permissions_present(path)` is `true`. Observed RED before the fix. It is the regression test for the reported doctor bug.
+- [x] `crates/mirdan/src/install/edit_redirect_tests.rs`: `superseded_deny_set_is_exactly_the_four_natives` — assert the constant equals `["Bash", "Edit", "Read", "Write"]`. Observed RED (`left: ["Edit", "Write"]`).
+- [x] `crates/mirdan/src/status.rs` (inline `mod tests`): `permissions_present_false_when_deny_set_is_partial` — for each tool in the set, write a settings file that holds the other three and assert `permissions_present` is `false`. Observed RED.
+- [x] `crates/mirdan/src/status.rs` (inline `mod tests`): `project_permissions_state_is_installed_after_full_deny` — write `.claude/settings.json` with all four denies, call `check_component(&agent, Component::Permissions, InitScope::Project)` and assert `.state == ComponentState::Installed`.
+- [x] `cargo nextest run -E 'rdeps(mirdan)'` — 3231 passed, 0 failed, 0 skipped.
+
+## Out of scope, found while working
+
+The blast-radius run exposed `apps/swissarmyhammer-cli/src/commands/install/deinit.rs::test_deinit_does_not_reallow_bash`, which seeded the simulated serve-time Bash deny into `settings.json` (which the profile's `edit_redirect` fragment does manage) instead of `settings.local.json` (which `resolve_agent_file` never touches at any scope). Both deinit tests now seed and loop the whole roster through shared fixture helpers.
 
 ## Workflow
 
