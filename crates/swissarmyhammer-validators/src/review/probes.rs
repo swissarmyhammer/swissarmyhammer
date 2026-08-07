@@ -9,8 +9,9 @@
 //!
 //! # The catalog is data, not branching
 //!
-//! There are four code_context probes — [`callers`], [`duplicates`],
-//! [`similar`], [`complexity`] — described by a single static table
+//! There are five code_context probes — [`callers`], [`duplicates`],
+//! [`similar`], [`complexity`], `clone-siblings` — described by a single
+//! static table
 //! (`CODE_CONTEXT_PROBES`) of [`ProbeCatalogEntry`] rows. Each row binds a
 //! semantic probe name to the [`ProbeOp`] the runner interprets and the
 //! [`ProbeKind`] (`fact` vs `candidate`) the verify guard uses to decide which
@@ -24,6 +25,7 @@
 //! | `duplicates` | `find duplicates`          | each changed file + changed set  | `fact`      |
 //! | `similar`    | `search code` (semantic)   | each **added** function body     | `candidate` |
 //! | `complexity` | `cognitive_complexity`     | each file under review           | `fact`      |
+//! | `clone-siblings` | `find duplicates`      | the changed set, minus what it touched | `candidate` |
 //!
 //! [`catalog`] is the whole roster: those rows plus one row per registered
 //! [`TreeSitterProbe`], the second probe family (see
@@ -46,6 +48,9 @@
 //! just-changed file, so the same block pasted into two new unindexed files
 //! would be missed by an index-only `find_duplicates`. The `duplicates` probe
 //! therefore also compares the changed blocks against each other.
+//! The `clone-siblings` probe reads the SAME `find_duplicates` clusters and
+//! only subtracts from them — the members whose files the change touched — so
+//! there is exactly one similarity measure in the engine, not two.
 //!
 //! # Resolving the index
 //!
@@ -55,6 +60,7 @@
 //! [`TextEmbedder`] used to embed query bodies (for `similar`) and changed
 //! blocks (for the changed-set `duplicates` comparison).
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -64,7 +70,7 @@ use serde::Serialize;
 
 use swissarmyhammer_code_context::{
     find_duplicates_in, get_callgraph, load_all_embedded_chunks, search_loaded, CallGraphDirection,
-    CallGraphOptions, FindDuplicatesOptions, LoadedChunk, SearchCodeOptions,
+    CallGraphOptions, ChunkRef, FindDuplicatesOptions, LoadedChunk, SearchCodeOptions,
 };
 use swissarmyhammer_sem::parser::plugins::code::{
     cognitive_complexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
@@ -108,6 +114,9 @@ pub enum ProbeOp {
     /// `search code` (semantic) bound to each added function body, self
     /// excluded.
     Similar,
+    /// `find duplicates` bound to each file under review, with the change
+    /// overlaid on the clusters it returns.
+    CloneSiblings,
     /// Sonar cognitive complexity, computed per function from the tree-sitter
     /// parse of each file under review.
     Complexity,
@@ -174,7 +183,23 @@ static CODE_CONTEXT_PROBES: &[ProbeCatalogEntry] = &[
         kind: ProbeKind::Fact,
         op: ProbeOp::Complexity,
     },
+    ProbeCatalogEntry {
+        name: CLONE_SIBLINGS_PROBE_NAME,
+        kind: ProbeKind::Candidate,
+        op: ProbeOp::CloneSiblings,
+    },
 ];
+
+/// The target a **batch-scoped** probe result carries: evidence spanning the
+/// WHOLE change under review rather than any one file.
+///
+/// Named because two modules key on the exact string — the probe runner writes
+/// it, and
+/// [`select_shared_probe_results`](crate::review::scope) routes on it — and a
+/// result whose target is neither a file path nor a changed symbol reaches no
+/// prompt at all. A literal in each place would drift into silently dropped
+/// evidence.
+pub(crate) const CHANGED_SET_TARGET: &str = "<changed-set>";
 
 /// The complete probe catalog: the `CODE_CONTEXT_PROBES` rows followed by one
 /// row per registered [`TreeSitterProbe`].
@@ -557,9 +582,12 @@ pub async fn run_probes(
     // call — for a large index that repeated multi-hundred-MB load is what OOMed
     // the review. The `callers` probe is index-graph-only and needs no corpus, so
     // a callers-only run skips the load entirely.
-    let needs_corpus = entries
-        .iter()
-        .any(|e| matches!(e.op, ProbeOp::Duplicates | ProbeOp::Similar));
+    let needs_corpus = entries.iter().any(|e| {
+        matches!(
+            e.op,
+            ProbeOp::Duplicates | ProbeOp::Similar | ProbeOp::CloneSiblings
+        )
+    });
     let corpus: Vec<LoadedChunk> = if needs_corpus {
         load_all_embedded_chunks(conn)
             .map_err(|e| AvpError::Context(format!("failed to load embedding corpus: {e}")))?
@@ -585,6 +613,7 @@ pub async fn run_probes(
             ProbeOp::Callers => run_callers(entry, file_change, conn)?,
             ProbeOp::Duplicates => run_duplicates(entry, file_change, &corpus, embedder).await?,
             ProbeOp::Similar => run_similar(entry, file_change, &corpus, embedder).await?,
+            ProbeOp::CloneSiblings => run_clone_siblings(entry, file_change, &corpus),
             ProbeOp::Complexity => run_complexity(entry, file_change),
             ProbeOp::TreeSitter(probe) => run_tree_sitter_probe(probe, file_change, &parses),
         };
@@ -884,9 +913,174 @@ async fn changed_set_duplicates(
     Ok(ProbeResult {
         name: entry.name.to_string(),
         kind: entry.kind,
-        target: "<changed-set>".to_string(),
+        target: CHANGED_SET_TARGET.to_string(),
         rows,
     })
+}
+
+/// The name validators declare to pull [`run_clone_siblings`]'s rows.
+const CLONE_SIBLINGS_PROBE_NAME: &str = "clone-siblings";
+
+/// Where one clone-cluster member sits: enough to point a reviewer at it, and
+/// nothing more.
+///
+/// Deliberately not a [`ChunkRef`]: the overlay holds one of these per cluster
+/// member for the whole review, and a `ChunkRef` would carry the chunk's entire
+/// text alongside evidence that never renders the text.
+///
+/// Ordered, because it keys the overlay's map and therefore fixes the order the
+/// rows come out in: by file, then by line.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CloneSite {
+    /// The file the member lives in.
+    file_path: String,
+    /// The line the member starts on (1-based).
+    start_line: u32,
+    /// The member's qualified symbol path, when the index carries one.
+    symbol_path: Option<String>,
+}
+
+impl From<&ChunkRef> for CloneSite {
+    /// The location half of a duplicate-detection chunk, dropping its text.
+    fn from(chunk: &ChunkRef) -> Self {
+        Self {
+            file_path: chunk.file_path.clone(),
+            start_line: chunk.start_line,
+            symbol_path: chunk.symbol_path.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for CloneSite {
+    /// The site as an evidence row names it — ``src/a.rs:12 `compute` `` — with
+    /// the symbol elided when the index carries none.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file_path, self.start_line)?;
+        match &self.symbol_path {
+            Some(symbol) => write!(f, " `{symbol}`"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The changed clone-cluster member an untouched sibling mirrors, and how close
+/// the two are.
+#[derive(Debug)]
+struct MirroredMember {
+    /// The member of the same cluster that sits in a file under review.
+    site: CloneSite,
+    /// Cosine similarity between that member and the untouched sibling.
+    similarity: f32,
+}
+
+/// Every file the change under review touches.
+///
+/// The union of the files whose current source the review carries and the files
+/// the semantic diff names, so a file the change DELETED — which has no source
+/// left to carry — still counts as touched.
+///
+/// One set answers both halves of the overlay: which files to pull clusters
+/// for, and which cluster members the change already reached. A member can
+/// therefore never be both probed and reported as untouched.
+fn files_under_review(file_change: &FileChange) -> BTreeSet<&str> {
+    file_change
+        .sources
+        .keys()
+        .map(String::as_str)
+        .chain(file_change.entities.iter().map(|e| e.file_path.as_str()))
+        .collect()
+}
+
+/// `clone-siblings`: the clone clusters the change sits in, with the change
+/// overlaid — one row per cluster member the change left alone.
+///
+/// The clusters come from [`find_duplicates_in`] against the same pre-loaded
+/// corpus the `duplicates` probe reads; this function adds no similarity
+/// measure of its own. All it does is subtract: a cluster member whose file is
+/// under review is a site the change already reached, and every member that
+/// survives is a sibling the change did not.
+///
+/// A sibling is reported ONCE however many changed members clone it, carrying
+/// the closest of them, because the row exists to name a site — not a pair.
+///
+/// The rows are [`ProbeKind::Candidate`] and never a guard-able fact. The
+/// corpus is the code_context index, which lags the working tree and need not
+/// hold every file under review, so an empty list is "the index shows no
+/// untouched clone", not the fact "this change has no sibling sites".
+///
+/// One **batch-scoped** result on [`CHANGED_SET_TARGET`]: a cluster spans files,
+/// and the dedup that makes a sibling appear once spans them too, so the
+/// evidence belongs to the whole change rather than to any single file.
+fn run_clone_siblings(
+    entry: &ProbeCatalogEntry,
+    file_change: &FileChange,
+    corpus: &[LoadedChunk],
+) -> Vec<ProbeResult> {
+    let options = FindDuplicatesOptions::default();
+    let under_review = files_under_review(file_change);
+    let mut siblings: BTreeMap<CloneSite, MirroredMember> = BTreeMap::new();
+    for file in &under_review {
+        for group in find_duplicates_in(corpus, file, &options).groups {
+            let changed = CloneSite::from(&group.source);
+            let untouched = group
+                .duplicates
+                .iter()
+                .filter(|dup| !under_review.contains(dup.chunk.file_path.as_str()));
+            for duplicate in untouched {
+                keep_closest(
+                    &mut siblings,
+                    CloneSite::from(&duplicate.chunk),
+                    MirroredMember {
+                        site: changed.clone(),
+                        similarity: duplicate.similarity,
+                    },
+                );
+            }
+        }
+    }
+    vec![ProbeResult {
+        name: entry.name.to_string(),
+        kind: entry.kind,
+        target: CHANGED_SET_TARGET.to_string(),
+        rows: siblings
+            .into_iter()
+            .map(|(sibling, mirror)| clone_sibling_row(&sibling, &mirror))
+            .collect(),
+    }]
+}
+
+/// Hold `mirror` against `sibling`, keeping whichever changed member clones the
+/// sibling most closely when more than one does.
+fn keep_closest(
+    siblings: &mut BTreeMap<CloneSite, MirroredMember>,
+    sibling: CloneSite,
+    mirror: MirroredMember,
+) {
+    match siblings.entry(sibling) {
+        Entry::Vacant(slot) => {
+            slot.insert(mirror);
+        }
+        Entry::Occupied(mut held) => {
+            if mirror.similarity > held.get().similarity {
+                held.insert(mirror);
+            }
+        }
+    }
+}
+
+/// One untouched clone as an evidence row: where the sibling sits, the changed
+/// member it mirrors, and the similarity that put the two in one cluster.
+fn clone_sibling_row(sibling: &CloneSite, mirror: &MirroredMember) -> ProbeRow {
+    ProbeRow {
+        file_path: sibling.file_path.clone(),
+        symbol: sibling.symbol_path.clone(),
+        line: Some(sibling.start_line),
+        similarity: Some(mirror.similarity),
+        detail: Some(format!(
+            "the change edited {}; this near-copy of it is unchanged",
+            mirror.site
+        )),
+    }
 }
 
 /// `similar`: `search code` (semantic) on each added function body, self
@@ -964,8 +1158,10 @@ mod tests {
     use model_embedding::mock::MockEmbedder;
 
     use crate::review::test_support::{
-        body, dup_emb, index_conn, seed_call_edge, seed_chunk, seed_symbol, DIM,
+        body, dup_emb, index_conn, loader_with, seed_call_edge, seed_chunk, seed_symbol, TestRepo,
+        DIM,
     };
+    use crate::review::{scope_review, Scope};
 
     fn added_fn(name: &str, file: &str) -> ChangeEntry {
         ChangeEntry {
@@ -980,17 +1176,27 @@ mod tests {
     // --- catalog --------------------------------------------------------
 
     #[test]
-    fn catalog_has_exactly_the_four_code_context_probes_with_their_kinds() {
+    fn catalog_has_exactly_the_code_context_probes_with_their_kinds() {
         let names: Vec<_> = CODE_CONTEXT_PROBES.iter().map(|e| e.name).collect();
         assert_eq!(
             names,
-            vec!["callers", "duplicates", "similar", "complexity"]
+            vec![
+                "callers",
+                "duplicates",
+                "similar",
+                "complexity",
+                CLONE_SIBLINGS_PROBE_NAME
+            ]
         );
 
         assert_eq!(catalog_entry("callers").unwrap().kind, ProbeKind::Fact);
         assert_eq!(catalog_entry("duplicates").unwrap().kind, ProbeKind::Fact);
         assert_eq!(catalog_entry("similar").unwrap().kind, ProbeKind::Candidate);
         assert_eq!(catalog_entry("complexity").unwrap().kind, ProbeKind::Fact);
+        assert_eq!(
+            catalog_entry(CLONE_SIBLINGS_PROBE_NAME).unwrap().kind,
+            ProbeKind::Candidate
+        );
     }
 
     #[test]
@@ -1456,6 +1662,142 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
                 .any(|row| row.file_path == "src/util.rs"),
             "an upper-case entity type must bind like a lower-case one, got: {:?}",
             similar.rows
+        );
+    }
+
+    // --- clone-siblings -------------------------------------------------
+
+    /// The three near-copies of one function the clone fixture holds, each
+    /// indexed under the same embedding so all three sit in ONE clone cluster.
+    ///
+    /// The order is the fixture's overlay: the change edits the leading
+    /// [`EDITED_CLUSTER_MEMBERS`], and the member after them is the sibling it
+    /// left alone.
+    const CLONE_CLUSTER: [&str; 3] = ["src/first.rs", "src/second.rs", "src/third.rs"];
+
+    /// How many leading [`CLONE_CLUSTER`] members the fixture's change edits.
+    const EDITED_CLUSTER_MEMBERS: usize = 2;
+
+    /// A file in no clone cluster: its indexed chunk carries an embedding
+    /// orthogonal to the cluster's, so no chunk in the corpus matches it.
+    const UNCLUSTERED_FILE: &str = "src/alone.rs";
+
+    /// The symbol each [`CLONE_CLUSTER`] member defines before the change.
+    const CLONE_SYMBOL: &str = "mean_square";
+
+    /// The symbol an edited clone member defines after the change — one edit
+    /// applied at two of the cluster's three sites.
+    const EDITED_CLONE_SYMBOL: &str = "mean_square_checked";
+
+    /// The symbol [`UNCLUSTERED_FILE`] defines.
+    const UNCLUSTERED_SYMBOL: &str = "render";
+
+    /// The ruleset the clone fixture declares `clone-siblings` on.
+    const CLONE_VALIDATOR: &str = "siblings";
+
+    /// The glob [`CLONE_VALIDATOR`] matches — every Rust file in the fixture.
+    const RUST_FILES: &str = "*.rs";
+
+    /// The axis an orthogonal embedding stands on, so a chunk carrying it is a
+    /// duplicate of nothing seeded with [`dup_emb`] (which stands on axis 0).
+    const ORTHOGONAL_AXIS: usize = 1;
+
+    /// An embedding orthogonal to [`dup_emb`]: cosine 0 against every clone in
+    /// the cluster, well under `FindDuplicatesOptions::min_similarity`.
+    fn orthogonal_emb() -> Vec<f32> {
+        let mut embedding = vec![0.0; DIM];
+        embedding[ORTHOGONAL_AXIS] = 1.0;
+        embedding
+    }
+
+    /// Write one fixture file into `repo` and seed the matching indexed chunk,
+    /// so the repository and the index can never describe different source.
+    fn seed_fixture_file(
+        repo: &TestRepo,
+        conn: &Connection,
+        path: &str,
+        symbol: &str,
+        embedding: &[f32],
+    ) {
+        let source = body(symbol);
+        repo.write(path, &source);
+        seed_chunk(conn, path, symbol, &source, embedding);
+    }
+
+    /// The one `clone-siblings` result a real working-tree review produces over
+    /// the clone fixture, with `edited` naming the files the change rewrites.
+    ///
+    /// The whole production path: a real repository, a real seeded code_context
+    /// index, the real `scope_review`, and the batch-scoped shared-evidence slot
+    /// the engine carries a `<changed-set>` result on.
+    async fn clone_sibling_result(edited: &[&str]) -> ProbeResult {
+        let repo = TestRepo::new();
+        let conn = index_conn();
+        for member in CLONE_CLUSTER {
+            seed_fixture_file(&repo, &conn, member, CLONE_SYMBOL, &dup_emb());
+        }
+        seed_fixture_file(
+            &repo,
+            &conn,
+            UNCLUSTERED_FILE,
+            UNCLUSTERED_SYMBOL,
+            &orthogonal_emb(),
+        );
+        repo.commit("initial");
+        for file in edited {
+            repo.write(file, &body(EDITED_CLONE_SYMBOL));
+        }
+
+        let loader = loader_with(CLONE_VALIDATOR, RUST_FILES, &[CLONE_SIBLINGS_PROBE_NAME]);
+        let embedder = MockEmbedder::new(DIM);
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .expect("the working scope resolves");
+
+        work.shared_probe_results()
+            .into_iter()
+            .find(|result| result.name == CLONE_SIBLINGS_PROBE_NAME)
+            .expect("the review carries a clone-siblings result")
+    }
+
+    #[tokio::test]
+    async fn a_clone_the_change_left_alone_is_the_only_row_the_overlay_reports() {
+        let result = clone_sibling_result(&CLONE_CLUSTER[..EDITED_CLUSTER_MEMBERS]).await;
+
+        assert_eq!(result.kind, ProbeKind::Candidate);
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "one row for the one member the change left alone, got: {:?}",
+            result.rows
+        );
+        let row = &result.rows[0];
+        assert_eq!(row.file_path, CLONE_CLUSTER[EDITED_CLUSTER_MEMBERS]);
+        assert_eq!(row.symbol.as_deref(), Some(CLONE_SYMBOL));
+        assert!(
+            row.similarity.is_some(),
+            "the row must carry the similarity that put the two in one cluster, got: {row:?}"
+        );
+        let detail = row
+            .detail
+            .as_deref()
+            .expect("the row names the member it mirrors");
+        assert!(
+            CLONE_CLUSTER[..EDITED_CLUSTER_MEMBERS]
+                .iter()
+                .any(|member| detail.contains(member)),
+            "the row must name an edited member of the same cluster, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_in_no_clone_cluster_reports_no_rows() {
+        let result = clone_sibling_result(&[UNCLUSTERED_FILE]).await;
+
+        assert!(
+            result.rows.is_empty(),
+            "a change that clones nothing has no untouched siblings, got: {:?}",
+            result.rows
         );
     }
 }

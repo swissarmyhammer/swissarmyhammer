@@ -15,6 +15,7 @@ match:
 probes:
   - inverse-pairs
   - public-surface
+  - clone-siblings
 ---
 
 # Completeness Validator
@@ -25,11 +26,12 @@ the test passes, and the change ships — while a symmetric or sibling path the
 same change implies is left broken. This validator reads the diff and looks for
 that gap.
 
-Four one-concern rules, each a judgment over the diff. Two read the diff alone.
-Two read a probe as well: `inverse-operation-coverage` reads `inverse-pairs`,
-which finds the paired names for it, and `public-output-contract` reads
-`public-surface`, which computes what the change did to each file's
-declarations:
+Four one-concern rules, each a judgment over the diff. One reads the diff alone.
+Three read a probe as well: `inverse-operation-coverage` reads `inverse-pairs`,
+which finds the paired names for it; `invariant-propagation` reads
+`clone-siblings`, which finds the near-copies the change left alone; and
+`public-output-contract` reads `public-surface`, which computes what the change
+did to each file's declarations:
 
 - `inverse-operation-coverage` — a change to one direction of a paired operation
   (write/read, encode/decode, serialize/deserialize, classify/parse) without the
@@ -39,7 +41,11 @@ declarations:
   only. `inverse-pairs` is a *candidate* probe: it finds the pairs, and the rule
   judges whether the partner needed the change.
 - `invariant-propagation` — a change to how a token/flag/format/case is handled
-  at one site, not applied at the other sites that consume the same token.
+  at one site, not applied at the other sites that consume the same token. The
+  engine runs the `clone-siblings` probe over the whole change and attaches one
+  row per near-copy of changed code that the change left untouched.
+  `clone-siblings` is a *candidate* probe: it finds the sibling sites, and the
+  rule judges whether each one needed the same change.
 - `public-output-contract` — an existing user-facing message/output reformatted
   without need, an error made to "go away" by silently swallowing it instead
   of preserving the intended side-effect (warn / log / return value), or a

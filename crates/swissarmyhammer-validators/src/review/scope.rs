@@ -45,7 +45,9 @@ use swissarmyhammer_project_detection::{detect_projects, spec_for};
 
 use crate::error::AvpError;
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
-use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
+use crate::review::probes::{
+    run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult, CHANGED_SET_TARGET,
+};
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
 mod batch;
@@ -1189,15 +1191,18 @@ fn probe_result_for_file(result: &ProbeResult, file: &str, changed_symbols: &[St
     result.target == file || changed_symbols.iter().any(|s| s == &result.target)
 }
 
-/// Select the batch-scoped shared probe results (currently just the
-/// `<changed-set>` `duplicates` comparison) a validator's declared `probes`
-/// pulls from the shared single-run cache.
+/// Select the batch-scoped shared probe results — those bound to
+/// [`CHANGED_SET_TARGET`] — a validator's declared `probes` pulls from the
+/// shared single-run cache.
+///
+/// Two probes write that target: the `duplicates` changed-set comparison, and
+/// the `clone-siblings` overlay.
 ///
 /// Computed ONCE per validator — never once per file — because this evidence
 /// spans the WHOLE change under review rather than any one file
-/// (see [`probe_result_for_file`] for why `<changed-set>` is excluded there).
+/// (see [`probe_result_for_file`] for why the target is excluded there).
 fn select_shared_probe_results(cache: &[ProbeResult], probes: &ProbeNames) -> Vec<ProbeResult> {
-    select_probe_results_by(cache, probes, |r| r.target == "<changed-set>")
+    select_probe_results_by(cache, probes, |r| r.target == CHANGED_SET_TARGET)
 }
 
 /// The deduped, sorted names of the symbols changed by `entities`.

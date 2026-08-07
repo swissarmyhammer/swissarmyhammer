@@ -350,6 +350,7 @@ mod tests {
     const COMPLETENESS_PROBE_READERS: &[(&str, &str)] = &[
         ("inverse-pairs", "inverse-operation-coverage"),
         ("public-surface", "public-output-contract"),
+        ("clone-siblings", "invariant-propagation"),
     ];
 
     /// `completeness` declares exactly the probes [`COMPLETENESS_PROBE_READERS`]
