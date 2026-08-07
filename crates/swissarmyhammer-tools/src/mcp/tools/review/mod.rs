@@ -303,6 +303,15 @@ pub struct ReviewTool {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     concurrency: Option<usize>,
+    /// The workspace the `sah doctor` surface reports on, set at the wiring
+    /// layer by [`register_review_tool_for_workspace`].
+    ///
+    /// The MCP ops never read it — they take the root from the session
+    /// ([`ReviewTool::session_workspace_root`]) — but [`Doctorable`] carries no
+    /// session, so the doctor's workspace has to be tool state.
+    ///
+    /// [`Doctorable`]: swissarmyhammer_common::health::Doctorable
+    doctor_workspace_root: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for ReviewTool {
@@ -319,6 +328,7 @@ impl std::fmt::Debug for ReviewTool {
                 &self.embedder_factory.as_ref().map(|_| "EmbedderFactory"),
             )
             .field("concurrency", &self.concurrency)
+            .field("doctor_workspace_root", &self.doctor_workspace_root)
             .finish()
     }
 }
@@ -330,6 +340,7 @@ impl ReviewTool {
             agent_factory: None,
             embedder_factory: None,
             concurrency: None,
+            doctor_workspace_root: None,
         }
     }
 
@@ -355,27 +366,38 @@ impl ReviewTool {
         self
     }
 
+    /// Pin the workspace the `sah doctor` surface reports on.
+    ///
+    /// `sah doctor` runs against one workspace and has no MCP session to name
+    /// it, so the wiring layer resolves the root and pins it here. `None` (the
+    /// default) lints the builtin and user layers alone.
+    pub fn with_doctor_workspace_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.doctor_workspace_root = root;
+        self
+    }
+
     /// The workspace root the MCP session work-dir names (never
     /// `current_dir()`): the explicit `working_dir`, then its git root.
     ///
     /// `None` when the session carries no working directory. The loader-read
-    /// ops take it as-is and fail closed — no root resolves no project types,
-    /// so a `project_types`-keyed validator does not match.
-    fn workspace_root(&self, context: &ToolContext) -> Option<std::path::PathBuf> {
+    /// ops take it as-is and fail closed — no root resolves no project layer
+    /// and no project types, so a `project_types`-keyed validator does not
+    /// match.
+    fn session_workspace_root(&self, context: &ToolContext) -> Option<std::path::PathBuf> {
         let working_dir = context.working_dir.clone()?;
         Some(find_git_repository_root_from(&working_dir).unwrap_or(working_dir))
     }
 
     /// Resolve the repository root the three `review` ops need.
     ///
-    /// The same [`Self::workspace_root`] resolution, but a missing session
-    /// working directory is an error: the engine cannot diff a workspace it
-    /// cannot locate.
+    /// The same [`Self::session_workspace_root`] resolution, but a missing
+    /// session working directory is an error: the engine cannot diff a
+    /// workspace it cannot locate.
     fn resolve_repo_path(
         &self,
         context: &ToolContext,
     ) -> Result<std::path::PathBuf, rmcp::ErrorData> {
-        self.workspace_root(context).ok_or_else(|| {
+        self.session_workspace_root(context).ok_or_else(|| {
             rmcp::ErrorData::internal_error(
                 "review tool requires a session working directory (working_dir is unset)",
                 None,
@@ -475,13 +497,14 @@ impl swissarmyhammer_common::health::Doctorable for ReviewTool {
     /// here). All valid → one OK line; each problem → one Error line naming the
     /// offending validator, describing the problem, and carrying a fix.
     ///
-    /// CWD resolution: like the `list`/`dump`/`get`/`check validators` ops, the lint
-    /// loads the project layer relative to the session's working directory (the
-    /// directory `sah doctor` runs in), never an unrelated `current_dir()`.
+    /// Workspace resolution: the project layer comes from the root the wiring
+    /// layer pinned with [`ReviewTool::with_doctor_workspace_root`] — the
+    /// workspace `sah doctor` was asked about — never a `current_dir()` read
+    /// taken here.
     fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
         use swissarmyhammer_common::health::HealthCheck;
 
-        match validators::check_validators() {
+        match validators::check_validators(self.doctor_workspace_root.as_deref()) {
             Ok(response) if response.ok => {
                 vec![HealthCheck::ok(
                     "Validators",
@@ -597,7 +620,7 @@ impl McpTool for ReviewTool {
                 // — the same treatment an empty `op` gets above.
                 let include_rules = bool_arg(&args, "rules", false)
                     .map_err(|e| rmcp::ErrorData::invalid_params(e, None))?;
-                let workspace_root = self.workspace_root(context);
+                let workspace_root = self.session_workspace_root(context);
                 let summaries = validators::list_validators(
                     string_arg(&args, "source").as_deref(),
                     string_arg(&args, "match")
@@ -616,18 +639,22 @@ impl McpTool for ReviewTool {
                         None,
                     )
                 })?;
-                let workspace_root = self.workspace_root(context);
+                let workspace_root = self.session_workspace_root(context);
                 let response = validators::dump_validators(paths_value, workspace_root.as_deref())
                     .map_err(validator_op_error)?;
                 json_result(&response)
             }
             "get validator" => {
                 let name = required_string_arg(&args, "name", "`get validator` requires a `name`")?;
-                let detail = validators::get_validator(&name).map_err(validator_op_error)?;
+                let workspace_root = self.session_workspace_root(context);
+                let detail = validators::get_validator(&name, workspace_root.as_deref())
+                    .map_err(validator_op_error)?;
                 json_result(&detail)
             }
             "check validators" => {
-                let response = validators::check_validators().map_err(validator_op_error)?;
+                let workspace_root = self.session_workspace_root(context);
+                let response = validators::check_validators(workspace_root.as_deref())
+                    .map_err(validator_op_error)?;
                 json_result(&response)
             }
             other => {
@@ -724,6 +751,23 @@ pub fn register_review_tool_with_factories(
         tool = tool.with_embedder_factory(embedder);
     }
     registry.register(tool);
+}
+
+/// Register a `review` tool whose doctor surface reports on `workspace_root`,
+/// replacing any bare tool already registered under the `review` name.
+///
+/// `sah doctor` diagnoses one workspace and reaches the tool through
+/// [`Doctorable`](swissarmyhammer_common::health::Doctorable), which carries no
+/// session, so the doctor collector resolves the workspace root once and pins it
+/// here. Every MCP op still takes its root from the calling session.
+///
+/// Registration is by tool name, so this overwrites the bare `review` tool the
+/// default [`register_review_tools`] installed.
+pub fn register_review_tool_for_workspace(
+    registry: &mut ToolRegistry,
+    workspace_root: std::path::PathBuf,
+) {
+    registry.register(ReviewTool::new().with_doctor_workspace_root(Some(workspace_root)));
 }
 
 #[cfg(test)]

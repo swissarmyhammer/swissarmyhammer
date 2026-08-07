@@ -78,10 +78,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Returns an [`AvpError`] if loading the user/project directories fails. Builtin
 /// loading failures are logged and skipped rather than propagated, matching the
 /// loader's builtin-precedence contract.
-pub fn load_rules() -> Result<ValidatorLoader, AvpError> {
+pub fn load_rules(workspace_root: Option<&Path>) -> Result<ValidatorLoader, AvpError> {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
-    loader.load_all()?;
+    loader.load_all(workspace_root)?;
     Ok(loader)
 }
 
@@ -92,14 +92,16 @@ pub fn load_rules() -> Result<ValidatorLoader, AvpError> {
 /// ACP-hook context — loads the full rule stack via [`load_rules`], and returns
 /// the owned RuleSets whose match criteria select `file_path`.
 ///
-/// `workspace_root` is resolved once per call into the workspace's detected
-/// project type keys with [`review::detected_project_type_keys`], the same
-/// helper the review scope stage uses, so a RuleSet keyed on
-/// `match.project_types` is evaluated against the real workspace. Pass the
-/// session working directory's root; never the process current directory.
+/// `workspace_root` does double duty, and both uses take the same root. It
+/// selects the PROJECT layer [`load_rules`] stacks (`<root>/.validators`), and
+/// it is resolved once per call into the workspace's detected project type keys
+/// with [`review::detected_project_type_keys`], the same helper the review scope
+/// stage uses, so a RuleSet keyed on `match.project_types` is evaluated against
+/// the real workspace. Pass the session working directory's root; never the
+/// process current directory.
 ///
-/// A `None` root fails closed: no project types resolve, so a
-/// `project_types`-keyed RuleSet does not match.
+/// A `None` root fails closed twice over: no project layer loads, and no project
+/// types resolve, so a `project_types`-keyed RuleSet does not match.
 ///
 /// # Errors
 ///
@@ -108,7 +110,7 @@ pub fn match_rules(
     file_path: impl Into<String>,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<RuleSet>, AvpError> {
-    let loader = load_rules()?;
+    let loader = load_rules(workspace_root)?;
     let ctx = MatchContext::new()
         .with_file(file_path)
         .with_project_types(workspace_project_types(workspace_root));

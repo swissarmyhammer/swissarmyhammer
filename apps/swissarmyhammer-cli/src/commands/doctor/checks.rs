@@ -472,14 +472,10 @@ fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut 
 /// commands). The facts convert to rows via
 /// [`swissarmyhammer_validators::doctor::to_checks`].
 ///
-/// The workspace root is the surrounding Git repository when present,
-/// otherwise the current directory — the same resolution the review engine
-/// itself uses. A validator-stack load failure is one Error row; it never
-/// aborts the doctor pipeline.
+/// The workspace root comes from [`doctor_workspace_root`]. A validator-stack
+/// load failure is one Error row; it never aborts the doctor pipeline.
 pub fn check_review_engine(checks: &mut Vec<Check>) -> Result<()> {
-    let workspace_root = swissarmyhammer_common::utils::find_git_repository_root()
-        .or_else(|| env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let workspace_root = doctor_workspace_root();
 
     match swissarmyhammer_validators::doctor::check_review_engine(&workspace_root) {
         Ok(status) => checks.extend(swissarmyhammer_validators::doctor::to_checks(&status)),
@@ -494,6 +490,20 @@ pub fn check_review_engine(checks: &mut Vec<Check>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The workspace `sah doctor` reports on: the surrounding Git repository when
+/// present, otherwise the current directory.
+///
+/// This is the ONE place the doctor decides which workspace it is diagnosing,
+/// and the only place the process working directory answers that question — a
+/// CLI command is invoked *in* the workspace it is asked about. Every layer
+/// below takes the root as an argument, so no library ever rediscovers a
+/// workspace from the current directory.
+pub fn doctor_workspace_root() -> PathBuf {
+    swissarmyhammer_common::utils::find_git_repository_root()
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]

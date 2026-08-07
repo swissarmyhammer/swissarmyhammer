@@ -27,7 +27,7 @@
 //! Validators are loaded from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
 //! 2. User validators (~/.validators)
-//! 3. Project validators (./.validators) - highest precedence
+//! 3. Project validators (`<workspace_root>/.validators`) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
 //!
@@ -41,11 +41,12 @@
 //! # Example
 //!
 //! ```no_run
+//! use std::path::Path;
 //! use swissarmyhammer_validators::validators::{ValidatorLoader, MatchContext};
 //!
-//! // Create a loader and load all validators
+//! // Create a loader and load every validator of one workspace
 //! let mut loader = ValidatorLoader::new();
-//! loader.load_all().unwrap();
+//! loader.load_all(Some(Path::new("/path/to/workspace"))).unwrap();
 //!
 //! // Find validators matching a Write of a TypeScript file
 //! let ctx = MatchContext::new().with_tool("Write").with_file("app.ts");

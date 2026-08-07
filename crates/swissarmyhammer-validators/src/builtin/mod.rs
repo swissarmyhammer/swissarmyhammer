@@ -35,11 +35,13 @@ include!(concat!(env!("OUT_DIR"), "/builtin_includes.rs"));
 /// use swissarmyhammer_validators::builtin::load_builtins;
 /// use swissarmyhammer_validators::validators::ValidatorLoader;
 ///
+/// use std::path::Path;
+///
 /// let mut loader = ValidatorLoader::new();
 /// load_builtins(&mut loader);
 ///
-/// // Now load user/project validators which will override builtins
-/// loader.load_all().ok();
+/// // Now load user/project validators for one workspace, which override builtins
+/// loader.load_all(Some(Path::new("/path/to/workspace"))).ok();
 /// ```
 pub fn load_builtins(loader: &mut ValidatorLoader) {
     // First load YAML includes so @references work

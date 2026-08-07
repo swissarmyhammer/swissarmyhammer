@@ -187,11 +187,16 @@ impl ToolRuleStatus {
 /// project precedence), resolves the detected project types for
 /// `workspace_root`, and delegates to [`check_review_engine_with`].
 ///
+/// `workspace_root` selects both halves of the answer — the project validator
+/// layer that loads and the project types the sets are judged against — so the
+/// facts describe the workspace the caller named and no other. The caller
+/// resolves that root; this never falls back to the process current directory.
+///
 /// # Errors
 ///
 /// Returns an [`AvpError`] when the validator stack fails to load.
 pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, AvpError> {
-    let loader = crate::load_rules()?;
+    let loader = crate::load_rules(Some(workspace_root))?;
     let project_types = detected_project_type_keys(workspace_root);
     Ok(check_review_engine_with(&loader, &project_types))
 }

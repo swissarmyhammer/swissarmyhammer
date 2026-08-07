@@ -3,9 +3,14 @@
 //! Loads validators from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
 //! 2. User validators (~/.validators)
-//! 3. Project validators (./.validators) - highest precedence
+//! 3. Project validators (`<workspace_root>/.validators`) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
+//!
+//! The workspace root is always an argument, never a discovery: the caller
+//! names the workspace it means (an MCP session's working directory, a CLI
+//! command's target), and nothing here reads the process current directory to
+//! find it.
 //!
 //! The loader implements [`TemplateContentProvider`] from `swissarmyhammer_templating`,
 //! allowing it to be used with the unified [`LibraryPartialAdapter`] for partial
@@ -19,9 +24,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use swissarmyhammer_directory::{
-    DirectoryConfig, ManagedDirectory, ValidatorsConfig, YamlExpander,
-};
+use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig, YamlExpander};
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::error::AvpError;
@@ -37,6 +40,32 @@ use super::types::{MatchContext, RuleSet, Validator, ValidatorSource};
 /// `None` when the home directory cannot be determined.
 fn user_validators_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(ValidatorsConfig::DIR_NAME))
+}
+
+/// Resolve the project validators store directory, `<workspace_root>/.validators`.
+///
+/// The ONE place the project layer's path is derived, and it derives it from the
+/// caller's workspace root alone. It never consults the process current
+/// directory: an MCP server's process CWD has nothing to do with the workspace
+/// its session names, so a CWD-derived project layer is the wrong workspace's
+/// rules (or none at all).
+///
+/// Resolution mirrors [`user_validators_dir`] — a plain join of
+/// [`ValidatorsConfig::DIR_NAME`] — so the two layers agree on one mechanism, and
+/// so reading rules never CREATES a `.validators` directory as a side effect the
+/// way a managed-directory constructor would.
+fn project_validators_dir(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(ValidatorsConfig::DIR_NAME)
+}
+
+/// Resolve the project validators store directory when it exists on disk.
+///
+/// `None` for an absent workspace root (the project layer fails closed, exactly
+/// as no root resolves no project types) and for a root that carries no
+/// `.validators` directory.
+fn existing_project_validators_dir(workspace_root: Option<&Path>) -> Option<PathBuf> {
+    let validators_dir = project_validators_dir(workspace_root?);
+    validators_dir.exists().then_some(validators_dir)
 }
 
 /// Loader for validators with directory stacking precedence.
@@ -130,12 +159,22 @@ impl ValidatorLoader {
     /// This loads validators from:
     /// 1. Builtin validators (call `load_builtins()` first if needed)
     /// 2. User validators from ~/.validators
-    /// 3. Project validators from ./.validators
+    /// 3. Project validators from `<workspace_root>/.validators`
     ///
     /// Later sources override earlier ones with the same name.
     ///
+    /// `workspace_root` is the workspace the caller's session names — the MCP
+    /// session working directory's root, or the directory a CLI command was
+    /// pointed at. Never the process current directory. A `None` root loads no
+    /// project layer at all, so an unknown workspace contributes no rules
+    /// instead of an unrelated repository's.
+    ///
     /// Note: Call `load_includes()` before this to enable `@` reference expansion.
-    pub fn load_all(&mut self) -> Result<(), AvpError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AvpError`] when a validator directory cannot be read.
+    pub fn load_all(&mut self, workspace_root: Option<&Path>) -> Result<(), AvpError> {
         // Load RuleSets from the user directory (~/.validators)
         if let Some(validators_dir) = user_validators_dir() {
             if validators_dir.exists() {
@@ -143,12 +182,9 @@ impl ValidatorLoader {
             }
         }
 
-        // Load RuleSets from the project directory (<git_root>/.validators)
-        if let Ok(dir) = ManagedDirectory::<ValidatorsConfig>::from_git_root() {
-            let validators_dir = dir.root();
-            if validators_dir.exists() {
-                self.load_rulesets_directory(validators_dir, ValidatorSource::Project)?;
-            }
+        // Load RuleSets from the project directory (<workspace_root>/.validators)
+        if let Some(validators_dir) = existing_project_validators_dir(workspace_root) {
+            self.load_rulesets_directory(&validators_dir, ValidatorSource::Project)?;
         }
 
         Ok(())
@@ -287,8 +323,14 @@ impl ValidatorLoader {
         self.validators.keys().cloned().collect()
     }
 
-    /// Get all directories that would be searched for validators.
-    pub fn get_directories() -> Vec<std::path::PathBuf> {
+    /// Get all directories [`load_all`](Self::load_all) would search for
+    /// validators in the workspace at `workspace_root`.
+    ///
+    /// Resolves the same two layers `load_all` does, and skips a directory that
+    /// does not exist. `workspace_root` carries the same contract as
+    /// `load_all`'s: the caller's session workspace, never the process current
+    /// directory, and a `None` root contributes no project directory.
+    pub fn directories(workspace_root: Option<&Path>) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
 
         // User directory (~/.validators)
@@ -298,12 +340,9 @@ impl ValidatorLoader {
             }
         }
 
-        // Project directory (<git_root>/.validators)
-        if let Ok(dir) = ManagedDirectory::<ValidatorsConfig>::from_git_root() {
-            let validators_dir = dir.root();
-            if validators_dir.exists() {
-                dirs.push(validators_dir.to_path_buf());
-            }
+        // Project directory (<workspace_root>/.validators)
+        if let Some(validators_dir) = existing_project_validators_dir(workspace_root) {
+            dirs.push(validators_dir);
         }
 
         dirs
@@ -474,7 +513,12 @@ impl ValidatorLoader {
     /// - How many validators were loaded from each source
     ///
     /// Useful for debugging why validators aren't being loaded.
-    pub fn diagnostics(&self) -> ValidatorDiagnostics {
+    ///
+    /// `workspace_root` carries the same contract as
+    /// [`load_all`](Self::load_all)'s: the caller's session workspace, never the
+    /// process current directory. A `None` root reports the project directory as
+    /// unresolved, which is exactly what `load_all` did with it.
+    pub fn diagnostics(&self, workspace_root: Option<&Path>) -> ValidatorDiagnostics {
         let mut user_dir_info = DirectoryInfo {
             path: None,
             exists: false,
@@ -498,15 +542,15 @@ impl ValidatorLoader {
             }
         }
 
-        // Check project directory (<git_root>/.validators)
-        match ManagedDirectory::<ValidatorsConfig>::from_git_root() {
-            Ok(dir) => {
-                let validators_dir = dir.root().to_path_buf();
+        // Check project directory (<workspace_root>/.validators)
+        match workspace_root {
+            Some(root) => {
+                let validators_dir = project_validators_dir(root);
                 project_dir_info.exists = validators_dir.exists();
                 project_dir_info.path = Some(validators_dir);
             }
-            Err(e) => {
-                project_dir_info.error = Some(format!("{}", e));
+            None => {
+                project_dir_info.error = Some("no workspace root was supplied".to_string());
             }
         }
 
@@ -550,7 +594,8 @@ pub struct DirectoryInfo {
 pub struct ValidatorDiagnostics {
     /// Information about the user validators directory (~/.validators).
     pub user_directory: DirectoryInfo,
-    /// Information about the project validators directory (./.validators).
+    /// Information about the project validators directory
+    /// (`<workspace_root>/.validators`).
     pub project_directory: DirectoryInfo,
     /// Number of builtin validators loaded.
     pub builtin_count: usize,
@@ -582,28 +627,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    /// RAII guard that restores the current working directory on drop.
-    ///
-    /// Tests that mutate the process CWD must be marked `#[serial_test::serial(cwd)]`
-    /// so they do not race other CWD-sensitive tests.
-    struct CwdGuard {
-        original: std::path::PathBuf,
-    }
-
-    impl CwdGuard {
-        fn change_to(dir: &Path) -> Self {
-            let original = std::env::current_dir().expect("read cwd");
-            std::env::set_current_dir(dir).expect("set cwd");
-            Self { original }
-        }
-    }
-
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.original);
-        }
-    }
 
     /// RAII guard that restores an environment variable on drop.
     struct EnvVarGuard {
@@ -661,10 +684,9 @@ mod tests {
         write_ruleset(&project_validators, "shared", "Project version");
 
         let _env = EnvVarGuard::set("HOME", home.path());
-        let _cwd = CwdGuard::change_to(project_root.path());
 
         let mut loader = ValidatorLoader::new();
-        loader.load_all().unwrap();
+        loader.load_all(Some(project_root.path())).unwrap();
 
         // Both user-only and project-only RuleSets are discovered.
         assert!(
@@ -673,7 +695,7 @@ mod tests {
         );
         assert!(
             loader.get_ruleset("project-only").is_some(),
-            "project RuleSet from ./.validators should load"
+            "project RuleSet from <workspace_root>/.validators should load"
         );
 
         // Project overrides user for the same-named set.
@@ -708,10 +730,9 @@ mod tests {
         .expect("write project tool ruleset");
 
         let _env = EnvVarGuard::set("HOME", home.path());
-        let _cwd = CwdGuard::change_to(project_root.path());
 
         let mut loader = ValidatorLoader::new();
-        loader.load_all().unwrap();
+        loader.load_all(Some(project_root.path())).unwrap();
 
         let ruleset = loader.get_ruleset("tooled").expect("tooled ruleset loads");
         assert_eq!(ruleset.source, ValidatorSource::Project);
@@ -858,10 +879,9 @@ mod tests {
         fs::create_dir_all(project_root.path().join(".git")).unwrap();
 
         let _env = EnvVarGuard::set("HOME", home.path());
-        let _cwd = CwdGuard::change_to(project_root.path());
 
         let mut loader = ValidatorLoader::new();
-        loader.load_all().unwrap();
+        loader.load_all(Some(project_root.path())).unwrap();
 
         // The valid one loaded; the broken one did not crash the run.
         assert!(
@@ -1152,24 +1172,44 @@ Check issues.
     #[test]
     fn test_loader_load_all() {
         let mut loader = ValidatorLoader::new();
-        // load_all loads from VirtualFileSystem directories
-        // This may or may not find validators depending on the environment
-        let result = loader.load_all();
-        assert!(result.is_ok());
+        // A workspace root that carries no `.validators` directory contributes
+        // no project layer, and no root at all is equally quiet.
+        let empty_workspace = TempDir::new().unwrap();
+        assert!(loader.load_all(Some(empty_workspace.path())).is_ok());
+        assert!(loader.load_all(None).is_ok());
     }
 
+    /// The searched directory list never carries a project directory the caller
+    /// did not name, and never one that does not exist.
     #[test]
-    fn test_loader_get_directories() {
-        let dirs = ValidatorLoader::get_directories();
-        // Returns a list of validator directories (may be empty if none exist)
-        // The function should not panic
-        assert!(dirs.len() <= 2); // At most user + project directories
+    #[serial_test::serial(cwd)]
+    fn directories_come_from_the_supplied_workspace_root() {
+        let home = TempDir::new().unwrap();
+        let _env = EnvVarGuard::set("HOME", home.path());
+
+        let workspace = TempDir::new().unwrap();
+        assert!(
+            ValidatorLoader::directories(Some(workspace.path())).is_empty(),
+            "a workspace with no .validators directory contributes nothing"
+        );
+
+        let project_validators = workspace.path().join(".validators");
+        write_ruleset(&project_validators, "project-only", "Project-only ruleset");
+        assert_eq!(
+            ValidatorLoader::directories(Some(workspace.path())),
+            vec![project_validators],
+            "the named workspace's .validators directory is searched"
+        );
+        assert!(
+            ValidatorLoader::directories(None).is_empty(),
+            "no workspace root means no project directory"
+        );
     }
 
     #[test]
     fn test_loader_diagnostics_empty() {
         let loader = ValidatorLoader::new();
-        let diag = loader.diagnostics();
+        let diag = loader.diagnostics(None);
 
         // Empty loader should have zero counts
         assert_eq!(diag.builtin_count, 0);
@@ -1213,7 +1253,7 @@ Body.
             .load_directory(&validators_dir, ValidatorSource::User)
             .unwrap();
 
-        let diag = loader.diagnostics();
+        let diag = loader.diagnostics(Some(temp.path()));
 
         assert_eq!(diag.builtin_count, 1, "Should have 1 builtin");
         assert_eq!(diag.user_count, 1, "Should have 1 user validator");

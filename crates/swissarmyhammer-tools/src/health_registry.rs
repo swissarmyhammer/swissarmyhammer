@@ -13,8 +13,11 @@ use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
     register_code_context_tools, register_diagnostics_tools, register_file_tools,
     register_git_tools, register_kanban_tools, register_questions_tools, register_ralph_tools,
-    register_review_tools, register_shell_tools, register_web_tools,
+    register_shell_tools, register_web_tools,
 };
+// The specialized `review` registration lives on the tool module, like
+// `register_review_tool_with_factories` the server wiring uses.
+use crate::mcp::tools::review::register_review_tool_for_workspace;
 
 /// Directory name (relative to a user's home directory, or the current
 /// working directory) that holds user-authored prompts.
@@ -190,10 +193,15 @@ fn count_markdown_files(path: &std::path::Path) -> usize {
 /// Iterates over all registered MCP tools and standalone Doctorable
 /// components to collect their health checks. Called by `sah doctor`.
 ///
+/// `workspace_root` is the workspace being diagnosed. The caller resolves it —
+/// `sah doctor` reports on the repository it was invoked in — and it reaches the
+/// tools that read per-workspace state, so none of them has to guess a workspace
+/// from the process current directory.
+///
 /// # Returns
 ///
 /// * `Vec<HealthCheck>` - All health checks from all registered components
-pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
+pub async fn collect_all_health_checks(workspace_root: &std::path::Path) -> Vec<HealthCheck> {
     // Create MCP tool registry and register all tools
     let mut tool_registry = ToolRegistry::new();
 
@@ -208,7 +216,9 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     register_web_tools(&mut tool_registry);
     register_code_context_tools(&mut tool_registry);
     register_ralph_tools(&mut tool_registry);
-    register_review_tools(&mut tool_registry);
+    // The review tool's lint reads the workspace's project validator layer, so
+    // it is registered rooted at the workspace under diagnosis.
+    register_review_tool_for_workspace(&mut tool_registry, workspace_root.to_path_buf());
     register_diagnostics_tools(&mut tool_registry);
 
     // Register tools that need libraries (skill, agent) with default
@@ -455,7 +465,7 @@ mod tests {
 
         let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-        let checks = collect_all_health_checks().await;
+        let checks = collect_all_health_checks(cwd_dir.path()).await;
 
         // Should have at least some checks (web_search provides Chrome check)
         assert!(!checks.is_empty());
@@ -475,7 +485,7 @@ mod tests {
 
         let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-        let checks = collect_all_health_checks().await;
+        let checks = collect_all_health_checks(cwd_dir.path()).await;
 
         // Should have a Brave Search check from web tool
         let brave_check = checks
@@ -498,7 +508,7 @@ mod tests {
 
         let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-        let checks = collect_all_health_checks().await;
+        let checks = collect_all_health_checks(cwd_dir.path()).await;
 
         // Every registered tool group should surface at least one check.
         // code_context, ralph, and agent were previously omitted from the
@@ -539,7 +549,7 @@ mod tests {
 
         let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-        let checks = collect_all_health_checks().await;
+        let checks = collect_all_health_checks(cwd_dir.path()).await;
 
         // The review tool overrides the blanket OK default to lint validators;
         // its check surfaces under the "validators" category named "Validators"
@@ -566,7 +576,7 @@ mod tests {
 
         let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-        let checks = collect_all_health_checks().await;
+        let checks = collect_all_health_checks(cwd_dir.path()).await;
 
         // Should have prompt-related checks
         let prompt_checks: Vec<_> = checks.iter().filter(|c| c.category == "prompts").collect();

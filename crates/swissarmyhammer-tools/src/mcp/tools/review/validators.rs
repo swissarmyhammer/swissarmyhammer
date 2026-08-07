@@ -273,9 +273,10 @@ fn passes_filters(
 /// review run will enforce on that file.
 ///
 /// `workspace_root` is the session working directory's root — never the process
-/// current directory. It resolves the project types a path-shaped
-/// `match_filter` is answered against; a `None` root fails closed, so a
-/// `project_types`-keyed RuleSet does not match.
+/// current directory. It selects the project validator layer that loads
+/// (`<root>/.validators`) and resolves the project types a path-shaped
+/// `match_filter` is answered against; a `None` root fails closed, so no project
+/// layer loads and a `project_types`-keyed RuleSet does not match.
 ///
 /// # Errors
 ///
@@ -287,7 +288,7 @@ pub fn list_validators(
     include_rules: bool,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<ValidatorSummary>, ValidatorOpError> {
-    let loader = load_rules()?;
+    let loader = load_rules(workspace_root)?;
     // A path-shaped `match` is answered by the engine matcher, once for the whole
     // stack rather than per row.
     let project_types = workspace_project_types(workspace_root);
@@ -408,9 +409,10 @@ fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String
 /// file pattern, so one example file per distinct extension gives the full set.
 ///
 /// `workspace_root` is the session working directory's root — never the process
-/// current directory. Its detected project types are resolved once for the whole
-/// call, so a `project_types`-keyed RuleSet (the shape every tool rule uses)
-/// reaches the dump in a matching workspace. A `None` root fails closed.
+/// current directory. It selects the project validator layer that loads
+/// (`<root>/.validators`), and its detected project types are resolved once for
+/// the whole call, so a `project_types`-keyed RuleSet (the shape every tool rule
+/// uses) reaches the dump in a matching workspace. A `None` root fails closed.
 ///
 /// # Errors
 ///
@@ -425,7 +427,7 @@ pub fn dump_validators(
         return Err(ValidatorOpError::EmptyPaths);
     }
 
-    let loader = load_rules()?;
+    let loader = load_rules(workspace_root)?;
     let project_types = workspace_project_types(workspace_root);
 
     let mut matched: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -462,12 +464,21 @@ pub fn dump_validators(
 
 /// `get validator`: load the stack and return one RuleSet's full detail.
 ///
+/// `workspace_root` is the session working directory's root — never the process
+/// current directory. It selects the project validator layer that loads
+/// (`<root>/.validators`), so a project validator is reachable by name only in
+/// the workspace that defines it. A `None` root fails closed: the project layer
+/// contributes nothing, so a project-only name is unknown.
+///
 /// # Errors
 ///
 /// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails, and
 /// [`ValidatorOpError::UnknownValidator`] when no RuleSet is named `name`.
-pub fn get_validator(name: &str) -> Result<ValidatorDetail, ValidatorOpError> {
-    let loader = load_rules()?;
+pub fn get_validator(
+    name: &str,
+    workspace_root: Option<&Path>,
+) -> Result<ValidatorDetail, ValidatorOpError> {
+    let loader = load_rules(workspace_root)?;
     let ruleset = loader
         .get_ruleset(name)
         .ok_or_else(|| ValidatorOpError::UnknownValidator(name.to_string()))?;
@@ -500,11 +511,18 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, ValidatorOpError> {
 /// and this lint surfaces every one as an error naming the offending path and its
 /// parse problem. A broken validator never aborts the run — the rest still load.
 ///
+/// `workspace_root` is the session working directory's root — never the process
+/// current directory. It selects the project validator layer that is linted
+/// (`<root>/.validators`), so the lint reports the workspace the caller named.
+/// A `None` root lints the builtin and user layers alone.
+///
 /// # Errors
 ///
 /// Returns [`ValidatorOpError::Load`] when [`load_rules`] fails.
-pub fn check_validators() -> Result<CheckValidatorsResponse, ValidatorOpError> {
-    let loader = load_rules()?;
+pub fn check_validators(
+    workspace_root: Option<&Path>,
+) -> Result<CheckValidatorsResponse, ValidatorOpError> {
+    let loader = load_rules(workspace_root)?;
     let mut errors: Vec<ValidatorProblem> = Vec::new();
 
     let rulesets = loader.list_rulesets();

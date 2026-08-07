@@ -343,7 +343,7 @@ pub enum ValidatorSource {
     Builtin,
     /// User validators from ~/.validators.
     User,
-    /// Project validators from ./.validators.
+    /// Project validators from `<workspace_root>/.validators`.
     Project,
 }
 

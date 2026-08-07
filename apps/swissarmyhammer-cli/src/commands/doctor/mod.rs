@@ -107,8 +107,11 @@ impl Doctor {
     async fn run_tool_health_checks(&mut self) -> Result<()> {
         use swissarmyhammer_common::health::HealthStatus;
 
-        // Collect all health checks from registered MCP tools
-        let health_checks = swissarmyhammer_tools::collect_all_health_checks().await;
+        // Collect all health checks from registered MCP tools, rooted at the
+        // workspace this doctor run is diagnosing.
+        let health_checks =
+            swissarmyhammer_tools::collect_all_health_checks(&checks::doctor_workspace_root())
+                .await;
 
         // Convert HealthCheck to Check format
         for health_check in health_checks {

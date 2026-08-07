@@ -373,6 +373,60 @@ async fn list_validators_surfaces_user_and_project_layers_with_probes() {
     assert_eq!(project_row["probes"], json!(["callers"]));
 }
 
+/// Create a throwaway workspace holding one project-layer RuleSet.
+///
+/// The directory gets a `.git` marker so it reads as a repository root, and a
+/// `.validators/<name>` set matching every Rust file. Returns the `TempDir`,
+/// which the caller must keep alive for the workspace to exist.
+fn workspace_with_project_ruleset(name: &str) -> tempfile::TempDir {
+    let workspace = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(workspace.path().join(".git")).unwrap();
+    write_ruleset(&workspace.path().join(".validators"), name, "*.rs", &[]);
+    workspace
+}
+
+/// The project validator layer follows the SESSION working directory, never the
+/// process current directory.
+///
+/// Two workspaces each carry their own `.validators` set. The session names
+/// workspace A while the process CWD sits in workspace B, so a `list validators`
+/// call must report A's set and never B's.
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn list_validators_reads_the_session_workspace_not_the_process_cwd() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let session_workspace = workspace_with_project_ruleset("session-workspace-set");
+    let cwd_workspace = workspace_with_project_ruleset("cwd-workspace-set");
+    let _cwd = CurrentDirGuard::new(cwd_workspace.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(session_workspace.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("list validators"));
+    let result = tool.execute(args, &context).await.expect("list validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let names: Vec<String> = parsed
+        .as_array()
+        .expect("list returns an array")
+        .iter()
+        .map(|row| row["name"].as_str().unwrap().to_string())
+        .collect();
+
+    assert!(
+        names.contains(&"session-workspace-set".to_string()),
+        "the session working directory's project layer must load: {names:?}"
+    );
+    assert!(
+        !names.contains(&"cwd-workspace-set".to_string()),
+        "the process current directory's project layer must NOT load: {names:?}"
+    );
+}
+
 /// The tool-rule `run` script every seeded tool rule in these tests carries.
 /// The tests assert on exposure (`tool.run` round-trips through the ops), never
 /// on execution, so one fixed script serves every seeding call.
@@ -519,7 +573,7 @@ async fn list_validators_with_rules_pairs_like_the_engine_and_carries_bodies() {
 
     // The tool's answer IS the engine's pairing for that path — same code path,
     // so the two can never disagree about what a review run will enforce.
-    let loader = swissarmyhammer_validators::load_rules().expect("load rules");
+    let loader = swissarmyhammer_validators::load_rules(Some(project.path())).expect("load rules");
     let listed: Vec<String> = rows
         .iter()
         .map(|r| r["name"].as_str().unwrap().to_string())
@@ -1265,10 +1319,26 @@ async fn dump_validators_rejects_empty_paths() {
 // doctor health checks (`Doctorable::run_health_checks` over `check validators`)
 // ---------------------------------------------------------------------------
 
+/// Run the doctor surface against the workspace at `workspace_root`.
+///
+/// The root is pinned the way the doctor collector pins it, so the lint reads
+/// that workspace's project validator layer. The process current directory is
+/// left alone on purpose: it is the crate's own repository, which carries its
+/// own `.validators`, so a check that reported it would fail these assertions.
+fn doctor_checks_for_workspace(
+    workspace_root: &Path,
+) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+    use swissarmyhammer_common::health::Doctorable;
+
+    ReviewTool::new()
+        .with_doctor_workspace_root(Some(workspace_root.to_path_buf()))
+        .run_health_checks()
+}
+
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn doctor_reports_one_ok_when_all_validators_are_valid() {
-    use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+    use swissarmyhammer_common::health::HealthStatus;
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -1282,9 +1352,8 @@ async fn doctor_reports_one_ok_when_all_validators_are_valid() {
         "*.rs",
         &["duplicates"],
     );
-    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
-    let checks = ReviewTool::new().run_health_checks();
+    let checks = doctor_checks_for_workspace(project.path());
 
     assert_eq!(
         checks.len(),
@@ -1305,7 +1374,7 @@ async fn doctor_reports_one_ok_when_all_validators_are_valid() {
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn doctor_reports_an_error_naming_a_malformed_validator_with_a_fix() {
-    use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+    use swissarmyhammer_common::health::HealthStatus;
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -1319,9 +1388,8 @@ async fn doctor_reports_an_error_naming_a_malformed_validator_with_a_fix() {
         "*.rs",
         &["not-a-real-probe"],
     );
-    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
-    let checks = ReviewTool::new().run_health_checks();
+    let checks = doctor_checks_for_workspace(project.path());
 
     let error = checks
         .iter()
@@ -1349,7 +1417,7 @@ async fn doctor_reports_an_error_naming_a_malformed_validator_with_a_fix() {
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn doctor_reports_an_error_for_a_dropped_malformed_validator() {
-    use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+    use swissarmyhammer_common::health::HealthStatus;
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -1358,9 +1426,8 @@ async fn doctor_reports_an_error_for_a_dropped_malformed_validator() {
     let project = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(project.path().join(".git")).unwrap();
     write_malformed_ruleset(&project.path().join(".validators"), "broken-one");
-    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
-    let checks = ReviewTool::new().run_health_checks();
+    let checks = doctor_checks_for_workspace(project.path());
 
     let error = checks
         .iter()

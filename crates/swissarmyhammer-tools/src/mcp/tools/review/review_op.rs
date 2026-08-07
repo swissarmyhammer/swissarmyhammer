@@ -275,7 +275,9 @@ async fn run_review_request_inner(
     now: String,
     progress: Option<ReviewProgressSender>,
 ) -> Result<ReviewReport, ReviewError> {
-    let mut loader = load_rules().map_err(ReviewError::ValidatorLoad)?;
+    // The project validator layer belongs to the repository under review, which
+    // `repo_path` names — never the process current directory.
+    let mut loader = load_rules(Some(&repo_path)).map_err(ReviewError::ValidatorLoad)?;
     // Honor the `validators` subset modifier: when the caller named a subset,
     // scope the fan-out to just those validators. Empty means "all matching".
     loader.retain_rulesets(&request.validators);

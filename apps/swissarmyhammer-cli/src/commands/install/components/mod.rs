@@ -225,7 +225,7 @@ impl Initializable for ValidatorTools {
     /// with a synthetic loader.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         with_workspace_root(self.name(), |root| {
-            let loader = match swissarmyhammer_validators::load_rules() {
+            let loader = match swissarmyhammer_validators::load_rules(Some(root)) {
                 Ok(loader) => loader,
                 Err(e) => {
                     return vec![InitResult::error(
