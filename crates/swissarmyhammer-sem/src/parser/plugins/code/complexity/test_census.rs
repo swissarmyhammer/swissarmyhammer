@@ -12,10 +12,10 @@
 //! A test is whatever [`is_test_definition`](super::is_test_definition) says it
 //! is — an attribute at the definition (`#[test]`, `@Test`), a framework
 //! name+signature convention (`func TestX(t *testing.T)`, `def test_foo`), or a
-//! call-based definition (ExUnit's `test "..." do`). That is the SAME judgement
-//! the complexity scorer's test exemption uses, read off the one
-//! [`ComplexitySpec`] roster, and it never consults the file name. A helper in a
-//! file called `foo_test.rs` is not a test here.
+//! call-based definition (ExUnit's `test "..." do`, jest's `it("...", () =>
+//! {})`). That is the SAME judgement the complexity scorer's test exemption
+//! uses, read off the one [`ComplexitySpec`] roster, and it never consults the
+//! file name. A helper in a file called `foo_test.rs` is not a test here.
 //!
 //! # What a body is worth
 //!
@@ -25,9 +25,10 @@
 //!
 //! A language absent from that roster is **not measured** — `test_census`
 //! returns `None` — and a caller must report "not computed" rather than "no
-//! suspect tests". The distinction is not academic: JavaScript's `it(...)` is
-//! not recognized as a test definition at all today, so mapping its vocabulary
-//! here would report a file full of untested tests as clean.
+//! suspect tests". The distinction is not academic: Elixir's `test "..." do` IS
+//! a test definition the scorer recognizes, yet the language has no row here, so
+//! mapping its vocabulary would be needed before a `.exs` file could ever read
+//! as clean.
 
 use tree_sitter::Node;
 
@@ -253,6 +254,35 @@ const PYTHON_CENSUS: TestCensusSpec = TestCensusSpec {
     ..CENSUS_SPEC_DEFAULTS
 };
 
+/// The JavaScript family — JavaScript, TypeScript, and TSX, whose grammars
+/// spell all three of these the same way. jest and mocha define a test as a
+/// call, so the definition the census measures is the callback that call takes
+/// (`it("...", () => { ... })`), and the marker that skips it is the callee
+/// itself rather than an annotation: `it.skip`, `test.skip`, `xit`, and `xtest`
+/// all reduce to one of the words below through the substring match. Assertions
+/// are jest's `expect(...)`, node's and chai's `assert`, and chai's `should`
+/// style, which is a `property_identifier` rather than a leading call. A
+/// `catch_clause` that asserts nothing swallows the failure.
+const fn javascript_family_census(language: &'static str) -> TestCensusSpec {
+    TestCensusSpec {
+        language,
+        name_kinds: &["identifier", "property_identifier"],
+        assertion_words: &["assert", "expect", "should"],
+        skip_markers: &["skip", "xit", "xtest"],
+        catch_kinds: &["catch_clause"],
+        ..CENSUS_SPEC_DEFAULTS
+    }
+}
+
+/// JavaScript — [`javascript_family_census`].
+const JAVASCRIPT_CENSUS: TestCensusSpec = javascript_family_census("javascript");
+
+/// TypeScript — [`javascript_family_census`].
+const TYPESCRIPT_CENSUS: TestCensusSpec = javascript_family_census("typescript");
+
+/// TSX — [`javascript_family_census`].
+const TSX_CENSUS: TestCensusSpec = javascript_family_census("tsx");
+
 /// Every language the census can measure a test body in.
 ///
 /// A language absent here is "not measured", never "no suspect tests".
@@ -262,6 +292,9 @@ static TEST_CENSUS_SPECS: &[&TestCensusSpec] = &[
     &JAVA_CENSUS,
     &RUBY_CENSUS,
     &PYTHON_CENSUS,
+    &JAVASCRIPT_CENSUS,
+    &TYPESCRIPT_CENSUS,
+    &TSX_CENSUS,
 ];
 
 /// The census vocabulary for a language id, or `None` when it has no mapping.
@@ -348,6 +381,12 @@ fn body_statements<'t>(
 
 /// Whether a marker at the definition, or a call in the body, keeps the runner
 /// from running this test.
+///
+/// A marker at the definition is an attribute/annotation (`#[ignore]`,
+/// `@Disabled`) or, where a call defines the test, that call's own callee —
+/// jest spells a skipped test `it.skip("...", ...)` and mocha spells it
+/// `xit("...", ...)`, both of which carry the marker in the name they are
+/// called by.
 fn is_skipped(
     node: Node<'_>,
     source: &str,
@@ -357,6 +396,7 @@ fn is_skipped(
     let marked = super::definition_attributes(node, complexity)
         .into_iter()
         .filter_map(|attribute| super::attribute_marker_name(attribute, source))
+        .chain(super::defining_call(node, complexity, source).map(|(_, target)| target))
         .any(|marker| word_matches(marker, census.skip_markers));
     marked || names_in(node, source, census).any(|name| word_matches(name, census.skip_words))
 }
@@ -631,13 +671,86 @@ mod tests {
         );
     }
 
-    /// JavaScript's `it(...)` is not recognized as a test definition at all, so
-    /// the census must say "not measured" rather than "nothing suspect".
+    /// Elixir's `test "..." do` IS recognized as a test definition, but the
+    /// language has no census vocabulary to read a body with, so the census must
+    /// say "not measured" rather than "nothing suspect".
     #[test]
     fn a_language_with_no_census_mapping_is_not_measured() {
-        let source = "it('works', () => { expect(1).toBe(1); });\n";
-        let parsed = parse_code("a.test.js", source).expect("javascript is on the grammar roster");
+        let source = "defmodule ATest do\n  test \"works\" do\n    assert 1 == 1\n  end\nend\n";
+        let parsed = parse_code("a_test.exs", source).expect("elixir is on the grammar roster");
 
         assert_eq!(test_census(&parsed, source), None);
+    }
+
+    /// A jest module holding one honest test, one whose body is empty, one the
+    /// runner skips through the call itself, one nested in a `describe` suite,
+    /// and a helper beside them that is no test at all.
+    const JEST_TESTS: &str = "\
+        it(\"asserts\", () => {\n\
+        \x20   expect(build()).toBe(1);\n\
+        });\n\
+        \n\
+        it(\"empty\", () => {});\n\
+        \n\
+        it.skip(\"skipped\", () => {\n\
+        \x20   expect(build()).toBe(1);\n\
+        });\n\
+        \n\
+        describe(\"group\", () => {\n\
+        \x20   it(\"nested\", () => {\n\
+        \x20       expect(build()).toBe(1);\n\
+        \x20   });\n\
+        });\n\
+        \n\
+        function build() {\n\
+        \x20   return 1;\n\
+        }\n";
+
+    #[test]
+    fn a_jest_test_that_asserts_measures_no_defect() {
+        assert_eq!(defects_of(&census("a.test.js", JEST_TESTS), "asserts"), []);
+    }
+
+    #[test]
+    fn a_jest_test_with_an_empty_body_is_measured_as_empty() {
+        assert_eq!(
+            defects_of(&census("a.test.js", JEST_TESTS), "empty"),
+            [TestDefect::EmptyBody]
+        );
+    }
+
+    #[test]
+    fn a_jest_test_the_call_itself_skips_is_measured_as_skipped() {
+        assert_eq!(
+            defects_of(&census("a.test.js", JEST_TESTS), "skipped"),
+            [TestDefect::Skipped],
+            "the test asserts, so `skipped` is the only measure"
+        );
+    }
+
+    /// The census reads the call that defines the test, never the file name: a
+    /// plain function beside the tests is not one of them, and neither is a
+    /// `describe` suite, whose own body holds tests rather than assertions.
+    #[test]
+    fn only_the_jest_tests_themselves_are_measured() {
+        let names: Vec<String> = census("a.test.js", JEST_TESTS)
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+
+        assert_eq!(names, ["asserts", "empty", "skipped", "nested"]);
+    }
+
+    /// The census maps the whole JavaScript family, so the same jest module
+    /// measures the same way whichever of the three extensions carries it.
+    #[test]
+    fn every_javascript_family_extension_measures_a_jest_test() {
+        for path in ["a.test.js", "a.test.ts", "a.test.tsx"] {
+            assert_eq!(
+                defects_of(&census(path, JEST_TESTS), "empty"),
+                [TestDefect::EmptyBody],
+                "{path} measures the empty jest test"
+            );
+        }
     }
 }

@@ -1125,13 +1125,16 @@ mod tests {
         );
     }
 
-    /// A language whose tests the census cannot recognize must read as
-    /// **unknown**, never as a file whose tests all assert.
+    /// A language the census has no vocabulary for must read as **unknown**,
+    /// never as a file whose tests all assert. Elixir is the sharpest case: the
+    /// grammar roster DOES recognize `test "..." do` as a test definition, so
+    /// only the missing vocabulary stands between this file and a clean result.
     #[tokio::test]
     async fn a_language_with_no_census_mapping_reports_one_not_computed_row() {
         let change = FileChange::default().with_sources([(
-            "thing.test.js".to_string(),
-            "it('works', () => { expect(1).toBe(1); });\n".to_string(),
+            "thing_test.exs".to_string(),
+            "defmodule ThingTest do\n  test \"works\" do\n    assert 1 == 1\n  end\nend\n"
+                .to_string(),
         )]);
 
         let results = probe_results(&[ASSERTION_CENSUS_PROBE_NAME], &change).await;

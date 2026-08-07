@@ -125,6 +125,15 @@
 //! ([`ComplexitySpec::call_target_test_kinds`]), so being named `test` at the
 //! definition IS the marker.
 //!
+//! The JavaScript family marks a test the same way, one level out: jest and
+//! mocha spell a test `it("...", () => { ... })`, a call whose callback holds
+//! the body. The callback is the definition — it is where the statements and so
+//! the score are — and the enclosing call's callee is its marker, reached by
+//! [`defining_call`] off the same
+//! [`ComplexitySpec::call_target_test_kinds`] list Elixir uses. A `describe`
+//! suite is not on that list, so only the tests themselves are exempt from the
+//! gates.
+//!
 //! The prefix match is case-sensitive by default (Go, Python, and Ruby are all
 //! case-sensitive languages, and `go test` itself requires the exact-case
 //! `Test` prefix), but Fortran overrides it with
@@ -374,28 +383,50 @@ struct ComplexitySpec {
     // target's text. This breaks `function_kinds.contains(&node.kind())` —
     // EVERY call in the file has kind `"call"`, definitions and ordinary
     // calls alike.
-    /// The set of `target` identifier texts that reclassify a `call` node's
-    /// EFFECTIVE kind (see [`effective_kind`]) to that text, for every
-    /// [`ComplexitySpec`] list membership check the walker makes — function
-    /// detection, nesting, conditionals, and arms alike. An ordinary call
-    /// (`Repo.insert(a)`, `foo()`) is never affected: its `target` is either
-    /// not a bare identifier (a `dot` node for `Mod.fun()`, verified) or an
-    /// identifier whose text is not in this list. Empty for every grammar
-    /// whose special forms are real dedicated node kinds, which is every
-    /// grammar but Elixir's.
+    /// The grammar's call node kind — Elixir's `"call"`, the JS family's
+    /// `"call_expression"`, each verified by parsing a sample and reading the
+    /// labelled tree. Empty for a grammar that spells no definition as a call,
+    /// where every call-based lookup below reports nothing, because no node's
+    /// kind is the empty string.
+    call_kind: &'static str,
+    /// The field on a [`Self::call_kind`] node holding the callee — Elixir's
+    /// `"target"`, the JS family's `"function"`. [`call_target_text`] reads it
+    /// by name and has no second, per-grammar lookup beside it.
+    callee_field: &'static str,
+    /// The callee node kinds whose text names the call. Elixir reads only
+    /// `identifier`, so `Mod.fun()` — whose target is a `dot` node, verified —
+    /// is never misread as a special form. The JS family reads
+    /// `member_expression` as well, because jest spells a skipped test
+    /// `it.skip(...)`, whose callee is a member expression reading `it.skip`.
+    callee_kinds: &'static [&'static str],
+    /// The set of callee texts that reclassify a call node's EFFECTIVE kind
+    /// (see [`effective_kind`]) to that text, for every [`ComplexitySpec`] list
+    /// membership check the walker makes — function detection, nesting,
+    /// conditionals, and arms alike. An ordinary call (`Repo.insert(a)`,
+    /// `foo()`) is never affected: its callee is either not one of
+    /// [`Self::callee_kinds`] or an identifier whose text is not in this list.
+    /// Empty for every grammar whose special forms are real dedicated node
+    /// kinds, which is every grammar but Elixir's.
     call_target_kinds: &'static [&'static str],
-    /// The subset of [`Self::call_target_kinds`] whose mere identity marks a
-    /// function-level `call` as a test — Elixir's `"test"`, ExUnit's real
-    /// macro (`test "description" do ... end`, verified as a `call` node
-    /// exactly like `def`), which needs no attribute lookup at all: being
-    /// named `test` at the definition IS the marker.
+    /// The callee texts whose mere identity marks a call-based definition as a
+    /// test, needing no attribute lookup at all: being named that at the
+    /// definition IS the marker. Elixir's `"test"` is ExUnit's real macro
+    /// (`test "description" do ... end`, verified as a `call` node exactly like
+    /// `def`), and is a [`Self::call_target_kinds`] member too because Elixir
+    /// classifies the whole definition off its callee. The JS family's are
+    /// jest/mocha's `it`/`test` and the runner's own `.only`/`.skip`/`x`-prefixed
+    /// filters; none of them reclassifies anything, so the JS family leaves
+    /// [`Self::call_target_kinds`] empty.
     call_target_test_kinds: &'static [&'static str],
-    /// Whether [`function_name`] must read the name from a call-based
-    /// definition's `arguments` field (via [`call_function_name`]) instead of
-    /// [`Self::name_field`] — Elixir's `def`/`defp`/`defmacro`/`test`, none of
-    /// which carry a `name` field on the `call` node itself. `false` for
-    /// every other mapped grammar.
-    name_from_call_arguments: bool,
+    /// Function kinds a call-based definition takes as its BODY argument rather
+    /// than BEING — jest/mocha's `it("...", () => { ... })`, where the call
+    /// carries the marker and the callback carries the statements, so the
+    /// callback is the definition the scorer and the census both measure. A
+    /// callback sits directly in the call's argument list (`arrow_function`
+    /// inside `arguments` inside `call_expression`, verified), which is how
+    /// [`defining_call`] reaches its call. Empty for Elixir, whose `test "..."
+    /// do ... end` IS the definition node.
+    test_callback_kinds: &'static [&'static str],
 }
 
 /// Default values for the fields ^xjyb2qf added to support Go's, Ruby's, and
@@ -436,9 +467,12 @@ const EXTENDED_SPEC_DEFAULTS: ComplexitySpec = ComplexitySpec {
     positional_conditional: false,
     statement_terminator_kinds: &[],
     alternative_nested_in_consequence: false,
+    call_kind: "",
+    callee_field: "",
+    callee_kinds: &[],
     call_target_kinds: &[],
     call_target_test_kinds: &[],
-    name_from_call_arguments: false,
+    test_callback_kinds: &[],
 };
 
 /// Rust. Verified against `tree_sitter_rust` by parsing samples covering every
@@ -473,7 +507,17 @@ static RUST_SPEC: ComplexitySpec = ComplexitySpec {
 /// Shared field values for TypeScript, TSX, and JavaScript. All three
 /// grammars are C-like and produce identical node kinds for every field
 /// except the language id itself, confirmed by parsing the same
-/// control-flow and decorator samples under each grammar.
+/// control-flow, jest, and decorator samples under each grammar.
+///
+/// A jest/mocha test is a call — `it("...", () => { ... })` — rather than a
+/// declaration, and the call is not the function: the grammar hangs the body on
+/// the `arrow_function`/`function_expression` the call takes as its second
+/// argument (verified). So the callback is the definition, marked a test
+/// through the enclosing call's callee
+/// ([`ComplexitySpec::call_target_test_kinds`] reached by [`defining_call`]) and
+/// named by the call's description string. `describe` is deliberately absent
+/// from that list: a suite asserts nothing itself, and marking its callback a
+/// test would exempt real code from the gates.
 const fn typescript_family_spec(language: &'static str) -> ComplexitySpec {
     ComplexitySpec {
         language,
@@ -481,6 +525,7 @@ const fn typescript_family_spec(language: &'static str) -> ComplexitySpec {
             "function_declaration",
             "method_definition",
             "arrow_function",
+            "function_expression",
         ],
         name_field: "name",
         nesting_kinds: &[
@@ -509,6 +554,20 @@ const fn typescript_family_spec(language: &'static str) -> ComplexitySpec {
         label_kinds: &["statement_identifier"],
         attribute_kinds: &["decorator"],
         attribute_container_kinds: &[],
+        call_kind: "call_expression",
+        callee_field: "function",
+        callee_kinds: &["identifier", "member_expression"],
+        call_target_test_kinds: &[
+            "it",
+            "it.only",
+            "it.skip",
+            "test",
+            "test.only",
+            "test.skip",
+            "xit",
+            "xtest",
+        ],
+        test_callback_kinds: &["arrow_function", "function_expression"],
         ..EXTENDED_SPEC_DEFAULTS
     }
 }
@@ -914,7 +973,8 @@ static SWIFT_SPEC: ComplexitySpec = ComplexitySpec {
 /// [`effective_kind`] via [`ComplexitySpec::call_target_kinds`] rather than
 /// any per-language special case. `def`'s/`test`'s own name is not a field of
 /// the `call` at all; it is read from `arguments` by [`call_function_name`]
-/// instead ([`ComplexitySpec::name_from_call_arguments`]). `if`/`unless`
+/// instead, which [`function_name`] reaches through [`defining_call`] — the
+/// `call` IS the definition here, so it is its own defining call. `if`/`unless`
 /// carry their condition in the SAME `arguments` field a `def` uses for its
 /// name+parameters — [`ComplexitySpec::condition_field`] `"arguments"` — and
 /// their consequence+alternative both sit inside ONE `do_block` field, the
@@ -953,6 +1013,9 @@ static ELIXIR_SPEC: ComplexitySpec = ComplexitySpec {
     attribute_container_kinds: &[],
     condition_field: "arguments",
     alternative_nested_in_consequence: true,
+    call_kind: "call",
+    callee_field: "target",
+    callee_kinds: &["identifier"],
     call_target_kinds: &[
         "def",
         "defp",
@@ -965,7 +1028,6 @@ static ELIXIR_SPEC: ComplexitySpec = ComplexitySpec {
         "cond",
     ],
     call_target_test_kinds: &["test"],
-    name_from_call_arguments: true,
     ..EXTENDED_SPEC_DEFAULTS
 };
 
@@ -1147,33 +1209,76 @@ fn effective_kind<'s>(node: Node<'_>, spec: &ComplexitySpec, source: &'s str) ->
     if spec.call_target_kinds.is_empty() {
         return node.kind();
     }
-    match call_target_text(node, source) {
+    match call_target_text(node, spec, source) {
         Some(text) if spec.call_target_kinds.contains(&text) => text,
         _ => node.kind(),
     }
 }
 
-/// The `target` identifier's text of a `call` node, or `None` when `node`
-/// is not a `call`, or its `target` is not a bare identifier (Elixir's
-/// `Mod.fun()` targets a `dot` node instead, verified).
-fn call_target_text<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str> {
-    if node.kind() != "call" {
+/// The callee's text of a call node, or `None` when `node` is not this
+/// grammar's [`ComplexitySpec::call_kind`], or its callee is not one of the
+/// [`ComplexitySpec::callee_kinds`] the grammar's row reads.
+///
+/// The field holding the callee is the grammar's own
+/// ([`ComplexitySpec::callee_field`]: Elixir's `target`, the JS family's
+/// `function`), so one lookup serves every call-based grammar.
+fn call_target_text<'s>(node: Node<'_>, spec: &ComplexitySpec, source: &'s str) -> Option<&'s str> {
+    if node.kind() != spec.call_kind {
         return None;
     }
-    let target = node.child_by_field_name("target")?;
-    if target.kind() != "identifier" {
+    let callee = node.child_by_field_name(spec.callee_field)?;
+    if !spec.callee_kinds.contains(&callee.kind()) {
         return None;
     }
-    node_text(target, source)
+    node_text(callee, source)
 }
 
+/// The call node that DEFINES the function at `node`, together with its callee
+/// text, or `None` when no call defines it.
+///
+/// Two shapes, both read off the same [`ComplexitySpec`] row. The definition IS
+/// the call — Elixir's `def`/`test`, whose whole classification comes from the
+/// callee. Or the definition is the callback the call takes as an argument —
+/// jest/mocha's `it("...", () => { ... })`, where
+/// [`ComplexitySpec::test_callback_kinds`] names the callback kinds and the
+/// callback sits directly in the call's argument list, putting the call exactly
+/// two levels up (`arrow_function` inside `arguments` inside `call_expression`,
+/// verified against the JS grammar).
+///
+/// A call whose callee names no definition is never one, so an ordinary
+/// callback keeps its own identity: `arr.map((value) => value + 1)` reports
+/// `None`, and its callback stays an anonymous function rather than becoming a
+/// test.
+fn defining_call<'t, 's>(
+    node: Node<'t>,
+    spec: &ComplexitySpec,
+    source: &'s str,
+) -> Option<(Node<'t>, &'s str)> {
+    let call = if node.kind() == spec.call_kind {
+        node
+    } else if spec.test_callback_kinds.contains(&node.kind()) {
+        node.parent()?.parent()?
+    } else {
+        return None;
+    };
+    let target = call_target_text(call, spec, source)?;
+    let defines =
+        spec.call_target_kinds.contains(&target) || spec.call_target_test_kinds.contains(&target);
+    defines.then_some((call, target))
+}
+
+/// The quote characters a grammar wraps a string literal's own text in. Elixir
+/// writes a test description `"..."`; JavaScript accepts `'...'` for the same
+/// literal, so both are stripped to leave the description itself.
+const STRING_QUOTES: [char; 2] = ['"', '\''];
+
 /// The name of a call-based function definition (Elixir's `def`/`defp`/
-/// `defmacro`/`defmacrop`, or ExUnit's `test`) from its `arguments` field:
-/// verified as one of three shapes — the first argument is a nested `call`
-/// naming a parameterized function (whose own `target` is the name, e.g.
-/// `def pick(a, b)`), a bare `identifier` naming an arity-0 function (`def
-/// zero`), or (`test "description" do ... end`) a `string` naming the test
-/// directly.
+/// `defmacro`/`defmacrop`, ExUnit's `test`, or jest/mocha's `it`/`test`) from
+/// its `arguments` field: verified as one of three shapes — the first argument
+/// is a nested `call` naming a parameterized function (whose own `target` is the
+/// name, e.g. `def pick(a, b)`), a bare `identifier` naming an arity-0 function
+/// (`def zero`), or (`test "description" do ... end`, `it("description", ...)`)
+/// a `string` naming the test directly.
 fn call_function_name(node: Node<'_>, source: &str) -> Option<String> {
     let args = child_by_field_or_kind(node, "arguments")?;
     let mut cursor = args.walk();
@@ -1185,7 +1290,7 @@ fn call_function_name(node: Node<'_>, source: &str) -> Option<String> {
             .and_then(|t| node_text(t, source))
             .map(String::from),
         "identifier" => node_text(first?, source).map(String::from),
-        "string" => node_text(first?, source).map(|s| s.trim_matches('"').to_string()),
+        "string" => node_text(first?, source).map(|s| s.trim_matches(STRING_QUOTES).to_string()),
         _ => None,
     }
 }
@@ -1247,9 +1352,16 @@ fn score_function(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> Functi
 }
 
 /// The function's declared name, or `<anonymous>`.
+///
+/// A definition a call makes is named by that call's arguments — Elixir's `def
+/// pick(a, b)` and jest's `it("adds up", ...)` alike — because neither node
+/// carries a `name` field of its own. Every other definition is named by
+/// [`ComplexitySpec::name_field`].
 fn function_name(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> String {
-    if spec.name_from_call_arguments {
-        return call_function_name(node, source).unwrap_or_else(|| "<anonymous>".to_string());
+    if let Some((call, _)) = defining_call(node, spec, source) {
+        if let Some(name) = call_function_name(call, source) {
+            return name;
+        }
     }
     let header = function_header(node, spec);
     header
@@ -1327,13 +1439,15 @@ fn child_by_field_or_kind<'t>(node: Node<'t>, name: &str) -> Option<Node<'t>> {
 /// definition itself (JavaScript's bare `decorator` field), or a child
 /// wrapped in a container the grammar nests inside the definition (Java's
 /// `modifiers`, C#'s `attribute_list`, PHP's `attribute_list`/
-/// `attribute_group`, C/C++'s `attribute_declaration`). The file name is
-/// never consulted.
+/// `attribute_group`, C/C++'s `attribute_declaration`) — or, where the grammar
+/// spells a test as a call, the callee of the call that defines it (Elixir's
+/// `test "..." do`, jest/mocha's `it("...", () => { ... })`), read through
+/// [`defining_call`]. The file name is never consulted.
 fn is_test_definition(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bool {
     if name_signature_marks_test(node, source, spec) {
         return true;
     }
-    if let Some(target_text) = call_target_text(node, source) {
+    if let Some((_, target_text)) = defining_call(node, spec, source) {
         if spec.call_target_test_kinds.contains(&target_text) {
             return true;
         }
@@ -3088,6 +3202,34 @@ function pick(a, b) {
             let again = cognitive_complexity("src/lib.js", source).expect("javascript is mapped");
             assert_eq!(again, first, "run {run} drifted from run 0");
         }
+    }
+
+    /// jest/mocha spell a test as a call whose callback holds the body, so the
+    /// callback is the definition the exemption has to land on — and the call's
+    /// description names it. An ordinary callback beside it stays anonymous and
+    /// stays no test.
+    #[test]
+    fn javascript_marks_a_jest_callback_as_a_test_and_names_it() {
+        let file = cognitive_complexity(
+            "src/lib.js",
+            r#"
+it("adds up", () => {
+    expect(add(1, 1)).toBe(2);
+});
+
+items.forEach((item) => {
+    consume(item);
+});
+"#,
+        )
+        .expect("javascript is a mapped language");
+
+        let named: Vec<(&str, bool)> = file
+            .functions
+            .iter()
+            .map(|function| (function.name.as_str(), function.is_test))
+            .collect();
+        assert_eq!(named, [("adds up", true), ("<anonymous>", false)]);
     }
 
     // -----------------------------------------------------------------
