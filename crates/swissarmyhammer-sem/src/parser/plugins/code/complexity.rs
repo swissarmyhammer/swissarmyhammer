@@ -117,12 +117,16 @@
 //! test_foo`, Fortran's FRUIT-style `test_*` naming), checked by
 //! [`ComplexitySpec::test_name_prefix`]/[`ComplexitySpec::test_param_type`]
 //! via [`name_signature_marks_test`] rather than a per-language attribute
-//! branch. Elixir needs neither: its ExUnit `test` block is itself a `call`
-//! classified exactly like `def` ([`ComplexitySpec::call_target_test_kinds`]),
-//! so being named `test` at the definition IS the marker.
+//! branch. Python has the decorator construct, but neither pytest nor
+//! `unittest` marks a test with one: both read the `test_` prefix at the
+//! definition, so Python carries a name prefix BESIDE its decorator kinds
+//! rather than instead of them. Elixir needs neither: its ExUnit `test` block
+//! is itself a `call` classified exactly like `def`
+//! ([`ComplexitySpec::call_target_test_kinds`]), so being named `test` at the
+//! definition IS the marker.
 //!
-//! The prefix match is case-sensitive by default (Go's and Ruby's languages
-//! are both case-sensitive, and `go test` itself requires the exact-case
+//! The prefix match is case-sensitive by default (Go, Python, and Ruby are all
+//! case-sensitive languages, and `go test` itself requires the exact-case
 //! `Test` prefix), but Fortran overrides it with
 //! [`ComplexitySpec::test_name_case_insensitive`]: Fortran identifiers are
 //! case-insensitive by language semantics, so `TEST_DEEPLY_NESTED` and
@@ -251,20 +255,22 @@ struct ComplexitySpec {
     /// model; JavaScript's bare `decorator` field needs no unwrap at all).
     attribute_container_kinds: &'static [&'static str],
 
-    // ---- name+signature test marking (go, ruby, fortran) ----
+    // ---- name+signature test marking (go, ruby, fortran, python) ----
     //
     // Three grammars have no attribute/annotation node kind at all, so their
     // real test-marking convention is name+signature based instead: Go's
     // `func TestXxx(t *testing.T)`, Ruby's minitest `def test_foo`, and
-    // Fortran's FRUIT-style `test_*` subroutine naming. One generic
-    // mechanism — a name prefix, plus an optional first-parameter type
-    // substring for grammars (Go) where the prefix alone is ambiguous with
-    // an ordinary helper — covers all three, checked by
+    // Fortran's FRUIT-style `test_*` subroutine naming. Python has a
+    // decorator kind, yet pytest and `unittest` both mark a test by the same
+    // `test_` prefix, so it uses this mechanism BESIDE its decorator. One
+    // generic mechanism — a name prefix, plus an optional first-parameter
+    // type substring for grammars (Go) where the prefix alone is ambiguous
+    // with an ordinary helper — covers all four, checked by
     // [`name_signature_marks_test`] rather than a per-language branch.
     /// The prefix a function's own name must start with to count as a
-    /// name+signature test — Go's `"Test"`, Ruby's/Fortran's `"test_"`.
-    /// `None` for every grammar that marks tests via an attribute instead
-    /// (or not at all).
+    /// name+signature test — Go's `"Test"`, Ruby's/Fortran's/Python's
+    /// `"test_"`. `None` for every grammar that marks tests only through an
+    /// attribute (or not at all).
     test_name_prefix: Option<&'static str>,
     /// A substring the function's FIRST parameter's own `type` field text
     /// must contain for [`Self::test_name_prefix`] to count — Go's
@@ -280,10 +286,10 @@ struct ComplexitySpec {
     /// Whether [`Self::test_name_prefix`] matching in
     /// [`name_signature_marks_test`] must ignore case — Fortran's, whose
     /// identifiers are case-insensitive by language semantics (`TEST_FOO`,
-    /// `test_foo`, and `Test_Foo` all name the same subroutine), unlike Go's
-    /// and Ruby's, both case-sensitive languages where `go test`/minitest
-    /// require the exact-case prefix. `false` for every other grammar,
-    /// including Go and Ruby.
+    /// `test_foo`, and `Test_Foo` all name the same subroutine), unlike Go's,
+    /// Ruby's, and Python's, all case-sensitive languages where `go
+    /// test`/minitest/pytest require the exact-case prefix. `false` for every
+    /// other grammar, including Go, Ruby, and Python.
     test_name_case_insensitive: bool,
 
     // ---- indirect header fields (fortran) ----
@@ -532,6 +538,14 @@ static JAVASCRIPT_SPEC: ComplexitySpec = typescript_family_spec("javascript");
 /// another), and its boolean operator tokens are the literal keywords `and`/
 /// `or` rather than `&&`/`||` (confirmed by inspecting the operator node's own
 /// `kind()`).
+///
+/// Both pytest and `unittest` mark a test by the `test_` prefix at the
+/// definition rather than by a decorator, so the spec carries
+/// [`ComplexitySpec::test_name_prefix`] `"test_"` as well — a plain name
+/// prefix with no signature check, exactly as Ruby's minitest convention does.
+/// The `@...test` decorator branch stays: a `decorator` is a preceding named
+/// sibling inside the `decorated_definition` wrapper (confirmed by parsing
+/// `@pytest.mark.skip("why")` above a `def` and reading the s-expression).
 static PYTHON_SPEC: ComplexitySpec = ComplexitySpec {
     language: "python",
     function_kinds: &["function_definition"],
@@ -555,6 +569,7 @@ static PYTHON_SPEC: ComplexitySpec = ComplexitySpec {
     label_kinds: &[],
     attribute_kinds: &["decorator"],
     attribute_container_kinds: &[],
+    test_name_prefix: Some("test_"),
     ..EXTENDED_SPEC_DEFAULTS
 };
 
@@ -1414,20 +1429,23 @@ fn attribute_marker_name<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str>
 /// Whether the definition is a name+signature test by
 /// [`ComplexitySpec::test_name_prefix`]/[`ComplexitySpec::test_param_type`] —
 /// the convention Go (`func TestXxx(t *testing.T)`), Ruby (minitest's `def
-/// test_foo`), and Fortran (FRUIT's `test_*` subroutine naming) use in place
-/// of an attribute, none of whose grammars has an attribute/annotation node
-/// kind at all. `false` for every grammar that marks tests via an attribute
-/// instead ([`ComplexitySpec::test_name_prefix`] is `None`).
+/// test_foo`), Fortran (FRUIT's `test_*` subroutine naming), and Python
+/// (pytest's and `unittest`'s `def test_foo`) use in place of an attribute.
+/// The first three grammars have no attribute/annotation node kind at all;
+/// Python has one, but its frameworks do not mark a test with it, so the
+/// prefix check runs BESIDE the decorator check. `false` for every grammar
+/// that marks tests only through an attribute
+/// ([`ComplexitySpec::test_name_prefix`] is `None`).
 ///
 /// The prefix match itself is case-sensitive UNLESS
 /// [`ComplexitySpec::test_name_case_insensitive`] is set — Fortran's, whose
 /// identifiers are case-insensitive by language semantics, so
 /// `TEST_DEEPLY_NESTED`/`test_deeply_nested`/`Test_Deeply_Nested` all name
-/// the same subroutine. Go and Ruby leave it unset: both are case-sensitive
-/// languages where `go test`/minitest require the exact-case prefix, so a
-/// case-insensitive match there would recognize helpers `go test` itself
-/// would never run (an unexported `testHelper` is not a real `Test` entry
-/// point).
+/// the same subroutine. Go, Ruby, and Python leave it unset: all three are
+/// case-sensitive languages where `go test`/minitest/pytest require the
+/// exact-case prefix, so a case-insensitive match there would recognize
+/// helpers the runner itself would never run (an unexported `testHelper` is
+/// not a real `Test` entry point).
 fn name_signature_marks_test(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bool {
     let Some(prefix) = spec.test_name_prefix else {
         return false;
@@ -3226,6 +3244,59 @@ def deeply_nested_test(a, b, items):
         assert!(
             !scored.exceeds_gates(),
             "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn python_test_name_prefix_exempts_the_function() {
+        let file = cognitive_complexity(
+            "src/lib.py",
+            r#"
+def test_deeply_nested(a, b, items):
+    if a:
+        for item in items:
+            while b:
+                if item > 0:
+                    return 1
+    return 0
+"#,
+        )
+        .expect("python is a mapped language");
+        let scored = &file.functions[0];
+
+        assert!(scored.is_test, "pytest's def test_foo marks the function");
+        assert_eq!(scored.max_nesting_depth, 4, "the depth is still measured");
+        assert!(
+            !scored.exceeds_gates(),
+            "a test is exempt even at depth 4: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn python_a_helper_beside_a_test_is_not_a_test() {
+        let file = cognitive_complexity(
+            "src/test_lib.py",
+            r#"
+def test_something():
+    return 1
+
+
+def build_request(a):
+    if a:
+        return 1
+    return 0
+"#,
+        )
+        .expect("python is a mapped language");
+        let helper = file
+            .functions
+            .iter()
+            .find(|f| f.name == "build_request")
+            .expect("the helper is scored");
+
+        assert!(
+            !helper.is_test,
+            "a helper is judged at its own name, never by the file name"
         );
     }
 

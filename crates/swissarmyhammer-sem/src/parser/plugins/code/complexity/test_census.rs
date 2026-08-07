@@ -25,10 +25,9 @@
 //!
 //! A language absent from that roster is **not measured** — `test_census`
 //! returns `None` — and a caller must report "not computed" rather than "no
-//! suspect tests". The distinction is not academic: Python's `def test_foo` and
-//! JavaScript's `it(...)` are not recognized as test definitions at all today,
-//! so mapping their vocabulary here would report a file full of untested tests
-//! as clean.
+//! suspect tests". The distinction is not academic: JavaScript's `it(...)` is
+//! not recognized as a test definition at all today, so mapping its vocabulary
+//! here would report a file full of untested tests as clean.
 
 use tree_sitter::Node;
 
@@ -236,11 +235,34 @@ const RUBY_CENSUS: TestCensusSpec = TestCensusSpec {
     ..CENSUS_SPEC_DEFAULTS
 };
 
+/// Python. pytest's and `unittest`'s `def test_foo` marks the definition, and
+/// a `@pytest.mark.skip`/`@pytest.mark.skipif`/`@pytest.mark.xfail` or
+/// `@unittest.skip` decorator skips it — each one reducing to its last path
+/// segment, and `skip` covering `skipif` too because the marker match is a
+/// substring one. The language spells its own assertion as an
+/// `assert_statement` rather than as a call, so that kind is an assertion
+/// whatever it names; the rest are pytest's `pytest.raises` context manager
+/// and `unittest`'s `assertEqual` family, both an `identifier` leaf. An
+/// `except_clause` that asserts nothing swallows the failure.
+const PYTHON_CENSUS: TestCensusSpec = TestCensusSpec {
+    language: "python",
+    assertion_kinds: &["assert_statement"],
+    assertion_words: &["assert", "raises", "expect"],
+    skip_markers: &["skip", "xfail"],
+    catch_kinds: &["except_clause"],
+    ..CENSUS_SPEC_DEFAULTS
+};
+
 /// Every language the census can measure a test body in.
 ///
 /// A language absent here is "not measured", never "no suspect tests".
-static TEST_CENSUS_SPECS: &[&TestCensusSpec] =
-    &[&RUST_CENSUS, &GO_CENSUS, &JAVA_CENSUS, &RUBY_CENSUS];
+static TEST_CENSUS_SPECS: &[&TestCensusSpec] = &[
+    &RUST_CENSUS,
+    &GO_CENSUS,
+    &JAVA_CENSUS,
+    &RUBY_CENSUS,
+    &PYTHON_CENSUS,
+];
 
 /// The census vocabulary for a language id, or `None` when it has no mapping.
 fn census_spec_for_language(language: &str) -> Option<&'static TestCensusSpec> {
@@ -568,16 +590,54 @@ mod tests {
         assert_eq!(defects_of(&measured, "test_asserts"), []);
     }
 
-    /// Python's `def test_foo` is not recognized as a test definition at all,
-    /// so the census must say "not measured" rather than "nothing suspect".
+    /// A pytest module holding one honest test, one that asserts nothing, and
+    /// one the runner skips through a marker.
+    const PYTHON_TESTS: &str = "\
+        import pytest\n\
+        \n\
+        \n\
+        def test_asserts():\n\
+        \x20   assert build() == 1\n\
+        \n\
+        \n\
+        def test_measures_nothing():\n\
+        \x20   value = build()\n\
+        \x20   print(value)\n\
+        \n\
+        \n\
+        @pytest.mark.skip(\"flaky\")\n\
+        def test_skipped():\n\
+        \x20   assert build() == 1\n";
+
+    /// Python spells its assertion as a statement rather than as a call, so the
+    /// honest test proves the statement kind is read as well.
     #[test]
-    fn a_language_with_no_census_mapping_is_not_measured() {
-        let parsed = parse_code("test_a.py", "def test_nothing():\n    pass\n")
-            .expect("python is on the grammar roster");
+    fn a_python_test_that_asserts_nothing_is_measured() {
+        let measured = census("test_a.py", PYTHON_TESTS);
 
         assert_eq!(
-            test_census(&parsed, "def test_nothing():\n    pass\n"),
-            None
+            defects_of(&measured, "test_measures_nothing"),
+            [TestDefect::NoAssertions]
         );
+        assert_eq!(defects_of(&measured, "test_asserts"), []);
+    }
+
+    #[test]
+    fn a_pytest_skip_marker_is_measured_as_skipped() {
+        assert_eq!(
+            defects_of(&census("test_a.py", PYTHON_TESTS), "test_skipped"),
+            [TestDefect::Skipped],
+            "the test asserts, so `skipped` is the only measure"
+        );
+    }
+
+    /// JavaScript's `it(...)` is not recognized as a test definition at all, so
+    /// the census must say "not measured" rather than "nothing suspect".
+    #[test]
+    fn a_language_with_no_census_mapping_is_not_measured() {
+        let source = "it('works', () => { expect(1).toBe(1); });\n";
+        let parsed = parse_code("a.test.js", source).expect("javascript is on the grammar roster");
+
+        assert_eq!(test_census(&parsed, source), None);
     }
 }

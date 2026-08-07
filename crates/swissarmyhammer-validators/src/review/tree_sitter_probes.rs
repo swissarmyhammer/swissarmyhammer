@@ -1130,8 +1130,8 @@ mod tests {
     #[tokio::test]
     async fn a_language_with_no_census_mapping_reports_one_not_computed_row() {
         let change = FileChange::default().with_sources([(
-            "test_thing.py".to_string(),
-            "def test_nothing():\n    pass\n".to_string(),
+            "thing.test.js".to_string(),
+            "it('works', () => { expect(1).toBe(1); });\n".to_string(),
         )]);
 
         let results = probe_results(&[ASSERTION_CENSUS_PROBE_NAME], &change).await;
