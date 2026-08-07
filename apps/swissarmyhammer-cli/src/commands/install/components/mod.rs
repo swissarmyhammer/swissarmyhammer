@@ -128,7 +128,7 @@ impl Initializable for ProjectStructure {
     /// process working directory by design; the creation itself is
     /// root-explicit so it is unit-testable without touching the process CWD.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        with_workspace_root(self.name(), |root| {
+        with_workspace_root(|root| {
             let sah_root = match create_workspace_structure(root) {
                 Ok(sah_root) => sah_root,
                 Err(e) => return vec![InitResult::error(self.name(), e)],
@@ -155,7 +155,7 @@ impl Initializable for ProjectStructure {
             )];
         }
 
-        with_workspace_root(self.name(), |root| {
+        with_workspace_root(|root| {
             for dir_name in [SAH_DIR_NAME, PROMPTS_DIR_NAME] {
                 if let Some(failure) =
                     remove_directory_if_exists(root, dir_name, self.name(), reporter)
@@ -224,7 +224,7 @@ impl Initializable for ValidatorTools {
     /// itself to the loader-free [`install_tool_rules_with`], which tests drive
     /// with a synthetic loader.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        with_workspace_root(self.name(), |root| {
+        with_workspace_root(|root| {
             let loader = match swissarmyhammer_validators::load_rules(Some(root)) {
                 Ok(loader) => loader,
                 Err(e) => {
@@ -307,41 +307,25 @@ fn tool_rule_label(install: &ToolRuleInstall) -> String {
     format!("{}/{}", install.set_name(), install.rule_name())
 }
 
-/// Run `work` on the project root, or report the failure to resolve it as
-/// `component`'s single errored result.
+/// Run `work` on the project root the components act on.
 ///
-/// The ONE place the "resolve the root, else report" control flow lives. Every
-/// lifecycle body that needs the root — [`ProjectStructure::init`],
-/// [`ProjectStructure::deinit`], [`ValidatorTools::init`] — passes itself here
-/// as `work` instead of resolving and branching on its own, so neither the
-/// resolution nor the failure shape is written twice, and a change to either
-/// happens in this function alone.
+/// The ONE place the lifecycle bodies read the root. Every body that needs it —
+/// [`ProjectStructure::init`], [`ProjectStructure::deinit`],
+/// [`ValidatorTools::init`] — passes itself here as `work` instead of resolving
+/// on its own, so [`ProjectStructure::deinit`] run from a subdirectory cannot
+/// look for a workspace that [`ProjectStructure::init`] created at the git
+/// root, and [`ValidatorTools::init`] detects the project types of the same
+/// workspace `sah init` is installing.
+///
+/// Resolution itself is
+/// [`swissarmyhammer_common::utils::find_workspace_root`] — the shared "git
+/// root, else current directory" rule that `sah doctor` reads too, so the two
+/// commands never disagree about which workspace they are acting on.
 ///
 /// `work` borrows the root rather than owning it: every lifecycle body only
 /// reads the path, and each function it hands the root to takes `&Path`.
-fn with_workspace_root(
-    component: &str,
-    work: impl FnOnce(&Path) -> Vec<InitResult>,
-) -> Vec<InitResult> {
-    match workspace_root() {
-        Ok(root) => work(&root),
-        Err(e) => vec![InitResult::error(component, e)],
-    }
-}
-
-/// The project root the components act on: the git repository root, else the
-/// process working directory.
-///
-/// [`ProjectStructure::init`] and [`ProjectStructure::deinit`] must agree on
-/// this, or a `deinit` run from a subdirectory would look for a workspace that
-/// `init` created at the git root. [`ValidatorTools::init`] reads the same root
-/// so it detects the project types of the workspace `sah init` is installing.
-/// [`with_workspace_root`] is how all three read it.
-fn workspace_root() -> Result<PathBuf, String> {
-    if let Some(root) = swissarmyhammer_common::utils::find_git_repository_root() {
-        return Ok(root);
-    }
-    std::env::current_dir().map_err(|e| format!("failed to get current directory: {e}"))
+fn with_workspace_root(work: impl FnOnce(&Path) -> Vec<InitResult>) -> Vec<InitResult> {
+    work(&swissarmyhammer_common::utils::find_workspace_root())
 }
 
 /// Remove `<root>/<dir_name>` and report it, if the directory is there.

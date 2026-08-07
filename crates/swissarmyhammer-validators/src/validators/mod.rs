@@ -42,18 +42,22 @@
 //!
 //! ```no_run
 //! use std::path::Path;
+//! use swissarmyhammer_validators::AvpError;
 //! use swissarmyhammer_validators::validators::{ValidatorLoader, MatchContext};
 //!
-//! // Create a loader and load every validator of one workspace
-//! let mut loader = ValidatorLoader::new();
-//! loader.load_all(Some(Path::new("/path/to/workspace"))).unwrap();
+//! fn main() -> Result<(), AvpError> {
+//!     // Create a loader and load every validator of one workspace
+//!     let mut loader = ValidatorLoader::new();
+//!     loader.load_all(Some(Path::new("/path/to/workspace")))?;
 //!
-//! // Find validators matching a Write of a TypeScript file
-//! let ctx = MatchContext::new().with_tool("Write").with_file("app.ts");
-//! let matching = loader.matching(&ctx);
+//!     // Find validators matching a Write of a TypeScript file
+//!     let ctx = MatchContext::new().with_tool("Write").with_file("app.ts");
+//!     let matching = loader.matching(&ctx);
 //!
-//! for validator in matching {
-//!     println!("{}: {}", validator.name(), validator.description());
+//!     for validator in matching {
+//!         println!("{}: {}", validator.name(), validator.description());
+//!     }
+//!     Ok(())
 //! }
 //! ```
 

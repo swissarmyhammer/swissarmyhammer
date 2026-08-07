@@ -113,6 +113,11 @@ swissarmyhammer-build = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+# `CurrentDirGuard`: the loader tests pin the process working directory to a
+# DIFFERENT workspace than the one they load, proving the process CWD never
+# reaches the project validator layer. The guard is the shared RAII helper, not
+# a local copy.
+swissarmyhammer-common = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-test = { workspace = true }
 # The shared ACP mock-agent harness (MockAgent trait + adapter + dispatch) the

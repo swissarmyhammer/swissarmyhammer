@@ -39,11 +39,11 @@ pub mod check_names {
 /// - Binary version and build type
 /// - Execute permissions on Unix systems
 /// - Binary naming conventions
-pub fn check_installation(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_installation(checks: &mut impl Extend<Check>) -> Result<()> {
     let current_exe = env::current_exe().unwrap_or_default();
-    checks.push(check_installation_method(&current_exe));
+    checks.extend([check_installation_method(&current_exe)]);
     check_binary_permissions(&current_exe, checks);
-    checks.push(check_binary_name(&current_exe));
+    checks.extend([check_binary_name(&current_exe)]);
     Ok(())
 }
 
@@ -80,32 +80,32 @@ fn check_installation_method(current_exe: &std::path::Path) -> Check {
 
 /// Check if the binary has execute permissions (Unix only).
 #[cfg(unix)]
-fn check_binary_permissions(current_exe: &std::path::Path, checks: &mut Vec<Check>) {
+fn check_binary_permissions(current_exe: &std::path::Path, checks: &mut impl Extend<Check>) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(metadata) = std::fs::metadata(current_exe) {
         let mode = metadata.permissions().mode();
         let exe_path = current_exe.to_string_lossy();
 
         if mode & 0o111 != 0 {
-            checks.push(Check {
+            checks.extend([Check {
                 name: check_names::BINARY_PERMISSIONS.to_string(),
                 status: CheckStatus::Ok,
                 message: format!("Executable permissions: {:o}", mode & 0o777),
                 fix: None,
-            });
+            }]);
         } else {
-            checks.push(Check {
+            checks.extend([Check {
                 name: check_names::BINARY_PERMISSIONS.to_string(),
                 status: CheckStatus::Error,
                 message: "Binary is not executable".to_string(),
                 fix: Some(format!("Run: chmod +x {exe_path}")),
-            });
+            }]);
         }
     }
 }
 
 #[cfg(not(unix))]
-fn check_binary_permissions(_current_exe: &std::path::Path, _checks: &mut Vec<Check>) {}
+fn check_binary_permissions(_current_exe: &std::path::Path, _checks: &mut impl Extend<Check>) {}
 
 /// Check if this is the expected binary name.
 fn check_binary_name(current_exe: &std::path::Path) -> Check {
@@ -135,7 +135,7 @@ fn check_binary_name(current_exe: &std::path::Path) -> Check {
 ///
 /// Searches the system PATH for the swissarmyhammer executable
 /// and reports its location if found.
-pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_in_path(checks: &mut impl Extend<Check>) -> Result<()> {
     let path_var = env::var("PATH").unwrap_or_default();
     let paths: Vec<std::path::PathBuf> = env::split_paths(&path_var).collect();
 
@@ -153,7 +153,7 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
     }
 
     if found {
-        checks.push(Check {
+        checks.extend([Check {
             name: check_names::IN_PATH.to_string(),
             status: CheckStatus::Ok,
             message: format!(
@@ -161,16 +161,16 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
                 found_path.expect("found_path should be Some when found is true")
             ),
             fix: None,
-        });
+        }]);
     } else {
-        checks.push(Check {
+        checks.extend([Check {
             name: check_names::IN_PATH.to_string(),
             status: CheckStatus::Warning,
             message: "sah not found in PATH".to_string(),
             fix: Some(
                 "Add sah to your PATH or use the full path in Claude Code config".to_string(),
             ),
-        });
+        }]);
     }
 
     Ok(())
@@ -185,7 +185,7 @@ const MAX_PATH_ENTRIES_IN_HINT: usize = 3;
 ///
 /// Verifies that swissarmyhammer is properly configured as an MCP server
 /// in Claude Code by running `claude mcp list` and checking the output.
-pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_claude_config(checks: &mut impl Extend<Check>) -> Result<()> {
     let claude_path = find_claude_binary();
 
     if claude_path.is_none() {
@@ -195,7 +195,7 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
         // `check_single_lsp_server` for absent optional
         // tools, and keeps `sah doctor` runnable on CI hosts that don't have
         // Claude installed.
-        checks.push(Check {
+        checks.extend([Check {
             name: check_names::CLAUDE_CONFIG.to_string(),
             status: CheckStatus::Warning,
             message: "Claude Code command not found in PATH".to_string(),
@@ -203,11 +203,11 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
                 "Install Claude Code from https://claude.ai/code or ensure the 'claude' command is in your PATH\nCurrent PATH: {}",
                 env::split_paths(&path_var).take(MAX_PATH_ENTRIES_IN_HINT).map(|p| p.display().to_string()).collect::<Vec<_>>().join(if cfg!(windows) { ";" } else { ":" }) + "..."
             )),
-        });
+        }]);
         return Ok(());
     }
 
-    checks.push(check_claude_mcp_list(claude_path.as_deref()));
+    checks.extend([check_claude_mcp_list(claude_path.as_deref())]);
     Ok(())
 }
 
@@ -286,23 +286,23 @@ fn check_claude_mcp_list(claude_path: Option<&Path>) -> Check {
 ///
 /// Verifies that the current directory is readable, which is
 /// essential for SwissArmyHammer operations.
-pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
     match std::env::current_dir() {
         Ok(cwd) => {
-            checks.push(Check {
+            checks.extend([Check {
                 name: check_names::FILE_PERMISSIONS.to_string(),
                 status: CheckStatus::Ok,
                 message: format!("Can read current directory: {cwd:?}"),
                 fix: None,
-            });
+            }]);
         }
         Err(e) => {
-            checks.push(Check {
+            checks.extend([Check {
                 name: check_names::FILE_PERMISSIONS.to_string(),
                 status: CheckStatus::Error,
                 message: format!("Failed to read current directory: {e}"),
                 fix: Some("Check file permissions for the current directory".to_string()),
-            });
+            }]);
         }
     }
 
@@ -314,7 +314,7 @@ pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
 /// Uses project detection to find all project types in the current workspace,
 /// then queries the LSP registry for relevant servers. Each server is checked
 /// for availability via `which` and `--version`.
-pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_lsp_servers(checks: &mut impl Extend<Check>) -> Result<()> {
     use std::collections::HashSet;
     use swissarmyhammer_lsp::registry::servers_for_project;
     use swissarmyhammer_project_detection::detect_projects;
@@ -333,17 +333,17 @@ pub fn check_lsp_servers(checks: &mut Vec<Check>) -> Result<()> {
     }
 
     if specs.is_empty() {
-        checks.push(Check {
+        checks.extend([Check {
             name: "LSP Servers".to_string(),
             status: CheckStatus::Ok,
             message: "No project types detected; no LSP servers to check".to_string(),
             fix: None,
-        });
+        }]);
         return Ok(());
     }
 
     for spec in &specs {
-        checks.push(check_single_lsp_server(spec));
+        checks.extend([check_single_lsp_server(spec)]);
     }
 
     Ok(())
@@ -414,11 +414,11 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
 ///
 /// The stack is scope-independent: it does not require a surrounding Git
 /// repository, so user-scope rows surface even when `sah doctor` runs from `~`.
-pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_install_stack(checks: &mut impl Extend<Check>) -> Result<()> {
     let config = match mirdan::agents::load_agents_config() {
         Ok(config) => config,
         Err(e) => {
-            checks.push(Check {
+            checks.extend([Check {
                 name: "Install Stack".to_string(),
                 status: CheckStatus::Error,
                 message: format!("Failed to load agents config: {}", e),
@@ -430,7 +430,7 @@ pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
                     "Check $MIRDAN_AGENTS_CONFIG or ~/.mirdan/agents.yaml for syntax errors"
                         .to_string(),
                 ),
-            });
+            }]);
             return Ok(());
         }
     };
@@ -454,7 +454,10 @@ pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
 /// with a synthetic config (e.g. a bare agent that yields NotApplicable rows),
 /// without depending on what happens to be installed on the host. The public
 /// [`check_install_stack`] is the thin wrapper that loads the host's real config.
-fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut Vec<Check>) {
+fn check_install_stack_with(
+    config: &mirdan::agents::AgentsConfig,
+    checks: &mut impl Extend<Check>,
+) {
     use mirdan::status::{check_all_doctored, statuses_to_checks};
     use swissarmyhammer_common::lifecycle::InitScope;
 
@@ -474,19 +477,19 @@ fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut 
 ///
 /// The workspace root comes from [`doctor_workspace_root`]. A validator-stack
 /// load failure is one Error row; it never aborts the doctor pipeline.
-pub fn check_review_engine(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_review_engine(checks: &mut impl Extend<Check>) -> Result<()> {
     let workspace_root = doctor_workspace_root();
 
     match swissarmyhammer_validators::doctor::check_review_engine(&workspace_root) {
         Ok(status) => checks.extend(swissarmyhammer_validators::doctor::to_checks(&status)),
-        Err(e) => checks.push(Check {
+        Err(e) => checks.extend([Check {
             name: "Review Engine".to_string(),
             status: CheckStatus::Error,
             message: format!("Failed to load validators: {}", e),
             fix: Some(
                 "Check ~/.validators and ./.validators for malformed validator sets".to_string(),
             ),
-        }),
+        }]),
     }
 
     Ok(())
@@ -500,10 +503,12 @@ pub fn check_review_engine(checks: &mut Vec<Check>) -> Result<()> {
 /// CLI command is invoked *in* the workspace it is asked about. Every layer
 /// below takes the root as an argument, so no library ever rediscovers a
 /// workspace from the current directory.
+///
+/// The rule itself is [`swissarmyhammer_common::utils::find_workspace_root`],
+/// shared with `sah init` so the two commands never disagree about which
+/// workspace they are acting on.
 pub fn doctor_workspace_root() -> PathBuf {
-    swissarmyhammer_common::utils::find_git_repository_root()
-        .or_else(|| env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."))
+    swissarmyhammer_common::utils::find_workspace_root()
 }
 
 #[cfg(test)]

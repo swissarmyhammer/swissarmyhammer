@@ -626,6 +626,7 @@ impl TemplateContentProvider for ValidatorLoader {
 mod tests {
     use super::*;
     use std::fs;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     /// RAII guard that restores an environment variable on drop.
@@ -667,6 +668,11 @@ mod tests {
         .unwrap();
     }
 
+    /// The user and project layers stack with project winning, and the project
+    /// layer is the SUPPLIED workspace root's — never the process working
+    /// directory's. The working directory is pinned to a second project that
+    /// carries its own conflicting store, so a CWD-derived project layer would
+    /// answer with `cwd-only` and `CWD version` instead.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_load_all_discovers_user_and_project_validators_with_precedence() {
@@ -683,7 +689,16 @@ mod tests {
         write_ruleset(&project_validators, "project-only", "Project-only ruleset");
         write_ruleset(&project_validators, "shared", "Project version");
 
+        // A second project, holding a conflicting store, that the process
+        // working directory sits in.
+        let cwd_root = TempDir::new().unwrap();
+        fs::create_dir_all(cwd_root.path().join(".git")).unwrap();
+        let cwd_validators = cwd_root.path().join(".validators");
+        write_ruleset(&cwd_validators, "cwd-only", "CWD-only ruleset");
+        write_ruleset(&cwd_validators, "shared", "CWD version");
+
         let _env = EnvVarGuard::set("HOME", home.path());
+        let _cwd = CurrentDirGuard::new(cwd_root.path()).expect("cwd guard");
 
         let mut loader = ValidatorLoader::new();
         loader.load_all(Some(project_root.path())).unwrap();
@@ -698,7 +713,14 @@ mod tests {
             "project RuleSet from <workspace_root>/.validators should load"
         );
 
-        // Project overrides user for the same-named set.
+        // The working directory's own store contributes nothing.
+        assert!(
+            loader.get_ruleset("cwd-only").is_none(),
+            "the process working directory's .validators must not load"
+        );
+
+        // Project overrides user for the same-named set, with the supplied
+        // workspace's version rather than the working directory's.
         let shared = loader.get_ruleset("shared").expect("shared ruleset");
         assert_eq!(shared.source, ValidatorSource::Project);
         assert_eq!(shared.description(), "Project version");
@@ -708,6 +730,10 @@ mod tests {
     /// the project layer's version of a same-named set wins, and the loaded
     /// rule carries its tool block and supersedes. The on-disk tool-rule shape
     /// is the shared `test_support` fixture, never a local copy.
+    ///
+    /// The project layer is the SUPPLIED workspace root's. The working
+    /// directory is pinned to a second project carrying its own `tooled` set,
+    /// so a CWD-derived layer would run `cwd-runner` instead.
     #[test]
     #[serial_test::serial(cwd)]
     fn tool_rule_loads_by_the_existing_layer_precedence() {
@@ -729,10 +755,32 @@ mod tests {
         )
         .expect("write project tool ruleset");
 
+        // A second project, holding conflicting tool rules, that the process
+        // working directory sits in.
+        let cwd_root = TempDir::new().unwrap();
+        fs::create_dir_all(cwd_root.path().join(".git")).unwrap();
+        let cwd_validators = cwd_root.path().join(".validators");
+        write_tool_rule_ruleset(&cwd_validators, "tooled", "**/*.py", "cwd-runner \"$@\"")
+            .expect("write cwd tool ruleset");
+        write_tool_rule_ruleset(
+            &cwd_validators,
+            "cwd-tooled",
+            "**/*.py",
+            "cwd-runner \"$@\"",
+        )
+        .expect("write cwd-only tool ruleset");
+
         let _env = EnvVarGuard::set("HOME", home.path());
+        let _cwd = CurrentDirGuard::new(cwd_root.path()).expect("cwd guard");
 
         let mut loader = ValidatorLoader::new();
         loader.load_all(Some(project_root.path())).unwrap();
+
+        // The working directory's own store contributes nothing.
+        assert!(
+            loader.get_ruleset("cwd-tooled").is_none(),
+            "the process working directory's tool rules must not load"
+        );
 
         let ruleset = loader.get_ruleset("tooled").expect("tooled ruleset loads");
         assert_eq!(ruleset.source, ValidatorSource::Project);
@@ -865,6 +913,11 @@ mod tests {
         fs::write(dir.join("VALIDATOR.md"), "---\nmatch: [unterminated\n").unwrap();
     }
 
+    /// A malformed validator is collected as a failure while the rest of the
+    /// stack still loads — and only the layers the caller named are read. The
+    /// working directory is pinned to a second project holding its own valid
+    /// and malformed sets, so a CWD-derived project layer would load
+    /// `cwd-good-one` and collect a second failure.
     #[test]
     #[serial_test::serial(cwd)]
     fn load_all_collects_malformed_validator_as_a_failure_and_still_loads_the_valid_one() {
@@ -878,7 +931,16 @@ mod tests {
         let project_root = TempDir::new().unwrap();
         fs::create_dir_all(project_root.path().join(".git")).unwrap();
 
+        // A second project, holding its own valid and malformed sets, that the
+        // process working directory sits in.
+        let cwd_root = TempDir::new().unwrap();
+        fs::create_dir_all(cwd_root.path().join(".git")).unwrap();
+        let cwd_validators = cwd_root.path().join(".validators");
+        write_ruleset(&cwd_validators, "cwd-good-one", "A valid CWD ruleset");
+        write_malformed_ruleset(&cwd_validators, "cwd-broken-one");
+
         let _env = EnvVarGuard::set("HOME", home.path());
+        let _cwd = CurrentDirGuard::new(cwd_root.path()).expect("cwd guard");
 
         let mut loader = ValidatorLoader::new();
         loader.load_all(Some(project_root.path())).unwrap();
@@ -889,7 +951,15 @@ mod tests {
             "the valid ruleset alongside a broken one still loads"
         );
 
+        // The working directory's own store contributes neither rulesets nor
+        // failures.
+        assert!(
+            loader.get_ruleset("cwd-good-one").is_none(),
+            "the process working directory's .validators must not load"
+        );
+
         // The broken one is recorded as a collected failure naming its path.
+        // Exactly one: the working directory's malformed set was never read.
         let failures = loader.load_failures();
         assert_eq!(failures.len(), 1, "the malformed ruleset is collected once");
         let failure = &failures[0];
@@ -1181,16 +1251,28 @@ Check issues.
 
     /// The searched directory list never carries a project directory the caller
     /// did not name, and never one that does not exist.
+    ///
+    /// The process working directory is pinned to a different project that does
+    /// carry a `.validators` directory throughout, so every assertion below
+    /// also proves the working directory never contributes one: the empty cases
+    /// stay empty, and the named case lists the supplied workspace's directory
+    /// rather than the working directory's.
     #[test]
     #[serial_test::serial(cwd)]
     fn directories_come_from_the_supplied_workspace_root() {
         let home = TempDir::new().unwrap();
         let _env = EnvVarGuard::set("HOME", home.path());
 
+        let cwd_workspace = TempDir::new().unwrap();
+        let cwd_validators = cwd_workspace.path().join(".validators");
+        write_ruleset(&cwd_validators, "cwd-only", "CWD-only ruleset");
+        let _cwd = CurrentDirGuard::new(cwd_workspace.path()).expect("cwd guard");
+
         let workspace = TempDir::new().unwrap();
         assert!(
             ValidatorLoader::directories(Some(workspace.path())).is_empty(),
-            "a workspace with no .validators directory contributes nothing"
+            "a workspace with no .validators directory contributes nothing, \
+             even when the working directory has one"
         );
 
         let project_validators = workspace.path().join(".validators");
@@ -1198,11 +1280,12 @@ Check issues.
         assert_eq!(
             ValidatorLoader::directories(Some(workspace.path())),
             vec![project_validators],
-            "the named workspace's .validators directory is searched"
+            "the named workspace's .validators directory is searched, not the \
+             working directory's"
         );
         assert!(
             ValidatorLoader::directories(None).is_empty(),
-            "no workspace root means no project directory"
+            "no workspace root means no project directory, even from inside one"
         );
     }
 

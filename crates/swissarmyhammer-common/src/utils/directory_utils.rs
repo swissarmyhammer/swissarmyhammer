@@ -23,6 +23,25 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
     swissarmyhammer_directory::find_git_repository_root_from(start_dir)
 }
 
+/// The workspace the process is working on: the enclosing Git repository root,
+/// else the current directory.
+///
+/// The ONE definition of "which workspace am I in" for a command invoked *in*
+/// the workspace it acts on — `sah doctor`, `sah init`, and every other CLI
+/// entry point that must agree on the root. Each caller resolves the root here
+/// once and passes it down, so no library below rediscovers a workspace from
+/// the process current directory.
+///
+/// Never fails: an unreadable current directory falls back to the relative
+/// path `.`, which names the same directory every later filesystem call
+/// resolves against, so the real failure surfaces (with its own context) at the
+/// operation that needs the directory rather than here.
+pub fn find_workspace_root() -> PathBuf {
+    find_git_repository_root()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Find the SwissArmyHammer directory for the current Git repository
 ///
 /// Returns None if not in a Git repository or if no .sah directory exists.
@@ -138,6 +157,49 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Inside a repository, the workspace is the repository root — not the
+    /// subdirectory the process happens to sit in.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn find_workspace_root_returns_the_repository_root_from_a_subdirectory() {
+        use crate::test_utils::CurrentDirGuard;
+
+        let repo = TempDir::new().unwrap();
+        fs::create_dir_all(repo.path().join(".git")).unwrap();
+        let subdir = repo.path().join("crates").join("inner");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let _cwd = CurrentDirGuard::new(&subdir).expect("cwd guard");
+
+        assert_eq!(
+            find_workspace_root(),
+            repo.path().canonicalize().unwrap(),
+            "a process inside a repository works on the repository root"
+        );
+    }
+
+    /// Outside a repository, the workspace is the current directory.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn find_workspace_root_falls_back_to_the_current_directory_outside_a_repository() {
+        use crate::test_utils::CurrentDirGuard;
+
+        let plain = TempDir::new().unwrap();
+        let _cwd = CurrentDirGuard::new(plain.path()).expect("cwd guard");
+
+        // The temp directory must genuinely sit outside any repository, or the
+        // premise of the fallback does not hold.
+        if find_git_repository_root().is_some() {
+            return;
+        }
+
+        assert_eq!(
+            find_workspace_root(),
+            plain.path().canonicalize().unwrap(),
+            "with no repository above it, the current directory is the workspace"
+        );
+    }
 
     #[test]
     fn test_find_git_repository_root_from_direct() {
