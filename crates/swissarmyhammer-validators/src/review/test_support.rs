@@ -26,6 +26,7 @@ use tempfile::TempDir;
 use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
 
+use crate::review::scope::{BatchBudget, BatchBytes, FileCapBytes};
 use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
 use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
@@ -33,6 +34,16 @@ use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 /// so a test asserts against `match_validators_and_files` itself rather than a
 /// copy of its matching logic.
 pub use crate::review::scope::engine_matched_validator_names;
+
+/// A [`BatchBudget`] whose per-file cap and per-batch budget are both `bytes`.
+///
+/// The packing tests assert on WHERE batches split and WHICH pairs are skipped
+/// given one threshold; the two numbers diverging is the subject of its own
+/// tests, not of theirs. Collapsing them here keeps those tests reading as one
+/// budget without letting production collapse them.
+pub fn uniform_budget(bytes: usize) -> BatchBudget {
+    BatchBudget::new(FileCapBytes(bytes), BatchBytes(bytes))
+}
 
 /// Write the fixture pair the doctor health check demands for the tool rule
 /// named `rule`: a `fixtures/<rule>.fail.rs` carrying a TODO marker (the tool

@@ -1,15 +1,84 @@
 //! Batching — split a scoped work-list into budgeted, whole-file batches.
 //!
 //! [`batch_work_list`] packs (validator, file) pairs into batches whose
-//! rendered payload fits the caller's byte budget; a pair whose rendered block
-//! alone exceeds the budget becomes a [`SkippedFile`] gap, never a hard error.
+//! rendered payload fits the caller's [`BatchBudget`]; a pair whose rendered
+//! block alone exceeds the budget's per-file cap becomes a [`SkippedFile`] gap,
+//! never a hard error.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{FileWork, ValidatorWork, WorkList};
 
+/// The largest RENDERED block one (validator, file) pair may contribute to a
+/// prompt, in bytes. A pair over it is a [`SkippedFile`].
+///
+/// Newtype over `usize` so [`BatchBudget::new`]'s two byte counts cannot be
+/// transposed at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FileCapBytes(pub usize);
+
+/// How many RENDERED bytes of file blocks one batch's prompt may carry.
+///
+/// Newtype over `usize` so [`BatchBudget::new`]'s two byte counts cannot be
+/// transposed at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BatchBytes(pub usize);
+
+/// The two byte limits [`batch_work_list`] packs against.
+///
+/// They are deliberately two numbers, because they answer two different
+/// questions:
+///
+/// - `file_cap` decides the over-cap **verdict**: is this one file too large to
+///   review at all? That answer must depend on the FILE alone. The caller
+///   derives it from constants
+///   ([`FleetConfig::file_block_cap`](crate::review::fleet::FleetConfig::file_block_cap)),
+///   never from how many files the change carries.
+/// - `batch_bytes` decides where batch **boundaries** fall: how much fits
+///   alongside this run's measured prompt framing. That answer legitimately
+///   moves with the run, because the framing does.
+///
+/// One number served both jobs before (^tsram0q) and the two answers could not
+/// both be right: an over-cap finding tells the author to split the file, the
+/// split grows the change, a bigger change renders more framing, the smaller
+/// remainder puts MORE files over cap. Splitting made the next round worse, so
+/// the loop never converged. Separating the numbers is what breaks it — a file
+/// that satisfied the cap can only go over it by growing.
+///
+/// `batch_bytes` may be smaller than `file_cap` when the framing is large. A
+/// file between the two is not over cap: the packer gives it a batch of its
+/// own, which is the smallest prompt that can carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BatchBudget {
+    /// The constant per-file cap; the over-cap verdict is measured against it.
+    file_cap: usize,
+    /// The per-batch packing budget; batch boundaries are measured against it.
+    batch_bytes: usize,
+}
+
+impl BatchBudget {
+    /// Pair a constant per-file cap with a per-batch packing budget.
+    pub fn new(file_cap: FileCapBytes, batch_bytes: BatchBytes) -> Self {
+        Self {
+            file_cap: file_cap.0,
+            batch_bytes: batch_bytes.0,
+        }
+    }
+
+    /// The largest rendered block one (validator, file) pair may contribute,
+    /// in bytes. A pair over it is reported as a [`SkippedFile`].
+    pub fn file_cap(&self) -> usize {
+        self.file_cap
+    }
+
+    /// The rendered file-block bytes one batch may carry.
+    pub fn batch_bytes(&self) -> usize {
+        self.batch_bytes
+    }
+}
+
 /// A (validator, file) pair [`batch_work_list`] could not pack into any batch
-/// because the file's RENDERED block alone exceeds the batch budget.
+/// because the file's RENDERED block alone exceeds the per-file cap.
 ///
 /// A file is atomic — it is never split across batches — so an oversized block
 /// cannot be packed at all. Rather than a hard error that would block review of
@@ -32,8 +101,8 @@ pub struct SkippedFile {
     validator: String,
     /// The rendered size of that validator's block for the file, in bytes.
     size: usize,
-    /// The per-batch rendered budget it exceeded, in bytes.
-    budget: usize,
+    /// The per-file cap it exceeded, in bytes.
+    cap: usize,
 }
 
 impl SkippedFile {
@@ -41,12 +110,12 @@ impl SkippedFile {
     /// (`crate::review::synthesize`'s tests), which asserts on rendering given a
     /// skip list rather than driving the whole packer to produce one.
     #[cfg(test)]
-    pub(crate) fn for_test(path: &str, validator: &str, size: usize, budget: usize) -> Self {
+    pub(crate) fn for_test(path: &str, validator: &str, size: usize, cap: usize) -> Self {
         Self {
             path: path.to_string(),
             validator: validator.to_string(),
             size,
-            budget,
+            cap,
         }
     }
 
@@ -65,14 +134,14 @@ impl SkippedFile {
         self.size
     }
 
-    /// The per-batch rendered budget it exceeded, in bytes.
-    pub fn budget(&self) -> usize {
-        self.budget
+    /// The per-file cap it exceeded, in bytes.
+    pub fn cap(&self) -> usize {
+        self.cap
     }
 }
 
 /// Split a [`WorkList`] into budgeted batches at **whole-file** granularity, so
-/// every prompt a batch sends stays inside `budget` bytes of file content.
+/// every prompt a batch sends stays inside the [`BatchBudget`].
 ///
 /// Cramming every changed file into one shared prime overflows the review
 /// model's context on a large diff — every fan-out validator then fails
@@ -96,15 +165,17 @@ impl SkippedFile {
 /// evidence selected for that validator, so the same path can cost kilobytes
 /// for one validator and megabytes for another. So:
 ///
-/// 1. Any pair whose own cost exceeds `budget` is dropped and reported as a
-///    [`SkippedFile`]. It could not be packed without either splitting the file
-///    (forbidden) or blowing the budget, and dropping the whole PATH would cost
-///    every other validator a file it could easily afford.
+/// 1. Any pair whose own cost exceeds [`BatchBudget::file_cap`] is dropped and
+///    reported as a [`SkippedFile`]. It could not be packed without splitting
+///    the file (forbidden), and dropping the whole PATH would cost every other
+///    validator a file it could easily afford.
 /// 2. The surviving distinct files are packed greedily in
-///    [`WorkList::distinct_files`] order (the order the prime renders them),
-///    each charged the LARGEST surviving cost any validator has for it — the
-///    bound that covers both the shared prime and any one validator's
-///    monolithic fallback.
+///    [`WorkList::distinct_files`] order (the order the prime renders them)
+///    against [`BatchBudget::batch_bytes`], each charged the LARGEST surviving
+///    cost any validator has for it — the bound that covers both the shared
+///    prime and any one validator's monolithic fallback. A file larger than
+///    that budget still satisfied the cap, so it takes a batch of its own
+///    rather than being dropped.
 ///
 /// Each returned [`WorkList`] carries every validator that has at least one file
 /// in that batch, with the validator's files filtered to the batch (validators
@@ -116,23 +187,23 @@ impl SkippedFile {
 /// checks the returned skip list itself.
 pub fn batch_work_list<F: Fn(&FileWork) -> usize>(
     work: &WorkList,
-    budget: usize,
+    budget: BatchBudget,
     cost: F,
 ) -> (Vec<WorkList>, Vec<SkippedFile>) {
-    // Step 1: cost every (validator, file) pair once, dropping the pairs no
-    // batch could ever carry and keeping the largest surviving cost per path.
+    // Step 1: cost every (validator, file) pair once, dropping the pairs over
+    // the per-file cap and keeping the largest surviving cost per path.
     let mut skipped: Vec<SkippedFile> = Vec::new();
     let mut affordable: BTreeSet<(&str, &str)> = BTreeSet::new();
     let mut path_cost: BTreeMap<&str, usize> = BTreeMap::new();
     for validator in &work.validators {
         for file in &validator.files {
             let size = cost(file);
-            if size > budget {
+            if size > budget.file_cap() {
                 skipped.push(SkippedFile {
                     path: file.path.clone(),
                     validator: validator.validator_name.clone(),
                     size,
-                    budget,
+                    cap: budget.file_cap(),
                 });
                 continue;
             }
@@ -151,7 +222,7 @@ pub fn batch_work_list<F: Fn(&FileWork) -> usize>(
         let Some(&size) = path_cost.get(file.path.as_str()) else {
             continue;
         };
-        if !current.is_empty() && current_bytes + size > budget {
+        if !current.is_empty() && current_bytes + size > budget.batch_bytes() {
             batches.push(std::mem::take(&mut current));
             current_bytes = 0;
         }

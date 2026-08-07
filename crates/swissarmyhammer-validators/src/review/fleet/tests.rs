@@ -11,8 +11,8 @@ use swissarmyhammer_sem::model::change::{ChangeType, SemanticChange};
 use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
 use crate::review::scope::{ProbeNames, RuleNames, WorkList};
 use crate::review::test_support::{
-    findings_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
-    MOCK_PREFIX_TOKENS,
+    findings_json, uniform_budget, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig,
+    ScriptedReply, MOCK_PREFIX_TOKENS,
 };
 use crate::validators::types::{Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
 use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
@@ -366,6 +366,221 @@ fn the_file_payload_budget_leaves_room_for_the_prompt_framing() {
     );
 }
 
+// ---- the over-cap verdict is a constant ------------------------------
+
+/// A caller-supplied `batch_size`, in bytes, well under
+/// [`MAX_FILE_BLOCK_BYTES`] — the case where the caller's budget, not the
+/// constant, is the stricter of the two.
+const CALLER_BATCH_SIZE: usize = 6_000;
+
+/// The repo-relative path of the file whose over-cap verdict is under test.
+const SUBJECT_PATH: &str = "src/subject.rs";
+
+/// One source line of the subject file: 27 raw bytes, rendering to about 49
+/// with the number/sha/mark columns. Repeating one line makes the fixture's
+/// size a function of the line COUNT alone.
+const SUBJECT_SOURCE_LINE: &str = "fn filler() { let x = 1; }\n";
+
+/// How many [`SUBJECT_SOURCE_LINE`]s the subject file carries: enough to render
+/// past what a heavily framed run leaves for file blocks, and still inside the
+/// per-file cap. The test asserts both premises rather than trusting the
+/// arithmetic.
+const SUBJECT_SOURCE_LINES: usize = 4_000;
+
+/// How many `<changed-set>` duplicate rows the bigger change carries. Each row
+/// renders to a few dozen bytes, so this is several hundred kilobytes of run
+/// framing — the term that shrank the packer's budget between two review
+/// rounds in production.
+const GROWN_CHANGE_DUPLICATE_ROWS: usize = 12_000;
+
+/// How many other files the bigger change touches beside the subject.
+const GROWN_CHANGE_OTHER_FILES: usize = 20;
+
+/// How many short lines the deliberately over-cap file carries — enough that
+/// its rendered block clears [`MAX_FILE_BLOCK_BYTES`] on its own.
+const OVER_CAP_SOURCE_LINES: usize = 14_000;
+
+/// The `<changed-set>` `duplicates` evidence a change carrying `rows`
+/// duplicate pairs produces — the batch-scoped block every batch's prompt
+/// repeats, and the framing term that grows with the change.
+fn changed_set_duplicates(rows: usize) -> ProbeResult {
+    ProbeResult {
+        name: "duplicates".to_string(),
+        kind: ProbeKind::Fact,
+        target: "<changed-set>".to_string(),
+        rows: (0..rows)
+            .map(|index| ProbeRow {
+                file_path: format!("src/dup{index}.rs"),
+                symbol: Some(format!("sym{index}")),
+                line: Some(TEST_PROBE_LINE),
+                similarity: Some(TEST_SIMILARITY),
+                detail: None,
+            })
+            .collect(),
+    }
+}
+
+/// A minimal loader for the budget fixtures: one validator, one short rule, so
+/// the ruleset contributes almost nothing to the framing and the shared probe
+/// evidence is the only term that grows.
+fn budget_fixture_loader() -> ValidatorLoader {
+    loader_with(vec![ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", "RULE BODY.")],
+    )])
+}
+
+#[test]
+fn the_per_file_cap_holds_still_while_the_batch_budget_follows_the_framing() {
+    // The two numbers answer two questions, so only one of them may read the
+    // run's framing. Batch boundaries move with the framing; the over-cap
+    // verdict does not.
+    const SMALL_FRAMING: usize = 1_000;
+    const HEAVY_FRAMING: usize = 400_000;
+    let config = FleetConfig::default();
+
+    assert_eq!(
+        config.batch_budget(SMALL_FRAMING).file_cap(),
+        config.batch_budget(HEAVY_FRAMING).file_cap(),
+        "the over-cap verdict never reads the framing"
+    );
+    assert!(
+        config.batch_budget(SMALL_FRAMING).batch_bytes()
+            > config.batch_budget(HEAVY_FRAMING).batch_bytes(),
+        "batch boundaries still move with the framing"
+    );
+    assert_eq!(
+        config.file_block_cap(),
+        MAX_FILE_BLOCK_BYTES,
+        "the default cap is the constant"
+    );
+    assert_eq!(
+        FleetConfig::new(CALLER_BATCH_SIZE).file_block_cap(),
+        CALLER_BATCH_SIZE,
+        "a stricter caller budget lowers the cap with it"
+    );
+}
+
+#[test]
+fn a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows() {
+    // The defect this pins: an over-cap finding tells the author to split the
+    // file, the split grows the change, the bigger change renders more shared
+    // evidence, and the smaller remainder used to put MORE files over cap.
+    // Splitting made the next round worse, so the loop never converged. A file
+    // that did not grow must keep its verdict.
+    let loader = budget_fixture_loader();
+    let config = FleetConfig::default();
+
+    let subject = bare_file_work(
+        SUBJECT_PATH,
+        SUBJECT_SOURCE_LINE.repeat(SUBJECT_SOURCE_LINES),
+    );
+    let rendered = rendered_file_block_bytes(&subject);
+    assert!(
+        rendered < config.file_block_cap(),
+        "the subject must be inside the per-file cap: {rendered} rendered bytes vs {}",
+        config.file_block_cap()
+    );
+
+    let small_change = WorkList::new(
+        "PURPOSE: one file.".to_string(),
+        vec![validator_work("bulk", vec![subject.clone()])],
+    );
+
+    let mut grown_files = vec![subject];
+    grown_files.extend((0..GROWN_CHANGE_OTHER_FILES).map(|index| {
+        bare_file_work(
+            &format!("src/other{index}.rs"),
+            SUBJECT_SOURCE_LINE.to_string(),
+        )
+    }));
+    let grown_change = WorkList::new(
+        "PURPOSE: the same file, in a bigger change.".to_string(),
+        vec![validator_work("bulk", grown_files)
+            .with_shared_probe_results([changed_set_duplicates(GROWN_CHANGE_DUPLICATE_ROWS)])],
+    );
+
+    let small_framing = prompt_framing_bytes(&small_change, &loader);
+    let grown_framing = prompt_framing_bytes(&grown_change, &loader);
+    assert!(
+        grown_framing > AGENT_PROMPT_CAP.saturating_sub(rendered),
+        "premise: the bigger change's framing alone must leave less room than the subject \
+         needs ({grown_framing} framing, {rendered} rendered, {AGENT_PROMPT_CAP}-byte cap)"
+    );
+
+    let (_, small_skips) = crate::review::scope::batch_work_list(
+        &small_change,
+        config.batch_budget(small_framing),
+        rendered_file_block_bytes,
+    );
+    assert!(
+        small_skips.is_empty(),
+        "the subject is inside the cap, so the small change reviews it: {small_skips:?}"
+    );
+
+    let (_, grown_skips) = crate::review::scope::batch_work_list(
+        &grown_change,
+        config.batch_budget(grown_framing),
+        rendered_file_block_bytes,
+    );
+    assert!(
+        !grown_skips.iter().any(|skip| skip.path() == SUBJECT_PATH),
+        "the subject did not grow, so a bigger change around it cannot put it over cap: \
+         {grown_skips:?}"
+    );
+}
+
+#[test]
+fn two_runs_over_the_same_change_report_the_same_over_cap_files() {
+    // The other half of the convergence contract: re-running review over
+    // unchanged content re-reports exactly the same gaps, so an author can tell
+    // a fix from the engine moving under them.
+    let loader = budget_fixture_loader();
+    let config = FleetConfig::default();
+
+    let over_cap = bare_file_work(SUBJECT_PATH, short_line_source(OVER_CAP_SOURCE_LINES));
+    let rendered = rendered_file_block_bytes(&over_cap);
+    assert!(
+        rendered > config.file_block_cap(),
+        "the subject must be over the per-file cap: {rendered} rendered bytes vs {}",
+        config.file_block_cap()
+    );
+
+    let change = WorkList::new(
+        "PURPOSE: one oversized file beside a small one.".to_string(),
+        vec![validator_work(
+            "bulk",
+            vec![
+                over_cap,
+                bare_file_work("src/small.rs", "fn ok() {}\n".to_string()),
+            ],
+        )],
+    );
+
+    let review_once = || {
+        let framing = prompt_framing_bytes(&change, &loader);
+        let (_, skipped) = crate::review::scope::batch_work_list(
+            &change,
+            config.batch_budget(framing),
+            rendered_file_block_bytes,
+        );
+        skipped
+    };
+
+    let first = review_once();
+    let second = review_once();
+    assert_eq!(
+        first.iter().map(|skip| skip.path()).collect::<Vec<_>>(),
+        vec![SUBJECT_PATH],
+        "only the oversized file is a gap"
+    );
+    assert_eq!(
+        first, second,
+        "the same content reports the same over-cap files, byte counts and all"
+    );
+}
+
 // ---- rendered-budget tests -------------------------------------------
 
 /// A source of `lines` short lines — the content shape a fixed expansion
@@ -409,8 +624,11 @@ fn a_short_line_file_the_raw_byte_budget_admits_is_measured_by_its_rendered_size
     );
 
     let work = WorkList::new("purpose".to_string(), vec![validator_work("v", vec![file])]);
-    let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, BUDGET, rendered_file_block_bytes);
+    let (batches, skipped) = crate::review::scope::batch_work_list(
+        &work,
+        uniform_budget(BUDGET),
+        rendered_file_block_bytes,
+    );
 
     assert!(
         batches.is_empty(),
@@ -428,7 +646,7 @@ fn a_short_line_file_the_raw_byte_budget_admits_is_measured_by_its_rendered_size
         rendered,
         "the reported size is the rendered size, not the raw source size"
     );
-    assert_eq!(skipped[0].budget(), BUDGET);
+    assert_eq!(skipped[0].cap(), BUDGET);
 }
 
 #[test]
@@ -448,8 +666,11 @@ fn one_validators_oversized_file_does_not_cost_the_other_validators_that_file() 
             validator_work("light", vec![lean]),
         ],
     );
-    let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, BUDGET, rendered_file_block_bytes);
+    let (batches, skipped) = crate::review::scope::batch_work_list(
+        &work,
+        uniform_budget(BUDGET),
+        rendered_file_block_bytes,
+    );
 
     assert_eq!(batches.len(), 1, "the affordable pair still reviews");
     assert_eq!(
@@ -497,7 +718,7 @@ fn every_prompt_a_packed_batch_sends_fits_inside_the_agent_prompt_cap() {
     );
 
     let framing = prompt_framing_bytes(&work, &loader);
-    let budget = FleetConfig::default().file_payload_budget(framing);
+    let budget = FleetConfig::default().batch_budget(framing);
     let (batches, skipped) =
         crate::review::scope::batch_work_list(&work, budget, rendered_file_block_bytes);
 

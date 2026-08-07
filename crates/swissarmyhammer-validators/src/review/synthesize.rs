@@ -126,7 +126,7 @@ pub struct ReviewCounts {
     /// value means the rendered findings are INCOMPLETE.
     tasks_failed: usize,
     /// How many distinct file paths were excluded from review because the
-    /// file's rendered block alone exceeded the batch budget (see
+    /// file's rendered block alone exceeded the per-file cap (see
     /// [`SkippedFile`](crate::review::scope::SkippedFile)). A non-zero value
     /// means the review cannot be clean: each skipped path also becomes a
     /// CONFIRMED finding, and the markdown names each skipped file.
@@ -169,7 +169,7 @@ impl ReviewCounts {
     }
 
     /// How many distinct file paths were excluded from review because the
-    /// file's rendered block alone exceeded the batch budget. A non-zero value
+    /// file's rendered block alone exceeded the per-file cap. A non-zero value
     /// means the review cannot be clean: each skipped path also becomes a
     /// CONFIRMED finding, and the markdown names each one as a "not reviewed,
     /// too large" gap.
@@ -239,7 +239,7 @@ impl ReviewReport {
 /// mistaken for a clean review either.
 ///
 /// `skipped` names every [`SkippedFile`] [`batch_work_list`] excluded because
-/// the file's rendered block alone exceeded the batch budget: each is rendered
+/// the file's rendered block alone exceeded the per-file cap: each is rendered
 /// as a named "not reviewed, too large" gap directly under the header (and any
 /// incomplete-run banner), and their count rides into [`ReviewCounts::skipped`].
 /// This is deliberately never an error — one oversized file must not block
@@ -319,10 +319,10 @@ pub fn synthesize(
         for (path, group) in &by_path {
             let _ = writeln!(
                 markdown,
-                "> - `{}` — {} rendered bytes, over the {}-byte batch budget; not reviewed by: {} (narrow the scope)",
+                "> - `{}` — {} rendered bytes, over the {}-byte per-file cap; not reviewed by: {} (split the file)",
                 path,
                 group.largest,
-                group.budget,
+                group.cap,
                 group.validators.join(", ")
             );
         }
@@ -455,8 +455,8 @@ fn render_item(finding: &Finding) -> String {
 struct SkipGroup<'a> {
     /// The largest rendered block any of the path's skipped validators produced.
     largest: usize,
-    /// The batch budget every one of those blocks exceeded.
-    budget: usize,
+    /// The per-file cap every one of those blocks exceeded.
+    cap: usize,
     /// The validators that could not carry the file, sorted.
     validators: Vec<&'a str>,
 }
@@ -477,7 +477,7 @@ const SKIP_FINDING_RULE: &str = "prompt-cap";
 /// A file no validator could read is a coverage failure: every review of it
 /// would read "clean" for that validator's dimension until the file shrinks.
 /// So the skip enters the normal finding stream — confirmed by construction,
-/// because the batch packer measured the rendered block over the budget
+/// because the batch packer measured the rendered block over the per-file cap
 /// deterministically — and no consumer needs special handling to fail the
 /// gate. The grain is the PATH: one finding per file, with the claim naming
 /// the validators that could not carry it.
@@ -492,15 +492,15 @@ fn skip_findings(by_path: &BTreeMap<&str, SkipGroup<'_>>) -> Vec<VerifiedFinding
                 rule: Some(SKIP_FINDING_RULE.to_string()),
                 claim: format!(
                     "This file exceeds the review prompt cap — {} rendered bytes against the \
-                     {}-byte batch budget — so these validators could not review it: {}",
+                     {}-byte per-file cap — so these validators could not review it: {}",
                     group.largest,
-                    group.budget,
+                    group.cap,
                     group.validators.join(", ")
                 ),
                 evidence: format!(
                     "batch packer: the file's rendered block alone is {} bytes, over the \
-                     {}-byte budget",
-                    group.largest, group.budget
+                     {}-byte per-file cap",
+                    group.largest, group.cap
                 ),
                 suggestion: Some(
                     "Split the file into smaller modules that fit the review prompt cap"
@@ -508,7 +508,7 @@ fn skip_findings(by_path: &BTreeMap<&str, SkipGroup<'_>>) -> Vec<VerifiedFinding
                 ),
             },
             confirmed: true,
-            reason: "the batch packer measured the rendered block over the budget — \
+            reason: "the batch packer measured the rendered block over the per-file cap — \
                      a deterministic measurement, not a judgement"
                 .to_string(),
             decided_by: None,
@@ -526,7 +526,7 @@ fn group_skips_by_path(skipped: &[SkippedFile]) -> BTreeMap<&str, SkipGroup<'_>>
     for skip in skipped {
         let group = by_path.entry(skip.path()).or_insert_with(|| SkipGroup {
             largest: 0,
-            budget: skip.budget(),
+            cap: skip.cap(),
             validators: Vec::new(),
         });
         group.largest = group.largest.max(skip.size());
@@ -565,11 +565,13 @@ fn sentence(text: &str) -> String {
 ///    tool suppresses nothing and is reported as a prompt fallback.
 /// 3. [`batch_work_list`] — split the work-list into budgeted batches at
 ///    whole-file granularity so no single prompt overflows the agent's prompt
-///    cap. The budget is [`FleetConfig::file_payload_budget`] — the cap less the
-///    run's measured framing — and it is spent in RENDERED bytes. A small diff
-///    is one batch; a large one is several. A (validator, file) pair whose
-///    rendered block alone exceeds the budget is excluded and reported as a
-///    named gap (see [`SkippedFile`]), never a hard error.
+///    cap. [`FleetConfig::batch_budget`] supplies both numbers, spent in
+///    RENDERED bytes: [`FleetConfig::file_payload_budget`] (the cap less the
+///    run's measured framing) sets the batch boundaries, so a small diff is one
+///    batch and a large one is several; the constant
+///    [`FleetConfig::file_block_cap`] decides the over-cap verdict, so a
+///    (validator, file) pair over it is excluded and reported as a named gap
+///    (see [`SkippedFile`]), never a hard error.
 /// 4. For **each batch**, independently: [`run_fleet`] fans every validator out
 ///    across the shared `pool` over that batch's files (its own shared prime,
 ///    forked per validator), then [`verify_findings`] pairs each candidate back
@@ -595,7 +597,7 @@ fn sentence(text: &str) -> String {
 ///
 /// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or when
 /// a matched validator declares an unknown probe. [`batch_work_list`] never
-/// errors: a file whose rendered block is too large for the batch budget is
+/// errors: a file whose rendered block is over the per-file cap is
 /// excluded and reported as a named
 /// gap instead. Fan-out and verify failures never error either: a failed task
 /// degrades to zero findings (fan-out) or a refute-by-default verdict (verify),
@@ -647,15 +649,18 @@ pub async fn run_review(
     let (tool_findings, tool_errors) = tool_outcome.into_parts();
 
     // Stage 3: split the work-list into budgeted batches (whole-file
-    // granularity). The budget is the agent's prompt cap less the run's framing
-    // (change purpose + payload header + the largest validator suffix), and it
-    // is spent in RENDERED bytes — measured by running the fleet's own file
-    // renderer, so the packer's number and the agent's number are the same
-    // bytes. A (validator, file) pair whose rendered block alone exceeds it is
-    // excluded and reported as a named gap, never a hard error that would block
-    // the rest of the scope.
+    // granularity). Two numbers, both spent in RENDERED bytes — measured by
+    // running the fleet's own file renderer, so the packer's number and the
+    // agent's number are the same bytes:
+    //
+    // - batch bytes: the agent's prompt cap less this run's measured framing
+    //   (change purpose + shared evidence + the largest validator suffix). It
+    //   decides where batch boundaries fall, so it moves with the run.
+    // - the per-file cap: a constant. It decides which (validator, file) pair
+    //   is excluded and reported as a named gap, so it must not move with the
+    //   run — see `BatchBudget`.
     let framing = prompt_framing_bytes(&work, loader);
-    let budget = fleet_config.file_payload_budget(framing);
+    let budget = fleet_config.batch_budget(framing);
     let (batches, skipped) = batch_work_list(&work, budget, rendered_file_block_bytes);
 
     tracing::info!(
@@ -663,7 +668,8 @@ pub async fn run_review(
         files = work.distinct_files().count(),
         batches = batches.len(),
         skipped = skipped.len(),
-        budget,
+        file_cap = budget.file_cap(),
+        batch_bytes = budget.batch_bytes(),
         framing,
         prompt_cap = crate::review::fleet::AGENT_PROMPT_CAP,
         "review run: scoped work-list ready, batched, fanning out"
@@ -782,13 +788,13 @@ mod tests {
     /// it keeps the `FleetTally::new` arguments from reading as bare literals.
     const ATTEMPTED_TASKS: usize = 8;
 
-    /// The batch budget the oversized-file fixtures pretend the packer
-    /// enforced. The magnitude mirrors the real default budget so the
+    /// The per-file cap the oversized-file fixtures pretend the packer
+    /// enforced. The magnitude mirrors the real default cap so the
     /// rendered gap message carries a realistic byte count (asserted
     /// verbatim below).
-    const TEST_BATCH_BUDGET_BYTES: usize = 393_216;
+    const TEST_FILE_CAP_BYTES: usize = 393_216;
 
-    /// A rendered file block larger than [`TEST_BATCH_BUDGET_BYTES`] — the
+    /// A rendered file block larger than [`TEST_FILE_CAP_BYTES`] — the
     /// size that forces the packer to skip the file.
     const TEST_OVERSIZE_RENDERED_BYTES: usize = 500_000;
 
@@ -797,14 +803,14 @@ mod tests {
     /// skip the same file with different per-pair sizes.
     const TEST_OVERSIZE_ALT_RENDERED_BYTES: usize = 400_000;
 
-    /// A minimal budget for fixtures where only the over-budget relationship
+    /// A minimal cap for fixtures where only the over-cap relationship
     /// matters, never the magnitude.
-    const TEST_TINY_BUDGET_BYTES: usize = 5;
+    const TEST_TINY_CAP_BYTES: usize = 5;
 
-    /// A rendered size over [`TEST_TINY_BUDGET_BYTES`].
+    /// A rendered size over [`TEST_TINY_CAP_BYTES`].
     const TEST_TINY_OVERSIZE_BYTES: usize = 10;
 
-    /// A second rendered size over [`TEST_TINY_BUDGET_BYTES`], distinct from
+    /// A second rendered size over [`TEST_TINY_CAP_BYTES`], distinct from
     /// [`TEST_TINY_OVERSIZE_BYTES`] to show per-pair sizes never affect
     /// per-path grouping.
     const TEST_TINY_OVERSIZE_ALT_BYTES: usize = 12;
@@ -958,7 +964,7 @@ mod tests {
             "src/huge.rs",
             "duplication",
             TEST_OVERSIZE_RENDERED_BYTES,
-            TEST_BATCH_BUDGET_BYTES,
+            TEST_FILE_CAP_BYTES,
         )];
         let report = synthesize(
             vec![],
@@ -981,10 +987,8 @@ mod tests {
             report.markdown
         );
         assert!(
-            report
-                .markdown
-                .contains(&TEST_BATCH_BUDGET_BYTES.to_string()),
-            "the batch budget must be named: {}",
+            report.markdown.contains(&TEST_FILE_CAP_BYTES.to_string()),
+            "the per-file cap must be named: {}",
             report.markdown
         );
         assert!(
@@ -1005,13 +1009,13 @@ mod tests {
                 "src/huge.rs",
                 "duplication",
                 TEST_OVERSIZE_RENDERED_BYTES,
-                TEST_BATCH_BUDGET_BYTES,
+                TEST_FILE_CAP_BYTES,
             ),
             SkippedFile::for_test(
                 "src/huge.rs",
                 "dead-code",
                 TEST_OVERSIZE_ALT_RENDERED_BYTES,
-                TEST_BATCH_BUDGET_BYTES,
+                TEST_FILE_CAP_BYTES,
             ),
         ];
         let report = synthesize(
@@ -1053,19 +1057,19 @@ mod tests {
                 "src/z.rs",
                 "v",
                 TEST_TINY_OVERSIZE_BYTES,
-                TEST_TINY_BUDGET_BYTES,
+                TEST_TINY_CAP_BYTES,
             ),
             SkippedFile::for_test(
                 "src/a.rs",
                 "v",
                 TEST_TINY_OVERSIZE_BYTES,
-                TEST_TINY_BUDGET_BYTES,
+                TEST_TINY_CAP_BYTES,
             ),
             SkippedFile::for_test(
                 "src/a.rs",
                 "w",
                 TEST_TINY_OVERSIZE_ALT_BYTES,
-                TEST_TINY_BUDGET_BYTES,
+                TEST_TINY_CAP_BYTES,
             ),
         ];
         let report = synthesize(
@@ -1087,13 +1091,13 @@ mod tests {
                 "src/z.rs",
                 "v",
                 TEST_TINY_OVERSIZE_BYTES,
-                TEST_TINY_BUDGET_BYTES,
+                TEST_TINY_CAP_BYTES,
             ),
             SkippedFile::for_test(
                 "src/a.rs",
                 "v",
                 TEST_TINY_OVERSIZE_BYTES,
-                TEST_TINY_BUDGET_BYTES,
+                TEST_TINY_CAP_BYTES,
             ),
         ];
         let report = synthesize(
@@ -1126,7 +1130,7 @@ mod tests {
             "src/huge.rs",
             "duplication",
             TEST_TINY_OVERSIZE_BYTES,
-            TEST_TINY_BUDGET_BYTES,
+            TEST_TINY_CAP_BYTES,
         )];
         let report = synthesize(
             verified,

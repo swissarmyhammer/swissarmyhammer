@@ -51,7 +51,7 @@ pub struct ReviewCountsView {
     /// non-zero value means the rendered findings are INCOMPLETE.
     failed: usize,
     /// How many changed files were excluded from review because their inlined
-    /// rendered block alone exceeded the batch budget. A non-zero value means
+    /// rendered block alone exceeded the per-file cap. A non-zero value means
     /// the review cannot be clean: each skipped file also becomes a CONFIRMED
     /// finding, and the markdown names each one as a "not reviewed, too large"
     /// gap.
@@ -89,7 +89,7 @@ impl ReviewCountsView {
     }
 
     /// How many changed files were excluded from review because their inlined
-    /// rendered block alone exceeded the batch budget. A non-zero value means
+    /// rendered block alone exceeded the per-file cap. A non-zero value means
     /// the review cannot be clean: each skipped file also becomes a CONFIRMED
     /// finding, and the markdown names each one as a "not reviewed, too large"
     /// gap.

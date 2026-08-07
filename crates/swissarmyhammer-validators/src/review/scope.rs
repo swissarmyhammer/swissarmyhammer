@@ -51,7 +51,7 @@ use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 mod batch;
 mod resolve;
 
-pub use batch::{batch_work_list, SkippedFile};
+pub use batch::{batch_work_list, BatchBudget, BatchBytes, FileCapBytes, SkippedFile};
 use resolve::*;
 
 /// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
@@ -414,7 +414,7 @@ pub struct FileWork {
     /// A changed file is always inlined whole: it is the file's complete current
     /// contents (empty only for a deletion, which has no current content — the
     /// removal is carried by [`semantic_diff`](FileWork::semantic_diff())). A file
-    /// whose rendered block would exceed the review batch budget is never trimmed
+    /// whose rendered block would exceed the review per-file cap is never trimmed
     /// to a slice; [`batch_work_list`] excludes that (validator, file) pair and
     /// reports it as a [`SkippedFile`] instead, so this is never a partial view.
     source_slice: String,
@@ -938,7 +938,7 @@ fn compute_per_file_facts(
         // it is not given whole, and those round-trips dominate review wall-clock.
         // A deletion has no current content, so its source is empty (the removal
         // is carried by the semantic diff). A file whose rendered block would
-        // exceed the batch budget is never trimmed here either — [`batch_work_list`]
+        // exceed the per-file cap is never trimmed here either — [`batch_work_list`]
         // excludes it and reports it as a [`SkippedFile`] gap instead.
         let source_slice = after_content.get(file).cloned().unwrap_or_default();
         per_file.insert(

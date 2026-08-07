@@ -38,8 +38,9 @@ pub use probes::{
     ProbeResult, ProbeResults, ProbeRow, CATALOG,
 };
 pub use scope::{
-    batch_work_list, detected_project_type_keys, scope_review, FileWork, LineAnnotation,
-    ProbeNames, RuleNames, Scope, ScopeSpec, SkippedFile, ValidatorWork, WorkList,
+    batch_work_list, detected_project_type_keys, scope_review, BatchBudget, BatchBytes,
+    FileCapBytes, FileWork, LineAnnotation, ProbeNames, RuleNames, Scope, ScopeSpec, SkippedFile,
+    ValidatorWork, WorkList,
 };
 pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,

@@ -1837,7 +1837,7 @@ async fn review_working_batch_size_override_skips_a_file_the_default_would_revie
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte per-file cap")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1887,7 +1887,7 @@ async fn review_file_batch_size_override_skips_a_file_the_default_would_review()
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte per-file cap")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1932,7 +1932,7 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
         "the skipped file must be named: {markdown}"
     );
     assert!(
-        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte batch budget")),
+        markdown.contains(&format!("{TINY_BATCH_SIZE}-byte per-file cap")),
         "the report must name THIS run's batch_size, not the default: {markdown}"
     );
     assert_eq!(parsed["counts"]["skipped"], json!(1));
@@ -1943,9 +1943,9 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
 }
 
 /// A genuinely large source file — one whose rendered block fills most of the
-/// default batch budget — must review through a normal route: the default
-/// budget, no explicit `batch_size`. Regression for ^3rnvage, where an
-/// oversized real file was skipped instead of reviewed.
+/// per-file cap — must review through a normal route: the default budget, no
+/// explicit `batch_size`. Regression for ^3rnvage, where an oversized real
+/// file was skipped instead of reviewed.
 ///
 /// The oversized file is generated rather than read off disk: no file in this
 /// workspace fills that much of the budget, so a real fixture cannot state the
@@ -1954,14 +1954,14 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(cwd)]
 async fn review_file_reviews_an_oversized_source_file_under_the_default_budget() {
-    use swissarmyhammer_validators::review::fleet::{
-        rendered_file_block_bytes, DEFAULT_BATCH_SIZE,
-    };
+    use swissarmyhammer_validators::review::fleet::{rendered_file_block_bytes, FleetConfig};
     use swissarmyhammer_validators::review::scope::FileWork;
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
-    let current_default = DEFAULT_BATCH_SIZE;
+    // The over-cap verdict is measured against the per-file cap, which is a
+    // constant — never against what this run's framing happened to leave over.
+    let file_cap = FleetConfig::default().file_block_cap();
 
     // The budget is spent in RENDERED bytes, never raw ones, so the fixture is
     // sized with `rendered_file_block_bytes` — the very cost function the packer
@@ -1981,11 +1981,10 @@ async fn review_file_reviews_an_oversized_source_file_under_the_default_budget()
         ))
     };
 
-    // Three quarters of the default budget: unmistakably an oversized file, and
-    // the remaining quarter covers what this measure leaves out — the run's
-    // prompt framing, which `file_payload_budget` subtracts from the cap, and
-    // the semantic diff rendered beside the source.
-    let target_rendered = current_default / 4 * 3;
+    // Three quarters of the per-file cap: unmistakably an oversized file, and
+    // the remaining quarter covers what this measure leaves out — the semantic
+    // diff rendered beside the source.
+    let target_rendered = file_cap / 4 * 3;
     // Wide lines keep the rendered size close to the raw size, so the fixture
     // stays a plausible source file instead of a column of line numbers. Real
     // Rust so the validator fan-out treats it as a `*.rs` file.
@@ -2000,14 +1999,14 @@ async fn review_file_reviews_an_oversized_source_file_under_the_default_budget()
 
     let rendered = measure(&real_content);
     assert!(
-        rendered < current_default,
-        "the fixture must render inside the current default budget \
-         ({rendered} rendered bytes vs {current_default})"
+        rendered < file_cap,
+        "the fixture must render inside the per-file cap \
+         ({rendered} rendered bytes vs {file_cap})"
     );
     assert!(
-        rendered > current_default / 2,
+        rendered > file_cap / 2,
         "the fixture must be a genuinely large file, not a token one \
-         ({rendered} rendered bytes vs {current_default})"
+         ({rendered} rendered bytes vs {file_cap})"
     );
 
     let repo = TestRepo::new();
@@ -2040,13 +2039,13 @@ async fn review_file_reviews_an_oversized_source_file_under_the_default_budget()
     let result = tool
         .execute(args, &context)
         .await
-        .expect("an oversized source file must be reviewable under the current default batch_size");
+        .expect("an oversized source file must be reviewable under the current per-file cap");
     let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
 
     assert_eq!(
         parsed["counts"]["skipped"],
         json!(0),
-        "the file must NOT be skipped as too large under the current default: {parsed}"
+        "the file must NOT be skipped as too large under the current per-file cap: {parsed}"
     );
     // The exact count depends on how many loaded validators (builtins included)
     // match `*.rs`, which is not this test's concern — only that fan-out

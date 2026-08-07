@@ -281,7 +281,7 @@ pub fn render_file_payload(files: &[FileWork]) -> String {
 /// as the complete current contents the model does NOT need to re-read, because
 /// the read-round-trips that dominated review wall-clock came from the model
 /// re-reading a file it was only given a partial slice of. A file whose rendered
-/// block would exceed the batch budget never reaches here as a partial view:
+/// block would exceed the per-file cap never reaches here as a partial view:
 /// [`batch_work_list`](crate::review::scope::batch_work_list) excludes it and
 /// reports it as a [`SkippedFile`](crate::review::scope::SkippedFile) gap instead
 /// of trimming it to a slice.

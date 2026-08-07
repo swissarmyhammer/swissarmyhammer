@@ -71,7 +71,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::review::scope::{FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList};
+use crate::review::scope::{
+    BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
+};
 use crate::review::tool_rules::ToolSuppression;
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::types::Rule;
@@ -137,6 +139,29 @@ pub use crate::validators::AGENT_PROMPT_CAP;
 /// evidence and 0.1 MB was source. Rendering is the only honest measure.
 pub const DEFAULT_BATCH_SIZE: usize = AGENT_PROMPT_CAP;
 
+/// How many equal shares of [`AGENT_PROMPT_CAP`] a prompt is split into when
+/// deciding how much of it ONE file block may occupy.
+///
+/// Two: one share for the file, one for the framing the same prompt must also
+/// carry (the change purpose, the shared probe evidence, and the validator's
+/// whole ruleset). A file that cannot leave the framing its half is too large
+/// to review in one prompt however small the rest of the change is.
+const PROMPT_SHARES_PER_FILE_BLOCK: usize = 2;
+
+/// The largest RENDERED block one file may contribute to a review prompt, in
+/// bytes — one share of [`AGENT_PROMPT_CAP`].
+///
+/// This is a **constant**, and that is the whole point (^tsram0q). The over-cap
+/// verdict it decides tells the author to split the file, so it must be a
+/// property of the file alone. Measuring it against what the run's framing left
+/// over made it a property of the CHANGE: splitting a file grew the change, a
+/// bigger change rendered more framing, and the smaller remainder put more
+/// files over cap on the next run. Each round made the next one worse.
+///
+/// [`FleetConfig::file_block_cap`] applies it, taking the stricter of this and
+/// the caller's `batch_size`.
+pub const MAX_FILE_BLOCK_BYTES: usize = AGENT_PROMPT_CAP / PROMPT_SHARES_PER_FILE_BLOCK;
+
 /// Configuration for a fan-out run.
 ///
 /// The fan-out grain is the validator and the change's files live in the run's
@@ -148,9 +173,10 @@ pub const DEFAULT_BATCH_SIZE: usize = AGENT_PROMPT_CAP;
 #[derive(Debug, Clone, Copy)]
 pub struct FleetConfig {
     /// The maximum RENDERED file content, in bytes, one batch's prompts may
-    /// carry. Whole files are packed greedily up to this budget; a
-    /// (validator, file) pair whose own rendered block exceeds it is excluded
-    /// and reported as a named gap (never split, never sliced). Always
+    /// carry. Whole files are packed greedily up to this budget (never split,
+    /// never sliced), and it is also the caller's ceiling on
+    /// [`file_block_cap`](Self::file_block_cap) — the constant a
+    /// (validator, file) pair must satisfy to be reviewed at all. Always
     /// `<= `[`AGENT_PROMPT_CAP`] — [`new`](Self::new) clamps it. Read through
     /// [`batch_size`](Self::batch_size); private so the config can evolve
     /// without a field-level API commitment.
@@ -182,11 +208,40 @@ impl FleetConfig {
     /// The cap applies to the WHOLE prompt, and a prompt is framing plus file
     /// blocks, so the packer's budget is the cap minus the framing. Saturates
     /// at zero: framing that alone exceeds the cap leaves no room for any file,
-    /// and every file is then reported as a named gap rather than underflowing
-    /// into an enormous budget.
+    /// and every file then takes a batch of its own rather than the budget
+    /// underflowing into an enormous number.
+    ///
+    /// This sizes BATCHES only. The over-cap verdict is
+    /// [`file_block_cap`](Self::file_block_cap), which never reads the framing.
     pub fn file_payload_budget(&self, framing: usize) -> usize {
         self.batch_size
             .min(AGENT_PROMPT_CAP.saturating_sub(framing))
+    }
+
+    /// The largest rendered block one file may contribute, in bytes — the
+    /// stricter of [`MAX_FILE_BLOCK_BYTES`] and the caller's `batch_size`.
+    ///
+    /// A file over this is reported as a
+    /// [`SkippedFile`](crate::review::scope::SkippedFile) gap. Both inputs are
+    /// constants for a run, so the verdict is a pure function of the file: the
+    /// same content is judged the same way on every run, and a file that
+    /// satisfied the cap can only go over it by growing.
+    pub fn file_block_cap(&self) -> usize {
+        self.batch_size.min(MAX_FILE_BLOCK_BYTES)
+    }
+
+    /// The [`BatchBudget`] the packer runs on, given the run's `framing` bytes.
+    ///
+    /// Pairs the constant [`file_block_cap`](Self::file_block_cap) (the
+    /// over-cap verdict) with the framing-sensitive
+    /// [`file_payload_budget`](Self::file_payload_budget) (where batch
+    /// boundaries fall). Building both here is what keeps the two numbers from
+    /// collapsing back into one at a call site.
+    pub fn batch_budget(&self, framing: usize) -> BatchBudget {
+        BatchBudget::new(
+            FileCapBytes(self.file_block_cap()),
+            BatchBytes(self.file_payload_budget(framing)),
+        )
     }
 }
 
