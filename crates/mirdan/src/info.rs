@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
+
 use crate::agents::{self, agent_project_skill_dir};
 use crate::lockfile::Lockfile;
 use crate::registry::{RegistryClient, RegistryError};
@@ -154,24 +156,25 @@ async fn show_registry_info(name: &str) -> Result<(), RegistryError> {
 /// Read a specific field from YAML frontmatter.
 ///
 /// Checks top-level fields first, then falls back to `metadata.<field>`.
+///
+/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
+/// three hyphens delimits the block. A three-hyphen run inside a value -- a
+/// table separator or a horizontal rule indented in a `description: >-` block
+/// scalar -- stays in the frontmatter instead of cutting it short, and an
+/// opening line of `----` or `---x` opens nothing.
+///
+/// Returns `"unknown"` when the file will not read, when it carries no
+/// frontmatter block, or when the field is absent.
 fn read_frontmatter_field(path: &Path, field: &str) -> String {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return "unknown".to_string(),
     };
 
-    let content = content.trim();
-    if !content.starts_with("---") {
+    let Some((frontmatter, _body)) = split_frontmatter_body(&content) else {
         return "unknown".to_string();
-    }
-
-    let rest = &content[3..];
-    let end = match rest.find("---") {
-        Some(pos) => pos,
-        None => return "unknown".to_string(),
     };
 
-    let frontmatter = &rest[..end];
     if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(frontmatter) {
         if let Some(value) = yaml
             .get("metadata")
@@ -189,7 +192,45 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter_fixtures::{
+        write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+        OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
     use serial_test::serial;
+
+    #[test]
+    fn test_read_frontmatter_field_keeps_every_key_past_a_three_hyphen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+        assert_eq!(read_frontmatter_field(&path, "name"), "test-skill");
+        assert_eq!(read_frontmatter_field(&path, "version"), "1.2.3");
+    }
+
+    #[test]
+    fn test_read_frontmatter_field_rejects_an_opening_line_with_trailing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+        assert_eq!(read_frontmatter_field(&path, "name"), "unknown");
+        assert_eq!(read_frontmatter_field(&path, "description"), "unknown");
+    }
+
+    #[test]
+    fn test_read_frontmatter_field_rejects_an_opening_line_of_four_hyphens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+        assert_eq!(read_frontmatter_field(&path, "name"), "unknown");
+    }
+
+    #[test]
+    fn test_read_frontmatter_field_rejects_a_file_with_no_closing_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
+
+        assert_eq!(read_frontmatter_field(&path, "name"), "unknown");
+    }
 
     #[test]
     fn test_read_frontmatter_field_metadata_fallback() {

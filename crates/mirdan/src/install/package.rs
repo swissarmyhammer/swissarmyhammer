@@ -5,6 +5,7 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use indicatif::{ProgressBar, ProgressStyle};
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
 use crate::agents;
 use crate::git_source::{self, InstallSource};
@@ -295,10 +296,12 @@ fn log_installed(
     }
 }
 
-/// YAML frontmatter delimiter line.
-const FRONTMATTER_DELIMITER: &str = "---";
-
 /// Read name and version from YAML frontmatter of a markdown file.
+///
+/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
+/// three hyphens delimits the block. A three-hyphen run inside a value stays
+/// in the frontmatter instead of cutting it short, and an opening line of
+/// `----` or `---x` opens nothing.
 ///
 /// # Errors
 ///
@@ -306,21 +309,14 @@ const FRONTMATTER_DELIMITER: &str = "---";
 /// or unterminated, the YAML does not parse, or the `name` key is absent.
 pub(crate) fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
     let content = std::fs::read_to_string(path)?;
-    let content = content.trim();
 
-    if !content.starts_with(FRONTMATTER_DELIMITER) {
-        return Err(RegistryError::Validation(format!(
-            "{} must start with YAML frontmatter ({FRONTMATTER_DELIMITER})",
+    let (frontmatter, _body) = split_frontmatter_body(&content).ok_or_else(|| {
+        RegistryError::Validation(format!(
+            "{} must open and close YAML frontmatter with a line of exactly three hyphens",
             path.display()
-        )));
-    }
-
-    let rest = &content[FRONTMATTER_DELIMITER.len()..];
-    let end = rest.find(FRONTMATTER_DELIMITER).ok_or_else(|| {
-        RegistryError::Validation(format!("no closing --- in {} frontmatter", path.display()))
+        ))
     })?;
 
-    let frontmatter = &rest[..end];
     let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)
         .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))?;
 

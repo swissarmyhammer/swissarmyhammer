@@ -10,13 +10,21 @@ use std::fmt;
 use std::path::Path;
 
 /// The four package types Mirdan manages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageType {
+    /// A skill package, identified by a `SKILL.md`.
     Skill,
+    /// A validator package, identified by a `VALIDATOR.md` beside a `rules/`
+    /// directory.
     Validator,
+    /// A tool package -- an MCP server definition -- identified by a `TOOL.md`.
     Tool,
+    /// A Claude Code plugin, identified by a `.claude-plugin/plugin.json`.
     Plugin,
+    /// An agent package, identified by an `AGENT.md`.
     Agent,
 }
 

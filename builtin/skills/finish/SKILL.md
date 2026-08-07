@@ -41,10 +41,18 @@ Rules:
 - One `Agent` call, then one `TaskOutput` call. Never two `Agent` calls in a row.
 - Use the largest timeout the tool accepts. A test run on a large workspace takes
   more than ten minutes.
-- `TaskOutput` that returns `status: running` means the timeout ran out, not that
-  the step failed. Call `TaskOutput` again with the same id.
-- Never `sleep` in a shell, and never poll `ListAgents` in a loop. Both burn turns
-  and tell you nothing. `TaskOutput` is the one way to wait.
+- **Call `TaskOutput` once for each step.** A `TaskOutput` that returns
+  `status: running` hit its own ceiling. Do not call it again. On a sub agent that
+  still runs, `TaskOutput` returns the raw transcript of the sub agent, not the
+  step record — tens of thousands of tokens of tool calls you already delegated
+  to keep out of this context. A second call costs that again and still gives no
+  result.
+- After a `status: running`, end the turn. The harness sends a task notification
+  when the sub agent finishes, and that notification carries the step record.
+  The `ralph` Stop hook may start you once or twice while you wait. Answer with
+  one short line and end the turn again. That is cheap; a transcript dump is not.
+- Never `sleep` in a shell, and never poll `ListAgents` in a loop. Neither one
+  tells you anything.
 
 
 ## Invocation

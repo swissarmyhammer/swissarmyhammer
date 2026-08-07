@@ -9,15 +9,19 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
 use crate::registry::RegistryError;
 
 /// An MCP server entry as written to agent config files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerEntry {
+    /// The executable that starts the server.
     pub command: String,
+    /// The arguments passed to `command`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// The environment variables set for the server process.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 }
@@ -25,11 +29,16 @@ pub struct McpServerEntry {
 /// MCP configuration parsed from TOOL.md frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpFrontmatter {
+    /// The executable that starts the server.
     pub command: String,
+    /// The arguments passed to `command`.
     #[serde(default)]
     pub args: Vec<String>,
+    /// The transport the server speaks, such as `stdio`. `None` leaves the
+    /// choice to the agent.
     #[serde(default)]
     pub transport: Option<String>,
+    /// The environment variables set for the server process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
@@ -199,23 +208,27 @@ pub fn unregister_mcp_server(
 }
 
 /// Parse raw YAML frontmatter from a markdown file, returning the YAML Value.
+///
+/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
+/// three hyphens delimits the block. A three-hyphen run inside a value -- a
+/// `--` flag or a `---` separator in a TOOL.md command line -- stays in the
+/// frontmatter instead of cutting it short, and an opening line of `----` or
+/// `---x` opens nothing.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, the frontmatter block is
+/// missing or unterminated, or the YAML does not parse.
 pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml_ng::Value, RegistryError> {
     let content = std::fs::read_to_string(path)?;
-    let content = content.trim();
 
-    if !content.starts_with("---") {
-        return Err(RegistryError::Validation(format!(
-            "{} must start with YAML frontmatter (---)",
+    let (frontmatter, _body) = split_frontmatter_body(&content).ok_or_else(|| {
+        RegistryError::Validation(format!(
+            "{} must open and close YAML frontmatter with a line of exactly three hyphens",
             path.display()
-        )));
-    }
-
-    let rest = &content[3..];
-    let end = rest.find("---").ok_or_else(|| {
-        RegistryError::Validation(format!("no closing --- in {} frontmatter", path.display()))
+        ))
     })?;
 
-    let frontmatter = &rest[..end];
     serde_yaml_ng::from_str(frontmatter)
         .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))
 }
@@ -317,6 +330,52 @@ pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter_fixtures::{
+        write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+        OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
+
+    #[test]
+    fn test_parse_yaml_frontmatter_keeps_every_key_past_a_three_hyphen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+        let yaml = parse_yaml_frontmatter(&path).unwrap();
+        assert_eq!(
+            yaml.get("name").and_then(|v| v.as_str()),
+            Some("test-skill")
+        );
+        assert_eq!(
+            yaml.get("metadata")
+                .and_then(|m| m.get("version"))
+                .and_then(|v| v.as_str()),
+            Some("1.2.3")
+        );
+    }
+
+    #[test]
+    fn test_parse_yaml_frontmatter_rejects_an_opening_line_with_trailing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+        assert!(parse_yaml_frontmatter(&path).is_err());
+    }
+
+    #[test]
+    fn test_parse_yaml_frontmatter_rejects_an_opening_line_of_four_hyphens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+        assert!(parse_yaml_frontmatter(&path).is_err());
+    }
+
+    #[test]
+    fn test_parse_yaml_frontmatter_rejects_a_file_with_no_closing_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
+
+        assert!(parse_yaml_frontmatter(&path).is_err());
+    }
 
     #[test]
     fn test_parse_tool_frontmatter() {

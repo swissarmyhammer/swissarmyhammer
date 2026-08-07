@@ -1,5 +1,9 @@
 use swissarmyhammer_common::lifecycle::InitScope;
 
+use crate::frontmatter_fixtures::{
+    write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+    OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+};
 use crate::lockfile::{LockedPackage, Lockfile};
 use crate::mcp_config;
 use crate::package_type::{self, PackageType};
@@ -396,6 +400,40 @@ fn test_read_frontmatter_no_frontmatter_errors() {
     let dir = tempfile::tempdir().unwrap();
     let md = dir.path().join("SKILL.md");
     std::fs::write(&md, "# Just markdown\nNo frontmatter here.\n").unwrap();
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_keeps_every_key_past_a_three_hyphen_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+    let (name, version) = read_frontmatter(&md).unwrap();
+    assert_eq!(name, "test-skill");
+    assert_eq!(version, "1.2.3");
+}
+
+#[test]
+fn test_read_frontmatter_rejects_an_opening_line_with_trailing_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_rejects_an_opening_line_of_four_hyphens() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_rejects_a_file_with_no_closing_delimiter() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
 
     assert!(read_frontmatter(&md).is_err());
 }
@@ -1016,7 +1054,10 @@ fn test_e2e_tool_install_list_uninstall() {
     assert_eq!(mcp["mcpServers"]["fs-tool"]["command"], "npx");
 
     // 5. Verify list discovers the tool
-    let packages = crate::list::discover_packages(false, false, true, false, None);
+    let packages = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Tool]),
+        None,
+    );
     let tool_pkgs: Vec<_> = packages.iter().filter(|p| p.name == "fs-tool").collect();
     assert_eq!(tool_pkgs.len(), 1, "list --tools should find fs-tool");
     assert_eq!(tool_pkgs[0].package_type, PackageType::Tool);
@@ -1078,7 +1119,10 @@ fn test_e2e_plugin_install_list_uninstall() {
     assert!(deployed.join("commands/greet.md").exists());
 
     // 5. Verify list discovers the plugin
-    let packages = crate::list::discover_packages(false, false, false, true, None);
+    let packages = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Plugin]),
+        None,
+    );
     let plugin_pkgs: Vec<_> = packages
         .iter()
         .filter(|p| p.name == "test-plugin")
@@ -1442,7 +1486,7 @@ async fn test_e2e_all_four_types_coexist() {
         .exists());
 
     // 6. Verify list discovers all four
-    let all = crate::list::discover_packages(false, false, false, false, None);
+    let all = crate::list::discover_packages(&crate::list::PackageFilter::all(), None);
     let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
     assert!(
         names.contains(&"test-skill"),
@@ -1466,25 +1510,37 @@ async fn test_e2e_all_four_types_coexist() {
     );
 
     // 7. Verify type-specific filters work
-    let skills_only = crate::list::discover_packages(true, false, false, false, None);
+    let skills_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Skill]),
+        None,
+    );
     assert!(skills_only
         .iter()
         .all(|p| p.package_type == PackageType::Skill));
     assert!(skills_only.iter().any(|p| p.name == "test-skill"));
 
-    let tools_only = crate::list::discover_packages(false, false, true, false, None);
+    let tools_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Tool]),
+        None,
+    );
     assert!(tools_only
         .iter()
         .all(|p| p.package_type == PackageType::Tool));
     assert!(tools_only.iter().any(|p| p.name == "test-tool"));
 
-    let plugins_only = crate::list::discover_packages(false, false, false, true, None);
+    let plugins_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Plugin]),
+        None,
+    );
     assert!(plugins_only
         .iter()
         .all(|p| p.package_type == PackageType::Plugin));
     assert!(plugins_only.iter().any(|p| p.name == "test-plugin"));
 
-    let vals_only = crate::list::discover_packages(false, true, false, false, None);
+    let vals_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Validator]),
+        None,
+    );
     assert!(vals_only
         .iter()
         .all(|p| p.package_type == PackageType::Validator));

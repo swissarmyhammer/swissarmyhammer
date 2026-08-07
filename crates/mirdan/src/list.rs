@@ -4,7 +4,7 @@ use std::path::Path;
 
 use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 
-use crate::agents::{self, agent_project_skill_dir};
+use crate::agents::{self, agent_project_skill_dir, DetectedAgent};
 use crate::lockfile::Lockfile;
 use crate::mcp_config;
 use crate::package_type::PackageType;
@@ -33,183 +33,253 @@ pub struct InstalledPackage {
     pub targets: Vec<String>,
 }
 
+/// Which package types a scan covers.
+///
+/// The `mirdan list` type flags combine: `--skills --tools` selects two types.
+/// An empty selection covers every type, which is what a bare `mirdan list`
+/// asks for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackageFilter {
+    /// The selected types, or empty for every type.
+    selected: Vec<PackageType>,
+}
+
+impl PackageFilter {
+    /// A filter that covers every package type.
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// A filter that covers only `types`.
+    ///
+    /// An empty iterator gives the same filter as [`PackageFilter::all`].
+    pub fn only(types: impl IntoIterator<Item = PackageType>) -> Self {
+        Self {
+            selected: types.into_iter().collect(),
+        }
+    }
+
+    /// Build a filter from `(flag, type)` pairs, keeping each type whose flag
+    /// is set.
+    ///
+    /// This is the shape the CLI flags arrive in. Naming the type beside its
+    /// flag keeps the call site readable, which a row of bare booleans is not.
+    pub fn from_flags(flags: impl IntoIterator<Item = (bool, PackageType)>) -> Self {
+        Self::only(
+            flags
+                .into_iter()
+                .filter(|(selected, _)| *selected)
+                .map(|(_, package_type)| package_type),
+        )
+    }
+
+    /// Whether a scan covers `package_type`.
+    pub fn includes(&self, package_type: PackageType) -> bool {
+        self.selected.is_empty() || self.selected.contains(&package_type)
+    }
+}
+
 /// Discover installed packages by scanning the filesystem.
 ///
-/// Scans agent skill directories, ./.validators/, .tools/, and agent plugin dirs.
-/// Returns a deduplicated, sorted list.
-///
-/// When a type-specific flag is set (e.g. skills_only), only that type is scanned.
-/// When no flags are set, all types are scanned.
+/// Scans agent skill directories, ./.validators/, .tools/, and agent plugin
+/// dirs, limited to the types `filter` covers. Returns a deduplicated, sorted
+/// list whose `source` fields carry the lockfile key where one exists.
 pub fn discover_packages(
-    skills_only: bool,
-    validators_only: bool,
-    tools_only: bool,
-    plugins_only: bool,
+    filter: &PackageFilter,
     agent_filter: Option<&str>,
 ) -> Vec<InstalledPackage> {
     let mut packages: Vec<InstalledPackage> = Vec::new();
 
-    // If any specific filter is set, only scan that type.
-    // If none are set, scan all types.
-    let scan_all = !skills_only && !validators_only && !tools_only && !plugins_only;
-
-    // Scan skills from the central store and agent project directories.
-    //
-    // The store (`~/.skills/` global, `.skills/` project) is the source of truth
-    // for installed packages. Agent directories (`.claude/skills/`, etc.) contain
-    // symlinks into the store, which can break (e.g. when `~/.claude` is itself
-    // a symlink to iCloud). Scanning the store directly is robust.
-    //
-    // We also scan agent project-level directories for skills installed without
-    // the store (e.g. manually placed skills).
-    if skills_only || scan_all {
-        // Global store
-        let global_store = store::skill_store_dir(true);
-        if global_store.exists() {
-            scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
-        }
-
-        // Project store — skip if it resolves to the same path as global.
-        // Note: canonicalize() fails when a path doesn't exist or isn't accessible
-        // (e.g. permission denied). In those cases skip_project is false and both
-        // stores are scanned, which may produce duplicates if the project store is
-        // an inaccessible symlink to the global store. This is unlikely in practice.
-        let project_store = store::skill_store_dir(false);
-        let skip_project = project_store
-            .canonicalize()
-            .ok()
-            .zip(global_store.canonicalize().ok())
-            .is_some_and(|(p, g)| p == g);
-        if !skip_project && project_store.exists() {
-            scan_skills_recursive(&project_store, &project_store, "project", &mut packages);
-        }
-
-        // Also scan agent project-level skill dirs for non-store skills
-        if let Ok(config) = agents::load_agents_config() {
-            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
-
-            for agent in &agents {
-                let skill_dir = agent_project_skill_dir(&agent.def);
-                if skill_dir.exists() {
-                    scan_skills(&skill_dir, &agent.def.name, &mut packages);
-                }
-            }
-        }
+    if filter.includes(PackageType::Skill) {
+        scan_skill_stores(&mut packages);
+        scan_agent_skill_dirs(agent_filter, &mut packages);
     }
 
-    // Scan validators from ./.validators/ (project) and ~/.validators/ (global)
-    // Skip when --agent is set: validators are not agent-scoped
-    if (validators_only || scan_all) && agent_filter.is_none() {
-        let local_validators = crate::install::validators_dir(false);
-        if local_validators.exists() {
-            scan_validators(&local_validators, ".validators/", &mut packages);
-        }
-
-        let global_validators = crate::install::validators_dir(true);
-        if global_validators.exists() {
-            scan_validators(&global_validators, "~/.validators/", &mut packages);
-        }
+    // Validators are not agent-scoped, so an agent filter suppresses them.
+    if filter.includes(PackageType::Validator) && agent_filter.is_none() {
+        scan_validator_dirs(&mut packages);
     }
 
-    // Scan tools from .tools/ and ~/.tools/
-    if tools_only || scan_all {
-        scan_tools(&store::tool_store_dir(false), ".tools/", &mut packages);
-        scan_tools(&store::tool_store_dir(true), "~/.tools/", &mut packages);
+    if filter.includes(PackageType::Tool) {
+        scan_tool_dirs(&mut packages);
     }
 
-    // Scan plugins from agent plugin directories
-    if plugins_only || scan_all {
-        if let Ok(config) = agents::load_agents_config() {
-            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
-
-            for agent in &agents {
-                // Project-level plugins
-                if let Some(plugin_dir) = agents::agent_project_plugin_dir(&agent.def) {
-                    if plugin_dir.exists() {
-                        scan_plugins(&plugin_dir, &agent.def.name, &mut packages);
-                    }
-                }
-                // Global plugins
-                if let Some(plugin_dir) = agents::agent_global_plugin_dir(&agent.def) {
-                    if plugin_dir.exists() {
-                        scan_plugins(
-                            &plugin_dir,
-                            &format!("{} (global)", agent.def.name),
-                            &mut packages,
-                        );
-                    }
-                }
-            }
-        }
+    if filter.includes(PackageType::Plugin) {
+        scan_agent_plugin_dirs(agent_filter, &mut packages);
     }
 
     let mut merged = merge_packages(packages);
+    enrich_sources_from_lockfiles(&mut merged);
+    merged
+}
 
-    // Enrich source field from lockfiles so callers (e.g. GUI) can pass
-    // the correct identifier for uninstall/update operations.
-    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
-    for dir in lockfile_dirs.iter().flatten() {
-        if let Ok(lf) = Lockfile::load(dir) {
-            for pkg in &mut merged {
-                // If source is just the display name, try to find the full lockfile key
-                if pkg.source == pkg.name {
-                    for key in lf.packages.keys() {
-                        let last_segment = key.rsplit('/').next().unwrap_or(key);
-                        if last_segment == pkg.name {
-                            pkg.source = key.clone();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+/// The agents a scan covers, or an empty list when the agents config will not
+/// load or names no agent the filter matches.
+fn target_agents(agent_filter: Option<&str>) -> Vec<DetectedAgent> {
+    let Ok(config) = agents::load_agents_config() else {
+        return Vec::new();
+    };
+    agents::resolve_target_agents(&config, agent_filter).unwrap_or_default()
+}
+
+/// Scan the global and project skill stores.
+///
+/// The store (`~/.skills/` global, `.skills/` project) is the source of truth
+/// for installed packages. Agent directories (`.claude/skills/`, etc.) hold
+/// symlinks into the store, which can break (e.g. when `~/.claude` is itself a
+/// symlink to iCloud), so scanning the store directly is robust.
+fn scan_skill_stores(packages: &mut Vec<InstalledPackage>) {
+    let global_store = store::skill_store_dir(true);
+    if global_store.exists() {
+        scan_skills_recursive(&global_store, &global_store, "global", packages);
     }
 
-    merged
+    // Skip the project store when it resolves to the same path as global.
+    // `canonicalize()` fails when a path does not exist or is not accessible
+    // (e.g. permission denied). In those cases both stores are scanned, which
+    // may produce duplicates if the project store is an inaccessible symlink to
+    // the global store. This is unlikely in practice.
+    let project_store = store::skill_store_dir(false);
+    let same_as_global = project_store
+        .canonicalize()
+        .ok()
+        .zip(global_store.canonicalize().ok())
+        .is_some_and(|(p, g)| p == g);
+    if !same_as_global && project_store.exists() {
+        scan_skills_recursive(&project_store, &project_store, "project", packages);
+    }
+}
+
+/// Scan each target agent's project-level skill directory, which holds skills
+/// installed without the store (e.g. manually placed skills).
+fn scan_agent_skill_dirs(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
+    for agent in target_agents(agent_filter) {
+        let skill_dir = agent_project_skill_dir(&agent.def);
+        if skill_dir.exists() {
+            scan_skills(&skill_dir, &agent.def.name, packages);
+        }
+    }
+}
+
+/// Scan the project and global validator directories.
+fn scan_validator_dirs(packages: &mut Vec<InstalledPackage>) {
+    let locations = [
+        (crate::install::validators_dir(false), ".validators/"),
+        (crate::install::validators_dir(true), "~/.validators/"),
+    ];
+    for (dir, location) in locations {
+        if dir.exists() {
+            scan_validators(&dir, location, packages);
+        }
+    }
+}
+
+/// Scan the project and global tool stores.
+fn scan_tool_dirs(packages: &mut Vec<InstalledPackage>) {
+    scan_tools(&store::tool_store_dir(false), ".tools/", packages);
+    scan_tools(&store::tool_store_dir(true), "~/.tools/", packages);
+}
+
+/// Scan every target agent's plugin directories.
+fn scan_agent_plugin_dirs(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
+    for agent in target_agents(agent_filter) {
+        scan_one_agents_plugin_dirs(&agent, packages);
+    }
+}
+
+/// Scan one agent's project-level and global plugin directories.
+///
+/// The global scope's target label carries a `(global)` suffix, so a plugin
+/// installed in both scopes lists one entry for each.
+fn scan_one_agents_plugin_dirs(agent: &DetectedAgent, packages: &mut Vec<InstalledPackage>) {
+    let scopes = [
+        (
+            agents::agent_project_plugin_dir(&agent.def),
+            agent.def.name.clone(),
+        ),
+        (
+            agents::agent_global_plugin_dir(&agent.def),
+            format!("{} (global)", agent.def.name),
+        ),
+    ];
+
+    for (plugin_dir, target) in scopes {
+        let Some(plugin_dir) = plugin_dir else {
+            continue;
+        };
+        if plugin_dir.exists() {
+            scan_plugins(&plugin_dir, &target, packages);
+        }
+    }
+}
+
+/// Every package key in the lockfiles mirdan reads, home directory first.
+///
+/// Each lockfile is read once for each call, so a caller that resolves many
+/// names still touches the disk twice.
+fn lockfile_keys() -> Vec<String> {
+    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
+    lockfile_dirs
+        .iter()
+        .flatten()
+        .filter_map(|dir| Lockfile::load(dir).ok())
+        .flat_map(|lf| lf.packages.keys().cloned().collect::<Vec<_>>())
+        .collect()
+}
+
+/// The first key in `keys` that identifies the package called `name`.
+///
+/// A key is either the full source (`owner/repo/skill`) or, for a package
+/// installed by bare name, the name itself. Both match, so a display name
+/// finds the full source key it came from.
+fn find_lockfile_key<'a>(keys: &'a [String], name: &str) -> Option<&'a str> {
+    keys.iter().map(String::as_str).find(|key| {
+        let last_segment = key.rsplit('/').next().unwrap_or(key);
+        last_segment == name || *key == name
+    })
+}
+
+/// Replace each package's bare display-name source with its lockfile key, so
+/// callers (e.g. the GUI) pass the identifier uninstall and update expect.
+fn enrich_sources_from_lockfiles(packages: &mut [InstalledPackage]) {
+    let keys = lockfile_keys();
+    for pkg in packages {
+        // A source that already differs from the display name is a store path,
+        // which is more specific than any lockfile key.
+        if pkg.source != pkg.name {
+            continue;
+        }
+        if let Some(key) = find_lockfile_key(&keys, &pkg.name) {
+            pkg.source = key.to_string();
+        }
+    }
 }
 
 /// Get the mirdan.ai registry URL for a package.
 ///
 /// Looks up the source URL from the lockfile (where the key is the full
 /// source like `https://github.com/owner/repo/skill`), then constructs
-/// `https://mirdan.ai/package/{url_encoded_source}`.
+/// `https://mirdan.ai/package/{url_encoded_source}`. Falls back to `name`
+/// when no lockfile names the package.
 pub fn registry_url(name: &str) -> String {
-    use crate::lockfile::Lockfile;
-
-    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
-
-    for dir in lockfile_dirs.iter().flatten() {
-        if let Ok(lf) = Lockfile::load(dir) {
-            for key in lf.packages.keys() {
-                let last_segment = key.rsplit('/').next().unwrap_or(key);
-                if last_segment == name || key == name {
-                    return format!("https://mirdan.ai/package/{}", urlencoding::encode(key));
-                }
-            }
-        }
-    }
-
-    format!("https://mirdan.ai/package/{}", urlencoding::encode(name))
+    let keys = lockfile_keys();
+    let source = find_lockfile_key(&keys, name).unwrap_or(name);
+    format!("https://mirdan.ai/package/{}", urlencoding::encode(source))
 }
 
 /// Run the list command.
 ///
-/// Scans all package locations for installed packages.
+/// Scans every package location the `filter` covers.
+///
+/// # Errors
+///
+/// Returns an error when the listing cannot be rendered.
 pub fn run_list(
-    skills_only: bool,
-    validators_only: bool,
-    tools_only: bool,
-    plugins_only: bool,
+    filter: &PackageFilter,
     agent_filter: Option<&str>,
     json: bool,
 ) -> Result<(), RegistryError> {
-    let packages = discover_packages(
-        skills_only,
-        validators_only,
-        tools_only,
-        plugins_only,
-        agent_filter,
-    );
+    let packages = discover_packages(filter, agent_filter);
 
     if json {
         let entries: Vec<serde_json::Value> = packages
@@ -559,7 +629,7 @@ metadata:
     #[test]
     fn test_run_list_empty() {
         // Should not panic even with no packages
-        let result = run_list(false, false, false, false, None, true);
+        let result = run_list(&PackageFilter::all(), None, true);
         assert!(result.is_ok());
     }
 
@@ -582,7 +652,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // With agent filter, validators should be suppressed
-        let result = run_list(false, false, false, false, Some("claude-code"), true);
+        let result = run_list(&PackageFilter::all(), Some("claude-code"), true);
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();
@@ -663,7 +733,7 @@ metadata:
     }
 
     #[test]
-    fn three_hyphen_run_in_a_description_keeps_every_frontmatter_key() {
+    fn test_three_hyphen_run_in_a_description_keeps_every_frontmatter_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("SKILL.md");
         std::fs::write(
@@ -681,7 +751,7 @@ metadata:
     }
 
     #[test]
-    fn an_opening_line_of_more_than_three_hyphens_is_not_a_delimiter() {
+    fn test_an_opening_line_of_more_than_three_hyphens_is_not_a_delimiter() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("SKILL.md");
         std::fs::write(&path, "----\nname: test-skill\n---\n# Test\n").unwrap();
@@ -691,7 +761,7 @@ metadata:
     }
 
     #[test]
-    fn an_opening_line_with_text_after_the_hyphens_is_not_a_delimiter() {
+    fn test_an_opening_line_with_text_after_the_hyphens_is_not_a_delimiter() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("SKILL.md");
         std::fs::write(
@@ -706,7 +776,7 @@ metadata:
     }
 
     #[test]
-    fn a_file_with_no_closing_delimiter_line_reads_no_frontmatter() {
+    fn test_a_file_with_no_closing_delimiter_line_reads_no_frontmatter() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("SKILL.md");
         std::fs::write(
@@ -739,7 +809,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // Without agent filter, validators should appear
-        let result = run_list(false, false, false, false, None, true);
+        let result = run_list(&PackageFilter::all(), None, true);
         assert!(result.is_ok());
 
         std::env::set_current_dir(old_dir).unwrap();

@@ -1,6 +1,7 @@
 //! Shared command dispatch logic used by both the CLI and Tauri app binaries.
 
 use crate::deploy_result::{DeployAction, DeployResult};
+use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::{
     agents, auth, completions, doctor, info, install, list, new, outdated, publish, search, status,
@@ -136,10 +137,12 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
             plugins,
             json,
         } => handle_registry_result(list::run_list(
-            *skills,
-            *validators,
-            *tools,
-            *plugins,
+            &list::PackageFilter::from_flags([
+                (*skills, PackageType::Skill),
+                (*validators, PackageType::Validator),
+                (*tools, PackageType::Tool),
+                (*plugins, PackageType::Plugin),
+            ]),
             agent_filter,
             *json,
         )),

@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use swissarmyhammer_common::frontmatter::split_frontmatter_body;
 use url::Url;
 
 use crate::package_type::{self, PackageType};
@@ -501,14 +502,17 @@ fn scan_recursive(
 }
 
 /// Extract the `name` field from YAML frontmatter.
+///
+/// [`split_frontmatter_body`] makes the split, so only a line that is exactly
+/// three hyphens delimits the block. A three-hyphen run inside a value stays
+/// in the frontmatter instead of cutting it short, and an opening line of
+/// `----` or `---x` opens nothing. This reads third-party repositories, whose
+/// package files this repository does not control.
+///
+/// Returns `None` when the text carries no frontmatter block, when the block
+/// holds YAML the parser rejects, or when `name` is absent.
 fn extract_name_from_frontmatter(content: &str) -> Option<String> {
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return None;
-    }
-    let rest = &content[3..];
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
+    let (frontmatter, _body) = split_frontmatter_body(content)?;
     let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
     yaml.get("name")
         .and_then(|v| v.as_str())
@@ -539,6 +543,41 @@ fn filter_by_select(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter_fixtures::{
+        NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS, OPENING_LINE_WITH_TRAILING_TEXT,
+        THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
+
+    // --- extract_name_from_frontmatter tests ---
+
+    #[test]
+    fn test_extract_name_reads_past_a_three_hyphen_run() {
+        assert_eq!(
+            extract_name_from_frontmatter(THREE_HYPHEN_RUN_IN_DESCRIPTION),
+            Some("test-skill".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_name_rejects_an_opening_line_with_trailing_text() {
+        assert_eq!(
+            extract_name_from_frontmatter(OPENING_LINE_WITH_TRAILING_TEXT),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_name_rejects_an_opening_line_of_four_hyphens() {
+        assert_eq!(
+            extract_name_from_frontmatter(OPENING_LINE_OF_FOUR_HYPHENS),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_name_rejects_a_file_with_no_closing_delimiter() {
+        assert_eq!(extract_name_from_frontmatter(NO_CLOSING_DELIMITER), None);
+    }
 
     // --- classify_source tests ---
 

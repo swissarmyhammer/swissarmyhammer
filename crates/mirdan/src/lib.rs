@@ -32,6 +32,10 @@ mod dispatch;
 pub use dispatch::{dispatch, format_deploy_results};
 /// Diagnostic checks for Mirdan setup and configuration.
 pub mod doctor;
+/// Markdown fixtures shared by the frontmatter delimiter tests of every
+/// reader in this crate.
+#[cfg(test)]
+mod frontmatter_fixtures;
 /// Git-based package installation support.
 pub mod git_source;
 /// Detailed information about a single package.
