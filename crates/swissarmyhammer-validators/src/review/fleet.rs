@@ -89,8 +89,9 @@ use prime::prime_run_prefix;
 pub use prime::{classify_reuse, unpin_prefix_session, PrefixReuse};
 pub(crate) use render::render_numbered_lines;
 pub use render::{
-    prompt_framing_bytes, render_file_payload, render_fleet_prompt, render_run_prime,
-    render_shared_probe_evidence, render_validator_suffix, rendered_file_block_bytes,
+    prompt_framing, prompt_framing_bytes, render_file_payload, render_fleet_prompt,
+    render_run_prime, render_shared_probe_evidence, render_validator_suffix,
+    rendered_file_block_bytes, PromptFraming,
 };
 
 /// The agent prompt cap every review prompt must fit inside, in **bytes**.
@@ -161,6 +162,49 @@ const PROMPT_SHARES_PER_FILE_BLOCK: usize = 2;
 /// [`FleetConfig::file_block_cap`] applies it, taking the stricter of this and
 /// the caller's `batch_size`.
 pub const MAX_FILE_BLOCK_BYTES: usize = AGENT_PROMPT_CAP / PROMPT_SHARES_PER_FILE_BLOCK;
+
+/// The largest RENDERED framing a batch's prompt may carry, in bytes — the
+/// share of [`AGENT_PROMPT_CAP`] left over once one file block has taken its own
+/// ([`MAX_FILE_BLOCK_BYTES`]).
+///
+/// This is the bound that keeps a packed batch sendable. A batch's prompt is
+/// framing plus file blocks, and the packer bounds the blocks two different
+/// ways:
+///
+/// - a multi-file batch by [`FleetConfig::file_payload_budget`], which is the
+///   cap MINUS the framing, so that batch fits whatever the framing is;
+/// - a batch holding one file too big for that budget by the constant
+///   [`MAX_FILE_BLOCK_BYTES`], which never reads the framing (^tsram0q, and it
+///   must not — an over-cap verdict has to be a property of the file alone).
+///
+/// Only the second case can overflow, and it cannot once the framing stays
+/// inside this bound. It measured 469950 bytes on a real 15-file change of this
+/// repo — 90% of the whole cap — so a file at the per-file cap made a prompt
+/// `AgentPool::enqueue` refused outright (^x8z9hgf).
+pub const MAX_FRAMING_BYTES: usize = AGENT_PROMPT_CAP - MAX_FILE_BLOCK_BYTES;
+
+/// How many equal shares of [`MAX_FRAMING_BYTES`] the framing is split into when
+/// deciding how much of it the shared probe evidence may occupy.
+///
+/// Two: one share for the evidence, one for the authored framing the same prompt
+/// must also carry (the change purpose and the largest validator's mandate,
+/// guidance, rule bodies, and output contract).
+const FRAMING_SHARES_PER_EVIDENCE_BLOCK: usize = 2;
+
+/// The largest RENDERED shared-evidence section a prompt may carry, in bytes —
+/// one share of [`MAX_FRAMING_BYTES`].
+///
+/// The `<changed-set>` `duplicates` rows this section renders are PAIRWISE, so
+/// they grow with the square of the changed entity count: on a real 15-file
+/// change of this repo they rendered about 452 KB, 96% of the whole framing,
+/// leaving almost nothing of the prompt cap for the files under review
+/// (^x8z9hgf). The authored share is generous by comparison — the largest
+/// builtin validator's suffix measured 21 KB against this many bytes — so the
+/// split is not close on either side.
+///
+/// [`render_shared_probe_evidence`] applies it and names how many rows it
+/// dropped.
+pub const MAX_SHARED_EVIDENCE_BYTES: usize = MAX_FRAMING_BYTES / FRAMING_SHARES_PER_EVIDENCE_BLOCK;
 
 /// Configuration for a fan-out run.
 ///

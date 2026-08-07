@@ -504,9 +504,15 @@ fn a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows() {
     let small_framing = prompt_framing_bytes(&small_change, &loader);
     let grown_framing = prompt_framing_bytes(&grown_change, &loader);
     assert!(
-        grown_framing > AGENT_PROMPT_CAP.saturating_sub(rendered),
-        "premise: the bigger change's framing alone must leave less room than the subject \
-         needs ({grown_framing} framing, {rendered} rendered, {AGENT_PROMPT_CAP}-byte cap)"
+        grown_framing > small_framing,
+        "premise: the bigger change must still frame more than the small one \
+         ({grown_framing} vs {small_framing})"
+    );
+    assert!(
+        grown_framing <= MAX_FRAMING_BYTES,
+        "however much evidence the change carries, the framing stays inside its share, so it \
+         can never crowd out a file that satisfies the per-file cap ({grown_framing} framing, \
+         {rendered} rendered, {MAX_FRAMING_BYTES}-byte framing share)"
     );
 
     let (_, small_skips) = crate::review::scope::batch_work_list(
@@ -777,6 +783,292 @@ fn the_prompt_framing_bytes_cover_the_purpose_the_payload_header_and_the_ruleset
         "framing ({framing}) must cover the whole prompt minus its file blocks ({})",
         monolithic.len() - blocks
     );
+}
+
+// ---- the framing stays inside its share of the cap --------------------
+
+/// How many `<changed-set>` duplicate rows the framing-bound fixtures carry —
+/// far more than [`MAX_SHARED_EVIDENCE_BYTES`] admits, so every one of them
+/// exercises the truncation rather than the rows simply fitting.
+const OVER_CAP_EVIDENCE_ROWS: usize = 20_000;
+
+/// How many files the file-count fixture spreads across, to show the framing no
+/// longer moves with the size of the change's file list.
+const FRAMING_FIXTURE_FILES: usize = 40;
+
+/// The line count the per-file cap fixture probes with before it scales up to
+/// the cap. Big enough that the block's fixed header amortizes away, small
+/// enough to render quickly.
+const CAP_PROBE_LINES: usize = 1_000;
+
+/// A `FileWork` whose rendered cost is the largest a whole number of
+/// [`SUBJECT_SOURCE_LINE`]s can reach without passing `cap` — a file that FILLS
+/// the per-file cap.
+///
+/// Sized by probing the real renderer rather than by a hand-computed line
+/// count, so it keeps filling the cap when the block format changes.
+fn file_filling_the_cap(path: &str, cap: usize) -> FileWork {
+    let probe = bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(CAP_PROBE_LINES));
+    let per_line = rendered_file_block_bytes(&probe) / CAP_PROBE_LINES;
+    let mut lines = cap / per_line;
+    while rendered_file_block_bytes(&bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(lines))) > cap
+    {
+        lines -= 1;
+    }
+    bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(lines))
+}
+
+#[test]
+fn a_batch_prompt_fits_the_cap_when_one_file_fills_the_per_file_cap() {
+    // The acceptance test for ^x8z9hgf, driven through the REAL renderers and
+    // the REAL packer. Two files each filling the per-file cap cannot share a
+    // batch, so one batch carries a single full-cap block; the change also
+    // carries far more duplicate evidence than a prompt can hold. Both prompt
+    // shapes must still fit — the shared prime and, because the claude backend
+    // never saves restorable prime state, the monolithic fallback that is its
+    // production path.
+    let ruleset = ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", &"RULE BODY sentence. ".repeat(500))],
+    );
+    let loader = loader_with(vec![ruleset.clone()]);
+    let config = FleetConfig::default();
+
+    let first = file_filling_the_cap(SUBJECT_PATH, config.file_block_cap());
+    let second = file_filling_the_cap("src/second.rs", config.file_block_cap());
+    let full_cap_cost = rendered_file_block_bytes(&first);
+
+    let work = WorkList::new(
+        "PURPOSE: two files at the per-file cap, in a change carrying far more duplicate \
+         evidence than one prompt can hold."
+            .to_string(),
+        vec![validator_work("bulk", vec![first, second])
+            .with_shared_probe_results([changed_set_duplicates(OVER_CAP_EVIDENCE_ROWS)])],
+    );
+
+    let framing = prompt_framing(&work, &loader);
+    assert!(
+        framing.shared_evidence() <= MAX_SHARED_EVIDENCE_BYTES,
+        "premise: the evidence must have been truncated, not merely fit: {} vs \
+         {MAX_SHARED_EVIDENCE_BYTES}",
+        framing.shared_evidence()
+    );
+    assert!(
+        framing.total() <= MAX_FRAMING_BYTES,
+        "the framing must stay inside its share of the cap: {} vs {MAX_FRAMING_BYTES}",
+        framing.total()
+    );
+    assert!(
+        framing.total() + config.file_block_cap() <= AGENT_PROMPT_CAP,
+        "a full-cap file plus this run's framing must fit the prompt cap: {} + {} vs \
+         {AGENT_PROMPT_CAP}",
+        framing.total(),
+        config.file_block_cap()
+    );
+
+    let budget = config.batch_budget(framing.total());
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, budget, rendered_file_block_bytes);
+    assert!(
+        skipped.is_empty(),
+        "neither file is over the per-file cap, so both are reviewed: {skipped:?}"
+    );
+    assert!(
+        batches
+            .iter()
+            .any(|batch| batch.distinct_files().count() == 1),
+        "premise: a full-cap file must take a batch of its own, which is the prompt this \
+         test exists to size"
+    );
+
+    for batch in &batches {
+        let prime = render_run_prime(batch);
+        assert!(
+            prime.len() <= AGENT_PROMPT_CAP,
+            "a batch's shared prime is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap \
+             (framing {}, full-cap block {full_cap_cost})",
+            prime.len(),
+            framing.total()
+        );
+        for validator in batch.validators() {
+            let monolithic = render_fleet_prompt(batch.change_purpose(), validator, &ruleset);
+            assert!(
+                monolithic.len() <= AGENT_PROMPT_CAP,
+                "{}'s monolithic prompt is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap \
+                 (framing {}, full-cap block {full_cap_cost})",
+                validator.validator_name(),
+                monolithic.len(),
+                framing.total()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_shared_evidence_block_is_capped_and_names_the_rows_it_dropped() {
+    // Truncating evidence is a real loss, so the block must never read as an
+    // exhaustive list once it is partial.
+    let mut out = String::new();
+    render_shared_probe_evidence(&mut out, &[changed_set_duplicates(OVER_CAP_EVIDENCE_ROWS)]);
+
+    assert!(
+        out.len() <= MAX_SHARED_EVIDENCE_BYTES,
+        "the section is capped: {} vs {MAX_SHARED_EVIDENCE_BYTES}",
+        out.len()
+    );
+    assert!(
+        out.contains("further evidence rows are NOT shown"),
+        "the block must say it is partial, or the model reads it as the whole list"
+    );
+
+    let rows_shown = out.matches("src/dup").count();
+    assert!(
+        rows_shown > 0,
+        "the rows that fit are still rendered, so the evidence is sampled, not dropped"
+    );
+    assert!(
+        out.contains(&format!("{} further", OVER_CAP_EVIDENCE_ROWS - rows_shown)),
+        "the notice must name exactly how many rows were left out; it shows {rows_shown} of \
+         {OVER_CAP_EVIDENCE_ROWS}: {}",
+        &out[out.len().saturating_sub(400)..]
+    );
+}
+
+#[test]
+fn a_shared_evidence_block_that_fits_renders_every_row_and_no_notice() {
+    // The cap must be invisible below it: a change whose evidence fits is
+    // rendered exactly as it was before the cap existed.
+    const FITTING_ROWS: usize = 10;
+    let mut out = String::new();
+    render_shared_probe_evidence(&mut out, &[changed_set_duplicates(FITTING_ROWS)]);
+
+    assert_eq!(
+        out.matches("src/dup").count(),
+        FITTING_ROWS,
+        "every row renders when they all fit"
+    );
+    assert!(
+        !out.contains("further evidence rows are NOT shown"),
+        "no notice when nothing was dropped: {out}"
+    );
+}
+
+#[test]
+fn the_omitted_rows_notice_fits_the_bytes_reserved_for_it() {
+    // The reserve is what keeps the notice from pushing the section past its
+    // cap, so it must cover the widest count the notice can ever render.
+    let widest = crate::review::fleet::render::omitted_rows_notice(usize::MAX);
+    assert!(
+        widest.len() <= crate::review::fleet::render::MAX_OMITTED_ROWS_NOTICE_BYTES,
+        "the widest notice is {} bytes against a {}-byte reserve: {widest}",
+        widest.len(),
+        crate::review::fleet::render::MAX_OMITTED_ROWS_NOTICE_BYTES
+    );
+}
+
+#[test]
+fn a_validators_suffix_splits_into_run_framing_plus_one_line_per_file() {
+    // The focus-file lines are charged to their file, not reserved as run
+    // framing. That is only sound if the two halves add back up to the suffix
+    // the agent actually receives.
+    let rs = ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", "RULE BODY.")],
+    );
+    let loader = loader_with(vec![rs.clone()]);
+
+    let files: Vec<FileWork> = (0..FRAMING_FIXTURE_FILES)
+        .map(|index| bare_file_work(&format!("src/f{index}.rs"), "fn ok() {}\n".to_string()))
+        .collect();
+    let work = WorkList::new(
+        "PURPOSE: many files.".to_string(),
+        vec![validator_work("bulk", files.clone())],
+    );
+
+    let suffix = render_validator_suffix(&work.validators()[0], &rs).len();
+    let framing = prompt_framing(&work, &loader);
+    let focus_lines: usize = files
+        .iter()
+        .map(crate::review::fleet::render::focus_file_line_bytes)
+        .sum();
+
+    assert_eq!(
+        suffix,
+        framing.validator_suffix() + focus_lines,
+        "the whole suffix must be the reserved framing plus the per-file lines"
+    );
+}
+
+#[test]
+fn the_framing_stops_growing_with_the_number_of_files_in_the_change() {
+    // The framing is a per-BATCH reserve, so a term that grows with the run's
+    // file count shrinks every batch's budget for files that batch does not
+    // even carry.
+    let rs = ruleset(
+        "bulk",
+        "MANDATE: review everything.",
+        &[("one-rule", "RULE BODY.")],
+    );
+    let loader = loader_with(vec![rs]);
+
+    let one = WorkList::new(
+        "PURPOSE: same purpose.".to_string(),
+        vec![validator_work(
+            "bulk",
+            vec![bare_file_work("src/f0.rs", "fn ok() {}\n".to_string())],
+        )],
+    );
+    let many = WorkList::new(
+        "PURPOSE: same purpose.".to_string(),
+        vec![validator_work(
+            "bulk",
+            (0..FRAMING_FIXTURE_FILES)
+                .map(|index| {
+                    bare_file_work(&format!("src/f{index}.rs"), "fn ok() {}\n".to_string())
+                })
+                .collect(),
+        )],
+    );
+
+    assert_eq!(
+        prompt_framing_bytes(&one, &loader),
+        prompt_framing_bytes(&many, &loader),
+        "the same purpose and the same ruleset frame the same bytes, however many files the \
+         change touches"
+    );
+}
+
+#[test]
+fn every_builtin_validators_suffix_fits_the_framings_authored_share() {
+    // The framing bound holds only if the authored half — the change purpose
+    // and the largest validator's rule bodies — stays inside what the shared
+    // evidence cap leaves it. That half is authored Markdown, so the shipped
+    // validators are what has to satisfy it.
+    let authored_share = MAX_FRAMING_BYTES - MAX_SHARED_EVIDENCE_BYTES;
+    let mut loader = ValidatorLoader::new();
+    crate::builtin::load_builtins(&mut loader);
+    let rulesets = loader.list_rulesets();
+    assert!(
+        !rulesets.is_empty(),
+        "the builtin validators must load, or this proves nothing"
+    );
+
+    for rs in rulesets {
+        let validator = ValidatorWork::new(
+            rs.manifest.name.clone(),
+            RuleNames::new(rs.rules.iter().map(|rule| rule.name.clone())),
+            ProbeNames::new(rs.manifest.probes.iter().cloned()),
+            Vec::new(),
+        );
+        let suffix = render_validator_suffix(&validator, rs).len();
+        assert!(
+            suffix < authored_share,
+            "`{}` frames {suffix} bytes against the {authored_share}-byte authored share",
+            rs.manifest.name
+        );
+    }
 }
 
 // ---- renderer tests (pure) -------------------------------------------

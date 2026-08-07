@@ -12,11 +12,13 @@
 
 use std::fmt::Write as _;
 
-use crate::review::probes::{render_probe_evidence, ProbeResult};
+use crate::review::probes::{render_probe_evidence, render_probe_evidence_within, ProbeResult};
 use crate::review::scope::{FileWork, LineAnnotation, ValidatorWork, WorkList};
 use crate::validators::{RuleSet, ValidatorLoader};
 
-use super::{MANDATE_HEADER, OUTPUT_CONTRACT, PRIME_HANDOFF, VALIDATOR_HEADER};
+use super::{
+    MANDATE_HEADER, MAX_SHARED_EVIDENCE_BYTES, OUTPUT_CONTRACT, PRIME_HANDOFF, VALIDATOR_HEADER,
+};
 
 /// The header that opens both fan-out prompt renderings — the monolithic
 /// fallback ([`render_fleet_prompt`]) and the shared run prime
@@ -95,15 +97,43 @@ pub fn render_run_prime(work: &WorkList) -> String {
 /// Always non-empty: it carries at least the rule bodies and the output contract,
 /// so a fork turn never degenerates to a full reprocess (`lcp == new_len`).
 pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> String {
+    render_suffix(validator.validator_name(), ruleset, validator.files())
+}
+
+/// The suffix bytes that do NOT move with the batch's file list — everything
+/// [`render_validator_suffix`] renders except the focus-file lines.
+///
+/// The identity `render_validator_suffix(v, rs).len() ==
+/// validator_suffix_framing_bytes(v, rs) + sum of focus_file_line_bytes` holds
+/// by construction: both go through [`render_suffix`], one with the file list
+/// and one with none.
+///
+/// This is the suffix term [`prompt_framing_bytes`] reserves, and the split is
+/// what makes that reserve independent of how many files the change carries.
+/// The focus-file line is a PER-FILE cost — a batch's suffix lists that batch's
+/// files, not the run's — so [`rendered_file_block_bytes`] charges it to the
+/// file, where the packer already budgets per file. Measured as run framing it
+/// was charged against the run's WHOLE file list in every batch, which both
+/// over-reserved for the batch actually being sent and grew the framing without
+/// bound as the change grew.
+fn validator_suffix_framing_bytes(validator: &ValidatorWork, ruleset: &RuleSet) -> usize {
+    render_suffix(validator.validator_name(), ruleset, &[]).len()
+}
+
+/// The shared body of [`render_validator_suffix`] and
+/// [`validator_suffix_framing_bytes`]: the validator header, mandate, guidance,
+/// the focus-file list over `files`, every prompt rule body, and the output
+/// contract.
+fn render_suffix(validator_name: &str, ruleset: &RuleSet, files: &[FileWork]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{VALIDATOR_HEADER}{}\n", validator.validator_name());
+    let _ = writeln!(out, "{VALIDATOR_HEADER}{validator_name}\n");
     out.push_str(MANDATE_HEADER);
     out.push_str(ruleset.description().trim());
     out.push_str("\n\n");
 
     render_validator_guidance(&mut out, ruleset.manifest_body());
 
-    render_focus_files(&mut out, validator.files());
+    render_focus_files(&mut out, files);
 
     out.push_str("## Rules\n\n");
     // Tool rules never render: no LLM reads a tool rule's body — the tool
@@ -150,9 +180,30 @@ fn render_focus_files(out: &mut String, files: &[FileWork]) {
          anywhere in one of these files is in scope and must be reported now.\n\n",
     );
     for file in files {
-        let _ = writeln!(out, "- `{}`", file.path());
+        out.push_str(&focus_file_line(file));
     }
     out.push('\n');
+}
+
+/// The one line [`render_focus_files`] spends naming `file`.
+///
+/// Rendered through one helper so [`focus_file_line_bytes`] measures the bytes
+/// the suffix actually writes rather than a second guess at the format.
+fn focus_file_line(file: &FileWork) -> String {
+    format!("- `{}`\n", file.path())
+}
+
+/// The bytes `file` adds to the validator suffix's focus-file list.
+///
+/// Charged to the file by [`rendered_file_block_bytes`], not reserved as run
+/// framing — see [`validator_suffix_framing_bytes`] for why this cost belongs
+/// to the file.
+///
+/// `pub(super)` for the fleet test that adds the per-file lines back onto the
+/// reserved suffix framing and checks the sum against the whole rendered
+/// suffix.
+pub(super) fn focus_file_line_bytes(file: &FileWork) -> usize {
+    focus_file_line(file).len()
 }
 
 /// The header that opens every file payload, in the prime and in the
@@ -174,10 +225,17 @@ const FILE_PAYLOAD_HEADER: &str = "# Files under review\n\n";
 /// The cost is per **(validator, file) pair**, not per path: a file's block
 /// carries the probe evidence selected for THAT validator, so the same path can
 /// cost kilobytes for one validator and megabytes for another.
+///
+/// The file's [`focus_file_line_bytes`] are charged here too. A monolithic
+/// prompt names each of its files twice — once as a block and once in the
+/// suffix's focus-file list — and both lines arrive with the file, so the packer
+/// charges the pair for both. What this buys is the exact accounting the batch
+/// guarantee rests on: a rendered prompt is never more than
+/// [`prompt_framing_bytes`] plus the sum of this cost over the batch's files.
 pub fn rendered_file_block_bytes(file: &FileWork) -> usize {
     let mut out = String::new();
     render_file_block(&mut out, file);
-    out.len()
+    out.len() + focus_file_line_bytes(file)
 }
 
 /// The header introducing the batch-scoped shared probe evidence section —
@@ -197,23 +255,69 @@ const SHARED_EVIDENCE_HEADER: &str = "# Shared evidence\n\n";
 /// identical, potentially multi-megabyte block once per file in the batch —
 /// zero additional information at N× the bytes (^t7f5fqf). Rendering it once
 /// here, shared by [`render_run_prime`] and [`render_fleet_prompt`] alike,
-/// shows the model the exact same rows at a fraction of the cost: the fix is a
-/// payload-size change only, never a change to which rows the model sees.
+/// shows the model the exact same rows at a fraction of the cost.
+///
+/// # The section is capped
+///
+/// The rows are bounded by [`MAX_SHARED_EVIDENCE_BYTES`], and the rows past the
+/// cap are replaced by a notice naming how many were dropped, so the model never
+/// reads a truncated list as an exhaustive one. On a real 15-file change of this
+/// repo the uncapped section rendered about 452 KB — 96% of the whole framing —
+/// because the `<changed-set>` rows are PAIRWISE and so grow with the square of
+/// the changed entity count (^x8z9hgf).
+///
+/// A fixed cap rather than a per-batch filter of the rows, on purpose. A row
+/// names two files that may land in different batches, so filtering by batch
+/// drops real evidence; the framing is measured once before batching, so a
+/// batch-dependent section would make the measure a fixed point of the packing
+/// it feeds; and filtering bounds nothing — one batch's file can still appear in
+/// thousands of rows. A constant keeps this section byte-identical across both
+/// prompt shapes and across runs over the same change, which the fork-prefix
+/// reuse and the ^tsram0q convergence contract both depend on.
 pub fn render_shared_probe_evidence(out: &mut String, results: &[ProbeResult]) {
     if results.is_empty() {
         return;
     }
+    let start = out.len();
     out.push_str(SHARED_EVIDENCE_HEADER);
     out.push_str(
         "The evidence below spans the WHOLE change under review, not any single \
          file, so it is shown ONCE here rather than repeated per file above. It \
          still applies to any file a row below names.\n\n",
     );
-    render_probe_evidence(out, results, false);
+    // Reserve the notice out of the cap before any row renders, so the notice
+    // itself can never push the section past it.
+    let row_budget =
+        MAX_SHARED_EVIDENCE_BYTES.saturating_sub(out.len() - start + MAX_OMITTED_ROWS_NOTICE_BYTES);
+    let omitted = render_probe_evidence_within(out, results, false, row_budget);
+    if omitted > 0 {
+        out.push_str(&omitted_rows_notice(omitted));
+    }
 }
 
-/// The bytes of a batch's prompt that are NOT file blocks — an upper bound over
-/// every validator in the run.
+/// The largest an [`omitted_rows_notice`] can render to, in bytes — the fixed
+/// sentence plus the widest row count a `usize` can hold.
+///
+/// [`render_shared_probe_evidence`] reserves it out of
+/// [`MAX_SHARED_EVIDENCE_BYTES`] before it renders any row, so a section that
+/// truncates still fits the cap. The reserve is only sound if it really does
+/// cover the widest notice, so it is `pub(super)` for the fleet test that pins
+/// it against the real rendering.
+pub(super) const MAX_OMITTED_ROWS_NOTICE_BYTES: usize = 320;
+
+/// The notice that replaces the rows [`render_shared_probe_evidence`] had to
+/// drop, so a truncated block never reads as an exhaustive one.
+pub(super) fn omitted_rows_notice(omitted: usize) -> String {
+    format!(
+        "_{omitted} further evidence rows are NOT shown. This shared block is capped at \
+         {MAX_SHARED_EVIDENCE_BYTES} bytes so every batch's prompt fits the agent's prompt \
+         cap. Treat the rows above as a sample of the duplicate evidence, not the whole \
+         list._\n\n"
+    )
+}
+
+/// The framing of a batch's prompt — every byte the prompt carries that is NOT
+/// a file block — broken into the three terms it is made of.
 ///
 /// A batch sends two prompt shapes, and both are framing plus file blocks:
 ///
@@ -223,24 +327,71 @@ pub fn render_shared_probe_evidence(out: &mut String, results: &[ProbeResult]) {
 ///   that validator's blocks + [`render_shared_probe_evidence`] +
 ///   [`render_validator_suffix`].
 ///
-/// The suffix (mandate, guidance, focus-file list, every prompt rule body —
-/// tool rules never render — and the output contract) is by far the larger of
-/// the two tails and is what makes this worth
-/// measuring rather than guessing: a validator's rule bodies are authored
-/// Markdown of unbounded size. It is measured against the validator's WHOLE
-/// file list, so it bounds the suffix of any batch that subsets those files.
+/// [`total`](Self::total) is the upper bound over both shapes and over every
+/// validator in the run. The terms are reported separately because they behave
+/// differently and only one of them was ever the problem: on a real 15-file
+/// change of this repo the shared evidence measured about 452 KB against about
+/// 17 KB of validator suffix and under 1 KB of change purpose (^x8z9hgf).
+/// [`run_review`](crate::review::run_review) logs the split, so the next run
+/// that gets tight says which term did it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptFraming {
+    /// The change-purpose section plus the file-payload header — the fixed
+    /// preamble every prompt shape opens with.
+    purpose: usize,
+    /// The capped [`render_shared_probe_evidence`] section, measured against
+    /// the WHOLE work-list's dedup'd shared results
+    /// ([`WorkList::shared_probe_results`]) rather than one batch: that
+    /// evidence is batch-scoped, not file-scoped, so it costs the same bytes in
+    /// every batch's prompt regardless of which files that batch carries.
+    shared_evidence: usize,
+    /// The largest [`validator_suffix_framing_bytes`] in the run, floored at
+    /// [`PRIME_HANDOFF`] — the larger of the two prompt shapes' tails. Excludes
+    /// the focus-file lines, which [`rendered_file_block_bytes`] charges to
+    /// their file instead.
+    validator_suffix: usize,
+    /// The validator whose suffix set [`validator_suffix`](Self::validator_suffix),
+    /// or `None` when no validator in the work-list has a ruleset in the loader.
+    largest_validator: Option<String>,
+}
+
+impl PromptFraming {
+    /// The change-purpose section plus the file-payload header.
+    pub fn purpose(&self) -> usize {
+        self.purpose
+    }
+
+    /// The capped shared probe evidence section.
+    pub fn shared_evidence(&self) -> usize {
+        self.shared_evidence
+    }
+
+    /// The largest validator suffix, focus-file lines excluded.
+    pub fn validator_suffix(&self) -> usize {
+        self.validator_suffix
+    }
+
+    /// The validator whose suffix set [`validator_suffix`](Self::validator_suffix).
+    pub fn largest_validator(&self) -> Option<&str> {
+        self.largest_validator.as_deref()
+    }
+
+    /// The whole framing — the sum of the three terms.
+    pub fn total(&self) -> usize {
+        self.purpose + self.shared_evidence + self.validator_suffix
+    }
+}
+
+/// Measure a batch prompt's framing, term by term.
 ///
-/// The shared evidence section is measured against the WHOLE work-list's
-/// dedup'd shared results ([`WorkList::shared_probe_results`]), never against
-/// one batch: that evidence is batch-scoped, not file-scoped, so it costs the
-/// same fixed bytes in every batch's prompt regardless of which files that
-/// batch carries.
+/// Every term runs the real renderer, so the number the packer budgets on and
+/// the number the agent receives are the same bytes.
 ///
 /// A validator the `loader` does not know is skipped, exactly as
 /// `plan_fan_out` skips it — it never renders a prompt, so it cannot frame
 /// one.
-pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize {
-    let head = CHANGE_PURPOSE_HEADER.len()
+pub fn prompt_framing(work: &WorkList, loader: &ValidatorLoader) -> PromptFraming {
+    let purpose = CHANGE_PURPOSE_HEADER.len()
         + work.change_purpose().trim().len()
         + "\n\n".len()
         + FILE_PAYLOAD_HEADER.len();
@@ -248,18 +399,40 @@ pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize 
     let mut shared_evidence = String::new();
     render_shared_probe_evidence(&mut shared_evidence, &work.shared_probe_results());
 
-    let tail = work
+    let largest = work
         .validators()
         .iter()
         .filter_map(|validator| {
             let ruleset = loader.get_ruleset(validator.validator_name())?;
-            Some(render_validator_suffix(validator, ruleset).len())
+            Some((
+                validator_suffix_framing_bytes(validator, ruleset),
+                validator.validator_name(),
+            ))
         })
-        .max()
-        .unwrap_or(0)
-        .max(PRIME_HANDOFF.len());
+        .max_by_key(|(bytes, _)| *bytes);
 
-    head + shared_evidence.len() + tail
+    PromptFraming {
+        purpose,
+        shared_evidence: shared_evidence.len(),
+        // Floored at the prime's own tail: the prime carries the handoff where
+        // a fork carries a suffix, so the reserve must cover whichever is
+        // larger.
+        validator_suffix: largest
+            .map_or(0, |(bytes, _)| bytes)
+            .max(PRIME_HANDOFF.len()),
+        largest_validator: largest.map(|(_, name)| name.to_string()),
+    }
+}
+
+/// The bytes of a batch's prompt that are NOT file blocks — an upper bound over
+/// every validator in the run, and the whole of [`prompt_framing`].
+///
+/// This is the number [`FleetConfig::file_payload_budget`](super::FleetConfig::file_payload_budget)
+/// subtracts from the agent's prompt cap to size a batch. It is bounded by
+/// [`MAX_FRAMING_BYTES`](super::MAX_FRAMING_BYTES), so a single-file batch
+/// carrying a file at the per-file cap still fits the prompt cap.
+pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize {
+    prompt_framing(work, loader).total()
 }
 
 /// Render the file payload — one self-contained block per file (path + semantic

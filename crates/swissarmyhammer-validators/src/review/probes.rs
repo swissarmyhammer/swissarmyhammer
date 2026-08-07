@@ -168,16 +168,57 @@ pub fn probe_exists(name: &str) -> bool {
 /// `show_kind` is the stages' only divergence: verify annotates each probe header
 /// with its `(fact)`/`(candidate)` [kind](ProbeKind) so the adversary knows which
 /// rows are deterministic facts; fan-out omits it.
+///
+/// Unbounded: every row renders. The one caller that must not render every row —
+/// the batch-scoped shared evidence block, whose `<changed-set>` rows are
+/// pairwise and so grow with the square of the changed entity count — calls
+/// [`render_probe_evidence_within`] with an explicit byte budget instead.
 pub(crate) fn render_probe_evidence(out: &mut String, results: &[ProbeResult], show_kind: bool) {
+    render_probe_evidence_within(out, results, show_kind, usize::MAX);
+}
+
+/// [`render_probe_evidence`], bounded: append at most `max_bytes` of rendered
+/// result headers and evidence rows, and return how many rows were left out.
+///
+/// Rows render in order and stop at a row boundary — a row that would push the
+/// block past `max_bytes` is rolled back rather than half-written, and a result
+/// header no row of which fits is rolled back with it. `usize::MAX` is the
+/// unbounded budget [`render_probe_evidence`] passes.
+///
+/// Truncating evidence is a real loss, so the caller MUST tell the model the
+/// list is partial (see
+/// [`render_shared_probe_evidence`](crate::review::fleet::render_shared_probe_evidence),
+/// which renders the returned count as an explicit notice). The alternative is
+/// worse than partial evidence: an unbounded block pushes the whole prompt past
+/// the agent's cap, and the agent then reviews nothing at all.
+pub(crate) fn render_probe_evidence_within(
+    out: &mut String,
+    results: &[ProbeResult],
+    show_kind: bool,
+    max_bytes: usize,
+) -> usize {
     if results.is_empty() {
         out.push_str("_No probe evidence._\n\n");
-        return;
+        return 0;
     }
+    let start = out.len();
+    let mut omitted = 0usize;
     for result in results {
+        if omitted > 0 {
+            omitted += result.rows.len();
+            continue;
+        }
+        let mark = out.len();
         render_result_header(out, result, show_kind);
-        render_result_rows(out, result);
+        omitted = render_result_rows_within(out, result, start, max_bytes);
+        if !result.rows.is_empty() && omitted == result.rows.len() {
+            // Not one row of this result fit, so its header would name a probe
+            // with nothing under it. Drop the header with the rows.
+            out.truncate(mark);
+        }
     }
     out.push('\n');
+    omitted
 }
 
 /// Render one result's header line (`- probe \`name\` [(kind)] on \`target\`:`).
@@ -202,15 +243,31 @@ fn render_result_header(out: &mut String, result: &ProbeResult, show_kind: bool)
     }
 }
 
-/// Render one result's evidence rows, or the `(no rows)` sentinel when empty.
-fn render_result_rows(out: &mut String, result: &ProbeResult) {
+/// Render one result's evidence rows, or the `(no rows)` sentinel when empty,
+/// stopping before the bytes written since `start` would exceed `max_bytes`.
+///
+/// Returns how many of `result`'s rows it did not render — zero when they all
+/// fit. A row that would cross the budget is rolled back whole, so the block
+/// always ends on a row boundary and never on a half-written row.
+fn render_result_rows_within(
+    out: &mut String,
+    result: &ProbeResult,
+    start: usize,
+    max_bytes: usize,
+) -> usize {
     if result.rows.is_empty() {
         out.push_str("  - (no rows)\n");
-        return;
+        return 0;
     }
-    for row in &result.rows {
+    for (index, row) in result.rows.iter().enumerate() {
+        let mark = out.len();
         render_probe_row(out, row);
+        if out.len() - start > max_bytes {
+            out.truncate(mark);
+            return result.rows.len() - index;
+        }
     }
+    0
 }
 
 /// Render one evidence row (`file_path:line \`symbol\` @ {sim:.2} — {detail}`),

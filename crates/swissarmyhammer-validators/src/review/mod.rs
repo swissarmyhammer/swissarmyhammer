@@ -28,10 +28,11 @@ pub mod verify;
 
 pub use drive::run_review_over_agent;
 pub use fleet::{
-    prompt_framing_bytes, render_file_payload, render_fleet_prompt, render_run_prime,
-    render_validator_suffix, rendered_file_block_bytes, run_fleet, unpin_prefix_session,
-    FleetConfig, FleetOutcome, ReviewProgressEvent, ReviewProgressSender, AGENT_PROMPT_CAP,
-    DEFAULT_BATCH_SIZE,
+    prompt_framing, prompt_framing_bytes, render_file_payload, render_fleet_prompt,
+    render_run_prime, render_validator_suffix, rendered_file_block_bytes, run_fleet,
+    unpin_prefix_session, FleetConfig, FleetOutcome, PromptFraming, ReviewProgressEvent,
+    ReviewProgressSender, AGENT_PROMPT_CAP, DEFAULT_BATCH_SIZE, MAX_FRAMING_BYTES,
+    MAX_SHARED_EVIDENCE_BYTES,
 };
 pub use probes::{
     probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,

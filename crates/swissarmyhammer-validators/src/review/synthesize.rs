@@ -36,7 +36,7 @@ use rusqlite::Connection;
 
 use crate::error::AvpError;
 use crate::review::fleet::{
-    prompt_framing_bytes, rendered_file_block_bytes, run_fleet, FleetConfig, FleetOutcome,
+    prompt_framing, rendered_file_block_bytes, run_fleet, FleetConfig, FleetOutcome,
     ReviewProgressSender,
 };
 use crate::review::scope::{
@@ -659,7 +659,8 @@ pub async fn run_review(
     // - the per-file cap: a constant. It decides which (validator, file) pair
     //   is excluded and reported as a named gap, so it must not move with the
     //   run — see `BatchBudget`.
-    let framing = prompt_framing_bytes(&work, loader);
+    let prompt_framing = prompt_framing(&work, loader);
+    let framing = prompt_framing.total();
     let budget = fleet_config.batch_budget(framing);
     let (batches, skipped) = batch_work_list(&work, budget, rendered_file_block_bytes);
 
@@ -671,6 +672,13 @@ pub async fn run_review(
         file_cap = budget.file_cap(),
         batch_bytes = budget.batch_bytes(),
         framing,
+        // The framing decomposition, so a run that gets tight on prompt budget
+        // says WHICH term did it rather than only that the total was large.
+        framing_purpose = prompt_framing.purpose(),
+        framing_shared_evidence = prompt_framing.shared_evidence(),
+        framing_validator_suffix = prompt_framing.validator_suffix(),
+        framing_largest_validator = prompt_framing.largest_validator(),
+        framing_cap = crate::review::fleet::MAX_FRAMING_BYTES,
         prompt_cap = crate::review::fleet::AGENT_PROMPT_CAP,
         "review run: scoped work-list ready, batched, fanning out"
     );
