@@ -162,6 +162,85 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/test_support.rs. Both `## Review Findings` items flipped to `- [x]`. `cargo test -p swissarmyhammer-validators --all-features` 455 passed, 0 failed, doc tests 2 passed; `cargo test -p swissarmyhammer-tools --lib mcp::tools::review` 69 passed, 0 failed; `cargo clippy -p swissarmyhammer-validators --all-targets --all-features -- -D warnings` clean; `cargo fmt --all --check` clean; `cargo check --workspace --all-targets` clean.
     - next: /review
   timestamp: 2026-08-07T03:12:32.079733+00:00
+- actor: claude-code
+  id: 01kzd4pkekcnmgmzyjegfw3ben
+  text: |
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (99130d71e) — 1 finding, 1 confirmed, 3 refuted, 9 attempted, 0 skipped. crates/swissarmyhammer-validators/src/review/test_support.rs:213
+    - prior: the 2 findings from 2026-08-06 21:40 are truly closed — write_tool_rule_fixtures now routes both the fail and the pass fixture path through join_confined.
+    - next: make commit_only use join_confined, or correct its docstring. Task stays in review.
+  timestamp: 2026-08-07T03:36:36.051391+00:00
+- actor: claude-code
+  id: 01kzd4q1gxn05arnvd5r2j6m3f
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — crates/swissarmyhammer-validators/src/review/test_support.rs; the 2 prior findings are closed and verified
+    - test: green — cargo nextest run --workspace 13665 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 99130d71e
+    - review: findings — crates/swissarmyhammer-validators/src/review/test_support.rs:213 (commit_only still calls confine_relative directly while its docstring promises the join_confined path)
+    - guardrail: no repeat. Each round names a different line and a different cause.
+  timestamp: 2026-08-07T03:36:50.461679+00:00
+- actor: claude-code
+  id: 01kzd510v3et1rewhjs26k6y24
+  text: |
+    ### Implementation — the commit_only confinement finding
+
+    The finding gives two options. Only one of them is correct here.
+
+    `join_confined(base, rel)` returns `base.join(...)` — an ABSOLUTE path.
+    `commit_only` hands its result to `git2::Index::add_path`, which stages a path
+    relative to the working tree and rejects an absolute one. Routing `commit_only`
+    through `join_confined` would break every caller. So the docstring is the part
+    that is wrong, and the docstring is what I corrected.
+
+    `confine_relative` is already the shared guard both paths apply. The two paths
+    differ only in what they do with its result: `write` (through `join_confined`)
+    resolves it against a base directory; `commit_only` stops at the relative form.
+    The old docstring hid that difference behind "the same way `write` confines".
+
+    ### Swept the whole file, not only line 213
+
+    The cause is a docstring that describes a confinement shape the code no longer
+    has. Three docstrings carried that cause:
+
+    1. `commit_only` — the named one. Now states the shared `confine_relative`
+       guard AND the difference: not joined onto the repo root, because libgit2's
+       index stages a working-tree-relative path.
+    2. `join_confined` — said "Every path these fixtures build from a
+       caller-supplied name goes through here". False: `commit_only` does not. Now
+       scoped to every FILESYSTEM path, and names `commit_only` as the one confined
+       caller that builds no filesystem path.
+    3. `confine_relative` — framed its whole purpose as guarding a `Path::join`
+       onto a base. That describes only one of its two callers. Now names both
+       callers and what each does with the result.
+
+    Every remaining direct `confine_relative` call was audited. There are exactly
+    two: `join_confined` (line 163) and `commit_only` (line 227). Both are now
+    documented as the two callers, and the docs agree with the code.
+
+    ### No test
+
+    Documentation only — no behavior changed, so there is no new behavior to drive
+    RED. The confinement behavior the docs describe is already under test:
+    `write_confines_an_absolute_rel_under_the_repo_root`,
+    `write_confines_a_dotdot_rel_under_the_repo_root`,
+    `write_tool_rule_fixtures_confines_a_traversing_rule_name`, and
+    `write_tool_rule_ruleset_confines_a_traversing_name`.
+
+    ### Verification
+
+    `cargo doc -p swissarmyhammer-validators --no-deps --all-features
+    --document-private-items` emits zero warnings against `test_support.rs`, so the
+    new intra-doc links (`[TestRepo::commit_only]`, `[join_confined]`,
+    `[confine_relative]`) all resolve.
+  timestamp: 2026-08-07T03:42:17.443302+00:00
+- actor: claude-code
+  id: 01kzd5168xtm30jceaefykpr3x
+  text: |
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/test_support.rs (docstrings on `confine_relative`, `join_confined`, `TestRepo::commit_only`). The `## Review Findings (2026-08-06 22:31)` item is flipped to `- [x]`. `cargo test -p swissarmyhammer-validators --all-features` 455 passed, 0 failed, doc tests 2 passed; `cargo clippy -p swissarmyhammer-validators --all-targets --all-features -- -D warnings` clean; `cargo fmt --all --check` clean; `cargo check --workspace --all-targets` clean; `cargo doc --document-private-items` zero warnings in test_support.rs.
+    - next: /review
+  timestamp: 2026-08-07T03:42:23.005184+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Review batch budget shrinks as the diff grows — over-cap splits cannot converge
@@ -192,3 +271,7 @@ Scope: `review sha HEAD~1..HEAD` (7df31c4b4). Acceptance evidence: this run repo
 
 - [x] `crates/swissarmyhammer-validators/src/review/test_support.rs:55` — Path traversal vulnerability: the `rule` parameter is used in a format string to construct a filesystem path without validation. If `rule` contains path traversal sequences like `../`, files can be written outside the intended `fixtures` directory. Validate the `rule` parameter to reject path traversal attempts. Use a function like `confine_relative()` (already defined in this file at line 123) to strip non-normal path components, or explicitly validate that `rule` matches a safe pattern (e.g., `^[a-zA-Z0-9_-]+$`).
 - [x] `crates/swissarmyhammer-validators/src/review/test_support.rs:57` — Path traversal vulnerability: the `rule` parameter is used in a format string to construct a filesystem path without validation. If `rule` contains path traversal sequences like `../`, files can be written outside the intended `fixtures` directory. Apply the same fix as line 55: validate the `rule` parameter to reject path traversal attempts using `confine_relative()` or an explicit whitelist pattern.
+
+## Review Findings (2026-08-06 22:31)
+
+- [x] `crates/swissarmyhammer-validators/src/review/test_support.rs:213` — The fix routes caller-supplied names through join_confined in write (line 187), write_tool_rule_fixtures (line 60–65), and write_tool_rule_ruleset (line 389), but commit_only still uses confine_relative directly. The docstring at lines 204–205 promises that paths are confined 'the same way write confines', which is now false after this change. Apply join_confined to commit_only's path parameter to achieve uniform confinement across all caller-supplied name functions, or update the docstring to acknowledge the different confinement mechanisms.

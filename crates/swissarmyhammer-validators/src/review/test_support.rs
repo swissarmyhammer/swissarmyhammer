@@ -126,10 +126,16 @@ impl Default for TestRepo {
     }
 }
 
-/// Strip a relative path down to only its `Normal` components so a
-/// [`Path::join`] onto a base directory can never escape it. Drops a leading `/`
-/// (which would otherwise make `join` replace the whole path), `..` climbs, and
-/// any prefix/root component. A path that reduces to nothing yields `"."`.
+/// Strip a relative path down to only its `Normal` components, so what survives
+/// can never escape the directory it is resolved against. Drops a leading `/`
+/// (which would otherwise make [`Path::join`] replace the whole path), `..`
+/// climbs, and any prefix/root component. A path that reduces to nothing yields
+/// `"."`.
+///
+/// Two callers apply the guard, and they differ only in what they do with the
+/// result: [`join_confined`] resolves it against a base directory, while
+/// [`TestRepo::commit_only`] hands it to libgit2's index, which takes the
+/// working-tree-relative form and rejects an absolute one.
 fn confine_relative(rel: &str) -> PathBuf {
     use std::path::Component;
     let confined: PathBuf = Path::new(rel)
@@ -149,10 +155,13 @@ fn confine_relative(rel: &str) -> PathBuf {
 /// Join `rel` onto `base`, confined by [`confine_relative`] so the result always
 /// stays under `base`.
 ///
-/// Every path these fixtures build from a caller-supplied name goes through here:
-/// a bare [`Path::join`] lets an absolute `rel` replace `base` outright and lets a
-/// `..` climb out of it, so a fixture written from an untrusted rule or ruleset
-/// name would land anywhere on the filesystem.
+/// Every FILESYSTEM path these fixtures build from a caller-supplied name goes
+/// through here: a bare [`Path::join`] lets an absolute `rel` replace `base`
+/// outright and lets a `..` climb out of it, so a fixture written from an
+/// untrusted rule or ruleset name would land anywhere on the filesystem.
+/// [`TestRepo::commit_only`] builds no filesystem path — it stages a
+/// working-tree-relative one — so it applies [`confine_relative`] on its own
+/// instead of joining a base.
 fn join_confined(base: &Path, rel: &str) -> PathBuf {
     base.join(confine_relative(rel))
 }
@@ -201,12 +210,17 @@ impl TestRepo {
         self.commit_from_index(&mut index, message)
     }
 
-    /// Stage ONLY `paths` (each confined the same way [`write`](Self::write)
-    /// confines a target) and commit, returning the commit sha. Any OTHER
+    /// Stage ONLY `paths` and commit, returning the commit sha. Any OTHER
     /// working-tree modification — e.g. a dirty, uncommitted edit to a
     /// different file — is left untouched in the index, so this produces a
     /// real "unrelated commit" a test can use to prove that file's blame/diff
     /// state is undisturbed by history moving elsewhere.
+    ///
+    /// Each path is stripped to its `Normal` components by the same
+    /// `confine_relative` guard [`write`](Self::write) applies, and it stops
+    /// there: unlike `write`, it is NOT joined onto the repo root, because
+    /// libgit2's index stages a working-tree-relative path and rejects an
+    /// absolute one.
     pub fn commit_only(&self, paths: &[&str], message: &str) -> String {
         let mut index = self.repo.index().unwrap();
         for path in paths {
