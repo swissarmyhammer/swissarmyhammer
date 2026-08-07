@@ -136,8 +136,18 @@ comments:
 
     The work itself is small and unblocked. A new session can continue with `/finish ^jjm86xy`. The last good commit is 0e2946d2d.
   timestamp: 2026-08-07T20:17:26.548609+00:00
-position_column: review
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzf4x6dev6391wmdnt4a5swf
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — crates/swissarmyhammer-validators/src/review/types.rs; a test pins that an upper-case fenced reply parses
+    - test: green — cargo nextest run --workspace 13778 passed 0 failed 0 skipped, fmt clean, clippy clean. One earlier full run showed 3 failures (2 model-loader download tests, 1 rust-analyzer diagnostics test); each passed alone and none touches this change, and the re-run was fully green.
+    - commit: 903c6057c (parent 031eae522)
+    - review: clean — 0 findings, 0 confirmed, 0 refuted, 9 attempted, 0 skipped_files. Task moved to done.
+    - Honest note on the finding's premise. The finding said the upper-case fence "falls through to the bare-fence rung". I measured that instead of assuming it, and it does not hold: disabling any ONE of bare_fenced_value, balanced_value, or spanning_value leaves this test and all 16 parse tests green, because each remaining rung finds the same array. The ladder is a fallback chain, so its rungs are redundant on well-formed input and no test can pin one rung. The test therefore pins the outcome, and the doc comment records the measurement.
+  timestamp: 2026-08-07T22:18:40.942827+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc480
 title: 'review: retry a fleet reply that does not parse before failing the pair'
 ---
 One malformed LLM reply invalidates a whole review. Seen 2026-08-07 in ../swissarmyhammer-main (`.sah/mcp.7341.log`, 15:16:31): the duplication validator's reply failed JSON parse ("expected `,` or `}` at line 7 column 361"), the engine yielded zero findings, marked the task failed, and the 6-minute review ended INCOMPLETE. The only recovery is a full re-run.
