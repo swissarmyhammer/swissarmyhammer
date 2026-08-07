@@ -9,4 +9,16 @@ pub struct DocumentedNeighbor;
 
 pub struct UndocumentedItem;
 
+impl UndocumentedItem {
+    pub fn undocumented_method(&self) {}
+}
+
+pub enum UndocumentedChoice {
+    First,
+}
+
+pub trait UndocumentedContract {
+    fn required(&self);
+}
+
 pub fn undocumented_function() {}

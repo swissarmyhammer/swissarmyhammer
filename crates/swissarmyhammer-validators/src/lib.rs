@@ -160,3 +160,51 @@ pub async fn execute_agents(
     }
     results
 }
+
+#[cfg(test)]
+mod fixture_template_tests {
+    use super::*;
+
+    /// The repository root, from this crate's manifest directory.
+    fn repo_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("repository root above crates/<crate>")
+            .to_path_buf()
+    }
+
+    /// A tool rule's fixture carries the defect the rule reports, so a fixture
+    /// stored as source is a file the engine reviews — and the rule fires on
+    /// the fixture built to make it fire. The `.tmpl` suffix is what stops
+    /// that: no language owns it, so no rule matches it.
+    #[test]
+    fn no_rule_matches_a_shipped_fixture_template() {
+        let root = repo_root();
+        let fixtures = root.join("builtin/validators/code-hygiene/fixtures");
+
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&fixtures).expect("read the shipped fixtures") {
+            let path = entry.expect("fixture entry").path();
+            if !path.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .expect("a fixture under the repository root")
+                .to_string_lossy()
+                .into_owned();
+
+            let matched = match_rules(relative.clone(), Some(&root)).expect("match the rules");
+            let names: Vec<&str> = matched.iter().map(|set| set.name()).collect();
+            assert!(
+                names.is_empty(),
+                "a fixture must match no rule, or its own rule reports it; \
+                 {relative} matched {names:?}"
+            );
+            checked += 1;
+        }
+
+        assert!(checked > 0, "the shipped fixtures must not be empty");
+    }
+}

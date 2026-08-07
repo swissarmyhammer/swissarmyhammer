@@ -147,6 +147,14 @@ comments:
 
     4. Then re-run review. When the only remaining findings are fixture-contract findings, record them as dropped per written rule and move this card to done.
   timestamp: 2026-08-07T15:34:54.263595+00:00
+- actor: claude-code
+  id: 01kzf2taxbw1m354w74qv15qna
+  text: |-
+    ### implement — changed
+    - evidence: 26 files. Every file in builtin/validators/code-hygiene/fixtures/ is renamed to a `.tmpl` template (git mv, history kept). doctor.rs gains materialize_fixtures + materialized_name: it copies the fixture directory to a scratch path, drops the suffix, and runs there, so the tool still sees the real extension and the set directory is never a working directory. tempfile becomes a production dependency. New guards: no_rule_matches_a_shipped_fixture_template (validators) and test_every_shipped_fixture_is_a_template (mirdan). The Rust fixture pair widened to struct, method, enumeration, trait, function.
+    - The earlier true conflict is gone at its root, and the proof is a RED run: with one fixture restored to a plain `.ts` name the new guard fails and names the nine validator sets that matched it — code-hygiene, code-security, completeness, duplication, js-ts, magic-numbers, naming, reuse, test-integrity. With the `.tmpl` name it matches none.
+    - next: /test then /commit then /review
+  timestamp: 2026-08-07T21:42:10.091561+00:00
 depends_on:
 - 01KZ9361Q5W4W38TGRWB01GTZG
 - 01KZ935S9GWN207TF50MHCN5HB
@@ -173,13 +181,13 @@ Each tool rule ships fail/pass fixtures and pinned install commands. Follow the 
 
 ## Review Findings (2026-08-07 10:16)
 
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs:10` — The Rust fail fixture tests only struct and function items, leaving out an undocumented method test. All other language fail fixtures (Dart, Go, Python, Swift, TypeScript) were modified in this same commit to include undocumented methods within a class/struct, but the Rust fixture is incomplete. Add an impl block with an undocumented method on UndocumentedItem between lines 10 and 12, e.g.: `impl UndocumentedItem { pub fn undocumented_method(&self) {} }` to match the pattern established in the other five languages.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:12` — Missing JSDoc comment.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:16` — Missing JSDoc comment.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:18` — Missing JSDoc comment.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:22` — Missing JSDoc comment.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:23` — Missing JSDoc comment.
-- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:26` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs:10` — The Rust fail fixture tests only struct and function items, leaving out an undocumented method test. All other language fail fixtures (Dart, Go, Python, Swift, TypeScript) were modified in this same commit to include undocumented methods within a class/struct, but the Rust fixture is incomplete. Add an impl block with an undocumented method on UndocumentedItem between lines 10 and 12, e.g.: `impl UndocumentedItem { pub fn undocumented_method(&self) {} }` to match the pattern established in the other five languages.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:12` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:16` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:18` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:22` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:23` — Missing JSDoc comment.
+- [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:26` — Missing JSDoc comment.
 
 ## Review Blocker (2026-08-07 10:16)
 
@@ -209,3 +217,15 @@ path glob, so this is not a mechanical fix.
 
 The first finding, on `missing-docs-rust.fail.rs`, carries no conflict and is
 actionable on its own.
+
+**How these were resolved.** The six JSDoc items and the Rust item were raised
+against fixture files. A fixture carries the very defect its rule reports, so a
+fixture stored under a real source extension is a file the engine reviews, and
+the rule fires on the fixture built to make it fire. Every file in
+`fixtures/` is now a template whose stored name ends in `.tmpl`; the doctor
+copies the directory to a scratch path and drops the suffix before it runs the
+tool. Proof, not assumption: `no_rule_matches_a_shipped_fixture_template`
+fails when one fixture keeps its `.ts` name, and the failure names the nine
+validator sets that then matched it. The Rust item asked for wider kind
+coverage, which is real work and was done — the fail and pass fixtures now
+carry a struct, a method, an enumeration, a trait, and a function each.

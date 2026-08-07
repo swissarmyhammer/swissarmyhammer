@@ -150,8 +150,16 @@ Rules for tool rules:
 
 Each tool rule ships two fixture files in the set's `fixtures/` directory:
 
-- `fixtures/<name>.fail.<ext>` — the tool must report at least one finding.
-- `fixtures/<name>.pass.<ext>` — the tool must report zero findings.
+- `fixtures/<name>.fail.<ext>.tmpl` — the tool must report at least one finding.
+- `fixtures/<name>.pass.<ext>.tmpl` — the tool must report zero findings.
+
+**A fixture is a template, and its stored name ends in `.tmpl`.** A fixture
+carries the very defect its rule reports. Stored under a real source extension
+it is a file the review engine reviews, so the missing-docs rule fires on the
+fixture built to make it fire, and the two demands cannot both be met. No
+language owns `.tmpl` and no file group matches it, so the stored file is
+never reviewed and never linted. Every file in `fixtures/` takes the suffix,
+support files included.
 
 The two fixtures must cover the same kinds. The fail fixture holds one
 undocumented item of every kind the pass fixture documents — the type, the
@@ -160,9 +168,13 @@ fixture that documents six kinds against a fail fixture that holds only a
 function proves nothing about the other five: a tool that stops reporting a
 whole kind still passes that pair.
 
-Doctor runs the tool rule against both fixtures, with the `fixtures/` directory
-as the working directory. A `files`-scope script gets the fixture file name as
-its argument; a `workspace`-scope script gets none. Doctor counts only the
+Doctor copies `fixtures/` into a scratch directory, drops the `.tmpl` suffix
+from every name, and runs there — so the tool sees `missing-docs-rust.fail.rs`
+even though the set stores `missing-docs-rust.fail.rs.tmpl`. The set's own
+directory is never the working directory, so a tool that writes beside its
+input cannot dirty the repository. A `files`-scope script gets the
+materialized fixture file name as its argument; a `workspace`-scope script
+gets none. Doctor counts only the
 findings the run reports ABOUT the fixture under test — the same attribution
 the engine makes when it keeps only the findings in the changed files. A
 `workspace`-scope script reads the whole `fixtures/` directory on both runs, so
@@ -170,7 +182,9 @@ without that attribution it could never pass the pair.
 
 A tool that needs more than a loose file to run gets it in `fixtures/`. Cargo
 lints a package, never a loose file, so the `code-hygiene` fixtures carry a
-`Cargo.toml` and a crate root that hold both Rust fixtures as modules.
+`Cargo.toml.tmpl` and a crate root that hold both Rust fixtures as modules.
+The whole directory is materialized, not only the fixture under test, so a
+`workspace`-scope tool finds those neighbours.
 
 A tool rule that fails its fixtures is not used, and doctor reports it.
 Fixtures catch a tool upgrade that changes behavior.

@@ -91,12 +91,11 @@ futures = { workspace = true }
 # discrimination names `git2::ErrorCode`, so git2 is a direct, non-optional dep.
 git2 = { workspace = true }
 
-# Optional dep activated only by the `test-support` feature, which exports the
-# review test fixtures (`test_support`) to downstream crates' tests — the shared
-# scripted ACP agent harness plus the throwaway git repo / seeded code_context
-# index fixtures. During this crate's OWN `#[cfg(test)]` runs this is supplied
-# by the matching `[dev-dependencies]` below.
-tempfile = { workspace = true, optional = true }
+# The doctor materializes a validator set's fixture templates into a scratch
+# directory before it runs a tool rule against them, so this is a production
+# dependency, not a test one. The `test-support` feature and this crate's own
+# `#[cfg(test)]` runs use the same crate.
+tempfile = { workspace = true }
 
 [features]
 # Export the review `test_support` fixtures (the shared scripted ACP agent
@@ -105,7 +104,7 @@ tempfile = { workspace = true, optional = true }
 # acp-conformance's `test-support` features. `swissarmyhammer-tools` dev-depends
 # on this so its review-tool tests consume the one shared harness rather than
 # carrying their own copies.
-test-support = ["dep:tempfile", "model-embedding/test-support"]
+test-support = ["model-embedding/test-support"]
 
 [build-dependencies]
 swissarmyhammer-build = { workspace = true }

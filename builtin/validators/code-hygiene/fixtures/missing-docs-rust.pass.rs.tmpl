@@ -7,5 +7,22 @@
 /// A documented public struct.
 pub struct DocumentedItem;
 
+impl DocumentedItem {
+    /// A documented public method.
+    pub fn documented_method(&self) {}
+}
+
+/// A documented public enumeration.
+pub enum DocumentedChoice {
+    /// A documented variant.
+    First,
+}
+
+/// A documented public trait.
+pub trait DocumentedContract {
+    /// A documented required method.
+    fn required(&self);
+}
+
 /// A documented public function.
 pub fn documented_function() {}

@@ -5,7 +5,7 @@
 //! whatever language the tool lints — as `(name, content)` tuples, where `name`
 //! is the path relative to `builtin/validators/` with its real filename
 //! preserved (e.g. `dead-code/VALIDATOR.md`, `dead-code/rules/dead-code.md`,
-//! `code-hygiene/fixtures/missing-docs-rust.fail.rs`).
+//! `code-hygiene/fixtures/missing-docs-rust.fail.rs.tmpl`).
 //!
 //! This mirrors how `swissarmyhammer-skills` embeds `builtin/skills/`: the
 //! profile installer materializes these onto disk in the validators store
@@ -186,6 +186,31 @@ mod tests {
         );
     }
 
+    /// Every shipped fixture is a TEMPLATE.
+    ///
+    /// A fixture holds the defect its rule reports. Stored under a real source
+    /// extension it becomes a file the review engine reviews, and the rule
+    /// fires on the fixture built to make it fire. The `.tmpl` suffix keeps
+    /// the stored file out of every language and every file group; the doctor
+    /// strips it when it materializes the fixture for the tool.
+    #[test]
+    fn test_every_shipped_fixture_is_a_template() {
+        let sets = builtin_validators_by_set();
+        let stored: Vec<&str> = sets
+            .values()
+            .flatten()
+            .map(|(name, _)| *name)
+            .filter(|name| name.contains("/fixtures/"))
+            .filter(|name| !name.ends_with(".tmpl"))
+            .collect();
+
+        assert!(
+            stored.is_empty(),
+            "a fixture stored under a real source extension is reviewed as source, \
+             and its own rule reports it; rename each to `<name>.tmpl`: {stored:?}"
+        );
+    }
+
     /// The shipped tool rules' fixtures reach the store, so doctor can prove
     /// each rule healthy in an installed project.
     #[test]
@@ -194,22 +219,22 @@ mod tests {
         let code_hygiene_files = &sets["code-hygiene"];
 
         for fixture in [
-            "missing-docs-rust.fail.rs",
-            "missing-docs-rust.pass.rs",
-            "missing-docs-python.fail.py",
-            "missing-docs-python.pass.py",
-            "missing-docs-typescript.fail.ts",
-            "missing-docs-typescript.pass.ts",
-            "missing-docs-go.fail.go",
-            "missing-docs-go.pass.go",
-            "missing-docs-swift.fail.swift",
-            "missing-docs-swift.pass.swift",
-            "missing-docs-dart.fail.dart",
-            "missing-docs-dart.pass.dart",
-            "unused-code-go.fail.go",
-            "unused-code-go.pass.go",
-            "unreachable-code-python.fail.py",
-            "unreachable-code-python.pass.py",
+            "missing-docs-rust.fail.rs.tmpl",
+            "missing-docs-rust.pass.rs.tmpl",
+            "missing-docs-python.fail.py.tmpl",
+            "missing-docs-python.pass.py.tmpl",
+            "missing-docs-typescript.fail.ts.tmpl",
+            "missing-docs-typescript.pass.ts.tmpl",
+            "missing-docs-go.fail.go.tmpl",
+            "missing-docs-go.pass.go.tmpl",
+            "missing-docs-swift.fail.swift.tmpl",
+            "missing-docs-swift.pass.swift.tmpl",
+            "missing-docs-dart.fail.dart.tmpl",
+            "missing-docs-dart.pass.dart.tmpl",
+            "unused-code-go.fail.go.tmpl",
+            "unused-code-go.pass.go.tmpl",
+            "unreachable-code-python.fail.py.tmpl",
+            "unreachable-code-python.pass.py.tmpl",
         ] {
             assert!(
                 code_hygiene_files

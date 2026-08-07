@@ -22,9 +22,11 @@
 //! fixture must produce at least one finding, the pass fixture none. A rule
 //! that fails its fixtures is reported and not used.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Output;
+
+use tempfile::TempDir;
 
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
@@ -46,6 +48,16 @@ const PROJECT_TYPES_ROWS: usize = 1;
 
 /// The directory inside a validator set that carries tool-rule fixtures.
 const FIXTURES_DIR_NAME: &str = "fixtures";
+
+/// The suffix that marks a fixture file as a template rather than source.
+///
+/// A fixture carries the very defect its tool rule reports, so a fixture
+/// stored under a real source extension is a file the review engine would
+/// review — and every missing-docs rule would fire on the fixture built to
+/// make it fire. The stored name therefore ends in `.tmpl`, which no language
+/// owns and no file group matches. [`materialize_fixtures`] drops the suffix
+/// when it copies the file, so the tool still sees the extension it needs.
+const FIXTURE_TEMPLATE_SUFFIX: &str = ".tmpl";
 
 /// The fixture that must make the tool report at least one finding.
 const FAIL_FIXTURE_KIND: &str = "fail";
@@ -397,9 +409,10 @@ fn find_fixture(dir: &Path, rule_name: &str, kind: &str) -> Option<PathBuf> {
 /// Run the rule's script against one fixture file and count the findings it
 /// reported ABOUT that fixture.
 ///
-/// The script runs with the fixture's directory as its working directory. A
-/// `files`-scope script receives the fixture file name as `"$@"`; a
-/// `workspace`-scope script runs with no arguments.
+/// The script runs against a scratch copy of the fixtures directory, never the
+/// directory in the validator set — see [`materialize_fixtures`]. A
+/// `files`-scope script receives the materialized fixture file name as `"$@"`;
+/// a `workspace`-scope script runs with no arguments.
 ///
 /// A `workspace`-scope script reads the whole fixtures directory, so it sees
 /// the fail fixture and the pass fixture on every run. Only the findings whose
@@ -408,13 +421,14 @@ fn find_fixture(dir: &Path, rule_name: &str, kind: &str) -> Option<PathBuf> {
 /// only the findings in the changed files. Without it a `workspace`-scope rule
 /// could never pass the pair, because both runs report the same findings.
 fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
-    let fixture_dir = fixture.parent().unwrap_or_else(|| Path::new("."));
-    let fixture_name = fixture
-        .file_name()
-        .ok_or_else(|| format!("fixture path has no file name: {}", fixture.display()))?;
+    let source_dir = fixture.parent().unwrap_or_else(|| Path::new("."));
+    let fixture_name = materialized_name(fixture)?;
+
+    let scratch = materialize_fixtures(source_dir)?;
+    let fixture_dir = scratch.path();
 
     let args: Vec<&OsStr> = match spec.scope {
-        ToolScope::Files => vec![fixture_name],
+        ToolScope::Files => vec![fixture_name.as_os_str()],
         ToolScope::Workspace => Vec::new(),
     };
 
@@ -439,10 +453,58 @@ fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
         .iter()
         .filter(|finding| {
             Path::new(&normalize_tool_path(&finding.file, fixture_dir)).file_name()
-                == Some(fixture_name)
+                == Some(fixture_name.as_os_str())
         })
         .count();
     Ok(about_fixture)
+}
+
+/// The name a fixture template takes once it is materialized: its own file
+/// name with a trailing [`FIXTURE_TEMPLATE_SUFFIX`] removed. A name without
+/// the suffix is its own materialized name.
+fn materialized_name(fixture: &Path) -> Result<OsString, String> {
+    let name = fixture
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| format!("fixture path has no file name: {}", fixture.display()))?;
+    Ok(OsString::from(
+        name.strip_suffix(FIXTURE_TEMPLATE_SUFFIX).unwrap_or(name),
+    ))
+}
+
+/// Copy a validator set's fixture directory into a scratch directory, dropping
+/// [`FIXTURE_TEMPLATE_SUFFIX`] from every name.
+///
+/// The set stores `missing-docs-rust.fail.rs.tmpl`; the tool under test needs
+/// `missing-docs-rust.fail.rs`, so the runner writes that name here and runs
+/// against this copy. The set's own directory is never the working directory,
+/// so a tool that writes beside its input — a build cache, a lock file —
+/// cannot dirty the repository.
+///
+/// The whole directory is copied, not only the fixture under test: a
+/// `workspace`-scope tool reads the fixture's neighbours, such as a Cargo
+/// manifest, a Go module file, or the `lib.rs` that declares the Rust
+/// fixtures as modules. Sub-directories are skipped; a fixture directory
+/// holds no fixture input below its top level, only caches a tool left behind.
+fn materialize_fixtures(source_dir: &Path) -> Result<TempDir, String> {
+    let scratch = tempfile::Builder::new()
+        .prefix("sah-fixtures-")
+        .tempdir()
+        .map_err(|e| format!("could not create a fixture scratch directory: {e}"))?;
+
+    let entries = std::fs::read_dir(source_dir)
+        .map_err(|e| format!("could not read {}: {e}", source_dir.display()))?;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = materialized_name(&path)?;
+        std::fs::copy(&path, scratch.path().join(&name))
+            .map_err(|e| format!("could not copy {}: {e}", path.display()))?;
+    }
+
+    Ok(scratch)
 }
 
 /// The fixture's file name for messages, falling back to the full path.
