@@ -108,11 +108,50 @@ comments:
     - evidence: 8 files — builtin/validators/README.md, builtin/validators/code-hygiene/fixtures/lib.rs, and the six fail fixtures (missing-docs-{rust,python,typescript,go,swift,dart}.fail.*). Doctor-shape re-run of all six pairs: fail>=1 and pass=0 for each. cargo test -p swissarmyhammer-validators: 503 passed, 0 failed, doc tests 2 passed; every_shipped_missing_docs_tool_rule_passes_its_fixtures ok. cargo test -p mirdan --lib: 432 passed, 0 failed.
     - next: /review
   timestamp: 2026-08-07T14:34:00.099257+00:00
+- actor: claude-code
+  id: 01kzed1tvbm4n8sgneqmcbyrdj
+  text: |
+    ### review — stuck
+    - evidence: 7 findings (7 confirmed, 0 refuted, 15 attempted, 0 failed) — builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs:10, missing-docs-typescript.fail.ts:12, :16, :18, :22, :23, :26
+    - scope: review sha HEAD~1..HEAD (e4b3bc31d)
+    - prior findings: all three are truly closed. Each fail fixture now holds one undocumented item of every kind its pass fixture documents — Go (type, method, function), Swift (structure, method, function), TypeScript (interface, alias, enumeration, class, method, function). The same cause was removed from the Dart, Python, and Rust fixtures too. `cargo test -p swissarmyhammer-validators every_shipped_missing_docs_tool_rule_passes_its_fixtures` passes, and all six tools resolve on the path (clippy, ruff, eslint, revive, swiftlint, dart), so every pair ran. `sah doctor` reports "fixtures pass" for the two rules this project type selects.
+    - blocker: six of the seven findings ask for a JSDoc comment on each exported item of the `missing-docs-typescript` fail fixture. builtin/validators/README.md states that the fail fixture must hold one undocumented item of every kind. Obeying the findings makes the fail fixture report zero findings, which makes the rule unusable and fails the acceptance test. The finding and the contract cannot both hold. Recorded as "## Review Blocker" on the card.
+    - cause: the review engine reviews the validator fixtures as ordinary changed source, so each missing-docs tool rule fires on the fixture built to make it fire.
+    - environment: the long-lived MCP server process in this session carries an older binary image whose probe catalog holds only callers, duplicates, similar, complexity. Every `review` call against it fails with "unknown probe 'assertion-census'". The on-disk `sah` (0.17.0, e2e1e2d494eb) answers `check validators` with ok=true and 0 errors. The review was driven against a fresh `sah serve` process of that on-disk binary. Restart the session's MCP server to clear this.
+    - next: a person decides how the engine scopes validator fixtures. The `missing-docs-rust.fail.rs:10` finding carries no conflict and can be worked on its own.
+  timestamp: 2026-08-07T15:21:47.115762+00:00
+- actor: claude-code
+  id: 01kzed5fm1p7qz8jkfnrzt3h9k
+  text: |-
+    ### finish iteration 2 — stuck
+    - implement: changed — 8 files; all six fail fixtures widened, verified closed by the review
+    - test: green — cargo nextest run --workspace 13761 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: e4b3bc31d (on top of 51fc375c3, which a parallel shell landed mid-iteration)
+    - review: stuck — 7 findings. Six ask for a JSDoc comment on each exported item of missing-docs-typescript.fail.ts. That file IS the fail fixture, and builtin/validators/README.md states in the same commit that the fail fixture holds one undocumented item of every kind the pass fixture documents. Documenting them makes the fixture report zero findings, makes the rule unusable, and fails the acceptance test.
+    - TRUE CONFLICT, a person must decide: the rule fights a documented contract. The cause is that the engine reviews the validator fixtures as ordinary changed source, so each missing-docs tool rule fires on the fixture built to make it fire. The project rule no-path-based-test-exclusion argues against a plain path glob, so there is no mechanical fix. The task stays in review. It was NOT forced to done.
+    - One finding carries no conflict and stays actionable on its own: builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs:10.
+    - Environment defect found while driving the engine: the long-lived MCP server in this session carries an older binary image whose probe catalog lacks assertion-census, so every review call against it fails with "unknown probe". The on-disk sah 0.17.0 is correct. Restart the session MCP server.
+  timestamp: 2026-08-07T15:23:46.689858+00:00
+- actor: claude-code
+  id: 01kzedsvhqyc2rm3ntwv1qzajq
+  text: |-
+    ### DECISION on the review blocker (2026-08-07)
+
+    The blocker asked a person to decide. The decision:
+
+    1. **Finding 1 (`missing-docs-rust.fail.rs`) is real. Fix it.** The fixture still lacks the undocumented method. Add `impl UndocumentedItem { pub fn undocumented_method(&self) {} }` per the finding.
+
+    2. **The six `missing-docs-typescript.fail.ts` findings are refuted by a written contract.** `builtin/validators/README.md` states the fail fixture must hold undocumented items. Documenting them makes the rule unusable and fails `every_shipped_missing_docs_tool_rule_passes_its_fixtures`. Check the six boxes with the note "refuted by the fixture contract in builtin/validators/README.md — see ^4cc5y9b". Do NOT document the fixture items.
+
+    3. **The root cause is filed as ^4cc5y9b**: the engine must exclude validator-set fixture files from review pairs and tool-rule runs, derived from the validator store layout. Until it lands, any review that touches fixture files re-raises these findings; drop them per the same written contract and cite this comment.
+
+    4. Then re-run review. When the only remaining findings are fixture-contract findings, record them as dropped per written rule and move this card to done.
+  timestamp: 2026-08-07T15:34:54.263595+00:00
 depends_on:
 - 01KZ9361Q5W4W38TGRWB01GTZG
 - 01KZ935S9GWN207TF50MHCN5HB
-position_column: doing
-position_ordinal: '8480'
+position_column: review
+position_ordinal: '8380'
 title: missing-docs runners for TS, Swift, Go, and Dart
 ---
 Clone the missing-docs tool-rule pattern to the remaining languages. Each is a rule file in `code-hygiene/rules/` with a `tool` block and `supersedes: missing-docs`.
@@ -131,3 +170,42 @@ Each tool rule ships fail/pass fixtures and pinned install commands. Follow the 
 - [x] `builtin/validators/code-hygiene/fixtures/missing-docs-go.fail.go:12` — The pass fixture tests documented types and methods, but the fail fixture only tests an undocumented function. If the tool fails to report undocumented types or methods, the fixture will not catch it. Add an undocumented type and method to the fail fixture, e.g., `type UndocumentedType struct{}` and `func (u UndocumentedType) UndocumentedMethod() {}`, so the fixture comprehensively proves the tool reports undocumented items across all categories.
 - [x] `builtin/validators/code-hygiene/fixtures/missing-docs-swift.fail.swift:10` — The pass fixture tests documented structures and methods, but the fail fixture only tests an undocumented function. If the tool fails to report undocumented structures or methods, the fixture will not catch it. Add an undocumented structure and method to the fail fixture, e.g., `public struct UndocumentedStructure { public func undocumentedMethod() {} }`, so the fixture comprehensively proves the tool reports undocumented items across all categories.
 - [x] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:11` — The pass fixture tests documented interfaces, types, enums, classes, and methods, but the fail fixture only tests an undocumented function. If the tool fails to report undocumented interfaces, enums, classes, or methods, the fixture will not catch it. Add undocumented versions of the interfaces, types, enums, classes, and methods to the fail fixture, e.g., `export interface UndocumentedInterface {}`, `export class UndocumentedClass { undocumentedMethod(): void {} }`, so the fixture comprehensively proves the tool reports undocumented items across all categories.
+
+## Review Findings (2026-08-07 10:16)
+
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs:10` — The Rust fail fixture tests only struct and function items, leaving out an undocumented method test. All other language fail fixtures (Dart, Go, Python, Swift, TypeScript) were modified in this same commit to include undocumented methods within a class/struct, but the Rust fixture is incomplete. Add an impl block with an undocumented method on UndocumentedItem between lines 10 and 12, e.g.: `impl UndocumentedItem { pub fn undocumented_method(&self) {} }` to match the pattern established in the other five languages.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:12` — Missing JSDoc comment.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:16` — Missing JSDoc comment.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:18` — Missing JSDoc comment.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:22` — Missing JSDoc comment.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:23` — Missing JSDoc comment.
+- [ ] `builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts:26` — Missing JSDoc comment.
+
+## Review Blocker (2026-08-07 10:16)
+
+Six of the seven findings above fight a documented contract. A person must
+decide. Do not resolve them in the implement loop.
+
+The six `missing-docs-typescript.fail.ts` findings ask for a JSDoc comment on
+each exported item of that file. The file is the fail fixture of the
+`missing-docs-typescript` tool rule. `builtin/validators/README.md` states the
+contract in the same commit that raised these findings:
+
+    fixtures/<name>.fail.<ext> — the tool must report at least one finding.
+    The two fixtures must cover the same kinds. The fail fixture holds one
+    undocumented item of every kind the pass fixture documents.
+
+Documenting those six items turns the fail fixture into a second pass fixture.
+The doctor pair then reports zero findings on the fail side, the rule becomes
+unusable, and `every_shipped_missing_docs_tool_rule_passes_its_fixtures` fails.
+The finding and the contract cannot both hold.
+
+The cause is that the review engine reviews the validator fixtures as ordinary
+changed source, so each missing-docs tool rule fires on the fixture built to
+make it fire. The decision belongs to a person: change how the engine scopes the
+fixture directory, or accept the findings on every future fixture change. Note
+that the project rule `no-path-based-test-exclusion` argues against a plain
+path glob, so this is not a mechanical fix.
+
+The first finding, on `missing-docs-rust.fail.rs`, carries no conflict and is
+actionable on its own.
