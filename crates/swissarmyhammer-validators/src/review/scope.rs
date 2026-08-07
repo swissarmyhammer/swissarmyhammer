@@ -577,6 +577,7 @@ pub async fn scope_review(
         &grouped.change_entities,
         &matched.matched_files,
         &resolved.after_content,
+        &before_by_path,
         conn,
         embedder,
     )
@@ -844,10 +845,7 @@ async fn compute_line_annotations(
     // count is identical between the raw and trimmed forms — this only
     // shortens the annotation list for the rare file with several trailing
     // blank lines, exactly as the pre-existing renderer already discarded them.
-    let raw_contents: BTreeMap<String, String> = matched_files
-        .iter()
-        .filter_map(|file| after_content.get(file).map(|c| (file.clone(), c.clone())))
-        .collect();
+    let raw_contents = sources_under_review(matched_files, after_content);
 
     let mut tasks = Vec::new();
     for (file, content) in &raw_contents {
@@ -1069,17 +1067,35 @@ fn to_probe_entry(change: &SemanticChange) -> ChangeEntry {
     }
 }
 
+/// The subset of `content` covering the files under review, keyed by path.
+///
+/// The one narrowing every stage applies before it reads file text, so the
+/// blame pass and the probe runner see exactly the same file set.
+fn sources_under_review(
+    matched_files: &BTreeSet<String>,
+    content: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    matched_files
+        .iter()
+        .filter_map(|file| content.get(file).map(|text| (file.clone(), text.clone())))
+        .collect()
+}
+
 /// Build the shared probe-result cache from a single [`run_probes`] call over the
 /// whole change set with the union of every validator's declared probes.
 ///
-/// Entity-bound probes read `change_entities`; file-bound probes (`complexity`)
-/// read the current source of every matched file, so they measure the whole
-/// review boundary rather than only the entities the diff touched.
+/// Entity-bound probes read `change_entities`; file-bound probes (`complexity`,
+/// the tree-sitter family) read the current source of every matched file, so
+/// they measure the whole review boundary rather than only the entities the
+/// diff touched. Diff-aware tree-sitter probes also read each file's base
+/// revision, which is why `before_by_path` — already computed for the blame
+/// pass — comes through here rather than being read from git a second time.
 async fn run_probe_cache(
     validators: &BTreeMap<String, MatchedValidator>,
     change_entities: &[ChangeEntry],
     matched_files: &BTreeSet<String>,
     after_content: &BTreeMap<String, String>,
+    before_by_path: &BTreeMap<String, Option<String>>,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
 ) -> Result<Vec<ProbeResult>, AvpError> {
@@ -1087,22 +1103,25 @@ async fn run_probe_cache(
         .values()
         .flat_map(|mv| mv.probes.as_slice().iter().cloned())
         .collect();
-    let sources: BTreeMap<String, String> = matched_files
-        .iter()
-        .filter_map(|file| {
-            after_content
-                .get(file)
-                .map(|content| (file.clone(), content.clone()))
-        })
-        .collect();
+    let sources = sources_under_review(matched_files, after_content);
     // A file-bound probe still has work when the diff produced no entities, so
     // an empty entity list alone must not short-circuit the whole cache.
     if union.is_empty() || (change_entities.is_empty() && sources.is_empty()) {
         return Ok(Vec::new());
     }
+    // A file absent at the base revision (one the change added) has no before
+    // content, and drops out here rather than reaching a probe as an empty file.
+    let present_before: BTreeMap<String, String> = before_by_path
+        .iter()
+        .filter_map(|(file, content)| content.clone().map(|text| (file.clone(), text)))
+        .collect();
+    let before_sources = sources_under_review(matched_files, &present_before);
+
     let names: Vec<String> = union.into_iter().collect();
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let change = ProbeChange::new(change_entities.to_vec()).with_sources(sources);
+    let change = ProbeChange::new(change_entities.to_vec())
+        .with_sources(sources)
+        .with_before_sources(before_sources);
     let results = run_probes(&name_refs, &change, conn, embedder).await?;
     Ok(results.results)
 }

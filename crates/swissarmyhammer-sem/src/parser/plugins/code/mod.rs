@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use crate::model::entity::SemanticEntity;
 use crate::parser::plugin::SemanticParserPlugin;
 use entity_extractor::extract_entities;
-use languages::{dotted_lowercase_extension, get_language_config};
+use languages::{dotted_lowercase_extension, get_language_config, LanguageConfig};
 
 /// Semantic parser plugin that extracts entities (functions, classes, traits,
 /// modules, ...) from source code via tree-sitter, covering every language
@@ -48,53 +48,144 @@ impl SemanticParserPlugin for CodeParserPlugin {
     }
 
     fn extract_entities(&self, content: &str, file_path: &str) -> Vec<SemanticEntity> {
-        let ext = dotted_lowercase_extension(file_path).unwrap_or_default();
-
-        let config = match get_language_config(&ext) {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        let language = match (config.get_language)() {
-            Some(lang) => lang,
-            None => return Vec::new(),
-        };
-
-        PARSER_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            let parser = match cache.entry(config.id) {
-                Entry::Occupied(occupied) => occupied.into_mut(),
-                Entry::Vacant(vacant) => {
-                    let mut p = tree_sitter::Parser::new();
-                    // Only cache a successfully configured parser: caching a
-                    // language-less parser after a `set_language` failure would
-                    // permanently pin it for this thread and every later file
-                    // of this language would silently parse to no entities.
-                    if let Err(e) = p.set_language(&language) {
-                        tracing::warn!(
-                            language = config.id,
-                            error = %e,
-                            "failed to set tree-sitter language; skipping entity extraction"
-                        );
-                        return Vec::new();
-                    }
-                    vacant.insert(p)
-                }
-            };
-
-            let tree = match parser.parse(content.as_bytes(), None) {
-                Some(t) => t,
-                None => return Vec::new(),
-            };
-
-            extract_entities(&tree, file_path, config, content)
-        })
+        match parse_code(file_path, content) {
+            Some(parsed) => parsed.entities(file_path, content),
+            None => Vec::new(),
+        }
     }
+}
+
+/// One source file parsed by the code plugin's tree-sitter grammars.
+///
+/// Carries the parse tree together with the language config the roster
+/// routed the file to, so everything computed from a parse — entities,
+/// complexity, review probes — reads the SAME grammar table rather than
+/// keeping a roster of its own.
+///
+/// Cloning is cheap: a `tree_sitter::Tree` is reference counted.
+#[derive(Debug, Clone)]
+pub struct ParsedCode {
+    config: &'static LanguageConfig,
+    tree: tree_sitter::Tree,
+}
+
+impl ParsedCode {
+    /// The language id the roster routed the file to (e.g. `"rust"`).
+    pub fn language(&self) -> &'static str {
+        self.config.id
+    }
+
+    /// The tree-sitter parse tree.
+    pub fn tree(&self) -> &tree_sitter::Tree {
+        &self.tree
+    }
+
+    /// The semantic entities (functions, methods, types, modules, ...) this
+    /// parse defines.
+    ///
+    /// The same extraction [`CodeParserPlugin`] performs, run against a parse
+    /// the caller already holds — so a caller that needs both a tree and its
+    /// entities parses the file once, not twice.
+    ///
+    /// `file_path` and `source` must be the ones the parse was made from; they
+    /// name the entity ids and supply the text the node ranges index into.
+    pub fn entities(&self, file_path: &str, source: &str) -> Vec<SemanticEntity> {
+        extract_entities(&self.tree, file_path, self.config, source)
+    }
+}
+
+/// Parse `source` with the tree-sitter grammar the code plugin routes `path` to.
+///
+/// This is the one entry point into the grammar roster: every consumer that
+/// needs a parse calls it instead of building a `tree_sitter::Parser` and
+/// picking a language itself.
+///
+/// Returns `None` — meaning **not parsed** — when the path carries no extension
+/// the roster maps, when the grammar fails to load, or when tree-sitter
+/// produces no tree. A caller must report "not computed" for `None` and never
+/// substitute an empty result, which would silently read as "nothing found".
+///
+/// The parser comes from a per-thread cache, so repeated calls for one language
+/// build the parser once.
+///
+/// # Examples
+///
+/// ```
+/// use swissarmyhammer_sem::parser::plugins::code::parse_code;
+///
+/// let parsed = parse_code("src/lib.rs", "fn one() {}\n").ok_or("rust is mapped")?;
+/// assert_eq!(parsed.language(), "rust");
+/// assert!(parse_code("notes.txt", "plain text\n").is_none());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn parse_code(path: &str, source: &str) -> Option<ParsedCode> {
+    let extension = dotted_lowercase_extension(path)?;
+    let config = get_language_config(&extension)?;
+    let language = (config.get_language)()?;
+
+    PARSER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let parser = match cache.entry(config.id) {
+            Entry::Occupied(occupied) => occupied.into_mut(),
+            Entry::Vacant(vacant) => {
+                let mut parser = tree_sitter::Parser::new();
+                // Only cache a successfully configured parser: caching a
+                // language-less parser after a `set_language` failure would
+                // permanently pin it for this thread and every later file
+                // of this language would silently parse to nothing.
+                if let Err(error) = parser.set_language(&language) {
+                    tracing::warn!(
+                        language = config.id,
+                        error = %error,
+                        "failed to set tree-sitter language; skipping parse"
+                    );
+                    return None;
+                }
+                vacant.insert(parser)
+            }
+        };
+
+        let tree = parser.parse(source.as_bytes(), None)?;
+        Some(ParsedCode { config, tree })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_code_routes_a_mapped_extension_to_its_grammar() {
+        let parsed = parse_code("src/lib.rs", "fn one() {}\n").expect("rust is in the roster");
+        assert_eq!(parsed.language(), "rust");
+        assert_eq!(parsed.tree().root_node().kind(), "source_file");
+    }
+
+    #[test]
+    fn parse_code_returns_none_for_an_extension_the_roster_does_not_map() {
+        assert!(parse_code("notes.txt", "plain text\n").is_none());
+        assert!(parse_code("Makefile", "all:\n").is_none());
+    }
+
+    #[test]
+    fn parsed_code_entities_match_the_plugin_extraction_of_the_same_source() {
+        let source = "fn one() {}\nstruct Two;\nfn three() {}\n";
+        let parsed = parse_code("src/lib.rs", source).expect("rust is in the roster");
+
+        let from_parse: Vec<String> = parsed
+            .entities("src/lib.rs", source)
+            .into_iter()
+            .map(|entity| entity.name)
+            .collect();
+        let from_plugin: Vec<String> = CodeParserPlugin
+            .extract_entities(source, "src/lib.rs")
+            .into_iter()
+            .map(|entity| entity.name)
+            .collect();
+
+        assert_eq!(from_parse, from_plugin);
+        assert_eq!(from_parse, vec!["one", "Two", "three"]);
+    }
 
     #[test]
     fn test_java_entity_extraction() {

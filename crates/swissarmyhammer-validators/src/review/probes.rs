@@ -9,14 +9,14 @@
 //!
 //! # The catalog is data, not branching
 //!
-//! There are exactly four probes — [`callers`], [`duplicates`], [`similar`],
-//! [`complexity`] —
-//! described by a single static table ([`CATALOG`]) of [`ProbeCatalogEntry`]
-//! rows. Each row binds a semantic probe name to the [`ProbeOp`] the runner
-//! interprets and the [`ProbeKind`] (`fact` vs `candidate`) the verify guard
-//! uses to decide which probes can deterministically refute a claim. The runner
-//! is **one** code path parameterized by the entry — there is no per-probe match
-//! arm with copy-pasted call code.
+//! There are four code_context probes — [`callers`], [`duplicates`],
+//! [`similar`], [`complexity`] — described by a single static table
+//! (`CODE_CONTEXT_PROBES`) of [`ProbeCatalogEntry`] rows. Each row binds a
+//! semantic probe name to the [`ProbeOp`] the runner interprets and the
+//! [`ProbeKind`] (`fact` vs `candidate`) the verify guard uses to decide which
+//! probes can deterministically refute a claim. The runner is **one** code path
+//! parameterized by the entry — there is no per-probe match arm with
+//! copy-pasted call code.
 //!
 //! | Probe        | code_context op            | Subject (from the diff)          | Kind        |
 //! |--------------|----------------------------|----------------------------------|-------------|
@@ -24,6 +24,13 @@
 //! | `duplicates` | `find duplicates`          | each changed file + changed set  | `fact`      |
 //! | `similar`    | `search code` (semantic)   | each **added** function body     | `candidate` |
 //! | `complexity` | `cognitive_complexity`     | each file under review           | `fact`      |
+//!
+//! [`catalog`] is the whole roster: those rows plus one row per registered
+//! [`TreeSitterProbe`], the second probe family (see
+//! [`tree_sitter_probes`](crate::review::tree_sitter_probes)), whose logic runs
+//! over a changed file's parse rather than a code_context op. Both families
+//! resolve by name and yield [`ProbeResult`]s on the same path, so a validator
+//! declares either kind in `probes:` the same way.
 //!
 //! # Reuse, never reimplement
 //!
@@ -49,6 +56,7 @@
 //! blocks (for the changed-set `duplicates` comparison).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use model_embedding::{cosine_similarity, TextEmbedder};
 use rusqlite::Connection;
@@ -64,6 +72,9 @@ use swissarmyhammer_sem::parser::plugins::code::{
 };
 
 use crate::error::AvpError;
+use crate::review::tree_sitter_probes::{
+    prime_parse_cache, run_tree_sitter_probe, ParseCache, TreeSitterProbe, TREE_SITTER_PROBES,
+};
 
 /// Whether a probe yields a deterministically checkable fact or an
 /// agent-interpreted candidate.
@@ -87,7 +98,7 @@ pub enum ProbeKind {
 /// diff and dispatch the right library op — the *only* thing that varies between
 /// catalog entries' execution. It exists so the catalog stays a data table and
 /// the runner stays a single parameterized code path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum ProbeOp {
     /// `get callgraph` (inbound) bound to each added symbol.
     Callers,
@@ -100,7 +111,31 @@ pub enum ProbeOp {
     /// Sonar cognitive complexity, computed per function from the tree-sitter
     /// parse of each file under review.
     Complexity,
+    /// A [`TreeSitterProbe`] implementation, run over the shared parse of each
+    /// file under review.
+    ///
+    /// The op carries the probe itself rather than a discriminant, so the
+    /// catalog row and the code that runs it are the same value — this is the
+    /// second probe family's whole registration.
+    TreeSitter(&'static dyn TreeSitterProbe),
 }
+
+impl PartialEq for ProbeOp {
+    /// Two ops are equal when they name the same operation.
+    ///
+    /// Two [`Self::TreeSitter`] ops name the same operation when they carry the
+    /// same probe, compared by the name the catalog keys it under — a probe's
+    /// one stable identity. Comparing trait-object pointers instead would make
+    /// equality depend on how the compiler laid out vtables.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::TreeSitter(left), Self::TreeSitter(right)) => left.name() == right.name(),
+            (left, right) => std::mem::discriminant(left) == std::mem::discriminant(right),
+        }
+    }
+}
+
+impl Eq for ProbeOp {}
 
 /// One row of the probe catalog: a semantic name bound to an op and a kind.
 #[derive(Debug, Clone, Copy)]
@@ -114,12 +149,11 @@ pub struct ProbeCatalogEntry {
     pub op: ProbeOp,
 }
 
-/// The complete probe catalog — exactly four entries.
+/// The code_context probes — exactly four entries.
 ///
-/// Adding a probe is adding a row here plus an arm in [`ProbeOp`]; the runner
-/// does not change. This is the single source of truth for both
-/// [`probe_exists`] and [`run_probes`].
-pub static CATALOG: &[ProbeCatalogEntry] = &[
+/// Adding one is adding a row here plus an arm in [`ProbeOp`]; the runner does
+/// not change.
+static CODE_CONTEXT_PROBES: &[ProbeCatalogEntry] = &[
     ProbeCatalogEntry {
         name: "callers",
         kind: ProbeKind::Fact,
@@ -142,9 +176,35 @@ pub static CATALOG: &[ProbeCatalogEntry] = &[
     },
 ];
 
+/// The complete probe catalog: the `CODE_CONTEXT_PROBES` rows followed by one
+/// row per registered [`TreeSitterProbe`].
+///
+/// The single source of truth for both [`probe_exists`] and [`run_probes`].
+/// Each tree-sitter row is BUILT from its implementation — the name and kind
+/// are read off the probe rather than restated here — so a validator's declared
+/// name and the probe that answers to it can never drift apart. Adding a
+/// tree-sitter probe is adding one entry to the `TREE_SITTER_PROBES` roster in
+/// [`tree_sitter_probes`](crate::review::tree_sitter_probes).
+///
+/// Built once on first call and shared thereafter.
+pub fn catalog() -> &'static [ProbeCatalogEntry] {
+    static CATALOG: OnceLock<Vec<ProbeCatalogEntry>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        CODE_CONTEXT_PROBES
+            .iter()
+            .copied()
+            .chain(TREE_SITTER_PROBES.iter().map(|probe| ProbeCatalogEntry {
+                name: probe.name(),
+                kind: probe.kind(),
+                op: ProbeOp::TreeSitter(*probe),
+            }))
+            .collect()
+    })
+}
+
 /// Look up a catalog entry by its semantic name.
 fn catalog_entry(name: &str) -> Option<&'static ProbeCatalogEntry> {
-    CATALOG.iter().find(|e| e.name == name)
+    catalog().iter().find(|e| e.name == name)
 }
 
 /// Whether `name` is a real probe in the catalog.
@@ -324,9 +384,20 @@ impl ChangeEntry {
     /// Whether this entry looks like a function/method (for `similar`, which
     /// binds to added *function bodies*).
     fn is_function(&self) -> bool {
-        let t = self.entity_type.to_ascii_lowercase();
-        t.contains("function") || t.contains("method")
+        is_function_entity_type(&self.entity_type)
     }
+}
+
+/// Whether a semantic entity type names a function or a method.
+///
+/// The sem entity extractor spells these `"function"` and `"method"` across
+/// every grammar, and the git semantic diff carries the same strings through to
+/// [`ChangeEntry::entity_type`]. One predicate owns that convention, so the
+/// diff-bound probes and the parse-bound ones agree on what counts as a
+/// function.
+pub(crate) fn is_function_entity_type(entity_type: &str) -> bool {
+    let lowercased = entity_type.to_ascii_lowercase();
+    lowercased.contains("function") || lowercased.contains("method")
 }
 
 /// The change set a `run_probes` invocation is bound to.
@@ -344,6 +415,14 @@ pub struct FileChange {
     /// A file-bound probe measures the file as it stands, not only the entities
     /// the diff touched, because the review boundary is the whole file.
     pub sources: BTreeMap<String, String>,
+    /// The content of each file under review at the review's BASE revision,
+    /// keyed by path.
+    ///
+    /// A diff-aware probe compares the two revisions of a file, so both live
+    /// here. A file the change added has no entry, and neither does any file
+    /// when the scope has no base revision to compare against (a glob or
+    /// whole-file review).
+    pub before_sources: BTreeMap<String, String>,
 }
 
 impl FileChange {
@@ -352,12 +431,22 @@ impl FileChange {
         Self {
             entities: entities.into_iter().collect(),
             sources: BTreeMap::new(),
+            before_sources: BTreeMap::new(),
         }
     }
 
     /// The same change set with the current source of each file attached.
     pub fn with_sources(mut self, sources: impl IntoIterator<Item = (String, String)>) -> Self {
         self.sources = sources.into_iter().collect();
+        self
+    }
+
+    /// The same change set with each file's base-revision source attached.
+    pub fn with_before_sources(
+        mut self,
+        before_sources: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.before_sources = before_sources.into_iter().collect();
         self
     }
 }
@@ -448,7 +537,7 @@ async fn embed(embedder: &dyn TextEmbedder, text: &str) -> Result<Vec<f32>, AvpE
 /// # Errors
 ///
 /// Returns [`AvpError::Validator`] if any requested name is not a real probe
-/// (validated against [`CATALOG`]), or [`AvpError::Context`] if the index or
+/// (validated against [`catalog`]), or [`AvpError::Context`] if the index or
 /// embedder fails. A probe that simply finds nothing is *not* an error — it
 /// yields a [`ProbeResult`] with empty `rows`.
 pub async fn run_probes(
@@ -478,6 +567,18 @@ pub async fn run_probes(
         Vec::new()
     };
 
+    // Same shape for the tree-sitter family: parse each file revision ONCE
+    // here, before any probe runs, and share the parses across every trait
+    // probe. A run with no trait probe skips parsing entirely.
+    let needs_parse = entries
+        .iter()
+        .any(|e| matches!(e.op, ProbeOp::TreeSitter(_)));
+    let parses = if needs_parse {
+        prime_parse_cache(file_change)
+    } else {
+        ParseCache::default()
+    };
+
     let mut results = Vec::new();
     for entry in entries {
         let mut probe_results = match entry.op {
@@ -485,6 +586,7 @@ pub async fn run_probes(
             ProbeOp::Duplicates => run_duplicates(entry, file_change, &corpus, embedder).await?,
             ProbeOp::Similar => run_similar(entry, file_change, &corpus, embedder).await?,
             ProbeOp::Complexity => run_complexity(entry, file_change),
+            ProbeOp::TreeSitter(probe) => run_tree_sitter_probe(probe, file_change, &parses),
         };
         results.append(&mut probe_results);
     }
@@ -501,7 +603,7 @@ fn resolve_entries(probe_names: &[&str]) -> Result<Vec<&'static ProbeCatalogEntr
                 validator: name.to_string(),
                 message: format!(
                     "unknown probe '{name}'; the catalog defines: {}",
-                    CATALOG
+                    catalog()
                         .iter()
                         .map(|e| e.name)
                         .collect::<Vec<_>>()
@@ -534,33 +636,59 @@ const COMPLEXITY_NOT_COMPUTED: &str =
 /// [`COMPLEXITY_NOT_COMPUTED`] row instead, so absence of a score never reads as
 /// absence of complexity.
 fn run_complexity(entry: &ProbeCatalogEntry, file_change: &FileChange) -> Vec<ProbeResult> {
+    per_file_results(
+        entry.name,
+        entry.kind,
+        file_change,
+        |path, source| match cognitive_complexity(path, source) {
+            Some(computed) => computed
+                .functions
+                .iter()
+                .filter(|function| function.exceeds_gates())
+                .map(|function| complexity_row(path, function))
+                .collect(),
+            None => vec![not_computed_row(path, COMPLEXITY_NOT_COMPUTED)],
+        },
+    )
+}
+
+/// One [`ProbeResult`] per file under review, in path order, with `rows`
+/// computing that file's evidence from its path and current source.
+///
+/// The shape every **file-bound** probe has — `complexity` and the tree-sitter
+/// family both measure whole files rather than diff entities — held in one
+/// place so a new file-bound probe supplies only its row logic.
+pub(crate) fn per_file_results(
+    name: &str,
+    kind: ProbeKind,
+    file_change: &FileChange,
+    rows: impl Fn(&str, &str) -> Vec<ProbeRow>,
+) -> Vec<ProbeResult> {
     file_change
         .sources
         .iter()
-        .map(|(path, source)| {
-            let rows = match cognitive_complexity(path, source) {
-                Some(computed) => computed
-                    .functions
-                    .iter()
-                    .filter(|function| function.exceeds_gates())
-                    .map(|function| complexity_row(path, function))
-                    .collect(),
-                None => vec![ProbeRow {
-                    file_path: path.clone(),
-                    symbol: None,
-                    line: None,
-                    similarity: None,
-                    detail: Some(COMPLEXITY_NOT_COMPUTED.to_string()),
-                }],
-            };
-            ProbeResult {
-                name: entry.name.to_string(),
-                kind: entry.kind,
-                target: path.clone(),
-                rows,
-            }
+        .map(|(path, source)| ProbeResult {
+            name: name.to_string(),
+            kind,
+            target: path.clone(),
+            rows: rows(path, source),
         })
         .collect()
+}
+
+/// The single row a file-bound probe emits when it could not measure `path`.
+///
+/// A probe that cannot compute must say so rather than return nothing: an empty
+/// result is the positive fact "this probe found nothing here", and letting an
+/// unmeasurable file wear that fact would silently disable the probe for it.
+pub(crate) fn not_computed_row(path: &str, detail: &str) -> ProbeRow {
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: None,
+        line: None,
+        similarity: None,
+        detail: Some(detail.to_string()),
+    }
 }
 
 /// One over-gate function as an evidence row.
@@ -852,8 +980,8 @@ mod tests {
     // --- catalog --------------------------------------------------------
 
     #[test]
-    fn catalog_has_exactly_the_four_probes_with_their_kinds() {
-        let names: Vec<_> = CATALOG.iter().map(|e| e.name).collect();
+    fn catalog_has_exactly_the_four_code_context_probes_with_their_kinds() {
+        let names: Vec<_> = CODE_CONTEXT_PROBES.iter().map(|e| e.name).collect();
         assert_eq!(
             names,
             vec!["callers", "duplicates", "similar", "complexity"]
@@ -866,11 +994,33 @@ mod tests {
     }
 
     #[test]
+    fn catalog_appends_the_tree_sitter_probes_after_the_code_context_ones() {
+        let names: Vec<_> = catalog().iter().map(|e| e.name).collect();
+        let expected: Vec<&str> = CODE_CONTEXT_PROBES
+            .iter()
+            .map(|e| e.name)
+            .chain(TREE_SITTER_PROBES.iter().map(|probe| probe.name()))
+            .collect();
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn probe_ops_compare_equal_only_to_the_same_operation() {
+        assert_eq!(ProbeOp::Callers, ProbeOp::Callers);
+        assert_ne!(ProbeOp::Callers, ProbeOp::Complexity);
+
+        let functions = catalog_entry("functions").unwrap().op;
+        assert_eq!(functions, functions);
+        assert_ne!(functions, ProbeOp::Complexity);
+    }
+
+    #[test]
     fn probe_exists_is_true_for_catalog_names_and_false_otherwise() {
         assert!(probe_exists("callers"));
         assert!(probe_exists("duplicates"));
         assert!(probe_exists("similar"));
         assert!(probe_exists("complexity"));
+        assert!(probe_exists("functions"));
         assert!(!probe_exists("search_symbol"));
         assert!(!probe_exists("blastradius"));
         assert!(!probe_exists("nonsense"));

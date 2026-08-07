@@ -144,7 +144,7 @@
 
 use tree_sitter::Node;
 
-use super::languages::{dotted_lowercase_extension, get_language_config};
+use super::parse_code;
 
 /// The cognitive-complexity score at or above which a function is flagged. The
 /// Sonar default.
@@ -1052,17 +1052,14 @@ pub struct FileComplexity {
 /// "not computed" for `None` and never substitute a zero score, which would
 /// silently disable the validator for that file.
 pub fn cognitive_complexity(path: &str, source: &str) -> Option<FileComplexity> {
-    let extension = dotted_lowercase_extension(path)?;
-    let config = get_language_config(&extension)?;
-    let spec = spec_for_language(config.id)?;
-    let language = (config.get_language)()?;
-
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&language).ok()?;
-    let tree = parser.parse(source, None)?;
+    // The parse comes from the shared roster entry point, never from a second
+    // parser built here: one grammar table, one parser cache, one place a new
+    // language is added.
+    let parsed = parse_code(path, source)?;
+    let spec = spec_for_language(parsed.language())?;
 
     let mut functions = Vec::new();
-    collect_functions(tree.root_node(), source, spec, 0, &mut functions);
+    collect_functions(parsed.tree().root_node(), source, spec, 0, &mut functions);
     Some(FileComplexity {
         language: spec.language,
         functions,

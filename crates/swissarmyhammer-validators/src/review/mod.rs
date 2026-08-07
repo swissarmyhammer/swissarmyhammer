@@ -23,6 +23,7 @@ pub mod test_support;
 pub mod tool_install;
 pub mod tool_output;
 pub mod tool_rules;
+pub mod tree_sitter_probes;
 pub mod types;
 pub mod verify;
 
@@ -35,8 +36,8 @@ pub use fleet::{
     MAX_SHARED_EVIDENCE_BYTES,
 };
 pub use probes::{
-    probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,
-    ProbeResult, ProbeResults, ProbeRow, CATALOG,
+    catalog, probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind,
+    ProbeOp, ProbeResult, ProbeResults, ProbeRow,
 };
 pub use scope::{
     batch_work_list, detected_project_type_keys, scope_review, BatchBudget, BatchBytes,
@@ -55,6 +56,9 @@ pub use tool_output::parse_tool_stdout;
 pub use tool_rules::{
     execute_tool_runs, plan_tool_rules, ToolFallback, ToolOutcome, ToolPlan, ToolReport, ToolRun,
     ToolRunError, ToolSuppression,
+};
+pub use tree_sitter_probes::{
+    ParsedRevision, Revision, TreeSitterProbe, TreeSitterProbeContext, TREE_SITTER_NOT_PARSED,
 };
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{

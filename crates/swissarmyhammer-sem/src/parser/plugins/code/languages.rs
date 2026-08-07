@@ -1,6 +1,7 @@
 use tree_sitter::Language;
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct LanguageConfig {
     pub id: &'static str,
     pub extensions: &'static [&'static str],
