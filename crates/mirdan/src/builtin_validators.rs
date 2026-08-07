@@ -198,6 +198,14 @@ mod tests {
             "missing-docs-rust.pass.rs",
             "missing-docs-python.fail.py",
             "missing-docs-python.pass.py",
+            "missing-docs-typescript.fail.ts",
+            "missing-docs-typescript.pass.ts",
+            "missing-docs-go.fail.go",
+            "missing-docs-go.pass.go",
+            "missing-docs-swift.fail.swift",
+            "missing-docs-swift.pass.swift",
+            "missing-docs-dart.fail.dart",
+            "missing-docs-dart.pass.dart",
         ] {
             assert!(
                 code_hygiene_files

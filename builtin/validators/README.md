@@ -139,6 +139,12 @@ Rules for tool rules:
   temporary path and passes it with a flag — the script owns its whole
   invocation, config included. Never change the project's own lint
   configuration.
+- A tool with no configuration flag reads its configuration from the directory
+  tree around the file it examines. The script then builds that tree: it makes
+  a temporary package, writes the configuration into it, copies the changed
+  files in, runs the tool on the package, and maps the temporary paths back to
+  the paths it was given. `dart analyze` works this way. The project's own
+  configuration is still never read.
 
 ### Fixtures
 

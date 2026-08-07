@@ -234,7 +234,14 @@ mod tests {
 
     /// The tool rules `code-hygiene` carries. Each supersedes the `missing-docs`
     /// prompt rule for the language it serves.
-    const CODE_HYGIENE_TOOL_RULES: &[&str] = &["missing-docs-rust", "missing-docs-python"];
+    const CODE_HYGIENE_TOOL_RULES: &[&str] = &[
+        "missing-docs-rust",
+        "missing-docs-python",
+        "missing-docs-typescript",
+        "missing-docs-go",
+        "missing-docs-swift",
+        "missing-docs-dart",
+    ];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,

@@ -1,11 +1,62 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kze80hnm8wg4mmjepm5af841
+  text: |-
+    Research done. Every pipeline below was run in a real terminal on this machine (macOS arm64) before the frontmatter was written.
+
+    **TypeScript/JavaScript — eslint + eslint-plugin-jsdoc.** Installed `eslint@10.8.0 eslint-plugin-jsdoc@63.3.3 typescript-eslint@8.66.0 typescript@5.9.3` with `npm install -g`. The generated flat config is a `.cjs` file in a temp dir. A temp config cannot resolve a plugin by name, because node walks up from the config file and finds no `node_modules`. `NODE_PATH="$(npm root -g)"` makes `require()` resolve the global packages. `--no-config-lookup` keeps eslint off the project's own config. `typescript-eslint`'s parser is needed for `.ts`; the default parser cannot read TypeScript syntax. `typescript-eslint@8.66.0` accepts `typescript >=4.8.4 <6.1.0`, so the pin is 5.9.3, not the 7.0.2 that is `latest`.
+
+    **Go — revive `exported`.** Installed `go@1.26.5` (brew) and `go install github.com/mgechev/revive@v1.15.0`. The generated config is a one-line `revive.toml` holding `[rule.exported]`. `-formatter json` prints `null`, not `[]`, on a clean file, so the jq filter starts `(. // [])[]`. revive needs no `go.mod` to lint a loose file.
+
+    **Swift — swiftlint `missing_docs`.** Installed `swiftlint@0.65.0` (brew). The generated config is a `swiftlint.yml` with `only_rules: [missing_docs]`. `--no-cache` keeps swiftlint from writing a cache beside the code.
+
+    **Dart — `public_member_api_docs`.** This is the generated-config case the card called out. `dart analyze` reads `analysis_options.yaml` by walking up from the file, and takes no rule flag. Two more constraints found by running it:
+    1. `public_member_api_docs` only fires for a file inside a package's `lib/`. A loose file in a temp dir with the config beside it reports nothing.
+    2. It also needs `.dart_tool/package_config.json`, which only `dart pub get` writes. Without it the lint is silent while other lints (`prefer_single_quotes`) still fire — a silent false pass.
+    So the script builds a whole probe package in a temp dir (`pubspec.yaml`, `analysis_options.yaml`, the changed files copied under `lib/`), runs `dart pub get --offline`, analyzes the package, then maps the temp paths back.
+    A third trap: `mktemp -d` returns `/var/folders/...` while `dart analyze` reports the resolved `/private/var/folders/...`. The prefix strip silently matched nothing. The script resolves the temp dir with `cd ... && pwd -P` first.
+    The pipe ends in `awk`, not `grep`: `grep` exits 1 when it matches nothing, which the engine reads as a broken tool on every clean run.
+  timestamp: 2026-08-07T13:53:42.068920+00:00
+- actor: claude-code
+  id: 01kze8tb1nk9v4g8ztp6nvc32x
+  text: |-
+    All four pipelines ran on this machine. None was written from memory.
+
+    Every pipeline was then run again the way the doctor runs it — working directory `builtin/validators/code-hygiene/fixtures/`, the fixture file name as the only argument, findings counted only when the reported path names that fixture. All six shipped rules pass their pair:
+
+        PASS missing-docs-rust:       fail=1 pass=0
+        PASS missing-docs-python:     fail=1 pass=0
+        PASS missing-docs-typescript: fail=1 pass=0
+        PASS missing-docs-go:         fail=1 pass=0
+        PASS missing-docs-swift:      fail=1 pass=0
+        PASS missing-docs-dart:       fail=1 pass=0
+
+    **Install commands, and why two rules declare none.**
+
+    - TypeScript: `npm install -g eslint@10.8.0 eslint-plugin-jsdoc@63.3.3 typescript-eslint@8.66.0 typescript@5.9.3`. Run and verified.
+    - Go: `go install github.com/mgechev/revive@v1.15.0`. Run and verified. It puts the binary in `$(go env GOPATH)/bin`, so a machine without that directory on its path reports the rule degraded until the person adds it.
+    - Swift: no install commands, `fix_hint: "brew install swiftlint"`. This is the ^s297bfh mechanism. Homebrew installs the current version only and cannot pin. Mint can pin, and `mint install realm/SwiftLint@0.65.0` was run here and did produce SwiftLint 0.65.0 — but it builds from source and links into `~/.mint/bin`, which is not on the path, so the command cannot make `check_command` pass. A command that cannot satisfy its own doctor check is not an install command.
+    - Dart: no install commands, `fix_hint: "brew install dart-sdk"`. `dart analyze` is a component of the Dart SDK, the same shape as clippy in a rustup toolchain, so there is no package version to pin.
+
+    **The `readlink` step in the eslint pipeline.** The first draft set `NODE_PATH="$(npm root -g)"`. It reported zero findings on the fail fixture. Two `npm` commands were on the path, and `npm root -g` answered for the first one while eslint came from the other, so `require("eslint-plugin-jsdoc")` failed inside the temp config. Because the pipe ends in `jq`, the broken run looked exactly like a clean file. The script now reads the module tree from the eslint command itself (`readlink -f` on the command, then two directories up), which also names the right tree for a project-local eslint.
+
+    **Test change.** `every_shipped_missing_docs_tool_rule_passes_its_fixtures` now covers all six rules. It asserted `usable()` for every rule; with four more toolchains in the roster that assertion states what the machine has installed, not what the code guarantees, and the doctor contract says a missing tool is a warning that falls the rule back to its prompt rule. The test now asserts `supersedes` for every rule, asserts the fixtures passed for every rule whose tool doctor found, and asserts at least one rule was exercised so it can never pass while asserting nothing. With the tools installed here, all six take the fixture branch.
+  timestamp: 2026-08-07T14:07:47.253607+00:00
+- actor: claude-code
+  id: 01kze8thrhspr4kmevcszzvvbr
+  text: |-
+    ### implement — changed
+    - evidence: 13 files — 4 rule files and 8 fixtures under builtin/validators/code-hygiene/, builtin/validators/README.md, crates/mirdan/src/builtin_validators.rs, crates/swissarmyhammer-validators/src/builtin/mod.rs, crates/swissarmyhammer-validators/src/review/tool_rules.rs. cargo test -p swissarmyhammer-validators -p mirdan: 937 passed, 0 failed. cargo clippy on both crates: no warnings.
+    - next: /review
+  timestamp: 2026-08-07T14:07:54.129350+00:00
 depends_on:
 - 01KZ9361Q5W4W38TGRWB01GTZG
 - 01KZ935S9GWN207TF50MHCN5HB
-position_column: todo
-position_ordinal: ff8380
+position_column: doing
+position_ordinal: '8480'
 title: missing-docs runners for TS, Swift, Go, and Dart
 ---
 Clone the missing-docs tool-rule pattern to the remaining languages. Each is a rule file in `code-hygiene/rules/` with a `tool` block and `supersedes: missing-docs`.
