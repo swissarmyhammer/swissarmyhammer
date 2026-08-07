@@ -1162,6 +1162,10 @@ mod tests {
     /// The prompt rule every shipped missing-docs tool rule supersedes.
     const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
 
+    /// The shipped missing-docs tool rule for Rust, the one the pipeline
+    /// acceptance test drives end to end.
+    const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
+
     /// Every shipped missing-docs tool rule, with the project type it serves.
     const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str)] = &[
         ("rust", "missing-docs-rust"),
@@ -1221,12 +1225,56 @@ mod tests {
                 CODE_HYGIENE_SET,
                 RuleNames::new([
                     MISSING_DOCS_PROMPT_RULE.to_string(),
-                    "missing-docs-rust".to_string(),
+                    RUST_MISSING_DOCS_RULE.to_string(),
                 ]),
                 ProbeNames::new([]),
                 file_work,
             )],
         )
+    }
+
+    /// Executes `run` over `repo_root` and holds it to the report contract every
+    /// shipped tool rule keeps: the pipeline breaks nothing, and it reports
+    /// exactly one finding in `path` — confirmed, attributed to the
+    /// `code-hygiene` set and to `rule`, carrying `claim_fragment` of the tool's
+    /// own message.
+    ///
+    /// This is the half every shipped-rule acceptance test shares. The half
+    /// above it — the probe repository, the work-list, and what the plan must
+    /// suppress — differs per rule and stays in the test.
+    fn verify_run_reports_one_finding(
+        run: &ToolRun,
+        repo_root: &Path,
+        path: &str,
+        rule: &str,
+        claim_fragment: &str,
+    ) {
+        let outcome = execute_tool_runs(std::slice::from_ref(run), repo_root, None);
+
+        assert!(
+            outcome.errors().is_empty(),
+            "the shipped pipeline must not break; errors: {:?}",
+            outcome.errors()
+        );
+        let findings: Vec<&VerifiedFinding> = outcome
+            .findings()
+            .iter()
+            .filter(|verified| verified.finding.file == path)
+            .collect();
+        assert_eq!(
+            findings.len(),
+            1,
+            "exactly one finding must be reported in {path}; got {:?}",
+            outcome.findings()
+        );
+        assert!(findings[0].confirmed);
+        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
+        assert_eq!(findings[0].finding.rule.as_deref(), Some(rule));
+        assert!(
+            findings[0].finding.claim.contains(claim_fragment),
+            "the claim must be the tool's message carrying '{claim_fragment}'; got '{}'",
+            findings[0].finding.claim
+        );
     }
 
     /// Acceptance: the shipped Rust tool rule reports an undocumented public
@@ -1253,7 +1301,7 @@ mod tests {
         let run = plan
             .runs()
             .iter()
-            .find(|run| run.rule() == "missing-docs-rust")
+            .find(|run| run.rule() == RUST_MISSING_DOCS_RULE)
             .unwrap_or_else(|| {
                 panic!(
                     "the shipped Rust tool rule must plan a run; fallbacks: {:?}",
@@ -1268,39 +1316,21 @@ mod tests {
             "a healthy tool rule must suppress the prompt rule, so no LLM reads the pair"
         );
 
-        let outcome = execute_tool_runs(std::slice::from_ref(run), repo.path(), None);
-
-        assert!(
-            outcome.errors().is_empty(),
-            "the shipped pipeline must not break; errors: {:?}",
-            outcome.errors()
-        );
-        let findings: Vec<&VerifiedFinding> = outcome
-            .findings()
-            .iter()
-            .filter(|verified| verified.finding.file == UNDOCUMENTED_LIB_PATH)
-            .collect();
-        assert_eq!(
-            findings.len(),
-            1,
-            "exactly the undocumented item must be reported; got {:?}",
-            outcome.findings()
-        );
-        assert!(findings[0].confirmed);
-        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
-        assert_eq!(
-            findings[0].finding.rule.as_deref(),
-            Some("missing-docs-rust")
-        );
-        assert!(
-            findings[0].finding.claim.contains("missing documentation"),
-            "the claim must be clippy's message; got '{}'",
-            findings[0].finding.claim
+        verify_run_reports_one_finding(
+            run,
+            repo.path(),
+            UNDOCUMENTED_LIB_PATH,
+            RUST_MISSING_DOCS_RULE,
+            "missing documentation",
         );
     }
 
     /// The prompt rule the dead-code tool rules run beside, never in place of.
     const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
+
+    /// The shipped dead-code tool rule for Python, the one the pipeline
+    /// acceptance test drives end to end.
+    const PYTHON_UNREACHABLE_CODE_RULE: &str = "unreachable-code-python";
 
     /// A Python module with one statement stranded behind a `return`.
     const UNREACHABLE_MODULE_PY: &str = concat!(
@@ -1323,7 +1353,7 @@ mod tests {
                 CODE_HYGIENE_SET,
                 RuleNames::new([
                     DEAD_CODE_PROMPT_RULE.to_string(),
-                    "unreachable-code-python".to_string(),
+                    PYTHON_UNREACHABLE_CODE_RULE.to_string(),
                 ]),
                 ProbeNames::new([]),
                 [FileWork::new(path, vec![], vec![], content, vec![])],
@@ -1372,109 +1402,49 @@ mod tests {
         let Some(run) = plan
             .runs()
             .iter()
-            .find(|run| run.rule() == "unreachable-code-python")
+            .find(|run| run.rule() == PYTHON_UNREACHABLE_CODE_RULE)
         else {
             return;
         };
         assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
 
-        let outcome = execute_tool_runs(std::slice::from_ref(run), repo.path(), None);
-
-        assert!(
-            outcome.errors().is_empty(),
-            "the shipped pipeline must not break; errors: {:?}",
-            outcome.errors()
-        );
-        let findings: Vec<&VerifiedFinding> = outcome
-            .findings()
-            .iter()
-            .filter(|verified| verified.finding.file == UNREACHABLE_MODULE_PATH)
-            .collect();
-        assert_eq!(
-            findings.len(),
-            1,
-            "exactly the stranded statement must be reported; got {:?}",
-            outcome.findings()
-        );
-        assert!(findings[0].confirmed);
-        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
-        assert_eq!(
-            findings[0].finding.rule.as_deref(),
-            Some("unreachable-code-python")
-        );
-        assert!(
-            findings[0].finding.claim.contains("unreachable code after"),
-            "the claim must be vulture's message; got '{}'",
-            findings[0].finding.claim
+        verify_run_reports_one_finding(
+            run,
+            repo.path(),
+            UNREACHABLE_MODULE_PATH,
+            PYTHON_UNREACHABLE_CODE_RULE,
+            "unreachable code after",
         );
     }
 
-    /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
-    /// in doctor, after the same pre-install `sah init` runs.
+    /// Drives every rule in `rules` through the real pre-install and doctor
+    /// path, and holds each one to the fixture contract.
+    ///
+    /// Each pair names a project type and the tool rule that serves it. For
+    /// each, the helper runs the same pre-install `sah init` runs, reads the
+    /// doctor row, and asserts the row supersedes `expected_supersedes` —
+    /// `None` for a rule that must leave its prompt rule running.
     ///
     /// A rule whose tool the machine does not have — and whose install commands
     /// could not get it — is reported as degraded, which is the documented
     /// behavior: a missing tool falls the rule back to its prompt rule and never
     /// blocks a review. That state cannot run the fixtures, so the fixture
     /// assertion applies to the rules whose tool doctor found. The exercised
-    /// count guards against every rule taking that branch and the test asserting
-    /// nothing.
-    #[test]
-    fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
+    /// count guards against every rule taking that branch and the caller
+    /// asserting nothing.
+    ///
+    /// `rule_kind` names the group in the failure messages — the prompt rule the
+    /// group is named for, whether the group replaces that rule or runs beside
+    /// it — so a failing run says which roster came up empty.
+    fn verify_shipped_tool_rules_pass_fixtures(
+        rules: &[(&str, &str)],
+        expected_supersedes: Option<&str>,
+        rule_kind: &str,
+    ) {
         let loader = builtin_loader();
         let mut exercised = 0;
 
-        for (project_type, rule_name) in SHIPPED_MISSING_DOCS_RULES {
-            let project_types = vec![(*project_type).to_string()];
-            crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
-
-            let status = crate::doctor::check_review_engine_with(&loader, &project_types);
-            let row = status
-                .tool_rules
-                .iter()
-                .find(|row| row.rule_name == *rule_name)
-                .unwrap_or_else(|| {
-                    panic!("{rule_name} must be reported for a {project_type} project")
-                });
-            assert_eq!(row.supersedes.as_deref(), Some(MISSING_DOCS_PROMPT_RULE));
-            if row.presence == ToolPresence::Present {
-                assert!(
-                    row.usable(),
-                    "{rule_name}'s tool is installed, so its fixtures must pass; \
-                     doctor says: {}",
-                    row.degraded_detail()
-                );
-                exercised += 1;
-            }
-        }
-
-        assert!(
-            exercised > 0,
-            "no shipped tool rule's tool was installed, so the fixture pairs were \
-             never run and this test asserts nothing"
-        );
-    }
-
-    /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
-    /// doctor, and supersedes nothing.
-    ///
-    /// The `supersedes` assertion is the load-bearing half. A dead-code tool
-    /// reads the code without the `callers` probe, so it cannot see the
-    /// `dead-code` prompt rule's carve-outs and would report staged work as
-    /// dead. Naming that prompt rule in `supersedes` would silence it for the
-    /// files the tool covers, which is exactly the regression to prevent.
-    ///
-    /// The fixture half mirrors
-    /// [`every_shipped_missing_docs_tool_rule_passes_its_fixtures`]: a rule
-    /// whose tool the machine lacks is reported degraded, which is the
-    /// documented fallback, so the fixture assertion applies to the rules whose
-    /// tool doctor found.
-    #[test]
-    fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
-        let loader = builtin_loader();
-        let mut exercised = 0;
-
-        for (project_type, rule_name) in SHIPPED_DEAD_CODE_RULES {
+        for (project_type, rule_name) in rules {
             let project_types = vec![(*project_type).to_string()];
             crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
 
@@ -1487,9 +1457,10 @@ mod tests {
                     panic!("{rule_name} must be reported for a {project_type} project")
                 });
             assert_eq!(
-                row.supersedes, None,
-                "{rule_name} must supersede no prompt rule, so `dead-code` keeps running \
-                 with its carve-outs"
+                row.supersedes.as_deref(),
+                expected_supersedes,
+                "{rule_name} must supersede {}, the contract every {rule_kind} tool rule keeps",
+                expected_supersedes.unwrap_or("nothing")
             );
             if row.presence == ToolPresence::Present {
                 assert!(
@@ -1504,8 +1475,41 @@ mod tests {
 
         assert!(
             exercised > 0,
-            "no shipped dead-code tool rule's tool was installed, so the fixture pairs \
-             were never run and this test asserts nothing"
+            "no shipped {rule_kind} tool rule's tool was installed, so the fixture \
+             pairs were never run and this test asserts nothing"
+        );
+    }
+
+    /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
+    /// in doctor, and supersedes the `missing-docs` prompt rule.
+    ///
+    /// A tool that reads the whole public surface answers the documentation
+    /// question the prompt rule asks, so it replaces it for the files it covers.
+    /// [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
+    /// contract, including what a machine without the tool proves.
+    #[test]
+    fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
+        verify_shipped_tool_rules_pass_fixtures(
+            SHIPPED_MISSING_DOCS_RULES,
+            Some(MISSING_DOCS_PROMPT_RULE),
+            MISSING_DOCS_PROMPT_RULE,
+        );
+    }
+
+    /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
+    /// doctor, and supersedes nothing.
+    ///
+    /// The `supersedes` assertion is the load-bearing half. A dead-code tool
+    /// reads the code without the `callers` probe, so it cannot see the
+    /// `dead-code` prompt rule's carve-outs and would report staged work as
+    /// dead. Naming that prompt rule in `supersedes` would silence it for the
+    /// files the tool covers, which is exactly the regression to prevent.
+    #[test]
+    fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
+        verify_shipped_tool_rules_pass_fixtures(
+            SHIPPED_DEAD_CODE_RULES,
+            None,
+            DEAD_CODE_PROMPT_RULE,
         );
     }
 
