@@ -1,6 +1,6 @@
 //! Mirdan List - List installed packages (skills, validators, tools, plugins).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agents::{self, agent_project_skill_dir, DetectedAgent};
 use crate::frontmatter;
@@ -96,11 +96,11 @@ pub fn discover_packages(
 
     // Validators are not agent-scoped, so an agent filter suppresses them.
     if filter.includes(PackageType::Validator) && agent_filter.is_none() {
-        scan_validator_dirs(&mut packages);
+        scan_scoped_store(&VALIDATOR_STORE, &mut packages);
     }
 
     if filter.includes(PackageType::Tool) {
-        scan_tool_dirs(&mut packages);
+        scan_scoped_store(&TOOL_STORE, &mut packages);
     }
 
     if filter.includes(PackageType::Plugin) {
@@ -158,25 +158,14 @@ fn scan_agent_skill_dirs(agent_filter: Option<&str>, packages: &mut Vec<Installe
     }
 }
 
-/// Scan the project and global validator directories.
-fn scan_validator_dirs(packages: &mut Vec<InstalledPackage>) {
-    let locations = [
-        (crate::install::validators_dir(false), ".validators/"),
-        (crate::install::validators_dir(true), "~/.validators/"),
+/// Scan a store's project directory and then its global one.
+fn scan_scoped_store(store: &ScopedStore, packages: &mut Vec<InstalledPackage>) {
+    let scopes = [
+        ((store.dir)(false), store.project_location),
+        ((store.dir)(true), store.global_location),
     ];
-    for (dir, location) in locations {
-        scan_package_dirs(&dir, location, &VALIDATOR_SCAN, packages);
-    }
-}
-
-/// Scan the project and global tool stores.
-fn scan_tool_dirs(packages: &mut Vec<InstalledPackage>) {
-    let locations = [
-        (store::tool_store_dir(false), ".tools/"),
-        (store::tool_store_dir(true), "~/.tools/"),
-    ];
-    for (dir, location) in locations {
-        scan_package_dirs(&dir, location, &TOOL_SCAN, packages);
+    for (dir, location) in scopes {
+        scan_package_dirs(&dir, location, store.scan, packages);
     }
 }
 
@@ -433,6 +422,40 @@ const PLUGIN_SCAN: PackageScan = PackageScan {
     read_metadata: plugin_manifest_metadata,
 };
 
+/// A store that holds one kind of package in a project directory and in a
+/// global one.
+///
+/// Validators and tools are stored this way, and the two scans differ in
+/// exactly these four things. Stating each store as one row keeps the walk
+/// over its two scopes written once.
+struct ScopedStore {
+    /// Resolves the store directory for a scope: `true` for global, `false`
+    /// for project.
+    dir: fn(bool) -> PathBuf,
+    /// The target label `mirdan list` shows for the project-scope directory.
+    project_location: &'static str,
+    /// The target label `mirdan list` shows for the global-scope directory.
+    global_location: &'static str,
+    /// How a package in this store is recognized and read.
+    scan: &'static PackageScan,
+}
+
+/// Validators live in `.validators/` and `~/.validators/`.
+const VALIDATOR_STORE: ScopedStore = ScopedStore {
+    dir: crate::install::validators_dir,
+    project_location: ".validators/",
+    global_location: "~/.validators/",
+    scan: &VALIDATOR_SCAN,
+};
+
+/// Tools live in `.tools/` and `~/.tools/`.
+const TOOL_STORE: ScopedStore = ScopedStore {
+    dir: store::tool_store_dir,
+    project_location: ".tools/",
+    global_location: "~/.tools/",
+    scan: &TOOL_SCAN,
+};
+
 /// Scan the immediate subdirectories of `dir` for the packages `scan`
 /// recognizes, recording each one against `target`.
 ///
@@ -552,7 +575,7 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
 }
 
 /// Add each target `existing` does not already list.
-fn add_unique_targets(existing: &mut InstalledPackage, targets: Vec<String>) {
+fn add_unique_targets(existing: &mut InstalledPackage, targets: impl IntoIterator<Item = String>) {
     for target in targets {
         if !existing.targets.contains(&target) {
             existing.targets.push(target);
@@ -743,6 +766,83 @@ metadata:
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].version, UNKNOWN_VERSION);
         assert_eq!(packages[0].description, "");
+    }
+
+    #[test]
+    #[serial]
+    fn test_scan_scoped_store_reads_the_project_validator_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let validator = dir.path().join(".validators/project-validator");
+        std::fs::create_dir_all(validator.join("rules")).unwrap();
+        std::fs::write(
+            validator.join("VALIDATOR.md"),
+            "---\nname: project-validator\ndescription: A project validator\nmetadata:\n  version: \"4.0.0\"\n---\n",
+        )
+        .unwrap();
+
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let mut packages = Vec::new();
+        scan_scoped_store(&VALIDATOR_STORE, &mut packages);
+        std::env::set_current_dir(old_dir).unwrap();
+
+        // The global scope reads the real home directory, so keep only the
+        // packages the project scope labelled.
+        let project: Vec<&InstalledPackage> = packages
+            .iter()
+            .filter(|pkg| pkg.targets == [".validators/"])
+            .collect();
+        assert_eq!(project.len(), 1);
+        assert_eq!(project[0].name, "project-validator");
+        assert_eq!(project[0].version, "4.0.0");
+        assert_eq!(project[0].package_type, PackageType::Validator);
+    }
+
+    #[test]
+    #[serial]
+    fn test_scan_scoped_store_reads_the_project_tool_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join(".tools/project-tool");
+        std::fs::create_dir_all(&tool).unwrap();
+        std::fs::write(
+            tool.join("TOOL.md"),
+            "---\nname: project-tool\ndescription: A project tool\nmetadata:\n  version: \"5.0.0\"\n---\n",
+        )
+        .unwrap();
+
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let mut packages = Vec::new();
+        scan_scoped_store(&TOOL_STORE, &mut packages);
+        std::env::set_current_dir(old_dir).unwrap();
+
+        let project: Vec<&InstalledPackage> = packages
+            .iter()
+            .filter(|pkg| pkg.targets == [".tools/"])
+            .collect();
+        assert_eq!(project.len(), 1);
+        assert_eq!(project[0].name, "project-tool");
+        assert_eq!(project[0].version, "5.0.0");
+        assert_eq!(project[0].package_type, PackageType::Tool);
+    }
+
+    #[test]
+    fn test_add_unique_targets_takes_any_iterator() {
+        let mut existing = InstalledPackage {
+            source: "skill-a".to_string(),
+            name: "skill-a".to_string(),
+            description: String::new(),
+            package_type: PackageType::Skill,
+            version: "1.0.0".to_string(),
+            targets: vec!["Claude Code".to_string()],
+        };
+
+        add_unique_targets(
+            &mut existing,
+            ["Claude Code".to_string(), "Cursor".to_string()],
+        );
+
+        assert_eq!(existing.targets, ["Claude Code", "Cursor"]);
     }
 
     #[test]

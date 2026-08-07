@@ -1,12 +1,49 @@
 //! Mirdan New - Scaffold a new skill, validator, tool, or plugin package.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::agents;
 use crate::package_type::{self, is_valid_package_name, PackageType};
 use crate::registry::RegistryError;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
+
+/// Refuse a name the package registry will not accept.
+///
+/// Every `mirdan new` command applies the same rule, so it is stated once.
+///
+/// # Errors
+///
+/// Returns [`RegistryError::Validation`] when `name` is not a valid package
+/// name.
+fn check_package_name(name: &str) -> Result<(), RegistryError> {
+    if is_valid_package_name(name) {
+        return Ok(());
+    }
+    Err(RegistryError::Validation(format!(
+        "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+         no leading/trailing/consecutive hyphens",
+        name
+    )))
+}
+
+/// Refuse a scaffold whose target directory is already there.
+///
+/// Every `mirdan new` command writes into a directory it creates, so none of
+/// them may write over one that exists.
+///
+/// # Errors
+///
+/// Returns [`RegistryError::Validation`] when `base_dir` exists.
+fn check_base_dir_not_exists(base_dir: &Path) -> Result<(), RegistryError> {
+    if !base_dir.exists() {
+        return Ok(());
+    }
+    Err(RegistryError::Validation(format!(
+        "directory already exists: {}",
+        base_dir.display()
+    )))
+}
 
 /// Run the `mirdan new skill` command.
 ///
@@ -16,13 +53,7 @@ pub fn run_new_skill(
     global: bool,
     agent_filter: Option<&str>,
 ) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    check_package_name(name)?;
 
     let base_dir = if global {
         // Deploy to first matching agent's global skill dir
@@ -37,12 +68,7 @@ pub fn run_new_skill(
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure per agentskills.io spec
     let scripts_dir = base_dir.join("scripts");
@@ -109,13 +135,7 @@ TODO: Add reference documentation, API specs, or other context the agent needs.
 ///
 /// Creates a validator scaffold following the AVP spec.
 pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    check_package_name(name)?;
 
     let base_dir = if global {
         // Global validators live in the shared home-dotfile store `~/.validators/`
@@ -125,12 +145,7 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure
     let rules_dir = base_dir.join(package_type::VALIDATOR_RULES_DIR);
@@ -232,13 +247,7 @@ mirdan publish
 ///
 /// Creates a tool scaffold with TOOL.md (MCP server definition) and README.md.
 pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    check_package_name(name)?;
 
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
@@ -252,12 +261,7 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    check_base_dir_not_exists(&base_dir)?;
 
     fs::create_dir_all(&base_dir)?;
 
@@ -340,13 +344,7 @@ mirdan publish
 /// Creates a Claude Code plugin scaffold with .claude-plugin/plugin.json,
 /// commands/, skills/, and README.md.
 pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    check_package_name(name)?;
 
     let base_dir = if global {
         let config = agents::load_agents_config()?;
@@ -370,12 +368,7 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure
     let plugin_manifest = base_dir.join(PackageType::Plugin.manifest_file());
@@ -608,5 +601,51 @@ mod tests {
     fn test_new_plugin_invalid_name() {
         assert!(run_new_plugin("INVALID", false).is_err());
         assert!(run_new_plugin("", false).is_err());
+    }
+
+    #[test]
+    fn test_check_base_dir_not_exists_refuses_a_directory_that_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = check_base_dir_not_exists(dir.path());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_base_dir_not_exists_accepts_a_directory_that_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = check_base_dir_not_exists(&dir.path().join("absent"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_package_name_refuses_an_invalid_name() {
+        assert!(check_package_name("INVALID").is_err());
+        assert!(check_package_name("").is_err());
+        assert!(check_package_name("double--hyphen").is_err());
+        assert!(check_package_name("good-name").is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_new_refuses_a_validator_tool_or_plugin_directory_that_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["existing-validator", "existing-tool", "existing-plugin"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let validator = run_new_validator("existing-validator", false);
+        let tool = run_new_tool("existing-tool", false);
+        let plugin = run_new_plugin("existing-plugin", false);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(validator.is_err());
+        assert!(tool.is_err());
+        assert!(plugin.is_err());
     }
 }

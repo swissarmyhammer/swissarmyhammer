@@ -332,10 +332,10 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
         || msg.contains("name or service not known")
         || msg.contains("could not resolve")
     {
-        return RegistryError::Validation(format!("DNS resolution failed for '{}': {}", url, err));
+        return RegistryError::Validation(format!("dns resolution failed for '{}': {}", url, err));
     }
 
-    RegistryError::Validation(format!("Git clone failed for '{}': {}", url, err))
+    RegistryError::Validation(format!("git clone failed for '{}': {}", url, err))
 }
 
 /// Priority directories to search for packages within a cloned repo.
@@ -838,6 +838,53 @@ mod tests {
         );
         let result = classify_git_error(err, "https://example.com/repo.git");
         assert!(matches!(result, RegistryError::Validation(_)));
+    }
+
+    #[test]
+    fn test_classify_git_error_messages_open_lowercase() {
+        let cases = [
+            (
+                git2::ErrorCode::Auth,
+                git2::ErrorClass::Net,
+                "authentication required",
+            ),
+            (
+                git2::ErrorCode::NotFound,
+                git2::ErrorClass::Net,
+                "repository not found",
+            ),
+            (
+                git2::ErrorCode::GenericError,
+                git2::ErrorClass::Net,
+                "failed to resolve host",
+            ),
+            (
+                git2::ErrorCode::GenericError,
+                git2::ErrorClass::None,
+                "something else went wrong",
+            ),
+        ];
+
+        for (code, class, git_message) in cases {
+            let classified = classify_git_error(
+                git2::Error::new(code, class, git_message),
+                "https://example.com/repo.git",
+            );
+            let message = match &classified {
+                RegistryError::Unauthorized(message)
+                | RegistryError::NotFound(message)
+                | RegistryError::Validation(message) => message.clone(),
+                other => panic!("unexpected error variant: {other}"),
+            };
+            let opening = message
+                .chars()
+                .next()
+                .expect("a classified message is never empty");
+            assert!(
+                !opening.is_uppercase(),
+                "a git error message must open lowercase, got {message:?}"
+            );
+        }
     }
 
     // --- discover_packages tests ---

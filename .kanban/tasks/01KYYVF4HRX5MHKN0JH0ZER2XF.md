@@ -371,6 +371,76 @@ comments:
     - evidence: 6 files — crates/mirdan/src/git_source.rs, crates/mirdan/src/list.rs, crates/mirdan/src/new.rs, crates/mirdan/src/install/package.rs, crates/mirdan/src/install/uninstall.rs, crates/mirdan/src/install/tests.rs. 5 new tests (4 containment, RED first; 1 Clone, RED by compile error). All 5 round-3 findings checked. `cargo nextest run --workspace`: 13633 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo doc -p mirdan --no-deps`: zero warnings in changed files. `cargo fmt --all`.
     - next: /review
   timestamp: 2026-08-07T18:11:20.488231+00:00
+- actor: claude-code
+  id: 01kzepv0vd7s344xxad6wywswt
+  text: |-
+    ### commit — changed
+    - evidence: e1e3946ec fix(mirdan): close path-traversal review findings on git-source scan (iteration 4)
+    - next: none
+  timestamp: 2026-08-07T18:12:49.645969+00:00
+- actor: claude-code
+  id: 01kzeqzwr1f6tm7mnmxxdj6fj4
+  text: |-
+    ### review — findings
+    - evidence: 4 findings (18 attempted, 0 failed, 0 skipped) on `HEAD~1..HEAD` = e1e3946ec — crates/mirdan/src/git_source.rs:338, crates/mirdan/src/list.rs:162, crates/mirdan/src/list.rs:555, crates/mirdan/src/new.rs:40
+    - closure check: all 22 prior items verified closed against the code at e1e3946ec, not against the resolution notes. The path-traversal fix refuses all three escapes: `subpath_stays_inside` is an allowlist over Normal/CurDir, `RepoScan::contains` canonicalizes both sides and uses component-wise `Path::starts_with`, and both `read_dir` sites sit behind a `contains` early return.
+    - next: fix the four round-4 findings, then re-review. Task stays in review.
+  timestamp: 2026-08-07T18:32:57.857311+00:00
+- actor: claude-code
+  id: 01kzer0st85dn9w8ex8qrywg93
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — 6 files; path-traversal fix with `subpath_stays_inside` allowlist plus `RepoScan` canonical-root containment; 5 new tests, 4 RED first; all five round-3 findings closed
+    - test: green — cargo nextest run --workspace, 13633 passed, 0 failed, 0 skipped; clippy -D warnings clean; cargo fmt --all
+    - commit: e1e3946ec
+    - review: findings — 4 new, 4 confirmed, 18 attempted, 0 failed. crates/mirdan/src/git_source.rs:338, crates/mirdan/src/list.rs:162, crates/mirdan/src/list.rs:555, crates/mirdan/src/new.rs:40
+    - prior-finding verification: all 22 confirmed closed against the code at e1e3946ec. The path-traversal fix holds against `../`, absolute, and symlink escapes; both read_dir sites sit behind a containment check.
+
+    Finding count per round: 6, 11, 5, 4. No finding has repeated.
+  timestamp: 2026-08-07T18:33:27.624678+00:00
+- actor: claude-code
+  id: 01kzes0medm1gdbq38bx9xqw35
+  text: |-
+    Picked the card back up from `review` with four open findings from round 4. All four are closed. RED first for each.
+
+    **RED runs, in order.**
+
+    1. `test_classify_git_error_messages_open_lowercase` failed by assertion, not by compile error, and it named the *second* offender before the first: `a git error message must open lowercase, got "DNS resolution failed for 'https://example.com/repo.git': failed to resolve host; class=Net (12)"`. The finding named only line 338. Reading the whole file for the cause found `DNS resolution failed` beside `Git clone failed`. Writing the test as a rule over all four branches of `classify_git_error`, rather than as a pin on the one string, is what surfaced it.
+    2. The other three failed to compile against the absent contracts: `cannot find value VALIDATOR_STORE`, `cannot find value TOOL_STORE`, `cannot find function scan_scoped_store`, `expected Vec<String>, found [String; 2]`, `cannot find function check_base_dir_not_exists`, `cannot find function check_package_name`.
+
+    GREEN: all eight new tests pass, and the crate's 490 tests pass.
+
+    **Two decisions worth keeping for the next agent.**
+
+    1. **Lowercase the whole message, do not lowercase an acronym in place.** `dns resolution failed` follows what the standard library does (`invalid utf-8 sequence`): the message is lowercase throughout, so an acronym inside it is lowercase too. The alternative, rewording to keep `DNS` capitalized mid-message, changes user-facing text the finding did not ask about, which the public-output-contract rule forbids.
+
+    2. **A shared helper with four parameters would have opened the finding round 2 closed.** The duplication finding proposes "a helper that takes the directory function, location strings, and SCAN constant as parameters". Written literally, that signature holds `project_location: &str` beside `global_location: &str` -- two adjacent parameters of the same type and different meaning, which is the exact defect `ServersKey`/`ToolName` closed. `ScopedStore` carries the four as named, documented fields instead, and it matches `PackageScan`, the row shape round 2 already introduced in this file. Do not flatten it back to parameters.
+
+    **Causes removed beyond the named lines.**
+
+    - `git_source.rs` — both uppercase-opening messages, not only line 338. Every other message in the file was read and already opens lowercase.
+    - `new.rs` — both repeated validation blocks, not only the directory-exists one. The `is_valid_package_name` block above it was the same seven lines with the same message, four times over. Eight copies became `check_package_name` and `check_base_dir_not_exists`, each stated once and called from all four `run_new_*` functions.
+
+    **Dead code removed, not left behind.** `scan_validator_dirs` and `scan_tool_dirs` are deleted, not kept as one-line shims; a repo-wide grep confirms no caller anywhere in `crates/` or `apps/`.
+
+    **Blast radius.** `add_unique_targets` widened its parameter type, which cannot break a caller. `scan_scoped_store` and the two `ScopedStore` rows are private to `list.rs`. `check_package_name` and `check_base_dir_not_exists` are private to `new.rs`. No public signature changed, so no crate outside `mirdan` is touched. `cargo nextest run --workspace` confirms it: 13641 passed, 0 failed, 0 skipped.
+
+    **Test-coverage note.** `test_new_refuses_a_validator_tool_or_plugin_directory_that_already_exists` is not a RED case -- it passes against the old code too. It is sibling coverage: only `run_new_skill` had an already-exists test, so the extraction that now serves all four functions had three untested call sites. It covers validator, tool, and plugin, and deliberately does not repeat the skill case the existing test already holds.
+
+    **Verification, all from the repo root.**
+    - `cargo nextest run --workspace` — 13641 passed, 0 failed, 0 skipped.
+    - `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean.
+    - `cargo clippy -p mirdan --all-targets -- -W missing_docs` — zero findings in `git_source.rs`, `list.rs`, or `new.rs`. The crate's remaining findings are all in `registry/types.rs`, untouched.
+    - `cargo doc -p mirdan --no-deps` — zero warnings in any touched file.
+    - `cargo fmt --all --check` — clean.
+  timestamp: 2026-08-07T18:50:50.701561+00:00
+- actor: claude-code
+  id: 01kzes0wwgwme3edrk10dc40dt
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — crates/mirdan/src/git_source.rs, crates/mirdan/src/list.rs, crates/mirdan/src/new.rs. 8 new tests: 7 RED first (1 by assertion, 6 by missing contract), 1 sibling coverage. All 4 round-4 findings checked. `cargo nextest run --workspace`: 13641 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo doc -p mirdan --no-deps`: zero warnings in changed files. `cargo fmt --all --check`: clean.
+    - next: /review
+  timestamp: 2026-08-07T18:50:59.344767+00:00
 position_column: doing
 position_ordinal: '8380'
 title: mirdan list.rs carries the frontmatter substring-split defect
@@ -517,3 +587,48 @@ Four tests state the rule, all RED first against the old code, each failing by r
 **The `rules/` literal finding.** The cause is a production literal that duplicates a constant which already names it, and `new.rs` carried five of them. `base_dir.join("rules")` now reads `package_type::VALIDATOR_RULES_DIR`, and the four manifest joins -- `SKILL.md`, `VALIDATOR.md`, `TOOL.md`, and `.claude-plugin/plugin.json` -- now read `PackageType::manifest_file()`. The plugin manifest join makes its own directory from `plugin_manifest.parent()`, so `.claude-plugin` is named once as well. The only production occurrence of `"rules"` left in the crate is the constant declaration itself; every other occurrence is inside a `mod tests`. The `println!` tree and the "Next steps" lines keep their literals: they are user-facing output, not paths, and the public-output-contract rule forbids rewording them.
 
 **Verification.** `cargo nextest run --workspace`: 13633 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan --all-targets -- -W missing_docs`: zero findings in any file this change touched. `cargo doc -p mirdan --no-deps`: zero warnings in any file this change touched, including the pre-existing private-link warning in `git_source.rs`, which is now gone. `cargo fmt --all`.
+
+## Review Findings (2026-08-07 13:13)
+
+> Scope: `HEAD~1..HEAD` (commit e1e3946ec). Round 4. All 22 prior items are verified closed against the code at this commit, not against the resolution notes. 18 review tasks attempted, 0 failed, 0 skipped.
+
+- [x] `crates/mirdan/src/git_source.rs:338` — Error message 'Git clone failed' uses uppercase 'Git' at message start; error messages must use lowercase for consistency and readability. Change "Git clone failed" to "git clone failed" in the error message format string on line 338.
+- [x] `crates/mirdan/src/list.rs:162` — scan_validator_dirs and scan_tool_dirs have nearly identical structure and logic — both create a two-element locations array, loop through it, and call scan_package_dirs. The only differences are the directory function (validators_dir vs tool_store_dir), the location display strings, and the SCAN constant, all of which are suitable parameters. Extract a shared helper function that takes the directory function, location strings, and SCAN constant as parameters, eliminating the duplicated loop logic and reducing maintenance burden.
+- [x] `crates/mirdan/src/list.rs:555` — Function accepts concrete type Vec<String> instead of generic trait. Should accept impl IntoIterator<Item = String> for flexibility, allowing callers to pass any iterator type without requiring Vec allocation. This is a new function, so establishing good patterns is important. Change signature to `fn add_unique_targets(existing: &mut InstalledPackage, targets: impl IntoIterator<Item = String>)` to accept any iterable type.
+- [x] `crates/mirdan/src/new.rs:40` — Identical directory-exists check repeated in run_new_skill, run_new_validator, run_new_tool, and run_new_plugin — this validation block appears 4 times and could drift if one copy is updated without others. Extract a shared helper function `check_base_dir_not_exists(base_dir: &Path) -> Result<(), RegistryError>` and call it from all four functions.
+
+### Closure check on all 22 prior items
+
+Every prior item is closed. Read from the code at `e1e3946ec`, not from the resolution notes.
+
+Round 1. `discover_packages` in `list.rs` is 27 lines at nesting depth 2, four `if filter.includes(...)` guards over seven named helpers. `PackageFilter` carries the four former bools through `discover_packages` and `run_list`; the CLI builds it with `PackageFilter::from_flags` in `dispatch.rs`. No `strip_prefix("---")` or `find("---")` split survives under `crates/mirdan/src`; the one textual hit is a doc comment in `frontmatter/fixtures.rs` that describes the old defect. All 24 `#[test]` functions in `list.rs` carry the `test_` prefix.
+
+Round 2. `parse_git_source` is a three-step `or_else` chain over `parse_ssh_source`, `parse_url_source`, and `parse_shorthand_source`. `git_source::discover_packages` is 32 lines at depth 2. `crates/mirdan/src/frontmatter.rs` declares all seven readers, and `info.rs`, `install/package.rs`, `git_source.rs`, `mcp_config.rs`, and `list.rs` all delegate with no split-parse of their own. The four `scan_*` functions are gone; one `scan_package_dirs` walker reads four `PackageScan` rows. All four `mcp_config.rs` signatures take `&ServersKey` and `&ToolName`.
+
+Round 3. `InstallSource` derives `Debug, Clone, PartialEq, Eq, Hash`. `read_frontmatter` returns `FrontmatterMetadata`, and `parse_package_spec` returns `PackageSpec`. `merge_packages` is 12 lines at depth 2 with `add_unique_targets` beside it. `new.rs` joins `package_type::VALIDATOR_RULES_DIR`; every surviving bare `"rules"` literal is inside a `mod tests`.
+
+The path-traversal fix is sound on all three escapes. `subpath_stays_inside` is an allowlist over `Component::Normal` and `Component::CurDir`, so `ParentDir`, `RootDir`, and `Prefix` are all refused before any join. `RepoScan::open` canonicalizes the repository root, and `RepoScan::contains` canonicalizes the candidate directory before the test, so every symbolic link resolves on both sides. The test is `Path::starts_with`, which compares whole components, so `/repo-evil` does not pass as inside `/repo`. The file holds exactly two `read_dir` call sites, and each sits behind a `contains` early return; `scan_dir`, `scan_child_dirs`, and `scan_recursive` each re-check, and recursion re-enters a checked method, so no walk reads a directory the check did not clear. Four tests state the rule -- a `../` subpath, an absolute subpath, a symbolically linked subpath, and a symbolically linked priority directory -- and the shared fixture plants a real `SKILL.md` outside the repository, so a leak makes them fail.
+
+One residual, recorded as an observation and not raised as a finding, because no rule names it: containment gates directories, not the manifest file inside a cleared directory. A cloned repository holding `pkg/SKILL.md` as a symbolic link to a host file would have that file read by `frontmatter::file_field`. The reach is one package name string, not a directory walk and not a file copy.
+
+## Resolution round 4 (2026-08-07)
+
+All four findings are closed. Each was applied to the whole cause, not only the named line.
+
+**The uppercase-error-message finding.** The cause is an error message that opens with a capital letter. `git_source.rs` carried two, not one: `"Git clone failed for ..."` and `"DNS resolution failed for ..."`. Both are gone. The message now reads `"git clone failed for ..."`, and the resolver message reads `"dns resolution failed for ..."`, which matches the lowercase-throughout convention the standard library uses for messages such as `"invalid utf-8 sequence"`. Every other message the file builds already opened lowercase, and each was read to confirm it.
+
+A test states the rule rather than pinning the two strings: `test_classify_git_error_messages_open_lowercase` runs all four branches of `classify_git_error` and asserts the opening character of each message is not uppercase. It failed RED on the `DNS` message first, which is how the second occurrence was found.
+
+**The two-scan duplication finding.** `scan_validator_dirs` and `scan_tool_dirs` are gone. A `ScopedStore` row carries the four things they differed in -- the directory resolver, the project label, the global label, and the `PackageScan` row -- and one `scan_scoped_store` walker reads it. `VALIDATOR_STORE` and `TOOL_STORE` are the two rows. This is the shape `PackageScan` already set in round 2, so the file states variation as data in one way rather than two.
+
+The four fields are a struct, not four parameters. A helper taking `(dir_fn, project_location, global_location, scan)` would place two adjacent `&str` parameters of different meaning in one signature, which is the newtype defect round 2 closed for `ServersKey` and `ToolName`; closing one finding that way would open another.
+
+Two tests read through the production rows: `test_scan_scoped_store_reads_the_project_validator_directory` and `test_scan_scoped_store_reads_the_project_tool_directory`. Each plants a package in a temporary current directory and keeps only the entries the project label marks, so the real home directory cannot change the result.
+
+**The `Vec<String>` parameter finding.** `add_unique_targets` now takes `impl IntoIterator<Item = String>`. The `for` loop body is unchanged, because a `for` loop already consumes an `IntoIterator`. `merge_packages`, its one caller, passes the same `Vec` and still compiles. `test_add_unique_targets_takes_any_iterator` passes an array, which is the RED case: the old signature refused it with `expected Vec<String>, found [String; 2]`.
+
+**The repeated-validation finding.** The cause is an identical validation block copied into all four `run_new_*` functions, and `new.rs` carried two such blocks, not one. The directory-exists check the finding names is now `check_base_dir_not_exists(base_dir: &Path) -> Result<(), RegistryError>`, exactly as named. The package-name check above it was the same defect -- the same seven lines with the same message, four times -- so it is now `check_package_name`. All four functions call both. Eight copies became two statements of the rule.
+
+Three tests state the two helpers, and `test_new_refuses_a_validator_tool_or_plugin_directory_that_already_exists` reads the rule through the production path for the three commands that had no exists test of their own; `run_new_skill` already had one.
+
+**Verification.** `cargo nextest run --workspace`: 13641 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan --all-targets -- -W missing_docs`: zero findings in any file this change touched; the remaining ones in the crate are in `registry/types.rs`, untouched. `cargo doc -p mirdan --no-deps`: zero warnings in any touched file. `cargo fmt --all --check`: clean.
