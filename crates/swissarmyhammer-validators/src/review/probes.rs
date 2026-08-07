@@ -9,13 +9,12 @@
 //!
 //! # The catalog is data, not branching
 //!
-//! There are five code_context probes — [`callers`], [`duplicates`],
-//! [`similar`], [`complexity`], `clone-siblings` — described by a single
-//! static table
-//! (`CODE_CONTEXT_PROBES`) of [`ProbeCatalogEntry`] rows. Each row binds a
-//! semantic probe name to the [`ProbeOp`] the runner interprets and the
-//! [`ProbeKind`] (`fact` vs `candidate`) the verify guard uses to decide which
-//! probes can deterministically refute a claim. The runner is **one** code path
+//! The code_context probes are described by a single static table
+//! (`CODE_CONTEXT_PROBES`) of [`ProbeCatalogEntry`] rows, one row per probe —
+//! the table below is that roster. Each row binds a semantic probe name to the
+//! [`ProbeOp`] the runner interprets and the [`ProbeKind`] (`fact` vs
+//! `candidate`) the verify guard uses to decide which probes can
+//! deterministically refute a claim. The runner is **one** code path
 //! parameterized by the entry — there is no per-probe match arm with
 //! copy-pasted call code.
 //!
@@ -149,8 +148,7 @@ impl Eq for ProbeOp {}
 /// One row of the probe catalog: a semantic name bound to an op and a kind.
 #[derive(Debug, Clone, Copy)]
 pub struct ProbeCatalogEntry {
-    /// The semantic name validators declare (`callers`, `duplicates`,
-    /// `similar`).
+    /// The semantic name validators declare in their `probes:` list.
     pub name: &'static str,
     /// The kind of evidence this probe yields.
     pub kind: ProbeKind,
@@ -158,7 +156,7 @@ pub struct ProbeCatalogEntry {
     pub op: ProbeOp,
 }
 
-/// The code_context probes — exactly four entries.
+/// The code_context probes in this catalog table.
 ///
 /// Adding one is adding a row here plus an arm in [`ProbeOp`]; the runner does
 /// not change.
@@ -428,9 +426,8 @@ pub(crate) fn is_function_entity_type(entity_type: &str) -> bool {
 /// The change set a `run_probes` invocation is bound to.
 ///
 /// Carries the diff's changed entities, plus the current source of each file
-/// under review. Entity-bound probes (`callers`, `duplicates`, `similar`)
-/// derive their arguments from the entities; file-bound probes (`complexity`)
-/// read the sources.
+/// under review. Entity-bound probes derive their arguments from the entities;
+/// file-bound probes read the sources.
 #[derive(Debug, Clone, Default)]
 pub struct FileChange {
     /// The changed entities from the semantic diff.
@@ -479,9 +476,9 @@ impl FileChange {
 /// One evidence row a probe produced.
 ///
 /// Structured so the same value renders as human-facing evidence *and* is
-/// machine-checkable by the verify guard. Fields are optional because the three
-/// ops surface different shapes (a duplicate has a similarity; a caller has a
-/// call site; a reuse candidate has both).
+/// machine-checkable by the verify guard. Fields are optional because the ops
+/// surface different shapes (a duplicate has a similarity; a caller has a call
+/// site; a reuse candidate has both).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProbeRow {
     /// The file the evidence points at (the duplicate's location, the caller's
@@ -504,7 +501,7 @@ pub struct ProbeRow {
 /// The result of running one probe against one bound target.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProbeResult {
-    /// The probe's semantic name (`callers` / `duplicates` / `similar`).
+    /// The probe's semantic name, as the catalog keys it.
     pub name: String,
     /// The probe's kind, copied from the catalog so consumers don't re-look-up.
     pub kind: ProbeKind,
@@ -575,13 +572,13 @@ pub async fn run_probes(
     // probe is a clear error rather than a silent no-op.
     let entries = resolve_entries(probe_names)?;
 
-    // The embedding-backed probes (`duplicates`, `similar`) compare against the
-    // whole indexed corpus. Load it ONCE here and share it across every changed
-    // file and every added body, rather than re-materializing the entire
-    // `ts_chunks` embedding table inside `find_duplicates`/`search_code` per
-    // call — for a large index that repeated multi-hundred-MB load is what OOMed
-    // the review. The `callers` probe is index-graph-only and needs no corpus, so
-    // a callers-only run skips the load entirely.
+    // The embedding-backed probes compare against the whole indexed corpus.
+    // Load it ONCE here and share it across every changed file and every added
+    // body, rather than re-materializing the entire `ts_chunks` embedding table
+    // inside `find_duplicates`/`search_code` per call — for a large index that
+    // repeated multi-hundred-MB load is what OOMed the review. The `callers`
+    // probe is index-graph-only and needs no corpus, so a callers-only run skips
+    // the load entirely.
     let needs_corpus = entries.iter().any(|e| {
         matches!(
             e.op,
