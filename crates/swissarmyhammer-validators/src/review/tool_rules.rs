@@ -165,12 +165,27 @@ impl ToolFallback {
     }
 }
 
+/// A fallback is a report fact, not an error — the review still ran, through
+/// the prompt rule — so it carries `Display` without `std::error::Error`.
+impl std::fmt::Display for ToolFallback {
+    /// The fallback as one line: which rule fell back, in which validator, and
+    /// why. The prompt rule that ran instead is a separate report fact.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tool rule `{}` in validator `{}` fell back: {}",
+            self.rule, self.validator, self.detail
+        )
+    }
+}
+
 /// A tool run that broke: a nonzero exit or stdout that violates the contract.
 ///
 /// This is a tool error, never findings and never a clean result. The raw
 /// stderr (or the parse problem) rides in `detail` so the diagnosing agent
 /// reads exactly what the tool said.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("tool rule `{rule}` in validator `{validator}` broke: {detail}")]
 pub struct ToolRunError {
     /// The owning validator (RuleSet) name.
     validator: String,
@@ -1070,6 +1085,39 @@ mod tests {
         assert!(outcome.errors()[0]
             .detail()
             .contains("this is not a finding line"));
+    }
+
+    #[test]
+    fn a_tool_run_error_displays_the_rule_the_validator_and_the_detail() {
+        let error = ToolRunError::for_test("docs", "docs-tool", "the linter exploded");
+
+        assert_eq!(
+            error.to_string(),
+            "tool rule `docs-tool` in validator `docs` broke: the linter exploded"
+        );
+    }
+
+    #[test]
+    fn a_tool_run_error_is_a_standard_error() {
+        let error = ToolRunError::for_test("docs", "docs-tool", "the linter exploded");
+        let standard: &dyn std::error::Error = &error;
+
+        assert_eq!(standard.to_string(), error.to_string());
+    }
+
+    #[test]
+    fn a_tool_fallback_displays_the_rule_the_validator_and_the_detail() {
+        let fallback = ToolFallback::for_test(
+            "docs",
+            "docs-tool",
+            Some("missing-docs"),
+            "the tool is not installed",
+        );
+
+        assert_eq!(
+            fallback.to_string(),
+            "tool rule `docs-tool` in validator `docs` fell back: the tool is not installed"
+        );
     }
 
     #[test]

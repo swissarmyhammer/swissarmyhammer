@@ -41,6 +41,49 @@ comments:
     - tests: `cargo test -p swissarmyhammer-validators -p mirdan -p swissarmyhammer-build` → 495 + 432 + 34 + doc-tests, 0 failed. `cargo clippy --workspace --all-targets -- -D warnings` → clean.
     - next: /review
   timestamp: 2026-08-07T12:24:06.708716+00:00
+- actor: claude-code
+  id: 01kze4bbhfn3m1bsf04gpsw7hj
+  text: |
+    ### review — findings
+    - scope: `review sha HEAD~1..HEAD` (e1d4719cf)
+    - evidence: 4 findings (4 confirmed, 2 refuted, 20 attempted) — builtin/validators/code-hygiene/fixtures/lib.rs:8, builtin/validators/code-hygiene/fixtures/lib.rs:11, crates/swissarmyhammer-validators/src/review/tool_rules.rs:121, crates/swissarmyhammer-validators/src/review/tool_rules.rs:174
+    - deviation 1 (Rust rule declares no `install.commands`): accepted, no finding. `install_command_pins_version` (crates/swissarmyhammer-validators/src/review/tool_install.rs:442) requires a pinned version, and a rustup component has no package version to pin. The commit records the case in builtin/validators/README.md and in the rule prose. The fix-hint gap is on follow-up card ^s297bfh.
+    - deviation 2 (Python rule uses `ruff check --isolated --no-cache`): accepted, no finding. The README clause about a temporary config file applies only when a tool needs a configuration file. `--isolated --select D1` gives ruff no configuration file to need, and it meets the stated intent: the script owns its whole invocation and never reads the project's own lint configuration.
+    - next: fix the 4 findings, then re-review.
+  timestamp: 2026-08-07T12:49:41.935546+00:00
+- actor: claude-code
+  id: 01kze4cc2nd0wqeq130hyt7mmr
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 12 files; the first two builtin tool rules with fixtures, plus two engine fixes (workspace-scope fixture attribution in doctor.rs, non-markdown builtin embedding in the mirdan build). Two deviations recorded and accepted by the review: no install.commands on the Rust rule (rustup components pin no version; follow-up ^s297bfh), and ruff --isolated in place of a temp config file.
+    - test: green — cargo nextest run --workspace 13753 passed, doc tests 0 failed, fmt clean, clippy clean. The fixtures cargo package carries its own [workspace] table and does not join the main build.
+    - commit: e1d4719cf
+    - review: findings — builtin/validators/code-hygiene/fixtures/lib.rs:8, :11 (public modules with no doc comment), crates/swissarmyhammer-validators/src/review/tool_rules.rs:121, :174 (public error-like types with no Display)
+  timestamp: 2026-08-07T12:50:15.253985+00:00
+- actor: claude-code
+  id: 01kze4tgq6btc6ze6yqd4zq5ba
+  text: |
+    Findings pass, notes for the next agent:
+
+    1. **The two `lib.rs` findings are safe to fix, and I proved it.** The fixture harness declares both fixtures as `#[path]` modules. Clippy attributes a missing-doc on a module declaration to `lib.rs`, never to the fixture file, and `doctor::run_fixture` counts only the findings a run reports ABOUT the fixture under test. So documenting the two module declarations removes two `lib.rs` rows that the doctor already ignored, and changes neither fixture. Verified by running the rule's own pipeline in the fixtures directory after the edit: the whole package now reports exactly one row, `missing-docs-rust.fail.rs:9 missing documentation for a struct`. No fixture was weakened.
+
+    2. **`ToolRunError` uses `thiserror`, `ToolFallback` uses a hand-written `Display`.** The finding on `ToolRunError` names `thiserror` itself, the crate already uses it for its error types (`src/error.rs`, `src/validators/pool.rs`), and the derive gives `Display` and `std::error::Error` together. `ToolFallback` is NOT an error — the review still ran, through the prompt rule — so it gets `Display` alone. A comment above the impl records that reason, so a later reader does not "unify" the two.
+
+    3. **The report wording did not change.** `synthesize::render_tool_errors` and `render_tool_fallbacks` still write their own markdown blocks. They are not duplicates of `Display`: the error block is a multi-line blockquote of the raw stderr, and the fallback block also names the prompt rule that ran instead. Routing them through `Display` would drop that note and rewrite output the synthesize tests assert on.
+
+    Both `Display` messages are lowercase with no trailing punctuation, per the `rust/error-handling` rule.
+  timestamp: 2026-08-07T12:57:58.758408+00:00
+- actor: claude-code
+  id: 01kze4tv1jzss7tcnestb5ptnh
+  text: |
+    ### implement — changed
+    - evidence: 2 files — builtin/validators/code-hygiene/fixtures/lib.rs (doc comment on each `#[path]` module declaration), crates/swissarmyhammer-validators/src/review/tool_rules.rs (`#[derive(thiserror::Error)]` + `#[error(...)]` on `ToolRunError`, hand-written `Display` for `ToolFallback`, 3 new tests).
+    - findings: 4 of 4 closed, all four boxes now `- [x]`.
+    - TDD: RED first — `cargo test -p swissarmyhammer-validators --lib review::tool_rules::tests::a_tool` failed to compile with 4 errors (`ToolRunError doesn't implement std::fmt::Display`, `ToolFallback doesn't implement std::fmt::Display`, and the `&dyn std::error::Error` coercion). GREEN after the impls.
+    - tests: `cargo test -p swissarmyhammer-validators -p mirdan` → 498 + 432 + doc tests, 0 failed (1 pre-existing ignored doc example in mirdan/src/tool_install.rs). `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` clean. `cargo fmt --check` clean.
+    - fixture proof: the rule's own pipeline in builtin/validators/code-hygiene/fixtures now reports exactly `missing-docs-rust.fail.rs:9`; both `every_shipped_missing_docs_tool_rule_passes_its_fixtures` and `the_shipped_rust_tool_rule_reports_an_undocumented_public_item` still pass.
+    - next: /review
+  timestamp: 2026-08-07T12:58:09.330964+00:00
 depends_on:
 - 01KZ9356Y8XTJ6A28KQCBNFE97
 - 01KZ935GJX1YS2EAD7C2HK89AJ
@@ -73,3 +116,10 @@ Acceptance:
 - Fixture checks pass in doctor for both tool rules.
 
 #tool-validators
+
+## Review Findings (2026-08-07 07:36)
+
+- [x] `builtin/validators/code-hygiene/fixtures/lib.rs:8` — Public module `fail` has no doc comment. All public items must be documented. Add a doc comment above line 8, e.g. `/// The fail fixture module.` or similar explaining its purpose.
+- [x] `builtin/validators/code-hygiene/fixtures/lib.rs:11` — Public module `pass` has no doc comment. All public items must be documented. Add a doc comment above line 11, e.g. `/// The pass fixture module.` or similar explaining its purpose.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:121` — ToolFallback is a public type representing an error-like fallback condition but does not implement Display trait. Like ToolRunError, it represents a failure mode and should support standard error formatting. Add `impl Display for ToolFallback` to format the fallback details: `impl Display for ToolFallback { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "tool rule `{}` in validator `{}` fell back: {}", self.rule, self.validator, self.detail) } }`.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:174` — ToolRunError is a public error type but does not implement Display trait. Error types must implement Display to support standard error formatting and reporting patterns. Add `impl Display for ToolRunError` to format the error details: `impl Display for ToolRunError { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "tool rule `{}` in validator `{}` broke: {}", self.rule, self.validator, self.detail) } }`. Consider also implementing `std::error::Error` for complete error type support, or use the `thiserror` crate for automatic implementations.
