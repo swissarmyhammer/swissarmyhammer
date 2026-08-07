@@ -506,6 +506,26 @@ Let me know if you want more detail."#;
         assert_eq!(findings[0].line, 3);
     }
 
+    /// The rung-1 marker is the lowercase ```` ```json ````, so a model that
+    /// spells the language identifier in upper case misses it and the reply
+    /// must still parse.
+    ///
+    /// This pins the outcome, not a rung. Measured by mutation: disabling any
+    /// one of `bare_fenced_value`, `balanced_value`, or `spanning_value`
+    /// leaves this test — and every other parse test — green, because each
+    /// remaining rung finds the same array. The ladder is a fallback chain by
+    /// design, so its rungs are redundant on well-formed input; what a test
+    /// can hold is that the reply parses, whichever rung gets there.
+    #[test]
+    fn parse_findings_reads_a_fence_whose_language_is_upper_case() {
+        let text = "Findings:\n\n```JSON\n[{\"file\": \"a.rs\", \"line\": 7, \
+                    \"validator\": \"v\", \"severity\": \"nit\", \"claim\": \"c\", \
+                    \"evidence\": \"e\"}]\n```\n";
+        let findings = parse_findings(text).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 7);
+    }
+
     #[test]
     fn parse_findings_reads_array_embedded_in_prose_without_fence() {
         let text = "Result: [{\"file\": \"a.rs\", \"line\": 9, \"validator\": \"v\", \

@@ -106,7 +106,37 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/types.rs. `extract_json_value` cognitive complexity 20 -> 0 by the real `swissarmyhammer_sem` scorer; no function in the file is over the complexity gate (15) or the nesting gate (4). `cargo test -p swissarmyhammer-validators`: 517 passed, 0 failed, doc tests 2 passed. `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings`: clean. `cargo fmt --all -- --check`: clean.
     - next: /review
   timestamp: 2026-08-07T19:55:07.903078+00:00
-position_column: doing
+- actor: claude-code
+  id: 01kzexx51m4brxk0jwj0ddftre
+  text: |
+    ### review — findings
+    - scope: `review sha 773fe1d4c..0e2946d2d` (HEAD~1..HEAD), driven through a fresh `sah serve` process because the session MCP image has an old probe catalog
+    - prior finding verified closed: `extract_json_value` is now a flat four-rung `or_else` ladder (`json_fenced_value`, `bare_fenced_value`, `balanced_value`, `spanning_value`); the complexity cause is removed from the whole function
+    - counts: 1 finding, 1 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped
+    - evidence: crates/swissarmyhammer-validators/src/review/types.rs:250
+    - scope check: `git blame` puts line 250 in commit 0e2946d2d, so the finding is on new code; it asks for a NEW test, which the existing-test exception does not cover
+    - next: add the uppercase language identifier test, then re-run review
+  timestamp: 2026-08-07T20:16:19.508535+00:00
+- actor: claude-code
+  id: 01kzexydfkvp5y16x2hz4t051s
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — crates/swissarmyhammer-validators/src/review/types.rs; the prior finding is closed and verified. extract_json_value is a flat ladder over five helpers, complexity 20 to 0 by the real scorer.
+    - test: green — cargo nextest run --workspace 13775 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 0e2946d2d (parent 773fe1d4c)
+    - review: findings — crates/swissarmyhammer-validators/src/review/types.rs:250 (no test covers an uppercase ```JSON language identifier falling through to the bare-fence rung). git blame puts the line in this commit, so the existing-test exception does not release it.
+    - guardrail: no repeat. Round 1 named the complexity, round 2 names a missing test on the new code.
+  timestamp: 2026-08-07T20:17:00.915382+00:00
+- actor: claude-code
+  id: 01kzexz6gm4q9pe3dgv4y3ebn0
+  text: |-
+    ### finish iteration 3 — stuck (session limit, not a code problem)
+    The session reached its subagent limit (200 of 200), so the finish loop cannot run another implement step. The card stays in `review` with 1 open finding:
+    - crates/swissarmyhammer-validators/src/review/types.rs:250 — no test covers an uppercase ```JSON language identifier falling through to the bare-fence rung.
+
+    The work itself is small and unblocked. A new session can continue with `/finish ^jjm86xy`. The last good commit is 0e2946d2d.
+  timestamp: 2026-08-07T20:17:26.548609+00:00
+position_column: review
 position_ordinal: '8480'
 title: 'review: retry a fleet reply that does not parse before failing the pair'
 ---
@@ -125,3 +155,9 @@ Requirements:
 Scope: `814d6f8ea..773fe1d4c` (HEAD~1..HEAD).
 
 - [x] `crates/swissarmyhammer-validators/src/review/types.rs:221` — Function `extract_json_value` exceeds cognitive complexity gate: complexity 20 is significantly over the limit of 15, making it difficult to verify and maintain. Extract each extraction strategy (```json fence, bare ``` fence, delimiter-matching, first-to-last fallback) into a separate private helper function that `extract_json_value` calls in sequence, reducing branching at the top level.
+
+## Review Findings (2026-08-07 15:11)
+
+Scope: `773fe1d4c..0e2946d2d` (HEAD~1..HEAD).
+
+- [x] `crates/swissarmyhammer-validators/src/review/types.rs:250` — The new `json_fenced_value` function performs case-sensitive matching for the Markdown language identifier, searching for the exact string `"```json"`, but Markdown language identifiers are case-insensitive in practice and per CommonMark conventions. An LLM response using `"```JSON"` or `"```Json"` will fail to match this check and fall through to the generic fence handler, yet there is no test covering this non-canonical case to verify the fallback behavior. Add one test feeding an uppercase language identifier (e.g., `"```JSON\n[...]\n```"` or `"```Json\n[...]\n```"`) through `parse_findings` to verify the fallback to `bare_fenced_value` correctly handles case-insensitive identifiers.
