@@ -61,6 +61,107 @@ comments:
     - evidence: 12 files — crates/swissarmyhammer-validators/src/review/scope/batch.rs, review/scope.rs, review/scope/tests.rs, review/fleet.rs, review/fleet/render.rs, review/fleet/tests.rs, review/synthesize.rs, review/test_support.rs, review/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs, review/review_op/response.rs, review/tests.rs. `cargo test -p swissarmyhammer-validators` 455 passed, 0 failed; `cargo test -p swissarmyhammer-tools --lib` 1313 passed, 0 failed; clippy `-D warnings` clean on both crates; `cargo check --workspace --all-targets` clean.
     - next: /review
   timestamp: 2026-08-07T02:30:37.871171+00:00
+- actor: claude-code
+  id: 01kzd1fj9s9xw6a89egzcz7z65
+  text: |-
+    ### commit — changed
+    - evidence: 7df31c4b4 fix(review): split batch budget into a per-file cap and a batch cap (^tsram0q)
+    - next: review
+  timestamp: 2026-08-07T02:40:19.769637+00:00
+- actor: claude-code
+  id: 01kzd1hhfrjn2hz1w1ggzh92n4
+  text: 'Check-in from the watching session (card author, 2026-08-07): both acceptance criteria are met by construction and by test — the over-cap verdict now comes from a constant per-file cap (the `a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows` test reproduces the exact ^cbnfe97 symptom with the defect restored, cap 50946 vs 262144), and the two newtypes stop the collapse from recurring. The report-text correction ("split the file" instead of "narrow the scope") matters too — the old advice could not change the verdict. Your ^x8z9hgf discovery (framing at 69-90% of the prompt) is the right follow-up split. Nothing to add.'
+  timestamp: 2026-08-07T02:41:24.472232+00:00
+- actor: claude-code
+  id: 01kzd2vmw3yfh6x11cbtfrqtk5
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (7df31c4b4). counts: 3 findings, 3 confirmed, 30 refuted, 36 attempted, 0 failed, 0 skipped, `skipped_files: []`. 2 recorded — crates/swissarmyhammer-validators/src/review/test_support.rs:55, crates/swissarmyhammer-validators/src/review/test_support.rs:57.
+    - dropped: crates/swissarmyhammer-validators/src/review/scope/tests.rs:825 (magic number 5 to a named constant). The line is authored by 503b743463, not by the commit under review, and the subject is restyling test code that already existed — the skill's blanket test exception drops it.
+    - subject evidence: `skipped_files` is empty on a 12-file diff. The round-2 15-file diff reported 13 over-cap files. The per-file cap is now constant, so no over-cap finding was raised against this card's own change.
+    - note: all 3 findings sit on lines authored by 503b743463; the commit under review touched neither line.
+    - next: fix the two path-traversal findings in test_support.rs, then re-review.
+  timestamp: 2026-08-07T03:04:24.195220+00:00
+- actor: claude-code
+  id: 01kzd2wepynpr0zwh7pmsgjsb9
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 12 files; batch_work_list takes BatchBudget with a constant file_cap and a separate batch_bytes; new card ^x8z9hgf records the shared-probe framing bloat
+    - test: green — cargo nextest run --workspace 13663 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 7df31c4b4
+    - review: findings — crates/swissarmyhammer-validators/src/review/test_support.rs:55, :57 (write_tool_rule_fixtures interpolates the rule name into a path with no confine_relative guard)
+    - acceptance evidence: the review reported skipped_files [] over a 12-file diff. The round-2 baseline on this card was 13 over-cap files on a 15-file diff. The per-file cap no longer follows the diff size.
+  timestamp: 2026-08-07T03:04:50.654291+00:00
+- actor: claude-code
+  id: 01kzd3aayxahz0vtv8dzfnf9xv
+  text: |
+    ### Implementation — path-traversal findings
+
+    Both findings name `write_tool_rule_fixtures`, but the cause is the file's habit of
+    joining a caller-supplied name straight onto a base directory. I removed that cause
+    from the whole file, not only from the two named lines.
+
+    New private helper next to `confine_relative`:
+
+        fn join_confined(base: &Path, rel: &str) -> PathBuf {
+            base.join(confine_relative(rel))
+        }
+
+    Every path in the file that a caller-supplied name builds now goes through it:
+
+    - `write_tool_rule_fixtures` — both writes (the two named lines).
+    - `write_tool_rule_ruleset` — `base.join(name)`, the third site the findings did
+      not name. It was the worse one: a `..` in `name` put the whole ruleset directory,
+      `rules/`, and `VALIDATOR.md` outside `base`.
+    - `TestRepo::write` — was already calling `confine_relative` by hand; it now calls
+      the shared helper, so one guard covers all four writes.
+
+    `confine_relative`'s doc said "working-tree-relative"; it is no longer repo-only, so
+    the doc now says "a base directory".
+
+    ### RED -> GREEN, verified
+
+    Two new tests, both watched failing first against the unguarded code:
+
+        write_tool_rule_fixtures_confines_a_traversing_rule_name  FAILED
+          a `..` rule name must not climb out of the fixtures dir to
+          /var/.../T/escape_rule_.tmpdzFDb8.fail.rs
+        write_tool_rule_ruleset_confines_a_traversing_name  FAILED
+          a `..` ruleset name must not climb out of the base dir to
+          /var/.../T/escape_ruleset_.tmpzQd96p
+
+    Both write real files OUTSIDE the temp dir before the fix — the vulnerability is
+    reproduced, not asserted from reading. Both pass after it. The escaped artifacts the
+    RED run left in the system temp dir were removed.
+
+    ### Not a path, so not routed through the guard
+
+    `rename_current_branch_to` and `checkout_new_branch` interpolate `name` into
+    `refs/heads/{name}`. That is a git refname handed to libgit2, not a filesystem
+    join — `repo.branch(name, ..)` normalizes and rejects it first, and a path guard
+    would corrupt a legitimate refname. No other site in the file builds a path from an
+    untrusted name; every remaining `join` takes a literal (`fixtures`, `rules`,
+    `VALIDATOR.md`, `.code-context`, `index.db`).
+
+    ### Refactor
+
+    Four confinement tests each rebuilt the same unique-marker `format!` with a
+    different prefix literal. Extracted to `escape_marker(prefix, dir)` in the test
+    module — one block with an argument instead of four copies.
+
+    ### Blast radius
+
+    Callers pass literal names (`docs-tool`, `tooled`, `tooled-set`), so no behavior
+    changed for any of them: `review/drive.rs`, `review/tool_rules.rs`,
+    `validators/loader.rs`, and `swissarmyhammer-tools`' `mcp/tools/review/tests.rs`.
+  timestamp: 2026-08-07T03:12:25.565707+00:00
+- actor: claude-code
+  id: 01kzd3ahaffj0bbemk49z3mjv6
+  text: |
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/test_support.rs. Both `## Review Findings` items flipped to `- [x]`. `cargo test -p swissarmyhammer-validators --all-features` 455 passed, 0 failed, doc tests 2 passed; `cargo test -p swissarmyhammer-tools --lib mcp::tools::review` 69 passed, 0 failed; `cargo clippy -p swissarmyhammer-validators --all-targets --all-features -- -D warnings` clean; `cargo fmt --all --check` clean; `cargo check --workspace --all-targets` clean.
+    - next: /review
+  timestamp: 2026-08-07T03:12:32.079733+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Review batch budget shrinks as the diff grows — over-cap splits cannot converge
@@ -82,3 +183,12 @@ Acceptance:
 - A file that satisfied the cap in run N cannot be over cap in run N+1 without growing.
 
 #tool-validators
+
+## Review Findings (2026-08-06 21:40)
+
+Scope: `review sha HEAD~1..HEAD` (7df31c4b4). Acceptance evidence: this run reported
+`skipped_files: []` — zero over-cap files across a 12-file diff, where the round-2
+15-file diff reported 13. The cap no longer moves with diff size.
+
+- [x] `crates/swissarmyhammer-validators/src/review/test_support.rs:55` — Path traversal vulnerability: the `rule` parameter is used in a format string to construct a filesystem path without validation. If `rule` contains path traversal sequences like `../`, files can be written outside the intended `fixtures` directory. Validate the `rule` parameter to reject path traversal attempts. Use a function like `confine_relative()` (already defined in this file at line 123) to strip non-normal path components, or explicitly validate that `rule` matches a safe pattern (e.g., `^[a-zA-Z0-9_-]+$`).
+- [x] `crates/swissarmyhammer-validators/src/review/test_support.rs:57` — Path traversal vulnerability: the `rule` parameter is used in a format string to construct a filesystem path without validation. If `rule` contains path traversal sequences like `../`, files can be written outside the intended `fixtures` directory. Apply the same fix as line 55: validate the `rule` parameter to reject path traversal attempts using `confine_relative()` or an explicit whitelist pattern.

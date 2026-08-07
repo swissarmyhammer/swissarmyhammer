@@ -49,13 +49,23 @@ pub fn uniform_budget(bytes: usize) -> BatchBudget {
 /// named `rule`: a `fixtures/<rule>.fail.rs` carrying a TODO marker (the tool
 /// must flag it) and a `fixtures/<rule>.pass.rs` that is clean (the tool must
 /// stay silent). Shared by every tool-rule test that needs a healthy rule.
+///
+/// `rule` is confined under `fixtures`: a `..` climb or an absolute segment in
+/// the name would otherwise write the fixture pair outside the directory the
+/// doctor check reads.
 pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
     let fixtures = base.join("fixtures");
     std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
-    std::fs::write(fixtures.join(format!("{rule}.fail.rs")), "// TODO: fail\n")
-        .expect("write fail fixture");
-    std::fs::write(fixtures.join(format!("{rule}.pass.rs")), "fn clean() {}\n")
-        .expect("write pass fixture");
+    std::fs::write(
+        join_confined(&fixtures, &format!("{rule}.fail.rs")),
+        "// TODO: fail\n",
+    )
+    .expect("write fail fixture");
+    std::fs::write(
+        join_confined(&fixtures, &format!("{rule}.pass.rs")),
+        "fn clean() {}\n",
+    )
+    .expect("write pass fixture");
 }
 
 /// Embedding dimension shared by the seeded index and the mock embedder.
@@ -116,8 +126,8 @@ impl Default for TestRepo {
     }
 }
 
-/// Strip a working-tree-relative path down to only its `Normal` components so a
-/// [`Path::join`] onto the repo root can never escape it. Drops a leading `/`
+/// Strip a relative path down to only its `Normal` components so a
+/// [`Path::join`] onto a base directory can never escape it. Drops a leading `/`
 /// (which would otherwise make `join` replace the whole path), `..` climbs, and
 /// any prefix/root component. A path that reduces to nothing yields `"."`.
 fn confine_relative(rel: &str) -> PathBuf {
@@ -134,6 +144,17 @@ fn confine_relative(rel: &str) -> PathBuf {
     } else {
         confined
     }
+}
+
+/// Join `rel` onto `base`, confined by [`confine_relative`] so the result always
+/// stays under `base`.
+///
+/// Every path these fixtures build from a caller-supplied name goes through here:
+/// a bare [`Path::join`] lets an absolute `rel` replace `base` outright and lets a
+/// `..` climb out of it, so a fixture written from an untrusted rule or ruleset
+/// name would land anywhere on the filesystem.
+fn join_confined(base: &Path, rel: &str) -> PathBuf {
+    base.join(confine_relative(rel))
 }
 
 impl TestRepo {
@@ -163,7 +184,7 @@ impl TestRepo {
     /// an absolute `rel` would make [`Path::join`] replace the whole path and
     /// escape the [`TempDir`], and a `..` segment would climb out of it.
     pub fn write(&self, rel: &str, content: &str) {
-        let full = self.dir.path().join(confine_relative(rel));
+        let full = join_confined(self.dir.path(), rel);
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -352,6 +373,9 @@ pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoa
 /// test and the tools crate's review-tool tests, so the written shape can
 /// never drift between them.
 ///
+/// `name` is confined under `base`: a `..` climb or an absolute segment in it
+/// would otherwise write the ruleset outside the directory the loader scans.
+///
 /// # Errors
 ///
 /// Returns the I/O error when a directory or file cannot be written —
@@ -362,7 +386,7 @@ pub fn write_tool_rule_ruleset(
     glob: &str,
     run: &str,
 ) -> Result<(), std::io::Error> {
-    let dir = base.join(name);
+    let dir = join_confined(base, name);
     std::fs::create_dir_all(dir.join("rules"))?;
     std::fs::write(
         dir.join("VALIDATOR.md"),
@@ -1449,18 +1473,24 @@ pub(crate) fn verdict_json(confirmed: bool, reason: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A file or directory name unique to `dir`, prefixed by `prefix`.
+    ///
+    /// Every confinement test below asserts that some name did NOT appear outside
+    /// its base directory. Deriving that name from the throwaway temp dir's own
+    /// name means neither a leftover from an earlier run nor a parallel test can
+    /// make the assertion fire on someone else's file.
+    fn escape_marker(prefix: &str, dir: &Path) -> String {
+        format!("{prefix}_{}", dir.file_name().unwrap().to_string_lossy())
+    }
+
     /// `TestRepo::write` must confine writes under its temp dir even when handed
     /// an absolute path: `PathBuf::join` would otherwise let an absolute `rel`
     /// replace the whole path and escape the repo root.
     #[test]
     fn write_confines_an_absolute_rel_under_the_repo_root() {
         let repo = TestRepo::new();
-        // A marker unique to this repo's temp dir so the escape assertion can
-        // never collide with a leftover or a parallel test.
-        let outside = std::env::temp_dir().join(format!(
-            "test_support_escape_{}.txt",
-            repo.path().file_name().unwrap().to_string_lossy()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("{}.txt", escape_marker("absolute", repo.path())));
         let _ = std::fs::remove_file(&outside);
 
         // An absolute path — naive `join` would write straight to `outside`.
@@ -1479,12 +1509,7 @@ mod tests {
     #[test]
     fn write_confines_a_dotdot_rel_under_the_repo_root() {
         let repo = TestRepo::new();
-        // A marker unique to this repo's temp dir, so a leftover or a parallel
-        // test can never make the parent-escape assertion below flaky.
-        let marker = format!(
-            "escape_marker_{}.txt",
-            repo.path().file_name().unwrap().to_string_lossy()
-        );
+        let marker = format!("{}.txt", escape_marker("dotdot", repo.path()));
         repo.write(&format!("../{marker}"), "leaked");
 
         // The `..` is stripped, so the file lives under the root...
@@ -1498,6 +1523,56 @@ mod tests {
             !above.exists(),
             "a `..` rel must not climb out of the repo root to {}",
             above.display()
+        );
+    }
+
+    /// `write_tool_rule_fixtures` must confine both fixture writes under the
+    /// `fixtures` directory: the rule name is interpolated into the file name, so
+    /// a `..` climb in it would otherwise land the fixtures outside `base`.
+    #[test]
+    fn write_tool_rule_fixtures_confines_a_traversing_rule_name() {
+        let base = TempDir::new().unwrap();
+        let marker = escape_marker("rule", base.path());
+        // Two climbs: the first leaves `fixtures`, the second leaves `base`.
+        write_tool_rule_fixtures(base.path(), &format!("../../{marker}"));
+
+        let above = base.path().parent().unwrap();
+        for suffix in ["fail", "pass"] {
+            let escaped = above.join(format!("{marker}.{suffix}.rs"));
+            assert!(
+                !escaped.exists(),
+                "a `..` rule name must not climb out of the fixtures dir to {}",
+                escaped.display()
+            );
+            assert!(
+                base.path()
+                    .join("fixtures")
+                    .join(format!("{marker}.{suffix}.rs"))
+                    .exists(),
+                "the climbs should be dropped, landing the {suffix} fixture under `fixtures`"
+            );
+        }
+    }
+
+    /// `write_tool_rule_ruleset` must confine the ruleset directory under `base`:
+    /// the ruleset name is joined onto `base`, so a `..` climb in it would
+    /// otherwise write the validator manifest outside `base`.
+    #[test]
+    fn write_tool_rule_ruleset_confines_a_traversing_name() {
+        let base = TempDir::new().unwrap();
+        let marker = escape_marker("ruleset", base.path());
+        write_tool_rule_ruleset(base.path(), &format!("../{marker}"), "**/*.py", "runner")
+            .expect("write ruleset");
+
+        let escaped = base.path().parent().unwrap().join(&marker);
+        assert!(
+            !escaped.exists(),
+            "a `..` ruleset name must not climb out of the base dir to {}",
+            escaped.display()
+        );
+        assert!(
+            base.path().join(&marker).join("VALIDATOR.md").exists(),
+            "the climb should be dropped, landing the ruleset under the base dir"
         );
     }
 
