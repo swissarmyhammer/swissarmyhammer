@@ -1,10 +1,11 @@
 //! Builtin validator assets embedded in the binary for the profile installer.
 //!
 //! The build script ([`build.rs`]) embeds every file under `builtin/validators/`
-//! (each set's `VALIDATOR.md` plus its `rules/*.md`) as `(name, content)` tuples,
-//! where `name` is the path relative to `builtin/validators/` with its real
-//! filename preserved (e.g. `dead-code/VALIDATOR.md`,
-//! `dead-code/rules/dead-code.md`).
+//! — each set's `VALIDATOR.md`, its `rules/*.md`, and its tool-rule fixtures in
+//! whatever language the tool lints — as `(name, content)` tuples, where `name`
+//! is the path relative to `builtin/validators/` with its real filename
+//! preserved (e.g. `dead-code/VALIDATOR.md`, `dead-code/rules/dead-code.md`,
+//! `code-hygiene/fixtures/missing-docs-rust.fail.rs`).
 //!
 //! This mirrors how `swissarmyhammer-skills` embeds `builtin/skills/`: the
 //! profile installer materializes these onto disk in the validators store
@@ -130,6 +131,79 @@ mod tests {
                     .iter()
                     .any(|(name, _)| *name == format!("code-hygiene/rules/{expected_rule}")),
                 "code-hygiene must embed the moved rule `rules/{expected_rule}`, got: {:?}",
+                code_hygiene_files
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The build artifact directory a fixture's own tool writes beside it. The
+    /// build script skips it, so the guard below must skip it too.
+    const BUILD_ARTIFACT_DIR: &str = "target";
+
+    /// Every file of a validator set reaches the store, not only its markdown.
+    ///
+    /// A tool rule's fixtures are source files in whatever language the tool
+    /// lints. A fixture left out of the embed makes doctor report the rule as
+    /// fixture-less, and the rule silently falls back to its prompt rule.
+    #[test]
+    fn test_every_builtin_validator_file_is_embedded() {
+        let source_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators");
+        let embedded: std::collections::BTreeSet<&str> = get_builtin_validators()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        let mut missing = Vec::new();
+        let mut pending = vec![source_dir.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read validators dir") {
+                let path = entry.expect("read dir entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n == BUILD_ARTIFACT_DIR) {
+                        continue;
+                    }
+                    pending.push(path);
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(&source_dir)
+                    .expect("every file is under the source dir")
+                    .to_string_lossy()
+                    .to_string();
+                if !embedded.contains(relative.as_str()) {
+                    missing.push(relative);
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these builtin validator files are not embedded, so `sah init` never writes them: {missing:?}"
+        );
+    }
+
+    /// The shipped tool rules' fixtures reach the store, so doctor can prove
+    /// each rule healthy in an installed project.
+    #[test]
+    fn test_tool_rule_fixtures_are_embedded() {
+        let sets = builtin_validators_by_set();
+        let code_hygiene_files = &sets["code-hygiene"];
+
+        for fixture in [
+            "missing-docs-rust.fail.rs",
+            "missing-docs-rust.pass.rs",
+            "missing-docs-python.fail.py",
+            "missing-docs-python.pass.py",
+        ] {
+            assert!(
+                code_hygiene_files
+                    .iter()
+                    .any(|(name, _)| *name == format!("code-hygiene/fixtures/{fixture}")),
+                "code-hygiene must embed the tool-rule fixture `fixtures/{fixture}`, got: {:?}",
                 code_hygiene_files
                     .iter()
                     .map(|(name, _)| name)

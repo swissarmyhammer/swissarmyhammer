@@ -59,13 +59,13 @@ A tool rule binds one tool to one language. Example:
     tool:
       scope: files
       run: |
-        ruff check --select D1 --output-format json "$@" |
-          jq -c '.[] | {file: .filename, line: .location.row, message: .message}'
+        ruff check --isolated --no-cache --select D1 --output-format json "$@" |
+          jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
       doctor:
         check_command: "which ruff jq"
         check_version_command: "ruff --version"
       install:
-        commands: ["uv tool install ruff", "pipx install ruff", "brew install ruff"]
+        commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
     ---
 
 The `match` block is the same block the set manifest uses — the same struct,
@@ -102,7 +102,9 @@ The `tool` block keys:
   the main tool's version. Name everything the pipe needs (`which ruff jq`).
 - `install.commands` — the install commands, in order of preference. Pin the
   tool version in each command. An unpinned tool can change its rules and
-  break the gate.
+  break the gate. A tool that ships with the language toolchain has no package
+  to pin (clippy is a `rustup` component), so its rule declares no install
+  commands at all.
 
 The script's contract is its stdout. One finding per line, in either shape:
 
@@ -140,9 +142,20 @@ Each tool rule ships two fixture files in the set's `fixtures/` directory:
 - `fixtures/<name>.fail.<ext>` — the tool must report at least one finding.
 - `fixtures/<name>.pass.<ext>` — the tool must report zero findings.
 
-Doctor runs the tool rule against both fixtures. A tool rule that fails its
-fixtures is not used, and doctor reports it. Fixtures catch a tool upgrade
-that changes behavior.
+Doctor runs the tool rule against both fixtures, with the `fixtures/` directory
+as the working directory. A `files`-scope script gets the fixture file name as
+its argument; a `workspace`-scope script gets none. Doctor counts only the
+findings the run reports ABOUT the fixture under test — the same attribution
+the engine makes when it keeps only the findings in the changed files. A
+`workspace`-scope script reads the whole `fixtures/` directory on both runs, so
+without that attribution it could never pass the pair.
+
+A tool that needs more than a loose file to run gets it in `fixtures/`. Cargo
+lints a package, never a loose file, so the `code-hygiene` fixtures carry a
+`Cargo.toml` and a crate root that hold both Rust fixtures as modules.
+
+A tool rule that fails its fixtures is not used, and doctor reports it.
+Fixtures catch a tool upgrade that changes behavior.
 
 ## Install lifecycle
 

@@ -88,7 +88,7 @@ mod tests {
     /// `code-security` (no probes) and `code-hygiene` (`probes: [callers,
     /// complexity]`, needed by the `dead-code` and `cognitive-complexity` rules
     /// bundled inside it). See [`test_code_security_loads_with_three_rules_and_no_probes`]
-    /// and [`test_code_hygiene_loads_with_six_rules_and_callers_and_complexity_probes`].
+    /// and [`test_code_hygiene_loads_its_rule_roster_and_callers_and_complexity_probes`].
     const MERGED_VALIDATORS: &[&str] = &["code-security", "code-hygiene"];
 
     /// The nine single-rule builtin validators retired by the code-security /
@@ -222,12 +222,26 @@ mod tests {
         }
     }
 
-    /// `code-hygiene` carries exactly the six merged hygiene rules and
+    /// The prompt rules `code-hygiene` carries — the merged hygiene set.
+    const CODE_HYGIENE_PROMPT_RULES: &[&str] = &[
+        "no-commented-code",
+        "function-length",
+        "cognitive-complexity",
+        "missing-docs",
+        "data-driven",
+        "dead-code",
+    ];
+
+    /// The tool rules `code-hygiene` carries. Each supersedes the `missing-docs`
+    /// prompt rule for the language it serves.
+    const CODE_HYGIENE_TOOL_RULES: &[&str] = &["missing-docs-rust", "missing-docs-python"];
+
+    /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
     /// `complexity` for `cognitive-complexity` (the rest are in-file
     /// judgments that need no probe).
     #[test]
-    fn test_code_hygiene_loads_with_six_rules_and_callers_and_complexity_probes() {
+    fn test_code_hygiene_loads_its_rule_roster_and_callers_and_complexity_probes() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
@@ -249,22 +263,35 @@ mod tests {
         }
 
         let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
+        let expected_rules = CODE_HYGIENE_PROMPT_RULES
+            .iter()
+            .chain(CODE_HYGIENE_TOOL_RULES.iter());
         assert_eq!(
             ruleset.rules.len(),
-            6,
-            "code-hygiene should carry exactly 6 rules, got: {rule_names:?}"
+            CODE_HYGIENE_PROMPT_RULES.len() + CODE_HYGIENE_TOOL_RULES.len(),
+            "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
-        for expected in [
-            "no-commented-code",
-            "function-length",
-            "cognitive-complexity",
-            "missing-docs",
-            "data-driven",
-            "dead-code",
-        ] {
+        for expected in expected_rules {
             assert!(
-                rule_names.contains(&expected),
+                rule_names.contains(expected),
                 "code-hygiene should carry the {expected} rule, got: {rule_names:?}"
+            );
+        }
+
+        for tool_rule_name in CODE_HYGIENE_TOOL_RULES {
+            let tool_rule = ruleset
+                .rules
+                .iter()
+                .find(|rule| rule.name == *tool_rule_name)
+                .unwrap_or_else(|| panic!("{tool_rule_name} should be loaded"));
+            assert!(
+                tool_rule.tool.is_some(),
+                "{tool_rule_name} must carry a tool block, or it is a prompt rule"
+            );
+            assert_eq!(
+                tool_rule.supersedes.as_deref(),
+                Some("missing-docs"),
+                "{tool_rule_name} must supersede the missing-docs prompt rule"
             );
         }
     }

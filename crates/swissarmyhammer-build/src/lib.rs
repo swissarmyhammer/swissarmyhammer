@@ -41,6 +41,9 @@ pub struct BuiltinGenerator {
     /// When true, preserve file extensions in generated names.
     /// When false (default), extensions are stripped so names serve as identifiers.
     preserve_extensions: bool,
+    /// When true, every file is embedded whatever its extension, and
+    /// `extensions` is ignored.
+    all_extensions: bool,
 }
 
 impl BuiltinGenerator {
@@ -58,6 +61,7 @@ impl BuiltinGenerator {
             extensions: vec!["md".to_string()],
             skip_dirs: vec![],
             preserve_extensions: false,
+            all_extensions: false,
         }
     }
 
@@ -99,6 +103,20 @@ impl BuiltinGenerator {
     /// multi-file resources where filenames are written to disk.
     pub fn preserve_extensions(mut self) -> Self {
         self.preserve_extensions = true;
+        self
+    }
+
+    /// Embed every file in the source directory, whatever its extension.
+    ///
+    /// Use this for a resource whose members are a directory of mixed files —
+    /// a validator set carries its `VALIDATOR.md`, its `rules/*.md`, and its
+    /// tool-rule fixtures in whatever language the tool lints. An extension
+    /// list would silently drop a fixture the day a new language arrives.
+    ///
+    /// Pair it with [`preserve_extensions`](Self::preserve_extensions): the
+    /// real filenames are what the installer writes to disk.
+    pub fn all_extensions(mut self) -> Self {
+        self.all_extensions = true;
         self
     }
 
@@ -218,7 +236,13 @@ impl BuiltinGenerator {
     }
 
     /// Check if a file matches any of the configured extensions.
+    ///
+    /// [`all_extensions`](Self::all_extensions) takes every file, including
+    /// one with no extension at all.
     fn matches_extension(&self, path: &Path) -> bool {
+        if self.all_extensions {
+            return true;
+        }
         let Some(ext) = path.extension() else {
             return false;
         };
@@ -373,6 +397,17 @@ mod tests {
     fn test_matches_extension_no_extension() {
         let gen = BuiltinGenerator::new("prompts");
         assert!(!gen.matches_extension(Path::new("Makefile")));
+    }
+
+    #[test]
+    fn test_all_extensions_takes_every_file() {
+        let gen = BuiltinGenerator::new("validators").all_extensions();
+        for file in ["foo.md", "bar.rs", "baz.py", "Cargo.toml", "Makefile"] {
+            assert!(
+                gen.matches_extension(Path::new(file)),
+                "all_extensions() must take {file}"
+            );
+        }
     }
 
     // -- extract_name tests --

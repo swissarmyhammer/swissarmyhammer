@@ -638,7 +638,12 @@ fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<Vec<Finding>, Stri
 
 /// Normalize a tool-reported path onto the repo-relative form the work-list
 /// uses: strip the workspace root from an absolute path and a leading `./`.
-fn normalize_tool_path(path: &str, repo_root: &Path) -> String {
+///
+/// Crate-visible so the doctor's fixture checks
+/// ([`crate::doctor`]) attribute a tool-reported path to a fixture with the
+/// same normalization the engine attributes it to a changed file with — a path
+/// can never mean two things.
+pub(crate) fn normalize_tool_path(path: &str, repo_root: &Path) -> String {
     let p = Path::new(path);
     let relative = p.strip_prefix(repo_root).unwrap_or(p);
     let text = relative.to_string_lossy();
@@ -1098,6 +1103,162 @@ mod tests {
             if validator == "docs" && file == "src/lib.rs")
         );
         assert_eq!(events.len(), 4);
+    }
+
+    /// The builtin `code-hygiene` set, the one that carries the shipped
+    /// missing-docs tool rules.
+    const CODE_HYGIENE_SET: &str = "code-hygiene";
+
+    /// The prompt rule both shipped missing-docs tool rules supersede.
+    const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
+
+    /// Every shipped missing-docs tool rule, with the project type it serves.
+    const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str)] = &[
+        ("rust", "missing-docs-rust"),
+        ("python", "missing-docs-python"),
+    ];
+
+    /// A cargo package holding one undocumented public item and one documented
+    /// one. `[workspace]` keeps cargo inside the temporary directory.
+    const UNDOCUMENTED_PACKAGE_MANIFEST: &str = concat!(
+        "[package]\nname = \"undocumented-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        "\n[workspace]\n",
+    );
+
+    /// The library of [`UNDOCUMENTED_PACKAGE_MANIFEST`]. The undocumented
+    /// struct is the finding the Rust tool rule must report.
+    const UNDOCUMENTED_LIB_RS: &str = concat!(
+        "//! A probe crate for the shipped Rust missing-docs tool rule.\n\n",
+        "/// A documented public struct.\n",
+        "pub struct Documented;\n\n",
+        "pub struct Undocumented;\n",
+    );
+
+    /// The library path inside the probe package, as the work-list holds it.
+    const UNDOCUMENTED_LIB_PATH: &str = "src/lib.rs";
+
+    /// A loader carrying every shipped validator set.
+    fn builtin_loader() -> ValidatorLoader {
+        let mut loader = ValidatorLoader::new();
+        crate::load_builtins(&mut loader);
+        loader
+    }
+
+    /// A one-validator work-list over `files` for the builtin `code-hygiene`
+    /// set, naming both the prompt rule and the Rust tool rule.
+    fn code_hygiene_work(files: &[&str]) -> WorkList {
+        let file_work = files
+            .iter()
+            .map(|path| FileWork::new(*path, vec![], vec![], UNDOCUMENTED_LIB_RS, vec![]));
+        WorkList::new(
+            "an undocumented public item",
+            vec![ValidatorWork::new(
+                CODE_HYGIENE_SET,
+                RuleNames::new([
+                    MISSING_DOCS_PROMPT_RULE.to_string(),
+                    "missing-docs-rust".to_string(),
+                ]),
+                ProbeNames::new([]),
+                file_work,
+            )],
+        )
+    }
+
+    /// Acceptance: the shipped Rust tool rule reports an undocumented public
+    /// item on a real cargo workspace, through the real clippy pipeline.
+    ///
+    /// No LLM reads the pair: the rule plans healthy, so the `missing-docs`
+    /// prompt rule is suppressed for the file, and the finding comes from the
+    /// script's stdout — [`execute_tool_runs`] never reaches an agent.
+    #[test]
+    fn the_shipped_rust_tool_rule_reports_an_undocumented_public_item() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("Cargo.toml"),
+            UNDOCUMENTED_PACKAGE_MANIFEST,
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join(UNDOCUMENTED_LIB_PATH), UNDOCUMENTED_LIB_RS).unwrap();
+        let loader = builtin_loader();
+        let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
+
+        let plan = plan_tool_rules(&work, &loader, &["rust".to_string()]);
+
+        let run = plan
+            .runs()
+            .iter()
+            .find(|run| run.rule() == "missing-docs-rust")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the shipped Rust tool rule must plan a run; fallbacks: {:?}",
+                    plan.fallbacks()
+                )
+            });
+        assert_eq!(run.files(), [UNDOCUMENTED_LIB_PATH.to_string()]);
+        assert!(
+            plan.suppression()
+                .suppressed_rules(CODE_HYGIENE_SET, UNDOCUMENTED_LIB_PATH)
+                .contains(MISSING_DOCS_PROMPT_RULE),
+            "a healthy tool rule must suppress the prompt rule, so no LLM reads the pair"
+        );
+
+        let outcome = execute_tool_runs(std::slice::from_ref(run), repo.path(), None);
+
+        assert!(
+            outcome.errors().is_empty(),
+            "the shipped pipeline must not break; errors: {:?}",
+            outcome.errors()
+        );
+        let findings: Vec<&VerifiedFinding> = outcome
+            .findings()
+            .iter()
+            .filter(|verified| verified.finding.file == UNDOCUMENTED_LIB_PATH)
+            .collect();
+        assert_eq!(
+            findings.len(),
+            1,
+            "exactly the undocumented item must be reported; got {:?}",
+            outcome.findings()
+        );
+        assert!(findings[0].confirmed);
+        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
+        assert_eq!(
+            findings[0].finding.rule.as_deref(),
+            Some("missing-docs-rust")
+        );
+        assert!(
+            findings[0].finding.claim.contains("missing documentation"),
+            "the claim must be clippy's message; got '{}'",
+            findings[0].finding.claim
+        );
+    }
+
+    /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
+    /// in doctor, after the same pre-install `sah init` runs.
+    #[test]
+    fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
+        let loader = builtin_loader();
+
+        for (project_type, rule_name) in SHIPPED_MISSING_DOCS_RULES {
+            let project_types = vec![(*project_type).to_string()];
+            crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
+
+            let status = crate::doctor::check_review_engine_with(&loader, &project_types);
+            let row = status
+                .tool_rules
+                .iter()
+                .find(|row| row.rule_name == *rule_name)
+                .unwrap_or_else(|| {
+                    panic!("{rule_name} must be reported for a {project_type} project")
+                });
+            assert!(
+                row.usable(),
+                "{rule_name} must be usable; doctor says: {}",
+                row.degraded_detail()
+            );
+            assert_eq!(row.supersedes.as_deref(), Some(MISSING_DOCS_PROMPT_RULE));
+        }
     }
 
     #[test]

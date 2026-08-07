@@ -30,7 +30,7 @@ use swissarmyhammer_doctor::{Check, CheckStatus};
 use crate::error::AvpError;
 use crate::review::scope::detected_project_type_keys;
 use crate::review::tool_output::parse_tool_stdout;
-use crate::review::tool_rules::project_tool_rules;
+use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
 use crate::validators::types::{
     Rule, RuleSet, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
 };
@@ -378,11 +378,19 @@ fn find_fixture(dir: &Path, rule_name: &str, kind: &str) -> Option<PathBuf> {
         })
 }
 
-/// Run the rule's script against one fixture file and count its findings.
+/// Run the rule's script against one fixture file and count the findings it
+/// reported ABOUT that fixture.
 ///
 /// The script runs with the fixture's directory as its working directory. A
 /// `files`-scope script receives the fixture file name as `"$@"`; a
 /// `workspace`-scope script runs with no arguments.
+///
+/// A `workspace`-scope script reads the whole fixtures directory, so it sees
+/// the fail fixture and the pass fixture on every run. Only the findings whose
+/// path is the fixture under test count — the same attribution
+/// [`execute_tool_runs`](crate::review::execute_tool_runs) makes when it keeps
+/// only the findings in the changed files. Without it a `workspace`-scope rule
+/// could never pass the pair, because both runs report the same findings.
 fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
     let fixture_dir = fixture.parent().unwrap_or_else(|| Path::new("."));
     let fixture_name = fixture
@@ -411,7 +419,14 @@ fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
             fixture_label(fixture)
         )
     })?;
-    Ok(findings.len())
+    let about_fixture = findings
+        .iter()
+        .filter(|finding| {
+            Path::new(&normalize_tool_path(&finding.file, fixture_dir)).file_name()
+                == Some(fixture_name)
+        })
+        .count();
+    Ok(about_fixture)
 }
 
 /// The fixture's file name for messages, falling back to the full path.
@@ -659,6 +674,23 @@ tool:
 Always silent.
 "#;
 
+    /// A `workspace`-scope tool rule: the script reads the whole directory it
+    /// runs in, never the fixture it is asked about, so both fixture runs see
+    /// both fixture files and report the same findings.
+    const WORKSPACE_TOOL_RULE: &str = r#"---
+name: workspace-check
+description: Flag TODO markers across the whole workspace.
+supersedes: missing-docs
+tool:
+  scope: workspace
+  run: |
+    grep -rn TODO . | awk -F: '{print $1 ":" $2 ": found TODO"}'
+  doctor:
+    check_command: "which grep awk"
+---
+Grep the workspace for TODO markers.
+"#;
+
     /// A tool rule scoped to python projects only.
     const PYTHON_TOOL_RULE: &str = r#"---
 name: python-only-check
@@ -828,6 +860,38 @@ Python only.
         );
         assert!(!rule.usable());
         assert!(rule.on_prompt_fallback());
+    }
+
+    /// A `workspace`-scope script reads the whole fixtures directory, so both
+    /// fixture runs report the fail fixture's defect. Only the findings of the
+    /// fixture under test count, exactly as the review engine keeps only the
+    /// findings in the changed files for a `workspace`-scope run.
+    #[test]
+    fn test_workspace_scope_fixtures_count_only_the_fixture_under_test() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        write_ruleset(
+            temp.path(),
+            "tool-set",
+            TOOL_SET_MANIFEST,
+            &[("workspace-check.md", WORKSPACE_TOOL_RULE)],
+            &[
+                ("workspace-check.fail.txt", "a TODO marker\n"),
+                ("workspace-check.pass.txt", "all clean here\n"),
+            ],
+        );
+        let loader = loader_for(temp.path());
+
+        let status = check_review_engine_with(&loader, &rust_types());
+
+        assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
+        let rule = &status.tool_rules[0];
+        assert_eq!(rule.presence, ToolPresence::Present);
+        assert_eq!(
+            rule.fixtures,
+            FixtureOutcome::Passed,
+            "the pass fixture holds no defect, so a workspace run must count zero findings for it"
+        );
+        assert!(rule.usable());
     }
 
     #[test]
