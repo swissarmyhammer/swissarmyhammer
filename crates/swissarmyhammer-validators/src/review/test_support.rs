@@ -1471,6 +1471,15 @@ pub(crate) fn findings_json(file: &str, line: u32, rule: &str, claim: &str) -> S
     format!("Here are my findings:\n\n```json\n{array}\n```\n")
 }
 
+/// A findings reply no parse can read: the array is cut off mid-object, so
+/// neither the strict parse nor the bracket repair can close it.
+///
+/// The shape a real model produces when it truncates — and the one reply that
+/// earns a fleet task its single re-ask.
+pub(crate) fn malformed_findings_json() -> String {
+    "Here are my findings:\n\n[{\"file\": ".to_string()
+}
+
 /// A verify verdict object as the verifier agent would emit it, fenced in
 /// prose (`confirmed: true` keeps the finding, `false` refutes it).
 pub(crate) fn verdict_json(confirmed: bool, reason: &str) -> String {

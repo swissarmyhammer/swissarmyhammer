@@ -160,6 +160,49 @@ fn parse_bare_object_findings(agent_text: &str) -> Option<Vec<Finding>> {
     (!findings.is_empty()).then_some(findings)
 }
 
+/// How many `[` positions the repair pass tries as the findings array's start.
+///
+/// A reply's prose carries a handful of bracketed asides at most ("I reviewed
+/// [src/lib.rs]"), so the real array is among the first few candidates. The cap
+/// keeps a reply that is mostly brackets from turning the repair into a long
+/// scan.
+const MAX_REPAIR_ARRAY_STARTS: usize = 16;
+
+/// Parse a fleet-agent reply into findings, repairing a reply [`parse_findings`]
+/// rejects.
+///
+/// The reply is a JSON array by contract, so a rejected one earns a cheap repair
+/// pass before the caller spends anything more expensive on it: strip the text
+/// before an `[` and after the last `]`, and deserialize what is left.
+/// [`extract_json_value`] already does that for the FIRST `[` and the delimiter
+/// that balances it, which a bracketed aside in the prose captures instead of
+/// the array; this walks the later `[` candidates too, up to
+/// [`MAX_REPAIR_ARRAY_STARTS`] of them.
+///
+/// # Errors
+///
+/// Returns the [`parse_findings`] error when no candidate span deserializes into
+/// a findings array. The repair never invents a message of its own — the error a
+/// caller reports is the one the real parse produced.
+pub(crate) fn parse_findings_repaired(agent_text: &str) -> Result<Vec<Finding>, AvpError> {
+    let parse_error = match parse_findings(agent_text) {
+        Ok(findings) => return Ok(findings),
+        Err(err) => err,
+    };
+    repair_findings_array(agent_text).ok_or(parse_error)
+}
+
+/// Deserialize the first `[`…last `]` span of `agent_text` that yields a findings
+/// array, or `None` when no candidate span does.
+fn repair_findings_array(agent_text: &str) -> Option<Vec<Finding>> {
+    let end = agent_text.rfind(']')?;
+    agent_text
+        .match_indices('[')
+        .take_while(|(start, _)| *start < end)
+        .take(MAX_REPAIR_ARRAY_STARTS)
+        .find_map(|(start, _)| serde_json::from_str(&agent_text[start..=end]).ok())
+}
+
 /// Extract the JSON value substring delimited by `open`/`close` from an agent
 /// response.
 ///
@@ -531,6 +574,44 @@ Let me know if you want more detail."#;
     #[test]
     fn parse_findings_errors_on_truncated_array() {
         let err = parse_findings("```json\n[{\"file\": \"a.rs\"\n```").unwrap_err();
+        assert!(matches!(err, AvpError::Json(_)), "got: {err:?}");
+    }
+
+    /// A bracketed aside in the prose captures the strict parse's array
+    /// extraction — it balances `[src/lib.rs]` and never reaches the real array
+    /// — and the schema the model restates keeps the bare-object fallback from
+    /// rescuing it. The repair walks on to the next `[` and reads the array.
+    #[test]
+    fn parse_findings_repaired_reads_past_a_bracketed_aside() {
+        let text = "Each finding is {\"file\": <path>, \"line\": <n>}. I reviewed \
+                    [src/lib.rs] and found:\n\
+                    [{\"file\": \"src/lib.rs\", \"line\": 4, \"claim\": \"c1\", \"evidence\": \"e1\"},\
+                    {\"file\": \"src/lib.rs\", \"line\": 9, \"claim\": \"c2\", \"evidence\": \"e2\"}]";
+        parse_findings(text).expect_err("the strict parse cannot read past the aside");
+
+        let findings = parse_findings_repaired(text).expect("the repair must read the array");
+        assert_eq!(findings.len(), 2, "got: {findings:?}");
+        assert_eq!(findings[0].claim, "c1");
+        assert_eq!(findings[1].claim, "c2");
+    }
+
+    /// A reply the strict parse already reads is returned unchanged — the repair
+    /// is a fallback, never a second interpretation of a good reply.
+    #[test]
+    fn parse_findings_repaired_leaves_a_clean_reply_alone() {
+        let text = "```json\n[{\"file\": \"a.rs\", \"line\": 1, \"claim\": \"c\", \
+                    \"evidence\": \"e\"}]\n```";
+        let findings = parse_findings_repaired(text).unwrap();
+        assert_eq!(findings, parse_findings(text).unwrap());
+    }
+
+    /// A reply cut off mid-object has no `]` to strip back to, so no candidate
+    /// span exists and the repair reports the parse's own error. This is the
+    /// reply shape that earns a re-ask.
+    #[test]
+    fn parse_findings_repaired_errors_on_a_reply_with_no_array_close() {
+        let err =
+            parse_findings_repaired("Here are my findings:\n\n[{\"file\": \"a.rs\", ").unwrap_err();
         assert!(matches!(err, AvpError::Json(_)), "got: {err:?}");
     }
 }

@@ -75,7 +75,7 @@ use crate::review::scope::{
     BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
 };
 use crate::review::tool_rules::ToolSuppression;
-use crate::review::types::{parse_findings, Finding};
+use crate::review::types::{parse_findings_repaired, Finding};
 use crate::validators::types::Rule;
 use crate::validators::{
     AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, ValidatorLoader,
@@ -297,8 +297,8 @@ impl Default for FleetConfig {
 
 /// The result of a fan-out run: the merged findings plus the task tally.
 ///
-/// A task that errors, is dropped, or returns unparseable content still
-/// degrades to zero findings (one bad task never aborts the rest), but unlike
+/// A task that errors, is dropped, or answers unreadably twice still degrades to
+/// zero findings (one bad task never aborts the rest), but unlike
 /// the findings — which simply omit it — the tally records that it was both
 /// `attempted` and `failed`. A review where most tasks fail therefore renders an
 /// empty findings set with a non-zero `failed` count, which is exactly what
@@ -314,8 +314,9 @@ pub struct FleetOutcome {
     /// [`attempted`](Self::attempted); private so the tally can evolve without a
     /// field-level API commitment.
     attempted: usize,
-    /// How many of those tasks failed (errored, were dropped, or did not parse)
-    /// and so degraded to zero findings. Read through [`failed`](Self::failed);
+    /// How many of those tasks failed (errored, were dropped, or answered
+    /// unreadably even on their one re-ask) and so degraded to zero findings.
+    /// Read through [`failed`](Self::failed);
     /// private for the same reason as [`attempted`](Self::attempted).
     failed: usize,
     /// The run's shared primed-prefix pin guard, when priming succeeded.
@@ -361,8 +362,8 @@ impl FleetOutcome {
         self.attempted
     }
 
-    /// How many submitted tasks failed (errored, were dropped, or did not parse)
-    /// and so degraded to zero findings.
+    /// How many submitted tasks failed (errored, were dropped, or answered
+    /// unreadably even on their one re-ask) and so degraded to zero findings.
     pub fn failed(&self) -> usize {
         self.failed
     }
@@ -507,10 +508,12 @@ pub(crate) fn emit_progress(progress: Option<&ReviewProgressSender>, event: Revi
 /// ([`render_run_prime`]). Then one task is built per validator: each forks the
 /// shared prime and sends only that validator's instructions
 /// ([`render_validator_suffix`] — its prompt rules + output contract), decoding
-/// strictly forward from the cached prefix. As each task returns, its response is
-/// parsed by [`parse_findings`] and every finding is tagged with the validator. A
-/// task that errors or returns unparseable content contributes zero findings for
-/// its validator and is logged — never a panic.
+/// strictly forward from the cached prefix. As each task returns, its reply is
+/// parsed by [`parse_findings`](crate::review::types::parse_findings) — plus a
+/// cheap bracket repair — and every finding is tagged with the validator. A
+/// reply no parse can read earns the task one re-ask before it is declared
+/// failed; a task that errors, or whose second reply is unreadable too,
+/// contributes zero findings for its validator and is logged — never a panic.
 ///
 /// `loader` is the same fully-loaded [`ValidatorLoader`] stage 1 matched against,
 /// reused here as the authoritative source of each validator's mandate and rule
@@ -711,9 +714,9 @@ fn submit_fan_out(
 /// merged findings plus the `(attempted, failed)` tally.
 ///
 /// Each receiver resolves independently while the pool drains in parallel up to
-/// its worker count. A task that errors, is dropped, or returns unparseable
-/// content contributes zero findings and bumps `failed` — one bad task never
-/// aborts the rest. Awaiting here (rather than in a detached task) is what keeps
+/// its worker count. A task that errors, is dropped, or answers unreadably even
+/// on its one re-ask contributes zero findings and bumps `failed` — one bad task
+/// never aborts the rest. Awaiting here (rather than in a detached task) keeps
 /// the run's shared-prime pin released on cancellation: dropping the `run_fleet`
 /// future drops this collect mid-await.
 async fn collect_fan_out(
@@ -725,28 +728,23 @@ async fn collect_fan_out(
     let attempted = pending.len();
     let mut findings: Vec<Finding> = Vec::new();
     let mut failed = 0usize;
-    for pending in pending {
-        let name = pending.task.validator.validator_name();
-        let files: Vec<String> = pending
-            .task
+    for PendingValidator { task, rx } in pending {
+        let files: Vec<String> = task
             .validator
             .files()
             .iter()
             .map(|f| f.path().to_string())
             .collect();
-        let collected = match pending.rx {
-            Submitted::Monolithic(rx) => collect_task(rx.await, name, &files),
-            Submitted::Forked(rx) => {
-                collect_forked_task(
-                    rx.await,
-                    work.change_purpose(),
-                    &pending.task.validator,
-                    &pending.task.ruleset,
-                    &files,
-                    pool,
-                )
-                .await
-            }
+        let ctx = TaskContext {
+            change_purpose: work.change_purpose(),
+            validator: &task.validator,
+            ruleset: &task.ruleset,
+            files: &files,
+        };
+        let name = ctx.name();
+        let collected = match rx {
+            Submitted::Monolithic(rx) => collect_monolithic_task(rx.await, &ctx, pool).await,
+            Submitted::Forked(rx) => collect_forked_task(rx.await, &ctx, pool).await,
         };
         match collected {
             Ok(parsed) => {
@@ -764,7 +762,9 @@ async fn collect_fan_out(
                 );
                 findings.extend(parsed);
             }
-            Err(()) => failed += 1,
+            // Both failure kinds land here: the re-ask ladder is already spent
+            // by the time a task reports one, so the tally is the same.
+            Err(_) => failed += 1,
         }
         // One PairDone per (validator, file) regardless of how the task
         // resolved — success, monolithic fallback, or failure — so a consumer
@@ -808,6 +808,75 @@ enum Submitted {
     Monolithic(tokio::sync::oneshot::Receiver<crate::validators::PromptResult>),
 }
 
+/// Everything one validator task's collectors need: the name a finding is
+/// tagged with, the files a failure is attributed to, and the material to
+/// re-render the task's monolithic prompt.
+struct TaskContext<'a> {
+    /// The run's change purpose — the first section of a monolithic prompt.
+    change_purpose: &'a str,
+    /// The validator the task reviews for, narrowed to its file group.
+    validator: &'a ValidatorWork,
+    /// The task's rule set, already filtered of tool and suppressed rules.
+    ruleset: &'a RuleSet,
+    /// The validator's files, as every log line and progress event names them.
+    files: &'a [String],
+}
+
+impl TaskContext<'_> {
+    /// The validator's name — what every finding is tagged with and every log
+    /// line names.
+    fn name(&self) -> &str {
+        self.validator.validator_name()
+    }
+
+    /// Render this task's self-contained monolithic prompt: the fresh-session
+    /// prompt used when there is no prime to fork from, and again when a re-ask
+    /// needs a second sample with no session to continue.
+    fn monolithic_prompt(&self) -> String {
+        render_fleet_prompt(self.change_purpose, self.validator, self.ruleset)
+    }
+}
+
+/// Why one collected validator task yielded no findings.
+///
+/// The two are not the same accident, and only one of them is worth asking
+/// again about: a reply that arrived and could not be read is a bad sample from
+/// the model, while a task that never delivered a reply would fail the same way
+/// a second time.
+enum TaskFailure {
+    /// No usable reply was delivered — a pool error, or a dropped result
+    /// channel.
+    NotDelivered,
+    /// A reply arrived and no parse could read it, repair included.
+    Unparseable,
+}
+
+/// The log message for a validator task whose turn came back as a pool error.
+const TASK_ERRORED: &str = "fleet task failed; yielding zero findings for this validator";
+
+/// The log message for a validator task whose result channel was dropped before
+/// the turn was delivered.
+const TASK_DROPPED: &str = "fleet task result was dropped before delivery; yielding zero findings";
+
+/// The log message for a re-ask that never came back, so the task's unreadable
+/// first reply is final.
+const REASK_UNDELIVERED: &str =
+    "fleet re-ask was not delivered; the task's unreadable reply stands";
+
+/// The one re-ask a validator task gets when its reply cannot be read.
+///
+/// One malformed reply used to throw away a whole validator's review: the task
+/// yielded zero findings, the tally counted it failed, and the report ended
+/// INCOMPLETE with a full re-run as the only recovery. Asking the model to
+/// restate what it already found is far cheaper than that, and on the forked
+/// path it runs on a fork of the very session that answered, so the findings are
+/// still in context. The instruction is deliberately about the SHAPE of the
+/// reply, not about reviewing again — the review already happened.
+const REASK_PROMPT: &str = "\
+Your last reply could not be read as JSON. Reply again with the SAME findings as \
+a single JSON array and nothing else: no prose, no code fence, no tool call. An \
+empty array is the correct reply when you found nothing.";
+
 /// Resolve one forked validator task's delivered result into tagged findings.
 ///
 /// A delivered turn is parsed exactly like the monolithic path, after logging
@@ -819,42 +888,17 @@ enum Submitted {
 /// [`collect_task`].
 async fn collect_forked_task(
     delivered: Result<SessionTurnResult, tokio::sync::oneshot::error::RecvError>,
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
-    files: &[String],
+    ctx: &TaskContext<'_>,
     pool: &AgentPool,
-) -> Result<Vec<Finding>, ()> {
-    let name = validator.validator_name();
+) -> Result<Vec<Finding>, TaskFailure> {
     match delivered {
-        Ok(Ok(turn)) => handle_fork_success(turn, name, files, pool).await,
+        Ok(Ok(turn)) => handle_fork_success(turn, ctx, pool).await,
         Ok(Err(PoolError::ForkFailed {
             parent_session_id,
             message,
-        })) => {
-            handle_fork_failed(
-                parent_session_id,
-                message,
-                change_purpose,
-                validator,
-                ruleset,
-                files,
-                pool,
-            )
-            .await
-        }
-        Ok(Err(err)) => handle_task_failure(
-            name,
-            files,
-            Some(&err),
-            "fleet task failed; yielding zero findings for this validator",
-        ),
-        Err(_) => handle_task_failure(
-            name,
-            files,
-            None,
-            "fleet task result was dropped before delivery; yielding zero findings",
-        ),
+        })) => handle_fork_failed(parent_session_id, message, ctx, pool).await,
+        Ok(Err(err)) => Err(note_task_failure(ctx, Some(&err), TASK_ERRORED)),
+        Err(_) => Err(note_task_failure(ctx, None, TASK_DROPPED)),
     }
 }
 
@@ -864,18 +908,29 @@ async fn collect_forked_task(
 /// instances before returning.
 ///
 /// A turn whose fork ran cold (no warm prefix reuse) is logged as degraded but
-/// still parsed — correctness never depends on the cache hit. Returns `Err(())`
-/// only when the response does not parse (propagated from [`parse_task_response`]).
+/// still parsed — correctness never depends on the cache hit. A reply no parse
+/// can read earns one [`reask_forked_task`] before the task fails; the sweep
+/// then drives whichever session actually answered.
 async fn handle_fork_success(
     turn: SessionTurn,
-    name: &str,
-    files: &[String],
+    ctx: &TaskContext<'_>,
     pool: &AgentPool,
-) -> Result<Vec<Finding>, ()> {
+) -> Result<Vec<Finding>, TaskFailure> {
+    log_prefix_reuse(&turn, ctx);
+    let (findings, answered_on) = match parse_task_response(&turn.content, ctx) {
+        Some(findings) => (findings, turn.session_id),
+        None => reask_forked_task(pool, &turn.session_id, ctx).await?,
+    };
+    Ok(sweep_until_dry(pool, &answered_on, ctx, findings).await)
+}
+
+/// Log how warm a forked turn's prefix reuse was, warning when it ran cold, so a
+/// run's prefill savings are measurable from the log.
+fn log_prefix_reuse(turn: &SessionTurn, ctx: &TaskContext<'_>) {
     let reuse = classify_reuse(turn.fork, turn.cache_usage);
     tracing::info!(
-        validator = %name,
-        files = ?files,
+        validator = %ctx.name(),
+        files = ?ctx.files,
         session = %turn.session_id,
         reuse = reuse.label(),
         reused_tokens = ?reuse.reused_tokens(),
@@ -885,14 +940,40 @@ async fn handle_fork_success(
     );
     if matches!(reuse, PrefixReuse::Cold) {
         tracing::warn!(
-            validator = %name,
-            files = ?files,
+            validator = %ctx.name(),
+            files = ?ctx.files,
             session = %turn.session_id,
             "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
         );
     }
-    let findings = parse_task_response(&turn.content, name, files)?;
-    Ok(sweep_until_dry(pool, &turn.session_id, name, files, findings).await)
+}
+
+/// Re-ask one forked validator task whose reply could not be read, exactly once.
+///
+/// The re-ask forks the session that produced the unreadable reply, so the model
+/// restates findings it has already made rather than reviewing the files again —
+/// the cheap rung, and the warm one. Returns the findings with the session that
+/// answered, so [`sweep_until_dry`] keeps driving that same conversation
+/// forward. A second unreadable reply, and a re-ask that never comes back, both
+/// fail the task.
+async fn reask_forked_task(
+    pool: &AgentPool,
+    session: &SessionId,
+    ctx: &TaskContext<'_>,
+) -> Result<(Vec<Finding>, SessionId), TaskFailure> {
+    tracing::warn!(
+        validator = %ctx.name(),
+        files = ?ctx.files,
+        session = %session,
+        "fleet task reply could not be read; re-asking the validator once on a fork of its session"
+    );
+    let turn = match pool.submit_forked(session, REASK_PROMPT.to_string()).await {
+        Ok(Ok(turn)) => turn,
+        Ok(Err(err)) => return Err(note_task_failure(ctx, Some(&err), REASK_UNDELIVERED)),
+        Err(_) => return Err(note_task_failure(ctx, None, REASK_UNDELIVERED)),
+    };
+    let findings = parse_task_response(&turn.content, ctx).ok_or(TaskFailure::Unparseable)?;
+    Ok((findings, turn.session_id))
 }
 
 /// The fork-failed arm of [`collect_forked_task`]: the `session/fork` call failed,
@@ -902,22 +983,17 @@ async fn handle_fork_success(
 async fn handle_fork_failed(
     parent_session_id: String,
     message: String,
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
-    files: &[String],
+    ctx: &TaskContext<'_>,
     pool: &AgentPool,
-) -> Result<Vec<Finding>, ()> {
-    let name = validator.validator_name();
+) -> Result<Vec<Finding>, TaskFailure> {
     tracing::warn!(
-        validator = %name,
-        files = ?files,
+        validator = %ctx.name(),
+        files = ?ctx.files,
         parent = %parent_session_id,
         error = %message,
         "fleet task fork failed; falling back to a monolithic fresh-session prompt"
     );
-    let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
-    collect_task(pool.submit(prompt).await, name, files)
+    collect_monolithic_task(pool.submit(ctx.monolithic_prompt()).await, ctx, pool).await
 }
 
 /// The failure arm of the task collectors ([`collect_forked_task`] /
@@ -926,21 +1002,21 @@ async fn handle_fork_failed(
 /// agent error) or a dropped result channel. Logged with `message` (and the
 /// `error` field when the failure carried one — a [`PoolError`], absent for a
 /// dropped delivery) and degraded to zero findings — one bad task never aborts
-/// the rest — returning `Err(())` so the caller tallies it as failed rather than
-/// conflating it with a clean validator.
-fn handle_task_failure(
-    name: &str,
-    files: &[String],
+/// the rest — returning [`TaskFailure::NotDelivered`] so the caller tallies it
+/// as failed rather than conflating it with a clean validator, and so no re-ask
+/// is spent on a reply that never arrived.
+fn note_task_failure(
+    ctx: &TaskContext<'_>,
     error: Option<&PoolError>,
     message: &str,
-) -> Result<Vec<Finding>, ()> {
+) -> TaskFailure {
     tracing::warn!(
-        validator = %name,
-        files = ?files,
+        validator = %ctx.name(),
+        files = ?ctx.files,
         error = error.map(tracing::field::display),
         "{message}"
     );
-    Err(())
+    TaskFailure::NotDelivered
 }
 
 /// Drive a validator's review session forward with a repeated "any more?"
@@ -973,8 +1049,7 @@ fn handle_task_failure(
 async fn sweep_until_dry(
     pool: &AgentPool,
     parent_session: &SessionId,
-    validator: &str,
-    files: &[String],
+    ctx: &TaskContext<'_>,
     findings: Vec<Finding>,
 ) -> Vec<Finding> {
     // Nothing reported → nothing to be incomplete about; do not spend a turn.
@@ -992,28 +1067,28 @@ async fn sweep_until_dry(
             .await;
         let Ok(Ok(turn)) = delivered else {
             tracing::debug!(
-                validator = %validator,
-                files = ?files,
+                validator = %ctx.name(),
+                files = ?ctx.files,
                 sweep,
                 "fleet follow-up sweep unavailable; ending the loop with the findings gathered so far"
             );
             return merged;
         };
-        let Ok(additional) = parse_task_response(&turn.content, validator, files) else {
+        let Some(additional) = parse_task_response(&turn.content, ctx) else {
             return merged;
         };
         if additional.is_empty() {
             tracing::info!(
-                validator = %validator,
-                files = ?files,
+                validator = %ctx.name(),
+                files = ?ctx.files,
                 sweep,
                 "fleet follow-up sweep went dry; the model reports no further instances"
             );
             return merged;
         }
         tracing::info!(
-            validator = %validator,
-            files = ?files,
+            validator = %ctx.name(),
+            files = ?ctx.files,
             sweep,
             added = additional.len(),
             "fleet follow-up sweep recovered further instances on the first review"
@@ -1025,46 +1100,57 @@ async fn sweep_until_dry(
         session = turn.session_id;
     }
     tracing::info!(
-        validator = %validator,
-        files = ?files,
+        validator = %ctx.name(),
+        files = ?ctx.files,
         cap = MAX_FOLLOWUP_SWEEPS,
         "fleet follow-up sweep hit the runaway cap without going dry; keeping the gathered findings"
     );
     merged
 }
 
+/// Collect a monolithic validator task, re-asking it once when its reply cannot
+/// be read.
+///
+/// A monolithic task runs on a fresh session with nothing to fork from, so the
+/// re-ask re-renders and re-submits the SAME prompt: a second sample on a fresh
+/// session is the only re-ask a run without a live prime can take. Only a
+/// delivered reply that no parse could read is re-asked — a pool error or a
+/// dropped channel is a delivery failure a second ask would only repeat.
+async fn collect_monolithic_task(
+    delivered: Result<crate::validators::PromptResult, tokio::sync::oneshot::error::RecvError>,
+    ctx: &TaskContext<'_>,
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, TaskFailure> {
+    match collect_task(delivered, ctx) {
+        Err(TaskFailure::Unparseable) => {
+            tracing::warn!(
+                validator = %ctx.name(),
+                files = ?ctx.files,
+                "fleet task reply could not be read; re-asking the validator once on a fresh session"
+            );
+            collect_task(pool.submit(ctx.monolithic_prompt()).await, ctx)
+        }
+        collected => collected,
+    }
+}
+
 /// Resolve one task's delivered result into tagged findings.
 ///
-/// Returns `Ok(findings)` for a task that delivered a parseable response (the
-/// findings may legitimately be empty), and `Err(())` for any failure — a task
-/// error, a dropped channel, or a response that did not parse. A failure is
-/// logged and degrades the validator to zero findings (one bad task never aborts
-/// the rest); the `Err` lets the caller tally it as failed rather than silently
-/// conflating it with a clean validator. `files` are the validator's files the
-/// failure is attributed to in the log.
+/// Returns `Ok(findings)` for a task that delivered a readable reply (the
+/// findings may legitimately be empty), and a [`TaskFailure`] naming what went
+/// wrong otherwise — a task error, a dropped channel, or a reply no parse could
+/// read. A failure is logged and degrades the validator to zero findings (one
+/// bad task never aborts the rest); the `Err` lets the caller tally it as failed
+/// rather than silently conflating it with a clean validator, and decide whether
+/// the failure is worth a re-ask.
 fn collect_task(
     delivered: Result<crate::validators::PromptResult, tokio::sync::oneshot::error::RecvError>,
-    validator: &str,
-    files: &[String],
-) -> Result<Vec<Finding>, ()> {
+    ctx: &TaskContext<'_>,
+) -> Result<Vec<Finding>, TaskFailure> {
     let response = match delivered {
         Ok(Ok(response)) => response,
-        Ok(Err(err)) => {
-            return handle_task_failure(
-                validator,
-                files,
-                Some(&err),
-                "fleet task failed; yielding zero findings for this validator",
-            )
-        }
-        Err(_) => {
-            return handle_task_failure(
-                validator,
-                files,
-                None,
-                "fleet task result was dropped before delivery; yielding zero findings",
-            )
-        }
+        Ok(Err(err)) => return Err(note_task_failure(ctx, Some(&err), TASK_ERRORED)),
+        Err(_) => return Err(note_task_failure(ctx, None, TASK_DROPPED)),
     };
 
     // A monolithic task runs on a fresh session (no fork), so any reuse is
@@ -1072,34 +1158,35 @@ fn collect_task(
     // fallback path also reports cache usage.
     let reuse = classify_reuse(None, response.cache_usage);
     tracing::info!(
-        validator = %validator,
-        files = ?files,
+        validator = %ctx.name(),
+        files = ?ctx.files,
         reuse = reuse.label(),
         cache_read_input_tokens = ?reuse.cache_read(),
         cache_creation_input_tokens = ?reuse.cache_created(),
         "fleet monolithic task prefix reuse"
     );
-    parse_task_response(&response.content, validator, files)
+    parse_task_response(&response.content, ctx).ok_or(TaskFailure::Unparseable)
 }
 
-/// Parse one task's response text into validator-tagged findings, degrading an
-/// unparseable response to a logged failure — shared by the monolithic and
-/// forked collection paths so both parse identically.
-fn parse_task_response(
-    content: &str,
-    validator: &str,
-    files: &[String],
-) -> Result<Vec<Finding>, ()> {
-    match parse_findings(content) {
-        Ok(parsed) => Ok(tag_findings(parsed, validator)),
+/// Parse one task's reply text into validator-tagged findings, degrading a reply
+/// no parse can read to a logged `None` — shared by the monolithic and forked
+/// collection paths so both read a reply identically.
+///
+/// The parse is [`parse_findings_repaired`]: the strict parse first, then the
+/// cheap bracket repair, which is why a repaired reply is a plain success and
+/// costs nothing further. `None` therefore means no parse could read the reply
+/// at all, which is exactly what earns it a re-ask.
+fn parse_task_response(content: &str, ctx: &TaskContext<'_>) -> Option<Vec<Finding>> {
+    match parse_findings_repaired(content) {
+        Ok(parsed) => Some(tag_findings(parsed, ctx.name())),
         Err(err) => {
             tracing::warn!(
-                validator = %validator,
-                files = ?files,
+                validator = %ctx.name(),
+                files = ?ctx.files,
                 error = %err,
-                "fleet task response did not parse into findings; yielding zero findings"
+                "fleet task response did not parse into findings"
             );
-            Err(())
+            None
         }
     }
 }

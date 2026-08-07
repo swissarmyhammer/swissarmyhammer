@@ -440,9 +440,9 @@ mod tests {
     use crate::review::fleet::FleetConfig;
     use crate::review::scope::Scope;
     use crate::review::test_support::{
-        findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
-        seeded_two_file_dup_repo, verdict_json, ScriptedAdapter, ScriptedAgent,
-        ScriptedAgentConfig, ScriptedReply,
+        findings_json as shared_findings_json, loader_with, malformed_findings_json, prompt_text,
+        ruleset, seeded_dup_repo, seeded_two_file_dup_repo, verdict_json, ScriptedAdapter,
+        ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     };
 
     /// How long a wedged pipeline may run before a test fails instead of
@@ -617,6 +617,227 @@ mod tests {
         );
         assert_eq!(report.counts().findings(), 1);
         assert_eq!(report.counts().confirmed(), 1);
+    }
+
+    // ---- a reply that does not parse is re-asked once before the pair fails ---
+
+    /// A fan-out reply the strict parse rejects but the bracket repair rescues:
+    /// the model restates the schema (an object shape the bare-object fallback
+    /// cannot read) and names the file in a bracketed aside, so the first `[`
+    /// the parser balances is the aside rather than the findings array.
+    fn repairable_findings_json(file: &str, claim: &str) -> String {
+        let array = serde_json::json!([{
+            "file": file,
+            "line": 1,
+            "rule": "r",
+            "claim": claim,
+            "evidence": "per `duplicates`: 0.94",
+            "suggestion": "extract a helper",
+        }]);
+        format!(
+            "Each finding is {{\"file\": <path>, \"line\": <n>}}. I reviewed [{file}] \
+             and found:\n{array}\n"
+        )
+    }
+
+    /// How many fan-out prompts the agent served — every prompt carrying the
+    /// validator header. The prime turn and the verify turn carry no validator
+    /// header, so this counts asks of the validator itself.
+    fn fan_out_prompt_count(agent: &Arc<ScriptedAgent>) -> usize {
+        agent
+            .seen_prompts()
+            .iter()
+            .filter(|prompt| prompt.contains("# Validator: deduplicate"))
+            .count()
+    }
+
+    /// One malformed reply must not throw away a whole validator's review. The
+    /// fan-out task is re-asked once; the second reply parses, so the findings
+    /// land and the report is COMPLETE — no incomplete-run banner.
+    ///
+    /// The production failure this pins: the duplication validator's reply
+    /// failed JSON parse, the engine yielded zero findings, marked the task
+    /// failed, and a six-minute review ended INCOMPLETE with a full re-run as
+    /// the only recovery.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_re_asks_a_fan_out_task_whose_first_reply_does_not_parse() {
+        let (repo, conn, embedder) = seeded_dup_repo();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+
+        // The fan-out entry answers its FIRST match with the malformed reply and
+        // its second with a valid findings array — the re-ask is what reaches
+        // that second element.
+        let script = vec![
+            (
+                "# Validator: deduplicate".to_string(),
+                ScriptedReply::sequence([
+                    malformed_findings_json(),
+                    findings_json("src/lib.rs", "compute duplicates old_compute"),
+                ]),
+            ),
+            (
+                "compute duplicates old_compute".to_string(),
+                ScriptedReply::Text(confirm_json()),
+            ),
+        ];
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(script, notify_tx, true);
+        let agent_probe = Arc::clone(&agent);
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
+
+        let report = run_review_over_agent(
+            dyn_agent,
+            notification_rx,
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            PoolConfig::remote(TEST_POOL_WORKERS),
+            FleetConfig::default(),
+            None,
+            TEST_NOW,
+        )
+        .await
+        .expect("pipeline should produce a report");
+
+        assert_eq!(
+            fan_out_prompt_count(&agent_probe),
+            2,
+            "the validator is asked once and re-asked exactly once"
+        );
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            "the re-asked reply's finding must be rendered: {}",
+            report.markdown()
+        );
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().confirmed(), 1);
+        assert_eq!(
+            report.counts().tasks_failed(),
+            0,
+            "a task that answers on the re-ask is not a failed task: {}",
+            report.markdown()
+        );
+        assert!(
+            !report.markdown().contains("INCOMPLETE"),
+            "a recovered run is complete: {}",
+            report.markdown()
+        );
+    }
+
+    /// The re-ask is ONE re-ask. A validator that answers unparseably twice
+    /// fails its pair exactly as before, and the report says so — honesty about
+    /// a lost validator is the correct behaviour, not something the retry
+    /// papers over.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_fails_the_pair_when_both_replies_do_not_parse() {
+        let (repo, conn, embedder) = seeded_dup_repo();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+
+        // `Text` answers every match with the same malformed reply, so the
+        // re-ask does not parse either.
+        let script = vec![(
+            "# Validator: deduplicate".to_string(),
+            ScriptedReply::Text(malformed_findings_json()),
+        )];
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(script, notify_tx, true);
+        let agent_probe = Arc::clone(&agent);
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
+
+        let report = run_review_over_agent(
+            dyn_agent,
+            notification_rx,
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            PoolConfig::remote(TEST_POOL_WORKERS),
+            FleetConfig::default(),
+            None,
+            TEST_NOW,
+        )
+        .await
+        .expect("pipeline should produce a report");
+
+        assert_eq!(
+            fan_out_prompt_count(&agent_probe),
+            2,
+            "the task is re-asked once and only once"
+        );
+        assert_eq!(report.counts().findings(), 0);
+        assert_eq!(
+            report.counts().tasks_failed(),
+            1,
+            "two unparseable replies fail the pair: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("INCOMPLETE"),
+            "a failed pair must still flag the run incomplete: {}",
+            report.markdown()
+        );
+    }
+
+    /// The cheap rung comes first. A reply the bracket repair can rescue is a
+    /// success, so the validator is never asked twice — the re-ask is reserved
+    /// for a reply no parse can read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_repairs_a_bracketed_reply_without_re_asking() {
+        let (repo, conn, embedder) = seeded_dup_repo();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+
+        let script = vec![
+            (
+                "# Validator: deduplicate".to_string(),
+                ScriptedReply::Text(repairable_findings_json(
+                    "src/lib.rs",
+                    "compute duplicates old_compute",
+                )),
+            ),
+            (
+                "compute duplicates old_compute".to_string(),
+                ScriptedReply::Text(confirm_json()),
+            ),
+        ];
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(script, notify_tx, true);
+        let agent_probe = Arc::clone(&agent);
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
+
+        let report = run_review_over_agent(
+            dyn_agent,
+            notification_rx,
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            PoolConfig::remote(TEST_POOL_WORKERS),
+            FleetConfig::default(),
+            None,
+            TEST_NOW,
+        )
+        .await
+        .expect("pipeline should produce a report");
+
+        assert_eq!(
+            fan_out_prompt_count(&agent_probe),
+            1,
+            "a repaired parse spends no re-ask"
+        );
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            "the repaired reply's finding must be rendered: {}",
+            report.markdown()
+        );
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().tasks_failed(), 0);
     }
 
     // ---- content-budgeted batching: a large diff fans out as several batches --
