@@ -1172,6 +1172,17 @@ mod tests {
         ("flutter", "missing-docs-dart"),
     ];
 
+    /// Every shipped dead-code tool rule, with the project type it serves.
+    ///
+    /// These rules supersede nothing. The `dead-code` prompt rule keeps its
+    /// carve-outs — entry points, exported public API, work-in-process
+    /// scaffolding — because those need judgment. Each tool rule here adds one
+    /// deterministic check beside that rule, never in place of it.
+    const SHIPPED_DEAD_CODE_RULES: &[(&str, &str)] = &[
+        ("go", "unused-code-go"),
+        ("python", "unreachable-code-python"),
+    ];
+
     /// A cargo package holding one undocumented public item and one documented
     /// one. `[workspace]` keeps cargo inside the temporary directory.
     const UNDOCUMENTED_PACKAGE_MANIFEST: &str = concat!(
@@ -1288,6 +1299,116 @@ mod tests {
         );
     }
 
+    /// The prompt rule the dead-code tool rules run beside, never in place of.
+    const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
+
+    /// A Python module with one statement stranded behind a `return`.
+    const UNREACHABLE_MODULE_PY: &str = concat!(
+        "\"\"\"A probe module for the shipped Python unreachable-code tool rule.\"\"\"\n\n\n",
+        "def stops_early():\n",
+        "    \"\"\"Return a value, then strand the statement below it.\"\"\"\n",
+        "    return 1\n",
+        "    print(\"stranded\")\n",
+    );
+
+    /// The module path inside the probe repository, as the work-list holds it.
+    const UNREACHABLE_MODULE_PATH: &str = "src/stops_early.py";
+
+    /// A one-validator work-list over `files` for the builtin `code-hygiene`
+    /// set, naming both the `dead-code` prompt rule and the Python tool rule.
+    fn dead_code_work(path: &str, content: &str) -> WorkList {
+        WorkList::new(
+            "a statement behind a return",
+            vec![ValidatorWork::new(
+                CODE_HYGIENE_SET,
+                RuleNames::new([
+                    DEAD_CODE_PROMPT_RULE.to_string(),
+                    "unreachable-code-python".to_string(),
+                ]),
+                ProbeNames::new([]),
+                [FileWork::new(path, vec![], vec![], content, vec![])],
+            )],
+        )
+    }
+
+    /// Acceptance: the shipped Python dead-code tool rule never suppresses the
+    /// `dead-code` prompt rule, and reports the stranded statement through the
+    /// real vulture pipeline.
+    ///
+    /// The suppression half is asserted unconditionally, because it is the
+    /// regression that matters most and it does not depend on the tool being
+    /// installed: a healthy tool rule suppresses whatever its `supersedes`
+    /// names, and this rule must name nothing. Were it to name `dead-code`, the
+    /// prompt rule would stop reading these files and its carve-outs for entry
+    /// points, exported public API, and work-in-process scaffolding would go
+    /// with it.
+    ///
+    /// The reporting half runs only when the tool is installed, the same
+    /// condition [`every_shipped_dead_code_tool_rule_passes_its_fixtures`]
+    /// applies: a missing tool degrades the rule and never blocks a review.
+    #[test]
+    fn the_shipped_python_dead_code_tool_rule_reports_without_suppressing_dead_code() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(
+            repo.path().join(UNREACHABLE_MODULE_PATH),
+            UNREACHABLE_MODULE_PY,
+        )
+        .unwrap();
+        let loader = builtin_loader();
+        let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
+
+        let plan = plan_tool_rules(&work, &loader, &["python".to_string()]);
+
+        assert!(
+            !plan
+                .suppression()
+                .suppressed_rules(CODE_HYGIENE_SET, UNREACHABLE_MODULE_PATH)
+                .contains(DEAD_CODE_PROMPT_RULE),
+            "a dead-code tool rule must never suppress the `dead-code` prompt rule, \
+             or its carve-outs stop protecting staged work"
+        );
+
+        let Some(run) = plan
+            .runs()
+            .iter()
+            .find(|run| run.rule() == "unreachable-code-python")
+        else {
+            return;
+        };
+        assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
+
+        let outcome = execute_tool_runs(std::slice::from_ref(run), repo.path(), None);
+
+        assert!(
+            outcome.errors().is_empty(),
+            "the shipped pipeline must not break; errors: {:?}",
+            outcome.errors()
+        );
+        let findings: Vec<&VerifiedFinding> = outcome
+            .findings()
+            .iter()
+            .filter(|verified| verified.finding.file == UNREACHABLE_MODULE_PATH)
+            .collect();
+        assert_eq!(
+            findings.len(),
+            1,
+            "exactly the stranded statement must be reported; got {:?}",
+            outcome.findings()
+        );
+        assert!(findings[0].confirmed);
+        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
+        assert_eq!(
+            findings[0].finding.rule.as_deref(),
+            Some("unreachable-code-python")
+        );
+        assert!(
+            findings[0].finding.claim.contains("unreachable code after"),
+            "the claim must be vulture's message; got '{}'",
+            findings[0].finding.claim
+        );
+    }
+
     /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
     /// in doctor, after the same pre-install `sah init` runs.
     ///
@@ -1331,6 +1452,60 @@ mod tests {
             exercised > 0,
             "no shipped tool rule's tool was installed, so the fixture pairs were \
              never run and this test asserts nothing"
+        );
+    }
+
+    /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
+    /// doctor, and supersedes nothing.
+    ///
+    /// The `supersedes` assertion is the load-bearing half. A dead-code tool
+    /// reads the code without the `callers` probe, so it cannot see the
+    /// `dead-code` prompt rule's carve-outs and would report staged work as
+    /// dead. Naming that prompt rule in `supersedes` would silence it for the
+    /// files the tool covers, which is exactly the regression to prevent.
+    ///
+    /// The fixture half mirrors
+    /// [`every_shipped_missing_docs_tool_rule_passes_its_fixtures`]: a rule
+    /// whose tool the machine lacks is reported degraded, which is the
+    /// documented fallback, so the fixture assertion applies to the rules whose
+    /// tool doctor found.
+    #[test]
+    fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
+        let loader = builtin_loader();
+        let mut exercised = 0;
+
+        for (project_type, rule_name) in SHIPPED_DEAD_CODE_RULES {
+            let project_types = vec![(*project_type).to_string()];
+            crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
+
+            let status = crate::doctor::check_review_engine_with(&loader, &project_types);
+            let row = status
+                .tool_rules
+                .iter()
+                .find(|row| row.rule_name == *rule_name)
+                .unwrap_or_else(|| {
+                    panic!("{rule_name} must be reported for a {project_type} project")
+                });
+            assert_eq!(
+                row.supersedes, None,
+                "{rule_name} must supersede no prompt rule, so `dead-code` keeps running \
+                 with its carve-outs"
+            );
+            if row.presence == ToolPresence::Present {
+                assert!(
+                    row.usable(),
+                    "{rule_name}'s tool is installed, so its fixtures must pass; \
+                     doctor says: {}",
+                    row.degraded_detail()
+                );
+                exercised += 1;
+            }
+        }
+
+        assert!(
+            exercised > 0,
+            "no shipped dead-code tool rule's tool was installed, so the fixture pairs \
+             were never run and this test asserts nothing"
         );
     }
 

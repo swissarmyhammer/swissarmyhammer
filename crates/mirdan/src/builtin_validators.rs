@@ -206,6 +206,10 @@ mod tests {
             "missing-docs-swift.pass.swift",
             "missing-docs-dart.fail.dart",
             "missing-docs-dart.pass.dart",
+            "unused-code-go.fail.go",
+            "unused-code-go.pass.go",
+            "unreachable-code-python.fail.py",
+            "unreachable-code-python.pass.py",
         ] {
             assert!(
                 code_hygiene_files

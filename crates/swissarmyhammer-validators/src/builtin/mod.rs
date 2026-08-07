@@ -232,9 +232,9 @@ mod tests {
         "dead-code",
     ];
 
-    /// The tool rules `code-hygiene` carries. Each supersedes the `missing-docs`
-    /// prompt rule for the language it serves.
-    const CODE_HYGIENE_TOOL_RULES: &[&str] = &[
+    /// The documentation tool rules `code-hygiene` carries. Each supersedes the
+    /// `missing-docs` prompt rule for the language it serves.
+    const CODE_HYGIENE_MISSING_DOCS_TOOL_RULES: &[&str] = &[
         "missing-docs-rust",
         "missing-docs-python",
         "missing-docs-typescript",
@@ -242,6 +242,14 @@ mod tests {
         "missing-docs-swift",
         "missing-docs-dart",
     ];
+
+    /// The dead-code tool rules `code-hygiene` carries. Each supersedes
+    /// nothing: the `dead-code` prompt rule keeps its carve-outs for entry
+    /// points, exported public API, and work-in-process scaffolding, which need
+    /// judgment and the `callers` probe. These tools decide only the narrow
+    /// question a tool can settle alone, and run beside that rule.
+    const CODE_HYGIENE_DEAD_CODE_TOOL_RULES: &[&str] =
+        &["unused-code-go", "unreachable-code-python"];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
@@ -272,10 +280,13 @@ mod tests {
         let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
         let expected_rules = CODE_HYGIENE_PROMPT_RULES
             .iter()
-            .chain(CODE_HYGIENE_TOOL_RULES.iter());
+            .chain(CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.iter())
+            .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter());
         assert_eq!(
             ruleset.rules.len(),
-            CODE_HYGIENE_PROMPT_RULES.len() + CODE_HYGIENE_TOOL_RULES.len(),
+            CODE_HYGIENE_PROMPT_RULES.len()
+                + CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.len()
+                + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
         for expected in expected_rules {
@@ -285,11 +296,22 @@ mod tests {
             );
         }
 
-        for tool_rule_name in CODE_HYGIENE_TOOL_RULES {
+        // Each tool rule carries a tool block, and supersedes exactly what its
+        // group promises: the documentation tools replace the `missing-docs`
+        // prompt rule, and the dead-code tools replace nothing.
+        let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
+            .iter()
+            .map(|name| (name, Some("missing-docs")))
+            .chain(
+                CODE_HYGIENE_DEAD_CODE_TOOL_RULES
+                    .iter()
+                    .map(|name| (name, None)),
+            );
+        for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset
                 .rules
                 .iter()
-                .find(|rule| rule.name == *tool_rule_name)
+                .find(|rule| rule.name == **tool_rule_name)
                 .unwrap_or_else(|| panic!("{tool_rule_name} should be loaded"));
             assert!(
                 tool_rule.tool.is_some(),
@@ -297,8 +319,8 @@ mod tests {
             );
             assert_eq!(
                 tool_rule.supersedes.as_deref(),
-                Some("missing-docs"),
-                "{tool_rule_name} must supersede the missing-docs prompt rule"
+                superseded,
+                "{tool_rule_name} must supersede {superseded:?}"
             );
         }
     }
