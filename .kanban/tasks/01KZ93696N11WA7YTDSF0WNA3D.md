@@ -155,11 +155,22 @@ comments:
     - The earlier true conflict is gone at its root, and the proof is a RED run: with one fixture restored to a plain `.ts` name the new guard fails and names the nine validator sets that matched it — code-hygiene, code-security, completeness, duplication, js-ts, magic-numbers, naming, reuse, test-integrity. With the `.tmpl` name it matches none.
     - next: /test then /commit then /review
   timestamp: 2026-08-07T21:42:10.091561+00:00
+- actor: claude-code
+  id: 01kzf3j87q1465eqkytbmrqtew
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — 27 files; every fixture is a `.tmpl` template, the doctor materializes the directory to a scratch path, two new guards, the Rust fixture pair widened
+    - test: green — cargo nextest run --workspace 13777 passed 0 failed 0 skipped; cargo test --doc --workspace 0 failed; fmt clean; clippy --workspace --all-targets --all-features -D warnings clean
+    - commit: f8c47217a (parent 0e2946d2d)
+    - review: clean — review sha HEAD~1..HEAD: 0 findings, 0 confirmed, 1 refuted, 15 attempted, 0 failed, 0 skipped_files. Task moved to done.
+    - The earlier true conflict is closed by the engine's own verdict: the renamed fixtures are IN this diff, and the review reported nothing against them, where the previous round produced six findings on the same content.
+    - Note on how this review ran: the session MCP server carries a stale binary image. The installed sah (09:46) also predates the clone-siblings probe, so it would have reviewed with stale embedded validators. The review was driven against a freshly built target/debug/sah over stdio, so the engine under test is the one in this commit.
+  timestamp: 2026-08-07T21:55:13.783418+00:00
 depends_on:
 - 01KZ9361Q5W4W38TGRWB01GTZG
 - 01KZ935S9GWN207TF50MHCN5HB
-position_column: review
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc380
 title: missing-docs runners for TS, Swift, Go, and Dart
 ---
 Clone the missing-docs tool-rule pattern to the remaining languages. Each is a rule file in `code-hygiene/rules/` with a `tool` block and `supersedes: missing-docs`.
