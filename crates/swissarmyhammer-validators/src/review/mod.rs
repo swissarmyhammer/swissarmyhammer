@@ -58,7 +58,8 @@ pub use tool_rules::{
     ToolRunError, ToolSuppression,
 };
 pub use tree_sitter_probes::{
-    ParsedRevision, Revision, TreeSitterProbe, TreeSitterProbeContext, TREE_SITTER_NOT_PARSED,
+    ParsedRevision, Revision, TreeSitterProbe, TreeSitterProbeContext, INVERSE_PAIRS_NOT_DIFFED,
+    TREE_SITTER_NOT_PARSED,
 };
 pub use types::{parse_findings, Finding, RefutingLayer, VerifiedFinding};
 pub use verify::{

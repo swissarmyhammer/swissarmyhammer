@@ -12,6 +12,8 @@ match:
   files:
     - "@file_groups/source_code"
     - "@file_groups/test_files"
+probes:
+  - inverse-pairs
 ---
 
 # Completeness Validator
@@ -22,13 +24,17 @@ the test passes, and the change ships — while a symmetric or sibling path the
 same change implies is left broken. This validator reads the diff and looks for
 that gap.
 
-Four one-concern rules, each an **in-file judgment** over the diff (no engine
-probe required):
+Four one-concern rules, each a judgment over the diff. Three read the diff
+alone; `inverse-operation-coverage` also reads the `inverse-pairs` probe, which
+finds the paired names for it:
 
 - `inverse-operation-coverage` — a change to one direction of a paired operation
   (write/read, encode/decode, serialize/deserialize, classify/parse) without the
   other direction being exercised; or a test that *claims* round-trip/symmetry
-  but only goes one way.
+  but only goes one way. The engine runs the `inverse-pairs` probe over each
+  changed file and attaches one row per pair the change touched on one side
+  only. `inverse-pairs` is a *candidate* probe: it finds the pairs, and the rule
+  judges whether the partner needed the change.
 - `invariant-propagation` — a change to how a token/flag/format/case is handled
   at one site, not applied at the other sites that consume the same token.
 - `public-output-contract` — an existing user-facing message/output reformatted

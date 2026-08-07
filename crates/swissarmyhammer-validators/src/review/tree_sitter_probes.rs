@@ -48,6 +48,16 @@ use crate::review::probes::{
 pub const TREE_SITTER_NOT_PARSED: &str =
     "tree-sitter probe not computed — this language has no grammar mapping; judge from the source";
 
+/// The detail an `inverse-pairs` row carries when a file has no base revision.
+///
+/// The probe answers "which side of a pair did the change edit?", so a file it
+/// cannot diff — one the change added, or any file in a scope that carries no
+/// base revision — must read as **unknown**, never as "no pair was broken
+/// here". Emitting this row keeps the result non-empty for the same reason
+/// [`TREE_SITTER_NOT_PARSED`] does.
+pub const INVERSE_PAIRS_NOT_DIFFED: &str = "inverse pairs not computed — this file has no base \
+     revision to compare against; judge from the source";
+
 /// Which revision of a file under review a parse belongs to.
 ///
 /// A diff-aware probe compares the two.
@@ -330,12 +340,251 @@ fn function_count(path: &str, revision: ParsedRevision<'_>) -> usize {
 /// The one [`FunctionCountProbe`] the catalog registers.
 static FUNCTION_COUNT_PROBE: FunctionCountProbe = FunctionCountProbe;
 
+/// The name validators declare to pull [`InversePairProbe`]'s rows.
+const INVERSE_PAIRS_PROBE_NAME: &str = "inverse-pairs";
+
+/// One inverse-operation naming convention: the two words that stand opposite
+/// each other in two otherwise identical names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InversePair {
+    /// The word on one side of the convention (`serialize`, `to`, `push`).
+    forward: &'static str,
+    /// The word on the inverse side (`deserialize`, `from`, `pop`).
+    inverse: &'static str,
+}
+
+impl InversePair {
+    /// One row of [`INVERSE_PAIRS`].
+    const fn new(forward: &'static str, inverse: &'static str) -> Self {
+        Self { forward, inverse }
+    }
+
+    /// Whether this convention is the one that stands `left` opposite `right`.
+    ///
+    /// Order-free: the caller does not know which of the two names it holds is
+    /// the forward one.
+    fn pairs(&self, left: &str, right: &str) -> bool {
+        (left == self.forward && right == self.inverse)
+            || (left == self.inverse && right == self.forward)
+    }
+}
+
+impl std::fmt::Display for InversePair {
+    /// The convention as an evidence row names it: `serialize/deserialize`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.forward, self.inverse)
+    }
+}
+
+/// The naming conventions that stand an operation opposite its inverse.
+///
+/// One list, read as data: adding a convention is adding a row, and nothing
+/// else. Each row pairs two **words** rather than two whole names, which is
+/// what lets a single row cover `serialize`/`deserialize`,
+/// `write_all`/`read_all` and `to_json`/`from_json` alike.
+const INVERSE_PAIRS: &[InversePair] = &[
+    InversePair::new("serialize", "deserialize"),
+    InversePair::new("encode", "decode"),
+    InversePair::new("to", "from"),
+    InversePair::new("write", "read"),
+    InversePair::new("open", "close"),
+    InversePair::new("save", "load"),
+    InversePair::new("lock", "unlock"),
+    InversePair::new("push", "pop"),
+];
+
+/// Split an identifier into its lower-case words.
+///
+/// Covers the shapes a symbol name takes across the grammar roster:
+/// `snake_case` and `kebab-case` split on their separator, `camelCase` and
+/// `PascalCase` split at the case boundary, and an acronym run keeps its
+/// trailing word (`JSONParser` is `json` + `parser`). Any character that is not
+/// alphanumeric is a separator.
+fn name_words(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for (index, character) in chars.iter().copied().enumerate() {
+        if !character.is_alphanumeric() {
+            push_word(&mut words, &mut word);
+            continue;
+        }
+        if starts_word(&chars, index) {
+            push_word(&mut words, &mut word);
+        }
+        word.extend(character.to_lowercase());
+    }
+    push_word(&mut words, &mut word);
+    words
+}
+
+/// Move `word` onto `words` unless it is empty, leaving `word` empty.
+fn push_word(words: &mut Vec<String>, word: &mut String) {
+    if !word.is_empty() {
+        words.push(std::mem::take(word));
+    }
+}
+
+/// Whether the character at `index` opens a new camel-case word.
+///
+/// True for an upper-case character that either follows a lower-case one or a
+/// digit (`toJson`, `utf8Encode`), or opens the word after an acronym run
+/// (`JSONParser`). Never true at the start of the name.
+fn starts_word(chars: &[char], index: usize) -> bool {
+    if index == 0 || !chars[index].is_uppercase() {
+        return false;
+    }
+    let previous = chars[index - 1];
+    previous.is_lowercase()
+        || previous.is_numeric()
+        || chars.get(index + 1).is_some_and(|next| next.is_lowercase())
+}
+
+/// The convention that pairs two names, when one does.
+///
+/// Two names pair when their word lists are the same length and differ at
+/// exactly one position, and that position holds the two sides of one
+/// [`INVERSE_PAIRS`] row.
+fn pairing_convention(left: &[String], right: &[String]) -> Option<InversePair> {
+    if left.len() != right.len() {
+        return None;
+    }
+    let mut differing = left.iter().zip(right).filter(|(one, other)| one != other);
+    let (left_word, right_word) = differing.next()?;
+    if differing.next().is_some() {
+        return None;
+    }
+    INVERSE_PAIRS
+        .iter()
+        .copied()
+        .find(|pair| pair.pairs(left_word, right_word))
+}
+
+/// One function definition in the file under review, reduced to what pairing
+/// needs.
+#[derive(Debug)]
+struct PairCandidate {
+    /// The function's name as the source spells it.
+    name: String,
+    /// [`Self::name`] split into lower-case words.
+    words: Vec<String>,
+    /// The line the definition starts on.
+    start_line: usize,
+    /// Whether the change edited this definition.
+    edited: bool,
+}
+
+/// Every function the file under review defines, each marked with whether the
+/// change edited it.
+///
+/// A definition counts as edited when the base revision holds no definition
+/// under the same entity id, or holds one whose content hash differs. Keying on
+/// the entity id rather than on the bare name keeps two same-named methods on
+/// different types apart, and hashing content rather than comparing positions
+/// keeps a definition that only moved down the file reading as untouched.
+fn pair_candidates(
+    path: &str,
+    after: ParsedRevision<'_>,
+    before: ParsedRevision<'_>,
+) -> Vec<PairCandidate> {
+    let before_entities = before.parsed().entities(path, before.source());
+    let before_hashes: BTreeMap<&str, &str> = before_entities
+        .iter()
+        .map(|entity| (entity.id.as_str(), entity.content_hash.as_str()))
+        .collect();
+    after
+        .parsed()
+        .entities(path, after.source())
+        .iter()
+        .filter(|entity| is_function_entity_type(&entity.entity_type))
+        .map(|entity| PairCandidate {
+            name: entity.name.clone(),
+            words: name_words(&entity.name),
+            start_line: entity.start_line,
+            edited: before_hashes.get(entity.id.as_str()) != Some(&entity.content_hash.as_str()),
+        })
+        .collect()
+}
+
+/// One row per pair the change broke: every edited definition paired with every
+/// definition it left alone.
+fn broken_pair_rows(path: &str, candidates: &[PairCandidate]) -> Vec<ProbeRow> {
+    let mut rows = Vec::new();
+    for edited in candidates.iter().filter(|candidate| candidate.edited) {
+        for partner in candidates.iter().filter(|candidate| !candidate.edited) {
+            if let Some(convention) = pairing_convention(&edited.words, &partner.words) {
+                rows.push(broken_pair_row(path, edited, partner, convention));
+            }
+        }
+    }
+    rows
+}
+
+/// One broken pair as an evidence row: the edited definition, the partner the
+/// change left alone, and the convention that stands them opposite.
+fn broken_pair_row(
+    path: &str,
+    edited: &PairCandidate,
+    partner: &PairCandidate,
+    convention: InversePair,
+) -> ProbeRow {
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: Some(edited.name.clone()),
+        line: Some(edited.start_line as u32),
+        similarity: None,
+        detail: Some(format!(
+            "the change edited this function; its {convention} partner `{}` (line {}) is unchanged",
+            partner.name, partner.start_line
+        )),
+    }
+}
+
+/// The `inverse-pairs` probe: one row per inverse-operation pair the change
+/// broke — a function it edited whose opposite in the same file it left alone.
+///
+/// The pairing is a naming convention read off [`INVERSE_PAIRS`], so a row says
+/// only that the two names stand opposite each other and that one side moved.
+/// Whether the partner actually needed the same change is the agent's call,
+/// which is why the rows are [`ProbeKind::Candidate`] and never a guard-able
+/// fact.
+///
+/// The module is the file, not the enclosing type: `serialize` and
+/// `deserialize` sit in two different `impl` blocks in every serde-shaped file,
+/// so pairing within one parent would miss the case the probe exists for.
+#[derive(Debug)]
+struct InversePairProbe;
+
+impl sealed::Sealed for InversePairProbe {}
+
+impl TreeSitterProbe for InversePairProbe {
+    fn name(&self) -> &'static str {
+        INVERSE_PAIRS_PROBE_NAME
+    }
+
+    fn kind(&self) -> ProbeKind {
+        ProbeKind::Candidate
+    }
+
+    fn run(&self, context: &TreeSitterProbeContext<'_>) -> Vec<ProbeRow> {
+        let Some(before) = context.before() else {
+            return vec![not_computed_row(context.path(), INVERSE_PAIRS_NOT_DIFFED)];
+        };
+        let candidates = pair_candidates(context.path(), context.after(), before);
+        broken_pair_rows(context.path(), &candidates)
+    }
+}
+
+/// The one [`InversePairProbe`] the catalog registers.
+static INVERSE_PAIR_PROBE: InversePairProbe = InversePairProbe;
+
 /// Every registered [`TreeSitterProbe`].
 ///
 /// The single source of truth the probe catalog builds its tree-sitter rows
 /// from: a probe's name and kind are read off the implementation, never
 /// restated beside it. Adding a probe is adding one entry here.
-pub(crate) static TREE_SITTER_PROBES: &[&'static dyn TreeSitterProbe] = &[&FUNCTION_COUNT_PROBE];
+pub(crate) static TREE_SITTER_PROBES: &[&'static dyn TreeSitterProbe] =
+    &[&FUNCTION_COUNT_PROBE, &INVERSE_PAIR_PROBE];
 
 #[cfg(test)]
 mod tests {
@@ -343,13 +592,14 @@ mod tests {
 
     use super::{
         function_count, prime_parse_cache, run_tree_sitter_probe, sealed, ParseCache, Revision,
-        TreeSitterProbe, TreeSitterProbeContext, PARSE_EVENT, TREE_SITTER_NOT_PARSED,
+        TreeSitterProbe, TreeSitterProbeContext, INVERSE_PAIRS_NOT_DIFFED,
+        INVERSE_PAIRS_PROBE_NAME, PARSE_EVENT, TREE_SITTER_NOT_PARSED,
     };
     use crate::review::probes::{
         catalog, run_probes, FileChange, ProbeKind, ProbeOp, ProbeResult, ProbeRow,
     };
     use crate::review::test_support::{index_conn, loader_with, TestRepo, DIM};
-    use crate::review::{render_file_payload, scope_review, Scope};
+    use crate::review::{render_file_payload, scope_review, FileWork, Scope, WorkList};
 
     /// A two-function Rust file, so a count row reads `2` rather than `0` or `1`.
     const TWO_FUNCTIONS: &str = "pub fn one() {}\npub fn two() {}\n";
@@ -552,36 +802,57 @@ mod tests {
         );
     }
 
-    /// The whole path a validator's declared probe travels: a real repository,
-    /// a validator that declares `probes: [functions]`, the real `scope_review`,
-    /// and the real prompt renderer the model reads.
-    #[tokio::test]
-    async fn a_trait_probes_rows_reach_the_rendered_validator_prompt() {
+    /// The name of the one ruleset every scoped-review test here declares its
+    /// probes on.
+    const PROBE_VALIDATOR: &str = "census";
+
+    /// The glob [`PROBE_VALIDATOR`] matches, so [`CHANGED_FILE`] falls under it.
+    const RUST_FILES: &str = "*.rs";
+
+    /// Scope a real review over a real repository: commit `before`, write
+    /// `after` into the working tree, and scope [`PROBE_VALIDATOR`] declaring
+    /// `probes` over the result.
+    ///
+    /// The whole production path from a git diff to a validator's evidence, so
+    /// a test built on it reads real probe rows over a real base revision
+    /// rather than a hand-built change set.
+    async fn reviewed_work(before: &str, after: &str, probes: &[&str]) -> WorkList {
         let repo = TestRepo::new();
-        repo.write(CHANGED_FILE, ONE_FUNCTION);
+        repo.write(CHANGED_FILE, before);
         repo.commit("initial");
-        repo.write(CHANGED_FILE, TWO_FUNCTIONS);
+        repo.write(CHANGED_FILE, after);
 
         let conn = index_conn();
-        let loader = loader_with("census", "*.rs", &["functions"]);
+        let loader = loader_with(PROBE_VALIDATOR, RUST_FILES, probes);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+        scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
-            .expect("the working scope resolves");
-        let file = work
-            .validators()
+            .expect("the working scope resolves")
+    }
+
+    /// The work item [`reviewed_work`] produced for [`CHANGED_FILE`].
+    fn changed_file_work(work: &WorkList) -> &FileWork {
+        work.validators()
             .iter()
-            .find(|validator| validator.validator_name() == "census")
+            .find(|validator| validator.validator_name() == PROBE_VALIDATOR)
             .and_then(|validator| {
                 validator
                     .files()
                     .iter()
                     .find(|file| file.path() == CHANGED_FILE)
             })
-            .expect("the changed file is under the census validator");
+            .expect("the changed file is under the validator")
+    }
 
-        let rendered = render_file_payload(std::slice::from_ref(file));
+    /// The whole path a validator's declared probe travels: a real repository,
+    /// a validator that declares `probes: [functions]`, the real `scope_review`,
+    /// and the real prompt renderer the model reads.
+    #[tokio::test]
+    async fn a_trait_probes_rows_reach_the_rendered_validator_prompt() {
+        let work = reviewed_work(ONE_FUNCTION, TWO_FUNCTIONS, &["functions"]).await;
+
+        let rendered = render_file_payload(std::slice::from_ref(changed_file_work(&work)));
 
         assert!(
             rendered.contains("probe `functions` on `src/lib.rs`"),
@@ -590,6 +861,121 @@ mod tests {
         assert!(
             rendered.contains("2 function definitions"),
             "the prompt must carry the probe's row, got:\n{rendered}"
+        );
+    }
+
+    /// A module holding both sides of one inverse pair, so a change can edit one
+    /// side and leave the other alone.
+    const BOTH_PAIR_SIDES: &str = "\
+        pub fn serialize(value: u8) -> u8 { value }\n\
+        pub fn deserialize(value: u8) -> u8 { value }\n";
+
+    /// [`BOTH_PAIR_SIDES`] with only `serialize` edited — the broken pair.
+    const SERIALIZE_EDITED: &str = "\
+        pub fn serialize(value: u8) -> u8 { value + 1 }\n\
+        pub fn deserialize(value: u8) -> u8 { value }\n";
+
+    /// [`BOTH_PAIR_SIDES`] with both sides edited — the complete pair.
+    const BOTH_PAIR_SIDES_EDITED: &str = "\
+        pub fn serialize(value: u8) -> u8 { value + 1 }\n\
+        pub fn deserialize(value: u8) -> u8 { value - 1 }\n";
+
+    /// A module holding both sides of the `to`/`from` conversion convention,
+    /// which pairs on ONE word of a multi-word name rather than on the whole
+    /// name.
+    const BOTH_CONVERSION_SIDES: &str = "\
+        pub fn to_json(value: u8) -> u8 { value }\n\
+        pub fn from_json(value: u8) -> u8 { value }\n";
+
+    /// [`BOTH_CONVERSION_SIDES`] with only `to_json` edited.
+    const TO_JSON_EDITED: &str = "\
+        pub fn to_json(value: u8) -> u8 { value + 1 }\n\
+        pub fn from_json(value: u8) -> u8 { value }\n";
+
+    /// The `inverse-pairs` rows a real review produces for [`CHANGED_FILE`].
+    async fn inverse_pair_rows(before: &str, after: &str) -> Vec<ProbeRow> {
+        let work = reviewed_work(before, after, &[INVERSE_PAIRS_PROBE_NAME]).await;
+        changed_file_work(&work)
+            .probe_results()
+            .iter()
+            .flat_map(|result| result.rows.iter().cloned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_change_to_one_side_of_an_inverse_pair_names_the_untouched_partner() {
+        let rows = inverse_pair_rows(BOTH_PAIR_SIDES, SERIALIZE_EDITED).await;
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "one row for the one broken pair, got: {rows:?}"
+        );
+        assert_eq!(rows[0].symbol.as_deref(), Some("serialize"));
+        let detail = rows[0]
+            .detail
+            .as_deref()
+            .expect("the row explains the pair");
+        assert!(
+            detail.contains("deserialize"),
+            "the row must name the untouched partner, got: {detail}"
+        );
+        assert!(
+            detail.contains("serialize/deserialize"),
+            "the row must name the convention that paired them, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_to_both_sides_of_an_inverse_pair_reports_no_rows() {
+        let rows = inverse_pair_rows(BOTH_PAIR_SIDES, BOTH_PAIR_SIDES_EDITED).await;
+
+        assert!(
+            rows.is_empty(),
+            "a pair both sides of which changed is not broken, got: {rows:?}"
+        );
+    }
+
+    /// The pair table is a table of WORDS, not of whole names: `to_json` and
+    /// `from_json` pair on their first word alone, through the same comparison
+    /// that pairs `serialize` with `deserialize`.
+    #[tokio::test]
+    async fn a_conversion_pair_is_found_on_one_word_of_a_multi_word_name() {
+        let rows = inverse_pair_rows(BOTH_CONVERSION_SIDES, TO_JSON_EDITED).await;
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "one row for the one broken pair, got: {rows:?}"
+        );
+        assert_eq!(rows[0].symbol.as_deref(), Some("to_json"));
+        let detail = rows[0]
+            .detail
+            .as_deref()
+            .expect("the row explains the pair");
+        assert!(
+            detail.contains("from_json") && detail.contains("to/from"),
+            "the row must name the partner and the convention, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_with_no_base_revision_reports_one_not_computed_row() {
+        let change = FileChange::default()
+            .with_sources([(CHANGED_FILE.to_string(), BOTH_PAIR_SIDES.to_string())]);
+
+        let results = probe_results(&[INVERSE_PAIRS_PROBE_NAME], &change).await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].rows.len(),
+            1,
+            "exactly one row, got: {results:?}"
+        );
+        assert_eq!(
+            results[0].rows[0].detail.as_deref(),
+            Some(INVERSE_PAIRS_NOT_DIFFED),
+            "an undiffable file must not read as a pair that is whole"
         );
     }
 }

@@ -345,6 +345,41 @@ mod tests {
         assert_eq!(duplication.rules.len(), 3);
     }
 
+    /// `completeness` declares the `inverse-pairs` probe, and its
+    /// `inverse-operation-coverage` rule is what reads those rows. The three
+    /// halves are asserted together because each is useless without the others:
+    /// a declaration no probe answers to, or a probe no rule reads, leaves the
+    /// rule judging pairs from prose alone.
+    #[test]
+    fn test_completeness_declares_the_inverse_pairs_probe_its_rule_reads() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let completeness = loader
+            .get_ruleset("completeness")
+            .expect("completeness should be loaded");
+
+        assert_eq!(
+            completeness.manifest.probes,
+            vec!["inverse-pairs".to_string()],
+            "completeness should declare exactly [inverse-pairs], got: {:?}",
+            completeness.manifest.probes
+        );
+        assert!(
+            crate::review::probe_exists("inverse-pairs"),
+            "the probe completeness declares must be in the catalog"
+        );
+        let rule_names: Vec<&str> = completeness
+            .rules
+            .iter()
+            .map(|rule| rule.name.as_str())
+            .collect();
+        assert!(
+            rule_names.contains(&"inverse-operation-coverage"),
+            "the rule that reads the probe's rows must be in the ruleset, got: {rule_names:?}"
+        );
+    }
+
     // ========================================================================
     // Focused safety/integrity validators (migrated from security-rules /
     // test-integrity multi-rule sets into focused review-time validators)
