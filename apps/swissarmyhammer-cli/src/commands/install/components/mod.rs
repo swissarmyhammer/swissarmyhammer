@@ -22,7 +22,7 @@ use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_validators::review::{
-    detected_project_type_keys, install_project_tool_rules, ToolRuleInstall,
+    as_borrowed_strings, detected_project_type_keys, install_project_tool_rules, ToolRuleInstall,
 };
 use swissarmyhammer_validators::ValidatorLoader;
 
@@ -235,7 +235,7 @@ impl Initializable for ValidatorTools {
                 }
             };
             let detected_types = detected_project_type_keys(root);
-            let project_types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
+            let project_types = as_borrowed_strings(&detected_types);
 
             vec![install_tool_rules_with(
                 self.name(),

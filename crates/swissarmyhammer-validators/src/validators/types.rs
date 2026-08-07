@@ -321,7 +321,7 @@ impl ValidatorFrontmatter {
     pub fn apply_defaults(
         &mut self,
         path: &std::path::Path,
-        source_code_patterns: Option<&[String]>,
+        source_code_patterns: Option<&[impl AsRef<str>]>,
     ) {
         apply_name_and_description(&mut self.name, &mut self.description, path, "Validator");
 
@@ -330,7 +330,7 @@ impl ValidatorFrontmatter {
             if let Some(patterns) = source_code_patterns {
                 self.match_criteria = Some(ValidatorMatch {
                     tools: vec![],
-                    files: patterns.to_vec(),
+                    files: patterns.iter().map(|s| s.as_ref().to_string()).collect(),
                     project_types: vec![],
                 });
             }
@@ -541,10 +541,16 @@ fn matches_project_types(match_criteria: &ValidatorMatch, ctx: &MatchContext) ->
 pub enum ValidatorResult {
     /// Validation passed.
     #[serde(rename = "passed")]
-    Passed { message: String },
+    Passed {
+        /// What the validator confirmed, in the words the LLM returned.
+        message: String,
+    },
     /// Validation failed.
     #[serde(rename = "failed")]
-    Failed { message: String },
+    Failed {
+        /// The defect the validator found, in the words the LLM returned.
+        message: String,
+    },
 }
 
 /// Define a [`ValidatorResult`] factory method that wraps a message in the
@@ -1035,10 +1041,10 @@ pub const GLOB_MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
 /// Pre-compile a slice of glob pattern strings into `glob::Pattern` objects.
 ///
 /// Invalid patterns are silently skipped.
-pub fn compile_glob_patterns(patterns: &[String]) -> Vec<glob::Pattern> {
+pub fn compile_glob_patterns<S: AsRef<str>>(patterns: &[S]) -> Vec<glob::Pattern> {
     patterns
         .iter()
-        .filter_map(|p| glob::Pattern::new(p).ok())
+        .filter_map(|p| glob::Pattern::new(p.as_ref()).ok())
         .collect()
 }
 
@@ -1437,12 +1443,21 @@ mod tests {
         assert_eq!(ctx.event_context, Some("task_runner".to_string()));
     }
 
+    /// The `apply_defaults` argument that supplies no source-code patterns.
+    ///
+    /// `apply_defaults` accepts any slice of string-like patterns, so a bare
+    /// `None` leaves the element type open. This names the element type once.
+    const NO_SOURCE_CODE_PATTERNS: Option<&[&str]> = None;
+
     #[test]
     fn test_apply_defaults_sets_name_from_file_stem() {
         let mut frontmatter = base_frontmatter();
         frontmatter.name = String::new();
         frontmatter.description = String::new();
-        frontmatter.apply_defaults(&PathBuf::from("/path/to/my-validator.md"), None);
+        frontmatter.apply_defaults(
+            &PathBuf::from("/path/to/my-validator.md"),
+            NO_SOURCE_CODE_PATTERNS,
+        );
         assert_eq!(frontmatter.name, "my-validator");
     }
 
@@ -1451,7 +1466,7 @@ mod tests {
         let mut frontmatter = base_frontmatter();
         frontmatter.name = String::new();
         frontmatter.description = String::new();
-        frontmatter.apply_defaults(&PathBuf::from("check-types.md"), None);
+        frontmatter.apply_defaults(&PathBuf::from("check-types.md"), NO_SOURCE_CODE_PATTERNS);
         assert_eq!(frontmatter.description, "Validator: check-types");
     }
 
@@ -1473,7 +1488,7 @@ mod tests {
     fn test_apply_defaults_no_match_criteria_when_no_patterns() {
         let mut frontmatter = base_frontmatter();
         frontmatter.match_criteria = None;
-        frontmatter.apply_defaults(&PathBuf::from("test.md"), None);
+        frontmatter.apply_defaults(&PathBuf::from("test.md"), NO_SOURCE_CODE_PATTERNS);
         assert!(frontmatter.match_criteria.is_none());
     }
 
@@ -1904,7 +1919,7 @@ mod tests {
 
     #[test]
     fn test_compile_glob_patterns_empty() {
-        let compiled = compile_glob_patterns(&[]);
+        let compiled = compile_glob_patterns::<&str>(&[]);
         assert!(compiled.is_empty());
     }
 

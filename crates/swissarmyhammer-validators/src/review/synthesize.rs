@@ -40,7 +40,8 @@ use crate::review::fleet::{
     ReviewProgressSender,
 };
 use crate::review::scope::{
-    batch_work_list, detected_project_type_keys, scope_review, Scope, SkippedFile, WorkList,
+    as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, Scope,
+    SkippedFile, WorkList,
 };
 use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
 use crate::review::tool_rules::{execute_tool_runs, plan_tool_rules, ToolReport};
@@ -625,7 +626,7 @@ pub async fn run_review(
     // every batch's fan-out so a superseded prompt rule is skipped per file;
     // an unhealthy tool suppresses nothing, and the report notes the fallback.
     let detected_types = detected_project_type_keys(repo_path);
-    let project_types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
+    let project_types = as_borrowed_strings(&detected_types);
 
     // Stage 2a: install what the matched tool rules need before planning them.
     // The lifecycle tries each `install.commands` entry in order and, when all

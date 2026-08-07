@@ -685,6 +685,16 @@ pub fn detected_project_type_keys(repo_path: &Path) -> Vec<String> {
     }
 }
 
+/// Borrow every string in `items` as a `&str`.
+///
+/// [`detected_project_type_keys`] answers with owned keys, and every stage
+/// that consumes those keys — the tool-rule planner, the tool installer, the
+/// doctor check — takes a borrowed slice. This is the one conversion between
+/// the two, so no caller writes it again.
+pub fn as_borrowed_strings<S: AsRef<str>>(items: &[S]) -> Vec<&str> {
+    items.iter().map(S::as_ref).collect()
+}
+
 /// Match every resolved file against the loader's validators via the shared
 /// `matching_rulesets` code path, accumulating each validator's matched files.
 ///

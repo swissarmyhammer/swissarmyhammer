@@ -191,6 +191,79 @@ comments:
     - evidence: 6 files — crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/review/synthesize.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/validators/types.rs, apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. Tests: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1207 passed 0 failed 0 skipped; `cargo test --doc -p swissarmyhammer-validators` 2 passed; `cargo clippy --workspace --all-targets` no warning; `cargo fmt --all --check` clean.
     - next: /review
   timestamp: 2026-08-07T17:27:35.857640+00:00
+- actor: claude-code
+  id: 01kzep0qg14m8ft6ytw3x8tgw7
+  text: |-
+    ### review — findings
+    - scope: review sha HEAD~1..HEAD (commit 095fed931)
+    - prior findings: all 3 verified closed in code — helper `verify_shipped_tool_rules_pass_fixtures` at tool_rules.rs:1439 called by both fixture tests; `project_types: &[&str]` at tool_rules.rs:347, 387, 420, 462; `RUST_MISSING_DOCS_RULE` at tool_rules.rs:1171 and `PYTHON_UNREACHABLE_CODE_RULE` at tool_rules.rs:1194.
+    - counts: 7 confirmed, 3 refuted, 27 attempted, 0 failed, 0 skipped.
+    - recorded: 5 findings — components/mod.rs:238, types.rs:324, types.rs:544, types.rs:547, types.rs:1038.
+    - dropped by the skill test-refactoring exception: tool_rules.rs:765 (`loader_of`, inside `#[cfg(test)]` from line 679, not touched by this commit) and types.rs:1482 (`CUSTOM_TIMEOUT` in `mod tests` from line 1055, not touched by this commit). Both ask to restyle test code that already existed.
+    - environment: the session MCP server image lacks the `assertion-census` probe. The review ran on a fresh `sah serve` process of the on-disk binary over stdio.
+    - next: implement the 5 open findings; task stays in review.
+  timestamp: 2026-08-07T17:58:28.097173+00:00
+- actor: claude-code
+  id: 01kzep4pxwxyzqgznwf104qb9y
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 6 files; the 3 prior findings are closed and verified in the source
+    - test: green — cargo nextest run --workspace 13763 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 095fed931 (parent 978a4eef3)
+    - review: findings — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:238, crates/swissarmyhammer-validators/src/validators/types.rs:324, :544, :547, :1038 (one duplicated borrow conversion across three new call sites, plus four conditions in types.rs the same rules reach)
+    - guardrail: no repeat. Round 1 named the fixture test duplication, round 2 the parameter types and constants, round 3 the borrow conversion. Different causes, different lines, no no-change round.
+  timestamp: 2026-08-07T18:00:38.588955+00:00
+- actor: claude-code
+  id: 01kzepvhxaa6xaza6p7kbh47dw
+  text: |-
+    Cleared all five open findings from the 12:47 review, and swept each cause across the whole file.
+
+    FINDING components/mod.rs:238 — the borrow conversion is duplicated across three call sites.
+
+    One shared helper, `as_borrowed_strings`, now lives beside `detected_project_type_keys` in `review/scope.rs` and is re-exported from `review`. That module is its home because every one of the three sites calls `detected_project_type_keys` on the line above: the helper is the one conversion between the owned keys that function answers with and the borrowed slice the tool-rule planner, the tool installer, and the doctor check all take.
+
+    The finding writes the signature as `fn as_borrowed_strings(strings: &[String]) -> Vec<&str>`. The shipped signature is `pub fn as_borrowed_strings<S: AsRef<str>>(items: &[S]) -> Vec<&str>`. A concrete `&[String]` parameter is the exact defect the other four findings on this card name, so a helper written that way would arrive with a finding already on it. The generic form takes `&[String]` at all three sites and stays clean under the same rule.
+
+    Routed all three sites:
+    - `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs` — `ValidatorTools::init`
+    - `crates/swissarmyhammer-validators/src/doctor.rs` — `check_review_engine`
+    - `crates/swissarmyhammer-validators/src/review/synthesize.rs` — `run_review`
+
+    Swept the repository for the same conversion. Nine other sites spell it (statusline, code-context, entity-search, templating, focus, tools). Each is in a crate that does not depend on swissarmyhammer-validators, and each converts something unrelated to project-type keys. Routing them through this helper would add a crate edge to serve a one-line map. They stay.
+
+    TDD: wrote both `as_borrowed_strings` tests in `review/scope/tests.rs` FIRST and watched them fail RED with `error[E0425]: cannot find function 'as_borrowed_strings' in this scope`, twice. Then added the function, and both went GREEN. The second test feeds a `[&str; 2]`, which proves the generic bound is what lets a caller that already holds borrowed keys skip the owned vector.
+
+    FINDING types.rs:324 — `apply_defaults` takes a concrete `&[String]`.
+
+    Now `source_code_patterns: Option<&[impl AsRef<str>]>`, and the body builds `files` with `patterns.iter().map(|s| s.as_ref().to_string()).collect()`.
+
+    FINDING types.rs:1038 — `compile_glob_patterns` takes a concrete `&[String]`.
+
+    Now `pub fn compile_glob_patterns<S: AsRef<str>>(patterns: &[S])`, compiling each pattern from `p.as_ref()`.
+
+    Swept the whole file for that cause: `&[String]`, `&String`, and `&Vec<T>` in a parameter position. `apply_defaults` and `compile_glob_patterns` were the only two, and both are fixed.
+
+    Both signatures cost four call sites their type inference, because `None` and `&[]` no longer name their element type. Not a conflict — each site names the type instead:
+    - Three `apply_defaults(..., None)` test calls now pass a named constant, `NO_SOURCE_CODE_PATTERNS: Option<&[&str]> = None`. One constant rather than three turbofishes, so the choice of element type reads once.
+    - `compile_glob_patterns(&[])` is now `compile_glob_patterns::<&str>(&[])`.
+
+    FINDINGS types.rs:544 and :547 — missing documentation for a struct field.
+
+    `ValidatorResult::Passed` and `ValidatorResult::Failed` each carry a `message` field, and neither was documented. Both now are. The `missing_docs` lint cannot see these: it covers a struct field and skips an enum variant's field, which is why they survived a clean clippy.
+
+    Swept the whole file for that cause. Every other field is documented — the three enums are `ValidatorSource` and `ToolScope`, both unit-variant only, and `ValidatorResult`; `FixHint`'s tuple field is private. Nothing else is open.
+
+    No test for the four shape findings. A signature change is proved by the compiler at every caller in the workspace, and a doc comment has no behavior to assert.
+
+    Verified by running: `cargo check --workspace --all-targets` clean, which compiles every caller of the two changed public signatures — including `compile_glob_patterns` in swissarmyhammer-tools. `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1209 passed 0 failed 0 skipped. `cargo test --doc -p swissarmyhammer-validators` 2 passed. `cargo clippy --workspace --all-targets` no warning. `cargo fmt --all --check` clean.
+  timestamp: 2026-08-07T18:13:07.114528+00:00
+- actor: claude-code
+  id: 01kzepvvmecqneqd9cm4d4m1h7
+  text: |-
+    ### implement — changed
+    - evidence: 7 files — crates/swissarmyhammer-validators/src/review/scope.rs, crates/swissarmyhammer-validators/src/review/scope/tests.rs, crates/swissarmyhammer-validators/src/review/mod.rs, crates/swissarmyhammer-validators/src/review/synthesize.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/validators/types.rs, apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. Tests: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1209 passed 0 failed 0 skipped; `cargo test --doc -p swissarmyhammer-validators` 2 passed; `cargo check --workspace --all-targets` clean; `cargo clippy --workspace --all-targets` no warning; `cargo fmt --all --check` clean. RED→GREEN watched on both new `as_borrowed_strings` tests.
+    - next: /review
+  timestamp: 2026-08-07T18:13:17.070152+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'dead-code tools: evaluate narrow deterministic checks'
@@ -221,3 +294,11 @@ Acceptance for each accepted tool: it runs clean on this repository, or every fi
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:347` — Function parameter `project_types: &[String]` accepts concrete String type instead of generic `&[&str]`; reduces flexibility for callers who have borrowed strings or literals. Change parameter to `project_types: &[&str]` and update internal conversions (line 429 already does `.iter().cloned()` to create owned Strings, which works with borrowed input).
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:462` — Function parameter `project_types: &[String]` accepts concrete type instead of generic `&[&str]`; reduces API flexibility in a crate-visible function. Change parameter to `project_types: &[&str]`.
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1171` — New constant `RUST_MISSING_DOCS_RULE` (line 1167) centralizes the rule name to replace repeated literal strings. The constant is used in three updated test locations (1228, 1304, 1323), but the same string `"missing-docs-rust"` remains hardcoded in `SHIPPED_MISSING_DOCS_RULES` array. If the rule name changes, this entry becomes inconsistent with the constant. Update `SHIPPED_MISSING_DOCS_RULES` to use the constant: `("rust", RUST_MISSING_DOCS_RULE)` and `SHIPPED_DEAD_CODE_RULES` to use `("python", PYTHON_UNREACHABLE_CODE_RULE)`. This is achievable in Rust const expressions and makes the centralization complete.
+
+## Review Findings (2026-08-07 12:47)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:238` — Converting `Vec<String>` to `Vec<&str>` via `.iter().map(String::as_str).collect()` is duplicated across three call sites in this commit. This pattern should be extracted into a shared helper function. Extract a helper function `fn as_borrowed_strings(strings: &[String]) -> Vec<&str> { strings.iter().map(String::as_str).collect() }` and use it at all three call sites (mod.rs:237-238, doctor.rs:209-210, synthesize.rs:627-628).
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:324` — Function parameter accepts concrete `&[String]` instead of generic borrowed strings. Per rule: 'Accept generics, not concrete types. `&str` not `&String`, `&[T]` not `&Vec<T>`.' This forces callers to construct Vec<String> even when they have borrowed strs or static string slices. Change parameter to `source_code_patterns: Option<&[impl AsRef<str>]>` and update line 333 to `files: patterns.iter().map(|s| s.as_ref().to_string()).collect(),`.
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:544` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:547` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-validators/src/validators/types.rs:1038` — Function accepts concrete `&[String]` instead of generic borrowed strings. Per rule: 'Accept generics, not concrete types. `&str` not `&String`, `&[T]` not `&Vec<T>`.' This forces callers to own Strings even when they have borrowed strs, losing flexibility. Change signature to `pub fn compile_glob_patterns<S: AsRef<str>>(patterns: &[S]) -> Vec<glob::Pattern>` and call `glob::Pattern::new(p.as_ref())` inside the loop.

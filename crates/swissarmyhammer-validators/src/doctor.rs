@@ -29,7 +29,7 @@ use std::process::Output;
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::error::AvpError;
-use crate::review::scope::detected_project_type_keys;
+use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
 use crate::validators::types::{
@@ -207,8 +207,10 @@ impl ToolRuleStatus {
 pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, AvpError> {
     let loader = crate::load_rules(Some(workspace_root))?;
     let project_types = detected_project_type_keys(workspace_root);
-    let project_type_keys: Vec<&str> = project_types.iter().map(String::as_str).collect();
-    Ok(check_review_engine_with(&loader, &project_type_keys))
+    Ok(check_review_engine_with(
+        &loader,
+        &as_borrowed_strings(&project_types),
+    ))
 }
 
 /// Produce the review-engine facts from an explicit loader and detected

@@ -1177,3 +1177,25 @@ fn distinct_files_dedups_by_path_in_first_seen_order() {
         "distinct_files dedups by path and preserves first-seen order"
     );
 }
+
+#[test]
+fn as_borrowed_strings_borrows_every_owned_key_in_order() {
+    let owned = vec!["rust".to_string(), "python".to_string()];
+
+    assert_eq!(
+        as_borrowed_strings(&owned),
+        vec!["rust", "python"],
+        "the owned keys borrow one for one, in their original order"
+    );
+}
+
+#[test]
+fn as_borrowed_strings_accepts_a_slice_that_already_borrows() {
+    let already_borrowed = ["rust", "python"];
+
+    assert_eq!(
+        as_borrowed_strings(&already_borrowed),
+        vec!["rust", "python"],
+        "a caller holding borrowed keys needs no owned vector first"
+    );
+}
