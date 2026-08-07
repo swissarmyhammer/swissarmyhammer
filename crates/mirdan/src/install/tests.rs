@@ -40,16 +40,16 @@ fn test_find_packages_by_git_source_uppercase_scheme_and_host() {
 
 #[test]
 fn test_parse_package_spec_name_only() {
-    let (name, version) = parse_package_spec("no-secrets");
-    assert_eq!(name, "no-secrets");
-    assert_eq!(version, None);
+    let spec = parse_package_spec("no-secrets");
+    assert_eq!(spec.name, "no-secrets");
+    assert_eq!(spec.version, None);
 }
 
 #[test]
 fn test_parse_package_spec_with_version() {
-    let (name, version) = parse_package_spec("no-secrets@1.2.3");
-    assert_eq!(name, "no-secrets");
-    assert_eq!(version, Some("1.2.3".to_string()));
+    let spec = parse_package_spec("no-secrets@1.2.3");
+    assert_eq!(spec.name, "no-secrets");
+    assert_eq!(spec.version, Some("1.2.3".to_string()));
 }
 
 #[test]
@@ -340,9 +340,9 @@ fn test_read_frontmatter_skill() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "1.2.3");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "1.2.3");
 }
 
 #[test]
@@ -351,9 +351,9 @@ fn test_read_frontmatter_missing_version_defaults() {
     let md = dir.path().join("SKILL.md");
     std::fs::write(&md, "---\nname: test-skill\n---\n# Test\n").unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "0.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "0.0.0");
 }
 
 #[test]
@@ -366,9 +366,9 @@ fn test_read_frontmatter_metadata_version() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "2.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "2.0.0");
 }
 
 #[test]
@@ -381,9 +381,9 @@ fn test_read_frontmatter_metadata_preferred() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "2.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "2.0.0");
 }
 
 #[test]
@@ -409,9 +409,9 @@ fn test_read_frontmatter_keeps_every_key_past_a_three_hyphen_run() {
     let dir = tempfile::tempdir().unwrap();
     let md = write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "1.2.3");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "1.2.3");
 }
 
 #[test]
@@ -668,9 +668,9 @@ fn test_local_tool_detection_and_frontmatter() {
     assert_eq!(pkg_type, Some(PackageType::Tool));
 
     // read_frontmatter extracts name + version
-    let (name, version) = read_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
-    assert_eq!(name, "fs-tool");
-    assert_eq!(version, "1.0.0");
+    let metadata = read_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
+    assert_eq!(metadata.name, "fs-tool");
+    assert_eq!(metadata.version, "1.0.0");
 
     // MCP frontmatter parses correctly
     let yaml = mcp_config::parse_yaml_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
@@ -1162,9 +1162,9 @@ fn test_local_skill_detection_and_frontmatter() {
     assert_eq!(pkg_type, Some(PackageType::Skill));
 
     // read_frontmatter extracts name + version
-    let (name, version) = read_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
-    assert_eq!(name, "my-skill");
-    assert_eq!(version, "1.2.3");
+    let metadata = read_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
+    assert_eq!(metadata.name, "my-skill");
+    assert_eq!(metadata.version, "1.2.3");
 }
 
 #[test]
@@ -1176,9 +1176,9 @@ fn test_local_validator_detection_and_frontmatter() {
     let pkg_type = package_type::detect_package_type(&val_dir);
     assert_eq!(pkg_type, Some(PackageType::Validator));
 
-    let (name, version) = read_frontmatter(&val_dir.join("VALIDATOR.md")).unwrap();
-    assert_eq!(name, "my-validator");
-    assert_eq!(version, "0.1.0");
+    let metadata = read_frontmatter(&val_dir.join("VALIDATOR.md")).unwrap();
+    assert_eq!(metadata.name, "my-validator");
+    assert_eq!(metadata.version, "0.1.0");
 }
 
 // --- validator deploy + uninstall (no agents required) ---
@@ -1606,8 +1606,11 @@ fn test_deploy_tool_twice_overwrites_cleanly() {
     deploy_tool("fs-tool", &src_v2, None, false).unwrap();
 
     // Store should have v2 content
-    let (_, version) = read_frontmatter(&store.join("TOOL.md")).unwrap();
-    assert_eq!(version, "2.0.0", "Version should be updated to 2.0.0");
+    let metadata = read_frontmatter(&store.join("TOOL.md")).unwrap();
+    assert_eq!(
+        metadata.version, "2.0.0",
+        "Version should be updated to 2.0.0"
+    );
 
     // MCP config should still have exactly one entry for fs-tool (not duplicated)
     let mcp: serde_json::Value =

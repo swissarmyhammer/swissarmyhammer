@@ -541,19 +541,23 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
     let mut merged: Vec<InstalledPackage> = Vec::new();
 
     for pkg in packages {
-        if let Some(existing) = merged.iter_mut().find(|p| p.name == pkg.name) {
-            for target in pkg.targets {
-                if !existing.targets.contains(&target) {
-                    existing.targets.push(target);
-                }
-            }
-        } else {
-            merged.push(pkg);
+        match merged.iter_mut().find(|p| p.name == pkg.name) {
+            Some(existing) => add_unique_targets(existing, pkg.targets),
+            None => merged.push(pkg),
         }
     }
 
     merged.sort_by(|a, b| a.name.cmp(&b.name));
     merged
+}
+
+/// Add each target `existing` does not already list.
+fn add_unique_targets(existing: &mut InstalledPackage, targets: Vec<String>) {
+    for target in targets {
+        if !existing.targets.contains(&target) {
+            existing.targets.push(target);
+        }
+    }
 }
 
 #[cfg(test)]

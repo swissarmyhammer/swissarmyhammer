@@ -132,12 +132,11 @@ async fn run_install_local(
     })?;
 
     // Read name and version from frontmatter (or plugin.json for plugins)
-    let (name, version) = match pkg_type {
-        PackageType::Plugin => {
-            let plugin_name =
-                mcp_config::read_plugin_json(&dir.join(PackageType::Plugin.manifest_file()))?;
-            (plugin_name, DEFAULT_VERSION.to_string())
-        }
+    let FrontmatterMetadata { name, version } = match pkg_type {
+        PackageType::Plugin => FrontmatterMetadata {
+            name: mcp_config::read_plugin_json(&dir.join(PackageType::Plugin.manifest_file()))?,
+            version: DEFAULT_VERSION.to_string(),
+        },
         manifest_type => read_frontmatter(&dir.join(manifest_type.manifest_file()))?,
     };
 
@@ -198,7 +197,7 @@ async fn run_install_git(
         let version = match pkg.package_type {
             PackageType::Plugin => DEFAULT_VERSION.to_string(),
             manifest_type => read_frontmatter(&pkg.path.join(manifest_type.manifest_file()))
-                .map(|(_, v)| v)
+                .map(|metadata| metadata.version)
                 .unwrap_or_else(|_| DEFAULT_VERSION.to_string()),
         };
 
@@ -287,6 +286,16 @@ fn log_installed(
     }
 }
 
+/// What a package manifest states about itself in its frontmatter.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FrontmatterMetadata {
+    /// The package name, from the `name` key.
+    pub(crate) name: String,
+    /// The package version, from `metadata.version` or from a top-level
+    /// `version`. A manifest that names neither gets [`DEFAULT_VERSION`].
+    pub(crate) version: String,
+}
+
 /// Read name and version from YAML frontmatter of a markdown file.
 ///
 /// The [`frontmatter`] module makes the split and the parse. A manifest that
@@ -296,7 +305,7 @@ fn log_installed(
 ///
 /// Returns an error when the file cannot be read, the frontmatter is missing
 /// or unterminated, the YAML does not parse, or the `name` key is absent.
-pub(crate) fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
+pub(crate) fn read_frontmatter(path: &Path) -> Result<FrontmatterMetadata, RegistryError> {
     let yaml = frontmatter::read_file(path)?;
 
     let name = frontmatter::field(&yaml, "name")
@@ -307,7 +316,7 @@ pub(crate) fn read_frontmatter(path: &Path) -> Result<(String, String), Registry
         .unwrap_or(DEFAULT_VERSION)
         .to_string();
 
-    Ok((name, version))
+    Ok(FrontmatterMetadata { name, version })
 }
 
 /// Install a package from the registry.
@@ -316,7 +325,7 @@ async fn run_install_registry(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
-    let (name, version) = parse_package_spec(package_spec);
+    let PackageSpec { name, version } = parse_package_spec(package_spec);
 
     // Try authenticated client first, fall back to unauthenticated for public packages
     let client = match RegistryClient::authenticated() {
@@ -720,12 +729,26 @@ pub async fn install_package(
     run_install(&spec, agent_filter, global, InstallMode::Auto, None).await
 }
 
+/// A package spec split into the package it names and the version it pins.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PackageSpec {
+    /// The package name.
+    pub name: String,
+    /// The version the spec pins, or `None` when it pins none.
+    pub version: Option<String>,
+}
+
 /// Parse a package spec like "name" or "name@version".
-pub fn parse_package_spec(spec: &str) -> (String, Option<String>) {
-    if let Some((name, version)) = spec.rsplit_once('@') {
-        (name.to_string(), Some(version.to_string()))
-    } else {
-        (spec.to_string(), None)
+pub fn parse_package_spec(spec: &str) -> PackageSpec {
+    match spec.rsplit_once('@') {
+        Some((name, version)) => PackageSpec {
+            name: name.to_string(),
+            version: Some(version.to_string()),
+        },
+        None => PackageSpec {
+            name: spec.to_string(),
+            version: None,
+        },
     }
 }
 

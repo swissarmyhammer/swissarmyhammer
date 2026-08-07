@@ -281,6 +281,96 @@ comments:
     - evidence: 15 files — crates/mirdan/src/{frontmatter.rs (new), frontmatter/fixtures.rs (moved from frontmatter_fixtures.rs), list.rs, git_source.rs, info.rs, mcp_config.rs, package_type.rs, lib.rs}, crates/mirdan/src/install/{package.rs, applier.rs, profile.rs, deploy.rs, uninstall.rs}, crates/mirdan/src/strategy/mod.rs. 23 new tests, every new contract RED first. All 11 findings checked. `cargo nextest run --workspace`: 13628 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: zero errors. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo fmt --all`.
     - next: /review
   timestamp: 2026-08-07T16:51:26.090752+00:00
+- actor: claude-code
+  id: 01kzekpe9p5h471rqcvd0nehb5
+  text: |
+    ### review — findings
+
+    - scope: `review sha HEAD~1..HEAD` (commit a95954c6c), round 3
+    - counts: 27 attempted, 5 confirmed, 3 refuted, 0 failed
+    - evidence: crates/mirdan/src/git_source.rs:16, crates/mirdan/src/git_source.rs:416, crates/mirdan/src/install/package.rs:299, crates/mirdan/src/list.rs:540, crates/mirdan/src/new.rs:136
+    - dropped: crates/mirdan/src/git_source.rs:1143 asked to name the magic number in a pre-existing test assertion (blame 613f58ef3a, 2026-02-23). The rule against refactoring test code that already existed drops it.
+    - prior rounds: all 17 items verified closed against the code at a95954c6c, not only against the resolution notes. One round-2 resolution claim was inaccurate — `VALIDATOR_RULES_DIR` does not name `rules/` once, because `new.rs` still hardcodes the literal. Carried forward as an open item.
+    - next: close the five open items, then re-review.
+  timestamp: 2026-08-07T17:17:53.846420+00:00
+- actor: claude-code
+  id: 01kzekr18skp86361krjre1yde
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 15 files; new `crates/mirdan/src/frontmatter.rs` owns read-split-parse once; 23 new tests; all eleven round-2 findings closed
+    - test: green — cargo nextest run --workspace, 13628 passed, 0 failed, 0 skipped; clippy -D warnings clean; cargo fmt --all
+    - commit: a95954c6c
+    - review: findings — 5 new, 27 attempted, 5 confirmed, 3 refuted, 0 failed. crates/mirdan/src/git_source.rs:16, crates/mirdan/src/git_source.rs:416 (path traversal on a user-supplied subpath), crates/mirdan/src/install/package.rs:299, crates/mirdan/src/list.rs:540, crates/mirdan/src/new.rs:136
+    - prior-finding verification: all 17 confirmed closed against the code at a95954c6c, not from the resolution notes
+
+    Finding count per round: 6, then 11, then 5. Each round the reviewer reads the surface the previous round's refactor created. No finding has repeated, so the three-round guardrail has not fired.
+
+    The `ralph` keep-alive reached its 50-iteration cap at this point.
+  timestamp: 2026-08-07T17:18:46.041870+00:00
+- actor: claude-code
+  id: 01kzenyrr908z41hsqxj5afqgq
+  text: |-
+    Picked the card back up from `review` with five open findings from round 3. Research for the fix.
+
+    **Finding 1 (git_source.rs:16, `InstallSource` has no `Clone`).** The cause is a public type that omits a trait every field supports, which orphan rules keep a downstream crate from adding. Three public types live in this file. `InstallSource` had `Debug, PartialEq`; `GitSource` had `Debug, Clone, PartialEq`; `DiscoveredPackage` had `Debug, Clone`. Every field of all three is `String`, `Option<String>`, `PathBuf`, or `PackageType`, and all of those carry `Clone`, `Eq`, and `Hash`. All three now derive `Debug, Clone, PartialEq, Eq, Hash`, so the finding is applied to the cause, not only to the named line. `Default` and `Ord` are not applicable: no variant is a sensible default and no field pair states an order.
+
+    **Finding 2 (git_source.rs:416, path traversal).** `discover_in_subpath` joined `repo_dir.join(subpath)` with no check. The subpath is public API -- `GitSource::subpath` -- and `install/package.rs` passes it straight from the install spec. The directory it indexes is a freshly cloned third-party repository, so two different escapes reach the same scan:
+
+    1. The text names a location outside the clone: `../../etc`, or an absolute path (`Path::join` with an absolute argument discards the root entirely).
+    2. The text is ordinary but the repository carries a symbolic link that resolves outside the clone. `git clone` writes symbolic links from repository content, so this is attacker-supplied too, and it reaches the priority-directory walk and the recursive walk as well as the subpath.
+
+    One check cannot cover both, so the fix states each once. `subpath_stays_inside` reads the text and accepts only `Normal` and `CurDir` components. `RepoScan` owns the canonical repository root and answers `contains` for a directory by canonicalizing it and testing the prefix, which follows every link.
+
+    `RepoScan` also removes the reason the check was hard to place. The four walkers each threaded `packages: &mut Vec<_>` and `seen: &mut HashSet<_>`; adding a `root: &Path` beside `dir: &Path` would have put two adjacent `&Path` parameters of different meaning in four signatures, which is the newtype defect round 2 closed for `&str`. The struct carries root, packages, and seen together, so the containment check has one home and the parameter pair is gone.
+
+    Note for the next agent: canonicalize BOTH sides. On macOS a `tempfile::tempdir()` path is `/var/folders/...` while its canonical form is `/private/var/folders/...`, so a prefix test against a raw root matches nothing.
+
+    **Finding 3 (install/package.rs:299, unnamed `(String, String)`).** Two functions in that file return an unnamed tuple of name and version: `read_frontmatter` and `parse_package_spec`. Both get a struct, `FrontmatterMetadata` and `PackageSpec`. `parse_package_spec` is `pub`; a repo-wide grep shows its only callers are `install/package.rs` and `install/tests.rs`, so no other crate sees the change. `read_frontmatter` is `pub(crate)` with callers in `install/package.rs` (2), `install/uninstall.rs` (1), and `install/tests.rs` (9).
+
+    **Finding 4 (list.rs:540, `merge_packages` at nesting depth 4).** The inner target loop becomes `add_unique_targets`.
+
+    **Finding 5 (new.rs:136, the `rules/` literal).** The cause is a production literal that duplicates a constant which already names it. `new.rs` carries five: `"rules"` (which `package_type::VALIDATOR_RULES_DIR` names) and the four manifest names `SKILL.md`, `VALIDATOR.md`, `TOOL.md`, and `.claude-plugin/plugin.json` (which `PackageType::manifest_file()` names). The round-2 resolution listed the readers of `manifest_file()` and missed `new.rs` entirely, which is why the round-2 claim did not hold. All five path joins now read the constant. The `println!` tree and the "Next steps" lines keep their literals: they are user-facing output, not paths, and the public-output-contract rule forbids rewording them.
+  timestamp: 2026-08-07T17:57:23.849355+00:00
+- actor: claude-code
+  id: 01kzepqzhhr79hwzaq6b26x330
+  text: |-
+    All five round-3 findings closed. RED first for the two that state behaviour.
+
+    **RED runs.**
+    - `test_install_source_clones` — failed to compile: `no method named clone found for enum git_source::InstallSource`. GREEN after the derive.
+    - The four containment tests — each failed by reading a package from outside the repository. Verbatim from the run: `a subpath that climbs out of the repository must be refused, got Ok([DiscoveredPackage { name: "outside-skill", ... }])`, and the same shape for the absolute subpath, the symlinked subpath, and the symlinked priority directory. GREEN after `subpath_stays_inside` and `RepoScan::contains`.
+    - `FrontmatterMetadata` and `PackageSpec` — twelve `expected (String, String), found FrontmatterMetadata` errors named every call site before it was updated.
+
+    The five new tests are 60 of 60 in `git_source`, including the twelve network tests that clone real public repositories. Those matter here: they prove the containment check does not refuse a real clone. `anthropics/skills`, `anthropics/claude-plugins-official`, `basecamp/skills`, and `obra/superpowers` all still discover the same packages.
+
+    **Two things worth keeping for the next agent.**
+
+    1. Canonicalize BOTH sides of a containment test. On macOS a `tempfile::tempdir()` path is `/var/folders/...` while its canonical form is `/private/var/folders/...`. A prefix test of a canonical child against a raw root matches nothing, so the check would refuse every directory and every discovery test would fail. The bug is silent in the other direction too: a raw child against a raw root passes a symlinked escape.
+
+    2. The containment check had no home until the walkers became a struct. Threading `root: &Path` into the four free functions would have placed it beside `dir: &Path` -- two adjacent parameters of the same type and different meaning, in four signatures. That is the newtype defect round 2 closed for `&str`, so closing one finding would have opened another. `RepoScan` carries root, packages, and seen together, which removes the `&mut Vec` + `&mut HashSet` pair from four signatures at the same time.
+
+    **What did not work.** The first draft of `discover_in_subpath` relied only on the resolved check in `RepoScan::contains`, with no text check. It refuses a `../` subpath correctly, but the caller cannot then tell "the subpath leaves the repository" from "the subpath holds no package", so both report the same message. The two checks are kept separate on purpose: the text check names the refusal, and the resolved check catches a symbolic link that no text check can see.
+
+    **Blast radius.** `read_frontmatter` and `parse_package_spec` both changed return type. `parse_package_spec` is `pub`; a repo-wide grep shows no caller outside `crates/mirdan`. `discover_packages` keeps its signature but now errors when `repo_dir` does not resolve; its one production caller, `install/package.rs::run_install_git`, passes a `TempDir` path that always resolves. `InstallSource`, `GitSource`, and `DiscoveredPackage` only gained derives, which breaks nothing.
+
+    **Verification, all from the repo root.**
+    - `cargo nextest run --workspace` — 13633 passed, 0 failed, 0 skipped.
+    - `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean.
+    - `cargo clippy -p mirdan --all-targets -- -W missing_docs` — zero findings in any file this change touched; the rest of the crate's findings are in `registry/types.rs`, untouched.
+    - `cargo doc -p mirdan --no-deps` — zero warnings in any touched file. The pre-existing `git_clone` links to private item `checkout_ref` warning was in a file this change edits, so it is fixed rather than left standing.
+    - `cargo fmt --all`.
+
+    **Process note.** Two sub agents made the mechanical call-site edits in parallel, on disjoint file sets this time (one took `install/*`, the other took `list.rs` and `new.rs`), which answers the round-2 note about two agents writing the same file. Every edit was verified here by test, clippy, and diff.
+
+    **Unrelated observation, not touched.** The stray `crates/swissarmyhammer-mcp-proxy/.kanban` directory is still present. It predates this session and this work did not create it.
+  timestamp: 2026-08-07T18:11:10.001379+00:00
+- actor: claude-code
+  id: 01kzepr9s8de6590m0acqbjdb5
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — crates/mirdan/src/git_source.rs, crates/mirdan/src/list.rs, crates/mirdan/src/new.rs, crates/mirdan/src/install/package.rs, crates/mirdan/src/install/uninstall.rs, crates/mirdan/src/install/tests.rs. 5 new tests (4 containment, RED first; 1 Clone, RED by compile error). All 5 round-3 findings checked. `cargo nextest run --workspace`: 13633 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan -W missing_docs`: zero findings in changed files. `cargo doc -p mirdan --no-deps`: zero warnings in changed files. `cargo fmt --all`.
+    - next: /review
+  timestamp: 2026-08-07T18:11:20.488231+00:00
 position_column: doing
 position_ordinal: '8380'
 title: mirdan list.rs carries the frontmatter substring-split defect
@@ -381,3 +471,49 @@ Two things fell out of the consolidation and were deleted, not left dead: `git_s
 **Causes removed beyond the named lines.** `info::show_local_info` held the same read-version, read-description, print-three-lines block three times; it is now `show_package_at`. `info` named `"unknown"` twice and now has one `UNKNOWN`. `install/package.rs` named `"0.0.0"` four times and now has one `DEFAULT_VERSION`. `list.rs` named `"latest"` twice and now has one `UNKNOWN_VERSION`.
 
 **Not changed, and why.** `install/applier.rs::frontmatter_map` still calls `split_frontmatter_body` itself. It is a `#[cfg(test)]` helper that parses into `serde_yaml_ng::Mapping` rather than `Value`, because the duplicate-key rejection it asserts is a property of `Mapping`. Routing it through the shared reader would drop that check. No finding names it.
+
+## Review Findings (2026-08-07 11:53)
+
+> Scope: `HEAD~1..HEAD` (commit a95954c6c). Round 3. Every round-1 and round-2 item above is verified closed against the code at this commit, not only against the resolution notes.
+
+- [x] `crates/mirdan/src/git_source.rs:16` — Public enum `InstallSource` is missing the `Clone` trait, which it must implement because all its fields are cloneable (String and GitSource, which derives Clone). Downstream crates cannot add Clone due to orphan rules — it must be in the original definition. Change line 16 from `#[derive(Debug, PartialEq)]` to `#[derive(Debug, PartialEq, Clone)]`.
+- [x] `crates/mirdan/src/git_source.rs:416` — Path traversal vulnerability: user-controlled `subpath` parameter is joined with `repo_dir` without validation. An attacker could provide paths like `../../../etc/passwd` to read files outside the repository. Validate that the computed path stays within `repo_dir` after joining. Example: use `std::fs::canonicalize()` on both paths and verify one is a prefix of the other, or use a path component validator that rejects `..` and absolute paths in `subpath`.
+- [x] `crates/mirdan/src/install/package.rs:299` — read_frontmatter returns an unnamed tuple (String, String) where both elements have different semantic meanings (package name vs version). Unnamed tuples with semantically distinct elements are error-prone and fail to document intent. Create a struct to represent the result: pub(crate) struct FrontmatterMetadata { pub name: String, pub version: String } and return Result<FrontmatterMetadata, RegistryError>. This prevents accidental reordering, documents the tuple elements by name, and follows the newtype pattern for semantic clarity.
+- [x] `crates/mirdan/src/list.rs:540` — Function has max condition-nesting depth of 4, meeting the gate threshold of 4. Excessive nesting reduces readability and increases cognitive load for maintainers. Extract the inner loop logic (lines 545-549) into a separate helper function to reduce nesting depth. For example, create `fn add_unique_targets(existing: &mut InstalledPackage, targets: &[String])` to eliminate one level of nesting.
+
+A fifth finding asked to name a magic number, `plugins.len() >= 10`, in a test assertion at `crates/mirdan/src/git_source.rs:1143`. `git blame` dates that line to commit 613f58ef3a (2026-02-23), so it is test code that already existed and this commit did not touch it. The review skill rule that blocks refactoring of pre-existing test code drops it.
+
+`list.rs:540` is `merge_packages`, production code. `git blame` dates it to commit 7209f61c55, so it is pre-existing production code that this commit shifted but did not change. The pre-existing-test rule does not reach production code, so the finding stands.
+
+### Closure check on the round-2 resolution
+
+All seventeen prior items are closed. Verified in code: `discover_packages` in `list.rs` is about twenty lines at nesting depth 2 with all seven named helpers present; `PackageFilter` carries the four former bools through both `discover_packages` and `run_list`; no `strip_prefix("---")` plus `find("---")` pair survives anywhere under `crates/mirdan/src`; every `#[test]` function in `list.rs` carries the `test_` prefix; `parse_git_source` is a six-line `or_else` chain; `git_source::discover_packages` is flat at depth 2; `crates/mirdan/src/frontmatter.rs` declares all seven readers and every call site delegates; `extract_name_from_frontmatter` and `str_field` are gone with no callers; the four `scan_*` functions are gone in favour of `scan_package_dirs` over four `PackageScan` rows; and all four `mcp_config.rs` signatures take `ServersKey` and `ToolName`.
+
+One claim in the round-2 resolution does not hold as written, so it is carried forward as an open item:
+
+- [x] `crates/mirdan/src/new.rs:136` — The round-2 resolution states that `package_type::VALIDATOR_RULES_DIR` names the `rules/` directory once. It does not. `new.rs` still hardcodes `let rules_dir = base_dir.join("rules");`, the only remaining production occurrence of the bare `"rules"` literal. Replace it with `package_type::VALIDATOR_RULES_DIR` so the constant is the single source it is claimed to be.
+
+## Resolution round 3 (2026-08-07)
+
+All five findings are closed. Each was applied to the whole cause, not only the named line.
+
+**The `Clone` finding.** The cause is a public type that omits a trait every field supports, which orphan rules keep a downstream crate from adding. `git_source.rs` declares three public types, and all three were short. Every field of all three is a `String`, an `Option<String>`, a `PathBuf`, or a `PackageType`, and each of those carries `Clone`, `Eq`, and `Hash`. `InstallSource`, `GitSource`, and `DiscoveredPackage` now all derive `Debug, Clone, PartialEq, Eq, Hash`. `Default` and `Ord` stay off: no variant is a sensible default, and no field pair states an order.
+
+**The path-traversal finding.** The subpath reaches `discover_in_subpath` from the install spec through the public `GitSource::subpath` field, and the directory it indexes is a freshly cloned third-party repository. Two different escapes therefore reach the same walk, and one check cannot cover both:
+
+1. The text names a location outside the clone. `../outside/pkg` climbs out, and an absolute subpath discards the root entirely, because `Path::join` with an absolute argument returns the argument.
+2. The text is ordinary but the repository carries a symbolic link that resolves outside the clone. `git clone` writes symbolic links from repository content, so the link is attacker-supplied too, and it reaches the priority-directory walk and the recursive walk as well as the subpath.
+
+`subpath_stays_inside` states the first rule: only `Normal` and `CurDir` components are accepted. `RepoScan` states the second: the scan owns the canonical repository root and answers `contains` for a directory by canonicalizing it and testing the prefix, which follows every link. Every directory the walk reads passes `contains`, so the check covers the whole file rather than the named line.
+
+`RepoScan` also removes the reason the check had no home. The four walkers each threaded `packages: &mut Vec<_>` and `seen: &mut HashSet<_>`, and adding a `root: &Path` beside `dir: &Path` would have put two adjacent `&Path` parameters of different meaning into four signatures -- the newtype defect round 2 closed for `&str`. The struct carries the three together, so `scan_dir`, `scan_child_dirs`, and `scan_recursive` are methods with one parameter each, and the free-function `scan_recursive` is gone.
+
+Four tests state the rule, all RED first against the old code, each failing by reading `outside-skill` from outside the repository: a `../` subpath, an absolute subpath, a subpath that is a symbolic link out, and a priority directory that is a symbolic link out. The last two are `#[cfg(unix)]`.
+
+**The unnamed-tuple finding.** Two functions in `install/package.rs` returned an unnamed tuple of a name and a version, not one. `read_frontmatter` now returns `FrontmatterMetadata { name, version }`, and `parse_package_spec` now returns `PackageSpec { name, version }`. Twelve call sites read the named fields: two in `install/package.rs`, one in `install/uninstall.rs`, and eleven in `install/tests.rs`. No asserted value changed.
+
+**The nesting finding.** `merge_packages` is a `match` at depth 2, and the inner target loop is `add_unique_targets`.
+
+**The `rules/` literal finding.** The cause is a production literal that duplicates a constant which already names it, and `new.rs` carried five of them. `base_dir.join("rules")` now reads `package_type::VALIDATOR_RULES_DIR`, and the four manifest joins -- `SKILL.md`, `VALIDATOR.md`, `TOOL.md`, and `.claude-plugin/plugin.json` -- now read `PackageType::manifest_file()`. The plugin manifest join makes its own directory from `plugin_manifest.parent()`, so `.claude-plugin` is named once as well. The only production occurrence of `"rules"` left in the crate is the constant declaration itself; every other occurrence is inside a `mod tests`. The `println!` tree and the "Next steps" lines keep their literals: they are user-facing output, not paths, and the public-output-contract rule forbids rewording them.
+
+**Verification.** `cargo nextest run --workspace`: 13633 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean. `cargo clippy -p mirdan --all-targets -- -W missing_docs`: zero findings in any file this change touched. `cargo doc -p mirdan --no-deps`: zero warnings in any file this change touched, including the pre-existing private-link warning in `git_source.rs`, which is now gone. `cargo fmt --all`.

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::agents;
-use crate::package_type::is_valid_package_name;
+use crate::package_type::{self, is_valid_package_name, PackageType};
 use crate::registry::RegistryError;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
@@ -75,7 +75,7 @@ Describe when and how an agent should use this skill.
 "#,
         name = name
     );
-    fs::write(base_dir.join("SKILL.md"), skill_md)?;
+    fs::write(base_dir.join(PackageType::Skill.manifest_file()), skill_md)?;
 
     // Write reference file
     let reference_md = format!(
@@ -133,7 +133,7 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
     }
 
     // Create directory structure
-    let rules_dir = base_dir.join("rules");
+    let rules_dir = base_dir.join(package_type::VALIDATOR_RULES_DIR);
     fs::create_dir_all(&rules_dir)?;
 
     // Write VALIDATOR.md
@@ -156,7 +156,10 @@ Rules are automatically discovered from the `rules/` directory.
 "#,
         name = name
     );
-    fs::write(base_dir.join("VALIDATOR.md"), validator_md)?;
+    fs::write(
+        base_dir.join(PackageType::Validator.manifest_file()),
+        validator_md,
+    )?;
 
     // Write example rule
     let example_rule = r#"---
@@ -288,7 +291,7 @@ Describe any environment variables or configuration needed.
 "#,
         name = name
     );
-    fs::write(base_dir.join("TOOL.md"), tool_md)?;
+    fs::write(base_dir.join(PackageType::Tool.manifest_file()), tool_md)?;
 
     // Write README.md
     let readme = format!(
@@ -375,10 +378,12 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
     }
 
     // Create directory structure
-    let plugin_meta_dir = base_dir.join(".claude-plugin");
+    let plugin_manifest = base_dir.join(PackageType::Plugin.manifest_file());
     let commands_dir = base_dir.join("commands");
     let skills_dir = base_dir.join("skills");
-    fs::create_dir_all(&plugin_meta_dir)?;
+    if let Some(plugin_meta_dir) = plugin_manifest.parent() {
+        fs::create_dir_all(plugin_meta_dir)?;
+    }
     fs::create_dir_all(&commands_dir)?;
     fs::create_dir_all(&skills_dir)?;
 
@@ -391,7 +396,7 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
         }
     });
     fs::write(
-        plugin_meta_dir.join("plugin.json"),
+        plugin_manifest,
         serde_json::to_string_pretty(&plugin_json).unwrap() + "\n",
     )?;
 

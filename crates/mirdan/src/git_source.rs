@@ -4,7 +4,7 @@
 //! within cloned repositories. Supports GitHub shorthand (`owner/repo`),
 //! HTTPS URLs, SSH URLs, `#ref` fragments, and `@skill-name` suffixes.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use url::Url;
 
@@ -13,7 +13,7 @@ use crate::package_type::{self, PackageType};
 use crate::registry::RegistryError;
 
 /// Classified install source.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InstallSource {
     /// A local filesystem path.
     LocalPath(String),
@@ -24,7 +24,7 @@ pub enum InstallSource {
 }
 
 /// Parsed git source with all the pieces needed to clone and discover packages.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GitSource {
     /// The URL to clone (HTTPS or SSH).
     pub clone_url: String,
@@ -39,7 +39,7 @@ pub struct GitSource {
 }
 
 /// A package discovered inside a cloned repository.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscoveredPackage {
     /// Package name from frontmatter.
     pub name: String,
@@ -214,7 +214,7 @@ fn is_shorthand_segment(segment: &str) -> bool {
 /// Shallow cloning is used only when it is safe:
 ///   * If a specific `git_ref` is pinned it may name a branch/tag/commit that a
 ///     depth-1 clone of the default branch would not contain, so that (rare)
-///     case falls back to a full clone followed by [`checkout_ref`].
+///     case falls back to a full clone followed by a checkout of that ref.
 ///   * libgit2 does not support shallow clones of local (`file://`) remotes, so
 ///     those also take the full-clone path (they are already fast).
 pub fn git_clone(source: &GitSource) -> Result<tempfile::TempDir, RegistryError> {
@@ -361,6 +361,14 @@ const MAX_SCAN_DEPTH: usize = 5;
 /// 4. Recursive scan (max depth 5)
 ///
 /// Deduplicates by package name.
+///
+/// Every directory the search reads stays inside the clone.
+///
+/// # Errors
+///
+/// Returns an error when `repo_dir` does not resolve to a real directory,
+/// when the repository holds no package, or when `subpath` or `select` names
+/// none.
 pub fn discover_packages(
     repo_dir: &Path,
     subpath: Option<&str>,
@@ -370,30 +378,29 @@ pub fn discover_packages(
         return discover_in_subpath(repo_dir, sub, select);
     }
 
-    let mut packages = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut scan = RepoScan::open(repo_dir)?;
 
     // 1. Check root
-    scan_dir_for_package(repo_dir, &mut packages, &mut seen_names);
+    scan.scan_dir(repo_dir);
 
     // 2. Check priority directories
     for dir_name in PRIORITY_DIRS {
-        scan_child_dirs(&repo_dir.join(dir_name), &mut packages, &mut seen_names);
+        scan.scan_child_dirs(&repo_dir.join(dir_name));
     }
 
     // 3. If still nothing, recursive scan
-    if packages.is_empty() {
-        scan_recursive(repo_dir, &mut packages, &mut seen_names, 0);
+    if scan.is_empty() {
+        scan.scan_recursive(repo_dir, 0);
     }
 
-    if packages.is_empty() {
+    if scan.is_empty() {
         return Err(RegistryError::Validation(
             "no packages found in repository (expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json)"
                 .to_string(),
         ));
     }
 
-    filter_by_select(packages, select)
+    filter_by_select(scan.into_packages(), select)
 }
 
 /// Discover packages under one subpath of a cloned repository.
@@ -401,58 +408,111 @@ pub fn discover_packages(
 /// The subpath names one package directory, so the search stops there instead
 /// of falling back to the priority directories or a recursive scan.
 ///
+/// The subpath is untrusted text -- it comes from the install spec -- and it
+/// indexes a third-party repository. Two checks hold the search inside the
+/// clone: [`subpath_stays_inside`] refuses text that names a location outside
+/// it, and [`RepoScan`] refuses a directory that resolves outside it once
+/// every symbolic link is followed.
+///
 /// # Errors
 ///
-/// Returns an error when the subpath is not a directory, when it holds no
-/// package, or when `select` names no package it holds.
+/// Returns an error when the subpath leaves the repository, when it is not a
+/// directory, when it holds no package, or when `select` names no package it
+/// holds.
 fn discover_in_subpath(
     repo_dir: &Path,
     subpath: &str,
     select: Option<&str>,
 ) -> Result<Vec<DiscoveredPackage>, RegistryError> {
-    let mut packages = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    if !subpath_stays_inside(subpath) {
+        return Err(RegistryError::Validation(format!(
+            "subpath '{}' leaves the repository",
+            subpath
+        )));
+    }
 
-    scan_dir_for_package(&repo_dir.join(subpath), &mut packages, &mut seen_names);
+    let mut scan = RepoScan::open(repo_dir)?;
+    scan.scan_dir(&repo_dir.join(subpath));
 
-    if packages.is_empty() {
+    if scan.is_empty() {
         return Err(RegistryError::Validation(format!(
             "subpath '{}' not found or contains no packages",
             subpath
         )));
     }
 
-    filter_by_select(packages, select)
+    filter_by_select(scan.into_packages(), select)
 }
 
-/// Check each immediate subdirectory of `dir` for a package.
+/// Whether the text of `subpath` names a location inside the repository.
 ///
-/// A `dir` that is missing, or is not a directory, holds no subdirectory to
-/// check, so it adds nothing.
-fn scan_child_dirs(
-    dir: &Path,
-    packages: &mut Vec<DiscoveredPackage>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            scan_dir_for_package(&path, packages, seen);
-        }
-    }
+/// Only a relative path of ordinary segments can stay inside the clone. A
+/// leading separator, a drive prefix, and a `..` segment each name something
+/// outside it.
+fn subpath_stays_inside(subpath: &str) -> bool {
+    Path::new(subpath)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
-/// Check a single directory for a package and add it if found.
-fn scan_dir_for_package(
-    dir: &Path,
-    packages: &mut Vec<DiscoveredPackage>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    if let Some(pkg_type) = package_type::detect_package_type(dir) {
+/// One walk of a cloned repository, collecting the packages it holds.
+///
+/// A cloned repository is third-party content, so a symbolic link it carries
+/// may point anywhere on the host. The scan owns the canonical repository
+/// root and resolves every directory against it, so a walk that would leave
+/// the clone reads nothing.
+struct RepoScan {
+    /// The canonical repository root. Every directory read stays inside it.
+    root: PathBuf,
+    /// The packages collected so far, in discovery order.
+    packages: Vec<DiscoveredPackage>,
+    /// The package names already collected, so each package is reported once.
+    seen: std::collections::HashSet<String>,
+}
+
+impl RepoScan {
+    /// Open a scan of the repository checked out at `repo_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `repo_dir` does not resolve to a real directory.
+    fn open(repo_dir: &Path) -> Result<Self, RegistryError> {
+        let root = repo_dir.canonicalize().map_err(|e| {
+            RegistryError::Validation(format!(
+                "cannot read repository directory '{}': {}",
+                repo_dir.display(),
+                e
+            ))
+        })?;
+
+        Ok(Self {
+            root,
+            packages: Vec::new(),
+            seen: std::collections::HashSet::new(),
+        })
+    }
+
+    /// Whether `dir` resolves to a location inside the repository.
+    ///
+    /// Resolution follows every symbolic link, so a link that points out of
+    /// the clone answers `false`. A directory that resolves to nothing -- one
+    /// that is missing, or that is not a directory -- also answers `false`,
+    /// because the scan has nothing to read there.
+    fn contains(&self, dir: &Path) -> bool {
+        dir.canonicalize()
+            .is_ok_and(|resolved| resolved.starts_with(&self.root))
+    }
+
+    /// Check a single directory for a package and collect the one it holds.
+    fn scan_dir(&mut self, dir: &Path) {
+        if !self.contains(dir) {
+            return;
+        }
+
+        let Some(pkg_type) = package_type::detect_package_type(dir) else {
+            return;
+        };
+
         // Every type but Plugin names itself in the frontmatter of its
         // manifest; a plugin names itself in the JSON of its.
         let name = match pkg_type {
@@ -462,15 +522,78 @@ fn scan_dir_for_package(
             }
         };
 
-        if let Some(name) = name {
-            if seen.insert(name.clone()) {
-                packages.push(DiscoveredPackage {
-                    name,
-                    package_type: pkg_type,
-                    path: dir.to_path_buf(),
-                });
+        let Some(name) = name else {
+            return;
+        };
+
+        if self.seen.insert(name.clone()) {
+            self.packages.push(DiscoveredPackage {
+                name,
+                package_type: pkg_type,
+                path: dir.to_path_buf(),
+            });
+        }
+    }
+
+    /// Check each immediate subdirectory of `dir` for a package.
+    ///
+    /// A `dir` that is missing, that is not a directory, or that resolves
+    /// outside the repository holds no subdirectory to check, so it adds
+    /// nothing.
+    fn scan_child_dirs(&mut self, dir: &Path) {
+        if !self.contains(dir) {
+            return;
+        }
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.scan_dir(&path);
             }
         }
+    }
+
+    /// Walk `dir` and the directories under it, to [`MAX_SCAN_DEPTH`].
+    fn scan_recursive(&mut self, dir: &Path, depth: usize) {
+        if depth > MAX_SCAN_DEPTH || !self.contains(dir) {
+            return;
+        }
+
+        // Skip hidden dirs (except .claude, .avp) and common noise
+        let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if depth > 0 && dir_name.starts_with('.') && dir_name != ".claude" && dir_name != ".avp" {
+            return;
+        }
+        if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor") {
+            return;
+        }
+
+        self.scan_dir(dir);
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.scan_recursive(&path, depth + 1);
+            }
+        }
+    }
+
+    /// Whether the scan has collected no package.
+    fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+
+    /// The packages the scan collected, in discovery order.
+    fn into_packages(self) -> Vec<DiscoveredPackage> {
+        self.packages
     }
 }
 
@@ -485,38 +608,6 @@ fn extract_name_from_plugin_json(dir: &Path) -> Option<String> {
     json.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-}
-
-/// Recursively scan for packages up to MAX_SCAN_DEPTH.
-fn scan_recursive(
-    dir: &Path,
-    packages: &mut Vec<DiscoveredPackage>,
-    seen: &mut std::collections::HashSet<String>,
-    depth: usize,
-) {
-    if depth > MAX_SCAN_DEPTH {
-        return;
-    }
-
-    // Skip hidden dirs (except .claude, .avp) and common noise
-    let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if depth > 0 && dir_name.starts_with('.') && dir_name != ".claude" && dir_name != ".avp" {
-        return;
-    }
-    if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor") {
-        return;
-    }
-
-    scan_dir_for_package(dir, packages, seen);
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                scan_recursive(&path, packages, seen, depth + 1);
-            }
-        }
-    }
 }
 
 /// Filter packages by the `--skill` select option.
@@ -927,9 +1018,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut packages = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+        let packages = scan.into_packages();
 
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "my-skill");
@@ -945,11 +1036,10 @@ mod tests {
         )
         .unwrap();
 
-        let mut packages = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
 
-        assert!(packages.is_empty());
+        assert!(scan.is_empty());
     }
 
     #[test]
@@ -957,11 +1047,108 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("SKILL.md"), "# Just markdown").unwrap();
 
-        let mut packages = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        scan_dir_for_package(dir.path(), &mut packages, &mut seen);
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
 
-        assert!(packages.is_empty());
+        assert!(scan.is_empty());
+    }
+
+    // --- containment tests ---
+
+    /// A repository directory beside a package that sits outside it.
+    struct RepoAndOutsidePackage {
+        /// The repository a scan is rooted at.
+        repo: PathBuf,
+        /// A package directory that sits outside the repository.
+        outside: PathBuf,
+    }
+
+    /// Create a repository directory and, beside it, a package outside it.
+    ///
+    /// Both live under `root`, so a subpath of `../outside/pkg` reaches the
+    /// package from the repository.
+    fn repo_and_outside_package(root: &Path) -> RepoAndOutsidePackage {
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+
+        let outside = root.join("outside").join("pkg");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            outside.join("SKILL.md"),
+            "---\nname: outside-skill\n---\n# Outside\n",
+        )
+        .unwrap();
+
+        RepoAndOutsidePackage { repo, outside }
+    }
+
+    #[test]
+    fn test_discover_refuses_a_subpath_that_climbs_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+
+        let result = discover_packages(&tree.repo, Some("../outside/pkg"), None);
+
+        assert!(
+            result.is_err(),
+            "a subpath that climbs out of the repository must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_discover_refuses_an_absolute_subpath() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+
+        let result = discover_packages(&tree.repo, tree.outside.to_str(), None);
+
+        assert!(
+            result.is_err(),
+            "an absolute subpath must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_refuses_a_subpath_that_links_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+        std::os::unix::fs::symlink(&tree.outside, tree.repo.join("link")).unwrap();
+
+        let result = discover_packages(&tree.repo, Some("link"), None);
+
+        assert!(
+            result.is_err(),
+            "a subpath that resolves outside the repository must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skips_a_priority_directory_that_links_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+        let outside_store = tree.outside.parent().unwrap().to_path_buf();
+        std::os::unix::fs::symlink(&outside_store, tree.repo.join("skills")).unwrap();
+
+        let result = discover_packages(&tree.repo, None, None);
+
+        assert!(
+            result.is_err(),
+            "a priority directory that resolves outside the repository holds no \
+             package of this repository, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_install_source_clones() {
+        let source = InstallSource::GitRepo(parse_git_source("owner/repo", None).unwrap());
+
+        assert_eq!(source.clone(), source);
     }
 
     // --- integration tests (require network) ---

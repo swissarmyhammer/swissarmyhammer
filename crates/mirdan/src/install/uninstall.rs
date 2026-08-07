@@ -345,7 +345,7 @@ fn remove_store_entry_if_named(
 /// Delegates to the shared [`read_frontmatter`] parser; any parse failure
 /// (missing file, malformed frontmatter, absent name) yields `None`.
 fn read_skill_frontmatter_name(path: &Path) -> Option<String> {
-    read_frontmatter(path).ok().map(|(name, _version)| name)
+    read_frontmatter(path).ok().map(|metadata| metadata.name)
 }
 
 /// Uninstall a validator: remove its directory from the validators store.
