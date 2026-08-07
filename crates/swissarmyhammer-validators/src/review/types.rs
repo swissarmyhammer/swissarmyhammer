@@ -203,64 +203,79 @@ fn repair_findings_array(agent_text: &str) -> Option<Vec<Finding>> {
         .find_map(|(start, _)| serde_json::from_str(&agent_text[start..=end]).ok())
 }
 
+/// The Markdown marker that opens and closes a fenced code block.
+const CODE_FENCE: &str = "```";
+
+/// The Markdown marker that opens a fenced code block tagged as JSON.
+const JSON_CODE_FENCE: &str = "```json";
+
 /// Extract the JSON value substring delimited by `open`/`close` from an agent
 /// response.
 ///
 /// The one fence-stripping extractor for every agent-emitted JSON shape in
 /// the review pipeline: the findings array (`[ ... ]`), the bare-object
 /// findings fallback (`{ ... }`), and the verify stage's verdict object.
-/// Tries, in order:
 ///
-/// 1. A ```` ```json ```` fenced block.
-/// 2. Any bare ```` ``` ```` fenced block.
-/// 3. Delimiter-counting from the first `open` to its matching `close`.
-/// 4. The first `open` to the last `close` as a last resort.
+/// The strategies are a ladder, each one a rung the next only reaches when it
+/// returns `None`, in this order:
+///
+/// 1. [`json_fenced_value`] — a ```` ```json ```` fenced block.
+/// 2. [`bare_fenced_value`] — any bare ```` ``` ```` fenced block.
+/// 3. [`balanced_value`] — the first `open` to the `close` that balances it.
+/// 4. [`spanning_value`] — the first `open` to the last `close`, as a last
+///    resort.
 ///
 /// Falls back to the trimmed input so the caller's `serde_json` error carries a
 /// useful message when nothing delimited is present.
 pub(crate) fn extract_json_value(response: &str, open: char, close: char) -> &str {
     let trimmed = response.trim();
+    json_fenced_value(trimmed, open, close)
+        .or_else(|| bare_fenced_value(trimmed, open, close))
+        .or_else(|| balanced_value(trimmed, open, close))
+        .or_else(|| spanning_value(trimmed, open, close))
+        .unwrap_or(trimmed)
+}
 
-    // 1. JSON within a ```json fenced block.
-    if let Some(start) = trimmed.find("```json") {
-        let after_marker = &trimmed[start + "```json".len()..];
-        if let Some(end) = after_marker.find("```") {
-            let content = after_marker[..end].trim();
-            if content.starts_with(open) && content.ends_with(close) {
-                return content;
-            }
-        }
-    }
+/// Return `content` trimmed when it is exactly one `open`…`close` value.
+///
+/// The shared acceptance test of both fenced rungs: a fence whose body is
+/// something other than the wanted value is not an answer, so the caller falls
+/// through to the next rung instead of returning prose.
+fn delimited_value(content: &str, open: char, close: char) -> Option<&str> {
+    let content = content.trim();
+    (content.starts_with(open) && content.ends_with(close)).then_some(content)
+}
 
-    // 2. JSON within a bare ``` fenced block.
-    if let Some(start) = trimmed.find("```") {
-        let after_marker = &trimmed[start + 3..];
-        // Skip an optional language identifier on the fence's opening line.
-        let content_start = after_marker.find('\n').map(|i| i + 1).unwrap_or(0);
-        let content = &after_marker[content_start..];
-        if let Some(end) = content.find("```") {
-            let inner = content[..end].trim();
-            if inner.starts_with(open) && inner.ends_with(close) {
-                return inner;
-            }
-        }
-    }
+/// Rung 1: the value inside a ```` ```json ```` fenced block.
+fn json_fenced_value(trimmed: &str, open: char, close: char) -> Option<&str> {
+    let marker = trimmed.find(JSON_CODE_FENCE)?;
+    let body = &trimmed[marker + JSON_CODE_FENCE.len()..];
+    delimited_value(&body[..body.find(CODE_FENCE)?], open, close)
+}
 
-    // 3. Delimiter-count from the first `open` to its matching `close`.
-    if let Some(start) = trimmed.find(open) {
-        if let Some(end) = matching_delimiter(&trimmed[start..], open, close) {
-            return &trimmed[start..=start + end];
-        }
-    }
+/// Rung 2: the value inside any bare ```` ``` ```` fenced block.
+fn bare_fenced_value(trimmed: &str, open: char, close: char) -> Option<&str> {
+    let marker = trimmed.find(CODE_FENCE)?;
+    let after_marker = &trimmed[marker + CODE_FENCE.len()..];
+    // Skip an optional language identifier on the fence's opening line.
+    let body_start = after_marker.find('\n').map(|i| i + 1).unwrap_or(0);
+    let body = &after_marker[body_start..];
+    delimited_value(&body[..body.find(CODE_FENCE)?], open, close)
+}
 
-    // 4. Last resort: first `open` to last `close`.
-    if let (Some(start), Some(end)) = (trimmed.find(open), trimmed.rfind(close)) {
-        if start < end {
-            return &trimmed[start..=end];
-        }
-    }
+/// Rung 3: the first `open` through the `close` that balances it.
+fn balanced_value(trimmed: &str, open: char, close: char) -> Option<&str> {
+    let start = trimmed.find(open)?;
+    let end = matching_delimiter(&trimmed[start..], open, close)?;
+    Some(&trimmed[start..=start + end])
+}
 
-    trimmed
+/// Rung 4: the first `open` through the last `close`, whether or not they
+/// balance.
+fn spanning_value(trimmed: &str, open: char, close: char) -> Option<&str> {
+    let start = trimmed.find(open)?;
+    let end = trimmed.rfind(close)?;
+    (start < end).then(|| &trimmed[start..=end])
 }
 
 /// Find the byte index (relative to `s`, which must start with `open`) of the
@@ -613,5 +628,27 @@ Let me know if you want more detail."#;
         let err =
             parse_findings_repaired("Here are my findings:\n\n[{\"file\": \"a.rs\", ").unwrap_err();
         assert!(matches!(err, AvpError::Json(_)), "got: {err:?}");
+    }
+
+    /// Delimiter counting balances the FIRST `[`, so an opening bracket that
+    /// nothing closes leaves it with no answer. The last-resort span — the
+    /// first `[` through the last `]` — is the rung that still returns text.
+    #[test]
+    fn extract_json_value_spans_first_open_to_last_close_when_nothing_balances() {
+        // The inner `[` is never closed, so no `]` balances the outer one.
+        assert_eq!(
+            extract_json_value("prose [[1, 2] more", '[', ']'),
+            "[[1, 2]"
+        );
+    }
+
+    /// A response with no delimiter at all returns the trimmed input, so the
+    /// caller's `serde_json` error quotes the real text.
+    #[test]
+    fn extract_json_value_falls_back_to_the_trimmed_response() {
+        assert_eq!(
+            extract_json_value("  no json here  ", '[', ']'),
+            "no json here"
+        );
     }
 }

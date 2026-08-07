@@ -46,6 +46,66 @@ comments:
     - evidence: 5 files — crates/swissarmyhammer-validators/src/review/types.rs, review/fleet.rs, review/fleet/tests.rs, review/drive.rs, review/test_support.rs. `cargo test -p swissarmyhammer-validators`: 515 passed, 0 failed. `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings`: clean.
     - next: /review
   timestamp: 2026-08-07T19:06:30.920665+00:00
+- actor: claude-code
+  id: 01kzew2pz652ex4gegyaht4sdh
+  text: |
+    ### review — findings
+    - scope: `review sha 814d6f8ea..773fe1d4c` (HEAD~1..HEAD), driven over a fresh `sah serve` stdio process
+    - engine counts: 4 findings / 4 confirmed / 14 refuted / 26 attempted / 0 failed / 1 skipped file
+    - recorded: 1 finding — crates/swissarmyhammer-validators/src/review/types.rs:221
+    - dropped as out of scope (git blame shows the commit did not introduce the code, and the skill's existing-test exception covers it):
+      - drive.rs:1152 and drive.rs:1231 — magic literal `6` in `#[cfg(test)] mod tests` (module starts line 423); blame 945a7583ff (2026-06-09) and fcf1674b0a (2026-08-01). The commit's only drive.rs hunks are old line 443 and an insert at new line 622-842.
+      - fleet/tests.rs:1 — over prompt cap, remedy is to split an existing test file. The file was 118353 bytes before the commit and 122169 after; the rendered overage is 25802 bytes, far larger than the commit's 3816-byte addition, so the cap was already exceeded at the parent commit.
+    - next: extract each extraction strategy in `extract_json_value` into a private helper to bring cognitive complexity under 15
+  timestamp: 2026-08-07T19:44:24.550678+00:00
+- actor: claude-code
+  id: 01kzew6rqct7hb8q0p8dngqk9n
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 5 files; a three-rung ladder on an unreadable reply (cheap repair, one re-ask, then fail), a named TaskFailure, five behaviour tests all RED first
+    - test: green — cargo nextest run --workspace 13773 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 773fe1d4c (parent 814d6f8ea)
+    - review: findings — crates/swissarmyhammer-validators/src/review/types.rs:221 (extract_json_value cognitive complexity 20 against the limit of 15)
+    - Coverage gap reported by the reviewer: crates/swissarmyhammer-validators/src/review/fleet/tests.rs is over the rendered prompt cap, so the duplication validator did not review that one file. The overage predates this commit — the file was already 118353 bytes at the parent, and the overage is about seven times this commit's addition.
+  timestamp: 2026-08-07T19:46:37.420385+00:00
+- actor: claude-code
+  id: 01kzewp4tw17rrykm8z1hep7ze
+  text: |-
+    Finding worked: `extract_json_value` cognitive complexity 20 against the gate of 15.
+
+    Measured with the real scorer, never by eye. A throwaway example (`crates/swissarmyhammer-sem/examples/complexity_report.rs`) called `swissarmyhammer_sem::parser::plugins::code::cognitive_complexity` on the file and printed `cognitive_score` / `max_nesting_depth` for every function against `COGNITIVE_COMPLEXITY_THRESHOLD` (15) and `NESTING_DEPTH_THRESHOLD` (4). The example was deleted after the last measurement.
+
+    Whole-file sweep, not only the cited line. Before: `extract_json_value` score 20 / nesting 3 was the ONLY function over either gate; the next highest was `matching_delimiter` at score 10 / nesting 3, under both. So the file needed exactly the one fix.
+
+    The fix, as the finding stated: each of the four extraction strategies is now a private helper, and `extract_json_value` is a flat `or_else` ladder over them.
+    - `json_fenced_value` — a ```json fenced block.
+    - `bare_fenced_value` — any bare ``` fenced block.
+    - `balanced_value` — the first `open` to the `close` that balances it.
+    - `spanning_value` — the first `open` to the last `close`, the last resort.
+    - `delimited_value` — the acceptance test both fenced rungs share (the fence body must be exactly one `open`…`close` value). Extracted because the check repeated verbatim in the two fence rungs, which is duplication.
+
+    Two named constants, `CODE_FENCE` and `JSON_CODE_FENCE`, replace the repeated fence literals and remove the magic `start + 3` the bare-fence rung carried.
+
+    After: `extract_json_value` score 0 / nesting 0; every helper 0 or 1; the file's maximum is still `matching_delimiter` at score 10 / nesting 3. No function in the file is over either gate.
+
+    Two characterization tests were added FIRST, and confirmed green on the unrefactored code, because the two lowest rungs had no test to hold them through the move:
+    - `extract_json_value_spans_first_open_to_last_close_when_nothing_balances` — locks rung 4, which only fires when the first `open` never balances.
+    - `extract_json_value_falls_back_to_the_trimmed_response` — locks the trimmed-input fallback.
+    Rungs 1 to 3 were already covered by the `parse_findings_reads_*` tests. This is a behaviour-preserving refactor, so the harness is the existing green suite plus these two, not a new RED.
+
+    Verification: `cargo test -p swissarmyhammer-validators` 517 passed / 0 failed (515 before, plus the two new tests), doc tests 2 passed. `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` clean. `cargo fmt --all -- --check` clean.
+
+    `extract_json_value` keeps its exact `pub(crate) fn (&str, char, char) -> &str` signature, so no caller changed. The new helpers are private and single-call-site — the reuse rule states outright that a helper extracted to keep a function under the complexity limit is warranted with one caller and must never be flagged toward inlining.
+
+    ARCHITECTURE.md needs no update: no module, crate, or dependency edge changed.
+  timestamp: 2026-08-07T19:55:01.340164+00:00
+- actor: claude-code
+  id: 01kzewpb7zwsgh56xt1hny17bb
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/types.rs. `extract_json_value` cognitive complexity 20 -> 0 by the real `swissarmyhammer_sem` scorer; no function in the file is over the complexity gate (15) or the nesting gate (4). `cargo test -p swissarmyhammer-validators`: 517 passed, 0 failed, doc tests 2 passed. `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings`: clean. `cargo fmt --all -- --check`: clean.
+    - next: /review
+  timestamp: 2026-08-07T19:55:07.903078+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'review: retry a fleet reply that does not parse before failing the pair'
@@ -59,3 +119,9 @@ Requirements:
 - Test: a fleet task whose first reply is malformed and whose second reply is valid produces findings and a complete report; a task with two malformed replies fails the pair as today.
 
 #tool-validators
+
+## Review Findings (2026-08-07 14:28)
+
+Scope: `814d6f8ea..773fe1d4c` (HEAD~1..HEAD).
+
+- [x] `crates/swissarmyhammer-validators/src/review/types.rs:221` — Function `extract_json_value` exceeds cognitive complexity gate: complexity 20 is significantly over the limit of 15, making it difficult to verify and maintain. Extract each extraction strategy (```json fence, bare ``` fence, delimiter-matching, first-to-last fallback) into a separate private helper function that `extract_json_value` calls in sequence, reducing branching at the top level.
