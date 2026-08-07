@@ -23,7 +23,7 @@ pub mod check_names {
     pub const IN_PATH: &str = "swissarmyhammer in PATH";
     /// Human-readable check name for Claude Code MCP configuration
     pub const CLAUDE_CONFIG: &str = "Claude Code MCP configuration";
-    /// Human-readable check name for current directory permissions
+    /// Human-readable check name for workspace directory permissions
     pub const FILE_PERMISSIONS: &str = "File permissions";
 
     /// Build a dynamic check name for an LSP server
@@ -284,15 +284,17 @@ fn check_claude_mcp_list(claude_path: Option<&Path>) -> Check {
 
 /// Check file permissions
 ///
-/// Verifies that the current directory is readable, which is
-/// essential for SwissArmyHammer operations.
+/// Verifies that the workspace [`doctor_workspace_root`] names is readable,
+/// which is essential for SwissArmyHammer operations.
 pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
-    match std::env::current_dir() {
-        Ok(cwd) => {
+    let workspace_root = doctor_workspace_root();
+
+    match std::fs::read_dir(&workspace_root) {
+        Ok(_) => {
             checks.extend([Check {
                 name: check_names::FILE_PERMISSIONS.to_string(),
                 status: CheckStatus::Ok,
-                message: format!("Can read current directory: {cwd:?}"),
+                message: format!("Can read workspace directory: {workspace_root:?}"),
                 fix: None,
             }]);
         }
@@ -300,8 +302,8 @@ pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
             checks.extend([Check {
                 name: check_names::FILE_PERMISSIONS.to_string(),
                 status: CheckStatus::Error,
-                message: format!("Failed to read current directory: {e}"),
-                fix: Some("Check file permissions for the current directory".to_string()),
+                message: format!("Failed to read workspace directory {workspace_root:?}: {e}"),
+                fix: Some("Check file permissions for the workspace directory".to_string()),
             }]);
         }
     }
@@ -311,16 +313,17 @@ pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
 
 /// Check LSP server availability for all detected project types
 ///
-/// Uses project detection to find all project types in the current workspace,
-/// then queries the LSP registry for relevant servers. Each server is checked
-/// for availability via `which` and `--version`.
+/// Uses project detection to find all project types in the workspace
+/// [`doctor_workspace_root`] names, then queries the LSP registry for relevant
+/// servers. Each server is checked for availability via `which` and
+/// `--version`.
 pub fn check_lsp_servers(checks: &mut impl Extend<Check>) -> Result<()> {
     use std::collections::HashSet;
     use swissarmyhammer_lsp::registry::servers_for_project;
     use swissarmyhammer_project_detection::detect_projects;
 
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let projects = detect_projects(&cwd, Some(3)).unwrap_or_default();
+    let workspace_root = doctor_workspace_root();
+    let projects = detect_projects(&workspace_root, Some(3)).unwrap_or_default();
 
     let mut seen_commands = HashSet::new();
     let mut specs = Vec::new();
@@ -661,10 +664,11 @@ mod tests {
         );
     }
 
-    /// `check_lsp_servers` reads process-global CWD (`std::env::current_dir`)
-    /// and runs project detection against it, so this test only holds when CWD
-    /// is the real Rust workspace. `#[serial_test::serial(cwd)]` joins the
-    /// crate-wide `cwd` group so it cannot run while a CWD-mutating test (e.g.
+    /// `check_lsp_servers` runs project detection against
+    /// `doctor_workspace_root()`, which derives from process-global CWD, so
+    /// this test only holds when CWD is inside the real Rust workspace.
+    /// `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` group so it
+    /// cannot run while a CWD-mutating test (e.g.
     /// `test_lsp_servers_check_empty_dir`, which chdir's into an empty tempdir)
     /// is active — otherwise project detection would observe the tempdir and
     /// the `rust-analyzer` check assertion below would spuriously fail.
@@ -712,21 +716,124 @@ mod tests {
     #[test]
     #[serial_test::serial(cwd)]
     fn test_lsp_servers_check_empty_dir() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let _cwd = CurrentDirGuard::new(temp_dir.path()).expect("cwd guard");
 
-        {
-            std::env::set_current_dir(temp_dir.path()).unwrap();
-            let mut checks = Vec::new();
-            let result = check_lsp_servers(&mut checks);
+        let mut checks = Vec::new();
+        let result = check_lsp_servers(&mut checks);
 
-            assert!(result.is_ok());
-            assert_eq!(checks.len(), 1);
-            assert_eq!(checks[0].name, "LSP Servers");
-            assert!(checks[0].message.contains("No project types detected"));
+        assert!(result.is_ok());
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "LSP Servers");
+        assert!(checks[0].message.contains("No project types detected"));
+    }
+
+    /// The name of the marker-free subdirectory of [`SubdirectoryWorkspace`].
+    ///
+    /// A check message that names it reported on the process working
+    /// directory instead of the workspace root.
+    const MARKER_FREE_SUBDIRECTORY: &str = "marker-free-subdirectory";
+
+    /// A workspace whose root carries the Git marker and a Rust project
+    /// marker, plus a subdirectory that carries neither.
+    ///
+    /// Running a check from the subdirectory separates the two roots a doctor
+    /// invocation could report on: the process working directory (the
+    /// subdirectory) and the workspace [`doctor_workspace_root`] resolves (the
+    /// Git root). Every check must report on the second one.
+    struct SubdirectoryWorkspace {
+        /// Owns the temporary tree; dropping it removes the fixture.
+        _temp_dir: TempDir,
+        /// The Git root, in the canonical form `std::env::current_dir` reports.
+        root: PathBuf,
+        /// The marker-free directory the checks run from.
+        subdirectory: PathBuf,
+    }
+
+    impl SubdirectoryWorkspace {
+        /// Build the fixture on disk.
+        fn new() -> Self {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let root = temp_dir
+                .path()
+                .canonicalize()
+                .expect("canonical temp dir path");
+
+            fs::create_dir(root.join(".git")).expect("git marker");
+            fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\n")
+                .expect("rust project marker");
+
+            let subdirectory = root.join(MARKER_FREE_SUBDIRECTORY);
+            fs::create_dir(&subdirectory).expect("marker-free subdirectory");
+
+            Self {
+                _temp_dir: temp_dir,
+                root,
+                subdirectory,
+            }
         }
+    }
 
-        let _ = std::env::set_current_dir(&original_dir);
+    /// LSP detection runs against the workspace root, so a doctor invoked from
+    /// a marker-free subdirectory of a Rust workspace still reports the
+    /// workspace's Rust servers.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_lsp_servers_check_uses_the_workspace_root() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let workspace = SubdirectoryWorkspace::new();
+        let _cwd = CurrentDirGuard::new(&workspace.subdirectory).expect("cwd guard");
+
+        let mut checks = Vec::new();
+        check_lsp_servers(&mut checks).expect("lsp server checks");
+
+        let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&check_names::lsp_server("rust-analyzer").as_str()),
+            "expected the workspace root's Rust project to be detected; got: {names:?}"
+        );
+    }
+
+    /// The permissions row reports on the workspace root, so a doctor invoked
+    /// from a subdirectory names the same workspace every other check uses.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_file_permissions_check_uses_the_workspace_root() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let workspace = SubdirectoryWorkspace::new();
+        let _cwd = CurrentDirGuard::new(&workspace.subdirectory).expect("cwd guard");
+
+        let mut checks = Vec::new();
+        check_file_permissions(&mut checks).expect("file permission checks");
+
+        let permissions = checks
+            .iter()
+            .find(|c| c.name == check_names::FILE_PERMISSIONS)
+            .expect("expected a file permissions check");
+
+        assert_eq!(
+            permissions.status,
+            CheckStatus::Ok,
+            "a readable workspace should be Ok, got: {}",
+            permissions.message
+        );
+        assert!(
+            permissions
+                .message
+                .contains(&workspace.root.display().to_string()),
+            "the row should name the workspace root {}; got: {}",
+            workspace.root.display(),
+            permissions.message
+        );
+        assert!(
+            !permissions.message.contains(MARKER_FREE_SUBDIRECTORY),
+            "the row named the process working directory instead of the workspace root: {}",
+            permissions.message
+        );
     }
 
     /// With an isolated HOME that contains a detectable Claude Code layout, the

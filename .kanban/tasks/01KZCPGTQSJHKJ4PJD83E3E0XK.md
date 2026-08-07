@@ -99,6 +99,59 @@ comments:
     - evidence: 7 files — crates/swissarmyhammer-common/src/utils/directory_utils.rs, crates/swissarmyhammer-common/src/utils/mod.rs, apps/swissarmyhammer-cli/src/commands/doctor/checks.rs, apps/swissarmyhammer-cli/src/commands/install/components/mod.rs, crates/swissarmyhammer-validators/Cargo.toml, crates/swissarmyhammer-validators/src/validators/loader.rs, crates/swissarmyhammer-validators/src/validators/mod.rs (+ Cargo.lock)
     - next: ready for /review
   timestamp: 2026-08-07T01:17:20.551630+00:00
+- actor: claude-code
+  id: 01kzcxrp3m5cnm2kn3bkntrbzp
+  text: |
+    ### review — findings
+    - scope: review sha HEAD~1..HEAD (9fb7c5577)
+    - evidence: 1 finding — apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:322
+    - engine counts: 2 findings, 2 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped
+    - prior 11 findings verified closed in 9fb7c5577: doctor checks take `&mut impl Extend<Check>`; the duplicate `workspace_root()` is gone and both callers use the shared `swissarmyhammer_common::utils::find_workspace_root`; the four loader tests pin the process CWD to a second project with a conflicting store via `CurrentDirGuard`; the `validators/mod.rs` doc example propagates with `?`.
+    - dropped: 1 engine finding asking to name the `(0..21)` literal in `two_independently_built_loaders_enumerate_rulesets_in_the_same_order`. That test and that literal are at loader.rs:770/775 of 9fb7c5577~1, so the subject is test code that already existed. The review skill's blanket existing-test exception applies.
+    - no over-cap or batch-budget flag was raised, so nothing to log on ^tsram0q.
+    - next: fix the workspace root resolution in `check_lsp_servers`, then re-review.
+  timestamp: 2026-08-07T01:35:24.276062+00:00
+- actor: claude-code
+  id: 01kzcxscz8sv61ryamsp1spcjk
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 8 files; the 11 prior findings are closed and verified in the tree
+    - test: green — cargo nextest run --workspace 13656 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 9fb7c5577
+    - review: findings — apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:322 (check_lsp_servers still reads std::env::current_dir while check_review_engine reads doctor_workspace_root)
+    - guardrail: no repeat. Each round names a different cause.
+  timestamp: 2026-08-07T01:35:47.688891+00:00
+- actor: claude-code
+  id: 01kzcykj1gab92ygvyy900gs1g
+  text: |-
+    The 2026-08-06 20:27 finding is done. The cause — a doctor check that finds its own root from the process working directory — is removed from the WHOLE file, not only the named line.
+
+    **Two production reads, not one.** `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs` held two `std::env::current_dir()` reads:
+    - `check_lsp_servers` (the named line), which ran project detection against the process working directory.
+    - `check_file_permissions`, which reported on the process working directory.
+
+    Both now call `doctor_workspace_root()`, so all three workspace-relative checks — LSP servers, file permissions, review engine — report on ONE root for a single doctor invocation. No production `std::env::current_dir()` read is left in the doctor module.
+
+    **The permissions row now probes what its doc promises.** The old code called `current_dir()` and reported Ok when the CALL succeeded, which says nothing about whether the directory is readable. `doctor_workspace_root()` cannot fail, so the row now reads the workspace with `std::fs::read_dir` — the readability probe the docstring always claimed. The row name ("File permissions") is unchanged; the message names the workspace directory instead of the current directory, which the change requires.
+
+    **TDD RED -> GREEN, proved.** Two new tests share a `SubdirectoryWorkspace` fixture: a temporary Git root that carries `Cargo.toml`, plus a marker-free subdirectory. `CurrentDirGuard` pins the process working directory to the subdirectory, which separates the two roots the doctor could use.
+    - `test_lsp_servers_check_uses_the_workspace_root` — RED: `expected the workspace root's Rust project to be detected; got: ["LSP Servers"]`. The subdirectory holds no marker, so detection found nothing.
+    - `test_file_permissions_check_uses_the_workspace_root` — RED: `the row named the process working directory instead of the workspace root: Can read current directory: ".../marker-free-subdirectory"`.
+    Both pass after the change.
+
+    **Stale claims corrected.** Three doc comments said the checks read process-global CWD: the `FILE_PERMISSIONS` constant doc, the `test_lsp_servers_check` docstring, and the `test_run_diagnostics` docstring in `doctor/mod.rs`. Each now names `doctor_workspace_root()`.
+
+    **Last raw CWD handling removed.** `test_lsp_servers_check_empty_dir` saved and restored the working directory by hand, which leaks the directory when the test panics. It uses the shared `CurrentDirGuard` now, like every neighbouring test.
+
+    Verification: `cargo nextest run --workspace` 13660 passed / 0 failed / 0 skipped. `cargo test --workspace --doc` 0 failed. `cargo clippy --workspace --all-targets` clean. `cargo fmt --all --check` clean. `cargo doc -p swissarmyhammer-cli --no-deps` adds no warning — the checks.rs warnings that remain are the pre-existing install-stack links.
+  timestamp: 2026-08-07T01:50:04.848808+00:00
+- actor: claude-code
+  id: 01kzcykq68dmd8tsrnpsrtxpsm
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — apps/swissarmyhammer-cli/src/commands/doctor/checks.rs, apps/swissarmyhammer-cli/src/commands/doctor/mod.rs
+    - next: ready for /review
+  timestamp: 2026-08-07T01:50:10.120268+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Resolve the project validator directory from the session working dir, not the process CWD
@@ -135,3 +188,7 @@ Acceptance:
 - [x] `crates/swissarmyhammer-validators/src/validators/loader.rs:868` — Test is marked `#[serial_test::serial(cwd)]` and calls `loader.load_all(Some(project_root.path()))` to verify failure collection, but does not verify the paired/inverse case — that the process CWD does not interfere even when different from the supplied workspace. Extend test to create two temporary projects, change process CWD to one project, call `load_all(Some(other_project.path()))`, and verify the correct project's validators load (not CWD's).
 - [x] `crates/swissarmyhammer-validators/src/validators/loader.rs:1184` — Test claims to verify directory resolution ignores the process CWD, but exercises only one direction: it passes an explicit workspace_root and verifies the function uses it. The test does not verify the critical inverse case — that the function still uses the supplied root even when the process CWD is a different project directory. Extend test to create two temporary project directories, change the process CWD to one of them, call `directories(Some(other_project.path()))`, and verify the other project's validators are returned despite the CWD pointing elsewhere.
 - [x] `crates/swissarmyhammer-validators/src/validators/mod.rs:49` — Example code uses `.unwrap()` instead of proper error handling with `?`, teaching bad error-handling practices to users. Restructure the example to demonstrate error propagation: wrap the code in a function returning `Result<(), AvpError>` and use `?` instead of `.unwrap()`, e.g., `loader.load_all(Some(Path::new("/path/to/workspace")))?;`.
+
+## Review Findings (2026-08-06 20:27)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:322` — `check_lsp_servers` was updated with the new signature pattern (`&mut impl Extend<Check>`) introduced by this change, but still resolves the workspace root via `std::env::current_dir()` instead of using `doctor_workspace_root()`. The change unified workspace root resolution across the doctor command — line 481 shows `check_review_engine` now uses `doctor_workspace_root()` which respects git repository boundaries via `find_workspace_root()`. By not updating `check_lsp_servers` to match, the same doctor invocation now uses different workspace roots for different checks: LSP detection uses process CWD (might be a subdirectory), while review engine detection uses git repo root. This violates the docstring's promise (line 314) that LSP detection looks for projects 'in the current workspace'. Change line 322 from `let cwd = std::env::current_dir().unwrap_or_default();` to `let cwd = doctor_workspace_root();` to apply the same workspace root resolution rule that other checks in this command now follow.
