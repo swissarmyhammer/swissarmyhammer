@@ -731,6 +731,7 @@ mod tests {
                 doctor: Some(ToolDoctor {
                     check_command: check_command.to_string(),
                     check_version_command: None,
+                    fix_hint: None,
                 }),
                 install: Some(ToolInstall {
                     commands: install_commands,

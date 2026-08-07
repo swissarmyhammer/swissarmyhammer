@@ -24,6 +24,11 @@
 //!
 //! Presence is decided by [`check_presence`](crate::doctor) throughout — the one
 //! function doctor itself uses — so "installed" can never mean two things.
+//!
+//! Every command this module runs comes from `install.commands`. A rule's
+//! `doctor.fix_hint` is text a person reads, and it is a
+//! [`FixHint`](crate::validators::types::FixHint) rather than a command string,
+//! so no step of the lifecycle can run it.
 
 use futures::future::BoxFuture;
 use regex::Regex;
@@ -453,7 +458,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::review::test_support::{with_pool, ScriptedAgent, ScriptedReply};
-    use crate::validators::types::{ToolDoctor, ToolInstall, ToolScope};
+    use crate::validators::types::{FixHint, ToolDoctor, ToolInstall, ToolScope};
     use crate::validators::PoolConfig;
 
     /// The prompt line the scripted install agent keys on. It is the goal
@@ -474,6 +479,7 @@ mod tests {
             doctor: Some(ToolDoctor {
                 check_command: format!("test -f {}", shell_quote(marker)),
                 check_version_command: None,
+                fix_hint: None,
             }),
             install: Some(ToolInstall {
                 commands: commands.to_vec(),
@@ -765,24 +771,67 @@ mod tests {
         }
     }
 
-    /// Every builtin tool rule must pin the version in each install command —
-    /// an unpinned tool can change its rules between runs and break the gate.
-    #[test]
-    fn every_builtin_tool_rule_pins_its_install_commands() {
+    /// A fix hint is text for a person, never a command the engine runs.
+    ///
+    /// The lifecycle reads its commands from `install.commands` alone, and a
+    /// hint is a [`FixHint`] on the doctor block — not a command string at all.
+    /// This drives both halves at once: the deterministic commands and the
+    /// bounded agent turn.
+    #[tokio::test]
+    async fn the_install_lifecycle_never_runs_a_fix_hint() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let marker = marker_in(temp.path(), "tool");
+        let hint_ran = marker_in(temp.path(), "hint-ran");
+        let mut spec = marker_spec(&marker, &[]);
+        spec.doctor
+            .as_mut()
+            .expect("marker_spec declares a doctor block")
+            .fix_hint = Some(FixHint::from(create_marker(&hint_ran)));
+        let agent = ScriptedInstallAgent {
+            script: "true".to_string(),
+            answer: "nothing to do".to_string(),
+        };
+
+        let outcome = ensure_tool_installed("tool-set/hinted-check", &spec, Some(&agent)).await;
+
+        assert!(matches!(outcome, ToolInstallOutcome::Failed { .. }));
+        assert!(
+            !hint_ran.exists(),
+            "a fix hint is text for a person; the install lifecycle must never run it"
+        );
+    }
+
+    /// Every builtin tool rule's [`ToolSpec`], labeled `<set>/<rule>`.
+    fn builtin_tool_specs() -> Vec<(String, ToolSpec)> {
         let mut loader = ValidatorLoader::new();
         crate::load_builtins(&mut loader);
 
-        let mut unpinned = Vec::new();
+        let mut specs = Vec::new();
         for ruleset in loader.list_rulesets() {
             for rule in &ruleset.rules {
-                let Some(install) = rule.tool.as_ref().and_then(|spec| spec.install.as_ref())
-                else {
-                    continue;
-                };
-                for command in &install.commands {
-                    if !install_command_pins_version(command) {
-                        unpinned.push(format!("{}/{}: {command}", ruleset.name(), rule.name));
-                    }
+                if let Some(spec) = rule.tool.as_ref() {
+                    specs.push((format!("{}/{}", ruleset.name(), rule.name), spec.clone()));
+                }
+            }
+        }
+        specs
+    }
+
+    /// Every builtin tool rule must pin the version in each install command —
+    /// an unpinned tool can change its rules between runs and break the gate.
+    /// The guard must also have seen a real command, or it proves nothing.
+    #[test]
+    fn every_builtin_tool_rule_pins_its_install_commands() {
+        let mut unpinned = Vec::new();
+        let mut guarded = 0usize;
+        for (label, spec) in builtin_tool_specs() {
+            let Some(install) = spec.install.as_ref() else {
+                continue;
+            };
+            for command in &install.commands {
+                guarded += 1;
+                if !install_command_pins_version(command) {
+                    unpinned.push(format!("{label}: {command}"));
                 }
             }
         }
@@ -791,5 +840,36 @@ mod tests {
             unpinned.is_empty(),
             "these builtin install commands do not pin a version: {unpinned:?}"
         );
+        assert!(
+            guarded > 0,
+            "the guard saw no builtin install command at all, so it guards nothing"
+        );
+    }
+
+    /// A tool that ships with the language toolchain has no package version to
+    /// pin, so its rule states a fix hint instead of an install command. Every
+    /// builtin hint fails the pin guard — which is exactly why it is a hint.
+    #[test]
+    fn a_builtin_fix_hint_would_not_pass_the_pin_guard() {
+        let hints: Vec<(String, String)> = builtin_tool_specs()
+            .into_iter()
+            .filter_map(|(label, spec)| {
+                spec.doctor
+                    .and_then(|doctor| doctor.fix_hint)
+                    .map(|hint| (label, hint.to_string()))
+            })
+            .collect();
+
+        assert!(
+            !hints.is_empty(),
+            "at least one builtin tool rule must state a fix hint"
+        );
+        for (label, hint) in hints {
+            assert!(
+                !install_command_pins_version(&hint),
+                "{label} states `{hint}` as a fix hint; a string that pins a version \
+                 belongs in install.commands, where the lifecycle can run it"
+            );
+        }
     }
 }

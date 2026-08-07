@@ -80,7 +80,7 @@ pub use pool::{
     SessionTurnResult, AGENT_PROMPT_CAP, DEFAULT_MAX_TOKENS,
 };
 pub use types::{
-    compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator,
+    compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator, FixHint,
     HasValidatorResult, MatchContext, Rule, RuleFrontmatter, RuleLoadFailure, RuleResult, RuleSet,
     RuleSetManifest, RuleSetMetadata, ToolDoctor, ToolInstall, ToolScope, ToolSpec, Validator,
     ValidatorFrontmatter, ValidatorMatch, ValidatorResult, ValidatorSource, GLOB_MATCH_OPTIONS,

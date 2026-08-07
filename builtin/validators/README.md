@@ -105,6 +105,11 @@ The `tool` block keys:
   break the gate. A tool that ships with the language toolchain has no package
   to pin (clippy is a `rustup` component), so its rule declares no install
   commands at all.
+- `doctor.fix_hint` — the command a person runs when there is nothing to
+  install. A toolchain component has no package version to pin, so its rule
+  states `fix_hint: "rustup component add clippy"` and doctor reports that as
+  the fix. A fix hint is text for a person. The install lifecycle never runs
+  it, and it never enters `install.commands`.
 
 The script's contract is its stdout. One finding per line, in either shape:
 
@@ -185,7 +190,8 @@ The review engine is doctorable. `sah doctor` reports, for this project:
 - Each tool rule for the detected project types: tool present or missing, tool
   version, fixture result.
 - Each tool rule on its prompt fallback because its tool is missing, with the
-  install commands to fix it.
+  install commands to fix it, or with the `doctor.fix_hint` when the rule
+  declares no install commands.
 
 Run `sah doctor` after install, and again when review behavior changes.
 

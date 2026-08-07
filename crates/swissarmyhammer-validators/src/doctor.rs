@@ -14,7 +14,8 @@
 //! - each tool rule for the detected project types: tool present or missing,
 //!   tool version (`doctor.check_version_command`), and fixture result,
 //! - each tool rule on its prompt fallback — tool missing or fixtures failed
-//!   — with the `install.commands` to fix it.
+//!   — with the `install.commands` to fix it, or the `doctor.fix_hint` when the
+//!   tool ships with the language toolchain and there is nothing to install.
 //!
 //! Fixture checks run the rule's `run` script against the set's
 //! `fixtures/<rule>.fail.*` and `fixtures/<rule>.pass.*` files: the fail
@@ -32,7 +33,7 @@ use crate::review::scope::detected_project_type_keys;
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
 use crate::validators::types::{
-    Rule, RuleSet, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
+    FixHint, Rule, RuleSet, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
 };
 use crate::validators::ValidatorLoader;
 
@@ -51,6 +52,10 @@ const FAIL_FIXTURE_KIND: &str = "fail";
 
 /// The fixture that must make the tool report zero findings.
 const PASS_FIXTURE_KIND: &str = "pass";
+
+/// The lead-in every "the tool is missing" fix shares, so a person reads one
+/// sentence whether the rule ships install commands or a fix hint.
+const FIX_LEAD_IN: &str = "Install the tool: ";
 
 /// The check name for one validator set row.
 pub fn set_check_name(set_name: &str) -> String {
@@ -147,6 +152,10 @@ pub struct ToolRuleStatus {
 
     /// The `install.commands` that fix a missing tool, in order of preference.
     pub install_commands: Vec<String>,
+
+    /// The `doctor.fix_hint` the rule states: the command a person runs when
+    /// the tool has no package to install. Reported, never run.
+    pub fix_hint: Option<FixHint>,
 
     /// The prompt rule this tool rule replaces when healthy.
     pub supersedes: Option<String>,
@@ -259,6 +268,10 @@ pub(crate) fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -
             .as_ref()
             .map(|install| install.commands.clone())
             .unwrap_or_default(),
+        fix_hint: spec
+            .doctor
+            .as_ref()
+            .and_then(|doctor| doctor.fix_hint.clone()),
         supersedes: rule.supersedes.clone(),
     }
 }
@@ -519,14 +532,15 @@ fn tool_rule_check(rule: &ToolRuleStatus) -> Check {
 }
 
 /// The fix for a degraded row: missing fixtures ask for the fixture pair,
-/// every other degradation asks for the rule's install commands.
+/// every other degradation asks for the rule's install commands, and a rule
+/// with no install commands falls back to its `doctor.fix_hint`.
 fn degraded_fix(rule: &ToolRuleStatus) -> Option<String> {
     match &rule.fixtures {
         FixtureOutcome::MissingFixtures { .. } => Some(format!(
             "Add {rule}.{FAIL_FIXTURE_KIND}.* and {rule}.{PASS_FIXTURE_KIND}.* to the set's {FIXTURES_DIR_NAME}/ directory",
             rule = rule.rule_name,
         )),
-        _ => install_fix(rule),
+        _ => install_fix(rule).or_else(|| fix_hint_fix(rule)),
     }
 }
 
@@ -553,9 +567,20 @@ fn install_fix(rule: &ToolRuleStatus) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Install the tool: {}",
+        "{FIX_LEAD_IN}{}",
         rule.install_commands.join(" || ")
     ))
+}
+
+/// The fix-hint fallback for a degraded row, `None` when the rule states no
+/// hint.
+///
+/// A tool that ships with the language toolchain has no package to install, so
+/// its rule names the command a person runs instead. The engine renders that
+/// text and never runs it — [`FixHint`] is not a command string.
+fn fix_hint_fix(rule: &ToolRuleStatus) -> Option<String> {
+    let hint = rule.fix_hint.as_ref()?;
+    Some(format!("{FIX_LEAD_IN}{hint}"))
 }
 
 /// Run a tool-rule shell snippet the way the engine does: `bash -c <script>`
@@ -643,7 +668,9 @@ tool:
 Grep for TODO markers.
 "#;
 
-    /// A tool rule whose check command names a binary that cannot exist.
+    /// A tool rule whose check command names a binary that cannot exist. It
+    /// declares an install command AND a fix hint, so the doctor row proves
+    /// which of the two a person is shown.
     const MISSING_TOOL_RULE: &str = r#"---
 name: gone-check
 description: A rule whose tool is not installed.
@@ -653,6 +680,7 @@ tool:
   run: "definitely-not-a-real-tool-1f9c \"$@\""
   doctor:
     check_command: "definitely-not-a-real-tool-1f9c --version"
+    fix_hint: "ask the platform team for definitely-not-a-real-tool-1f9c"
   install:
     commands:
       - "brew install definitely-not-a-real-tool-1f9c"
@@ -1114,6 +1142,162 @@ Python only.
             types_row.message.contains("none detected"),
             "with no detected types the row must say so; got '{}'",
             types_row.message
+        );
+    }
+
+    /// The builtin set that carries the toolchain-component tool rule.
+    const BUILTIN_TOOL_SET: &str = "code-hygiene";
+
+    /// The builtin tool rule whose tool ships with the Rust toolchain: clippy
+    /// is a `rustup` component, so the rule declares no install commands and
+    /// states a fix hint instead.
+    const TOOLCHAIN_COMPONENT_RULE: &str = "missing-docs-rust";
+
+    /// The command a person runs when clippy is not on PATH.
+    const CLIPPY_COMPONENT_FIX: &str = "rustup component add clippy";
+
+    /// A doctor check command that always fails, standing in for a tool that is
+    /// not on PATH.
+    const TOOL_OFF_PATH_CHECK: &str = "exit 1";
+
+    /// The doctor facts for one shipped builtin tool rule, with its tool forced
+    /// off PATH.
+    ///
+    /// Everything the row reports — the fix hint, the install commands, the
+    /// superseded prompt rule — comes from the shipped rule file, through the
+    /// same [`check_tool_rule`] production uses. Only the doctor check command
+    /// is replaced, because a test cannot uninstall the host's clippy.
+    fn builtin_rule_with_tool_off_path(set_name: &str, rule_name: &str) -> ToolRuleStatus {
+        let mut loader = ValidatorLoader::new();
+        crate::load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset(set_name)
+            .unwrap_or_else(|| panic!("the builtin {set_name} set must load"));
+        let rule = ruleset
+            .rules
+            .iter()
+            .find(|rule| rule.name == rule_name)
+            .unwrap_or_else(|| panic!("the builtin {rule_name} rule must load"));
+        let mut spec = rule
+            .tool
+            .clone()
+            .unwrap_or_else(|| panic!("{rule_name} must carry a tool block"));
+        spec.doctor
+            .as_mut()
+            .unwrap_or_else(|| panic!("{rule_name} must declare a doctor block"))
+            .check_command = TOOL_OFF_PATH_CHECK.to_string();
+
+        check_tool_rule(ruleset, rule, &spec)
+    }
+
+    /// The doctor rows for one tool rule on its own.
+    fn checks_for(rule: ToolRuleStatus) -> Vec<Check> {
+        to_checks(&ReviewEngineStatus {
+            project_types: rust_types(),
+            sets: Vec::new(),
+            tool_rules: vec![rule],
+        })
+    }
+
+    /// With clippy off PATH the shipped `missing-docs-rust` row must name the
+    /// command a person runs. The rule declares no install commands — a
+    /// `rustup` component has no package version to pin — so the fix comes from
+    /// its `doctor.fix_hint`.
+    #[test]
+    fn test_toolchain_component_row_names_its_fix_hint() {
+        let rule = builtin_rule_with_tool_off_path(BUILTIN_TOOL_SET, TOOLCHAIN_COMPONENT_RULE);
+        assert!(
+            rule.install_commands.is_empty(),
+            "{TOOLCHAIN_COMPONENT_RULE} must declare no install commands; got {:?}",
+            rule.install_commands
+        );
+
+        let checks = checks_for(rule);
+
+        let tool_row = checks
+            .iter()
+            .find(|c| c.name == tool_rule_check_name(BUILTIN_TOOL_SET, TOOLCHAIN_COMPONENT_RULE))
+            .expect("tool rule row");
+        assert_eq!(tool_row.status, CheckStatus::Warning);
+        let fix = tool_row
+            .fix
+            .as_deref()
+            .expect("a degraded row must carry a fix");
+        assert!(
+            fix.contains(CLIPPY_COMPONENT_FIX),
+            "the row must name the command a person runs; got '{fix}'"
+        );
+    }
+
+    /// A rule that declares both reports its install command: the engine can
+    /// run that, so the hint stays the fallback for a rule with nothing to run.
+    #[test]
+    fn test_install_commands_win_over_a_fix_hint() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        write_ruleset(
+            temp.path(),
+            "tool-set",
+            TOOL_SET_MANIFEST,
+            &[("gone-check.md", MISSING_TOOL_RULE)],
+            &[
+                ("gone-check.fail.txt", "irrelevant\n"),
+                ("gone-check.pass.txt", "irrelevant\n"),
+            ],
+        );
+        let loader = loader_for(temp.path());
+        let status = check_review_engine_with(&loader, &rust_types());
+
+        let checks = to_checks(&status);
+
+        let tool_row = checks
+            .iter()
+            .find(|c| c.name == tool_rule_check_name("tool-set", "gone-check"))
+            .expect("tool rule row");
+        let fix = tool_row
+            .fix
+            .as_deref()
+            .expect("a degraded row must carry a fix");
+        let rule = &status.tool_rules[0];
+        assert!(
+            fix.contains(&rule.install_commands[0]),
+            "the fix must carry the install command; got '{fix}'"
+        );
+        let hint = rule.fix_hint.as_ref().expect("the rule states a fix hint");
+        assert!(
+            !fix.contains(&hint.to_string()),
+            "an installable tool shows its install command, not its hint; got '{fix}'"
+        );
+    }
+
+    /// A rule with no fixture pair asks for the fixture pair, whatever else it
+    /// declares — a fix hint never displaces that.
+    #[test]
+    fn test_missing_fixtures_outrank_a_fix_hint() {
+        let rule = ToolRuleStatus {
+            fixtures: FixtureOutcome::MissingFixtures {
+                detail: "no fixture pair".to_string(),
+            },
+            ..builtin_rule_with_tool_off_path(BUILTIN_TOOL_SET, TOOLCHAIN_COMPONENT_RULE)
+        };
+
+        let checks = checks_for(rule);
+
+        let tool_row = checks
+            .iter()
+            .find(|c| c.name == tool_rule_check_name(BUILTIN_TOOL_SET, TOOLCHAIN_COMPONENT_RULE))
+            .expect("tool rule row");
+        let fix = tool_row
+            .fix
+            .as_deref()
+            .expect("a degraded row must carry a fix");
+        assert!(
+            fix.contains(FIXTURES_DIR_NAME),
+            "a rule with no fixture pair must be asked for one; got '{fix}'"
+        );
+        assert!(
+            !fix.contains(CLIPPY_COMPONENT_FIX),
+            "the fixture fix must not be replaced by the fix hint; got '{fix}'"
         );
     }
 }

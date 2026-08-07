@@ -781,6 +781,36 @@ pub enum ToolScope {
     Workspace,
 }
 
+/// The fix a person runs to make a tool rule's tool usable, for a tool with no
+/// package to install.
+///
+/// Clippy is a component of the Rust toolchain, not a package with its own
+/// version, so no `install.commands` entry can pin it. Its rule states
+/// `rustup component add clippy` here instead, and doctor reports that as the
+/// fix for the degraded row.
+///
+/// A fix hint is text for a person, never a command the engine runs, and that
+/// is a type rather than a convention. A hint is not a `String`: it offers no
+/// `AsRef<str>`, no `Deref<Target = str>`, and no owned-string conversion, so
+/// it cannot slide into any position that expects a command. It also lives on
+/// [`ToolDoctor`], the block doctor reports from, while every command the
+/// install lifecycle runs comes from [`ToolInstall::commands`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FixHint(String);
+
+impl std::fmt::Display for FixHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for FixHint {
+    fn from(text: String) -> Self {
+        Self(text)
+    }
+}
+
 /// The doctor commands that prove a tool rule's tools are usable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -793,6 +823,12 @@ pub struct ToolDoctor {
     /// (for example `ruff --version`).
     #[serde(default)]
     pub check_version_command: Option<String>,
+
+    /// The fix a person runs when the tool has no package to install
+    /// (for example `rustup component add clippy`). Doctor reports it; the
+    /// install lifecycle never runs it.
+    #[serde(default)]
+    pub fix_hint: Option<FixHint>,
 }
 
 /// The install commands for a tool rule's tool, in order of preference.

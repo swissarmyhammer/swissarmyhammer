@@ -1368,6 +1368,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
                     doctor: Some(ToolDoctor {
                         check_command: check_command.to_string(),
                         check_version_command: None,
+                        fix_hint: None,
                     }),
                     install: None,
                 }),

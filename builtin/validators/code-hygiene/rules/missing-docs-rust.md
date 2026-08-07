@@ -19,6 +19,7 @@ tool:
   doctor:
     check_command: "which cargo-clippy jq"
     check_version_command: "cargo clippy --version"
+    fix_hint: "rustup component add clippy"
 ---
 
 # Missing Documentation — Rust
@@ -36,5 +37,7 @@ lint clippy emits. Selection here is attribution, not exemption: to exempt one
 item, write `#[allow(missing_docs)]` on it in the code.
 
 The rule declares no install commands. Clippy is a component of the Rust
-toolchain, not a package with its own version, so `rustup component add
-clippy` installs it for the toolchain the project already uses.
+toolchain, not a package with its own version, so no install command can pin
+it. The `doctor.fix_hint` states `rustup component add clippy` instead, which
+installs it for the toolchain the project already uses. `sah doctor` shows that
+hint as the fix; the install lifecycle never runs it.
