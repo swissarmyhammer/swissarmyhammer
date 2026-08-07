@@ -47,6 +47,23 @@ const WARM_UP_MAX_ATTEMPTS: u32 = 120;
 /// Poll interval between warm-up attempts.
 const WARM_UP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Whether a `CodeContextError` reports rust-analyzer's `ContentModified`
+/// condition — the LSP contract for "I am still processing an earlier
+/// request against a now-stale document version, resend this one." rust-
+/// analyzer raises it routinely right after a cold-start `didOpen`, or under
+/// CPU contention that delays its internal debounce. It is not a bug in the
+/// request; the warm-up polling loops below must treat it exactly like the
+/// "not warmed up yet" case they already retry on (a live-LSP miss, or
+/// `can_rename: false`), instead of failing the test on the first transient
+/// answer.
+fn is_transient_not_ready(err: &swissarmyhammer_code_context::CodeContextError) -> bool {
+    matches!(
+        err,
+        swissarmyhammer_code_context::CodeContextError::LspError(msg)
+            if msg.to_lowercase().contains("content modified")
+    )
+}
+
 /// Whether `rust-analyzer` is on PATH. The test is a no-op when it is not.
 ///
 /// Does the PATH lookup inline (a minimal `which`) to avoid pulling a crate dep
@@ -310,7 +327,15 @@ async fn follower_request_with_document_gets_real_definition_without_leader_preo
                 router_attempt,
             );
             swissarmyhammer_code_context::get_definition(&ctx, &opts)
-                .expect("get_definition via leader router")
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(e) if is_transient_not_ready(&e) => {
+                last = format!("transient: {e}");
+                tokio::time::sleep(WARM_UP_POLL_INTERVAL).await;
+                continue;
+            }
+            Err(e) => panic!("get_definition via leader router: {e}"),
         };
         last = format!("{result:?}");
         if result.source_layer == swissarmyhammer_code_context::SourceLayer::LiveLsp
@@ -431,7 +456,15 @@ async fn follower_multi_step_rename_gets_real_leader_edits_under_one_lock() {
             let ctx =
                 swissarmyhammer_code_context::LayeredContext::with_multi_lsp_router(&db, multi);
             swissarmyhammer_code_context::get_rename_edits(&ctx, &opts)
-                .expect("get_rename_edits via leader multi router")
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(e) if is_transient_not_ready(&e) => {
+                last = format!("transient: {e}");
+                tokio::time::sleep(WARM_UP_POLL_INTERVAL).await;
+                continue;
+            }
+            Err(e) => panic!("get_rename_edits via leader multi router: {e}"),
         };
         last = format!("{result:?}");
         if result.can_rename && !result.edits.is_empty() {

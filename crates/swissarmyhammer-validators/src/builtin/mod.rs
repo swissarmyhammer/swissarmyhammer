@@ -343,13 +343,22 @@ mod tests {
         assert_eq!(duplication.rules.len(), 3);
     }
 
-    /// `completeness` declares the `inverse-pairs` probe, and its
-    /// `inverse-operation-coverage` rule is what reads those rows. The three
-    /// halves are asserted together because each is useless without the others:
-    /// a declaration no probe answers to, or a probe no rule reads, leaves the
-    /// rule judging pairs from prose alone.
+    /// Every probe the `completeness` ruleset declares, beside the rule that
+    /// reads its rows.
+    ///
+    /// One row per probe, so declaring a probe and reading it stay one edit.
+    const COMPLETENESS_PROBE_READERS: &[(&str, &str)] = &[
+        ("inverse-pairs", "inverse-operation-coverage"),
+        ("public-surface", "public-output-contract"),
+    ];
+
+    /// `completeness` declares exactly the probes [`COMPLETENESS_PROBE_READERS`]
+    /// names, each of them is in the catalog, and the rule that reads each one
+    /// is in the ruleset. The three halves are asserted together because each is
+    /// useless without the others: a declaration no probe answers to, or a probe
+    /// no rule reads, leaves the rule judging from prose alone.
     #[test]
-    fn test_completeness_declares_the_inverse_pairs_probe_its_rule_reads() {
+    fn test_completeness_declares_exactly_the_probes_its_rules_read() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
@@ -357,25 +366,31 @@ mod tests {
             .get_ruleset("completeness")
             .expect("completeness should be loaded");
 
+        let declared: Vec<String> = COMPLETENESS_PROBE_READERS
+            .iter()
+            .map(|(probe, _reader)| (*probe).to_string())
+            .collect();
         assert_eq!(
-            completeness.manifest.probes,
-            vec!["inverse-pairs".to_string()],
-            "completeness should declare exactly [inverse-pairs], got: {:?}",
+            completeness.manifest.probes, declared,
+            "completeness should declare exactly {declared:?}, got: {:?}",
             completeness.manifest.probes
         );
-        assert!(
-            crate::review::probe_exists("inverse-pairs"),
-            "the probe completeness declares must be in the catalog"
-        );
+
         let rule_names: Vec<&str> = completeness
             .rules
             .iter()
             .map(|rule| rule.name.as_str())
             .collect();
-        assert!(
-            rule_names.contains(&"inverse-operation-coverage"),
-            "the rule that reads the probe's rows must be in the ruleset, got: {rule_names:?}"
-        );
+        for (probe, reader) in COMPLETENESS_PROBE_READERS {
+            assert!(
+                crate::review::probe_exists(probe),
+                "the probe completeness declares must be in the catalog: {probe}"
+            );
+            assert!(
+                rule_names.contains(reader),
+                "the rule that reads `{probe}`'s rows must be in the ruleset, got: {rule_names:?}"
+            );
+        }
     }
 
     // ========================================================================

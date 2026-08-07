@@ -31,7 +31,9 @@
 
 use std::collections::BTreeMap;
 
-use swissarmyhammer_sem::parser::plugins::code::{parse_code, test_census, ParsedCode, TestCensus};
+use swissarmyhammer_sem::parser::plugins::code::{
+    parse_code, test_census, ParsedCode, SurfaceChange, TestCensus,
+};
 
 use crate::review::probes::{
     is_function_entity_type, not_computed_row, per_file_results, FileChange, ProbeKind,
@@ -68,6 +70,26 @@ pub const INVERSE_PAIRS_NOT_DIFFED: &str = "inverse pairs not computed — this 
 pub const ASSERTION_CENSUS_NOT_MEASURED: &str =
     "assertion census not computed — this language has \
      no test vocabulary mapping; judge from the source";
+
+/// The detail a `public-surface` row carries when a file has no base revision.
+///
+/// The probe answers "what did this change do to the file's public surface?",
+/// so a file it cannot diff — one the change added, or any file in a scope that
+/// carries no base revision — must read as **unknown**, never as "this change
+/// moved no public symbol". Emitting this row keeps the result non-empty for
+/// the same reason [`TREE_SITTER_NOT_PARSED`] does.
+pub const PUBLIC_SURFACE_NOT_DIFFED: &str = "public surface not computed — this file has no base \
+     revision to compare against; judge from the source";
+
+/// The detail a `public-surface` row carries when a file's language has no
+/// visibility mapping.
+///
+/// A language the roster cannot answer "does this declaration reach outside its
+/// file?" for must read as **unknown**, never as "this change moved no public
+/// symbol". Emitting this row keeps the result non-empty for the same reason
+/// [`TREE_SITTER_NOT_PARSED`] does.
+pub const PUBLIC_SURFACE_NOT_MAPPED: &str = "public surface not computed — this language has no \
+     visibility mapping; judge from the source";
 
 /// Which revision of a file under review a parse belongs to.
 ///
@@ -656,6 +678,79 @@ fn suspect_test_row(path: &str, test: &TestCensus) -> ProbeRow {
 /// The one [`AssertionCensusProbe`] the catalog registers.
 static ASSERTION_CENSUS_PROBE: AssertionCensusProbe = AssertionCensusProbe;
 
+/// The name validators declare to pull [`PublicSurfaceProbe`]'s rows.
+const PUBLIC_SURFACE_PROBE_NAME: &str = "public-surface";
+
+/// The `public-surface` probe: one row per symbol whose place on the file's
+/// public surface the change altered — added, removed, re-spelled, or given a
+/// different visibility.
+///
+/// The two revisions are matched by the entity-level differ the `get diff` op
+/// runs, so a declaration that only moved down the file is the same symbol and
+/// a rename is one symbol re-spelled. The probe itself matches nothing.
+///
+/// A row is a measurement rather than a judgement: it says the declaration is
+/// spelled differently, never that the change was wrong to spell it that way.
+/// The rows are [`ProbeKind::Fact`] because the parse decides them, so an empty
+/// list refutes a claim that the change moved the public surface.
+#[derive(Debug)]
+struct PublicSurfaceProbe;
+
+impl sealed::Sealed for PublicSurfaceProbe {}
+
+impl TreeSitterProbe for PublicSurfaceProbe {
+    fn name(&self) -> &'static str {
+        PUBLIC_SURFACE_PROBE_NAME
+    }
+
+    fn kind(&self) -> ProbeKind {
+        ProbeKind::Fact
+    }
+
+    fn run(&self, context: &TreeSitterProbeContext<'_>) -> Vec<ProbeRow> {
+        let path = context.path();
+        let Some(before) = context.before() else {
+            return vec![not_computed_row(path, PUBLIC_SURFACE_NOT_DIFFED)];
+        };
+        let after = context.after();
+        let surfaces = after
+            .parsed()
+            .public_surface(path, after.source())
+            .zip(before.parsed().public_surface(path, before.source()));
+        let Some((after_surface, before_surface)) = surfaces else {
+            return vec![not_computed_row(path, PUBLIC_SURFACE_NOT_MAPPED)];
+        };
+        after_surface
+            .changes_from(&before_surface)
+            .iter()
+            .map(|change| surface_change_row(path, change))
+            .collect()
+    }
+}
+
+/// One public-surface change as an evidence row: what the change did to the
+/// symbol, and the declaration on each side of it.
+fn surface_change_row(path: &str, change: &SurfaceChange) -> ProbeRow {
+    let detail = match (&change.before_signature, &change.after_signature) {
+        (Some(before), Some(after)) => {
+            format!("{}: was `{before}`, now `{after}`", change.kind)
+        }
+        (None, Some(after)) => format!("{}: `{after}`", change.kind),
+        (Some(before), None) => format!("{}: was `{before}`", change.kind),
+        (None, None) => change.kind.to_string(),
+    };
+    ProbeRow {
+        file_path: path.to_string(),
+        symbol: Some(change.symbol_path.clone()),
+        line: Some(change.start_line as u32),
+        similarity: None,
+        detail: Some(detail),
+    }
+}
+
+/// The one [`PublicSurfaceProbe`] the catalog registers.
+static PUBLIC_SURFACE_PROBE: PublicSurfaceProbe = PublicSurfaceProbe;
+
 /// Every registered [`TreeSitterProbe`].
 ///
 /// The single source of truth the probe catalog builds its tree-sitter rows
@@ -665,6 +760,7 @@ pub(crate) static TREE_SITTER_PROBES: &[&'static dyn TreeSitterProbe] = &[
     &FUNCTION_COUNT_PROBE,
     &INVERSE_PAIR_PROBE,
     &ASSERTION_CENSUS_PROBE,
+    &PUBLIC_SURFACE_PROBE,
 ];
 
 #[cfg(test)]
@@ -675,7 +771,8 @@ mod tests {
         function_count, prime_parse_cache, run_tree_sitter_probe, sealed, ParseCache, Revision,
         TreeSitterProbe, TreeSitterProbeContext, ASSERTION_CENSUS_NOT_MEASURED,
         ASSERTION_CENSUS_PROBE_NAME, INVERSE_PAIRS_NOT_DIFFED, INVERSE_PAIRS_PROBE_NAME,
-        PARSE_EVENT, TREE_SITTER_NOT_PARSED,
+        PARSE_EVENT, PUBLIC_SURFACE_NOT_DIFFED, PUBLIC_SURFACE_NOT_MAPPED,
+        PUBLIC_SURFACE_PROBE_NAME, TREE_SITTER_NOT_PARSED,
     };
     use crate::review::probes::{
         catalog, run_probes, FileChange, ProbeKind, ProbeOp, ProbeResult, ProbeRow,
@@ -1122,6 +1219,184 @@ mod tests {
         assert!(
             detail.contains("skipped"),
             "the row must state the measure, got: {detail}"
+        );
+    }
+
+    /// A file with one function on the public surface and one helper below it,
+    /// so a change can move the public declaration and leave the private one
+    /// standing.
+    const PUBLIC_AND_PRIVATE: &str = "\
+        pub fn widen(value: u8) -> u8 { value }\n\
+        fn helper(value: u8) -> u8 { value }\n";
+
+    /// [`PUBLIC_AND_PRIVATE`] with the public function's parameter list widened.
+    const WIDENED_SIGNATURE: &str = "\
+        pub fn widen(value: u8, extra: u8) -> u8 { value + extra }\n\
+        fn helper(value: u8) -> u8 { value }\n";
+
+    /// [`PUBLIC_AND_PRIVATE`] with only the private helper's body changed, so
+    /// the public surface stands exactly as it did.
+    const PRIVATE_BODY_EDITED: &str = "\
+        pub fn widen(value: u8) -> u8 { value }\n\
+        fn helper(value: u8) -> u8 { value + 1 }\n";
+
+    /// [`PUBLIC_AND_PRIVATE`] with the private helper made public.
+    const HELPER_PUBLISHED: &str = "\
+        pub fn widen(value: u8) -> u8 { value }\n\
+        pub fn helper(value: u8) -> u8 { value }\n";
+
+    /// [`PUBLIC_AND_PRIVATE`] with a second public function added.
+    const SECOND_PUBLIC_FUNCTION: &str = "\
+        pub fn widen(value: u8) -> u8 { value }\n\
+        fn helper(value: u8) -> u8 { value }\n\
+        pub fn narrow(value: u8) -> u8 { value }\n";
+
+    /// [`PUBLIC_AND_PRIVATE`] with the public function deleted.
+    const PUBLIC_FUNCTION_DELETED: &str = "fn helper(value: u8) -> u8 { value }\n";
+
+    /// The `public-surface` rows a real review produces for [`CHANGED_FILE`].
+    async fn public_surface_rows(before: &str, after: &str) -> Vec<ProbeRow> {
+        reviewed_probe_rows(before, after, PUBLIC_SURFACE_PROBE_NAME).await
+    }
+
+    /// The detail of the single row `rows` holds.
+    fn only_row_detail(rows: &[ProbeRow]) -> &str {
+        assert_eq!(rows.len(), 1, "exactly one row, got: {rows:?}");
+        rows[0]
+            .detail
+            .as_deref()
+            .expect("the row states what the change did")
+    }
+
+    #[tokio::test]
+    async fn a_widened_public_signature_is_the_only_row_the_surface_reports() {
+        let rows = public_surface_rows(PUBLIC_AND_PRIVATE, WIDENED_SIGNATURE).await;
+
+        let detail = only_row_detail(&rows);
+        assert_eq!(rows[0].symbol.as_deref(), Some("widen"));
+        assert!(
+            detail.contains("signature changed"),
+            "the row must name the change kind, got: {detail}"
+        );
+        assert!(
+            detail.contains("pub fn widen(value: u8) -> u8")
+                && detail.contains("pub fn widen(value: u8, extra: u8) -> u8"),
+            "the row must carry the old and the new signature, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_that_leaves_the_public_surface_alone_reports_no_rows() {
+        let rows = public_surface_rows(PUBLIC_AND_PRIVATE, PRIVATE_BODY_EDITED).await;
+
+        assert!(
+            rows.is_empty(),
+            "a private body edit moves no public symbol, got: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_helper_made_public_reports_a_visibility_change() {
+        let rows = public_surface_rows(PUBLIC_AND_PRIVATE, HELPER_PUBLISHED).await;
+
+        let detail = only_row_detail(&rows);
+        assert_eq!(rows[0].symbol.as_deref(), Some("helper"));
+        assert!(
+            detail.contains("visibility changed"),
+            "the row must name the change kind, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_public_function_reports_an_addition() {
+        let rows = public_surface_rows(PUBLIC_AND_PRIVATE, SECOND_PUBLIC_FUNCTION).await;
+
+        let detail = only_row_detail(&rows);
+        assert_eq!(rows[0].symbol.as_deref(), Some("narrow"));
+        assert!(
+            detail.contains("added to the public surface"),
+            "the row must name the change kind, got: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_public_function_reports_a_removal() {
+        let rows = public_surface_rows(PUBLIC_AND_PRIVATE, PUBLIC_FUNCTION_DELETED).await;
+
+        let detail = only_row_detail(&rows);
+        assert_eq!(rows[0].symbol.as_deref(), Some("widen"));
+        assert!(
+            detail.contains("removed from the public surface"),
+            "the row must name the change kind, got: {detail}"
+        );
+    }
+
+    /// The whole path a `public-surface` row travels: a real repository, a
+    /// validator that declares the probe, the real `scope_review`, and the real
+    /// prompt renderer the model reads.
+    #[tokio::test]
+    async fn a_public_surface_row_reaches_the_rendered_validator_prompt() {
+        let work = reviewed_work(
+            PUBLIC_AND_PRIVATE,
+            WIDENED_SIGNATURE,
+            &[PUBLIC_SURFACE_PROBE_NAME],
+        )
+        .await;
+
+        let rendered = render_file_payload(std::slice::from_ref(changed_file_work(&work)));
+
+        assert!(
+            rendered.contains("probe `public-surface` on `src/lib.rs`"),
+            "the prompt must carry the probe's header, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("signature changed: was `pub fn widen(value: u8) -> u8`"),
+            "the prompt must carry the probe's row, got:\n{rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_with_no_base_revision_reports_one_surface_not_computed_row() {
+        let change = FileChange::default()
+            .with_sources([(CHANGED_FILE.to_string(), PUBLIC_AND_PRIVATE.to_string())]);
+
+        let results = probe_results(&[PUBLIC_SURFACE_PROBE_NAME], &change).await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].rows.len(),
+            1,
+            "exactly one row, got: {results:?}"
+        );
+        assert_eq!(
+            results[0].rows[0].detail.as_deref(),
+            Some(PUBLIC_SURFACE_NOT_DIFFED),
+            "an undiffable file must not read as a surface that stood still"
+        );
+    }
+
+    /// A language the visibility roster has no row for must read as **unknown**,
+    /// never as a change that moved no public symbol. Ruby is the sharpest
+    /// case: the grammar roster parses it and reports its methods, so only the
+    /// missing visibility mapping stands between this file and a clean result.
+    #[tokio::test]
+    async fn a_language_with_no_visibility_mapping_reports_one_not_computed_row() {
+        const RUBY_FILE: &str = "lib/thing.rb";
+        let change = FileChange::default()
+            .with_sources([(RUBY_FILE.to_string(), "def one\n  2\nend\n".to_string())])
+            .with_before_sources([(RUBY_FILE.to_string(), "def one\n  1\nend\n".to_string())]);
+
+        let results = probe_results(&[PUBLIC_SURFACE_PROBE_NAME], &change).await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].rows.len(),
+            1,
+            "exactly one row, got: {results:?}"
+        );
+        assert_eq!(
+            results[0].rows[0].detail.as_deref(),
+            Some(PUBLIC_SURFACE_NOT_MAPPED)
         );
     }
 

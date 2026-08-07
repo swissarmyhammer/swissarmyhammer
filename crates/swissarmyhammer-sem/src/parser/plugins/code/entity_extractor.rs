@@ -10,6 +10,24 @@ pub fn extract_entities(
     config: &LanguageConfig,
     source_code: &str,
 ) -> Vec<SemanticEntity> {
+    extract_entity_nodes(tree, file_path, config, source_code)
+        .into_iter()
+        .map(|(entity, _node)| entity)
+        .collect()
+}
+
+/// Every entity in `tree`, each paired with the syntax node it was read from.
+///
+/// The one traversal both entity consumers share. A reader that needs more of a
+/// declaration than [`SemanticEntity`] carries — its visibility, the text of its
+/// header — reads it off the node here instead of walking the tree a second
+/// time, which would let the two walks disagree about what an entity is.
+pub fn extract_entity_nodes<'tree>(
+    tree: &'tree Tree,
+    file_path: &str,
+    config: &LanguageConfig,
+    source_code: &str,
+) -> Vec<(SemanticEntity, Node<'tree>)> {
     let mut entities = Vec::new();
     visit_node(
         tree.root_node(),
@@ -22,11 +40,11 @@ pub fn extract_entities(
     entities
 }
 
-fn visit_node(
-    node: Node,
+fn visit_node<'tree>(
+    node: Node<'tree>,
     file_path: &str,
     config: &LanguageConfig,
-    entities: &mut Vec<SemanticEntity>,
+    entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
     parent_id: Option<&str>,
     source: &[u8],
 ) {
@@ -53,7 +71,7 @@ fn visit_node(
             };
 
             let entity_id = entity.id.clone();
-            entities.push(entity);
+            entities.push((entity, node));
 
             // Visit container children for nested entities (defs inside defmodule)
             let mut cursor = node.walk();
@@ -102,7 +120,7 @@ fn visit_node(
             };
 
             let entity_id = entity.id.clone();
-            entities.push(entity);
+            entities.push((entity, node));
 
             // Visit children for nested entities (methods inside classes, etc.)
             let mut cursor = node.walk();

@@ -1,6 +1,7 @@
 mod complexity;
 mod entity_extractor;
 mod languages;
+mod public_surface;
 
 /// All file extensions the code parser handles, in the canonical
 /// dotted-lowercase form (e.g. `".rs"`) — the single extension list other
@@ -20,6 +21,13 @@ pub use complexity::{
 /// skip marker, an empty body — so a reviewer reads rows instead of counting
 /// assertion calls by eye. See [`complexity::test_census`].
 pub use complexity::{test_census, TestCensus, TestDefect};
+/// What a change did to a file's public surface — declarations added, removed,
+/// re-spelled, or given a different visibility — so a reviewer reads rows
+/// instead of comparing declarations by eye, computed by the `public_surface`
+/// module.
+pub use public_surface::{
+    PublicSurface, SurfaceChange, SurfaceChangeKind, SurfaceSymbol, Visibility,
+};
 
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
@@ -95,6 +103,21 @@ impl ParsedCode {
     /// name the entity ids and supply the text the node ranges index into.
     pub fn entities(&self, file_path: &str, source: &str) -> Vec<SemanticEntity> {
         extract_entities(&self.tree, file_path, self.config, source)
+    }
+
+    /// Every declaration this parse holds, read for what it takes to tell an
+    /// API change from a body edit: the declaration's signature and whether it
+    /// reaches outside the file.
+    ///
+    /// Returns `None` — meaning **not measured** — when the parse's language has
+    /// no visibility mapping. A caller must report "not computed" for `None` and
+    /// never substitute an empty surface, which would read as "this file
+    /// declares nothing public".
+    ///
+    /// `file_path` and `source` must be the ones the parse was made from; they
+    /// name the entity ids and supply the text the node ranges index into.
+    pub fn public_surface(&self, file_path: &str, source: &str) -> Option<PublicSurface> {
+        public_surface::read(&self.tree, file_path, self.config, source)
     }
 }
 

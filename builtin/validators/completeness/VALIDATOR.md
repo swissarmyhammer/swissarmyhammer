@@ -14,6 +14,7 @@ match:
     - "@file_groups/test_files"
 probes:
   - inverse-pairs
+  - public-surface
 ---
 
 # Completeness Validator
@@ -24,9 +25,11 @@ the test passes, and the change ships — while a symmetric or sibling path the
 same change implies is left broken. This validator reads the diff and looks for
 that gap.
 
-Four one-concern rules, each a judgment over the diff. Three read the diff
-alone; `inverse-operation-coverage` also reads the `inverse-pairs` probe, which
-finds the paired names for it:
+Four one-concern rules, each a judgment over the diff. Two read the diff alone.
+Two read a probe as well: `inverse-operation-coverage` reads `inverse-pairs`,
+which finds the paired names for it, and `public-output-contract` reads
+`public-surface`, which computes what the change did to each file's
+declarations:
 
 - `inverse-operation-coverage` — a change to one direction of a paired operation
   (write/read, encode/decode, serialize/deserialize, classify/parse) without the
@@ -38,8 +41,13 @@ finds the paired names for it:
 - `invariant-propagation` — a change to how a token/flag/format/case is handled
   at one site, not applied at the other sites that consume the same token.
 - `public-output-contract` — an existing user-facing message/output reformatted
-  without need, or an error made to "go away" by silently swallowing it instead
-  of preserving the intended side-effect (warn / log / return value).
+  without need, an error made to "go away" by silently swallowing it instead
+  of preserving the intended side-effect (warn / log / return value), or a
+  declaration callers depend on removed, re-signed, or hidden. The engine runs
+  the `public-surface` probe over each changed file and attaches one row per
+  declaration the change added to, removed from, or re-spelled on the file's
+  public surface. `public-surface` is a *fact* probe: it computes the surface
+  change, and the rule judges whether the change broke a contract.
 - `case-sensitivity-coverage` — code that recognizes/parses/dispatches on textual
   tokens whose tests only use one spelling, so the case contract is unproven in
   both the positive (mixed-case accepted) and negative (wrong-case rejected)

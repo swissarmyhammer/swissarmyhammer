@@ -1,6 +1,6 @@
 ---
 name: public-output-contract
-description: Don't needlessly reformat user-facing output, and don't make errors "go away" by dropping the intended side-effect
+description: Don't needlessly reformat user-facing output, don't make errors "go away" by dropping the intended side-effect, and don't break a public declaration callers depend on
 ---
 
 # Public-Output-Contract Validator
@@ -12,6 +12,38 @@ or raise) and a diagnostic's *code/id*. Several mistakes all ship broken
 behaviour: changing output the task did not ask you to, *removing* an intended
 output while silencing an error, *adding* a hard failure to a path that used to
 succeed, or changing the severity/id of a diagnostic the caller keys on.
+
+## What the probe gives you
+
+The public surface is computed for you. The `public-surface` probe parses both
+revisions of each changed file and matches them with the same entity differ the
+`get diff` op runs. It lists one row per declaration whose place on the file's
+public surface the change altered, and no row for any other edit. Each row names
+the symbol, its line, what the change did, and the declaration on each side:
+
+    src/table.rs:41 `Table::write` — signature changed: was
+    `pub fn write(&self) -> String`, now
+    `pub fn write(&self, header_rows: usize) -> String`
+
+A row says one of four things: `added to the public surface`, `removed from the
+public surface`, `signature changed`, or `visibility changed`.
+
+A row is a fact, not a finding. It states that the declaration is spelled
+differently. Whether the change was right to spell it that way is your judgment.
+Read the rows against check 6 below, and read a changed return type against
+check 3 as well.
+
+**An empty row list is a measurement, and it is bounded.** It means the change
+re-spelled no declaration in that file. It says nothing about the checks below
+that read bodies rather than declarations — message text, a swallowed error, a
+changed severity are all invisible to it. Never re-derive the surface by reading
+the declarations yourself, and never report a declaration change the probe did
+not list.
+
+A file the change added, a file the review carries no base revision for, and a
+file whose language has no visibility mapping each get one row saying the probe
+could not compute. That row is not a finding, and it is not permission to stay
+silent either: read the diff and apply the checks below yourself.
 
 ## What to Check
 
@@ -60,6 +92,14 @@ succeed, or changing the severity/id of a diagnostic the caller keys on.
    against those named in the issue or failing test; a code the test expects but
    the patch never defines is the finding.
 
+6. **A public declaration removed, re-signed, or hidden.** The `public-surface`
+   probe listed a row for it. A declaration callers reach is a contract as much
+   as a message is: taking it off the surface, changing its parameters or its
+   return type, or narrowing its visibility breaks every caller the diff does
+   not update. Confirm the task asked for that API change, and that the diff
+   carries the caller updates the row implies. Report the row when neither
+   holds, and say which callers the old declaration served.
+
 ## Why This Matters
 
 Behaviour changes are judged on more than "does it stop crashing." Reformatting
@@ -70,14 +110,21 @@ exactly the edge case you were fixing.
 ## What to Report
 
 State which output/contract changed and whether it was (a) needlessly reformatted
-or (b) dropped/silenced, and what the preserved behaviour should be. Prefer:
+or (b) dropped/silenced, and what the preserved behaviour should be. When a probe
+row put you onto the contract, cite it: the symbol, its line, and the
+declaration on each side. Prefer:
 "empty-input path returns a bare array; the non-empty path returns `(x, y)` — make
 the edge case return the same shape," or "collision is now skipped silently — the
 intended behaviour warns and continues."
 
 ## Exceptions (Don't Flag)
 
-- The task explicitly asked to change the message/output/format.
+- The task explicitly asked to change the message/output/format, or to change
+  the declaration the probe row names.
 - The message is brand-new (no prior contract to break).
+- A probe row that only ADDS a declaration to the public surface. A new
+  declaration has no callers to break; report it only when the task asked for
+  no new API.
+- A probe row for a declaration whose callers the same diff updates.
 - Swallowing is correct AND the condition is genuinely non-actionable (rare —
   prefer at least a debug log; say why if you don't flag).
