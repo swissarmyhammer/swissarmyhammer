@@ -4,6 +4,22 @@ use super::languages::LanguageConfig;
 use crate::model::entity::{build_entity_id, SemanticEntity};
 use crate::utils::hash::{content_hash, structural_hash};
 
+/// Every entity one parse of a file declares, as the semantic model records it.
+///
+/// `tree` is a parse of `source_code`; `file_path` names the file that parse
+/// came from and seeds every entity id; `config` says which node kinds of the
+/// language are entities, which of them contain others, and which calls declare
+/// something. The result holds one [`SemanticEntity`] per declaration found, in
+/// the order the walk reached it, with a nested declaration recorded after the
+/// one that holds it and pointing back at it through
+/// [`SemanticEntity::parent_id`]. A file the language declares nothing in reads
+/// as an empty list.
+///
+/// This is [`extract_entity_nodes`] with the syntax nodes dropped. Call this one
+/// when the model is the whole answer — indexing, hashing, diffing. Call
+/// [`extract_entity_nodes`] instead when the reader also needs the parse an
+/// entity came from, to read something [`SemanticEntity`] does not carry, such
+/// as a declaration's visibility or the text of its header.
 pub fn extract_entities(
     tree: &Tree,
     file_path: &str,
@@ -28,255 +44,314 @@ pub fn extract_entity_nodes<'tree>(
     config: &LanguageConfig,
     source_code: &str,
 ) -> Vec<(SemanticEntity, Node<'tree>)> {
-    let mut entities = Vec::new();
-    visit_node(
-        tree.root_node(),
+    let walk = EntityWalk {
         file_path,
         config,
-        &mut entities,
-        None,
-        source_code.as_bytes(),
-    );
+        source: source_code.as_bytes(),
+    };
+    let mut entities = Vec::new();
+    walk.visit(tree.root_node(), None, &mut entities);
     entities
 }
 
-fn visit_node<'tree>(
-    node: Node<'tree>,
-    file_path: &str,
-    config: &LanguageConfig,
-    entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
-    parent_id: Option<&str>,
-    source: &[u8],
-) {
-    let node_type = node.kind();
+/// The inputs one traversal carries unchanged from its root down to every node
+/// it reaches.
+///
+/// Held together so a step of the walk takes only what actually changes as it
+/// descends: the node, the entity that holds it, and the entities found so far.
+struct EntityWalk<'a> {
+    /// The file the parse came from, which seeds every entity id.
+    file_path: &'a str,
+    /// The language's entity, container, and declaring-call vocabularies.
+    config: &'a LanguageConfig,
+    /// The parsed source, for reading a node's text.
+    source: &'a [u8],
+}
 
-    // Handle call-based entities (Elixir: def, defmodule, etc.)
-    if node_type == "call" && !config.call_entity_identifiers.is_empty() {
-        if let Some((name, entity_type)) = extract_call_entity(node, config, source) {
-            let content_str = node_text(node, source);
-            let content = content_str.to_string();
-            let struct_hash = structural_hash(node, source);
-            let entity = SemanticEntity {
-                id: build_entity_id(file_path, entity_type, &name, parent_id),
-                file_path: file_path.to_string(),
-                entity_type: entity_type.to_string(),
-                name: name.clone(),
-                parent_id: parent_id.map(String::from),
-                content_hash: content_hash(&content),
-                structural_hash: Some(struct_hash),
-                content,
-                start_line: node.start_position().row + 1,
-                end_line: node.end_position().row + 1,
-                metadata: None,
-            };
+impl EntityWalk<'_> {
+    /// Read every entity at or under `node` into `entities`, each recorded
+    /// under `parent_id`.
+    ///
+    /// Exactly one of the readings below claims `node`. A node that IS an
+    /// entity is recorded and its own children walked as that entity's; a node
+    /// that only wraps a declaration is followed through; and a node that is
+    /// neither passes its children on unchanged.
+    fn visit<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) {
+        if self.read_declaring_call(node, parent_id, entities) {
+            return;
+        }
+        if self.read_declaration(node, parent_id, entities) {
+            return;
+        }
+        if self.follow_export(node, parent_id, entities) {
+            return;
+        }
+        self.visit_children(node, parent_id, entities);
+    }
 
-            let entity_id = entity.id.clone();
-            entities.push((entity, node));
+    /// Record `node` when it is a call the language declares things with —
+    /// Elixir's `def`, `defmodule` and the rest. Answers whether it was one.
+    fn read_declaring_call<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) -> bool {
+        if node.kind() != "call" || self.config.call_entity_identifiers.is_empty() {
+            return false;
+        }
+        let Some((name, entity_type)) = extract_call_entity(node, self.config, self.source) else {
+            return false;
+        };
+        self.record(node, &name, entity_type, parent_id, entities);
+        true
+    }
 
-            // Visit container children for nested entities (defs inside defmodule)
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if config.container_node_types.contains(&child.kind()) {
-                    let mut inner_cursor = child.walk();
-                    for nested in child.named_children(&mut inner_cursor) {
-                        visit_node(
-                            nested,
-                            file_path,
-                            config,
-                            entities,
-                            Some(&entity_id),
-                            source,
-                        );
-                    }
-                }
+    /// Record `node` when the language's entity vocabulary names its kind and
+    /// the declaration names itself. Answers whether it was one.
+    fn read_declaration<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) -> bool {
+        if !self.config.entity_node_types.contains(&node.kind()) {
+            return false;
+        }
+        let Some(name) = extract_name(node, self.source) else {
+            return false;
+        };
+        let entity_type = if node.kind() == DECORATED_DEFINITION_KIND {
+            map_decorated_type(node)
+        } else {
+            map_node_type(node.kind())
+        };
+        self.record(node, &name, entity_type, parent_id, entities);
+        true
+    }
+
+    /// Follow an export statement to the declaration it exports, so the
+    /// declaration rather than the wrapper is the entity. Answers whether
+    /// `node` was one.
+    fn follow_export<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) -> bool {
+        if node.kind() != "export_statement" {
+            return false;
+        }
+        let Some(declaration) = node.child_by_field_name("declaration") else {
+            return false;
+        };
+        self.visit(declaration, parent_id, entities);
+        true
+    }
+
+    /// Record `node` as one entity called `name`, then walk the entities
+    /// declared inside it.
+    fn record<'tree>(
+        &self,
+        node: Node<'tree>,
+        name: &str,
+        entity_type: &str,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) {
+        let content = node_text(node, self.source).to_string();
+        let entity = SemanticEntity {
+            id: build_entity_id(self.file_path, entity_type, name, parent_id),
+            file_path: self.file_path.to_string(),
+            entity_type: entity_type.to_string(),
+            name: name.to_string(),
+            parent_id: parent_id.map(String::from),
+            content_hash: content_hash(&content),
+            structural_hash: Some(structural_hash(node, self.source)),
+            content,
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+            metadata: None,
+        };
+
+        let entity_id = entity.id.clone();
+        entities.push((entity, node));
+        self.visit_contained(node, &entity_id, entities);
+    }
+
+    /// Walk the entities `node`'s container children hold — the methods of a
+    /// class, the functions of an Elixir module — recorded under `parent_id`.
+    fn visit_contained<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: &str,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if !self.config.container_node_types.contains(&child.kind()) {
+                continue;
             }
-            return;
-        }
-    }
-
-    if config.entity_node_types.contains(&node_type) {
-        if let Some(name) = extract_name(node, source) {
-            let entity_type = if node_type == "decorated_definition" {
-                map_decorated_type(node)
-            } else {
-                map_node_type(node_type)
-            };
-            let content_str = node_text(node, source);
-            let content = content_str.to_string();
-
-            let struct_hash = structural_hash(node, source);
-            let entity = SemanticEntity {
-                id: build_entity_id(file_path, entity_type, &name, parent_id),
-                file_path: file_path.to_string(),
-                entity_type: entity_type.to_string(),
-                name: name.clone(),
-                parent_id: parent_id.map(String::from),
-                content_hash: content_hash(&content),
-                structural_hash: Some(struct_hash),
-                content,
-                start_line: node.start_position().row + 1,
-                end_line: node.end_position().row + 1,
-                metadata: None,
-            };
-
-            let entity_id = entity.id.clone();
-            entities.push((entity, node));
-
-            // Visit children for nested entities (methods inside classes, etc.)
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if config.container_node_types.contains(&child.kind()) {
-                    let mut inner_cursor = child.walk();
-                    for nested in child.named_children(&mut inner_cursor) {
-                        visit_node(
-                            nested,
-                            file_path,
-                            config,
-                            entities,
-                            Some(&entity_id),
-                            source,
-                        );
-                    }
-                }
+            let mut inner_cursor = child.walk();
+            for nested in child.named_children(&mut inner_cursor) {
+                self.visit(nested, Some(parent_id), entities);
             }
-            return;
         }
     }
 
-    // For export statements, look inside for the actual declaration
-    if node_type == "export_statement" {
-        if let Some(declaration) = node.child_by_field_name("declaration") {
-            visit_node(declaration, file_path, config, entities, parent_id, source);
-            return;
+    /// Walk `node`'s children as entities of whatever holds `node` itself,
+    /// because `node` declares nothing of its own.
+    fn visit_children<'tree>(
+        &self,
+        node: Node<'tree>,
+        parent_id: Option<&str>,
+        entities: &mut Vec<(SemanticEntity, Node<'tree>)>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.visit(child, parent_id, entities);
         }
-    }
-
-    // Recurse into top-level children
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        visit_node(child, file_path, config, entities, parent_id, source);
     }
 }
 
+/// The field a grammar gives a declaration's own identifier.
+const NAME_FIELD: &str = "name";
+
+/// The field a C-family grammar gives the thing a declaration declares, which
+/// is where the name sits when the declaration itself carries no
+/// [`NAME_FIELD`].
+const DECLARATOR_FIELD: &str = "declarator";
+
+/// The node kind of a bare name.
+const IDENTIFIER_KIND: &str = "identifier";
+
+/// The node kind of a bare name in type position.
+const TYPE_IDENTIFIER_KIND: &str = "type_identifier";
+
+/// The node kind Python gives a `def` or `class` that carries decorators.
+const DECORATED_DEFINITION_KIND: &str = "decorated_definition";
+
+/// Node kinds that declare a variable through `variable_declarator` children
+/// rather than through a [`NAME_FIELD`] of their own — JavaScript and
+/// TypeScript `let`, `const`, and `var`.
+const VARIABLE_DECLARATION_KINDS: &[&str] = &["lexical_declaration", "variable_declaration"];
+
+/// Node kinds whose name sits inside their [`DECLARATOR_FIELD`] — the C family,
+/// where `int *make(void)` names a declarator chain rather than an identifier.
+const DECLARATOR_NAMED_KINDS: &[&str] = &["function_definition", "declaration", "type_definition"];
+
+/// Node kinds a Python `decorated_definition` stands above.
+const DECORATED_INNER_KINDS: &[&str] = &["function_definition", "class_definition"];
+
+/// The name the declaration at `node` gives itself, `None` when it names
+/// nothing.
+///
+/// A [`NAME_FIELD`] answers for every grammar that has one, so the readings
+/// under it are only for the kinds that spell a name some other way. A kind
+/// that spells one nowhere — and a kind whose own reading came up empty — falls
+/// back to the first identifier among the children.
 fn extract_name(node: Node, source: &[u8]) -> Option<String> {
-    // Try 'name' field first (works for most languages)
-    if let Some(name_node) = node.child_by_field_name("name") {
+    if let Some(name_node) = node.child_by_field_name(NAME_FIELD) {
         return Some(node_text(name_node, source).to_string());
     }
+    declared_name(node, source).or_else(|| first_identifier_name(node, source))
+}
 
-    // For variable/lexical declarations, try to get the declarator name
-    let node_type = node.kind();
-    if node_type == "lexical_declaration" || node_type == "variable_declaration" {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "variable_declarator" {
-                if let Some(decl_name) = child.child_by_field_name("name") {
-                    return Some(node_text(decl_name, source).to_string());
-                }
-            }
-        }
+/// The name a declaration spells somewhere other than a [`NAME_FIELD`], `None`
+/// when its kind spells one nowhere.
+fn declared_name(node: Node, source: &[u8]) -> Option<String> {
+    let kind = node.kind();
+    if VARIABLE_DECLARATION_KINDS.contains(&kind) {
+        return variable_declarator_name(node, source);
     }
-
-    // For decorated definitions (Python), look at the inner definition
-    if node_type == "decorated_definition" {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "function_definition" || child.kind() == "class_definition" {
-                if let Some(inner_name) = child.child_by_field_name("name") {
-                    return Some(node_text(inner_name, source).to_string());
-                }
-            }
-        }
+    if kind == DECORATED_DEFINITION_KIND {
+        return decorated_definition_name(node, source);
     }
-
-    // For C/C++ function_definition, the name is inside the declarator
-    if node_type == "function_definition" {
-        if let Some(declarator) = node.child_by_field_name("declarator") {
-            return extract_declarator_name(declarator, source);
-        }
+    if DECLARATOR_NAMED_KINDS.contains(&kind) {
+        return node
+            .child_by_field_name(DECLARATOR_FIELD)
+            .and_then(|declarator| extract_declarator_name(declarator, source));
     }
-
-    // For C++ template_declaration, look at the inner declaration
-    if node_type == "template_declaration" {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            let kind = child.kind();
-            if kind != "template_parameter_list" {
-                // The inner declaration (class, function, etc.)
-                if let Some(name) = child.child_by_field_name("name") {
-                    return Some(node_text(name, source).to_string());
-                }
-                if let Some(declarator) = child.child_by_field_name("declarator") {
-                    return extract_declarator_name(declarator, source);
-                }
-            }
-        }
+    if kind == "template_declaration" {
+        return template_declaration_name(node, source);
     }
-
-    // For C++ namespace_definition
-    if node_type == "namespace_definition" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source).to_string());
-        }
-    }
-
-    // For C++ class_specifier
-    if node_type == "class_specifier" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source).to_string());
-        }
-    }
-
-    // For C# property_declaration, namespace_declaration, struct_declaration
-    if node_type == "property_declaration"
-        || node_type == "namespace_declaration"
-        || node_type == "struct_declaration"
-    {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source).to_string());
-        }
-    }
-
-    // For C declarations (global vars, function prototypes), extract the declarator name
-    if node_type == "declaration" {
-        if let Some(declarator) = node.child_by_field_name("declarator") {
-            // Could be a plain identifier, pointer_declarator, function_declarator, etc.
-            return extract_declarator_name(declarator, source);
-        }
-    }
-
-    // For C struct/enum/union specifiers, try the 'name' field
-    if node_type == "struct_specifier"
-        || node_type == "enum_specifier"
-        || node_type == "union_specifier"
-    {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source).to_string());
-        }
-    }
-
-    // For C type_definition (typedef), look for the type name
-    if node_type == "type_definition" {
-        if let Some(declarator) = node.child_by_field_name("declarator") {
-            return extract_declarator_name(declarator, source);
-        }
-    }
-
-    // Fallback: first identifier child
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            return Some(node_text(child, source).to_string());
-        }
-    }
-
     None
+}
+
+/// The name the first named declarator of a `let`/`const`/`var` declaration
+/// carries.
+fn variable_declarator_name(node: Node, source: &[u8]) -> Option<String> {
+    find_in_named_children(node, |child| {
+        if child.kind() != "variable_declarator" {
+            return None;
+        }
+        let name = child.child_by_field_name(NAME_FIELD)?;
+        Some(node_text(name, source).to_string())
+    })
+}
+
+/// The name of the `def` or `class` a Python decorated definition stands above.
+fn decorated_definition_name(node: Node, source: &[u8]) -> Option<String> {
+    find_in_named_children(node, |child| {
+        if !DECORATED_INNER_KINDS.contains(&child.kind()) {
+            return None;
+        }
+        let name = child.child_by_field_name(NAME_FIELD)?;
+        Some(node_text(name, source).to_string())
+    })
+}
+
+/// The name of the declaration a C++ `template` stands above, which is a
+/// sibling of the template's parameter list.
+fn template_declaration_name(node: Node, source: &[u8]) -> Option<String> {
+    find_in_named_children(node, |child| {
+        if child.kind() == "template_parameter_list" {
+            return None;
+        }
+        if let Some(name) = child.child_by_field_name(NAME_FIELD) {
+            return Some(node_text(name, source).to_string());
+        }
+        let declarator = child.child_by_field_name(DECLARATOR_FIELD)?;
+        extract_declarator_name(declarator, source)
+    })
+}
+
+/// The first identifier among `node`'s named children — the reading for a
+/// declaration whose grammar names it nowhere else.
+fn first_identifier_name(node: Node, source: &[u8]) -> Option<String> {
+    find_in_named_children(node, |child| {
+        is_identifier(child).then(|| node_text(child, source).to_string())
+    })
+}
+
+/// Whether `node` is a bare name, in value or in type position.
+fn is_identifier(node: Node) -> bool {
+    node.kind() == IDENTIFIER_KIND || node.kind() == TYPE_IDENTIFIER_KIND
+}
+
+/// The first value `read` yields for a named child of `node`.
+///
+/// The cursor a child walk needs is created and dropped here, so a caller reads
+/// the children it wants as one expression instead of as a loop.
+fn find_in_named_children<'tree, T>(
+    node: Node<'tree>,
+    read: impl FnMut(Node<'tree>) -> Option<T>,
+) -> Option<T> {
+    let mut cursor = node.walk();
+    let found = node.named_children(&mut cursor).find_map(read);
+    drop(cursor);
+    found
 }
 
 /// Extract the name from a C declarator (handles pointer_declarator, function_declarator, etc.)
 fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" => {
+        IDENTIFIER_KIND | TYPE_IDENTIFIER_KIND | "field_identifier" => {
             Some(node_text(node, source).to_string())
         }
         "qualified_identifier" | "scoped_identifier" => {
@@ -286,36 +361,24 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
         "pointer_declarator"
         | "function_declarator"
         | "array_declarator"
-        | "parenthesized_declarator" => {
-            if let Some(inner) = node.child_by_field_name("declarator") {
-                extract_declarator_name(inner, source)
-            } else {
-                let mut cursor = node.walk();
-                let result = node
-                    .named_children(&mut cursor)
-                    .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                    .map(|c| node_text(c, source).to_string());
-                result
-            }
-        }
-        _ => {
-            if let Some(name) = node.child_by_field_name("name") {
-                return Some(node_text(name, source).to_string());
-            }
-            let mut cursor = node.walk();
-            let result = node
-                .named_children(&mut cursor)
-                .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                .map(|c| node_text(c, source).to_string());
-            result
-        }
+        | "parenthesized_declarator" => match node.child_by_field_name(DECLARATOR_FIELD) {
+            Some(inner) => extract_declarator_name(inner, source),
+            None => first_identifier_name(node, source),
+        },
+        _ => match node.child_by_field_name(NAME_FIELD) {
+            Some(name) => Some(node_text(name, source).to_string()),
+            None => first_identifier_name(node, source),
+        },
     }
 }
 
+/// The text `node` spans, empty when the span is not valid UTF-8.
 fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
     node.utf8_text(source).unwrap_or("")
 }
 
+/// The semantic model's name for a tree-sitter node kind, which is the kind
+/// itself when no language spells that concept differently.
 fn map_node_type(tree_sitter_type: &str) -> &str {
     match tree_sitter_type {
         "function_declaration" | "function_definition" | "function_item" => "function",
@@ -352,7 +415,7 @@ fn extract_call_entity(
     source: &[u8],
 ) -> Option<(String, &'static str)> {
     let target = node.child_by_field_name("target")?;
-    if target.kind() != "identifier" {
+    if target.kind() != IDENTIFIER_KIND {
         return None;
     }
     let keyword = node_text(target, source);
@@ -408,18 +471,13 @@ fn extract_call_entity(
 /// Handles: call (fn with params), identifier (arity-0), binary_operator (defguard when clause)
 fn extract_fn_name_from_arg(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "call" => {
-            if let Some(fn_target) = node.child_by_field_name("target") {
-                Some(node_text(fn_target, source).to_string())
-            } else {
-                let mut c = node.walk();
-                let id = node
-                    .named_children(&mut c)
-                    .find(|n| n.kind() == "identifier")?;
-                Some(node_text(id, source).to_string())
-            }
-        }
-        "identifier" => Some(node_text(node, source).to_string()),
+        "call" => match node.child_by_field_name("target") {
+            Some(fn_target) => Some(node_text(fn_target, source).to_string()),
+            None => find_in_named_children(node, |child| {
+                (child.kind() == IDENTIFIER_KIND).then(|| node_text(child, source).to_string())
+            }),
+        },
+        IDENTIFIER_KIND => Some(node_text(node, source).to_string()),
         "binary_operator" => {
             // defguard is_positive(x) when ... -> left side has the actual call/identifier
             let left = node.child_by_field_name("left")?;
@@ -429,38 +487,46 @@ fn extract_fn_name_from_arg(node: Node, source: &[u8]) -> Option<String> {
     }
 }
 
+/// The first module alias or bare name among a call's arguments — the name an
+/// Elixir `defmodule` or `defprotocol` declares.
 fn extract_first_alias_or_identifier(args: Node, source: &[u8]) -> Option<String> {
-    let mut cursor = args.walk();
-    for child in args.named_children(&mut cursor) {
-        match child.kind() {
-            "alias" => return Some(node_text(child, source).to_string()),
-            "identifier" => return Some(node_text(child, source).to_string()),
-            _ => {}
-        }
-    }
-    None
+    find_in_named_children(args, |child| {
+        matches!(child.kind(), "alias" | IDENTIFIER_KIND)
+            .then(|| node_text(child, source).to_string())
+    })
 }
 
+/// The value a call's keyword arguments give `key` — the `for:` of Elixir's
+/// `defimpl Protocol, for: Target`.
 fn extract_keyword_value(args: Node, key: &str, source: &[u8]) -> Option<String> {
-    let mut cursor = args.walk();
-    for child in args.named_children(&mut cursor) {
-        if child.kind() == "keywords" {
-            let mut kw_cursor = child.walk();
-            for pair in child.named_children(&mut kw_cursor) {
-                if pair.kind() == "pair" {
-                    if let Some(pair_key) = pair.child_by_field_name("key") {
-                        let key_text = node_text(pair_key, source).trim();
-                        if key_text == format!("{}:", key) || key_text == key {
-                            if let Some(pair_value) = pair.child_by_field_name("value") {
-                                return Some(node_text(pair_value, source).to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    find_in_named_children(args, |child| keyword_list_value(child, key, source))
+}
+
+/// The value `node` gives `key`, `None` when `node` is not a keyword list or
+/// holds no such key.
+fn keyword_list_value(node: Node, key: &str, source: &[u8]) -> Option<String> {
+    if node.kind() != "keywords" {
+        return None;
     }
-    None
+    find_in_named_children(node, |pair| pair_value_for_key(pair, key, source))
+}
+
+/// `pair`'s value when `pair` is the keyword pair for `key`, `None` otherwise.
+///
+/// A pair spells its key either with the trailing colon the source carries
+/// (`for:`) or without it, depending on how the grammar cut the key node, so
+/// both spellings are accepted.
+fn pair_value_for_key(pair: Node, key: &str, source: &[u8]) -> Option<String> {
+    if pair.kind() != "pair" {
+        return None;
+    }
+    let pair_key = pair.child_by_field_name("key")?;
+    let key_text = node_text(pair_key, source).trim();
+    if key_text != format!("{key}:") && key_text != key {
+        return None;
+    }
+    let pair_value = pair.child_by_field_name("value")?;
+    Some(node_text(pair_value, source).to_string())
 }
 
 /// For Python decorated_definition, check the inner node to determine the real type.

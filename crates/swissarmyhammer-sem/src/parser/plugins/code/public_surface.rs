@@ -888,4 +888,100 @@ mod tests {
             "a file's private declarations are not its public surface"
         );
     }
+
+    /// One public declaration, kept unchanged on both sides, so the change
+    /// under test is the second declaration alone.
+    const KEPT_PUBLIC_DECLARATION: &str = "pub fn one(value: u8) -> u8 { value }\n";
+
+    /// A second public declaration, added on one side only.
+    const OTHER_PUBLIC_DECLARATION: &str = "pub fn two(value: u8) -> u8 { value + 1 }\n";
+
+    /// The declaration [`OTHER_PUBLIC_DECLARATION`] spells, as a surface row
+    /// reports it.
+    const OTHER_PUBLIC_SIGNATURE: &str = "pub fn two(value: u8) -> u8";
+
+    #[test]
+    fn a_public_declaration_the_change_added_is_reported_as_added() {
+        let before = KEPT_PUBLIC_DECLARATION.to_string();
+        let after = format!("{KEPT_PUBLIC_DECLARATION}{OTHER_PUBLIC_DECLARATION}");
+
+        let changes = changes("a.rs", &before, &after);
+
+        assert_eq!(changes.len(), 1, "one symbol added, got: {changes:?}");
+        assert_eq!(changes[0].symbol_path, "two");
+        assert_eq!(changes[0].kind, SurfaceChangeKind::Added);
+        assert_eq!(changes[0].before_signature, None);
+        assert_eq!(
+            changes[0].after_signature.as_deref(),
+            Some(OTHER_PUBLIC_SIGNATURE)
+        );
+    }
+
+    #[test]
+    fn a_public_declaration_the_change_removed_is_reported_as_removed() {
+        let before = format!("{KEPT_PUBLIC_DECLARATION}{OTHER_PUBLIC_DECLARATION}");
+        let after = KEPT_PUBLIC_DECLARATION.to_string();
+
+        let changes = changes("a.rs", &before, &after);
+
+        assert_eq!(changes.len(), 1, "one symbol removed, got: {changes:?}");
+        assert_eq!(changes[0].symbol_path, "two");
+        assert_eq!(changes[0].kind, SurfaceChangeKind::Removed);
+        assert_eq!(
+            changes[0].before_signature.as_deref(),
+            Some(OTHER_PUBLIC_SIGNATURE)
+        );
+        assert_eq!(changes[0].after_signature, None);
+    }
+
+    /// One declaration, spelled private and public, so a test tells the two
+    /// visibilities of one symbol apart.
+    const HIDDEN_DECLARATION: &str = "fn one(value: u8) -> u8 { value }\n";
+
+    /// The declaration [`HIDDEN_DECLARATION`] spells, as a surface row reports
+    /// it.
+    const HIDDEN_SIGNATURE: &str = "fn one(value: u8) -> u8";
+
+    /// The declaration [`KEPT_PUBLIC_DECLARATION`] spells, as a surface row
+    /// reports it.
+    const PUBLISHED_SIGNATURE: &str = "pub fn one(value: u8) -> u8";
+
+    /// Publishing a declaration that stayed inside the file puts it on the
+    /// surface, though nothing of it but the modifier moved.
+    #[test]
+    fn a_declaration_the_change_published_is_reported_as_visibility_changed() {
+        let changes = changes("a.rs", HIDDEN_DECLARATION, KEPT_PUBLIC_DECLARATION);
+
+        assert_eq!(changes.len(), 1, "one symbol published, got: {changes:?}");
+        assert_eq!(changes[0].symbol_path, "one");
+        assert_eq!(changes[0].kind, SurfaceChangeKind::VisibilityChanged);
+        assert_eq!(
+            changes[0].before_signature.as_deref(),
+            Some(HIDDEN_SIGNATURE)
+        );
+        assert_eq!(
+            changes[0].after_signature.as_deref(),
+            Some(PUBLISHED_SIGNATURE)
+        );
+    }
+
+    /// Hiding a declaration is a visibility change and not a removal: the
+    /// symbol is still declared, and the differ still matches it across the two
+    /// revisions.
+    #[test]
+    fn a_declaration_the_change_hid_is_reported_as_visibility_changed() {
+        let changes = changes("a.rs", KEPT_PUBLIC_DECLARATION, HIDDEN_DECLARATION);
+
+        assert_eq!(changes.len(), 1, "one symbol hidden, got: {changes:?}");
+        assert_eq!(changes[0].symbol_path, "one");
+        assert_eq!(changes[0].kind, SurfaceChangeKind::VisibilityChanged);
+        assert_eq!(
+            changes[0].before_signature.as_deref(),
+            Some(PUBLISHED_SIGNATURE)
+        );
+        assert_eq!(
+            changes[0].after_signature.as_deref(),
+            Some(HIDDEN_SIGNATURE)
+        );
+    }
 }
