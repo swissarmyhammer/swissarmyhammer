@@ -234,7 +234,8 @@ impl Initializable for ValidatorTools {
                     )]
                 }
             };
-            let project_types = detected_project_type_keys(root);
+            let detected_types = detected_project_type_keys(root);
+            let project_types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
 
             vec![install_tool_rules_with(
                 self.name(),
@@ -265,7 +266,7 @@ impl Initializable for ValidatorTools {
 fn install_tool_rules_with(
     component: &str,
     loader: &ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
     reporter: &dyn InitReporter,
 ) -> InitResult {
     let installs = install_project_tool_rules(loader, project_types);

@@ -624,7 +624,8 @@ pub async fn run_review(
     // tool must not run once per batch. The plan's suppression map rides into
     // every batch's fan-out so a superseded prompt rule is skipped per file;
     // an unhealthy tool suppresses nothing, and the report notes the fallback.
-    let project_types = detected_project_type_keys(repo_path);
+    let detected_types = detected_project_type_keys(repo_path);
+    let project_types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
 
     // Stage 2a: install what the matched tool rules need before planning them.
     // The lifecycle tries each `install.commands` entry in order and, when all

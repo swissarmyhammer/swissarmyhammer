@@ -127,6 +127,70 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules.rs. Tests: `cargo test -p swissarmyhammer-validators` 505 passed 0 failed, doc-tests 2 passed 0 failed; `cargo clippy -p swissarmyhammer-validators --all-targets` no warnings; `cargo fmt --check` clean. Mutation check drove both new helpers RED, then reverted to GREEN.
     - next: /review
   timestamp: 2026-08-07T16:32:27.241554+00:00
+- actor: claude-code
+  id: 01kzek6cykkdq1r5nbbydw7640
+  text: |-
+    ### review — findings
+    - scope: `review sha HEAD~1..HEAD` (978a4eef3, parent af211dd8b)
+    - prior finding verified closed: `verify_shipped_tool_rules_pass_fixtures` exists at tool_rules.rs:1439 and both `every_shipped_missing_docs_tool_rule_passes_its_fixtures` and `every_shipped_dead_code_tool_rule_passes_its_fixtures` call it.
+    - counts: 3 findings, 3 confirmed, 2 refuted, 9 attempted, 0 failed, 0 skipped
+    - evidence: crates/swissarmyhammer-validators/src/review/tool_rules.rs:347, :462, :1171
+    - environment: the long-lived MCP server image lacks the `assertion-census` probe. Ran the engine through a fresh `sah serve` stdio process with /tmp/sah_review_driver.py.
+    - next: fix the three findings, then re-review.
+  timestamp: 2026-08-07T17:09:08.179810+00:00
+- actor: claude-code
+  id: 01kzek91wb8xptc1v1p8kj3y20
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — crates/swissarmyhammer-validators/src/review/tool_rules.rs; the prior finding is closed and verified (verify_shipped_tool_rules_pass_fixtures serves both fixture tests)
+    - test: green — cargo nextest run --workspace 13763 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 978a4eef3 (parent af211dd8b)
+    - review: findings — crates/swissarmyhammer-validators/src/review/tool_rules.rs:347, :462 (project_types takes &[String] where &[&str] fits), :1171 (the two new rule-name constants are not applied in SHIPPED_MISSING_DOCS_RULES and SHIPPED_DEAD_CODE_RULES)
+    - guardrail: no repeat. Each round names a different cause.
+  timestamp: 2026-08-07T17:10:35.147118+00:00
+- actor: claude-code
+  id: 01kzem7z5w632bt515rg8rj9y9
+  text: |-
+    Cleared all three open findings from the 12:03 review, and swept each cause across the whole file.
+
+    FINDING :347 and :462 — `project_types: &[String]` must become `&[&str]`.
+
+    The callers were checked before the signature changed, as instructed. No true conflict: `detected_project_type_keys` still returns `Vec<String>`, and each surface that owns that vector now collects one `Vec<&str>` at its boundary. Nothing at any caller got worse; the test call sites got shorter.
+
+    One example is a cause, so all FOUR `&[String]` parameters in `tool_rules.rs` changed, not only the two the findings name: `plan_tool_rules`, `matched_tool_rules`, `matched_rule_files`, `project_tool_rules`.
+
+    The ripple, carried through every caller:
+    - `tool_install.rs` — `install_missing_tools` and `install_project_tool_rules` pass the same value straight through, so both take `&[&str]` too.
+    - `doctor.rs` — `check_review_engine_with` takes `&[&str]`; `check_review_engine` collects once from `detected_project_type_keys`.
+    - `synthesize.rs` — `run_review` collects once and uses the slice for both the install stage and the plan stage.
+    - `apps/swissarmyhammer-cli/.../install/components/mod.rs` — `install_tool_rules_with` takes `&[&str]`; `ValidatorTools::init` collects once.
+
+    Downward, `project_tool_rules` calls `ValidatorMatch::criteria_applies`, which took `&[String]`. Two ways to make that accept a borrowed slice, and the first was rejected by measurement of its cost:
+
+    1. REJECTED — change `criteria_applies`/`project_types_match` to `&[&str]`. `matches_project_types` (types.rs) reads `ctx.project_types`, which is a `Vec<String>` the context owns, so every per-file match would have to allocate a `Vec<&str>` first. That is the per-file matching path of every review run.
+    2. TAKEN — make both generic over `S: AsRef<str>`. `&[String]` and `&[&str]` both fit, no allocation anywhere, and no churn at the two existing callers. This is the same rule the finding cites: accept generics, not concrete types.
+
+    FINDING :1171 — the new rule-name constants are not applied in the rosters.
+
+    `SHIPPED_MISSING_DOCS_RULES` now reads `("rust", RUST_MISSING_DOCS_RULE)` and `SHIPPED_DEAD_CODE_RULES` reads `("python", PYTHON_UNREACHABLE_CODE_RULE)`.
+
+    Swept the same cause over the whole file: for each constant this task added, every surviving literal of its value. `"missing-docs-rust"` and `"unreachable-code-python"` each had exactly one survivor, both in the rosters, both gone. No other literal in the file duplicates a constant this task added. The `"missing-docs"` literals in the planner tests are a DIFFERENT thing — they name a fabricated prompt rule inside the synthetic `docs` set, not the shipped roster, and binding them to the roster constant would create a coupling that does not exist.
+
+    Also moved `DEAD_CODE_PROMPT_RULE` and `PYTHON_UNREACHABLE_CODE_RULE` up beside the other roster-name constants. A constant declared 150 lines below the array that reads it compiles, but it does not read.
+
+    Incidental to the signature change: the doctor test helper `rust_types()` existed only to widen `RUST_TYPES` (`&[&str]`) into a `Vec<String>` for the old parameter. With the parameter borrowed, the twelve call sites pass `RUST_TYPES` and the helper is gone.
+
+    No new test. Both findings are shape, not behavior: the signature change is proved by the compiler across every caller in the workspace, and the roster change substitutes a constant for the identical literal. A test asserting the roster holds the constant would assert nothing the compiler does not.
+
+    Verified: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1207 passed 0 failed 0 skipped; `cargo test --doc -p swissarmyhammer-validators` 2 passed; `cargo clippy --workspace --all-targets` no warning; `cargo fmt --all --check` clean. The blast radius is closed by `cargo check --workspace --all-targets`, which compiles every caller of the six changed signatures.
+  timestamp: 2026-08-07T17:27:28.188327+00:00
+- actor: claude-code
+  id: 01kzem86nhx5ehr0w5ayr2b4qz
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/review/synthesize.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/validators/types.rs, apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. Tests: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1207 passed 0 failed 0 skipped; `cargo test --doc -p swissarmyhammer-validators` 2 passed; `cargo clippy --workspace --all-targets` no warning; `cargo fmt --all --check` clean.
+    - next: /review
+  timestamp: 2026-08-07T17:27:35.857640+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'dead-code tools: evaluate narrow deterministic checks'
@@ -151,3 +215,9 @@ Acceptance for each accepted tool: it runs clean on this repository, or every fi
 > tool rule 'code-hygiene/missing-docs-go' is unavailable (tool missing: exited with exit status: 1); prompt rule 'missing-docs' ran instead.
 
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1473` — This function reimplements the structure and logic of the existing `every_shipped_missing_docs_tool_rule_passes_its_fixtures` function (lines 1422–1456). Both functions iterate over shipped rules, install tools, check the review engine, verify rule properties, and track exercised count with nearly identical implementation. The only differences are the constants used and the assertion on the `supersedes` field. Extract a common test helper `verify_shipped_tool_rules_pass_fixtures(rules, expected_supersedes, rule_type_name)` that both test functions call with their specific parameters, eliminating 40+ lines of code duplication.
+
+## Review Findings (2026-08-07 12:03)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:347` — Function parameter `project_types: &[String]` accepts concrete String type instead of generic `&[&str]`; reduces flexibility for callers who have borrowed strings or literals. Change parameter to `project_types: &[&str]` and update internal conversions (line 429 already does `.iter().cloned()` to create owned Strings, which works with borrowed input).
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:462` — Function parameter `project_types: &[String]` accepts concrete type instead of generic `&[&str]`; reduces API flexibility in a crate-visible function. Change parameter to `project_types: &[&str]`.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1171` — New constant `RUST_MISSING_DOCS_RULE` (line 1167) centralizes the rule name to replace repeated literal strings. The constant is used in three updated test locations (1228, 1304, 1323), but the same string `"missing-docs-rust"` remains hardcoded in `SHIPPED_MISSING_DOCS_RULES` array. If the rule name changes, this entry becomes inconsistent with the constant. Update `SHIPPED_MISSING_DOCS_RULES` to use the constant: `("rust", RUST_MISSING_DOCS_RULE)` and `SHIPPED_DEAD_CODE_RULES` to use `("python", PYTHON_UNREACHABLE_CODE_RULE)`. This is achievable in Rust const expressions and makes the centralization complete.

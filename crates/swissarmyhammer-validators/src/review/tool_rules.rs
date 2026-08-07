@@ -344,7 +344,7 @@ impl ToolReport {
 pub fn plan_tool_rules(
     work: &WorkList,
     loader: &ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> ToolPlan {
     let mut plan = ToolPlan::default();
     for matched in matched_tool_rules(work, loader, project_types) {
@@ -384,7 +384,7 @@ pub(crate) struct MatchedToolRule<'a> {
 pub(crate) fn matched_tool_rules<'a>(
     work: &WorkList,
     loader: &'a ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> Vec<MatchedToolRule<'a>> {
     let mut matched = Vec::new();
     for validator in work.validators() {
@@ -417,7 +417,7 @@ fn matched_rule_files(
     validator: &ValidatorWork,
     ruleset: &RuleSet,
     rule: &Rule,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> Vec<String> {
     validator
         .files()
@@ -426,7 +426,7 @@ fn matched_rule_files(
         .filter(|path| {
             let ctx = MatchContext::new()
                 .with_file(path.clone())
-                .with_project_types(project_types.iter().cloned());
+                .with_project_types(project_types.iter().copied().map(String::from));
             rule.matches(ruleset, &ctx)
         })
         .collect()
@@ -459,7 +459,7 @@ pub(crate) struct ProjectToolRule<'a> {
 /// skipped.
 pub(crate) fn project_tool_rules<'a>(
     loader: &'a ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> Vec<ProjectToolRule<'a>> {
     let mut matched = Vec::new();
     for ruleset in loader.list_rulesets() {
@@ -1168,13 +1168,20 @@ mod tests {
 
     /// Every shipped missing-docs tool rule, with the project type it serves.
     const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str)] = &[
-        ("rust", "missing-docs-rust"),
+        ("rust", RUST_MISSING_DOCS_RULE),
         ("python", "missing-docs-python"),
         ("nodejs", "missing-docs-typescript"),
         ("go", "missing-docs-go"),
         ("swift", "missing-docs-swift"),
         ("flutter", "missing-docs-dart"),
     ];
+
+    /// The prompt rule the dead-code tool rules run beside, never in place of.
+    const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
+
+    /// The shipped dead-code tool rule for Python, the one the pipeline
+    /// acceptance test drives end to end.
+    const PYTHON_UNREACHABLE_CODE_RULE: &str = "unreachable-code-python";
 
     /// Every shipped dead-code tool rule, with the project type it serves.
     ///
@@ -1184,7 +1191,7 @@ mod tests {
     /// deterministic check beside that rule, never in place of it.
     const SHIPPED_DEAD_CODE_RULES: &[(&str, &str)] = &[
         ("go", "unused-code-go"),
-        ("python", "unreachable-code-python"),
+        ("python", PYTHON_UNREACHABLE_CODE_RULE),
     ];
 
     /// A cargo package holding one undocumented public item and one documented
@@ -1296,7 +1303,7 @@ mod tests {
         let loader = builtin_loader();
         let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
 
-        let plan = plan_tool_rules(&work, &loader, &["rust".to_string()]);
+        let plan = plan_tool_rules(&work, &loader, &["rust"]);
 
         let run = plan
             .runs()
@@ -1324,13 +1331,6 @@ mod tests {
             "missing documentation",
         );
     }
-
-    /// The prompt rule the dead-code tool rules run beside, never in place of.
-    const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
-
-    /// The shipped dead-code tool rule for Python, the one the pipeline
-    /// acceptance test drives end to end.
-    const PYTHON_UNREACHABLE_CODE_RULE: &str = "unreachable-code-python";
 
     /// A Python module with one statement stranded behind a `return`.
     const UNREACHABLE_MODULE_PY: &str = concat!(
@@ -1388,7 +1388,7 @@ mod tests {
         let loader = builtin_loader();
         let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
 
-        let plan = plan_tool_rules(&work, &loader, &["python".to_string()]);
+        let plan = plan_tool_rules(&work, &loader, &["python"]);
 
         assert!(
             !plan
@@ -1445,7 +1445,7 @@ mod tests {
         let mut exercised = 0;
 
         for (project_type, rule_name) in rules {
-            let project_types = vec![(*project_type).to_string()];
+            let project_types = [*project_type];
             crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
 
             let status = crate::doctor::check_review_engine_with(&loader, &project_types);

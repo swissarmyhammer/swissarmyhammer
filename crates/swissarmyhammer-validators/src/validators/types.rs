@@ -60,14 +60,16 @@ impl ValidatorMatch {
     /// keys, e.g. "rust"). This is the project-level applicability question
     /// the doctor surface asks — "does this criteria's project constraint fit
     /// this workspace?" — independent of any file or tool context.
-    pub fn project_types_match(&self, detected: &[String]) -> bool {
+    pub fn project_types_match<S: AsRef<str>>(&self, detected: &[S]) -> bool {
         if self.project_types.is_empty() {
             return true;
         }
 
-        self.project_types
-            .iter()
-            .any(|wanted| detected.iter().any(|key| key.eq_ignore_ascii_case(wanted)))
+        self.project_types.iter().any(|wanted| {
+            detected
+                .iter()
+                .any(|key| key.as_ref().eq_ignore_ascii_case(wanted))
+        })
     }
 
     /// Whether an optional match criteria's project-type constraint fits the
@@ -77,7 +79,7 @@ impl ValidatorMatch {
     /// the review engine's tool-rule selection both ask it here, so a set and
     /// the rules inside it can never be judged applicable by two different
     /// tests.
-    pub fn criteria_applies(criteria: Option<&Self>, detected: &[String]) -> bool {
+    pub fn criteria_applies<S: AsRef<str>>(criteria: Option<&Self>, detected: &[S]) -> bool {
         criteria.is_none_or(|c| c.project_types_match(detected))
     }
 }

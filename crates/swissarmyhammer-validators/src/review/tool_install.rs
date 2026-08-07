@@ -384,7 +384,7 @@ impl ToolRuleInstall {
 pub async fn install_missing_tools(
     work: &WorkList,
     loader: &ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
     agent: Option<&dyn ToolInstallAgent>,
 ) -> Vec<ToolRuleInstall> {
     let matched = matched_tool_rules(work, loader, project_types);
@@ -427,7 +427,7 @@ pub async fn install_missing_tools(
 /// Returns one row per tool rule, in set order.
 pub fn install_project_tool_rules(
     loader: &ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> Vec<ToolRuleInstall> {
     crate::review::tool_rules::project_tool_rules(loader, project_types)
         .into_iter()

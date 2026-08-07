@@ -207,7 +207,8 @@ impl ToolRuleStatus {
 pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, AvpError> {
     let loader = crate::load_rules(Some(workspace_root))?;
     let project_types = detected_project_type_keys(workspace_root);
-    Ok(check_review_engine_with(&loader, &project_types))
+    let project_type_keys: Vec<&str> = project_types.iter().map(String::as_str).collect();
+    Ok(check_review_engine_with(&loader, &project_type_keys))
 }
 
 /// Produce the review-engine facts from an explicit loader and detected
@@ -218,7 +219,7 @@ pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, 
 /// validator directories or workspace.
 pub fn check_review_engine_with(
     loader: &ValidatorLoader,
-    project_types: &[String],
+    project_types: &[&str],
 ) -> ReviewEngineStatus {
     let sets = loader
         .list_rulesets()
@@ -239,7 +240,7 @@ pub fn check_review_engine_with(
         .collect();
 
     ReviewEngineStatus {
-        project_types: project_types.to_vec(),
+        project_types: project_types.iter().copied().map(String::from).collect(),
         sets,
         tool_rules,
     }
@@ -735,11 +736,9 @@ tool:
 Python only.
 "#;
 
+    /// The detected project types of a Rust workspace, in the borrowed form
+    /// [`check_review_engine_with`] takes them.
     const RUST_TYPES: &[&str] = &["rust"];
-
-    fn rust_types() -> Vec<String> {
-        RUST_TYPES.iter().map(|s| s.to_string()).collect()
-    }
 
     #[test]
     fn test_detected_project_types_flow_into_status() {
@@ -759,7 +758,8 @@ Python only.
         );
 
         let loader = ValidatorLoader::new();
-        let status = check_review_engine_with(&loader, &detected);
+        let detected_keys: Vec<&str> = detected.iter().map(String::as_str).collect();
+        let status = check_review_engine_with(&loader, &detected_keys);
         assert_eq!(status.project_types, detected);
     }
 
@@ -770,7 +770,7 @@ Python only.
         write_ruleset(temp.path(), "python-set", PYTHON_ONLY_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let applies: std::collections::BTreeMap<&str, bool> = status
             .sets
@@ -789,7 +789,7 @@ Python only.
         write_ruleset(temp.path(), "tool-set", TOOL_SET_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let names: Vec<&str> = status.sets.iter().map(|s| s.name.as_str()).collect();
         let mut sorted = names.clone();
@@ -813,7 +813,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -842,7 +842,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -876,7 +876,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -909,7 +909,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -934,7 +934,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -971,7 +971,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let names: Vec<&str> = status
             .tool_rules
@@ -1000,7 +1000,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let checks = to_checks(&status);
 
@@ -1057,7 +1057,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let checks = to_checks(&status);
 
@@ -1097,7 +1097,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let checks = to_checks(&status);
 
@@ -1194,7 +1194,7 @@ Python only.
     /// The doctor rows for one tool rule on its own.
     fn checks_for(rule: ToolRuleStatus) -> Vec<Check> {
         to_checks(&ReviewEngineStatus {
-            project_types: rust_types(),
+            project_types: RUST_TYPES.iter().copied().map(String::from).collect(),
             sets: Vec::new(),
             tool_rules: vec![rule],
         })
@@ -1246,7 +1246,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, &rust_types());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
 
         let checks = to_checks(&status);
 
