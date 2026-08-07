@@ -112,6 +112,20 @@ impl<'a> TreeSitterProbeContext<'a> {
     }
 }
 
+/// The bound that seals [`TreeSitterProbe`].
+///
+/// Private, so only this module and its submodules can name [`Sealed`] and
+/// therefore only they can implement the probe trait. That is where every probe
+/// belongs: a probe is useful only once [`TREE_SITTER_PROBES`] registers it, and
+/// that roster lives here. Sealing also keeps the trait free to gain a method
+/// without breaking a downstream implementation that could never have worked.
+///
+/// [`Sealed`]: sealed::Sealed
+mod sealed {
+    /// The private supertrait of [`TreeSitterProbe`](super::TreeSitterProbe).
+    pub trait Sealed {}
+}
+
 /// A review probe whose evidence is computed from a file's tree-sitter parse.
 ///
 /// An implementation declares its [`name`](Self::name) and
@@ -121,7 +135,11 @@ impl<'a> TreeSitterProbeContext<'a> {
 /// The runner owns parsing. `run` is handed the parses it needs and must never
 /// parse anything itself, because that is what keeps the per-review parse count
 /// at one per file per revision however many probes read the file.
-pub trait TreeSitterProbe: std::fmt::Debug + Send + Sync {
+///
+/// **Sealed.** A new probe is written in this module or a submodule of it, and
+/// implements `sealed::Sealed` beside `TreeSitterProbe`; no other crate can
+/// implement it.
+pub trait TreeSitterProbe: sealed::Sealed + std::fmt::Debug + Send + Sync {
     /// The semantic name validators declare in their `probes:` list.
     ///
     /// Unique across the whole probe catalog, code_context ops included.
@@ -273,6 +291,8 @@ fn probe_rows(
 #[derive(Debug)]
 struct FunctionCountProbe;
 
+impl sealed::Sealed for FunctionCountProbe {}
+
 impl TreeSitterProbe for FunctionCountProbe {
     fn name(&self) -> &'static str {
         "functions"
@@ -322,7 +342,7 @@ mod tests {
     use model_embedding::mock::MockEmbedder;
 
     use super::{
-        function_count, prime_parse_cache, run_tree_sitter_probe, ParseCache, Revision,
+        function_count, prime_parse_cache, run_tree_sitter_probe, sealed, ParseCache, Revision,
         TreeSitterProbe, TreeSitterProbeContext, PARSE_EVENT, TREE_SITTER_NOT_PARSED,
     };
     use crate::review::probes::{
@@ -339,6 +359,10 @@ mod tests {
 
     /// The changed file every probe test here is bound to.
     const CHANGED_FILE: &str = "src/lib.rs";
+
+    /// How many revisions of one changed file a review parses: the base one and
+    /// the changed one, once each however many probes read the file.
+    const EXPECTED_REVISIONS_PER_FILE: usize = 2;
 
     /// A one-file change set carrying both revisions of [`CHANGED_FILE`].
     fn changed_file() -> FileChange {
@@ -421,15 +445,21 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn every_file_revision_is_parsed_once_for_the_whole_review() {
-        let results = probe_results(&["functions", "functions"], &changed_file()).await;
+        let probes = ["functions", "functions"];
 
-        assert_eq!(results.len(), 2, "both probe runs produced a result");
+        let results = probe_results(&probes, &changed_file()).await;
+
+        assert_eq!(
+            results.len(),
+            probes.len(),
+            "every probe run produced a result"
+        );
         logs_assert(|lines: &[&str]| {
             let parses = lines
                 .iter()
                 .filter(|line| line.contains(PARSE_EVENT))
                 .count();
-            if parses == 2 {
+            if parses == EXPECTED_REVISIONS_PER_FILE {
                 Ok(())
             } else {
                 Err(format!(
@@ -454,7 +484,7 @@ mod tests {
 
         assert_eq!(before.entities(CHANGED_FILE, ONE_FUNCTION).len(), 1);
         assert_eq!(after.entities(CHANGED_FILE, TWO_FUNCTIONS).len(), 2);
-        assert_eq!(cache.parse_count(), 2);
+        assert_eq!(cache.parse_count(), EXPECTED_REVISIONS_PER_FILE);
     }
 
     /// A probe that reports how many functions the change ADDED, so the runner
@@ -464,6 +494,8 @@ mod tests {
     /// without one.
     #[derive(Debug)]
     struct FunctionDeltaProbe;
+
+    impl sealed::Sealed for FunctionDeltaProbe {}
 
     impl TreeSitterProbe for FunctionDeltaProbe {
         fn name(&self) -> &'static str {

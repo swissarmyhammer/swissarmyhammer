@@ -1,13 +1,37 @@
 use tree_sitter::Language;
 
+/// One programming language's row in the grammar roster: which files it claims,
+/// which tree-sitter grammar parses them, and which node kinds carry meaning.
+///
+/// The roster is the single table every consumer of a parse reads — the entity
+/// extractor, the complexity scorer, and the review probes all route a file to
+/// its grammar through [`get_language_config`] rather than keeping a list of
+/// their own. Adding a language is adding one config and one entry in the
+/// roster it is looked up from.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct LanguageConfig {
+    /// The language identifier (e.g. `"rust"`), reported as
+    /// [`ParsedCode::language`](super::ParsedCode::language) and used as the
+    /// per-thread parser cache key.
     pub id: &'static str,
+    /// The file extensions this language claims, in the dotted-lowercase form
+    /// [`dotted_lowercase_extension`] produces (e.g. `".rs"`).
     pub extensions: &'static [&'static str],
+    /// The tree-sitter node kinds that are themselves entities — functions,
+    /// types, modules — so the extractor reports one entity for each.
     pub entity_node_types: &'static [&'static str],
+    /// The tree-sitter node kinds that hold entities without being one, such as
+    /// a class or declaration body. The extractor descends through them to
+    /// build an entity's parent path.
     pub container_node_types: &'static [&'static str],
+    /// The call-target names that DEFINE an entity in languages where a
+    /// definition is spelled as a call rather than as its own node kind (e.g.
+    /// Elixir's `defmodule` and `def`). Empty for languages whose grammars give
+    /// definitions a node kind of their own.
     pub call_entity_identifiers: &'static [&'static str],
+    /// Loads the tree-sitter grammar for this language, `None` when it is
+    /// unavailable.
     pub get_language: fn() -> Option<Language>,
 }
 
@@ -75,45 +99,42 @@ fn get_bash() -> Option<Language> {
     Some(tree_sitter_bash::LANGUAGE.into())
 }
 
-static TYPESCRIPT_CONFIG: LanguageConfig = LanguageConfig {
-    id: "typescript",
-    extensions: &[".ts"],
-    entity_node_types: &[
-        "function_declaration",
-        "class_declaration",
-        "interface_declaration",
-        "type_alias_declaration",
-        "enum_declaration",
-        "export_statement",
-        "lexical_declaration",
-        "variable_declaration",
-        "method_definition",
-        "public_field_definition",
-    ],
-    container_node_types: &["class_body", "interface_body", "enum_body"],
-    call_entity_identifiers: &[],
-    get_language: get_typescript,
-};
+/// The config of one TypeScript-family language.
+///
+/// TypeScript and TSX are the same language with one extra syntax, so the TSX
+/// grammar reports the same node kinds under the same names. Both configs are
+/// built here rather than written twice, so the two cannot drift: a node kind
+/// added for TypeScript reaches TSX in the same edit.
+const fn typescript_family_config(
+    id: &'static str,
+    extensions: &'static [&'static str],
+    get_language: fn() -> Option<Language>,
+) -> LanguageConfig {
+    LanguageConfig {
+        id,
+        extensions,
+        entity_node_types: &[
+            "function_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "type_alias_declaration",
+            "enum_declaration",
+            "export_statement",
+            "lexical_declaration",
+            "variable_declaration",
+            "method_definition",
+            "public_field_definition",
+        ],
+        container_node_types: &["class_body", "interface_body", "enum_body"],
+        call_entity_identifiers: &[],
+        get_language,
+    }
+}
 
-static TSX_CONFIG: LanguageConfig = LanguageConfig {
-    id: "tsx",
-    extensions: &[".tsx"],
-    entity_node_types: &[
-        "function_declaration",
-        "class_declaration",
-        "interface_declaration",
-        "type_alias_declaration",
-        "enum_declaration",
-        "export_statement",
-        "lexical_declaration",
-        "variable_declaration",
-        "method_definition",
-        "public_field_definition",
-    ],
-    container_node_types: &["class_body", "interface_body", "enum_body"],
-    call_entity_identifiers: &[],
-    get_language: get_tsx,
-};
+static TYPESCRIPT_CONFIG: LanguageConfig =
+    typescript_family_config("typescript", &[".ts"], get_typescript);
+
+static TSX_CONFIG: LanguageConfig = typescript_family_config("tsx", &[".tsx"], get_tsx);
 
 static JAVASCRIPT_CONFIG: LanguageConfig = LanguageConfig {
     id: "javascript",
@@ -361,6 +382,12 @@ static ALL_CONFIGS: &[&LanguageConfig] = &[
     &BASH_CONFIG,
 ];
 
+/// The roster entry that claims `extension`, `None` when no language does.
+///
+/// `extension` must be in the dotted-lowercase form
+/// [`dotted_lowercase_extension`] produces (e.g. `".rs"`); an extension spelled
+/// any other way matches nothing. `None` means **the roster has no grammar for
+/// this file**, so a caller reports "not computed" rather than an empty result.
 pub fn get_language_config(extension: &str) -> Option<&'static LanguageConfig> {
     ALL_CONFIGS
         .iter()

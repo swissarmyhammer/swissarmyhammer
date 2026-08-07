@@ -1382,27 +1382,16 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
 
     // --- similar --------------------------------------------------------
 
-    #[tokio::test]
-    async fn similar_returns_an_existing_util_and_excludes_self() {
+    /// Run `similar` over one added body whose entity type the semantic diff
+    /// spells `entity_type`, and return the probe result bound to that body.
+    ///
+    /// The index holds two chunks: the added body itself, which `similar` must
+    /// exclude, and an existing util with the same content, which is the reuse
+    /// candidate. `MockEmbedder` answers every query with the same vector, so
+    /// both chunks are seeded with that vector and rank at cosine 1.0.
+    async fn similar_for_entity_type(entity_type: &str) -> ProbeResult {
         let conn = index_conn();
         let reimplemented = body("my_mse");
-        // The added function's own (already-indexed) chunk — must be excluded.
-        seed_chunk(&conn, "src/new.rs", "my_mse", &reimplemented, &dup_emb());
-        // An existing util with the same embedding — the reuse candidate.
-        seed_chunk(
-            &conn,
-            "src/util.rs",
-            "mean_squared_error",
-            &reimplemented,
-            &dup_emb(),
-        );
-
-        // Mock embedder returns a constant vector for every query; seed the
-        // chunks with that same vector so cosine == 1.0 and both rank top.
-        let embedder = MockEmbedder::new(DIM);
-        // MockEmbedder returns [0.1; DIM]; re-seed chunks to match so the
-        // query (also [0.1; DIM]) is maximally similar to both.
-        conn.execute("DELETE FROM ts_chunks", []).unwrap();
         let query_vec = vec![0.1_f32; DIM];
         seed_chunk(&conn, "src/new.rs", "my_mse", &reimplemented, &query_vec);
         seed_chunk(
@@ -1413,23 +1402,28 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
             &query_vec,
         );
 
+        let embedder = MockEmbedder::new(DIM);
         let change = FileChange::new(vec![ChangeEntry {
             change_type: "added".to_string(),
-            entity_type: "function".to_string(),
+            entity_type: entity_type.to_string(),
             entity_name: "my_mse".to_string(),
             file_path: "src/new.rs".to_string(),
-            after_content: Some(reimplemented.clone()),
+            after_content: Some(reimplemented),
         }]);
 
-        let results = run_probes(&["similar"], &change, &conn, &embedder)
+        run_probes(&["similar"], &change, &conn, &embedder)
             .await
-            .unwrap();
-
-        let similar = results
+            .expect("the similar probe runs")
             .results
-            .iter()
-            .find(|r| r.name == "similar" && r.target == "my_mse")
-            .expect("a similar result bound to the added body");
+            .into_iter()
+            .find(|result| result.name == "similar" && result.target == "my_mse")
+            .expect("a similar result bound to the added body")
+    }
+
+    #[tokio::test]
+    async fn similar_returns_an_existing_util_and_excludes_self() {
+        let similar = similar_for_entity_type("function").await;
+
         assert_eq!(similar.kind, ProbeKind::Candidate);
         assert!(
             similar
@@ -1442,6 +1436,25 @@ fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
         assert!(
             !similar.rows.iter().any(|row| row.file_path == "src/new.rs"),
             "similar must exclude the added entity itself, got: {:?}",
+            similar.rows
+        );
+    }
+
+    /// The entity type comes from the semantic diff, whose grammars spell it in
+    /// whatever case their own nodes carry. `similar` binds to function bodies
+    /// through [`is_function_entity_type`], which lowercases first — so a
+    /// `METHOD` entry must reach the probe exactly as a `function` entry does.
+    /// Drop that lowercasing and this body is never probed at all.
+    #[tokio::test]
+    async fn similar_binds_to_a_function_entity_type_spelled_in_upper_case() {
+        let similar = similar_for_entity_type("METHOD").await;
+
+        assert!(
+            similar
+                .rows
+                .iter()
+                .any(|row| row.file_path == "src/util.rs"),
+            "an upper-case entity type must bind like a lower-case one, got: {:?}",
             similar.rows
         );
     }

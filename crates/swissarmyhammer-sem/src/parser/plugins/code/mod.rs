@@ -161,6 +161,20 @@ mod tests {
         assert_eq!(parsed.tree().root_node().kind(), "source_file");
     }
 
+    /// The roster is keyed by the dotted-LOWERCASE extension, and a repository
+    /// carries files spelled `.RS` or `.PY`. `parse_code` normalizes before it
+    /// looks up, so an uppercase path must reach the same grammar; without the
+    /// normalization the lookup misses and the file reads as "not parsed".
+    #[test]
+    fn parse_code_routes_an_uppercase_extension_to_the_same_grammar() {
+        let parsed = parse_code("src/lib.RS", "fn one() {}\n").expect("rust is in the roster");
+        assert_eq!(parsed.language(), "rust");
+
+        let mixed =
+            parse_code("app/Main.Py", "def one():\n    pass\n").expect("python is in the roster");
+        assert_eq!(mixed.language(), "python");
+    }
+
     #[test]
     fn parse_code_returns_none_for_an_extension_the_roster_does_not_map() {
         assert!(parse_code("notes.txt", "plain text\n").is_none());
