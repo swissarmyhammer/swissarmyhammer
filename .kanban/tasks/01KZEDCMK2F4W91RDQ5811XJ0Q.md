@@ -145,6 +145,45 @@ comments:
     - evidence: 20 files — apps/shelltool-cli/src/commands/doctor.rs, apps/swissarmyhammer-cli/src/commands/doctor/checks.rs, apps/swissarmyhammer-cli/src/logging.rs, crates/agent-client-protocol-extras/src/hook_settings.rs, crates/agent-client-protocol-extras/src/test_support.rs, crates/claude-agent/src/agent_prompt_handling.rs, crates/claude-agent/src/test_support.rs, crates/mirdan/src/agents.rs, crates/mirdan/src/auth.rs, crates/mirdan/src/test_support.rs, crates/swissarmyhammer-common/src/test_utils.rs, crates/swissarmyhammer-config/tests/integration/environment_variables_fixed.rs, crates/swissarmyhammer-config/tests/integration/integrations.rs, crates/swissarmyhammer-tools/Cargo.toml, crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, crates/swissarmyhammer-tools/tests/integration/mirdan_test_support.rs, crates/swissarmyhammer-tools/tests/integration/per_client_tool_composition.rs, crates/swissarmyhammer-tools/tests/integration/serve_time_bash_deny.rs, crates/swissarmyhammer-validators/src/validators/loader.rs. All 4 findings checked. Shell injection proved by RED then GREEN: `a_reply_with_shell_metacharacters_is_data_not_a_command` failed with "the reply's shell metacharacters ran as commands: /var/folders/.../pwned exists" before the fix and passes after. `cargo nextest run --workspace`: 13857 passed, 0 failed, 0 skipped (was 13852; +5 new tests). `cargo test --doc -p swissarmyhammer-common`: 24 passed. `cargo fmt` applied. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0.
     - next: /review
   timestamp: 2026-08-08T11:31:45.933413+00:00
+- actor: claude-code
+  id: 01kzgm2rs5q8kjcszp2kja0jdx
+  text: |
+    ### review — findings
+    - scope: `review sha HEAD~2..HEAD` — d99fb9021 (shell quoting) and e678615c4 (EnvVarGuard/PathGuard, 12 of 13 sites). The range touches 20 files because the guard routing reached every crate that carried a copy.
+    - engine counts: 36 findings, 36 confirmed, 29 refuted, 44 attempted, 0 failed, 1 file skipped for the prompt cap.
+    - recorded: 31 open findings. Dropped 5 under the standing test-code exception, each verified pre-existing and outside every hunk in this range: agents.rs:436, auth.rs:529, loader.rs:800, mirdan/test_support.rs:116, mirdan/test_support.rs:158.
+    - prior 4 findings confirmed genuinely resolved. SCRIPTED_TURN_TIMEOUT_SECS at agent_prompt_handling.rs:2422 used at :2428. sh_quote at :2438 is the POSIX `'` -> `'\''` transform, and every script operand reaches it through printf_json_line, so serde_json escapes newlines and control bytes before the shell layer sees them; printf `%s` does not reinterpret escapes in its argument. PathGuard/EnvVarGuard live once in swissarmyhammer-common::test_utils. PathGuard::prepend takes `impl AsRef<Path>` at test_utils.rs:358.
+    - the engine raised zero findings against the two files these commits authored, `crates/claude-agent/src/agent_prompt_handling.rs` and `crates/swissarmyhammer-common/src/test_utils.rs`. It raised nothing about the 13th unconverted site (^f7vd3ha).
+    - every open finding is on a pre-existing line in a file the guard routing touched, except `crates/claude-agent/src/test_support.rs:36`, which is the new `pub(crate) use` re-export this range wrote.
+    - next: work the 31 findings, then re-review.
+  timestamp: 2026-08-08T12:03:06.661291+00:00
+- actor: claude-code
+  id: 01kzgmar2emgmzrzr66wphz67d
+  text: |-
+    Worked the one finding of the 2026-08-08 06:36 section that belongs to this card, and moved the other 30 off it.
+
+    **The finding.** `crates/claude-agent/src/test_support.rs:36` — the new `pub(crate) use swissarmyhammer_common::test_utils::PathGuard;` re-export carried its ten explanatory lines as `//`, not `///`, so the text documented nothing.
+
+    Swept the whole file for the same cause, as a finding requires. The file holds two `pub(crate) use` re-exports, and both had the defect:
+
+    - the `PathGuard` block the finding names (ten lines, including the bare `//` separator line), and
+    - the `StateDirGuard` block above `command_args`, three lines, same mistake, not named by the engine.
+
+    Both are now `///`. `command_args` already had a correct `///` block. The `//!` header stays `//!` — that is the module doc and is correct.
+
+    The [`StateDirGuard`] intra-doc link inside the `PathGuard` block now resolves for real instead of sitting in an ignored comment. The module is `#[cfg(test)]`, so rustdoc never renders it; the value is that the doc-comment validator and any reader see the text attached to the item.
+
+    **The other 30 findings moved to ^k24scye** (untagged — general code quality, not `tool-validators`, so it cannot hold the tool-validators batch open). Every one of them is on a pre-existing line in `mirdan/src/agents.rs`, `mirdan/src/auth.rs`, `swissarmyhammer-tools` `kanban/mod.rs` and `shell/mod.rs`, or `swissarmyhammer-validators/src/validators/loader.rs`. Commit `e678615c4` routed env-guard call sites through those files, which put whole files in review scope; it did not write those lines. The reviewer confirmed the engine returned zero findings against the two files these commits actually authored — `agent_prompt_handling.rs` and `swissarmyhammer-common/src/test_utils.rs`. The new card carries all 30 word for word, grouped by file, with a note that later commits move the reported line numbers.
+
+    The description's 06:36 section now holds the single `test_support.rs:36` item, checked, plus one line pointing at ^k24scye. The older dated sections are untouched.
+  timestamp: 2026-08-08T12:07:28.078731+00:00
+- actor: claude-code
+  id: 01kzgmb0j92cp4cpepxaf9zndd
+  text: |-
+    ### implement — changed
+    - evidence: 1 source file — crates/claude-agent/src/test_support.rs. Both `pub(crate) use` re-exports (`StateDirGuard`, `PathGuard`) now carry `///` doc comments instead of `//`. `cargo fmt` applied. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0. `cargo nextest run -p claude-agent`: 1090 passed, 0 failed, 0 skipped. The 30 pre-existing findings moved to new card ^k24scye (untagged); ^811xj0q's newest findings section now holds only the checked `test_support.rs:36` item plus the pointer line.
+    - next: /review
+  timestamp: 2026-08-08T12:07:36.777275+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'review fleet: warm prefix reuse never engages — every fork runs cold'
@@ -183,3 +222,18 @@ Scope: `review file` on the seven files this card changed inside merge `76e9e916
 - [x] `crates/claude-agent/src/agent_prompt_handling.rs:2451` — The `reply` parameter is directly interpolated into a shell script via Rust format! without escaping. A single quote character in `reply` will terminate the single-quoted string context prematurely, allowing injection of arbitrary shell commands. Escape the `reply` parameter before interpolating it into the shell script. Either (1) validate that `reply` contains only safe characters (alphanumeric, spaces, basic punctuation) and reject any containing single quotes or shell metacharacters, or (2) use proper shell escaping such as replacing each single quote `'` with the sequence `'"'"'` to safely embed it within single-quoted strings.
 - [x] `crates/claude-agent/src/test_support.rs:37` — PathGuard reimplements an environment-variable save-and-restore pattern already implemented in 9+ locations across the codebase with 0.86–0.97 semantic similarity. This should be extracted to a shared location and imported, not duplicated. Extract a generic `EnvVarGuard` to `agent_client_protocol_extras::test_support` (the same crate that exports `StateDirGuard` per line 11), parameterized by variable name and value type. Replace this fresh `PathGuard` with a type alias or direct import of the shared guard, or extend the existing generic if one of the nine implementations can be generalized.
 - [x] `crates/claude-agent/src/test_support.rs:45` — Function parameter accepts &Path instead of impl AsRef<Path>, reducing flexibility for callers who might have PathBuf or want to pass owned values. Change signature to 'pub(crate) fn prepend(dir: impl AsRef<std::path::Path>) -> Self' and add 'let dir = dir.as_ref();' at the start of the function body to maintain the same implementation logic.
+
+## Review Findings (2026-08-08 06:36)
+
+Scope: `review sha HEAD~2..HEAD` — `d99fb9021` (shell quoting fix) and `e678615c4` (EnvVarGuard/PathGuard extraction, 12 of 13 sites routed). The guard extraction touches 20 files, so the range covers every crate the routing reached.
+
+The four findings from the 2026-08-08 05:50 section verify as genuinely resolved: `SCRIPTED_TURN_TIMEOUT_SECS` exists at `agent_prompt_handling.rs:2422` and is used at :2428; `sh_quote` at :2438 applies the POSIX `'` -> `'\''` transform and every script operand reaches it through `printf_json_line`, so `serde_json` neutralizes newlines and control bytes before the shell layer; `EnvVarGuard`/`PathGuard` live once in `swissarmyhammer-common::test_utils` with claude-agent re-exporting; `PathGuard::prepend` takes `impl AsRef<Path>` at `test_utils.rs:358`. The engine raised no finding against `agent_prompt_handling.rs` or `swissarmyhammer-common/src/test_utils.rs`.
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` — 364079 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+- [x] `crates/claude-agent/src/test_support.rs:36` — Public item `PathGuard` re-export lacks a doc comment. All public items (including `pub(crate)` re-exports) must have doc comments that start with `///` or `//!` to be picked up by documentation generation. Convert the preceding regular comments to doc comments by changing `//` to `///` on lines 26-35, or add a `///` doc comment immediately before line 36.
+
+The other 30 findings of this section moved to card ^k24scye. They sit on pre-existing lines in files that the env-guard routing only passed through, so they are not this card's work.
+
+Five further engine findings were dropped under the review skill's standing exception for refactoring test code that already existed, each confirmed pre-existing (outside every hunk in this range) and inside a `#[cfg(test)] mod tests` or a test-support assertion helper: `crates/mirdan/src/agents.rs:436`, `crates/mirdan/src/auth.rs:529`, `crates/swissarmyhammer-validators/src/validators/loader.rs:800`, `crates/mirdan/src/test_support.rs:116`, `crates/mirdan/src/test_support.rs:158`.
