@@ -174,6 +174,24 @@ mod fixture_template_tests {
             .to_path_buf()
     }
 
+    /// The directory each validator set keeps its tool-rule fixtures in.
+    const FIXTURES_DIR_NAME: &str = "fixtures";
+
+    /// Every `fixtures/` directory under `builtin/validators/`, one per set that
+    /// ships a tool rule.
+    ///
+    /// The sweep is over the sets on disk rather than a named list, so a set
+    /// added later — `manifests` was the second — is covered the day it lands.
+    fn shipped_fixture_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let sets = root.join("builtin/validators");
+        std::fs::read_dir(&sets)
+            .expect("read the shipped validator sets")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path().join(FIXTURES_DIR_NAME))
+            .filter(|fixtures| fixtures.is_dir())
+            .collect()
+    }
+
     /// A tool rule's fixture carries the defect the rule reports, so a fixture
     /// stored as source is a file the engine reviews — and the rule fires on
     /// the fixture built to make it fire. The `.tmpl` suffix is what stops
@@ -181,28 +199,29 @@ mod fixture_template_tests {
     #[test]
     fn no_rule_matches_a_shipped_fixture_template() {
         let root = repo_root();
-        let fixtures = root.join("builtin/validators/code-hygiene/fixtures");
 
         let mut checked = 0;
-        for entry in std::fs::read_dir(&fixtures).expect("read the shipped fixtures") {
-            let path = entry.expect("fixture entry").path();
-            if !path.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&root)
-                .expect("a fixture under the repository root")
-                .to_string_lossy()
-                .into_owned();
+        for fixtures in shipped_fixture_dirs(&root) {
+            for entry in std::fs::read_dir(&fixtures).expect("read the shipped fixtures") {
+                let path = entry.expect("fixture entry").path();
+                if !path.is_file() {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("a fixture under the repository root")
+                    .to_string_lossy()
+                    .into_owned();
 
-            let matched = match_rules(relative.clone(), Some(&root)).expect("match the rules");
-            let names: Vec<&str> = matched.iter().map(|set| set.name()).collect();
-            assert!(
-                names.is_empty(),
-                "a fixture must match no rule, or its own rule reports it; \
-                 {relative} matched {names:?}"
-            );
-            checked += 1;
+                let matched = match_rules(relative.clone(), Some(&root)).expect("match the rules");
+                let names: Vec<&str> = matched.iter().map(|set| set.name()).collect();
+                assert!(
+                    names.is_empty(),
+                    "a fixture must match no rule, or its own rule reports it; \
+                     {relative} matched {names:?}"
+                );
+                checked += 1;
+            }
         }
 
         assert!(checked > 0, "the shipped fixtures must not be empty");

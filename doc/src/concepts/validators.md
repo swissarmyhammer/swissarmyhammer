@@ -46,6 +46,13 @@ Prevents test cheating:
 
 - **No test cheating** — catches mocking of the thing under test, assertion-free tests, and other patterns that make tests pass without testing anything
 
+### Manifests
+
+Checks dependency manifests rather than source code, so it runs only when a
+manifest changed:
+
+- **Unused dependencies (Rust)** — flags a dependency a `Cargo.toml` declares that no source file of the package names
+
 ## How Validators Work
 
 The review pipeline collects the changed files, matches each validator's `match.files` globs against them, and runs the matching validators over the changes:

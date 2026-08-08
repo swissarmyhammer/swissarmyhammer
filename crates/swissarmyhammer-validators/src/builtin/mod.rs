@@ -171,7 +171,8 @@ mod tests {
         let names = PROBE_VALIDATORS
             .iter()
             .map(|(name, _)| *name)
-            .chain(MERGED_VALIDATORS.iter().copied());
+            .chain(MERGED_VALIDATORS.iter().copied())
+            .chain(std::iter::once(MANIFESTS_VALIDATOR));
 
         for name in names {
             let dir = base.join(name);
@@ -391,6 +392,112 @@ mod tests {
                 tool_rule.supersedes.names(),
                 superseded,
                 "{tool_rule_name} must supersede {superseded:?}"
+            );
+        }
+    }
+
+    // ========================================================================
+    // The manifests set
+    // ========================================================================
+
+    /// The builtin set that matches dependency manifests instead of source
+    /// code.
+    ///
+    /// `code-hygiene` matches `@file_groups/source_code`, which declares no
+    /// manifest pattern, so a finding naming a `Cargo.toml` is dropped there on
+    /// every path through the engine. This set is where such a rule reports.
+    const MANIFESTS_VALIDATOR: &str = "manifests";
+
+    /// The tool rules `manifests` carries. Each supersedes nothing: no shipped
+    /// prompt rule asks whether a declared dependency is used, so there is no
+    /// prompt rule to replace and no fallback to degrade to.
+    const MANIFESTS_TOOL_RULES: &[&str] = &["unused-dependencies-rust"];
+
+    /// A manifest path the set must match: the one at the repository root.
+    const ROOT_MANIFEST_PATH: &str = "Cargo.toml";
+
+    /// A manifest path the set must match: a workspace member's.
+    const MEMBER_MANIFEST_PATH: &str = "crates/swissarmyhammer-fields/Cargo.toml";
+
+    /// `manifests` carries exactly its tool rules, declares no probes, and each
+    /// rule carries a tool block and supersedes nothing.
+    ///
+    /// The empty `supersedes` is the load-bearing assertion. A tool rule that
+    /// names a prompt rule silences that rule for the files it matches; this
+    /// one replaces nothing, so a machine without `cargo machete` simply gets no
+    /// answer to the dependency question rather than a degraded one.
+    #[test]
+    fn test_manifests_loads_its_tool_rules_with_no_probes_and_no_supersedes() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset(MANIFESTS_VALIDATOR)
+            .expect("manifests should be loaded");
+
+        assert!(
+            ruleset.manifest.probes.is_empty(),
+            "manifests must declare no probes, got: {:?}",
+            ruleset.manifest.probes
+        );
+
+        let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            ruleset.rules.len(),
+            MANIFESTS_TOOL_RULES.len(),
+            "manifests should carry exactly its tool rules, got: {rule_names:?}"
+        );
+        for expected in MANIFESTS_TOOL_RULES {
+            let rule = ruleset
+                .rules
+                .iter()
+                .find(|rule| rule.name == *expected)
+                .unwrap_or_else(|| {
+                    panic!("manifests should carry the {expected} rule, got: {rule_names:?}")
+                });
+            assert!(
+                rule.tool.is_some(),
+                "{expected} must carry a tool block, or it is a prompt rule"
+            );
+            assert!(
+                rule.supersedes.names().is_empty(),
+                "{expected} must supersede nothing, got: {:?}",
+                rule.supersedes.names()
+            );
+        }
+    }
+
+    /// The set fires on the manifest at the repository root and on a workspace
+    /// member's manifest, and on nothing else.
+    ///
+    /// One pattern, `**/Cargo.toml`, carries both. The engine compiles file
+    /// patterns under `require_literal_separator: false`, so a leading `**/`
+    /// matches no directory as readily as several. A bare `Cargo.toml` literal
+    /// would reach the root manifest alone, which is why it is not the pattern.
+    #[test]
+    fn test_manifests_matches_root_and_member_manifests_only() {
+        use crate::validators::types::MatchContext;
+
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset(MANIFESTS_VALIDATOR)
+            .expect("manifests should be loaded");
+
+        for manifest in [ROOT_MANIFEST_PATH, MEMBER_MANIFEST_PATH] {
+            let yes = MatchContext::new().with_file(manifest);
+            assert!(
+                ruleset.matches(&yes),
+                "manifests should match the changed manifest '{manifest}'"
+            );
+        }
+
+        for other in ["src/app.py", "crates/swissarmyhammer-fields/src/lib.rs"] {
+            let no = MatchContext::new().with_file(other);
+            assert!(
+                !ruleset.matches(&no),
+                "manifests should NOT match the non-manifest file '{other}'"
             );
         }
     }

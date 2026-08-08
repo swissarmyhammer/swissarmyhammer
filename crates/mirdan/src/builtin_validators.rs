@@ -70,10 +70,13 @@ mod tests {
         // no-commented-code, function-length, complexity, missing-docs,
         // data-driven, dead-code) were merged into code-security and
         // code-hygiene. duplication/reuse/test-integrity keep their own probe
-        // (or test-file match) and were left whole.
+        // (or test-file match) and were left whole. `manifests` matches
+        // `**/Cargo.toml` rather than source code, which is why it is its own
+        // set and not a rule inside code-hygiene.
         for expected in [
             "code-security",
             "code-hygiene",
+            "manifests",
             "duplication",
             "reuse",
             "test-integrity",
@@ -211,71 +214,92 @@ mod tests {
         );
     }
 
+    /// The `manifests` fixtures. Two are Cargo manifests, because the rule
+    /// reports a manifest; the `lib.rs` support file beside them is the source
+    /// whose one named dependency makes the pass fixture pass.
+    const MANIFESTS_FIXTURES: &[&str] = &[
+        "unused-dependencies-rust.fail.toml.tmpl",
+        "unused-dependencies-rust.pass.toml.tmpl",
+        "lib.rs.tmpl",
+    ];
+
+    /// The `code-hygiene` fixtures, one pair for each of its tool rules plus
+    /// the package files a `workspace`-scope tool needs beside them.
+    const CODE_HYGIENE_FIXTURES: &[&str] = &[
+        "missing-docs-rust.fail.rs.tmpl",
+        "missing-docs-rust.pass.rs.tmpl",
+        "missing-docs-python.fail.py.tmpl",
+        "missing-docs-python.pass.py.tmpl",
+        "missing-docs-typescript.fail.ts.tmpl",
+        "missing-docs-typescript.pass.ts.tmpl",
+        "missing-docs-go.fail.go.tmpl",
+        "missing-docs-go.pass.go.tmpl",
+        "missing-docs-swift.fail.swift.tmpl",
+        "missing-docs-swift.pass.swift.tmpl",
+        "missing-docs-dart.fail.dart.tmpl",
+        "missing-docs-dart.pass.dart.tmpl",
+        "unused-code-go.fail.go.tmpl",
+        "unused-code-go.pass.go.tmpl",
+        "dead-code-rust.fail.rs.tmpl",
+        "dead-code-rust.pass.rs.tmpl",
+        "dead-code-typescript.fail.ts.tmpl",
+        "dead-code-typescript.pass.ts.tmpl",
+        "dead-code-python.fail.py.tmpl",
+        "dead-code-python.pass.py.tmpl",
+        "dead-code-dart.fail.dart.tmpl",
+        "dead-code-dart.pass.dart.tmpl",
+        "dead-code-swift.fail.swift.tmpl",
+        "dead-code-swift.pass.swift.tmpl",
+        "magic-numbers-python.fail.py.tmpl",
+        "magic-numbers-python.pass.py.tmpl",
+        "magic-numbers-typescript.fail.ts.tmpl",
+        "magic-numbers-typescript.pass.ts.tmpl",
+        "magic-numbers-go.fail.go.tmpl",
+        "magic-numbers-go.pass.go.tmpl",
+        "magic-numbers-swift.fail.swift.tmpl",
+        "magic-numbers-swift.pass.swift.tmpl",
+        "complexity-rust.fail.rs.tmpl",
+        "complexity-rust.pass.rs.tmpl",
+        "complexity-python.fail.py.tmpl",
+        "complexity-python.pass.py.tmpl",
+        "function-length-python.fail.py.tmpl",
+        "function-length-python.pass.py.tmpl",
+        "complexity-typescript.fail.ts.tmpl",
+        "complexity-typescript.pass.ts.tmpl",
+        "complexity-swift.fail.swift.tmpl",
+        "complexity-swift.pass.swift.tmpl",
+        "complexity-go.fail.go.tmpl",
+        "complexity-go.pass.go.tmpl",
+        "function-length-go.fail.go.tmpl",
+        "function-length-go.pass.go.tmpl",
+    ];
+
     /// The shipped tool rules' fixtures reach the store, so doctor can prove
     /// each rule healthy in an installed project.
+    ///
+    /// Every set that ships a tool rule is listed here. A set whose fixtures
+    /// never reach the store has every one of its rules reported fixture-less,
+    /// and each falls silently back to its prompt rule — or, for a rule that
+    /// supersedes nothing, to no rule at all.
     #[test]
     fn test_tool_rule_fixtures_are_embedded() {
         let sets = builtin_validators_by_set();
-        let code_hygiene_files = &sets["code-hygiene"];
 
-        for fixture in [
-            "missing-docs-rust.fail.rs.tmpl",
-            "missing-docs-rust.pass.rs.tmpl",
-            "missing-docs-python.fail.py.tmpl",
-            "missing-docs-python.pass.py.tmpl",
-            "missing-docs-typescript.fail.ts.tmpl",
-            "missing-docs-typescript.pass.ts.tmpl",
-            "missing-docs-go.fail.go.tmpl",
-            "missing-docs-go.pass.go.tmpl",
-            "missing-docs-swift.fail.swift.tmpl",
-            "missing-docs-swift.pass.swift.tmpl",
-            "missing-docs-dart.fail.dart.tmpl",
-            "missing-docs-dart.pass.dart.tmpl",
-            "unused-code-go.fail.go.tmpl",
-            "unused-code-go.pass.go.tmpl",
-            "dead-code-rust.fail.rs.tmpl",
-            "dead-code-rust.pass.rs.tmpl",
-            "dead-code-typescript.fail.ts.tmpl",
-            "dead-code-typescript.pass.ts.tmpl",
-            "dead-code-python.fail.py.tmpl",
-            "dead-code-python.pass.py.tmpl",
-            "dead-code-dart.fail.dart.tmpl",
-            "dead-code-dart.pass.dart.tmpl",
-            "dead-code-swift.fail.swift.tmpl",
-            "dead-code-swift.pass.swift.tmpl",
-            "magic-numbers-python.fail.py.tmpl",
-            "magic-numbers-python.pass.py.tmpl",
-            "magic-numbers-typescript.fail.ts.tmpl",
-            "magic-numbers-typescript.pass.ts.tmpl",
-            "magic-numbers-go.fail.go.tmpl",
-            "magic-numbers-go.pass.go.tmpl",
-            "magic-numbers-swift.fail.swift.tmpl",
-            "magic-numbers-swift.pass.swift.tmpl",
-            "complexity-rust.fail.rs.tmpl",
-            "complexity-rust.pass.rs.tmpl",
-            "complexity-python.fail.py.tmpl",
-            "complexity-python.pass.py.tmpl",
-            "function-length-python.fail.py.tmpl",
-            "function-length-python.pass.py.tmpl",
-            "complexity-typescript.fail.ts.tmpl",
-            "complexity-typescript.pass.ts.tmpl",
-            "complexity-swift.fail.swift.tmpl",
-            "complexity-swift.pass.swift.tmpl",
-            "complexity-go.fail.go.tmpl",
-            "complexity-go.pass.go.tmpl",
-            "function-length-go.fail.go.tmpl",
-            "function-length-go.pass.go.tmpl",
-        ] {
-            assert!(
-                code_hygiene_files
-                    .iter()
-                    .any(|(name, _)| *name == format!("code-hygiene/fixtures/{fixture}")),
-                "code-hygiene must embed the tool-rule fixture `fixtures/{fixture}`, got: {:?}",
-                code_hygiene_files
-                    .iter()
-                    .map(|(name, _)| name)
-                    .collect::<Vec<_>>()
-            );
+        let expected = [
+            ("code-hygiene", CODE_HYGIENE_FIXTURES),
+            ("manifests", MANIFESTS_FIXTURES),
+        ];
+        for (set, fixtures) in expected {
+            let files = &sets[set];
+            for fixture in fixtures {
+                assert!(
+                    files
+                        .iter()
+                        .any(|(name, _)| *name == format!("{set}/fixtures/{fixture}")),
+                    "{set} must embed the tool-rule fixture `fixtures/{fixture}`, got: {:?}",
+                    files.iter().map(|(name, _)| name).collect::<Vec<_>>()
+                );
+            }
         }
     }
 

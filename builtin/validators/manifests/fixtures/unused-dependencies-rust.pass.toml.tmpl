@@ -1,0 +1,29 @@
+# The passing fixture of `unused-dependencies-rust`: the same two dependency
+# kinds the failing fixture holds, and zero findings.
+#
+# `libc` is named by `lib.rs`, so it is used. `serde` is named by no fixture
+# source — exactly as in the failing fixture — and here the ignore list covers
+# it. So the pair reports one finding and then none, and the difference between
+# the two runs is the marker alone.
+#
+# That makes this file the proof that the marker suppresses. A machete release
+# that stopped reading `[package.metadata.cargo-machete] ignored`, or stopped
+# reading it through a trailing comment, fails this fixture and doctor takes the
+# rule out of the review.
+[package]
+name = "unused-dependencies-pass"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata.cargo-machete]
+ignored = ["serde"] # declared for a feature; no source names it
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+libc = "0.2"
+serde = "1"
+
+[workspace]

@@ -143,20 +143,22 @@ suppression the tool reads.
   named is real and is answered where it belongs — `--ignore-names` and
   `--ignore-decorators` in the run script for framework patterns, `__all__` for
   the exported surface, and `# noqa: V1xx` for one name at a time.
-- The **`cargo machete`** rejection stands. Unused dependencies are a manifest
-  question, and this set matches `@file_groups/source_code`, which declares no
-  manifest pattern. That is `dead-code-rust`'s one gap, and it is a set-scope
-  gap rather than a tool one.
+- The **`cargo machete`** rejection is superseded by the `manifests` set's
+  `unused-dependencies-rust` rule. The rejection was right that this set cannot
+  host the tool, and wrong to stop there: a set-scope gap is closed by a set.
+  `manifests` matches `Cargo.toml`, so a machete finding lands on a file the
+  engine keeps, and the rule runs the default mode rather than the
+  `--with-metadata` mode the misreporting half of the verdict measured.
 
 ## Tools measured and rejected
 
 Five candidates were rejected. Four were installed and run before the verdict;
 the fifth cannot be installed on the terms this set needs.
 
-Two of the five verdicts no longer hold. `knip` and `periphery` are marked
-superseded below, and the dead-code section above records what replaced each
-one. A superseded verdict is kept rather than deleted, so a reader can see what
-was measured, and when it stopped being the answer.
+Three of the five verdicts no longer hold. `cargo machete`, `knip` and
+`periphery` are marked superseded below, and the dead-code section above records
+what replaced each one. A superseded verdict is kept rather than deleted, so a
+reader can see what was measured, and when it stopped being the answer.
 
 ### `clippy::cognitive_complexity` — rejected
 
@@ -179,7 +181,7 @@ across this workspace, the mass of them sitting just over the gate.
 identical spans with and without the `log` feature, so the macro expansion
 never reaches it.
 
-### `cargo machete` — rejected
+### `cargo machete` — rejected, and the rejection is superseded by the `manifests` set
 
 Unused Rust dependencies. Rejected for two independent reasons.
 
@@ -197,6 +199,16 @@ feature-gated use either.
 
 Unused dependencies are a manifest question, not a source-code one. A validator
 set that matches manifests could host this tool; this set cannot.
+
+That last sentence is what happened. The `manifests` set matches `Cargo.toml`,
+and its `unused-dependencies-rust` rule hosts the tool. The misreporting half of
+the verdict was answered rather than argued away: it is a property of
+`--with-metadata`, and the rule runs the default mode, where neither `kanban-app`
+nor `mirdan-app` appears among the 141 findings on this workspace. The default
+mode's own blind spot — a dependency named by no source because a feature turns
+it on — is real, and it is what
+`[package.metadata.cargo-machete] ignored` is for. The rule's own file records
+both measurements.
 
 ### `knip` — rejected, and the rejection is superseded by `dead-code-typescript`
 

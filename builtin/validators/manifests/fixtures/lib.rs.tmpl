@@ -1,0 +1,13 @@
+//! The one source file both `unused-dependencies-rust` fixture manifests point
+//! their `[lib] path` at.
+//!
+//! It names `libc` and nothing else. That single fact carries the pair: `libc`
+//! is the used dependency both manifests declare, and `serde` is the unused one
+//! this file must never mention.
+
+/// The system page size, read through the one dependency this file names.
+pub fn page_size() -> i64 {
+    // SAFETY: `sysconf` takes an integer name and returns a `long`, and it is
+    // safe to call with any name; an unsupported name returns -1.
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) }
+}

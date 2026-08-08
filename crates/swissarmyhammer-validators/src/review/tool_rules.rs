@@ -1322,6 +1322,31 @@ mod tests {
         ("go", "function-length-go", SUPERSEDES_FUNCTION_LENGTH),
     ];
 
+    /// The builtin `manifests` set, the one that matches dependency manifests
+    /// rather than source code.
+    const MANIFESTS_SET: &str = "manifests";
+
+    /// The shipped unused-dependency tool rule for Rust, the one the pipeline
+    /// acceptance test drives end to end.
+    const RUST_UNUSED_DEPENDENCIES_RULE: &str = "unused-dependencies-rust";
+
+    /// What an unused-dependency tool rule supersedes: nothing.
+    ///
+    /// No shipped prompt rule asks whether a declared dependency is used, so
+    /// this group replaces no rule and degrades to no rule. A machine without
+    /// `cargo machete` gets no answer to the question rather than a worse one.
+    const SUPERSEDES_NOTHING: &[&str] = &[];
+
+    /// The name [`verify_shipped_tool_rules_pass_fixtures`] puts in its failure
+    /// messages for this group. Every other group is named for the prompt rule
+    /// it replaces; this one replaces none, so it is named for its own concern.
+    const UNUSED_DEPENDENCIES_RULE_KIND: &str = "unused-dependency";
+
+    /// Every shipped unused-dependency tool rule, with the project type it
+    /// serves and the prompt rules it supersedes.
+    const SHIPPED_UNUSED_DEPENDENCY_RULES: &[(&str, &str, &[&str])] =
+        &[("rust", RUST_UNUSED_DEPENDENCIES_RULE, SUPERSEDES_NOTHING)];
+
     /// A cargo package holding one undocumented public item and one documented
     /// one. `[workspace]` keeps cargo inside the temporary directory.
     const UNDOCUMENTED_PACKAGE_MANIFEST: &str = concat!(
@@ -1370,9 +1395,8 @@ mod tests {
 
     /// Executes `run` over `repo_root` and holds it to the report contract every
     /// shipped tool rule keeps: the pipeline breaks nothing, and it reports
-    /// exactly one finding in `path` — confirmed, attributed to the
-    /// `code-hygiene` set and to `rule`, carrying `claim_fragment` of the tool's
-    /// own message.
+    /// exactly one finding in `path` — confirmed, attributed to `set` and to
+    /// `rule`, carrying `claim_fragment` of the tool's own message.
     ///
     /// This is the half every shipped-rule acceptance test shares. The half
     /// above it — the probe repository, the work-list, and what the plan must
@@ -1381,6 +1405,7 @@ mod tests {
         run: &ToolRun,
         repo_root: &Path,
         path: &str,
+        set: &str,
         rule: &str,
         claim_fragment: &str,
     ) {
@@ -1403,7 +1428,7 @@ mod tests {
             outcome.findings()
         );
         assert!(findings[0].confirmed);
-        assert_eq!(findings[0].finding.validator, CODE_HYGIENE_SET);
+        assert_eq!(findings[0].finding.validator, set);
         assert_eq!(findings[0].finding.rule.as_deref(), Some(rule));
         assert!(
             findings[0].finding.claim.contains(claim_fragment),
@@ -1455,6 +1480,7 @@ mod tests {
             run,
             repo.path(),
             UNDOCUMENTED_LIB_PATH,
+            CODE_HYGIENE_SET,
             RUST_MISSING_DOCS_RULE,
             "missing documentation",
         );
@@ -1569,6 +1595,7 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
             run,
             repo.path(),
             COMPLEX_LIB_PATH,
+            CODE_HYGIENE_SET,
             RUST_COMPLEXITY_RULE,
             "too nested",
         );
@@ -1659,6 +1686,7 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
             run,
             repo.path(),
             UNREACHABLE_MODULE_PATH,
+            CODE_HYGIENE_SET,
             PYTHON_DEAD_CODE_RULE,
             "unreachable code after",
         );
@@ -1795,6 +1823,122 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         verify_shipped_tool_rules_pass_fixtures(
             SHIPPED_COMPLEXITY_RULES,
             COGNITIVE_COMPLEXITY_PROMPT_RULE,
+        );
+    }
+
+    /// Acceptance: every shipped unused-dependency tool rule passes its fixture
+    /// pair in doctor, and supersedes nothing.
+    ///
+    /// The pass fixture is the load-bearing half. It declares the same unused
+    /// dependency its fail fixture declares, and the only difference between
+    /// the two is `[package.metadata.cargo-machete] ignored`, so a machete
+    /// release that stopped reading that key — or stopped reading it through
+    /// the trailing comment the entry carries — makes the pair fail and takes
+    /// the rule out of the review.
+    #[test]
+    fn every_shipped_unused_dependency_tool_rule_passes_its_fixtures() {
+        verify_shipped_tool_rules_pass_fixtures(
+            SHIPPED_UNUSED_DEPENDENCY_RULES,
+            UNUSED_DEPENDENCIES_RULE_KIND,
+        );
+    }
+
+    /// A cargo package that uses one dependency and declares a second one no
+    /// source names. `[workspace]` keeps cargo inside the temporary directory.
+    const UNUSED_DEPENDENCY_PACKAGE_MANIFEST: &str = concat!(
+        "[package]\nname = \"unused-dependency-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        "\n[dependencies]\nlibc = \"0.2\"\nserde = \"1\"\n",
+        "\n[workspace]\n",
+    );
+
+    /// The library of [`UNUSED_DEPENDENCY_PACKAGE_MANIFEST`]. It names `libc`
+    /// and never `serde`, so `serde` is the one finding the rule must report.
+    const UNUSED_DEPENDENCY_LIB_RS: &str = concat!(
+        "//! A probe crate for the shipped Rust unused-dependency tool rule.\n\n",
+        "/// The system page size, read through the one dependency this file names.\n",
+        "pub fn page_size() -> i64 {\n",
+        "    unsafe { libc::sysconf(libc::_SC_PAGESIZE) }\n",
+        "}\n",
+    );
+
+    /// The manifest path inside the probe repository, as the work-list holds
+    /// it. This is the file the finding must land on — not the source file that
+    /// fails to name the dependency.
+    const UNUSED_DEPENDENCY_MANIFEST_PATH: &str = "Cargo.toml";
+
+    /// The library path inside the probe package.
+    const UNUSED_DEPENDENCY_LIB_PATH: &str = "src/lib.rs";
+
+    /// A one-validator work-list over `path` for the builtin `manifests` set,
+    /// naming its one tool rule.
+    fn manifests_work(path: &str, content: &str) -> WorkList {
+        WorkList::new(
+            "a declared dependency no source names",
+            vec![ValidatorWork::new(
+                MANIFESTS_SET,
+                RuleNames::new([RUST_UNUSED_DEPENDENCIES_RULE.to_string()]),
+                ProbeNames::new([]),
+                [FileWork::new(path, vec![], vec![], content, vec![])],
+            )],
+        )
+    }
+
+    /// Acceptance: the shipped Rust unused-dependency tool rule reports a
+    /// declared dependency no source names, on a real cargo package, through
+    /// the real `cargo machete` pipeline.
+    ///
+    /// This is the production path the fixture pair cannot reach. A fixture is
+    /// a manifest under a fixture name, which machete refuses to read, so the
+    /// script normalizes it into a temporary package; a real manifest is named
+    /// `Cargo.toml` and is scanned where it lies. Only a run over a real
+    /// package exercises that half, and only it proves the finding lands on the
+    /// manifest rather than on the source file.
+    ///
+    /// The run is asserted only when the rule planned one, the same condition
+    /// [`every_shipped_unused_dependency_tool_rule_passes_its_fixtures`]
+    /// applies: a missing tool degrades the rule and never blocks a review.
+    #[test]
+    fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join(UNUSED_DEPENDENCY_MANIFEST_PATH),
+            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(
+            repo.path().join(UNUSED_DEPENDENCY_LIB_PATH),
+            UNUSED_DEPENDENCY_LIB_RS,
+        )
+        .unwrap();
+        let loader = builtin_loader();
+        let work = manifests_work(
+            UNUSED_DEPENDENCY_MANIFEST_PATH,
+            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        );
+
+        let plan = plan_tool_rules(&work, &loader, &["rust"]);
+
+        let Some(run) = plan
+            .runs()
+            .iter()
+            .find(|run| run.rule() == RUST_UNUSED_DEPENDENCIES_RULE)
+        else {
+            return;
+        };
+        assert_eq!(
+            run.files(),
+            [UNUSED_DEPENDENCY_MANIFEST_PATH.to_string()],
+            "the run must carry the changed manifest, so the engine keeps the finding"
+        );
+
+        verify_run_reports_one_finding(
+            run,
+            repo.path(),
+            UNUSED_DEPENDENCY_MANIFEST_PATH,
+            MANIFESTS_SET,
+            RUST_UNUSED_DEPENDENCIES_RULE,
+            "unused dependency `serde`",
         );
     }
 

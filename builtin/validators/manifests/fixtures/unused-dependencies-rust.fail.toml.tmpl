@@ -1,0 +1,24 @@
+# The failing fixture of `unused-dependencies-rust`: a package manifest
+# declaring a dependency no source of the package names.
+#
+# `libc` is named by `lib.rs`, so it is not reported. `serde` is named by no
+# fixture source, and no ignore list covers it, so `cargo machete` reports
+# exactly one finding here.
+#
+# `[workspace]` stops cargo from joining any workspace above the scratch
+# directory, and `[lib] path` reaches the source beside this file — the fixture
+# directory is flat, because doctor materializes only its top level.
+[package]
+name = "unused-dependencies-fail"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+libc = "0.2"
+serde = "1"
+
+[workspace]
