@@ -523,6 +523,121 @@ comments:
     - Diff scope confirmed: only `crates/mirdan/src/list.rs`, one line, `#[derive(Debug, Clone)]` → `#[derive(Debug, Clone, PartialEq, Eq)]`. No other files touched. No fixes needed.
     - next: ready for review.
   timestamp: 2026-08-08T07:58:34.825863+00:00
+- actor: claude-code
+  id: 01kzg6rx4sgn4p55z90v6wpztg
+  text: |
+    ### review — findings
+    - evidence: 1 finding (1 confirmed, 1 refuted, 9 validators attempted, 0 failed, 0 skipped) — crates/mirdan/src/list.rs:572
+    - scope: `review sha HEAD~2..HEAD` — commits 974b28696 (one-line derive change in list.rs) and 040af42b1 (board data only). Iteration-4 delta only, not the accumulated task diff.
+    - prior findings: all 37 items in the three earlier `## Review Findings` sections are checked, and each was independently re-verified against the working tree. Every one is genuinely resolved. Notable confirmations: the nextest retry is now narrowed to the single test with evidence (`.config/nextest.toml:127-128`) and the four-binary blanket retry is gone; the model-loader double mitigation is resolved down to the 30s timeout alone; `discover_packages` is 32 lines with max nesting 1, driven by the static `PackageSpec` table and one generic `Scan::walk`; `sync()` is 24 lines with max nesting 1; zero raw `set_current_dir` calls remain in crates/mirdan, all CWD mutation goes through the self-serializing `CurrentDirGuard`.
+    - loop health: this finding does NOT reopen either shape rejected in rounds 2 and 3. Round 2 rejected the monolithic `discover_packages`; round 3 rejected the five near-identical per-type helpers that the round-2 fix produced; the round-3 fix (one parameterized walk over static `PackageSpec` data) still stands and is untouched by this finding. The new finding concerns a different, 7-line helper duplicated across two files.
+    - caution for the implementer: the finding offers two options. Take the FIRST — move `merge_targets` to a shared location and call it from both `crates/mirdan/src/list.rs` and `crates/mirdan/src/install/profile.rs`. Do NOT take the second option (inline it back into `merge_packages`): that would directly reverse the round-1 finding at the old `list.rs:443`, which required extracting the target-merge loop out of `merge_packages` to cut its nesting depth. The shared-location option satisfies both rounds at once, so there is no contradiction and no reason to stop.
+    - next: implement the shared-location fix for `merge_targets`, then re-review.
+  timestamp: 2026-08-08T08:10:31.961446+00:00
+- actor: claude-code
+  id: 01kzg6wzzcx0py0xjm38282wqr
+  text: |
+    ### finish iteration 4 — findings
+    - implement: changed — 1 file, 1 line. `InstalledPackage` gained `PartialEq` and `Eq`.
+    - test: green — cargo nextest run --workspace twice, 13783 passed / 0 failed / 0 skipped each, no retry fired; fmt, clippy -D warnings clean
+    - commit: 974b28696 fix(mirdan): derive PartialEq, Eq for InstalledPackage (^qh5fnpd); 040af42b1 chore(kanban): record iteration-4 checkpoint, file ^7mk3pnp
+    - review: findings — 1 open. crates/mirdan/src/list.rs:572
+    - engine counts: 1 confirmed, 1 refuted, 9 attempted, 0 failed
+
+    Finding count per round: 28, then 7, then 1, then 1. The card is converging.
+
+    The root defect is confirmed closed: zero raw `set_current_dir` calls remain in `crates/mirdan`, and every working-directory change goes through `CurrentDirGuard` and its process-global mutex.
+
+    **Implementer caution, from the reviewer.** The finding offers two fixes and only one is safe. Move `merge_targets` to a shared location and call it from both `crates/mirdan/src/list.rs:572` and `crates/mirdan/src/install/profile.rs:669`. Do NOT inline it back into `merge_packages` — that reverses the round-1 finding which required extracting that loop to cut `merge_packages` nesting depth, and it starts a fifth round.
+  timestamp: 2026-08-08T08:12:45.932004+00:00
+- actor: claude-code
+  id: 01kzg74ar6s6a63nd87neap2ps
+  text: |-
+    Round-5 research, before any edit.
+
+    The one open finding names `crates/mirdan/src/list.rs:572`. Both copies confirmed:
+
+    - `crates/mirdan/src/list.rs:573` — `fn merge_targets(existing: &mut InstalledPackage, targets: Vec<String>)`. One call site, `merge_packages` at line 563.
+    - `crates/mirdan/src/install/profile.rs:670` — `fn merge_targets(targets: &mut Vec<String>, new: Vec<String>)`. One call site, `install_profile_items` at line 405.
+
+    The two bodies are the same loop. The signatures differ only in that the `list.rs` copy reaches through `InstalledPackage` to the `targets` field.
+
+    **Where the shared function goes.** I checked the modules both files already import: `crate::agents`, `crate::mcp_config`, `crate::registry`, `crate::store`. `crate::agents` looked like the fit at first, because `profile.rs` merges agent names and `agents` already owns `resolve_target_agents`. It is the wrong home. `list.rs` also puts store location labels in `targets` — `"global"`, `"project"`, and `"~/<label>"` (see `skill_store_scan` at line 132 and the label pair at line 175) — so the values are not all agent names. None of the four shared modules is an honest home.
+
+    The finding text itself sanctions the alternative: "Move merge_targets to a shared location (such as a common module in mirdan/src/common or install/mod.rs)". So a small new module is the sanctioned choice, not an invention.
+
+    **Sweep for other copies of the same loop.** `rg 'contains\(&' crates/mirdan/src/` returns three hits total:
+
+    1. `list.rs:575` — the named copy.
+    2. `install/profile.rs:672` — the named copy.
+    3. `status.rs:594` — `mcp_server_installed` builds an MCP config key probe order and appends the three fallback keys `["mcpServers", "servers", "mcp_servers"]`, skipping any already present. Same loop body, different value type (`Vec<&str>`, not `Vec<String>`).
+
+    That third one is a copy of the same merge loop, so it is in scope for the sweep and will route through the shared function too. A generic function over `T: PartialEq` serves all three.
+
+    **Existing coverage.** Neither helper has a direct unit test. `list.rs::test_merge_packages` (line 616) covers the `list.rs` copy indirectly by merging two packages that carry one target each and asserting the merged package carries two. Nothing covers the duplicate-skipping branch directly, so the shared function gets its own tests.
+
+    **Not doing.** I will not take the finding's second option (inline the loop back into `merge_packages`). That reverses the round-1 finding at the old `list.rs:443`, which required extracting the loop to cut `merge_packages` nesting depth.
+  timestamp: 2026-08-08T08:16:46.342647+00:00
+- actor: claude-code
+  id: 01kzg8m6bymxh9h2bdy965kms5
+  text: |-
+    Round-5 implementation landed. The one open finding is resolved and checked.
+
+    **What changed.** `merge_targets` now lives in one place, as a new module `crates/mirdan/src/merge.rs` holding `pub fn merge_unique<T: PartialEq>(existing: &mut Vec<T>, incoming: impl IntoIterator<Item = T>)`. Both duplicated copies are deleted and all call sites route through it.
+
+    The generic signature is not decoration. The `rust/api-design` rule states: "**Accept generics, not concrete types.** `&str` not `&String`, `&[T]` not `&Vec<T>`, `impl IntoIterator` not `&Vec<T>`, `AsRef<Path>` not `&PathBuf`." `impl IntoIterator<Item = T>` obeys that, and it is what lets the `status.rs` call pass a `[&str; 3]` array directly.
+
+    Three call sites, from the sweep recorded in the previous comment:
+
+    - `crates/mirdan/src/list.rs` — `merge_packages` now calls `merge_unique(&mut existing.targets, pkg.targets)`. The helper stays extracted, so the round-1 finding at the old `list.rs:443` is not reversed. `merge_packages` keeps its nesting depth.
+    - `crates/mirdan/src/install/profile.rs` — `install_profile_items` now calls `merge_unique(&mut targets, deployed)`.
+    - `crates/mirdan/src/status.rs` — `mcp_server_installed` replaced its inline dedupe-append loop with `merge_unique(&mut keys, ["mcpServers", "servers", "mcp_servers"])`, cutting five lines to one.
+
+    Zero copies of the merge loop remain in the crate.
+
+    **TDD.** Written test-first. The module first carried `merge_unique` with a no-op body, and `cargo nextest run -p mirdan --lib merge::` reported 6 tests run, 2 passed, 4 failed — each failure for the right reason, an unappended list. Filling in the loop turned all six green. The two that passed against the stub assert that nothing is added (the duplicate case and the empty-incoming case), so they hold trivially against a no-op; the other four carry the weight.
+
+    **Verification, all from a clean tree at HEAD 040af42b1.**
+
+    - `cargo nextest run -p mirdan` — 441 passed, 0 failed, 0 skipped. That is 6 more than the previous round's 435, exactly the new `merge` tests.
+    - `cargo fmt --check` — clean, exit 0.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — clean, exit 0.
+    - `cargo nextest run --workspace` — 13789 run, 13788 passed, 1 failed, 0 skipped. The one failure is the known unrelated flake `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes`, card ^7mk3pnp. Not touched, no retry added. It passes when run alone, and `cargo tree -p claude-agent -i mirdan` errors with "package ID specification `mirdan` did not match any packages" — `claude-agent` has no path to this change at all.
+
+    **Review-engine verification, `review file` on each touched file.**
+
+    - `crates/mirdan/src/list.rs` — 1 finding, 1 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped.
+    - `crates/mirdan/src/install/profile.rs` — 2 findings, 2 confirmed, 1 refuted, 9 attempted, 0 failed, 0 skipped.
+    - `crates/mirdan/src/status.rs` — 0 findings, 0 confirmed, 1 refuted, 9 attempted, 0 failed, 0 skipped.
+
+    **The `merge_targets` row is gone from every file, and no cognitive-complexity row appears in any of them.** The finding this card carried is resolved.
+
+    **Read the remaining rows carefully — they are not this card's finding, and they are not new damage.** `review file` reads the whole file, not the diff, so it reports pre-existing code the change never touched. All three are proven pre-existing:
+
+    - `list.rs:518` — `parse_frontmatter` duplicates `mcp_config::parse_yaml_frontmatter`. Both last changed in commit 375d20b16 on 2026-05-15, months before this card opened.
+    - `profile.rs:112` — `Profile` has 4 `Option` fields and no builder.
+    - `profile.rs:886` — the `install_profile_mcp` doc comment carries text about edit-redirect that describes other work.
+
+    `git diff -U0` confirms the change touched only an import line, one call line, and a deleted helper in each of the three files. None of those three rows sits in the diff.
+
+    Per the instruction to keep this change contained and refactor nothing the finding does not name, they are filed instead of fixed:
+
+    - ^dx797t0 — mirdan: unify the two YAML frontmatter parsers in list.rs and mcp_config.rs
+    - ^3q3vstp — mirdan: give Profile a builder, and fix the wrong doc comment on install_profile_mcp
+
+    ### implement — changed
+    - evidence: 5 files — `crates/mirdan/src/merge.rs` (new, holds the shared `merge_unique` plus 6 tests), `crates/mirdan/src/lib.rs` (registers `pub mod merge`), `crates/mirdan/src/list.rs`, `crates/mirdan/src/install/profile.rs`, `crates/mirdan/src/status.rs`. Suite `cargo nextest run --workspace` 13788/13789 passed, the one failure the known flake ^7mk3pnp. fmt and clippy `-D warnings` clean. Review engine: list.rs 1 finding / 9 attempted, profile.rs 2 findings / 9 attempted, status.rs 0 findings / 9 attempted — no merge_targets duplication row and no cognitive-complexity row in any of them; every remaining row is pre-existing and filed as ^dx797t0 and ^3q3vstp.
+    - next: /review
+  timestamp: 2026-08-08T08:42:54.718707+00:00
+- actor: claude-code
+  id: 01kzg9fewt9axky2z0pvj0hsvp
+  text: |-
+    ### test — green
+    - evidence: `cargo nextest run --workspace` — 13789 tests run, 13789 passed, 0 failed, 0 skipped (1 leaky, pre-existing, in `model-context-protocol-extras`, unrelated to this change). `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - known flake `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes` (tracked on ^7mk3pnp): passed on both full-workspace runs done here (line 686 of run 1, and confirmed again on a second full run). It did not fail either time, so it was not the sole failure and did not need isolation re-verification.
+    - No retry fired. Checked the full nextest log for `RETRY`/`FAIL`/`ERROR`/`TIMEOUT`/`ABORT` markers — none present. (Note: `.config/nextest.toml` has a pre-existing scoped `retries = 2` override for a different, unrelated test — `swissarmyhammer-diagnostics::diagnose_reports_target_and_broken_dependent_not_clean` — which did not need to retry in this run either.)
+    - next: none — merge.rs extraction is green.
+  timestamp: 2026-08-08T08:57:48.186341+00:00
 position_column: doing
 position_ordinal: '8480'
 title: mirdan lib tests fail at random under parallel execution
@@ -588,3 +703,7 @@ This is pre-existing. It was found while shipping the dead-code tool rules (^tee
 ## Review Findings (2026-08-08 02:15)
 
 - [x] `crates/mirdan/src/list.rs:17` — InstalledPackage is a public data struct whose fields all support PartialEq and Eq (String, Vec, PackageType), making these traits applicable. Deriving them allows downstream crates to compare packages for equality without reimplementing the trait. Due to orphan rules, if not provided here, downstream crates cannot add these traits. Change line 17 from `#[derive(Debug, Clone)]` to `#[derive(Debug, Clone, PartialEq, Eq)]`.
+
+## Review Findings (2026-08-08 03:02)
+
+- [x] `crates/mirdan/src/list.rs:572` — merge_targets reimplements the same target-merging logic that already exists in install/profile.rs::merge_targets. Both functions have identical names and identical purpose (deduplicating merge of string vectors into an existing package), but the code is duplicated instead of reused. Move merge_targets to a shared location (such as a common module in mirdan/src/common or install/mod.rs) and call it from both list.rs and profile.rs, or inline the simple merge logic directly into merge_packages since it has only one call site in list.rs and the operation is straightforward.

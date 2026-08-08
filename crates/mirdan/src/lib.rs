@@ -48,6 +48,8 @@ pub mod list;
 pub mod lockfile;
 /// MCP configuration file management for tool deployment.
 pub mod mcp_config;
+/// Order-preserving, duplicate-free extension of a list.
+pub mod merge;
 /// Scaffolding for a new skill, validator, tool, or plugin package.
 pub mod new;
 /// Checking for and applying package updates.

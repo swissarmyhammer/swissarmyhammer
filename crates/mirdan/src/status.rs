@@ -20,6 +20,7 @@ use crate::agents::{
     agent_project_settings_file, agent_project_skill_dir, AgentDef, AgentsConfig,
 };
 use crate::install::SUPERSEDED_NATIVE_DENY_TOOLS;
+use crate::merge::merge_unique;
 use crate::registry::RegistryError;
 use crate::table;
 
@@ -590,11 +591,7 @@ pub fn mcp_server_installed(path: &Path, servers_key: Option<&str>) -> bool {
     if let Some(key) = servers_key {
         keys.push(key);
     }
-    for fallback in ["mcpServers", "servers", "mcp_servers"] {
-        if !keys.contains(&fallback) {
-            keys.push(fallback);
-        }
-    }
+    merge_unique(&mut keys, ["mcpServers", "servers", "mcp_servers"]);
     for key in keys {
         if let Some(server) = root.get(key).and_then(|s| s.get("sah")) {
             if is_sah_command(server) {

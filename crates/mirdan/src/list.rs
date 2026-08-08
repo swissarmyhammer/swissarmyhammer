@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{self, agent_project_skill_dir, DetectedAgent};
 use crate::lockfile::Lockfile;
 use crate::mcp_config;
+use crate::merge::merge_unique;
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::store;
@@ -560,22 +561,13 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
 
     for pkg in packages {
         match merged.iter_mut().find(|p| p.name == pkg.name) {
-            Some(existing) => merge_targets(existing, pkg.targets),
+            Some(existing) => merge_unique(&mut existing.targets, pkg.targets),
             None => merged.push(pkg),
         }
     }
 
     merged.sort_by(|a, b| a.name.cmp(&b.name));
     merged
-}
-
-/// Add every target `existing` does not already carry.
-fn merge_targets(existing: &mut InstalledPackage, targets: Vec<String>) {
-    for target in targets {
-        if !existing.targets.contains(&target) {
-            existing.targets.push(target);
-        }
-    }
 }
 
 #[cfg(test)]

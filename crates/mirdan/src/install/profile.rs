@@ -21,6 +21,7 @@ use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
 use crate::mcp_config::{self, McpServerEntry};
+use crate::merge::merge_unique;
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -402,7 +403,7 @@ fn install_profile_items<T>(
             root,
             kind.is_skill,
         )?;
-        merge_targets(&mut targets, deployed);
+        merge_unique(&mut targets, deployed);
     }
 
     // Drop a discovery README at the store root so a user browsing the store
@@ -663,15 +664,6 @@ fn stage_and_deploy_rendered(
         deploy_skill_to_agents_at(name, &item_dir, None, global, root)
     } else {
         deploy_agent_to_agents_at(name, &item_dir, None, global, root)
-    }
-}
-
-/// Append `new` targets to `targets`, skipping duplicates (preserving order).
-fn merge_targets(targets: &mut Vec<String>, new: Vec<String>) {
-    for target in new {
-        if !targets.contains(&target) {
-            targets.push(target);
-        }
     }
 }
 
