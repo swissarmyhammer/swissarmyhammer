@@ -76,8 +76,18 @@ comments:
     - scoped verification: `crates/swissarmyhammer-code-context` alone — 670/670 tests pass, clippy clean, fmt clean.
     - next: none
   timestamp: 2026-08-08T14:32:46.947099+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kzgwz020vqcz1dnewy69txr4
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — find_duplicates.rs: DEFAULT_* module constants + Default impl, Clone on FindDuplicatesResult, TEST_* constants at every threshold site; findings 1-6 fixed, finding 7 tracked by ^gsm2fq8
+    - test: green — cargo nextest --workspace 13862 passed, 0 failed; clippy -D warnings clean; fmt clean
+    - commit: 11f8440dc
+    - review: clean — 0 findings, 0 failed, 0 skipped (fresh sah server via stdio; counts: 4 candidates all refuted)
+    - note: reviews ran out-of-process against the freshly installed binary because this session's MCP server is stale ("unknown probe 'assertion-census'"); reconnect the sah MCP server before the next in-session review
+  timestamp: 2026-08-08T14:38:20.224151+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffcb80
 title: duplicates probe cannot see duplication inside one file
 ---
 `find_duplicates_in` in `crates/swissarmyhammer-code-context/src/ops/find_duplicates.rs` splits the corpus into `source_chunks_list` and `other_chunks` by `chunk.file_path == file` (lines 136-140). It compares the source file only against other files. It can never report two duplicate blocks in the same file.
