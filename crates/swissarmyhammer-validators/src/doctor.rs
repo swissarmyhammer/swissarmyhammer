@@ -1158,8 +1158,11 @@ Python only.
             tool_row.message
         );
         assert!(
-            tool_row.message.contains("missing-docs"),
-            "a missing tool row must name the prompt rule that runs instead; got '{}'",
+            tool_row
+                .message
+                .contains("prompt rule 'missing-docs' runs instead"),
+            "a missing tool row must name the one prompt rule that runs instead, \
+             with the noun and verb agreeing with that count; got '{}'",
             tool_row.message
         );
         let fix = tool_row.fix.as_deref().expect("install fix");

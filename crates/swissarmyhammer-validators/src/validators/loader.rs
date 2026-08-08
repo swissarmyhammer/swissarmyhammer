@@ -192,7 +192,7 @@ impl ValidatorLoader {
 
     /// Parse content as a validator and insert into the collection.
     fn parse_and_insert_validator(&mut self, content: &str, path: &Path, source: ValidatorSource) {
-        match parse_validator_with_expansion(content, path.to_path_buf(), source, &self.expander) {
+        match parse_validator_with_expansion(content, path, source, &self.expander) {
             Ok(validator) => {
                 tracing::debug!(
                     "Loaded validator '{}' from {} ({})",
@@ -256,11 +256,11 @@ impl ValidatorLoader {
 
     /// Add a builtin validator from embedded content.
     pub fn add_builtin(&mut self, name: &str, content: &str) {
-        use std::path::PathBuf;
+        let path = PathBuf::from(format!("builtin:/{}.md", name));
 
         match parse_validator_with_expansion(
             content,
-            PathBuf::from(format!("builtin:/{}.md", name)),
+            &path,
             ValidatorSource::Builtin,
             &self.expander,
         ) {

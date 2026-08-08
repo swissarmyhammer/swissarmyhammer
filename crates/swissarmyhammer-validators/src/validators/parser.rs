@@ -154,7 +154,7 @@ where
 /// A parsed `Validator` or an error if parsing fails.
 pub fn parse_validator(
     content: &str,
-    path: PathBuf,
+    path: &Path,
     source: ValidatorSource,
 ) -> Result<Validator, AvpError> {
     parse_validator_internal(
@@ -186,7 +186,7 @@ pub fn parse_validator(
 /// `file_groups/source_code.yaml`.
 pub fn parse_validator_with_expansion<C: DirectoryConfig>(
     content: &str,
-    path: PathBuf,
+    path: &Path,
     source: ValidatorSource,
     expander: &YamlExpander<C>,
 ) -> Result<Validator, AvpError> {
@@ -199,7 +199,7 @@ const SOURCE_CODE_PATTERNS_PATH: &str = "file_groups/source_code";
 /// Internal implementation that optionally expands includes.
 fn parse_validator_internal<C: DirectoryConfig>(
     content: &str,
-    path: PathBuf,
+    path: &Path,
     source: ValidatorSource,
     expander: Option<&YamlExpander<C>>,
 ) -> Result<Validator, AvpError> {
@@ -212,7 +212,7 @@ fn parse_validator_internal<C: DirectoryConfig>(
     }
 
     // Split on frontmatter delimiters
-    let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
+    let (frontmatter_str, body) = extract_frontmatter(content, path)?;
 
     // Render, parse, expand, and deserialize the frontmatter
     let mut frontmatter: ValidatorFrontmatter = parse_frontmatter_block(
@@ -234,13 +234,13 @@ fn parse_validator_internal<C: DirectoryConfig>(
     });
 
     // Apply sensible defaults (name from file stem, description, source code file patterns)
-    frontmatter.apply_defaults(&path, source_code_patterns.as_deref());
+    frontmatter.apply_defaults(path, source_code_patterns.as_deref());
 
     Ok(Validator {
         frontmatter,
         body: body.to_string(),
         source,
-        path,
+        path: path.to_path_buf(),
     })
 }
 
@@ -650,7 +650,7 @@ This is the body of the validator.
 "#;
 
         let validator =
-            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
+            parse_validator(content, Path::new("test.md"), ValidatorSource::Builtin).unwrap();
 
         assert_eq!(validator.name(), "test-validator");
         assert_eq!(validator.description(), "A test validator");
@@ -676,7 +676,7 @@ Body content.
 "#;
 
         let validator =
-            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::User).unwrap();
+            parse_validator(content, Path::new("test.md"), ValidatorSource::User).unwrap();
 
         let match_criteria = validator.frontmatter.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.tools, vec!["Write", "Edit"]);
@@ -699,7 +699,7 @@ Body.
 "#;
 
         let validator =
-            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Project).unwrap();
+            parse_validator(content, Path::new("test.md"), ValidatorSource::Project).unwrap();
 
         assert_eq!(
             validator.frontmatter.tags,
@@ -713,7 +713,7 @@ Body.
 
         let validator = parse_validator(
             content,
-            PathBuf::from("/validators/code-quality.md"),
+            Path::new("/validators/code-quality.md"),
             ValidatorSource::User,
         )
         .unwrap();
@@ -740,7 +740,7 @@ This is actually the body since there's no closing delimiter.
 
         let validator = parse_validator(
             content,
-            PathBuf::from("my-validator.md"),
+            Path::new("my-validator.md"),
             ValidatorSource::Project,
         )
         .unwrap();
@@ -761,7 +761,7 @@ description: broken
 Body.
 "#;
 
-        let result = parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin);
+        let result = parse_validator(content, Path::new("test.md"), ValidatorSource::Builtin);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -780,7 +780,7 @@ Body.
 "#;
 
         let validator =
-            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
+            parse_validator(content, Path::new("test.md"), ValidatorSource::Builtin).unwrap();
 
         // Default timeout
         assert_eq!(
@@ -803,7 +803,7 @@ Minimal body.
 
         let validator = parse_validator(
             content,
-            PathBuf::from("/path/to/my-custom-validator.md"),
+            Path::new("/path/to/my-custom-validator.md"),
             ValidatorSource::Project,
         )
         .unwrap();
@@ -821,7 +821,7 @@ Body.
 "#;
 
         let validator =
-            parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
+            parse_validator(content, Path::new("test.md"), ValidatorSource::Builtin).unwrap();
 
         assert_eq!(validator.description(), "Validator: check-types");
     }
@@ -835,12 +835,8 @@ Body.
 Check that the code is correct.
 "#;
 
-        let validator = parse_validator(
-            content,
-            PathBuf::from("code-review.md"),
-            ValidatorSource::User,
-        )
-        .unwrap();
+        let validator =
+            parse_validator(content, Path::new("code-review.md"), ValidatorSource::User).unwrap();
 
         assert_eq!(validator.name(), "code-review");
         assert_eq!(validator.description(), "Validator: code-review");
@@ -874,7 +870,7 @@ Body.
 
         let validator = parse_validator_with_expansion(
             content,
-            PathBuf::from("test.md"),
+            Path::new("test.md"),
             ValidatorSource::Builtin,
             &expander,
         )
@@ -924,7 +920,7 @@ Body.
 
         let validator = parse_validator_with_expansion(
             content,
-            PathBuf::from("test.md"),
+            Path::new("test.md"),
             ValidatorSource::Builtin,
             &expander,
         )
@@ -1010,7 +1006,7 @@ Body.
 "#;
         let validator = parse_validator(
             content,
-            PathBuf::from("test-validator.md"),
+            Path::new("test-validator.md"),
             ValidatorSource::Builtin,
         )
         .unwrap();
@@ -1433,7 +1429,7 @@ This validator does not apply to test code.
         let content = "---\nname: test\n---\nBody.";
         let result = parse_validator(
             content,
-            PathBuf::from("/validators/_partials/common.md"),
+            Path::new("/validators/_partials/common.md"),
             ValidatorSource::Builtin,
         );
         assert!(result.is_err());
@@ -1447,7 +1443,7 @@ This validator does not apply to test code.
         let content = "{% partial %}\n\nThis is a partial.";
         let result = parse_validator(
             content,
-            PathBuf::from("some-validator.md"),
+            Path::new("some-validator.md"),
             ValidatorSource::Builtin,
         );
         assert!(result.is_err());
