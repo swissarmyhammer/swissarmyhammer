@@ -55,8 +55,46 @@ comments:
     - evidence: 22 files — 5 new rules (`dead-code-{rust,typescript,python,dart,swift}.md`), `unused-code-go.md` and `dead-code.md` rewritten, `unreachable-code-python.md` deleted; 11 new fixtures + `unused-code-go.pass.go.tmpl` and `lib.rs.tmpl` amended, 2 fixtures deleted; `builtin/validators/README.md` and `code-hygiene/VALIDATOR.md`; 3 rosters (`tool_rules.rs`, `builtin/mod.rs`, `mirdan/builtin_validators.rs`). Tests: validators lib 526 pass, mirdan lib 501 pass, cli doctor 17 pass, tools review integration 11 pass, clippy `-D warnings` clean. RED proven 8 ways and restored to GREEN.
     - next: /review
   timestamp: 2026-08-08T17:47:06.426093+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzh8av68bj684x8m751pxjf2
+  text: |-
+    ### commit — changed
+    - evidence: 6e5342c26 feat(validators): make dead-code detection deterministic, supersede prompt rule (^0v7nysz), 33 files changed
+    - next: none
+  timestamp: 2026-08-08T17:57:02.792120+00:00
+- actor: claude-code
+  id: 01kzh8k4z7tg9gq693wq5237mh
+  text: |-
+    ### review — clean
+    - evidence: `review sha e0fbaf42e..6e5342c26` — 0 findings, 0 confirmed, 7 refuted, 9 attempted, 0 failed, 0 skipped. No prior review section, no unchecked items.
+    - next: none — card moved to done
+  timestamp: 2026-08-08T18:01:34.951145+00:00
+- actor: claude-code
+  id: 01kzh8m68w0fezzg1jv1e4tkak
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 22 files; 5 new rules, 2 rewritten, 1 deleted, 11 new fixtures, 2 deleted, 2 amended, README.md + VALIDATOR.md, 3 rosters. RED verified 8 ways
+    - test: green — cargo nextest run --workspace, 13862 passed, 0 failed, 0 skipped, 175s; cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean
+    - commit: 6e5342c26 — 33 files
+    - review: clean — 0 findings; the fleet raised 7 candidates and refuted all 7; 9 attempted, 0 failed, 0 skipped on `review sha e0fbaf42e..6e5342c26`
+    - result: task moved to done
+
+    Every column of the matrix row is covered by a tool, so no language falls back to the prompt rule for dead code.
+
+    Measurements recorded in the rule bodies: Go U1000 over gohugoio/hugo, 13 findings, all real. Dart over dart-lang/http, 1, real. TypeScript over both UI projects, 58 after dropping `(used in module)` and `.d.ts`; 10 hand-checked, 7 real and 3 reached by a name the import graph cannot see. Swift over Alamofire, 493 -> 103 with `--retain-public` -> 74 after dropping `var.parameter`. Python over requests + flask, 118 -> 100 with the two ignore lists. Rust `dead_code`, 0 on this workspace; the orphan-module grep found 5, all real.
+
+    Two tool defects found and worked around, both stated in the rule bodies:
+    - `periphery scan` alone is broken on Swift 6.4. SwiftPM writes the index store to `.build/out`, not the `.build/debug/index/store` periphery looks for, so the script builds first and detects the store.
+    - `// periphery:ignore` stops suppressing the moment a reason follows it on the same line. The fixture and the rule body put the reason on its own line.
+
+    Tools installed: staticcheck 2025.1.1 (go install), ts-prune 0.10.3 (npm -g). vulture 2.14, periphery 3.8.0, dart 3.11.0 and swift 6.4 were already present.
+
+    New card ^2r35j9t records the five orphan Rust modules the new scan found.
+
+    Doctor rows verified in a scratch SPM project, because `~/.validators/code-hygiene/` holds an older `sah init` snapshot that shadows the builtins. Nothing under the home directory was read or written.
+  timestamp: 2026-08-08T18:02:09.052312+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffcd80
 title: 'dead-code goes objective: tool rules supersede the prompt rule; staged work must be annotated'
 ---
 ## STANDING ORDER
