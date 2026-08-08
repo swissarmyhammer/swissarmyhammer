@@ -14,7 +14,7 @@ use crate::table;
 const UNVERSIONED: &str = "latest";
 
 /// An installed package found during scanning.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPackage {
     /// Display name, taken from frontmatter or the terminal path segment.
     pub name: String,
