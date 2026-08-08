@@ -244,13 +244,22 @@ mod tests {
         "missing-docs-dart",
     ];
 
-    /// The dead-code tool rules `code-hygiene` carries. Each supersedes
-    /// nothing: the `dead-code` prompt rule keeps its carve-outs for entry
-    /// points, exported public API, and work-in-process scaffolding, which need
-    /// judgment and the `callers` probe. These tools decide only the narrow
-    /// question a tool can settle alone, and run beside that rule.
-    const CODE_HYGIENE_DEAD_CODE_TOOL_RULES: &[&str] =
-        &["unused-code-go", "unreachable-code-python"];
+    /// The dead-code tool rules `code-hygiene` carries. Each supersedes the
+    /// `dead-code` prompt rule for the language it serves.
+    ///
+    /// Three of that rule's four carve-outs are compiler behavior — an exported
+    /// item, a test, and an entry point are exempt because the compiler can see
+    /// which callers exist and which cannot. The fourth, work-in-process
+    /// scaffolding, is an annotation contract: staged code carries the
+    /// language's own suppression marker with a reason, or it is dead.
+    const CODE_HYGIENE_DEAD_CODE_TOOL_RULES: &[&str] = &[
+        "dead-code-rust",
+        "unused-code-go",
+        "dead-code-typescript",
+        "dead-code-python",
+        "dead-code-dart",
+        "dead-code-swift",
+    ];
 
     /// The magic-number tool rules `code-hygiene` carries. Each supersedes the
     /// `magic-numbers` prompt rule for the language it serves. Rust and Dart
@@ -348,15 +357,15 @@ mod tests {
         // Each tool rule carries a tool block, and supersedes exactly what its
         // group promises: the documentation tools replace the `missing-docs`
         // prompt rule, the magic-number tools replace the `magic-numbers`
-        // prompt rule, the dead-code tools replace nothing, and each complexity
-        // tool replaces the gates its own tool decides.
+        // prompt rule, the dead-code tools replace the `dead-code` prompt rule,
+        // and each complexity tool replaces the gates its own tool decides.
         let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
             .iter()
             .map(|name| (name, ["missing-docs"].as_slice()))
             .chain(
                 CODE_HYGIENE_DEAD_CODE_TOOL_RULES
                     .iter()
-                    .map(|name| (name, [].as_slice())),
+                    .map(|name| (name, ["dead-code"].as_slice())),
             )
             .chain(
                 CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES

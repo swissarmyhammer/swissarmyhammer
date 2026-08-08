@@ -1,0 +1,31 @@
+/**
+ * The failing fixture of `dead-code-typescript`.
+ *
+ * It holds one unannotated unused export of every kind the passing fixture
+ * stages — the type, the interface, the constant, the class, and the function.
+ * Nothing in the project imports any of them, so the tool must report each one.
+ * A tool upgrade that stops reporting a kind makes the doctor mark the rule
+ * unusable.
+ */
+
+/** A type alias nothing imports. */
+export type DeadOptions = { size: number };
+
+/** An interface nothing imports. */
+export interface DeadReading {
+  value: number;
+}
+
+/** A constant nothing imports. */
+export const DEAD_LIMIT = 1;
+
+/** A class nothing imports. */
+export class DeadWidget {
+  /** The one field the class carries. */
+  size = 0;
+}
+
+/** A function nothing imports. */
+export function deadHelper(): number {
+  return 2;
+}

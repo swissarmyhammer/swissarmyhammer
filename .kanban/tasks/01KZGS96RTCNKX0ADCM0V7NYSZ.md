@@ -1,8 +1,62 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffa780
+comments:
+- actor: claude-code
+  id: 01kzh5s7tr1q5qrbhnvkb94rvf
+  text: |-
+    Research done. Tools installed and measured before any rule was written.
+
+    Installed: `staticcheck` 2025.1.1 (`go install honnef.co/go/tools/cmd/staticcheck@2025.1.1`), `ts-prune` 0.10.3 (`npm install -g ts-prune@0.10.3`). Already present: `vulture` 2.14, `periphery` 3.8.0, `dart` 3.11.0, `swift` 6.4, `go` 1.26.5.
+
+    Measurements on real code:
+    - Rust `cargo check --workspace --all-targets` `dead_code`: 0 findings on this workspace. Verified cargo REPLAYS cached warnings on a probe crate, so a second review run still reports; `--all-targets` doubles each finding, so `sort -u` is needed.
+    - Rust orphan modules: 5 findings on this workspace, all hand-checked and all real — `crates/swissarmyhammer/src/security.rs` (15 KB nothing compiles), `crates/markdowndown/src/error.rs`, `crates/markdowndown/src/fetch.rs`, `crates/swissarmyhammer-common/src/sample_avp_test.rs`, `crates/swissarmyhammer-tools/src/mcp/notifications.rs` (0 bytes). 6.7 s over the whole workspace.
+    - Python vulture at default confidence over requests + flask: 118 findings. `--ignore-names` drops 4 (dunder protocol methods, `test_*`). `--ignore-decorators` drops 14 (all `@t.overload` stubs). 100 remain, the mass of them library public API that neither library declares in `__all__`. Verified vulture honours `__all__` as the export marker, and that `# noqa: V103` / `V102` / `V201` suppress by code while a wrong code does not.
+    - TypeScript ts-prune over `apps/kanban-app/ui`: 178 lines, 103 of them `(used in module)` (the symbol is alive, only the `export` keyword is surplus — not dead code), 18 of the rest in the generated `parser.terms.d.ts`. Verified `// ts-prune-ignore-next` suppresses.
+    - Dart `dart analyze --format=machine` over dart-lang/http: 1 finding, real. Verified all four `// ignore:` markers suppress.
+    - Swift periphery 3.8.0: `periphery scan` alone fails — Swift 6.4 SwiftPM writes the index store to `.build/out`, not the `.build/debug/index/store` periphery looks for. `swift build` then `periphery scan --skip-build --index-store-path` over the detected store works. Verified `// periphery:ignore` suppresses.
+
+    Pre-existing defect found, out of scope for this card: the 5 orphan Rust modules above. They are not in this card's changed files, so the rule never reports them here.
+  timestamp: 2026-08-08T17:12:28.760164+00:00
+- actor: claude-code
+  id: 01kzh7r8fe87dvefhn9q1q0k1s
+  text: |-
+    Implementation landed. Every column of the matrix row is covered.
+
+    Six tool rules, each `supersedes: dead-code`:
+    - `dead-code-rust` — `cargo check --workspace --all-targets --message-format=json` piped to jq on `dead_code`, plus the orphan-module scan the compiler cannot make (crate = nearest `Cargo.toml`; `lib.rs`/`main.rs`/`mod.rs`/`build.rs` and `tests/`, `benches/`, `examples/`, `src/bin/` exempt; `#[path]` targets exempt). Marker `#[expect(dead_code, reason = "...")]`, chosen over `#[allow]` because it expires through `unfulfilled_lint_expectations`.
+    - `unused-code-go` — promoted, body rewritten to say why the compiler plus U1000 leaves nothing to judge. Marker `//lint:ignore U1000 <reason>`; `//nolint:staticcheck` measured as NOT working.
+    - `dead-code-typescript` — ts-prune 0.10.3, discovers every `tsconfig.json` outside `node_modules`, drops `(used in module)` and `.d.ts`, `sort -u`.
+    - `dead-code-python` — vulture at default confidence, `--ignore-names`/`--ignore-decorators`/`--exclude` in the script; `unreachable-code-python` deleted and folded in.
+    - `dead-code-dart` — `dart analyze --format=machine .` selecting the four unused diagnostics, prefix stripped with `pwd -P`.
+    - `dead-code-swift` — `swift build --build-tests` then `periphery scan --skip-build --index-store-path <detected>` with `--retain-public` and friends; `var.parameter` dropped; `check_command` also tests for `Package.swift` so a project without an SPM package falls back to the prompt rule.
+
+    Docs: `dead-code.md` rewritten as the fallback with the annotation contract table; `builtin/validators/README.md` rules-for-tool-rules gained "an exemption a person would argue for in prose must become an inline suppression the tool reads", with staged work as the canonical example and a note to prefer a marker that expires; `code-hygiene/VALIDATOR.md` records the reversal of ^teemmch and marks the knip, periphery and vulture verdicts superseded.
+
+    Rosters: `SHIPPED_DEAD_CODE_RULES` (tool_rules.rs), `CODE_HYGIENE_DEAD_CODE_TOOL_RULES` (builtin/mod.rs), and the fixture list (mirdan/builtin_validators.rs) all carry the six. The Python acceptance test was inverted — it now asserts the tool rule DOES suppress `dead-code`, and its probe module uses `__all__` so the run measures the one stranded statement.
+
+    RED verified eight ways, each restored to GREEN:
+    1-5. Strip the staging marker from each pass fixture (rust, python, typescript, dart, go) — doctor reports "the pass fixture ... produced 6 / 8 / 5 / 5 / 6 finding(s); none are allowed".
+    6. Annotate every item in the Rust fail fixture — "the fail fixture produced no findings; at least one is required".
+    7. The same for the Python fail fixture.
+    8. Drop `supersedes: dead-code` from `unused-code-go` — "unused-code-go must supersede dead-code, the contract every dead-code tool rule keeps".
+
+    Swift is measured outside the acceptance test on purpose: `check_command` requires a `Package.swift` at the process cwd, so doctor reports it Missing in this repo. Verified in a scratch SPM project carrying a project-layer `.validators/code-hygiene` copy — `sah doctor` printed `Validator Tool Rule · code-hygiene/dead-code-swift ┆ tool present (3.8.0); fixtures pass`, and the script reported the one real dead function in that project and left the `public` entry and the reached helper alone. Nothing under `~` was touched.
+
+    Tests: swissarmyhammer-validators lib 526 pass, mirdan lib 501 pass, swissarmyhammer-cli doctor 17 pass, tools review integration 4 + 1 + 3 + 1 + 2 pass. `cargo clippy -p swissarmyhammer-validators -p mirdan --all-targets -- -D warnings` clean.
+
+    New card ^2r35j9t records the five orphan Rust modules the new scan found in this workspace.
+  timestamp: 2026-08-08T17:46:53.806339+00:00
+- actor: claude-code
+  id: 01kzh7rmst1hnc5xvc12be97kc
+  text: |-
+    ### implement — changed
+    - evidence: 22 files — 5 new rules (`dead-code-{rust,typescript,python,dart,swift}.md`), `unused-code-go.md` and `dead-code.md` rewritten, `unreachable-code-python.md` deleted; 11 new fixtures + `unused-code-go.pass.go.tmpl` and `lib.rs.tmpl` amended, 2 fixtures deleted; `builtin/validators/README.md` and `code-hygiene/VALIDATOR.md`; 3 rosters (`tool_rules.rs`, `builtin/mod.rs`, `mirdan/builtin_validators.rs`). Tests: validators lib 526 pass, mirdan lib 501 pass, cli doctor 17 pass, tools review integration 11 pass, clippy `-D warnings` clean. RED proven 8 ways and restored to GREEN.
+    - next: /review
+  timestamp: 2026-08-08T17:47:06.426093+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'dead-code goes objective: tool rules supersede the prompt rule; staged work must be annotated'
 ---
 ## STANDING ORDER

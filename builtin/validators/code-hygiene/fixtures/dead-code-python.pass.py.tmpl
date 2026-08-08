@@ -1,0 +1,56 @@
+"""The passing fixture of `dead-code-python`.
+
+It holds the same eight dead shapes the failing fixture holds, each carrying the
+`# noqa` code vulture reads. The tool must report nothing. A tool upgrade that
+reports one anyway makes the doctor mark the rule unusable.
+
+The comment beside each marker names the change that lands the consumer, which
+is what tells a reader staged work from a leftover.
+
+The module's own root is exempt the other way: `__all__` names it, which is how
+Python declares an exported surface whose callers live outside the module.
+"""
+
+import json  # noqa: V104  the first caller lands in the next change
+
+__all__ = ["dead_code_pass_root"]
+
+STAGED_LIMIT = 1  # noqa: V107  the first reader lands in the next change
+
+
+class StagedWidget:  # noqa: V102  the first caller lands in the next change
+    """A class the caller lands with."""
+
+    def staged_method(self):  # noqa: V105  the caller lands in the next change
+        """A method the caller lands with."""
+        return 1
+
+    @property  # noqa: V106  the reader lands in the next change
+    def staged_size(self):
+        """A property the reader lands with."""
+        return 2
+
+
+class StagedHolder:
+    """A class the root below names, so only its staged attribute is dead."""
+
+    def __init__(self):
+        """Set one attribute the root reads and one the reader lands with."""
+        self.live_count = 1
+        self.staged_count = 2  # noqa: V101  the reader lands in the next change
+
+
+def staged_helper():  # noqa: V103  the caller lands in the next change
+    """A function the caller lands with."""
+    return 3
+
+
+def stops_early():
+    """Return a value, then strand the statement below it."""
+    return 4
+    print("staged")  # noqa: V201  the guard above it lands in the next change
+
+
+def dead_code_pass_root():
+    """The root that keeps `StagedHolder` and its live attribute in use."""
+    return StagedHolder().live_count + stops_early()

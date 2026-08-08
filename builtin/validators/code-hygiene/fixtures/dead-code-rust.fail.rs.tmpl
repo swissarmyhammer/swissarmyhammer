@@ -1,0 +1,58 @@
+//! The failing fixture of `dead-code-rust`.
+//!
+//! It holds one unannotated dead item of every kind the passing fixture stages
+//! — the struct, the struct field, the enumeration variant, the method, the
+//! constant, and the function. The compiler must report each one. A toolchain
+//! that stops reporting a kind makes the doctor mark the rule unusable.
+//!
+//! Nothing here is `pub`, so the compiler already sees every caller these items
+//! could ever have.
+
+/// A structure the root below constructs, so the compiler reports its unread
+/// field alone and not the type around it.
+struct DeadHolder {
+    /// The field the root reads.
+    live_field: i32,
+    /// The field nothing reads.
+    dead_field: i32,
+}
+
+impl DeadHolder {
+    /// A method nothing calls.
+    fn dead_method(&self) -> i32 {
+        self.live_field
+    }
+}
+
+/// A structure nothing constructs.
+struct DeadStruct;
+
+/// An enumeration whose second variant nothing constructs.
+enum DeadChoice {
+    /// The variant the root constructs.
+    Live,
+    /// The variant nothing constructs.
+    Dead,
+}
+
+/// A constant nothing reads.
+const DEAD_LIMIT: i32 = 1;
+
+/// A function nothing calls.
+fn dead_helper() -> i32 {
+    2
+}
+
+/// The public root that keeps `DeadHolder`, its live field, and one enumeration
+/// variant in use. Without it the compiler would report the whole type instead
+/// of the one unread field, and the fixture would stop pinning the field kind.
+pub fn dead_code_fail_root() -> i32 {
+    let holder = DeadHolder {
+        live_field: 1,
+        dead_field: 2,
+    };
+    match DeadChoice::Live {
+        DeadChoice::Live => holder.live_field,
+        DeadChoice::Dead => 0,
+    }
+}

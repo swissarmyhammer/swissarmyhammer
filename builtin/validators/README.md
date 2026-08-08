@@ -146,6 +146,24 @@ Rules for tool rules:
 - A finding from a tool is a requirement. Fix it or suppress it in code.
 - Exemptions live in the tool configuration or in an inline suppression
   (for example `#[allow(missing_docs)]`, `# noqa`). They do not live in prose.
+- **An exemption a person would argue for in prose must become an inline
+  suppression the tool reads.** A prompt rule can carve out a case by describing
+  it; a tool rule cannot, and it must not try. Turn the argument into a marker in
+  the code, and state the marker in the rule body.
+
+  Staged work is the canonical example. A prompt rule can say "exempt a symbol a
+  later task will consume", and then every reader decides for themselves what
+  counts. A tool rule says instead: write
+  `#[expect(dead_code, reason = "...")]`, or `//lint:ignore U1000 <reason>`, or
+  `// ts-prune-ignore-next`, or `# noqa: V103`, or `// ignore: unused_element`,
+  or `// periphery:ignore`. The marker is the claim, the reason names the change
+  that lands the consumer, and a symbol with neither is dead. That converts a
+  judgment into a fact, which is the whole point of a tool rule.
+
+  Prefer a marker that expires. Rust's `#[expect]` raises
+  `unfulfilled_lint_expectations` the moment the consumer lands, so the
+  annotation cleans itself up; `#[allow]` never does. Where the language offers
+  both, the rule body names the expiring one.
 - When a tool needs a configuration file, the `run` script writes one to a
   temporary path and passes it with a flag — the script owns its whole
   invocation, config included. Never change the project's own lint
@@ -193,9 +211,16 @@ without that attribution it could never pass the pair.
 
 A tool that needs more than a loose file to run gets it in `fixtures/`. Cargo
 lints a package, never a loose file, so the `code-hygiene` fixtures carry a
-`Cargo.toml.tmpl` and a crate root that hold both Rust fixtures as modules.
-The whole directory is materialized, not only the fixture under test, so a
-`workspace`-scope tool finds those neighbours.
+`Cargo.toml.tmpl` and a crate root that hold every Rust fixture as a module. A
+`go.mod.tmpl`, a `tsconfig.json.tmpl` and a `Package.swift.tmpl` do the same for
+staticcheck, ts-prune and periphery. The whole directory is materialized, not
+only the fixture under test, so a `workspace`-scope tool finds those neighbours.
+
+Only the top level of `fixtures/` is copied, so a manifest has to reach its
+fixtures without a source directory: the Swift manifest names `path: "."` and
+lists its `sources`, and the crate root uses `#[path = "..."]`. Each manifest
+names its own rule's fixtures and no others, so one rule's fixtures cannot move
+another rule's result.
 
 A tool rule that fails its fixtures is not used, and doctor reports it.
 Fixtures catch a tool upgrade that changes behavior.

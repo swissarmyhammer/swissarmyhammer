@@ -1204,8 +1204,8 @@ mod tests {
     /// What a missing-docs tool rule supersedes.
     const SUPERSEDES_MISSING_DOCS: &[&str] = &[MISSING_DOCS_PROMPT_RULE];
 
-    /// What a dead-code tool rule supersedes: nothing.
-    const SUPERSEDES_NOTHING: &[&str] = &[];
+    /// What a dead-code tool rule supersedes.
+    const SUPERSEDES_DEAD_CODE: &[&str] = &[DEAD_CODE_PROMPT_RULE];
 
     /// What a magic-numbers tool rule supersedes.
     const SUPERSEDES_MAGIC_NUMBERS: &[&str] = &[MAGIC_NUMBERS_PROMPT_RULE];
@@ -1237,22 +1237,28 @@ mod tests {
         ("flutter", "missing-docs-dart", SUPERSEDES_MISSING_DOCS),
     ];
 
-    /// The prompt rule the dead-code tool rules run beside, never in place of.
+    /// The prompt rule every shipped dead-code tool rule supersedes.
     const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
 
     /// The shipped dead-code tool rule for Python, the one the pipeline
     /// acceptance test drives end to end.
-    const PYTHON_UNREACHABLE_CODE_RULE: &str = "unreachable-code-python";
+    const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 
     /// Every shipped dead-code tool rule, with the project type it serves.
     ///
-    /// These rules supersede nothing. The `dead-code` prompt rule keeps its
-    /// carve-outs — entry points, exported public API, work-in-process
-    /// scaffolding — because those need judgment. Each tool rule here adds one
-    /// deterministic check beside that rule, never in place of it.
+    /// Each supersedes the `dead-code` prompt rule for its language. Three of
+    /// that rule's four carve-outs are compiler behavior — an exported item, a
+    /// test, and an entry point are exempt because the compiler already sees
+    /// which callers exist and which cannot. The fourth, work-in-process
+    /// scaffolding, is an annotation contract: staged code carries the
+    /// language's own suppression marker with a reason, or it is dead.
     const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
-        ("go", "unused-code-go", SUPERSEDES_NOTHING),
-        ("python", PYTHON_UNREACHABLE_CODE_RULE, SUPERSEDES_NOTHING),
+        ("rust", "dead-code-rust", SUPERSEDES_DEAD_CODE),
+        ("go", "unused-code-go", SUPERSEDES_DEAD_CODE),
+        ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
+        ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
+        ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
+        ("swift", "dead-code-swift", SUPERSEDES_DEAD_CODE),
     ];
 
     /// The prompt rule every shipped magic-numbers tool rule supersedes.
@@ -1569,8 +1575,15 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     }
 
     /// A Python module with one statement stranded behind a `return`.
+    ///
+    /// `__all__` names the one function, which is how Python declares an
+    /// exported surface and how vulture is told the function has callers
+    /// outside the module. Without it the run reports the function as unused
+    /// too, and the probe would measure two findings rather than the one
+    /// stranded statement it is built to measure.
     const UNREACHABLE_MODULE_PY: &str = concat!(
-        "\"\"\"A probe module for the shipped Python unreachable-code tool rule.\"\"\"\n\n\n",
+        "\"\"\"A probe module for the shipped Python dead-code tool rule.\"\"\"\n\n",
+        "__all__ = [\"stops_early\"]\n\n\n",
         "def stops_early():\n",
         "    \"\"\"Return a value, then strand the statement below it.\"\"\"\n",
         "    return 1\n",
@@ -1589,7 +1602,7 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
                 CODE_HYGIENE_SET,
                 RuleNames::new([
                     DEAD_CODE_PROMPT_RULE.to_string(),
-                    PYTHON_UNREACHABLE_CODE_RULE.to_string(),
+                    PYTHON_DEAD_CODE_RULE.to_string(),
                 ]),
                 ProbeNames::new([]),
                 [FileWork::new(path, vec![], vec![], content, vec![])],
@@ -1597,23 +1610,23 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         )
     }
 
-    /// Acceptance: the shipped Python dead-code tool rule never suppresses the
+    /// Acceptance: the shipped Python dead-code tool rule suppresses the
     /// `dead-code` prompt rule, and reports the stranded statement through the
     /// real vulture pipeline.
     ///
-    /// The suppression half is asserted unconditionally, because it is the
-    /// regression that matters most and it does not depend on the tool being
-    /// installed: a healthy tool rule suppresses whatever its `supersedes`
-    /// names, and this rule must name nothing. Were it to name `dead-code`, the
-    /// prompt rule would stop reading these files and its carve-outs for entry
-    /// points, exported public API, and work-in-process scaffolding would go
-    /// with it.
+    /// The suppression half is the load-bearing one, and it is asserted only
+    /// when the rule planned a run — a healthy tool rule suppresses whatever
+    /// its `supersedes` names, and a machine without vulture falls the rule
+    /// back to the prompt rule instead. Superseding is what makes dead code
+    /// objective for Python: the prompt rule's carve-outs for the exported
+    /// surface and for staged work become `__all__` and `# noqa: V1xx`, which
+    /// the tool reads.
     ///
-    /// The reporting half runs only when the tool is installed, the same
-    /// condition [`every_shipped_dead_code_tool_rule_passes_its_fixtures`]
-    /// applies: a missing tool degrades the rule and never blocks a review.
+    /// The reporting half runs under the same condition, the one
+    /// [`every_shipped_dead_code_tool_rule_passes_its_fixtures`] applies: a
+    /// missing tool degrades the rule and never blocks a review.
     #[test]
-    fn the_shipped_python_dead_code_tool_rule_reports_without_suppressing_dead_code() {
+    fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(repo.path().join("src")).unwrap();
         std::fs::write(
@@ -1626,29 +1639,27 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
 
         let plan = plan_tool_rules(&work, &loader, &["python"]);
 
-        assert!(
-            !plan
-                .suppression()
-                .suppressed_rules(CODE_HYGIENE_SET, UNREACHABLE_MODULE_PATH)
-                .contains(DEAD_CODE_PROMPT_RULE),
-            "a dead-code tool rule must never suppress the `dead-code` prompt rule, \
-             or its carve-outs stop protecting staged work"
-        );
-
         let Some(run) = plan
             .runs()
             .iter()
-            .find(|run| run.rule() == PYTHON_UNREACHABLE_CODE_RULE)
+            .find(|run| run.rule() == PYTHON_DEAD_CODE_RULE)
         else {
             return;
         };
         assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
+        assert!(
+            plan.suppression()
+                .suppressed_rules(CODE_HYGIENE_SET, UNREACHABLE_MODULE_PATH)
+                .contains(DEAD_CODE_PROMPT_RULE),
+            "a healthy dead-code tool rule must suppress the `dead-code` prompt rule, \
+             so no LLM re-reads a question the tool already decided"
+        );
 
         verify_run_reports_one_finding(
             run,
             repo.path(),
             UNREACHABLE_MODULE_PATH,
-            PYTHON_UNREACHABLE_CODE_RULE,
+            PYTHON_DEAD_CODE_RULE,
             "unreachable code after",
         );
     }
@@ -1739,13 +1750,14 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     }
 
     /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
-    /// doctor, and supersedes nothing.
+    /// doctor, and supersedes the `dead-code` prompt rule.
     ///
-    /// The `supersedes` assertion is the load-bearing half. A dead-code tool
-    /// reads the code without the `callers` probe, so it cannot see the
-    /// `dead-code` prompt rule's carve-outs and would report staged work as
-    /// dead. Naming that prompt rule in `supersedes` would silence it for the
-    /// files the tool covers, which is exactly the regression to prevent.
+    /// The pass fixture is the load-bearing half. Each pass fixture holds the
+    /// same dead shapes its fail fixture holds, each behind the language's own
+    /// suppression marker, so a marker the tool stops reading makes the pair
+    /// fail. That marker is the whole staging contract: with it the tool
+    /// replaces the prompt rule's judgment, and without it the tool would
+    /// report staged work as dead.
     #[test]
     fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
         verify_shipped_tool_rules_pass_fixtures(SHIPPED_DEAD_CODE_RULES, DEAD_CODE_PROMPT_RULE);

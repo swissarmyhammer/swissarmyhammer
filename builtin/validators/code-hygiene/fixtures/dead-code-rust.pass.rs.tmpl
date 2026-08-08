@@ -1,0 +1,64 @@
+//! The passing fixture of `dead-code-rust`.
+//!
+//! It holds the same six dead shapes the failing fixture holds, each carrying
+//! the staging annotation `#[expect(dead_code, reason = "...")]`. The compiler
+//! must report nothing. A toolchain that reports one anyway makes the doctor
+//! mark the rule unusable.
+//!
+//! `#[expect]` is the staging marker rather than `#[allow]` because it expires
+//! by itself: once the named consumer lands, the expectation goes unfulfilled
+//! and the compiler asks for the annotation back.
+
+/// A structure the root below constructs, so only its staged field is dead.
+struct StagedHolder {
+    /// The field the root reads.
+    live_field: i32,
+    /// The field the reader lands with.
+    #[expect(dead_code, reason = "the reader lands in the next change of this plan")]
+    staged_field: i32,
+}
+
+impl StagedHolder {
+    /// The method the caller lands with.
+    #[expect(dead_code, reason = "the caller lands in the next change of this plan")]
+    fn staged_method(&self) -> i32 {
+        self.live_field
+    }
+}
+
+/// The structure the caller lands with.
+#[expect(dead_code, reason = "the caller lands in the next change of this plan")]
+struct StagedStruct;
+
+/// An enumeration whose second variant the writer lands with.
+enum StagedChoice {
+    /// The variant the root constructs.
+    Live,
+    /// The variant the writer lands with.
+    #[expect(dead_code, reason = "the writer lands in the next change of this plan")]
+    Staged,
+}
+
+/// The constant the reader lands with.
+#[expect(dead_code, reason = "the reader lands in the next change of this plan")]
+const STAGED_LIMIT: i32 = 1;
+
+/// The function the caller lands with.
+#[expect(dead_code, reason = "the caller lands in the next change of this plan")]
+fn staged_helper() -> i32 {
+    2
+}
+
+/// The public root that keeps `StagedHolder`, its live field, and one
+/// enumeration variant in use, so the fixture measures the staged shapes and
+/// nothing else.
+pub fn dead_code_pass_root() -> i32 {
+    let holder = StagedHolder {
+        live_field: 1,
+        staged_field: 2,
+    };
+    match StagedChoice::Live {
+        StagedChoice::Live => holder.live_field,
+        StagedChoice::Staged => 0,
+    }
+}

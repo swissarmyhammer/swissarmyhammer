@@ -1,0 +1,35 @@
+/**
+ * The passing fixture of `dead-code-typescript`.
+ *
+ * It holds the same five unused exports the failing fixture holds, each behind
+ * a `// ts-prune-ignore-next` marker naming the change that lands the importer.
+ * The tool must report nothing. A tool upgrade that reports one anyway makes
+ * the doctor mark the rule unusable.
+ */
+
+/** A type alias the importer lands with. */
+// ts-prune-ignore-next  the importer lands in the next change
+export type StagedOptions = { size: number };
+
+/** An interface the importer lands with. */
+// ts-prune-ignore-next  the importer lands in the next change
+export interface StagedReading {
+  value: number;
+}
+
+/** A constant the importer lands with. */
+// ts-prune-ignore-next  the importer lands in the next change
+export const STAGED_LIMIT = 1;
+
+/** A class the importer lands with. */
+// ts-prune-ignore-next  the importer lands in the next change
+export class StagedWidget {
+  /** The one field the class carries. */
+  size = 0;
+}
+
+/** A function the importer lands with. */
+// ts-prune-ignore-next  the importer lands in the next change
+export function stagedHelper(): number {
+  return 2;
+}

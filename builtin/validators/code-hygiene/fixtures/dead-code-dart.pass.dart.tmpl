@@ -1,0 +1,31 @@
+/// The passing fixture of `dead-code-dart`.
+///
+/// It holds the same five dead shapes the failing fixture holds, each carrying
+/// the `// ignore:` marker the analyzer reads, with the reason on the line
+/// beside it. The analyzer must report nothing. A Dart SDK upgrade that reports
+/// one anyway makes the doctor mark the rule unusable.
+library;
+
+// ignore: unused_import — the first caller lands in the next change
+import 'dart:math';
+
+/// A class the analyzer reads for its private members.
+class StagedWidget {
+  // ignore: unused_field — the reader lands in the next change
+  int _stagedField = 0;
+
+  /// The one entry the class offers.
+  int run() {
+    // ignore: unused_local_variable — the reader lands in the next change
+    var stagedLocal = 1;
+    return _liveHelper();
+  }
+
+  int _liveHelper() => 1;
+
+  // ignore: unused_element — the caller lands in the next change
+  void _stagedMethod() {}
+}
+
+// ignore: unused_element — the caller lands in the next change
+void _stagedTopLevel() {}

@@ -1,0 +1,60 @@
+/// The passing fixture of `dead-code-swift`.
+///
+/// It holds the same six dead shapes the failing fixture holds, each behind a
+/// `// periphery:ignore` marker. Periphery must report nothing. A tool upgrade
+/// that reports one anyway makes the doctor mark the rule unusable.
+///
+/// The marker takes no trailing text — measured, a reason written after it on
+/// the same line stops it working — so the reason sits on its own comment line
+/// above it.
+
+/// A structure the caller lands with.
+// the caller lands in the next change
+// periphery:ignore
+struct StagedWidget {
+    /// The one stored property the structure carries.
+    let size: Int
+}
+
+/// A type alias the caller lands with.
+// the caller lands in the next change
+// periphery:ignore
+typealias StagedHandler = (Int) -> Int
+
+/// An enumeration the caller lands with.
+// the caller lands in the next change
+// periphery:ignore
+enum StagedChoice {
+    /// The one case the enumeration offers.
+    case live
+}
+
+/// A structure the root below constructs, so only its staged members are dead.
+struct StagedHolder {
+    /// The property the root reads.
+    let liveCount: Int
+
+    /// The property the reader lands with.
+    // the reader lands in the next change
+    // periphery:ignore
+    let stagedCount: Int
+
+    /// The method the caller lands with.
+    // the caller lands in the next change
+    // periphery:ignore
+    func stagedMethod() -> Int {
+        liveCount
+    }
+}
+
+/// The function the caller lands with.
+// the caller lands in the next change
+// periphery:ignore
+func stagedHelper() -> Int {
+    2
+}
+
+/// The public root that keeps `StagedHolder` and its live property in use.
+public func deadCodePassRoot() -> Int {
+    StagedHolder(liveCount: 1, stagedCount: 2).liveCount
+}

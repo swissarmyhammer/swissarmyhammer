@@ -1,31 +1,38 @@
 // Package fixtures holds the Go fixtures of the `unused-code-go` tool rule.
 //
-// Every unexported item in this file is reached from the exported root below —
-// one of every kind the failing fixture leaves dead. The tool must report
-// nothing. A tool upgrade that reports one anyway makes the doctor mark the
-// rule unusable.
+// This file holds the same six dead shapes the failing fixture holds — the
+// type, the struct field, the method, the constant, the variable, and the
+// function — each carrying the `//lint:ignore U1000 <reason>` staging marker.
+// The tool must report nothing. A tool upgrade that reports one anyway makes
+// the doctor mark the rule unusable.
 package fixtures
 
-// liveType is an unexported type the root names.
-type liveType struct {
-	liveCount int
+//lint:ignore U1000 the first user lands in the next change
+type stagedType struct{}
+
+// stagedHolder is named by the exported root below, so the marker on its
+// staged field is the only thing keeping the field out of the report.
+type stagedHolder struct {
+	liveField int
+	//lint:ignore U1000 the reader lands in the next change
+	stagedField int
 }
 
-// liveMethod is an unexported method the root calls.
-func (t liveType) liveMethod() int { return t.liveCount }
+//lint:ignore U1000 the caller lands in the next change
+func (h stagedHolder) stagedMethod() int { return h.liveField }
 
-// liveConst is an unexported constant the root reads.
-const liveConst = 1
+//lint:ignore U1000 the reader lands in the next change
+const stagedConst = 1
 
-// liveVar is an unexported variable the root reads.
-var liveVar = 2
+//lint:ignore U1000 the reader lands in the next change
+var stagedVar = 2
 
-// liveFunc is an unexported function the root calls.
-func liveFunc() int { return liveConst + liveVar }
+//lint:ignore U1000 the caller lands in the next change
+func stagedFunc() int { return 3 }
 
-// DeadCodePassRoot is the exported root that keeps every unexported item above
-// in use. An exported item is the package's surface, so the unused check counts
-// it as used and never reports it.
+// DeadCodePassRoot keeps stagedHolder and its live field in use. Without it the
+// tool would report the type around the staged field, and the fixture would no
+// longer pin the struct-field kind on its own.
 func DeadCodePassRoot() int {
-	return liveType{liveCount: 1}.liveMethod() + liveFunc()
+	return stagedHolder{liveField: 1}.liveField
 }

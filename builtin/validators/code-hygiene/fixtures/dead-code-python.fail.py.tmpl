@@ -1,0 +1,53 @@
+"""The failing fixture of `dead-code-python`.
+
+It holds one unannotated dead item of every kind the passing fixture stages —
+the import, the class, the function, the method, the property, the attribute,
+the module variable, and the statement behind a jump. The tool must report each
+one. A tool upgrade that stops reporting a kind makes the doctor mark the rule
+unusable.
+
+The module declares no `__all__`, so nothing here is the module's exported
+surface and vulture sees every caller these names could have.
+"""
+
+import json
+
+DEAD_LIMIT = 1
+
+
+class DeadWidget:
+    """A class nothing names."""
+
+    def dead_method(self):
+        """A method nothing calls."""
+        return 1
+
+    @property
+    def dead_size(self):
+        """A property nothing reads."""
+        return 2
+
+
+class DeadHolder:
+    """A class the root below names, so only its dead attribute is reported."""
+
+    def __init__(self):
+        """Set one attribute the root reads and one nothing reads."""
+        self.live_count = 1
+        self.dead_count = 2
+
+
+def dead_helper():
+    """A function nothing calls."""
+    return 3
+
+
+def stops_early():
+    """Return a value, then strand the statement below it."""
+    return 4
+    print("stranded")
+
+
+def dead_code_fail_root():
+    """The root that keeps `DeadHolder` and its live attribute in use."""
+    return DeadHolder().live_count + stops_early()

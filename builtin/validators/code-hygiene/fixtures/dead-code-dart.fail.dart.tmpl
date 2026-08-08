@@ -1,0 +1,27 @@
+/// The failing fixture of `dead-code-dart`.
+///
+/// It holds one unannotated dead item of every kind the passing fixture stages
+/// — the import, the private field, the local variable, the private method, and
+/// the private top-level function. The analyzer must report each one. A Dart
+/// SDK upgrade that stops reporting a kind makes the doctor mark the rule
+/// unusable.
+library;
+
+import 'dart:math';
+
+/// A class the analyzer reads for its private members.
+class DeadWidget {
+  int _deadField = 0;
+
+  /// The one entry the class offers.
+  int run() {
+    var deadLocal = 1;
+    return _liveHelper();
+  }
+
+  int _liveHelper() => 1;
+
+  void _deadMethod() {}
+}
+
+void _deadTopLevel() {}

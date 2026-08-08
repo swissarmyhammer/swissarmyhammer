@@ -87,26 +87,76 @@ The `complexity` probe stays. Dart, every other language, and every workspace
 whose tool doctor cannot find keep the probe and the prompt rules. That is the
 designed fallback, not a gap.
 
-## Dead code: two tool rules beside the prompt rule
+## Dead code: six tool rules, and the prompt rule as the fallback
 
-The `dead-code` prompt rule owns the judgment half of dead code. Its carve-outs
-— entry points, exported public API, and work-in-process scaffolding — need a
-reader, and the `callers` probe gives that reader machine facts. No tool rule
-supersedes it. A tool that replaced it would report staged work as dead.
+Dead code is objective. Six tool rules supersede the `dead-code` prompt rule,
+one for each language a tool covers:
 
-Two tool rules run beside it, each deciding one question a tool can settle
-alone:
+| Rule | Tool | Staging marker |
+|---|---|---|
+| `dead-code-rust` | `cargo check` `dead_code`, plus a `grep` orphan-module scan | `#[expect(dead_code, reason = "...")]` |
+| `unused-code-go` | `staticcheck -checks U1000` | `//lint:ignore U1000 <reason>` |
+| `dead-code-typescript` | `ts-prune` | `// ts-prune-ignore-next` |
+| `dead-code-python` | `vulture` at its default confidence | `# noqa: V103` and its sibling codes |
+| `dead-code-dart` | `dart analyze`, four unused diagnostics | `// ignore: unused_element` and its siblings |
+| `dead-code-swift` | `periphery scan --retain-public` | `// periphery:ignore` |
 
-- `unused-code-go` — `staticcheck -checks U1000`. An unexported Go item is the
-  package's own business, so the whole set of possible callers is in the
-  module.
-- `unreachable-code-python` — `vulture --min-confidence 100`. A statement behind
-  a jump that always runs can have no future consumer.
+The prompt rule stays as the fallback. It reads a language no tool rule covers,
+and it reads any language whose tool `sah doctor` could not find. Its file now
+says so, and it carries the same standard the tools carry.
+
+### What made the question objective
+
+Three of the prompt rule's four carve-outs were never judgments. A compiler
+exempts an exported item, a test, and an entry point on its own, because it can
+see which callers exist and which cannot: rustc never reports a reachable `pub`
+item, `U1000` never reports an exported Go identifier, `dart analyze`'s
+`unused_element` fires only on `_`-prefixed names, and `--retain-public` is the
+same exemption for Swift. Python has no compiler, so `__all__` is the marker
+vulture reads, and TypeScript has no marker at all — every `export` is surface,
+and the module graph is the whole answer.
+
+The fourth carve-out, work-in-process scaffolding, became an **annotation
+contract**: staged code carries the language's own suppression marker with a
+reason, or it is dead. The markers are in the table above. The
+`builtin/validators/README.md` rules-for-tool-rules section states the general
+form — an exemption a person would argue for in prose must become an inline
+suppression the tool reads.
+
+### Reversed and superseded decisions
+
+- The `dead-code` **"do not supersede"** decision is reversed. It held that the
+  carve-outs need a reader and that a tool replacing the prompt rule would
+  report staged work as dead. The annotation contract answers the second half,
+  and the compilers answer the first.
+- The **`knip`** rejection is superseded by `dead-code-typescript`. `ts-prune`
+  was taken instead: it carries an inline suppression, and its claim — an export
+  no module imports — is narrower.
+- The **`periphery`** rejection is superseded by `dead-code-swift`. The earlier
+  verdict was made against a directory holding a loose `.swift` file, which
+  periphery refused. The fixtures now carry a `Package.swift`, which is what the
+  tool asks for, and `doctor.check_command` tests for one in the project so a
+  workspace without an SPM package falls back to the prompt rule.
+- The **`vulture` at default confidence** rejection is superseded by
+  `dead-code-python`, and `unreachable-code-python` is folded into it so that
+  one finding has one owner. The high false-positive rate the earlier verdict
+  named is real and is answered where it belongs — `--ignore-names` and
+  `--ignore-decorators` in the run script for framework patterns, `__all__` for
+  the exported surface, and `# noqa: V1xx` for one name at a time.
+- The **`cargo machete`** rejection stands. Unused dependencies are a manifest
+  question, and this set matches `@file_groups/source_code`, which declares no
+  manifest pattern. That is `dead-code-rust`'s one gap, and it is a set-scope
+  gap rather than a tool one.
 
 ## Tools measured and rejected
 
 Five candidates were rejected. Four were installed and run before the verdict;
 the fifth cannot be installed on the terms this set needs.
+
+Two of the five verdicts no longer hold. `knip` and `periphery` are marked
+superseded below, and the dead-code section above records what replaced each
+one. A superseded verdict is kept rather than deleted, so a reader can see what
+was measured, and when it stopped being the answer.
 
 ### `clippy::cognitive_complexity` — rejected
 
@@ -148,7 +198,7 @@ feature-gated use either.
 Unused dependencies are a manifest question, not a source-code one. A validator
 set that matches manifests could host this tool; this set cannot.
 
-### `knip` — rejected
+### `knip` — rejected, and the rejection is superseded by `dead-code-typescript`
 
 Unused JavaScript and TypeScript files and exports. Run zero-config against
 `apps/kanban-app/ui` with a full dependency tree installed.
@@ -166,7 +216,7 @@ It also cannot meet the fixture contract. Knip reads a project — `package.json
 "unused" is a whole-project question, so a fail fixture and a pass fixture in
 one directory cannot be judged apart.
 
-### `periphery` — rejected
+### `periphery` — rejected, and the rejection is superseded by `dead-code-swift`
 
 Unused Swift declarations. Installed at 3.8.0 and run against a directory
 holding a loose `.swift` file. It refused: "Failed to identify project in the
@@ -176,6 +226,13 @@ projects change to the directory containing the Package.swift."
 Periphery needs an Xcode project or an SPM package, and it builds that project
 to index it. A review pass cannot pay a full build, and the fixture contract
 gives a tool one loose file.
+
+Both halves of that verdict were answered rather than argued away. The fixture
+directory now carries a `Package.swift.tmpl` whose one target names `path: "."`
+and lists the two Swift dead-code fixtures, so the tool gets the package it
+asks for. And the build is not a full one: measured on `Alamofire` at HEAD,
+`swift build --build-tests` takes 5 s warm and the scan itself 1 s, and the
+build is the project's own incremental cargo-equivalent, not a clean rebuild.
 
 ### DCM — rejected, and this is why Dart has no complexity tool rule
 

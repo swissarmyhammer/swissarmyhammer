@@ -24,3 +24,13 @@ pub mod complexity_fail;
 /// gates, so the tool must report nothing.
 #[path = "complexity-rust.pass.rs"]
 pub mod complexity_pass;
+
+/// The failing fixture of `dead-code-rust`: it holds one unannotated dead item
+/// of every kind, so the compiler must report each one.
+#[path = "dead-code-rust.fail.rs"]
+pub mod dead_code_fail;
+
+/// The passing fixture of `dead-code-rust`: the same shapes carrying the
+/// staging annotation, so the compiler must report nothing.
+#[path = "dead-code-rust.pass.rs"]
+pub mod dead_code_pass;

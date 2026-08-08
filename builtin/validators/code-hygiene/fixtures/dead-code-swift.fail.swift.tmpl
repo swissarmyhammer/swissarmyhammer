@@ -1,0 +1,49 @@
+/// The failing fixture of `dead-code-swift`.
+///
+/// It holds one unannotated dead declaration of every kind the passing fixture
+/// stages — the structure, the type alias, the enumeration, the method, the
+/// property, and the function. Periphery must report each one. A tool upgrade
+/// that stops reporting a kind makes the doctor mark the rule unusable.
+///
+/// Nothing here is `public`, so `--retain-public` leaves every one of them for
+/// the index to judge.
+
+/// A structure nothing references.
+struct DeadWidget {
+    /// The one stored property the structure carries.
+    let size: Int
+}
+
+/// A type alias nothing references.
+typealias DeadHandler = (Int) -> Int
+
+/// An enumeration nothing constructs.
+enum DeadChoice {
+    /// The one case the enumeration offers.
+    case live
+}
+
+/// A structure the root below constructs, so periphery reports its dead method
+/// and its dead property rather than the type around them.
+struct DeadHolder {
+    /// The property the root reads.
+    let liveCount: Int
+
+    /// The property nothing reads.
+    let deadCount: Int
+
+    /// A method nothing calls.
+    func deadMethod() -> Int {
+        liveCount
+    }
+}
+
+/// A function nothing calls.
+func deadHelper() -> Int {
+    2
+}
+
+/// The public root that keeps `DeadHolder` and its live property in use.
+public func deadCodeFailRoot() -> Int {
+    DeadHolder(liveCount: 1, deadCount: 2).liveCount
+}

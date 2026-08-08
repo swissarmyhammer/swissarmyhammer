@@ -1,0 +1,26 @@
+// swift-tools-version:5.9
+//
+// The Swift fixtures of the `dead-code-swift` tool rule, as an SPM package.
+//
+// `periphery` scans a built package, never a loose file: it reads the index
+// store the Swift compiler writes, so the declarations have to be compiled
+// before they can be judged. `sources` names this rule's two fixtures and
+// nothing else, the same way `lib.rs` names only the Rust fixtures — the other
+// Swift fixtures in this directory belong to swiftlint rules that read the
+// paths they are given, and keeping them out of this target keeps one rule's
+// fixtures from moving another rule's result.
+import PackageDescription
+
+let package = Package(
+    name: "CodeHygieneFixtures",
+    targets: [
+        .target(
+            name: "CodeHygieneFixtures",
+            path: ".",
+            sources: [
+                "dead-code-swift.fail.swift",
+                "dead-code-swift.pass.swift",
+            ]
+        )
+    ]
+)

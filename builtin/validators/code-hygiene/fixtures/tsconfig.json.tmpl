@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "The TypeScript fixtures of the `dead-code-typescript` tool rule, as a project.",
+    "ts-prune reads a tsconfig to build the module graph — 'exported and never",
+    "imported' is a whole-project question, not a question about one loose file.",
+    "`include` names this rule's two fixtures and nothing else, the same way",
+    "`lib.rs` names only the Rust fixtures: the other TypeScript fixtures in this",
+    "directory belong to eslint rules that read the paths they are given, and",
+    "keeping them out of this program keeps one rule's fixtures from moving",
+    "another rule's result."
+  ],
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["dead-code-typescript.fail.ts", "dead-code-typescript.pass.ts"]
+}
