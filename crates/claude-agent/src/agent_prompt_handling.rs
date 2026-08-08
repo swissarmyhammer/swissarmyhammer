@@ -2417,10 +2417,50 @@ mod tests {
     /// Reply the scripted CLI gives when the test wants the turn read as a
     /// refusal. Matches one of `ClaudeAgent::is_response_refusal`'s patterns.
     const SCRIPTED_REFUSAL_REPLY: &str = "I must decline that request.";
+    /// Seconds of wall-clock budget one scripted turn gets, the value behind
+    /// [`SCRIPTED_TURN_TIMEOUT`].
+    const SCRIPTED_TURN_TIMEOUT_SECS: u64 = 30;
+
     /// Wall-clock budget for the scripted turn. The script answers instantly,
     /// so overrunning this means the turn wedged — fail loudly instead of
     /// hanging the suite.
-    const SCRIPTED_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const SCRIPTED_TURN_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(SCRIPTED_TURN_TIMEOUT_SECS);
+
+    /// Quote `word` as one literal `/bin/sh` argument.
+    ///
+    /// `sh` treats every byte inside single quotes literally except the
+    /// closing quote itself, so wrapping the word and rewriting each embedded
+    /// `'` as `'\''` — close, emit an escaped quote, reopen — is the whole
+    /// escape. Every operand [`write_scripted_claude`] puts in its script goes
+    /// through here, so no value it interpolates can end a quoting context and
+    /// be read as a command.
+    fn sh_quote(word: &str) -> String {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+
+    /// Render `line` as a `printf` statement that writes it to stdout verbatim.
+    ///
+    /// The JSON encoding escapes whatever the value holds, and [`sh_quote`]
+    /// escapes the encoded text again for the shell, so the two quoting layers
+    /// the script nests are each handled by the code that owns them.
+    fn printf_json_line(line: &serde_json::Value) -> String {
+        format!("printf '%s\\n' {}\n", sh_quote(&line.to_string()))
+    }
+
+    /// The `result` line the CLI ends a turn with, reporting `usage` when
+    /// `usage` is given and omitting the key when it is not.
+    fn scripted_result_line(usage: Option<serde_json::Value>) -> serde_json::Value {
+        let mut line = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "stop_reason": "end_turn",
+        });
+        if let Some(usage) = usage {
+            line["usage"] = usage;
+        }
+        line
+    }
 
     /// Write an executable stand-in for the `claude` CLI into `dir`, whose
     /// one turn answers with `reply` and reports a warm prompt cache.
@@ -2435,32 +2475,48 @@ mod tests {
     ///    line and the `result` line whose `usage` object reports a warm
     ///    cache read.
     ///
+    /// `reply` is caller-supplied text that reaches a `/bin/sh` script, so
+    /// every line the script prints is built as JSON and then quoted by
+    /// [`printf_json_line`]. A reply holding a quote, a semicolon, or a
+    /// backtick stays one literal string.
+    ///
     /// The trailing `cat` holds stdin open so the agent's reader never hits
     /// EOF before it has consumed that second result line.
     fn write_scripted_claude(dir: &std::path::Path, reply: &str) {
         use std::os::unix::fs::PermissionsExt;
 
+        let init = serde_json::json!({
+            "type": "system",
+            "subtype": "init",
+            "tools": [],
+        });
+        let assistant = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": reply}],
+            },
+        });
+        let usage = serde_json::json!({
+            "cache_read_input_tokens": SCRIPTED_CACHE_READ_TOKENS,
+            "cache_creation_input_tokens": SCRIPTED_CACHE_CREATION_TOKENS,
+            "input_tokens": SCRIPTED_INPUT_TOKENS,
+            "output_tokens": SCRIPTED_OUTPUT_TOKENS,
+        });
+
         let script = format!(
             "#!/bin/sh\n\
              read -r _init_trigger\n\
-             printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[]}}'\n\
-             printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\
-             \"stop_reason\":\"end_turn\"}}'\n\
+             {init_line}\
+             {init_result_line}\
              read -r _prompt\n\
-             printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\
-             \"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}]}}}}'\n\
-             printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\
-             \"stop_reason\":\"end_turn\",\"usage\":{{\
-             \"cache_read_input_tokens\":{read},\
-             \"cache_creation_input_tokens\":{created},\
-             \"input_tokens\":{input},\
-             \"output_tokens\":{output}}}}}'\n\
+             {assistant_line}\
+             {turn_result_line}\
              exec cat >/dev/null\n",
-            reply = reply,
-            read = SCRIPTED_CACHE_READ_TOKENS,
-            created = SCRIPTED_CACHE_CREATION_TOKENS,
-            input = SCRIPTED_INPUT_TOKENS,
-            output = SCRIPTED_OUTPUT_TOKENS,
+            init_line = printf_json_line(&init),
+            init_result_line = printf_json_line(&scripted_result_line(None)),
+            assistant_line = printf_json_line(&assistant),
+            turn_result_line = printf_json_line(&scripted_result_line(Some(usage))),
         );
 
         let script_path = dir.join("claude");
@@ -2604,5 +2660,41 @@ mod tests {
             "the scripted reply must have been read as a refusal: {meta}"
         );
         assert_scripted_cache_usage(cache_usage_of(&meta));
+    }
+
+    /// A reply carrying shell metacharacters is data the CLI echoes back, not
+    /// a command the harness runs.
+    ///
+    /// [`write_scripted_claude`] embeds `reply` in a `/bin/sh` script. A reply
+    /// holding a single quote closes the script's quoting context, so an
+    /// unescaped interpolation would let any caller of this helper run
+    /// arbitrary commands on the developer's machine and on CI. The reply here
+    /// carries the classic `'; <command>; '` shape: the turn must report it
+    /// back verbatim, and the command inside it must never run.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_reply_with_shell_metacharacters_is_data_not_a_command() {
+        let _state = crate::test_support::StateDirGuard::new();
+        let bin_dir = tempfile::tempdir().expect("a temp dir for the scripted claude");
+        let _path_guard = crate::test_support::PathGuard::prepend(bin_dir.path());
+
+        // A file the injected `touch` would create. It lives outside `bin_dir`
+        // so it cannot be mistaken for the scripted CLI the harness writes.
+        let canary_dir = tempfile::tempdir().expect("a temp dir for the injection canary");
+        let canary = canary_dir.path().join("pwned");
+        let reply = format!("'; touch {} ; '", canary.display());
+
+        let meta = scripted_turn_meta(&reply, bin_dir.path()).await;
+
+        assert!(
+            !canary.exists(),
+            "the reply's shell metacharacters ran as commands: {} exists",
+            canary.display()
+        );
+        assert_eq!(
+            meta.get("claude_response").and_then(|v| v.as_str()),
+            Some(reply.as_str()),
+            "a reply full of shell metacharacters must come back verbatim: {meta}"
+        );
     }
 }
