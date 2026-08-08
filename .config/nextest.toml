@@ -112,22 +112,19 @@ test-group = "lsp-ipc-serial"
 # Real rust-analyzer round-trips are not sub-second: warn every 60s, hard-kill
 # after 5 periods (5 minutes) so a cold analyzer has room to answer.
 slow-timeout = { period = "60s", terminate-after = 5 }
-# Bounded retry for the same reason as the real-model overrides above: these
-# tests already cap concurrency to ONE real rust-analyzer at a time, but under
-# full --workspace parallelism the OTHER ~16k tests still starve the CPU the
-# analyzer needs to answer inside its own generous (60s+) deadlines. Re-run
-# lands green once contention eases; it does not mask a defect — the same
-# assertions run again, deterministic tests never retry.
-retries = 2
 
-# Bounded retry for the same CPU-contention class as the lsp-ipc-serial group
-# above: download_progress_test spins up a real in-process tokio HTTP server
-# and drives a real download through it, bounded by its own internal
-# TEST_TIMEOUT watchdog. Under full --workspace parallelism that watchdog can
-# still trip even though the transfer itself is instant and correct. Re-run
-# lands green once contention eases; it does not mask a defect.
+# Bounded retry, scoped to the ONE test that was observed to fail under full
+# --workspace parallelism. `diagnose_reports_target_and_broken_dependent_not_clean`
+# asks a cold rust-analyzer for `textDocument/diagnostic` and asserts on the
+# answer, so a CPU-starved analyzer that misses its request deadline reports
+# "clean" and the assertion fails. Re-run lands green once contention eases,
+# and the same assertion runs again on the retry.
+#
+# The retry is deliberately NOT on the whole-binary override above: that filter
+# spans four test binaries, and a blanket retry there would silently convert a
+# genuine failure in any other test in them into a green run.
 [[profile.default.overrides]]
-filter = "package(model-loader) and binary(download_progress_test)"
+filter = "package(swissarmyhammer-diagnostics) and test(diagnose_reports_target_and_broken_dependent_not_clean)"
 retries = 2
 
 # Apply serial execution to llama-embedding tests
