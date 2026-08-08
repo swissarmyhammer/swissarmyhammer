@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::NullReporter;
-use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard, IsolatedTestEnvironment};
 
+use crate::agents::AGENTS_CONFIG_ENV;
 use crate::install::Selector;
 use crate::tool_install::ToolInstall;
 
@@ -29,23 +30,16 @@ use crate::tool_install::ToolInstall;
 /// `#[serial_test::serial(cwd)]` at the call site.
 #[derive(Debug)]
 pub struct MirdanConfigGuard {
-    original: Option<String>,
+    /// Restores [`AGENTS_CONFIG_ENV`] on drop. Held for that effect alone,
+    /// never read.
+    _env: EnvVarGuard,
 }
 
 impl MirdanConfigGuard {
-    /// Set `MIRDAN_AGENTS_CONFIG` to `path`, capturing the prior value.
-    pub fn set(path: &Path) -> Self {
-        let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-        std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-        Self { original }
-    }
-}
-
-impl Drop for MirdanConfigGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-            None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
+    /// Set [`AGENTS_CONFIG_ENV`] to `path`, capturing the prior value.
+    pub fn set(path: impl AsRef<Path>) -> Self {
+        Self {
+            _env: EnvVarGuard::set(AGENTS_CONFIG_ENV, path.as_ref()),
         }
     }
 }

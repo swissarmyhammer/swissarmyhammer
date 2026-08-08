@@ -487,7 +487,7 @@ mod tests {
     use super::*;
     use crate::registry::DEFAULT_REGISTRY_URL;
     use serial_test::serial;
-    use std::env;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
 
     #[test]
     fn test_generate_state() {
@@ -532,83 +532,49 @@ mod tests {
     #[test]
     #[serial(mirdan_env)]
     fn test_registry_url_from_env() {
-        let original = env::var("MIRDAN_REGISTRY_URL").ok();
-        env::set_var("MIRDAN_REGISTRY_URL", "https://custom.example.com");
+        let _registry = EnvVarGuard::set("MIRDAN_REGISTRY_URL", "https://custom.example.com");
 
         let url = get_registry_url();
         assert_eq!(url, "https://custom.example.com");
-
-        match original {
-            Some(v) => env::set_var("MIRDAN_REGISTRY_URL", v),
-            None => env::remove_var("MIRDAN_REGISTRY_URL"),
-        }
     }
 
     #[test]
     #[serial(mirdan_env)]
     fn test_registry_url_default() {
-        let original = env::var("MIRDAN_REGISTRY_URL").ok();
-        env::remove_var("MIRDAN_REGISTRY_URL");
+        let _registry = EnvVarGuard::unset("MIRDAN_REGISTRY_URL");
 
         let url = get_registry_url();
         assert_eq!(url, DEFAULT_REGISTRY_URL);
-
-        if let Some(v) = original {
-            env::set_var("MIRDAN_REGISTRY_URL", v);
-        }
     }
 
     #[test]
     #[serial(mirdan_env)]
     fn test_credentials_path_from_env() {
-        let original = env::var("MIRDAN_CREDENTIALS_PATH").ok();
-        env::set_var("MIRDAN_CREDENTIALS_PATH", "/custom/path/creds");
+        let _creds_path = EnvVarGuard::set("MIRDAN_CREDENTIALS_PATH", "/custom/path/creds");
 
         let path = get_credentials_path();
         assert_eq!(path, PathBuf::from("/custom/path/creds"));
-
-        match original {
-            Some(v) => env::set_var("MIRDAN_CREDENTIALS_PATH", v),
-            None => env::remove_var("MIRDAN_CREDENTIALS_PATH"),
-        }
     }
 
     #[test]
     #[serial(mirdan_env)]
     fn test_credentials_path_default() {
-        let original = env::var("MIRDAN_CREDENTIALS_PATH").ok();
-        env::remove_var("MIRDAN_CREDENTIALS_PATH");
+        let _creds_path = EnvVarGuard::unset("MIRDAN_CREDENTIALS_PATH");
 
         let path = get_credentials_path();
         assert!(path.ends_with(".mirdan/credentials"));
-
-        if let Some(v) = original {
-            env::set_var("MIRDAN_CREDENTIALS_PATH", v);
-        }
     }
 
     #[test]
     #[serial(mirdan_env)]
     fn test_load_credentials_from_env_token() {
-        let original_token = env::var("MIRDAN_TOKEN").ok();
-        let original_path = env::var("MIRDAN_CREDENTIALS_PATH").ok();
-
-        env::set_var("MIRDAN_TOKEN", "mirdan_env_token_123");
-        env::set_var("MIRDAN_CREDENTIALS_PATH", "/nonexistent/path");
+        let _token = EnvVarGuard::set("MIRDAN_TOKEN", "mirdan_env_token_123");
+        let _creds_path = EnvVarGuard::set("MIRDAN_CREDENTIALS_PATH", "/nonexistent/path");
 
         let creds = load_credentials();
         assert!(creds.is_some());
         let creds = creds.unwrap();
         assert_eq!(creds.token, "mirdan_env_token_123");
-
-        match original_token {
-            Some(v) => env::set_var("MIRDAN_TOKEN", v),
-            None => env::remove_var("MIRDAN_TOKEN"),
-        }
-        match original_path {
-            Some(v) => env::set_var("MIRDAN_CREDENTIALS_PATH", v),
-            None => env::remove_var("MIRDAN_CREDENTIALS_PATH"),
-        }
     }
 
     #[test]
@@ -617,11 +583,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let creds_path = temp_dir.path().join("credentials");
 
-        let original = env::var("MIRDAN_CREDENTIALS_PATH").ok();
-        env::set_var("MIRDAN_CREDENTIALS_PATH", &creds_path);
-
-        let original_token = env::var("MIRDAN_TOKEN").ok();
-        env::remove_var("MIRDAN_TOKEN");
+        let _creds_path_env = EnvVarGuard::set("MIRDAN_CREDENTIALS_PATH", &creds_path);
+        let _token = EnvVarGuard::unset("MIRDAN_TOKEN");
 
         let creds = Credentials {
             registry: "https://test.example.com".to_string(),
@@ -645,14 +608,6 @@ mod tests {
             let mode = metadata.permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
-
-        match original {
-            Some(v) => env::set_var("MIRDAN_CREDENTIALS_PATH", v),
-            None => env::remove_var("MIRDAN_CREDENTIALS_PATH"),
-        }
-        if let Some(v) = original_token {
-            env::set_var("MIRDAN_TOKEN", v);
-        }
     }
 
     #[test]
@@ -664,15 +619,9 @@ mod tests {
         fs::write(&creds_path, "test").unwrap();
         assert!(creds_path.exists());
 
-        let original = env::var("MIRDAN_CREDENTIALS_PATH").ok();
-        env::set_var("MIRDAN_CREDENTIALS_PATH", &creds_path);
+        let _creds_path_env = EnvVarGuard::set("MIRDAN_CREDENTIALS_PATH", &creds_path);
 
         delete_credentials().unwrap();
         assert!(!creds_path.exists());
-
-        match original {
-            Some(v) => env::set_var("MIRDAN_CREDENTIALS_PATH", v),
-            None => env::remove_var("MIRDAN_CREDENTIALS_PATH"),
-        }
     }
 }

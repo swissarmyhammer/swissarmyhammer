@@ -103,7 +103,7 @@ fn assert_all_present(names: &HashSet<String>, required: &[&str], context: &str)
 #[serial(mirdan_env)]
 async fn claude_client_gets_shared_plus_shell_not_agent_tools() {
     let (mut server, temp) = start_isolated_server().await;
-    let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
+    let _guard = MirdanConfigGuard::set(write_claude_agents_config(temp.path()));
 
     let names = advertised_tools(&server, "claude-code").await;
 

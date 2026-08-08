@@ -158,6 +158,7 @@ pub fn run_doctor(verbose: bool) -> i32 {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::PathGuard;
     use tempfile::TempDir;
 
     /// RAII guard that restores `env::current_dir` on drop.
@@ -178,29 +179,6 @@ mod tests {
         fn drop(&mut self) {
             // Best-effort restore; ignore errors during unwind.
             let _ = env::set_current_dir(&self.original);
-        }
-    }
-
-    /// RAII guard that restores the `PATH` env var on drop.
-    struct PathEnvGuard {
-        original: Option<String>,
-    }
-
-    impl PathEnvGuard {
-        /// Capture the current `PATH` value so it can be restored later.
-        fn capture() -> Self {
-            Self {
-                original: env::var("PATH").ok(),
-            }
-        }
-    }
-
-    impl Drop for PathEnvGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => env::set_var("PATH", value),
-                None => env::remove_var("PATH"),
-            }
         }
     }
 
@@ -334,7 +312,7 @@ mod tests {
     #[test]
     #[serial(env)]
     fn test_check_shelltool_in_path_not_found() {
-        let _path_env = PathEnvGuard::capture();
+        let _path_env = PathGuard::capture();
 
         let tmp = TempDir::new().expect("create tempdir");
         env::set_var("PATH", tmp.path());

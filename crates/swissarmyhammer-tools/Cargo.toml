@@ -165,6 +165,10 @@ agent-client-protocol-extras = { workspace = true }
 # Captures `tracing` output to assert the review engine's observability traces
 # fire on the real tool path (through spawn_blocking).
 tracing-test = { workspace = true }
+# `test-support` exposes `mirdan::test_support::MirdanConfigGuard`, the one RAII
+# redirect of `MIRDAN_AGENTS_CONFIG` every test that touches mirdan agent
+# detection uses.
+mirdan = { workspace = true, features = ["test-support"] }
 # `test-helpers` exposes `cli_gen::test_support` (build_commands_from_schema /
 # collect_verb_noun_pairs) used by the review tool's CLI command-tree coverage test.
 swissarmyhammer-operations = { workspace = true, features = ["test-helpers"] }

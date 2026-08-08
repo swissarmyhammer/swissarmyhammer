@@ -626,31 +626,8 @@ impl TemplateContentProvider for ValidatorLoader {
 mod tests {
     use super::*;
     use std::fs;
-    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard};
     use tempfile::TempDir;
-
-    /// RAII guard that restores an environment variable on drop.
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &Path) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
 
     /// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`.
     fn write_ruleset(base: &Path, name: &str, description: &str) {

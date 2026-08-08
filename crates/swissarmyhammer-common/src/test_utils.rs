@@ -254,6 +254,129 @@ impl Drop for CurrentDirGuard {
     }
 }
 
+/// Name of the search-path environment variable [`PathGuard`] scopes.
+const PATH_ENV: &str = "PATH";
+
+/// RAII guard that restores one environment variable to its prior value on
+/// drop, whatever the test did to it in between.
+///
+/// This is the one implementation of the save-and-restore pattern for the
+/// whole workspace. Every guard that scopes a single variable — `PATH`,
+/// `HOME`, `XDG_STATE_HOME`, an application's own config override — is built
+/// on this rather than repeating the capture/set/restore triple, so the
+/// restore semantics (including "the variable was unset before, so unset it
+/// again") cannot drift between crates.
+///
+/// The environment is process-global, so a test holding an `EnvVarGuard` must
+/// also be `#[serial]`, or join a named `serial_test` group shared with every
+/// other test that reads or writes the same variable.
+///
+/// ```
+/// use swissarmyhammer_common::test_utils::EnvVarGuard;
+///
+/// {
+///     let _guard = EnvVarGuard::set("SAH_DOC_EXAMPLE", "on");
+///     assert_eq!(std::env::var("SAH_DOC_EXAMPLE").as_deref(), Ok("on"));
+/// }
+/// assert!(std::env::var_os("SAH_DOC_EXAMPLE").is_none());
+/// ```
+#[derive(Debug)]
+pub struct EnvVarGuard {
+    key: std::ffi::OsString,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    /// Capture `key`'s current value without changing it, so a test that
+    /// mutates the variable by hand still has it restored on drop.
+    pub fn capture(key: impl AsRef<std::ffi::OsStr>) -> Self {
+        let key = key.as_ref().to_os_string();
+        let previous = std::env::var_os(&key);
+        Self { key, previous }
+    }
+
+    /// Set `key` to `value` for the guard's lifetime.
+    pub fn set(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let guard = Self::capture(key);
+        std::env::set_var(&guard.key, value);
+        guard
+    }
+
+    /// Remove `key` for the guard's lifetime.
+    pub fn unset(key: impl AsRef<std::ffi::OsStr>) -> Self {
+        let guard = Self::capture(key);
+        std::env::remove_var(&guard.key);
+        guard
+    }
+
+    /// Prepend `dir` to the search list in `key`, keeping the existing entries
+    /// behind it, so a program name with no path separator resolves to a file
+    /// placed in `dir` first.
+    ///
+    /// # Panics
+    /// Panics when an existing entry holds the platform's path separator and
+    /// therefore cannot be re-joined. Only a corrupt environment produces
+    /// that, and a test cannot proceed against one.
+    pub fn prepend_path(key: impl AsRef<std::ffi::OsStr>, dir: impl AsRef<Path>) -> Self {
+        let guard = Self::capture(key);
+        let mut entries = vec![dir.as_ref().to_path_buf()];
+        if let Some(existing) = &guard.previous {
+            entries.extend(std::env::split_paths(existing));
+        }
+        let joined = std::env::join_paths(entries)
+            .expect("the existing search-path entries must be re-joinable");
+        std::env::set_var(&guard.key, joined);
+        guard
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(&self.key, value),
+            None => std::env::remove_var(&self.key),
+        }
+    }
+}
+
+/// RAII guard that scopes a change to the process search path, restoring
+/// `PATH` on drop.
+///
+/// Naming the variable once here keeps the three kinds of `PATH` test — shim a
+/// scripted executable in front of the real one, blank the path so a lookup
+/// must fail, and capture before mutating by hand — reading the same way.
+/// Callers must be `#[serial]`; see [`EnvVarGuard`].
+#[derive(Debug)]
+pub struct PathGuard {
+    /// Restores `PATH` on drop. Held for that effect alone, never read.
+    _env: EnvVarGuard,
+}
+
+impl PathGuard {
+    /// Prepend `dir` to `PATH`, so a program name with no path separator
+    /// (e.g. `"claude"`) resolves to a binary placed in `dir`.
+    pub fn prepend(dir: impl AsRef<Path>) -> Self {
+        Self {
+            _env: EnvVarGuard::prepend_path(PATH_ENV, dir),
+        }
+    }
+
+    /// Replace `PATH` wholesale — an empty value guarantees no lookup succeeds.
+    pub fn set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+        Self {
+            _env: EnvVarGuard::set(PATH_ENV, value),
+        }
+    }
+
+    /// Capture `PATH` without changing it, for a test that mutates the
+    /// variable itself and only wants the restore.
+    pub fn capture() -> Self {
+        Self {
+            _env: EnvVarGuard::capture(PATH_ENV),
+        }
+    }
+}
+
 /// Helper struct to ensure process cleanup in tests
 ///
 /// This guard automatically kills and waits for a child process when dropped,
@@ -449,8 +572,10 @@ fn create_isolated_test_home() -> std::io::Result<(TempDir, PathBuf)> {
 /// Used from IsolatedTestEnvironment to provide a complete isolated test setup.
 #[derive(Debug)]
 struct IsolatedTestHome {
+    /// Restores `HOME` first, before the temp directory it points at is
+    /// deleted and before the global lock is released.
+    _home: EnvVarGuard,
     _temp_dir: TempDir,
-    original_home: Option<String>,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -492,15 +617,11 @@ impl IsolatedTestHome {
         // Acquire the global HOME environment lock to prevent race conditions
         let lock_guard = acquire_home_env_lock();
 
-        let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home()?;
 
-        // Set HOME to the temporary directory
-        std::env::set_var("HOME", &home_path);
-
         Ok(Self {
+            _home: EnvVarGuard::set("HOME", &home_path),
             _temp_dir: temp_dir,
-            original_home,
             _lock_guard: lock_guard,
         })
     }
@@ -516,16 +637,6 @@ impl IsolatedTestHome {
             .expect("Failed to get swissarmyhammer directory")
             .root()
             .to_path_buf()
-    }
-}
-
-impl Drop for IsolatedTestHome {
-    fn drop(&mut self) {
-        // Restore original HOME environment variable
-        match &self.original_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
     }
 }
 
@@ -687,6 +798,91 @@ mod tests {
     /// Delay used in tests to allow a short-lived spawned process to finish
     /// exiting before asserting on its state.
     const TEST_PROCESS_COMPLETION_WAIT_MS: u64 = 100;
+
+    /// Variable the [`EnvVarGuard`] tests scope. It belongs to no other test,
+    /// so those tests need no serial group beyond their own.
+    const GUARD_TEST_ENV: &str = "SAH_ENV_VAR_GUARD_TEST";
+
+    /// A variable that already held a value goes back to that value on drop.
+    #[test]
+    #[serial_test::serial(sah_env_var_guard_test)]
+    fn env_var_guard_restores_a_prior_value() {
+        let _outer = EnvVarGuard::set(GUARD_TEST_ENV, "before");
+
+        {
+            let _inner = EnvVarGuard::set(GUARD_TEST_ENV, "during");
+            assert_eq!(
+                std::env::var(GUARD_TEST_ENV).as_deref(),
+                Ok("during"),
+                "the inner guard must be the value in force while it lives"
+            );
+        }
+
+        assert_eq!(
+            std::env::var(GUARD_TEST_ENV).as_deref(),
+            Ok("before"),
+            "dropping the inner guard must put the prior value back"
+        );
+    }
+
+    /// A variable that was unset is unset again on drop, not left holding the
+    /// test's value nor set to an empty string.
+    #[test]
+    #[serial_test::serial(sah_env_var_guard_test)]
+    fn env_var_guard_restores_an_absent_variable_to_absent() {
+        std::env::remove_var(GUARD_TEST_ENV);
+
+        {
+            let _guard = EnvVarGuard::set(GUARD_TEST_ENV, "during");
+            assert!(std::env::var_os(GUARD_TEST_ENV).is_some());
+        }
+
+        assert!(
+            std::env::var_os(GUARD_TEST_ENV).is_none(),
+            "a variable that did not exist must not exist afterwards"
+        );
+    }
+
+    /// `unset` hides an existing value for the guard's lifetime and gives it
+    /// back on drop.
+    #[test]
+    #[serial_test::serial(sah_env_var_guard_test)]
+    fn env_var_guard_unset_hides_then_restores() {
+        let _outer = EnvVarGuard::set(GUARD_TEST_ENV, "before");
+
+        {
+            let _inner = EnvVarGuard::unset(GUARD_TEST_ENV);
+            assert!(std::env::var_os(GUARD_TEST_ENV).is_none());
+        }
+
+        assert_eq!(std::env::var(GUARD_TEST_ENV).as_deref(), Ok("before"));
+    }
+
+    /// `prepend_path` puts the new directory first and keeps every existing
+    /// entry behind it, in order.
+    #[test]
+    #[serial_test::serial(sah_env_var_guard_test)]
+    fn env_var_guard_prepend_path_keeps_the_existing_entries_behind() {
+        let existing = std::env::join_paths(["/first", "/second"])
+            .expect("the fixture entries must be joinable");
+        let _outer = EnvVarGuard::set(GUARD_TEST_ENV, &existing);
+
+        let _inner = EnvVarGuard::prepend_path(GUARD_TEST_ENV, "/shim");
+
+        let entries: Vec<PathBuf> = std::env::split_paths(
+            &std::env::var_os(GUARD_TEST_ENV).expect("the guard must have set the variable"),
+        )
+        .collect();
+        assert_eq!(
+            entries,
+            vec![
+                PathBuf::from("/shim"),
+                PathBuf::from("/first"),
+                PathBuf::from("/second"),
+            ],
+            "the prepended directory must come first and the existing entries must follow in order"
+        );
+    }
 
     /// `CaptureWriter` records the formatted output of a tracing subscriber so
     /// a test can assert on emitted log lines verbatim.

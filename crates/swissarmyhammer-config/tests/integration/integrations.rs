@@ -5,17 +5,18 @@
 
 use liquid::ParserBuilder;
 use serde_json::json;
-use std::env;
 use std::fs;
-use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for comprehensive integration testing
 struct IntegrationTestEnvironment {
+    /// Restores every variable this fixture set, in reverse order of setting.
+    /// Held for that effect alone, never read.
+    _env_vars: Vec<EnvVarGuard>,
     _env: IsolatedTestEnvironment,
     _dir_guard: CurrentDirGuard,
-    env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IntegrationTestEnvironment {
@@ -29,16 +30,14 @@ impl IntegrationTestEnvironment {
         let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
+            _env_vars: Vec::new(),
             _env: env,
             _dir_guard: dir_guard,
-            env_vars_to_restore: Vec::new(),
         }
     }
 
     fn set_env_var(&mut self, key: &str, value: &str) {
-        let original = env::var(key).ok();
-        self.env_vars_to_restore.push((key.to_string(), original));
-        env::set_var(key, value);
+        self._env_vars.push(EnvVarGuard::set(key, value));
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
@@ -72,21 +71,6 @@ impl IntegrationTestEnvironment {
         fs::create_dir_all(&project_config_dir).expect("Failed to create project config");
 
         subdir
-    }
-}
-
-impl Drop for IntegrationTestEnvironment {
-    fn drop(&mut self) {
-        // Restore environment variables
-        for (key, original_value) in &self.env_vars_to_restore {
-            match original_value {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-        }
-
-        // CurrentDirGuard automatically restores the original directory
-        // IsolatedTestEnvironment handles HOME restoration
     }
 }
 

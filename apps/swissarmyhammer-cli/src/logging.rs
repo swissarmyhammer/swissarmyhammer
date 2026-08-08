@@ -273,6 +273,7 @@ pub async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_m
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
 
     #[test]
     fn validate_log_file_name_accepts_bare_names() {
@@ -346,35 +347,5 @@ mod tests {
     fn resolve_log_file_name_rejects_path_override() {
         let _guard = EnvVarGuard::set("SWISSARMYHAMMER_LOG_FILE", "../escape.log");
         assert!(resolve_log_file_name().is_err());
-    }
-
-    /// Save/restore a single env var around a test so the override-sensitive
-    /// `resolve_log_file_name` cases don't leak into one another.
-    struct EnvVarGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self { key, prev }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prev = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
     }
 }

@@ -1316,30 +1316,9 @@ mod tests {
     // agent whose MCP configs live under the project dir / isolated home.
     // =====================================================================
 
+    use mirdan::test_support::MirdanConfigGuard;
     use serial_test::serial;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
-
-    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
-    struct MirdanConfigGuard {
-        original: Option<String>,
-    }
-
-    impl MirdanConfigGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-            Self { original }
-        }
-    }
-
-    impl Drop for MirdanConfigGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
-            }
-        }
-    }
 
     /// Build the tool wired with the `shelltool` MCP server entry, matching
     /// how the CLI constructs it.

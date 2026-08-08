@@ -78,7 +78,7 @@ fn deny_list(settings_path: &Path) -> Vec<String> {
 #[serial(mirdan_env)]
 async fn claude_client_triggers_bash_deny() {
     let (mut server, temp) = start_isolated_server().await;
-    let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
+    let _guard = MirdanConfigGuard::set(write_claude_agents_config(temp.path()));
 
     handshake_as(&server, "claude-code").await;
 
@@ -103,7 +103,7 @@ async fn claude_client_triggers_bash_deny() {
 #[serial(mirdan_env)]
 async fn unknown_client_triggers_no_deny() {
     let (mut server, temp) = start_isolated_server().await;
-    let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
+    let _guard = MirdanConfigGuard::set(write_claude_agents_config(temp.path()));
 
     handshake_as(&server, "some-unrecognized-mcp-client").await;
 

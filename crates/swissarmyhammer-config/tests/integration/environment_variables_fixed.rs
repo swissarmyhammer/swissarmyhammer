@@ -4,25 +4,26 @@
 //! key transformation, type conversion, and precedence handling.
 
 use serde_json::json;
-use std::env;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard, IsolatedTestEnvironment};
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
+    /// Restores every variable this fixture set, in reverse order of setting.
+    /// Held for that effect alone, never read.
+    _env_vars: Vec<EnvVarGuard>,
+    /// Restores `HOME`. Held for that effect alone, never read.
+    _home: EnvVarGuard,
     _env: IsolatedTestEnvironment,
     _dir_guard: CurrentDirGuard,
-    original_home: Option<String>,
-    env_vars_to_restore: Vec<(String, Option<String>)>,
     timestamp: String,
 }
 
 impl IsolatedEnvTest {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-        let original_home = env::var("HOME").ok();
 
         // Create unique timestamp for variable names
         let timestamp = SystemTime::now()
@@ -37,43 +38,20 @@ impl IsolatedEnvTest {
         // Set up isolated environment
         let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
+        let home = EnvVarGuard::set("HOME", &home_dir);
         let dir_guard = CurrentDirGuard::new(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
+            _env_vars: Vec::new(),
+            _home: home,
             _env: env,
             _dir_guard: dir_guard,
-            original_home,
-            env_vars_to_restore: Vec::new(),
             timestamp,
         }
     }
 
     fn set_env_var(&mut self, key: &str, value: &str) {
-        // Store original value for restoration
-        let original = env::var(key).ok();
-        self.env_vars_to_restore.push((key.to_string(), original));
-
-        env::set_var(key, value);
-    }
-}
-
-impl Drop for IsolatedEnvTest {
-    fn drop(&mut self) {
-        // Restore environment variables
-        for (key, original_value) in &self.env_vars_to_restore {
-            match original_value {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-        }
-
-        // CurrentDirGuard automatically restores the original working directory
-        if let Some(home) = &self.original_home {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
+        self._env_vars.push(EnvVarGuard::set(key, value));
     }
 }
 

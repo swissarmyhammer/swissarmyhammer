@@ -129,15 +129,20 @@ pub struct DetectedAgent {
     pub detection_detail: String,
 }
 
+/// Environment variable that overrides the agents configuration file mirdan
+/// reads. Named here so the loader and the test guard that redirects it name
+/// the same string.
+pub const AGENTS_CONFIG_ENV: &str = "MIRDAN_AGENTS_CONFIG";
+
 /// Load agents config from the best available source.
 ///
 /// Priority:
-/// 1. MIRDAN_AGENTS_CONFIG env var
+/// 1. [`AGENTS_CONFIG_ENV`] env var
 /// 2. ~/.mirdan/agents.yaml
 /// 3. Embedded default
 pub fn load_agents_config() -> Result<AgentsConfig, RegistryError> {
     // Check env var first
-    if let Ok(path) = std::env::var("MIRDAN_AGENTS_CONFIG") {
+    if let Ok(path) = std::env::var(AGENTS_CONFIG_ENV) {
         let content = std::fs::read_to_string(&path).map_err(|e| {
             RegistryError::Validation(format!(
                 "cannot read MIRDAN_AGENTS_CONFIG '{}': {}",

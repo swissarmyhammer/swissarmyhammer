@@ -3140,32 +3140,11 @@ mod tests {
     // merge drivers in `.kanban/` rather than a `.shell/config.yaml`.
     // =========================================================================
 
+    use mirdan::test_support::MirdanConfigGuard;
     use serial_test::serial;
     use swissarmyhammer_common::lifecycle::{InitScope, Initializable};
     use swissarmyhammer_common::reporter::NullReporter;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
-
-    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
-    struct MirdanConfigGuard {
-        original: Option<String>,
-    }
-
-    impl MirdanConfigGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-            Self { original }
-        }
-    }
-
-    impl Drop for MirdanConfigGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
-            }
-        }
-    }
 
     /// Build the tool wired with the `kanban` MCP server entry, matching how
     /// the kanban CLI constructs it.

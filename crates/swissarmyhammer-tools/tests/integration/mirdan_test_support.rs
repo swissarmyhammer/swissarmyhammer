@@ -9,8 +9,9 @@
 //!
 //! Two facilities live here, shared by every test that touches the deny path so
 //! the env handling is written once:
-//! - [`MirdanConfigGuard`] — RAII redirect of `MIRDAN_AGENTS_CONFIG` into a
-//!   tempdir, restoring the prior value on drop.
+//! - [`MirdanConfigGuard`] — mirdan's own RAII redirect of
+//!   `MIRDAN_AGENTS_CONFIG` into a tempdir, re-exported here so the tests that
+//!   need it and `write_claude_agents_config` arrive together.
 //! - [`write_claude_agents_config`] — write a minimal agents config whose only
 //!   agent is a detected `claude-code` rooted under a tempdir.
 //!
@@ -21,30 +22,7 @@
 
 use std::path::Path;
 
-/// RAII guard that points `MIRDAN_AGENTS_CONFIG` at a temp agents config for the
-/// duration of a test, restoring the prior value (or unsetting it) on drop.
-pub struct MirdanConfigGuard {
-    original: Option<String>,
-}
-
-impl MirdanConfigGuard {
-    /// Redirect `MIRDAN_AGENTS_CONFIG` to `path`, capturing the prior value so
-    /// [`Drop`] can restore it.
-    pub fn set(path: &Path) -> Self {
-        let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-        std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-        Self { original }
-    }
-}
-
-impl Drop for MirdanConfigGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-            None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
-        }
-    }
-}
+pub use mirdan::test_support::MirdanConfigGuard;
 
 /// Write an agents config whose only agent is a detected `claude-code` whose
 /// settings files live under `root`, and return its path.

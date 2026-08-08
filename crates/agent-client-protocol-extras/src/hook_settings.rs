@@ -266,20 +266,21 @@ mod tests {
     /// restores the previous value on drop. Must only be used from a
     /// `#[serial]` test so no other thread observes the mutation.
     struct HomeGuard {
-        previous: Option<String>,
+        /// Restores `HOME` on drop, before `_home` deletes the directory it
+        /// pointed at. Held for that effect alone, never read.
+        _restore: swissarmyhammer_common::test_utils::EnvVarGuard,
         _home: TempDir,
         home_claude: PathBuf,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let previous = std::env::var("HOME").ok();
             let home = TempDir::new().unwrap();
-            std::env::set_var("HOME", home.path());
+            let restore = swissarmyhammer_common::test_utils::EnvVarGuard::set("HOME", home.path());
             let home_claude = home.path().join(".claude");
             fs::create_dir_all(&home_claude).unwrap();
             Self {
-                previous,
+                _restore: restore,
                 _home: home,
                 home_claude,
             }
@@ -288,15 +289,6 @@ mod tests {
         /// Write the user-level `~/.claude/settings.json`.
         fn write_user_settings(&self, contents: &str) {
             fs::write(self.home_claude.join("settings.json"), contents).unwrap();
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
         }
     }
 

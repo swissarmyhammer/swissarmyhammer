@@ -518,6 +518,7 @@ pub fn doctor_workspace_root() -> PathBuf {
 mod tests {
     use super::*;
     use std::fs;
+    use swissarmyhammer_common::test_utils::PathGuard;
     use tempfile::TempDir;
 
     /// The review-engine section must always report the detected project
@@ -599,31 +600,6 @@ mod tests {
         assert!(!claude_check
             .message
             .contains("Claude Code command not found in PATH"));
-    }
-
-    /// RAII guard that scopes a PATH override for the duration of a test and
-    /// restores the original value on drop. Pair with
-    /// `#[serial_test::serial(path_env)]` so concurrent tests don't see each
-    /// other's PATH mutations.
-    struct PathGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathGuard {
-        fn set(new_path: &str) -> Self {
-            let original = env::var_os("PATH");
-            env::set_var("PATH", new_path);
-            PathGuard { original }
-        }
-    }
-
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(value) => env::set_var("PATH", value),
-                None => env::remove_var("PATH"),
-            }
-        }
     }
 
     /// Regression test for CI: when the `claude` binary is absent from PATH,
