@@ -46,6 +46,16 @@ pub struct DuplicateGroup {
     pub duplicates: Vec<DuplicateMatch>,
 }
 
+/// Default minimum cosine similarity for [`FindDuplicatesOptions`].
+const DEFAULT_MIN_SIMILARITY: f32 = 0.85;
+
+/// Default minimum chunk size in bytes for [`FindDuplicatesOptions`].
+const DEFAULT_MIN_CHUNK_BYTES: usize = 100;
+
+/// Default maximum number of duplicates per source chunk for
+/// [`FindDuplicatesOptions`].
+const DEFAULT_MAX_PER_CHUNK: usize = 5;
+
 /// Options for [`find_duplicates`].
 #[derive(Debug)]
 pub struct FindDuplicatesOptions {
@@ -60,15 +70,15 @@ pub struct FindDuplicatesOptions {
 impl Default for FindDuplicatesOptions {
     fn default() -> Self {
         Self {
-            min_similarity: 0.85,
-            min_chunk_bytes: 100,
-            max_per_chunk: 5,
+            min_similarity: DEFAULT_MIN_SIMILARITY,
+            min_chunk_bytes: DEFAULT_MIN_CHUNK_BYTES,
+            max_per_chunk: DEFAULT_MAX_PER_CHUNK,
         }
     }
 }
 
 /// Result of [`find_duplicates`].
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FindDuplicatesResult {
     /// The file(s) that were analyzed.
     pub file: String,
@@ -215,6 +225,15 @@ mod tests {
     use crate::serialize_embedding;
     use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
+    /// Test `min_chunk_bytes` floor that keeps the short fixture chunks eligible.
+    const TEST_MIN_CHUNK_BYTES: usize = 10;
+
+    /// Low `min_similarity` for a test that must not filter on similarity.
+    const TEST_MIN_SIMILARITY_LOW: f32 = 0.5;
+
+    /// Test `max_per_chunk` cap that is smaller than the number of planted copies.
+    const TEST_MAX_PER_CHUNK: usize = 3;
+
     fn insert_chunk(
         conn: &Connection,
         file_path: &str,
@@ -262,7 +281,7 @@ mod tests {
         );
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/handler.rs", &opts).unwrap();
@@ -353,7 +372,7 @@ mod tests {
         insert_chunk(&conn, "src/other.rs", 1, 5, None, text_b, &[0.0, 1.0, 0.0]);
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/unique.rs", &opts).unwrap();
@@ -390,7 +409,7 @@ mod tests {
         );
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/main.rs", &opts).unwrap();
@@ -428,14 +447,14 @@ mod tests {
         }
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
-            max_per_chunk: 3,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
+            max_per_chunk: TEST_MAX_PER_CHUNK,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/source.rs", &opts).unwrap();
 
         assert_eq!(result.groups.len(), 1);
-        assert_eq!(result.groups[0].duplicates.len(), 3);
+        assert_eq!(result.groups[0].duplicates.len(), TEST_MAX_PER_CHUNK);
     }
 
     #[test]
@@ -449,8 +468,8 @@ mod tests {
         insert_chunk(&conn, "src/b.rs", 1, 1, None, "let x = 1;", &[1.0, 0.0]);
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 100,
-            min_similarity: 0.5,
+            min_chunk_bytes: DEFAULT_MIN_CHUNK_BYTES,
+            min_similarity: TEST_MIN_SIMILARITY_LOW,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/a.rs", &opts).unwrap();
@@ -468,7 +487,7 @@ mod tests {
         insert_chunk(&conn, "src/other.rs", 1, 3, None, text, &[1.0, 0.0]);
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/nonexistent.rs", &opts).unwrap();
@@ -523,7 +542,7 @@ mod tests {
         insert_chunk(&conn, "src/tiny.rs", 1, 1, None, "x;", &[0.9, 0.1, 0.0]);
 
         let opts = FindDuplicatesOptions {
-            min_chunk_bytes: 10,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let via_conn = find_duplicates(&conn, "src/handler.rs", &opts).unwrap();
@@ -583,8 +602,8 @@ mod tests {
         );
 
         let opts = FindDuplicatesOptions {
-            min_similarity: 0.85,
-            min_chunk_bytes: 10,
+            min_similarity: DEFAULT_MIN_SIMILARITY,
+            min_chunk_bytes: TEST_MIN_CHUNK_BYTES,
             ..Default::default()
         };
         let result = find_duplicates(&conn, "src/target.rs", &opts).unwrap();
