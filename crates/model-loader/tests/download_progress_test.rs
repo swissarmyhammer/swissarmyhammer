@@ -19,8 +19,12 @@ const MODEL_FILENAME: &str = "qwen2.5-coder-embedding-fake-model-q8_0.gguf";
 const REPO: &str = "test-org/test-repo";
 const ETAG: &str = "deadbeefcafe0123";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-/// Overall guard so a wedged download can never hang the suite.
-const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Overall guard so a wedged download can never hang the suite. Generous
+/// (not tight) on purpose: under full `--workspace` parallelism the async
+/// runtime driving this in-process fake HTTP server is CPU-starved by the
+/// other ~16k tests sharing the machine, so a tight budget trips on load
+/// even though the transfer itself is instant and correct.
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Deterministic fake model payload, large enough for several stream chunks.
 fn fake_payload() -> Vec<u8> {

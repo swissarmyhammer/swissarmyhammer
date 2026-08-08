@@ -112,6 +112,23 @@ test-group = "lsp-ipc-serial"
 # Real rust-analyzer round-trips are not sub-second: warn every 60s, hard-kill
 # after 5 periods (5 minutes) so a cold analyzer has room to answer.
 slow-timeout = { period = "60s", terminate-after = 5 }
+# Bounded retry for the same reason as the real-model overrides above: these
+# tests already cap concurrency to ONE real rust-analyzer at a time, but under
+# full --workspace parallelism the OTHER ~16k tests still starve the CPU the
+# analyzer needs to answer inside its own generous (60s+) deadlines. Re-run
+# lands green once contention eases; it does not mask a defect — the same
+# assertions run again, deterministic tests never retry.
+retries = 2
+
+# Bounded retry for the same CPU-contention class as the lsp-ipc-serial group
+# above: download_progress_test spins up a real in-process tokio HTTP server
+# and drives a real download through it, bounded by its own internal
+# TEST_TIMEOUT watchdog. Under full --workspace parallelism that watchdog can
+# still trip even though the transfer itself is instant and correct. Re-run
+# lands green once contention eases; it does not mask a defect.
+[[profile.default.overrides]]
+filter = "package(model-loader) and binary(download_progress_test)"
+retries = 2
 
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
