@@ -91,8 +91,25 @@ comments:
     - tests: `cargo test -p swissarmyhammer-validators` 462 passed, 0 failed; `cargo clippy -p swissarmyhammer-validators --all-targets` clean; `cargo check --workspace --all-targets` clean; `cargo test -p swissarmyhammer-tools --lib mcp::tools::review` 69 passed
     - next: /review
   timestamp: 2026-08-07T04:25:08.147797+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzd8yt49mnbak2y2d007svs4
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (33fcf38a9) — 18 attempted, 3 confirmed, 5 refuted, 0 failed, 0 skipped. All 3 confirmed findings dropped under the review skill's written existing-test exception, so 0 recordable findings.
+    - dropped (existing test code, refactor request): crates/swissarmyhammer-validators/src/review/synthesize.rs:1445, :1451, :1477 — each asks to extract a test line-number literal as a named constant. The commit's only hunks in that file are lines 39, 662, and 675, inside `run_review`. `git blame` dates the three flagged lines to 945a7583ff (2026-06-09) and eccd288dcd (2026-06-26), both before this commit.
+    - next: none — task moved to done.
+  timestamp: 2026-08-07T04:50:59.337950+00:00
+- actor: claude-code
+  id: 01kzd8zkdv6axzg9n5jwgdvaja
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 6 files; shared evidence capped at MAX_SHARED_EVIDENCE_BYTES, the focus-file list moved into the per-file cost, MAX_FRAMING_BYTES = AGENT_PROMPT_CAP - MAX_FILE_BLOCK_BYTES with a real-pipeline acceptance test (RED verified)
+    - test: green — cargo nextest run --workspace 13672 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 33fcf38a9
+    - review: clean — 18 attempted, 3 confirmed, 5 refuted; all 3 dropped under the existing-test exception; task moved to done
+  timestamp: 2026-08-07T04:51:25.243375+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb880
 title: Review prompt framing eats 70-90% of the agent prompt cap
 ---
 Found while fixing ^tsram0q. `prompt_framing_bytes` measured 360112 bytes on a 9-file change and 469950 bytes on a 15-file change, against an `AGENT_PROMPT_CAP` of 524288. The framing alone takes 69% then 90% of every batch prompt, so file blocks get what little is left.

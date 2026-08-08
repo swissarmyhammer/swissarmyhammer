@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use swissarmyhammer_validators::review::probe_exists;
 use swissarmyhammer_validators::validators::{
-    compile_glob_patterns, matches_any_pattern, MatchContext, ToolSpec, ValidatorLoader,
-    ValidatorMatch,
+    compile_glob_patterns, matches_any_pattern, MatchContext, Supersedes, ToolSpec,
+    ValidatorLoader, ValidatorMatch,
 };
 use swissarmyhammer_validators::{load_rules, workspace_project_types, AvpError, RuleSet};
 
@@ -94,10 +94,10 @@ pub struct RuleDetail {
     pub name: String,
     /// The rule's markdown body verbatim.
     pub body: String,
-    /// The prompt rule this tool rule replaces when its tool is healthy.
-    /// Absent on prompt rules.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supersedes: Option<String>,
+    /// The prompt rules this tool rule replaces when its tool is healthy, as a
+    /// list of names. Absent on prompt rules.
+    #[serde(skip_serializing_if = "Supersedes::is_empty")]
+    pub supersedes: Supersedes,
     /// The tool block. Present only on tool rules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolSpec>,
@@ -369,9 +369,8 @@ fn rules_file_path() -> PathBuf {
 /// Render the dumped RuleSets as one markdown document.
 ///
 /// Each validator gets a heading with its name, then its description and source
-/// layer, then each rule's name, the prompt rule it supersedes (when the rule
-/// declares one), and its verbatim body. An empty set states that no rules
-/// apply.
+/// layer, then each rule's name, the prompt rules it supersedes (when the rule
+/// names any), and its verbatim body. An empty set states that no rules apply.
 fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String {
     let mut doc = String::from("# Review rules\n\n");
     if !extensions.is_empty() {
@@ -390,8 +389,8 @@ fn render_rules_markdown(rulesets: &[&RuleSet], extensions: &[String]) -> String
         ));
         for rule in rule_details(ruleset) {
             doc.push_str(&format!("### {}\n\n", rule.name));
-            if let Some(supersedes) = &rule.supersedes {
-                doc.push_str(&format!("Supersedes: {supersedes}\n\n"));
+            if !rule.supersedes.is_empty() {
+                doc.push_str(&format!("Supersedes: {}\n\n", rule.supersedes));
             }
             doc.push_str(&format!("{}\n\n", rule.body));
         }

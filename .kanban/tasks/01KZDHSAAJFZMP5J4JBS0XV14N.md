@@ -42,8 +42,25 @@ comments:
     - evidence: 3 files — crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs, crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs, crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs. TDD: 6 new tests written first and watched fail (5 panicked "the sample's language has a census mapping", 1 read `[("<anonymous>", false), ("<anonymous>", false)]`), then green. `cargo test -p swissarmyhammer-sem -p swissarmyhammer-validators` 333 + 482 + 2 + 2 passed, 0 failed. `cargo fmt --all -- --check` clean, `cargo clippy --all-targets` 0 warnings, `cargo check --workspace --all-targets` clean. Temporary tree-dumping probe deleted.
     - next: /review
   timestamp: 2026-08-07T08:54:36.093832+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzdqvehvy4kbxxf6cm9mgaps
+  text: |-
+    ### review — clean
+    - scope: review sha HEAD~1..HEAD (4ad29b5de)
+    - evidence: 0 findings, 0 confirmed, 0 refuted; 18 validator pairs attempted, 0 failed, 0 skipped
+    - next: none — task moved to done
+  timestamp: 2026-08-07T09:11:17.819674+00:00
+- actor: claude-code
+  id: 01kzdqvxbmvpwjc661y6z06mbd
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files; the call-based test-definition lookup reads the callee by grammar field, JS/TS/TSX census rows added, the not-computed probe test moved to Elixir
+    - test: green — cargo nextest run --workspace 13718 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 4ad29b5de
+    - review: clean — 0 findings, 18 pairs attempted; task moved to done
+  timestamp: 2026-08-07T09:11:32.980552+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffbd80
 title: Detect jest/mocha `it(...)` and `test(...)` as test definitions
 ---
 The JavaScript/TypeScript/TSX `ComplexitySpec` rows in `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs` mark a test only from a `@Test` decorator. Real JS and TS tests are a call — `it("...", () => {...})`, `test("...", async () => {...})`, `describe.each(...)` — so no JS or TS test is recognized as one today.

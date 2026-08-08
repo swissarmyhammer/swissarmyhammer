@@ -264,8 +264,29 @@ comments:
     - evidence: 7 files — crates/swissarmyhammer-validators/src/review/scope.rs, crates/swissarmyhammer-validators/src/review/scope/tests.rs, crates/swissarmyhammer-validators/src/review/mod.rs, crates/swissarmyhammer-validators/src/review/synthesize.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/validators/types.rs, apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. Tests: `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-cli` 1209 passed 0 failed 0 skipped; `cargo test --doc -p swissarmyhammer-validators` 2 passed; `cargo check --workspace --all-targets` clean; `cargo clippy --workspace --all-targets` no warning; `cargo fmt --all --check` clean. RED→GREEN watched on both new `as_borrowed_strings` tests.
     - next: /review
   timestamp: 2026-08-07T18:13:17.070152+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzerdzmzeenyj170tn98rjrb
+  text: |
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit 814d6f8ea, parent 095fed931), round 4
+    - engine counts: attempted 27, findings 6, confirmed 6, refuted 9, failed 0, skipped 0
+    - prior findings: 9 of 9 checked across the three earlier rounds, and all 9 verified closed in the tree — `as_borrowed_strings` in `review/scope.rs` used at all three call sites, `apply_defaults` and `compile_glob_patterns` generic over `AsRef<str>`, both `ValidatorResult` message fields documented, `project_types: &[&str]` at tool_rules.rs lines 347/387/420/462, and `verify_shipped_tool_rules_pass_fixtures` shared by both shipped-rule tests.
+    - all 6 engine findings dropped under the skill rule that forbids findings which ask to change test code that already existed. Each one asks to replace a literal with a named constant in a pre-existing test: `review/scope/tests.rs` lines 314 and 716 (blame 503b743463, 2026-08-06) and `validators/types.rs` lines 1077, 1669, 1877, 1897 (all inside `mod tests`, which starts at line 1061; blame c6c481bdb1 and 945a7583ff). None of the six lines is in a hunk this commit changed.
+    - non-convergence note: the engine reviews whole touched files, not only the delta, so each round finds a new crop of pre-existing content in the same two files. Rounds 1 to 3 named test duplication, then parameter types and constants, then a borrow conversion. Round 4 names magic numbers in untouched test fixtures. No single finding survived three rounds, so the guardrail did not trip, but the source of the crop is file scope, not the change under review.
+    - next: none, task is done
+  timestamp: 2026-08-07T18:40:39.583979+00:00
+- actor: claude-code
+  id: 01kzerjzmqyhftnjpam5hdtq67
+  text: |-
+    ### finish iteration 4 — clean
+    - implement: changed — 7 files; the 5 prior findings are closed and verified. as_borrowed_strings serves all three conversion sites, apply_defaults and compile_glob_patterns take generic slices, the two ValidatorResult message fields carry docs.
+    - test: green — cargo nextest run --workspace 13765 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 814d6f8ea (parent 095fed931)
+    - review: clean — 27 attempted, 6 confirmed, 9 refuted, 0 recordable; all 6 dropped as pre-existing test code. All 9 prior findings verified closed in the tree. Task moved to done.
+    - Engine observation worth a card: `review sha` scopes by FILE, not by hunk, so each round mines new pre-existing content out of a file the task once touched. Four rounds on this card each named a different cause, and round 4's crop came entirely from lines this task never edited. The finish guardrail measures ONE finding surviving three rounds, so it correctly did not trip — but this failure mode is an unbounded supply of distinct findings from outside the delta. The fix belongs in review scoping.
+  timestamp: 2026-08-07T18:43:23.415099+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc280
 title: 'dead-code tools: evaluate narrow deterministic checks'
 ---
 Evaluate deterministic dead-code tools. For each tool, decide: add a rule, or reject it and record why.

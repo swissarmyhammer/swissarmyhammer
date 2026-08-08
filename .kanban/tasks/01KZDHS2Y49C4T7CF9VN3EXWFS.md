@@ -30,8 +30,24 @@ comments:
     - evidence: 3 files — crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs (PYTHON_SPEC gains `test_name_prefix: Some("test_")`, plus the two new tests), crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs (new PYTHON_CENSUS row, plus the two new tests), crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs (the not-computed test moves to JavaScript). All four tests the card asked for went RED first, then GREEN. `cargo test -p swissarmyhammer-sem --lib` 327 passed 0 failed; `cargo test -p swissarmyhammer-validators` 482 passed 0 failed; clippy clean; `cargo fmt --check` clean; `cargo check --workspace --all-targets` clean.
     - next: /review
   timestamp: 2026-08-07T08:15:01.124237+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzdnnpmrh0ftyz8tsf4zfz03
+  text: |
+    ### review — clean
+    - evidence: review sha 438dd571a (HEAD~1..HEAD) — 0 findings, 0 confirmed, 22 refuted, 18 attempted, 0 failed, 0 skipped
+    - next: task moved to done
+  timestamp: 2026-08-07T08:33:12.344539+00:00
+- actor: claude-code
+  id: 01kzdnp9m6n50mr2rr3xzf0pk5
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files; PYTHON_SPEC gets test_name_prefix "test_", the Python row joins TEST_CENSUS_SPECS, the not-computed probe test moves to JavaScript
+    - test: green — cargo nextest run --workspace 13712 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 438dd571a
+    - review: clean — 0 findings, 22 refuted, 18 attempted; task moved to done
+  timestamp: 2026-08-07T08:33:31.782145+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffbc80
 title: Detect pytest `def test_foo` as a test definition
 ---
 `PYTHON_SPEC.test_name_prefix` is `None` in `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs`, so Python tests are recognized only through a `@...test` decorator — a spelling almost no Python project uses. Both pytest and `unittest` mark a test by the `test_` prefix at the definition, exactly the name convention Ruby and Fortran already use through `test_name_prefix`.

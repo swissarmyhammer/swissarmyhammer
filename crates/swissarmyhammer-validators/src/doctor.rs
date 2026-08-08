@@ -35,7 +35,7 @@ use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
 use crate::validators::types::{
-    FixHint, Rule, RuleSet, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
+    FixHint, Rule, RuleSet, Supersedes, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
 };
 use crate::validators::ValidatorLoader;
 
@@ -169,8 +169,8 @@ pub struct ToolRuleStatus {
     /// the tool has no package to install. Reported, never run.
     pub fix_hint: Option<FixHint>,
 
-    /// The prompt rule this tool rule replaces when healthy.
-    pub supersedes: Option<String>,
+    /// The prompt rules this tool rule replaces when healthy.
+    pub supersedes: Supersedes,
 }
 
 impl ToolRuleStatus {
@@ -609,12 +609,17 @@ fn degraded_fix(rule: &ToolRuleStatus) -> Option<String> {
     }
 }
 
-/// The "which prompt rule runs instead" suffix for degraded rows.
+/// The "which prompt rules run instead" suffix for degraded rows. Names every
+/// prompt rule the tool rule supersedes.
 fn fallback_note(rule: &ToolRuleStatus) -> String {
-    match &rule.supersedes {
-        Some(prompt_rule) => format!("; prompt rule '{prompt_rule}' runs instead"),
-        None => "; prompt fallback".to_string(),
+    if rule.supersedes.is_empty() {
+        return "; prompt fallback".to_string();
     }
+    format!(
+        "; {} {} instead",
+        rule.supersedes.prompt_rule_phrase(),
+        rule.supersedes.runs_verb()
+    )
 }
 
 /// The "; vX.Y.Z" suffix for healthy rows, empty when no version was read.
@@ -753,6 +758,23 @@ tool:
 Never runs.
 "#;
 
+    /// A tool rule that supersedes TWO prompt rules and whose tool cannot
+    /// exist, so its degraded row must name both of them.
+    const PAIR_MISSING_TOOL_RULE: &str = r#"---
+name: pair-check
+description: A rule that replaces two prompt rules.
+supersedes:
+  - cognitive-complexity
+  - function-length
+tool:
+  scope: files
+  run: "definitely-not-a-real-tool-1f9c \"$@\""
+  doctor:
+    check_command: "definitely-not-a-real-tool-1f9c --version"
+---
+Never runs.
+"#;
+
     /// A tool rule whose script never reports findings, so its fail fixture
     /// cannot pass.
     const SILENT_TOOL_RULE: &str = r#"---
@@ -886,7 +908,7 @@ Python only.
         assert_eq!(rule.presence, ToolPresence::Present);
         assert_eq!(rule.version.as_deref(), Some("tool 1.2.3"));
         assert_eq!(rule.fixtures, FixtureOutcome::Passed);
-        assert_eq!(rule.supersedes.as_deref(), Some("missing-docs"));
+        assert_eq!(rule.supersedes.names(), ["missing-docs"]);
         assert!(rule.usable());
         assert!(!rule.on_prompt_fallback());
     }
@@ -1144,6 +1166,39 @@ Python only.
         assert!(
             fix.contains("brew install definitely-not-a-real-tool-1f9c"),
             "the fix must carry the install commands; got '{fix}'"
+        );
+    }
+
+    /// A degraded row names EVERY prompt rule the tool rule supersedes, and
+    /// the verb agrees with the count.
+    #[test]
+    fn test_to_checks_missing_tool_names_every_superseded_rule() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        write_ruleset(
+            temp.path(),
+            "tool-set",
+            TOOL_SET_MANIFEST,
+            &[("pair-check.md", PAIR_MISSING_TOOL_RULE)],
+            &[
+                ("pair-check.fail.txt", "irrelevant\n"),
+                ("pair-check.pass.txt", "irrelevant\n"),
+            ],
+        );
+        let loader = loader_for(temp.path());
+        let status = check_review_engine_with(&loader, RUST_TYPES);
+
+        let checks = to_checks(&status);
+
+        let tool_row = checks
+            .iter()
+            .find(|c| c.name == tool_rule_check_name("tool-set", "pair-check"))
+            .expect("tool rule row");
+        assert!(
+            tool_row
+                .message
+                .contains("prompt rules 'cognitive-complexity', 'function-length' run instead"),
+            "a degraded row must name every superseded prompt rule; got '{}'",
+            tool_row.message
         );
     }
 

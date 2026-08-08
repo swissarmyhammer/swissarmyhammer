@@ -389,9 +389,9 @@ fn render_tool_errors(markdown: &mut String, tools: &ToolReport) {
 /// the prompt rule reviewed those files, not the tool.
 fn render_tool_fallbacks(markdown: &mut String, tools: &ToolReport) {
     for fallback in tools.fallbacks() {
-        let note = match fallback.supersedes() {
-            Some(prompt_rule) => format!("prompt rule '{prompt_rule}' ran instead"),
-            None => "no prompt rule is named to run instead".to_string(),
+        let note = match fallback.supersedes().is_empty() {
+            true => "no prompt rule is named to run instead".to_string(),
+            false => format!("{} ran instead", fallback.supersedes().prompt_rule_phrase()),
         };
         let _ = writeln!(
             markdown,
@@ -1648,7 +1648,7 @@ mod tests {
             vec![ToolFallback::for_test(
                 "docs",
                 "docs-tool",
-                None,
+                &[],
                 "tool missing: no ruff",
             )],
         );
@@ -1667,6 +1667,32 @@ mod tests {
                 .markdown
                 .contains("no prompt rule is named to run instead"),
             "a fallback without supersedes must say so: {}",
+            report.markdown
+        );
+    }
+
+    /// A fallback whose tool rule names two prompt rules names BOTH in the
+    /// report: the reader must know every prompt rule that reviewed the files.
+    #[test]
+    fn a_tool_fallback_names_every_superseded_prompt_rule() {
+        let tools = ToolReport::new(
+            0,
+            vec![],
+            vec![ToolFallback::for_test(
+                "hygiene",
+                "complexity-rust",
+                &["cognitive-complexity", "function-length"],
+                "tool missing: no clippy",
+            )],
+        );
+
+        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+
+        assert!(
+            report
+                .markdown
+                .contains("prompt rules 'cognitive-complexity', 'function-length' ran instead"),
+            "the note must name every superseded prompt rule: {}",
             report.markdown
         );
     }

@@ -301,11 +301,11 @@ mod tests {
         // prompt rule, and the dead-code tools replace nothing.
         let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
             .iter()
-            .map(|name| (name, Some("missing-docs")))
+            .map(|name| (name, ["missing-docs"].as_slice()))
             .chain(
                 CODE_HYGIENE_DEAD_CODE_TOOL_RULES
                     .iter()
-                    .map(|name| (name, None)),
+                    .map(|name| (name, [].as_slice())),
             );
         for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset
@@ -318,7 +318,7 @@ mod tests {
                 "{tool_rule_name} must carry a tool block, or it is a prompt rule"
             );
             assert_eq!(
-                tool_rule.supersedes.as_deref(),
+                tool_rule.supersedes.names(),
                 superseded,
                 "{tool_rule_name} must supersede {superseded:?}"
             );

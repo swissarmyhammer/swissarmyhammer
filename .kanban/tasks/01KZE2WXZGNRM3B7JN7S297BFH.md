@@ -56,8 +56,24 @@ comments:
     - evidence: 8 files — crates/swissarmyhammer-validators/src/validators/types.rs, crates/swissarmyhammer-validators/src/validators/mod.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/drive.rs, builtin/validators/code-hygiene/rules/missing-docs-rust.md, builtin/validators/README.md
     - next: /review
   timestamp: 2026-08-07T13:25:52.235465+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kze7fkjsad2rztw1wq5g2x1z
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (49c4be016) — 0 findings, 0 confirmed, 0 refuted; 18 validator/file pairs attempted, 0 failed, 0 skipped
+    - next: task moved to done; no Review Findings section appended because the pass found nothing
+  timestamp: 2026-08-07T13:44:26.969546+00:00
+- actor: claude-code
+  id: 01kze7g5q7yjp85ghmg1g4kdkp
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 8 files; FixHint is a newtype that cannot reach a command position, degraded_fix falls back to it, missing-docs-rust states "rustup component add clippy". Both acceptance criteria have RED-verified tests.
+    - test: green — cargo nextest run --workspace 13761 passed, doc tests 59 passed 0 failed, fmt clean, clippy clean
+    - commit: 49c4be016
+    - review: clean — 0 findings, 18 pairs attempted; task moved to done
+  timestamp: 2026-08-07T13:44:45.543043+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc180
 title: Doctor has no fix hint for a toolchain-component tool rule
 ---
 A tool rule whose tool ships with the language toolchain declares no `install.commands`, because `install_command_pins_version` requires a version pin and a `rustup` component has no package version to pin. `missing-docs-rust` is the first such rule.

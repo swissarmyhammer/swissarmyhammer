@@ -1,0 +1,1 @@
+{"id":"01KZECQDMEF7VTWBDHPVJ6X2X9","timestamp":"2026-08-07T15:16:05.902376Z","op":"create","item_id":"probe","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 2c7a7b\n+name: probe\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 2c7a7b\n-name: probe\n","transaction_id":null}

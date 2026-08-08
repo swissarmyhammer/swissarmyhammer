@@ -84,11 +84,34 @@ comments:
     - fixture proof: the rule's own pipeline in builtin/validators/code-hygiene/fixtures now reports exactly `missing-docs-rust.fail.rs:9`; both `every_shipped_missing_docs_tool_rule_passes_its_fixtures` and `the_shipped_rust_tool_rule_reports_an_undocumented_public_item` still pass.
     - next: /review
   timestamp: 2026-08-07T12:58:09.330964+00:00
+- actor: claude-code
+  id: 01kze5mbbkjetms3kkr1fs2eet
+  text: |
+    ### review — clean
+    - scope: review sha HEAD~1..HEAD (1d279810b)
+    - evidence: 0 findings; 9 pairs attempted, 0 failed, 0 skipped
+    - prior findings verified closed:
+      - builtin/validators/code-hygiene/fixtures/lib.rs — `fail` and `pass` modules each carry a doc comment
+      - crates/swissarmyhammer-validators/src/review/tool_rules.rs:170 — hand-written `Display` for `ToolFallback`
+      - crates/swissarmyhammer-validators/src/review/tool_rules.rs:187 — `ToolRunError` derives `thiserror::Error`, so it has `Display` and `std::error::Error`
+    - doctor fixture checks after the fixture lib.rs edit: `cargo test -p swissarmyhammer-validators --lib` — 4 passed, 0 failed. `every_shipped_missing_docs_tool_rule_passes_its_fixtures` asserts `row.usable()` for both `missing-docs-rust` and `missing-docs-python`, which requires `FixtureOutcome::Passed` for each pair.
+    - `check validators`: ok, 14 validators, 0 errors
+    - next: task moved to done
+  timestamp: 2026-08-07T13:12:05.235751+00:00
+- actor: claude-code
+  id: 01kze5n1r2yvdvzhfqfrw1sx9v
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 2 files; the 4 prior findings are closed and verified in the source
+    - test: green — cargo nextest run --workspace 13756 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 1d279810b
+    - review: clean — 0 findings, 9 pairs attempted. The doctor fixture checks still pass for both shipped tool rules; check validators reports ok across 14 validators with 0 errors. Task moved to done.
+  timestamp: 2026-08-07T13:12:28.162217+00:00
 depends_on:
 - 01KZ9356Y8XTJ6A28KQCBNFE97
 - 01KZ935GJX1YS2EAD7C2HK89AJ
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc080
 title: missing-docs runners for Rust and Python, with fixtures
 ---
 Ship the first two tool rules for missing docs, in the `code-hygiene` set.

@@ -41,7 +41,9 @@ use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSen
 use crate::review::scope::{ValidatorWork, WorkList};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::types::{Finding, VerifiedFinding};
-use crate::validators::types::{MatchContext, Rule, ToolScope, ToolSpec, ValidatorMatch};
+use crate::validators::types::{
+    MatchContext, Rule, Supersedes, ToolScope, ToolSpec, ValidatorMatch,
+};
 use crate::validators::{RuleSet, ValidatorLoader};
 
 /// Why a tool finding is confirmed without the adversarial verify pass.
@@ -50,10 +52,10 @@ const TOOL_FINDING_REASON: &str =
 
 /// The prompt rules the fleet must skip, per `(validator, file)`.
 ///
-/// Built by [`plan_tool_rules`]: when a healthy tool rule matches a file and
-/// names a `supersedes` prompt rule, that prompt rule is skipped for that file.
-/// When the tool is missing or unhealthy nothing is suppressed — the prompt
-/// rule runs as before.
+/// Built by [`plan_tool_rules`]: when a healthy tool rule matches a file, every
+/// prompt rule its `supersedes` names is skipped for that file. When the tool
+/// is missing or unhealthy nothing is suppressed — those prompt rules run as
+/// before.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolSuppression(BTreeMap<String, BTreeMap<String, BTreeSet<String>>>);
 
@@ -115,16 +117,16 @@ impl ToolRun {
     }
 }
 
-/// A tool rule whose tool is missing or unhealthy: the superseded prompt rule
-/// runs as before, and the report notes the fallback.
+/// A tool rule whose tool is missing or unhealthy: the superseded prompt rules
+/// run as before, and the report notes the fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolFallback {
     /// The owning validator (RuleSet) name.
     validator: String,
     /// The tool rule's name.
     rule: String,
-    /// The prompt rule that runs instead, when the tool rule names one.
-    supersedes: Option<String>,
+    /// The prompt rules that run instead, when the tool rule names any.
+    supersedes: Supersedes,
     /// Why the tool rule is not usable.
     detail: String,
 }
@@ -140,9 +142,9 @@ impl ToolFallback {
         &self.rule
     }
 
-    /// The prompt rule that runs instead, when the tool rule names one.
-    pub fn supersedes(&self) -> Option<&str> {
-        self.supersedes.as_deref()
+    /// The prompt rules that run instead, when the tool rule names any.
+    pub fn supersedes(&self) -> &Supersedes {
+        &self.supersedes
     }
 
     /// Why the tool rule is not usable.
@@ -155,11 +157,11 @@ impl ToolFallback {
     ///
     /// [`SkippedFile::for_test`]: crate::review::scope::SkippedFile
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(validator: &str, rule: &str, supersedes: Option<&str>, detail: &str) -> Self {
+    pub fn for_test(validator: &str, rule: &str, supersedes: &[&str], detail: &str) -> Self {
         Self {
             validator: validator.to_string(),
             rule: rule.to_string(),
-            supersedes: supersedes.map(str::to_string),
+            supersedes: supersedes.iter().copied().collect(),
             detail: detail.to_string(),
         }
     }
@@ -337,10 +339,10 @@ impl ToolReport {
 /// doctor health check ([`check_tool_rule`](crate::doctor)) runs ONCE:
 ///
 /// - Healthy (tool present, fixtures pass) → a [`ToolRun`], plus one
-///   [`ToolSuppression`] entry per matched file for the `supersedes` prompt
-///   rule when the rule names one.
+///   [`ToolSuppression`] entry per matched file for each prompt rule the
+///   `supersedes` list names.
 /// - Missing or unhealthy → a [`ToolFallback`]; nothing is suppressed, so the
-///   superseded prompt rule runs as before.
+///   superseded prompt rules run as before.
 pub fn plan_tool_rules(
     work: &WorkList,
     loader: &ValidatorLoader,
@@ -488,8 +490,8 @@ pub(crate) fn project_tool_rules<'a>(
 
 /// Run the doctor health check ONCE for a matched tool rule and record the
 /// verdict on the plan: a healthy rule becomes a [`ToolRun`] (plus one
-/// suppression entry per matched file for its `supersedes` prompt rule), an
-/// unhealthy one a [`ToolFallback`] that suppresses nothing.
+/// suppression entry per matched file for each prompt rule its `supersedes`
+/// names), an unhealthy one a [`ToolFallback`] that suppresses nothing.
 fn plan_rule_by_health(
     plan: &mut ToolPlan,
     validator: &str,
@@ -506,7 +508,7 @@ fn plan_rule_by_health(
             rule = %rule.name,
             detail = %detail,
             supersedes = ?rule.supersedes,
-            "tool rule is not usable; the superseded prompt rule runs instead"
+            "tool rule is not usable; the superseded prompt rules run instead"
         );
         plan.fallbacks.push(ToolFallback {
             validator: validator.to_string(),
@@ -517,7 +519,7 @@ fn plan_rule_by_health(
         return;
     }
 
-    if let Some(superseded) = &rule.supersedes {
+    for superseded in rule.supersedes.names() {
         for file in &files {
             plan.suppression.insert(validator, file, superseded);
         }
@@ -724,7 +726,7 @@ mod tests {
             name: "docs-tool".to_string(),
             description: "docs by tool".to_string(),
             body: "TOOL RULE BODY — an LLM must never read this".to_string(),
-            supersedes: Some("missing-docs".to_string()),
+            supersedes: Supersedes::from_iter(["missing-docs"]),
             match_criteria,
             tool: Some(ToolSpec {
                 scope: ToolScope::Files,
@@ -807,6 +809,35 @@ mod tests {
             .contains("missing-docs"));
     }
 
+    /// A healthy tool rule that names two prompt rules suppresses BOTH of them
+    /// for every file it matched: one `cargo clippy` run answers more than one
+    /// prompt rule, so one entry per named rule per file is the contract.
+    #[test]
+    fn plan_suppresses_every_named_prompt_rule_per_file() {
+        let base = tempfile::tempdir().unwrap();
+        write_tool_rule_fixtures(base.path(), "docs-tool");
+        let mut rule = tool_rule(TODO_SCRIPT, TOOL_PRESENT, None);
+        rule.supersedes =
+            Supersedes::from_iter([MISSING_DOCS_PROMPT_RULE, FUNCTION_LENGTH_PROMPT_RULE]);
+        let loader = loader_of(docs_ruleset(base.path(), vec![prompt_rule(), rule]));
+        let files = ["src/lib.rs", "src/main.rs"];
+        let work = docs_work(&files);
+
+        let plan = plan_tool_rules(&work, &loader, &[]);
+
+        let expected = BTreeSet::from([
+            MISSING_DOCS_PROMPT_RULE.to_string(),
+            FUNCTION_LENGTH_PROMPT_RULE.to_string(),
+        ]);
+        for file in files {
+            assert_eq!(
+                plan.suppression().suppressed_rules("docs", file),
+                expected,
+                "both named prompt rules must be suppressed for {file}"
+            );
+        }
+    }
+
     #[test]
     fn plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing() {
         let base = tempfile::tempdir().unwrap();
@@ -822,7 +853,7 @@ mod tests {
         assert!(plan.runs().is_empty());
         assert_eq!(plan.fallbacks().len(), 1);
         assert_eq!(plan.fallbacks()[0].rule(), "docs-tool");
-        assert_eq!(plan.fallbacks()[0].supersedes(), Some("missing-docs"));
+        assert_eq!(plan.fallbacks()[0].supersedes().names(), ["missing-docs"]);
         assert!(!plan.fallbacks()[0].detail().is_empty());
         assert!(plan.suppression().is_empty());
     }
@@ -994,7 +1025,7 @@ mod tests {
         let plan = plan_tool_rules(&work, &loader, &[]);
         assert!(plan.runs().is_empty());
         assert_eq!(plan.fallbacks().len(), 1);
-        assert_eq!(plan.fallbacks()[0].supersedes(), Some("missing-docs"));
+        assert_eq!(plan.fallbacks()[0].supersedes().names(), ["missing-docs"]);
         assert!(
             plan.suppression().is_empty(),
             "the superseded prompt rule must still run for every file"
@@ -1112,7 +1143,7 @@ mod tests {
         let fallback = ToolFallback::for_test(
             "docs",
             "docs-tool",
-            Some("missing-docs"),
+            &["missing-docs"],
             "the tool is not installed",
         );
 
@@ -1161,6 +1192,9 @@ mod tests {
 
     /// The prompt rule every shipped missing-docs tool rule supersedes.
     const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
+
+    /// A second prompt rule name, for the tool rule that supersedes two.
+    const FUNCTION_LENGTH_PROMPT_RULE: &str = "function-length";
 
     /// The shipped missing-docs tool rule for Rust, the one the pipeline
     /// acceptance test drives end to end.
@@ -1438,11 +1472,15 @@ mod tests {
     /// it — so a failing run says which roster came up empty.
     fn verify_shipped_tool_rules_pass_fixtures(
         rules: &[(&str, &str)],
-        expected_supersedes: Option<&str>,
+        expected_supersedes: &[&str],
         rule_kind: &str,
     ) {
         let loader = builtin_loader();
         let mut exercised = 0;
+        let expected_label = match expected_supersedes.is_empty() {
+            true => "nothing".to_string(),
+            false => expected_supersedes.join(", "),
+        };
 
         for (project_type, rule_name) in rules {
             let project_types = [*project_type];
@@ -1457,10 +1495,10 @@ mod tests {
                     panic!("{rule_name} must be reported for a {project_type} project")
                 });
             assert_eq!(
-                row.supersedes.as_deref(),
+                row.supersedes.names(),
                 expected_supersedes,
-                "{rule_name} must supersede {}, the contract every {rule_kind} tool rule keeps",
-                expected_supersedes.unwrap_or("nothing")
+                "{rule_name} must supersede {expected_label}, the contract every {rule_kind} \
+                 tool rule keeps"
             );
             if row.presence == ToolPresence::Present {
                 assert!(
@@ -1491,7 +1529,7 @@ mod tests {
     fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
         verify_shipped_tool_rules_pass_fixtures(
             SHIPPED_MISSING_DOCS_RULES,
-            Some(MISSING_DOCS_PROMPT_RULE),
+            &[MISSING_DOCS_PROMPT_RULE],
             MISSING_DOCS_PROMPT_RULE,
         );
     }
@@ -1508,7 +1546,7 @@ mod tests {
     fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
         verify_shipped_tool_rules_pass_fixtures(
             SHIPPED_DEAD_CODE_RULES,
-            None,
+            &[],
             DEAD_CODE_PROMPT_RULE,
         );
     }

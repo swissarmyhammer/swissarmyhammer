@@ -83,10 +83,21 @@ must match. A key that is absent matches everything. The values inside one key
 combine with OR. So `files: ["**/*.py"]` plus `project_types: [python]` means:
 the file matches the pattern AND the workspace is a python project.
 
-`supersedes` names the prompt rule this tool rule replaces. When the tool is
-healthy, the named prompt rule is skipped for the files this rule matches.
-When the tool is missing, the named prompt rule runs as before. This is the
+`supersedes` names the prompt rules this tool rule replaces. When the tool is
+healthy, each named prompt rule is skipped for the files this rule matches.
+When the tool is missing, each named prompt rule runs as before. This is the
 fallback mechanism.
+
+Write one name, or a list of names:
+
+    supersedes: missing-docs
+
+    supersedes:
+      - cognitive-complexity
+      - function-length
+
+One tool run can replace more than one prompt rule. One `cargo clippy` run
+decides cognitive complexity and function length, so that rule names both.
 
 The `tool` block keys:
 

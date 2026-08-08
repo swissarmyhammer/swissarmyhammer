@@ -787,7 +787,7 @@ mod tests {
 
         let rule = &ruleset.rules[0];
         assert!(rule.is_tool_rule());
-        assert_eq!(rule.supersedes.as_deref(), Some("missing-docs"));
+        assert_eq!(rule.supersedes.names(), ["missing-docs"]);
         let tool = rule.tool.as_ref().unwrap();
         assert_eq!(tool.run.trim(), "project-runner \"$@\"");
         assert_eq!(tool.doctor.as_ref().unwrap().check_command, "which ruff");

@@ -1668,7 +1668,7 @@ tool:
         let rule = parse_rule_plain(content, Path::new("missing-docs-python.md")).unwrap();
 
         assert!(rule.is_tool_rule());
-        assert_eq!(rule.supersedes.as_deref(), Some("missing-docs"));
+        assert_eq!(rule.supersedes.names(), ["missing-docs"]);
 
         let match_criteria = rule.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.files, vec!["**/*.py"]);
@@ -1690,6 +1690,31 @@ tool:
         );
     }
 
+    /// `supersedes` takes a list of names: one tool run can replace more than
+    /// one prompt rule, so one `cargo clippy` run answers both the
+    /// `cognitive-complexity` and the `function-length` prompt rule.
+    #[test]
+    fn test_parse_tool_rule_supersedes_list() {
+        let content = r#"---
+name: complexity-rust
+description: Complexity and length by clippy, not by prompt.
+supersedes:
+  - cognitive-complexity
+  - function-length
+tool:
+  scope: workspace
+  run: cargo clippy --message-format json
+---
+"#;
+        let rule = parse_rule_plain(content, Path::new("complexity-rust.md")).unwrap();
+
+        assert!(rule.is_tool_rule());
+        assert_eq!(
+            rule.supersedes.names(),
+            ["cognitive-complexity", "function-length"]
+        );
+    }
+
     /// A rule without a `tool` block stays a prompt rule with no tool fields —
     /// existing prompt rules parse unchanged.
     #[test]
@@ -1699,7 +1724,7 @@ tool:
 
         assert!(!rule.is_tool_rule());
         assert!(rule.tool.is_none());
-        assert!(rule.supersedes.is_none());
+        assert!(rule.supersedes.is_empty());
         assert!(rule.match_criteria.is_none());
     }
 

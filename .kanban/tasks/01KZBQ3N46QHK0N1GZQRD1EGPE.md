@@ -24,8 +24,24 @@ comments:
 
     Note: the change is documentation only. No validator rules match `.md`, and no test reads ARCHITECTURE.md, so there is no test to run.
   timestamp: 2026-08-06T21:01:21.651047+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzcej1gd1tk95d7pr9j3bk4h
+  text: |
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (ee5ae2a20) — findings 0, confirmed 0, refuted 0, attempted 0, failed 0, skipped 0. The commit changes ARCHITECTURE.md and the kanban ledger only; no code file matched a validator.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-06T21:09:37.933050+00:00
+- actor: claude-code
+  id: 01kzcejs5sbbw2va33v7z7xadn
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — ARCHITECTURE.md
+    - test: green — cargo fmt --check clean, cargo clippy --workspace --all-targets --all-features -D warnings clean, cargo nextest run --workspace 13626 passed
+    - commit: ee5ae2a20
+    - review: clean — review sha HEAD~1..HEAD, 0 findings; task moved to done
+  timestamp: 2026-08-06T21:10:02.169980+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb380
 title: 'ARCHITECTURE.md: document the fact-producer doctor path'
 ---
 Found during ^2hk89aj. The Doctor Pattern section of ARCHITECTURE.md says: do not add health checks outside the `Doctorable` trait. That statement predates the `mirdan::status` fact-producer pattern. Two shipped modules now use the fact-producer path: `mirdan::status::check_install_stack` and `swissarmyhammer-validators::doctor::check_review_engine`.

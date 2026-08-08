@@ -1545,7 +1545,7 @@ mod tests {
 
     // ---- tool rules: the tool reviews the code, not an LLM ------------------
 
-    use crate::validators::types::{Rule, ToolDoctor, ToolScope, ToolSpec};
+    use crate::validators::types::{Rule, Supersedes, ToolDoctor, ToolScope, ToolSpec};
     use crate::validators::ValidatorLoader;
 
     /// A `files`-scope script that reports one `path:line: message` finding per
@@ -1582,7 +1582,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
                 name: "docs-tool".to_string(),
                 description: "docs by tool".to_string(),
                 body: TOOL_RULE_BODY.to_string(),
-                supersedes: Some("missing-docs".to_string()),
+                supersedes: Supersedes::from_iter(["missing-docs"]),
                 tool: Some(ToolSpec {
                     scope: ToolScope::Files,
                     run: TODO_TOOL_SCRIPT.to_string(),

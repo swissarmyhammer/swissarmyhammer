@@ -211,10 +211,26 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-sem/src/git_types.rs. The 2 findings from 2026-08-06 14:29 are done and checked. Finding :1 — the module docs now have an `# Examples` section with a doctest that constructs `DiffScope::Working`, `DiffScope::Commit`, a `FileStatus` variant, and a `FileChange` instance; the example uses no `.unwrap()`. Finding :32 — `FileStatus` now implements `Display` with lowercase variant names (`added`, `modified`, `deleted`, `renamed`); a test pins that the Display form equals the serde wire form. Full-file sweep so no item stays for a next round: `DiffScope` also implements `Display` (git revision syntax: `working`, `staged`, the sha, `from..to`); all four public types now derive `PartialOrd, Ord`; `FileStatus` also derives `Copy` (a workspace grep found no `.clone()` call on a `FileStatus` value, so no clippy `clone_on_copy` risk). `Default`, `From`, and `AsRef` are not applicable — these types have no natural default value or canonical conversion. TDD: RED first (14 compile errors for the missing Display/Ord/Copy), then GREEN. Verification: cargo nextest run -p swissarmyhammer-sem git_types 10/10 pass; cargo test --doc -p swissarmyhammer-sem git_types 1/1 pass; cargo nextest run -E 'rdeps(swissarmyhammer-sem)' 3480/3480 pass; cargo clippy -p swissarmyhammer-sem -p swissarmyhammer-validators -p swissarmyhammer-tools -p swissarmyhammer-git --all-targets -- -D warnings clean; cargo fmt --check clean.
     - next: test
   timestamp: 2026-08-06T19:45:05.785687+00:00
+- actor: claude-code
+  id: 01kzca4jtbtcf5z42v0amvhqnw
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (checkpoint e9f50259c) — 0 findings, 9 attempted, 0 failed, skipped_files empty (no new over-cap flags for ^tsram0q); all prior findings checked
+    - next: none — task moved to done
+  timestamp: 2026-08-06T19:52:22.603259+00:00
+- actor: claude-code
+  id: 01kzca593t19gxs9dx1bbgqyn2
+  text: |-
+    ### finish iteration 6 — clean
+    - implement: changed — worked the 2 git_types.rs findings (# Examples doctest, Display on FileStatus) plus sweep (Display on DiffScope, PartialOrd/Ord, Copy); 1 file
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-sem)', 3480 passed, 0 failed; 1 doctest passed; fmt clean; clippy -D warnings clean
+    - commit: e9f50259c
+    - review: clean — 0 findings, 0 over-cap flags; task moved to done
+  timestamp: 2026-08-06T19:52:45.434039+00:00
 depends_on:
 - 01KZ934SNEJ1TXNS2G9Q4909TF
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb280
 title: Tool-runner execution path in the review engine
 ---
 Run tool rules in the review engine. No LLM reads the code for a tool rule.

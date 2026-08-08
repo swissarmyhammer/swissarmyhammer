@@ -115,8 +115,24 @@ comments:
     - evidence: 4 files — crates/swissarmyhammer-sem/src/parser/plugins/code/languages.rs, .../code/mod.rs, crates/swissarmyhammer-validators/src/review/probes.rs, .../review/tree_sitter_probes.rs. All 15 findings in the 2026-08-07 00:33 section checked off. Tests: cargo nextest run -p swissarmyhammer-sem -p swissarmyhammer-validators — 784 passed, 0 failed, 0 skipped. fmt clean, workspace clippy -D warnings clean.
     - next: /review
   timestamp: 2026-08-07T06:11:06.904533+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzdeks3drhhvdy4d9qs01zx8
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (d7f94e5f2) — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped. All 15 prior findings verified closed in source: LanguageConfig struct + 6 field doc comments (languages.rs), typescript_family_config shared const fn used by TYPESCRIPT_CONFIG and TSX_CONFIG, get_language_config doc comment, parse_code_routes_an_uppercase_extension_to_the_same_grammar test (mod.rs), similar_for_entity_type("METHOD") test (probes.rs), sealed::Sealed supertrait on TreeSitterProbe, EXPECTED_REVISIONS_PER_FILE constant (tree_sitter_probes.rs).
+    - next: none — task moved to done.
+  timestamp: 2026-08-07T06:29:49.293237+00:00
+- actor: claude-code
+  id: 01kzdemapdypnyg4sw8n5j94wn
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 4 files; the 15 prior findings are closed and verified in the source
+    - test: green — cargo nextest run --workspace 13687 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: d7f94e5f2
+    - review: clean — 0 findings, 9 validators attempted; task moved to done
+  timestamp: 2026-08-07T06:30:07.309558+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb980
 title: 'TreeSitterProbe trait: file + parse + logic'
 ---
 Add a second probe family beside the `ProbeOp` catalog in `swissarmyhammer-validators/src/review/probes.rs`.

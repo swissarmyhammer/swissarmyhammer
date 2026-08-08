@@ -51,10 +51,26 @@ comments:
     - evidence: 5 files — crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs, crates/swissarmyhammer-validators/src/review/mod.rs, crates/swissarmyhammer-validators/src/builtin/mod.rs, builtin/validators/completeness/VALIDATOR.md, builtin/validators/completeness/rules/inverse-operation-coverage.md. `cargo test -p swissarmyhammer-validators`: 478 passed, 0 failed. `cargo clippy --workspace --all-targets`: 0 warnings.
     - next: /review
   timestamp: 2026-08-07T06:45:38.076288+00:00
+- actor: claude-code
+  id: 01kzdgdmfqnda35j9vg2kkqn8c
+  text: |
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (ede9b46ca) — 0 findings, 0 confirmed, 0 refuted; 9 pairs attempted, 0 failed, 0 skipped
+    - next: task moved to done
+  timestamp: 2026-08-07T07:01:25.111956+00:00
+- actor: claude-code
+  id: 01kzdge7f28v3bsxrmnj1cxg5p
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files; the inverse-pairs probe with an 8-row data pair table, wired into the completeness set and its inverse-operation-coverage rule
+    - test: green — cargo nextest run --workspace 13692 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: ede9b46ca
+    - review: clean — 0 findings, 9 pairs attempted; task moved to done
+  timestamp: 2026-08-07T07:01:44.546496+00:00
 depends_on:
 - 01KZ94F228KKTWT5T9Y59VJJVY
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffba80
 title: Inverse-pair census probe for completeness
 ---
 A TreeSitterProbe that reports when a diff touches one side of a paired operation and not the other.

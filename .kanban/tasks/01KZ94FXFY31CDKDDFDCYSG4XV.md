@@ -52,10 +52,26 @@ comments:
     - evidence: 8 files — crates/swissarmyhammer-sem/src/parser/plugins/code/complexity/test_census.rs (new), complexity.rs, code/mod.rs, crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs, review/mod.rs, src/builtin/mod.rs, builtin/validators/test-integrity/VALIDATOR.md, builtin/validators/test-integrity/rules/no-test-cheating.md. `cargo test -p swissarmyhammer-sem -p swissarmyhammer-validators` 323 + 482 + 2 + 2 passed, 0 failed. `cargo clippy --workspace --all-targets` 0 warnings, `cargo fmt --all --check` clean, `cargo doc -p swissarmyhammer-sem` adds no new warning. `check validators` ok, 14 validators, 0 errors.
     - next: /review
   timestamp: 2026-08-07T07:27:35.409932+00:00
+- actor: claude-code
+  id: 01kzdm1mk279mkkdnkx40txw8x
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (dbede4ebd) — 0 findings, 0 confirmed, 2 refuted, 18 validator/file pairs attempted, 0 failed, 0 files skipped. No prior Review Findings section had an open item.
+    - next: none — task moved to done.
+  timestamp: 2026-08-07T08:04:46.306761+00:00
+- actor: claude-code
+  id: 01kzdm28j96aq8bdj43fhw3a25
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 8 files; new test_census.rs in swissarmyhammer-sem, the assertion-census probe, and the test-integrity wire-up. New cards ^n3exwfs and ^s0xv14n (Python and JS test recognition), ^bz86ssx (mirdan serial-group race).
+    - test: green — cargo nextest run --workspace 13708 passed, doc tests 189 passed 0 failed, fmt clean, clippy clean. The mirdan claim was investigated: crates/mirdan is byte-identical to the previous commit and the race is a pre-existing serial-group defect, recorded on ^bz86ssx.
+    - commit: dbede4ebd
+    - review: clean — 0 findings, 2 refuted, 18 pairs attempted; task moved to done
+  timestamp: 2026-08-07T08:05:06.761336+00:00
 depends_on:
 - 01KZ94F228KKTWT5T9Y59VJJVY
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffbb80
 title: Assertion census probe for test-integrity
 ---
 A TreeSitterProbe that measures test bodies.

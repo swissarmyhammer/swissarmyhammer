@@ -460,7 +460,7 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
 
     let rule = &detail["rules"][0];
     assert_eq!(rule["name"], json!("docs-tool"));
-    assert_eq!(rule["supersedes"], json!("missing-docs"));
+    assert_eq!(rule["supersedes"], json!(["missing-docs"]));
     assert_eq!(rule["tool"]["scope"], json!("files"));
     assert_eq!(rule["tool"]["run"], json!(TOOL_RULE_RUN));
     assert_eq!(rule["tool"]["doctor"]["check_command"], json!("which ruff"));
@@ -495,7 +495,7 @@ async fn get_validator_exposes_tool_block_and_supersedes() {
         .find(|r| r["name"] == json!("tooled-set"))
         .expect("the tooled set is listed");
     assert_eq!(row["rules"][0]["tool"]["scope"], json!("files"));
-    assert_eq!(row["rules"][0]["supersedes"], json!("missing-docs"));
+    assert_eq!(row["rules"][0]["supersedes"], json!(["missing-docs"]));
 }
 
 /// `dump validators` on a path matched by a tool-rule validator renders the

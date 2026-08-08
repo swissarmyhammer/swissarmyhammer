@@ -714,6 +714,115 @@ impl RuleSetManifest {
     }
 }
 
+/// The prompt rules a tool rule replaces when its tool is healthy.
+///
+/// Frontmatter takes one name (`supersedes: missing-docs`) or a list
+/// (`supersedes: [cognitive-complexity, function-length]`). One tool run can
+/// answer more than one prompt rule — a single `cargo clippy` run decides both
+/// cognitive complexity and function length — so the value is a list of names,
+/// and one name is the short spelling of a list of one. A prompt rule names
+/// none, so its list is empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "SupersedesFrontmatter", into = "Vec<String>")]
+pub struct Supersedes(Vec<String>);
+
+impl Supersedes {
+    /// The named prompt rules, in frontmatter order.
+    pub fn names(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether the rule names no prompt rule at all.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The named prompt rules as a sentence subject: `prompt rule 'a'` for one
+    /// name, `prompt rules 'a', 'b'` for two or more. Empty when the rule names
+    /// none.
+    ///
+    /// The ONE place the reader-facing phrasing lives, so the doctor row and
+    /// the review report can never name the superseded rules two different
+    /// ways.
+    pub fn prompt_rule_phrase(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        let quoted: Vec<String> = self.0.iter().map(|name| format!("'{name}'")).collect();
+        format!("prompt {} {}", self.rule_noun(), quoted.join(", "))
+    }
+
+    /// The present-tense verb that agrees with [`Self::prompt_rule_phrase`]:
+    /// `runs` for one name, `run` for two or more.
+    pub fn runs_verb(&self) -> &'static str {
+        match self.is_one() {
+            true => "runs",
+            false => "run",
+        }
+    }
+
+    /// The noun that agrees with the named prompt rules: `rule` for one name,
+    /// `rules` for two or more.
+    fn rule_noun(&self) -> &'static str {
+        match self.is_one() {
+            true => "rule",
+            false => "rules",
+        }
+    }
+
+    /// Whether exactly one prompt rule is named — the count the phrasing
+    /// agrees with.
+    fn is_one(&self) -> bool {
+        self.0.len() == 1
+    }
+}
+
+/// The named prompt rules as a comma-separated list, empty when the rule names
+/// none.
+impl std::fmt::Display for Supersedes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.join(", "))
+    }
+}
+
+impl<S: Into<String>> FromIterator<S> for Supersedes {
+    fn from_iter<I: IntoIterator<Item = S>>(names: I) -> Self {
+        Self(names.into_iter().map(Into::into).collect())
+    }
+}
+
+impl<S: Into<String>> Extend<S> for Supersedes {
+    fn extend<I: IntoIterator<Item = S>>(&mut self, names: I) {
+        self.0.extend(names.into_iter().map(Into::into));
+    }
+}
+
+impl From<Supersedes> for Vec<String> {
+    fn from(supersedes: Supersedes) -> Self {
+        supersedes.0
+    }
+}
+
+/// The two shapes `supersedes` frontmatter takes, so both deserialize into the
+/// same [`Supersedes`] list.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SupersedesFrontmatter {
+    /// One prompt rule name: `supersedes: missing-docs`.
+    One(String),
+    /// A list of prompt rule names: `supersedes: [a, b]`.
+    Many(Vec<String>),
+}
+
+impl From<SupersedesFrontmatter> for Supersedes {
+    fn from(frontmatter: SupersedesFrontmatter) -> Self {
+        match frontmatter {
+            SupersedesFrontmatter::One(name) => Self(vec![name]),
+            SupersedesFrontmatter::Many(names) => Self(names),
+        }
+    }
+}
+
 /// Individual rule within a RuleSet.
 ///
 /// Rules contain the actual validation logic and can override certain
@@ -739,8 +848,8 @@ pub struct Rule {
     /// Optional rule-level match criteria that narrows the set's match.
     pub match_criteria: Option<ValidatorMatch>,
 
-    /// The prompt rule this tool rule replaces when its tool is healthy.
-    pub supersedes: Option<String>,
+    /// The prompt rules this tool rule replaces when its tool is healthy.
+    pub supersedes: Supersedes,
 
     /// The tool block. Present on tool rules, absent on prompt rules.
     pub tool: Option<ToolSpec>,
@@ -898,9 +1007,10 @@ pub struct RuleFrontmatter {
     #[serde(default, rename = "match")]
     pub match_criteria: Option<ValidatorMatch>,
 
-    /// The prompt rule this tool rule replaces when its tool is healthy.
+    /// The prompt rules this tool rule replaces when its tool is healthy.
+    /// Takes one name or a list of names.
     #[serde(default)]
-    pub supersedes: Option<String>,
+    pub supersedes: Supersedes,
 
     /// The tool block. Present on tool rules, absent on prompt rules.
     #[serde(default)]

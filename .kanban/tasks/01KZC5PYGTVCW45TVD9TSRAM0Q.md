@@ -241,8 +241,30 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/test_support.rs (docstrings on `confine_relative`, `join_confined`, `TestRepo::commit_only`). The `## Review Findings (2026-08-06 22:31)` item is flipped to `- [x]`. `cargo test -p swissarmyhammer-validators --all-features` 455 passed, 0 failed, doc tests 2 passed; `cargo clippy -p swissarmyhammer-validators --all-targets --all-features -- -D warnings` clean; `cargo fmt --all --check` clean; `cargo check --workspace --all-targets` clean; `cargo doc --document-private-items` zero warnings in test_support.rs.
     - next: /review
   timestamp: 2026-08-07T03:42:23.005184+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzd63x3235kjqfz3rbqkezxh
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (41d37b2d8, docs-only). counts: 17 findings, 17 confirmed, 2 refuted, 9 attempted, 0 failed, 0 skipped, `skipped_files: []`. 0 recordable after the skill's blanket test exception.
+    - prior findings verified truly closed, not only checked off:
+      - 2026-08-06 21:40 `test_support.rs:55` and `:57` — `write_tool_rule_fixtures` now routes BOTH fixture writes through `join_confined` (lines 60 and 65). `write_tool_rule_ruleset` (line 403) and `TestRepo::write` (line 196) use the same guard, so the cause is gone from the whole file, not only the two named lines.
+      - 2026-08-06 22:31 `test_support.rs:213` — the commit under review rewrote the `commit_only` docstring. It no longer claims confinement "the same way `write` confines". It now names the shared `confine_relative` guard AND the difference: not joined onto the repo root, because libgit2's index stages a working-tree-relative path and rejects an absolute one. That is the second of the two options the finding offered. The code at line 227 matches the new text.
+    - dropped, all 17, one cause: every finding names pre-existing test-fixture code in `crates/swissarmyhammer-validators/src/review/test_support.rs`, and every one asks to restyle it. 15 ask for a `# Panics` docstring section (`write_tool_rule_fixtures:56`, `TestRepo::new:173`, `write:195`, `commit:204`, `commit_only:224`, `rename_current_branch_to:255`, `checkout_new_branch:272`, `index_conn:284`, `on_disk_index_conn:299`, `seed_file:311`, `seed_chunk:322`, `seed_symbol:341`, `seed_call_edge:352`, `seeded_dup_repo:470`, `seeded_two_file_dup_repo:490`). 2 ask to extract a fixture line number to a named constant (`:333` end_line 10, `:345` end_line 5). The skill's blanket test exception names re-docstringing and renaming as dropped subjects, and names missing-docs and naming as flagging validators.
+    - authorship checked, not assumed: `git blame` puts all 17 lines on 503b743463, 83ebacb2bf, be66a882680, 83223a9b062, 6866d7c9a4d, or b4bac5136a7. None on 41d37b2d8. The commit under review touched only three docstrings (`confine_relative`, `join_confined`, `commit_only`).
+    - the distinction held from earlier rounds: this file's SECURITY findings (path traversal) were recorded and fixed in rounds 1 and 2. Only restyling of pre-existing test code drops.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-07T04:01:20.482661+00:00
+- actor: claude-code
+  id: 01kzd64zsdcwf0sexm8c0hc55z
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — crates/swissarmyhammer-validators/src/review/test_support.rs; three docstrings now agree with the code. commit_only keeps its direct confine_relative call because libgit2 stages a working-tree-relative path and rejects an absolute one.
+    - test: green — cargo nextest run --workspace 13665 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 41d37b2d8
+    - review: clean — 0 recordable findings, 17 dropped under the existing-test exception; all 3 prior findings verified closed; task moved to done
+  timestamp: 2026-08-07T04:01:56.013265+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb780
 title: Review batch budget shrinks as the diff grows — over-cap splits cannot converge
 ---
 Found while watching ^cbnfe97. The per-batch prompt budget is not stable between review runs on the same code:

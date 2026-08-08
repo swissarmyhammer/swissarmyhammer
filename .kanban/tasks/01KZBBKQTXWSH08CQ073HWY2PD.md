@@ -48,8 +48,31 @@ comments:
   id: 01kzcpx6vfzmypfx6sz0fq8g0s
   text: 'Check-in from the watching session (2026-08-06): as the card''s author I confirm both acceptance criteria are met as implemented — project_types-keyed rules appear in dump/list only for a matching workspace, resolved fail-soft from context.working_dir, never current_dir(). The shared `workspace_project_types` single-owner helper is the right shape. Your follow-up ^3e3e0xk is the correct split: same defect class, one layer deeper (the .validators project-layer load). Good catch — that one would have made a project''s own validator overrides silently vanish under a GUI-launched server with CWD=/.'
   timestamp: 2026-08-06T23:35:32.463128+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzcq5jz3v6cxb9qx5cb60yt5
+  text: |-
+    ### commit — changed
+    - evidence: aebdc9d76 feat(validators): resolve project types on hook and list/dump ops (^3hwy2pd)
+    - next: review
+  timestamp: 2026-08-06T23:40:07.011057+00:00
+- actor: claude-code
+  id: 01kzcqsp5pe5rsvn0a0743znn4
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (aebdc9d76) — 9 attempted, 4 confirmed, 7 refuted, 0 failed, 0 skipped files. All 4 confirmed findings were dropped under the skill's blanket existing-test exception: each asks to rename a literal into a named constant in `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs` (lines 1538, 1921, 1926, 2182), which is `#[cfg(test)]`-only code. `git blame` puts every one of those lines in an earlier commit (0ecaff64a6, e6a3840085, 945a7583ff), and this commit's hunks in that file all end at or below line ~1064, so none of the flagged code was introduced or touched here. The exception names `naming` explicitly. Zero recordable findings; no prior `## Review Findings` section existed.
+    - next: none — moved to done
+  timestamp: 2026-08-06T23:51:05.654741+00:00
+- actor: claude-code
+  id: 01kzcqtdfygtkjpkrnrj0v883n
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 6 files; match_rules and the list/dump validators ops take a workspace root, resolved from the session working dir; new card ^3e3e0xk records the same defect one layer down in ValidatorLoader::load_all
+    - test: green — cargo nextest run --workspace 13653 passed, cargo test --doc --workspace 0 failed, fmt clean, clippy clean
+    - commit: aebdc9d76
+    - review: clean — 9 attempted, 4 confirmed, 7 refuted; all 4 dropped under the existing-test exception; task moved to done
+  timestamp: 2026-08-06T23:51:29.534218+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb580
 title: Resolve project types on the hook and list/dump validators surfaces
 ---
 Follow-up to ^ygt2rre. Its research note found: `lib.rs::match_rules` (the hook surface) and the `list validators` / `dump validators` ops have no workspace root. They resolve no project types. A `project_types`-keyed rule fails closed there and silently never matches.

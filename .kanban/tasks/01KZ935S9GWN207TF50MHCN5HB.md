@@ -219,10 +219,28 @@ comments:
     - evidence: 1 file — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs. `with_workspace_root` now takes `work: impl FnOnce(&Path) -> Vec<InitResult>` and calls `work(&root)`; the three call sites pass `root` without the `&`. The file is swept: line 321 held the only owned-where-borrowed parameter. The 1 open review finding is checked off. Tests: nextest -p swissarmyhammer-cli 698 passed / 0 failed / 0 skipped; clippy -D warnings clean; fmt clean.
     - next: /review
   timestamp: 2026-08-06T23:02:08.611474+00:00
+- actor: claude-code
+  id: 01kzcnnsfecwqaswbyv49hta7r
+  text: |
+    ### review — clean
+    - scope: review sha HEAD~1..HEAD (6b4fa1179)
+    - evidence: 0 findings, 0 confirmed, 2 refuted, 9 attempted, 0 failed, 0 skipped, 0 skipped_files
+    - prior findings: all 7 items from the 3 dated sections verified closed in the working tree — `with_workspace_root` is the one owner (mod.rs:322), the three match blocks are now single calls (mod.rs:131, 158, 227), `work: impl FnOnce(&Path)` takes a borrowed path (mod.rs:324), `list_rulesets` returns BTreeMap order so no caller re-sorts (loader.rs:414), and `project_tool_rules` lives in review/tool_rules.rs:445 with doctor.rs and tool_install.rs both importing it
+    - next: none — task moved to done
+  timestamp: 2026-08-06T23:14:00.814354+00:00
+- actor: claude-code
+  id: 01kzcnphwxsh7gv6e50gt1c8ga
+  text: |-
+    ### finish iteration 4 — clean
+    - implement: changed — apps/swissarmyhammer-cli/src/commands/install/components/mod.rs (with_workspace_root gives the closure &Path)
+    - test: green — cargo nextest run --workspace 13651 passed, fmt clean, clippy clean
+    - commit: 6b4fa1179
+    - review: clean — 0 findings, 2 refuted, 9 attempted; all 7 prior findings verified closed in the tree; task moved to done
+  timestamp: 2026-08-06T23:14:25.821275+00:00
 depends_on:
 - 01KZ935GJX1YS2EAD7C2HK89AJ
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb480
 title: Runner install lifecycle with LLM installer fallback
 ---
 Install missing runner tools through the unified mirdan tool-install lifecycle.

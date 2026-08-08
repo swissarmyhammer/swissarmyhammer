@@ -152,8 +152,25 @@ comments:
     - evidence: 2 files — apps/swissarmyhammer-cli/src/commands/doctor/checks.rs, apps/swissarmyhammer-cli/src/commands/doctor/mod.rs
     - next: ready for /review
   timestamp: 2026-08-07T01:50:10.120268+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzcza5a1jbbf9cq3enmynnr9
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (7cdf35c5c) — 0 findings, 0 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped
+    - prior findings verified closed: checks.rs check_* signatures take `&mut impl Extend<Check>`; doctor_workspace_root() delegates to shared find_workspace_root(); check_lsp_servers uses doctor_workspace_root(); loader.rs tests pin the process CWD to a second conflicting project and assert its store contributes nothing; validators/mod.rs doc example propagates with `?`
+    - next: task moved to done
+  timestamp: 2026-08-07T02:02:25.473794+00:00
+- actor: claude-code
+  id: 01kzczamd5ege1afp1h34pfryz
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — apps/swissarmyhammer-cli/src/commands/doctor/{checks.rs,mod.rs}; check_lsp_servers and check_file_permissions resolve through doctor_workspace_root()
+    - test: green — cargo nextest run --workspace 13660 passed, doc tests 0 failed, fmt clean, clippy clean
+    - commit: 7cdf35c5c
+    - review: clean — 0 findings, 9 attempted; all 12 prior findings verified closed in the tree; task moved to done
+  timestamp: 2026-08-07T02:02:40.933726+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb680
 title: Resolve the project validator directory from the session working dir, not the process CWD
 ---
 Found while doing ^3hwy2pd.
