@@ -13,7 +13,7 @@
 //! suite).
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -24,25 +24,61 @@ use swissarmyhammer_lsp::{LspDaemon, OwnedLspServerSpec};
 /// How long to wait for `rust-analyzer` to load the workspace before the first
 /// query. rust-analyzer indexes the crate asynchronously after the handshake; a
 /// query fired too early answers null/transient, so the routing tests then poll
-/// (see [`WARM_UP_MAX_ATTEMPTS`]) on top of this initial settle.
+/// (see [`WARM_UP_BUDGET`]) on top of this initial settle.
 const RUST_ANALYZER_INITIAL_LOAD_WAIT_SECS: u64 = 3;
 
-/// Bounded retry budget for polling a routed live-LSP op until rust-analyzer is
+/// Wall-clock budget for polling a routed live-LSP op until rust-analyzer is
 /// warm enough to return the real cross-reference / rename (hang-safe: the loop
 /// is finite, never an unbounded wait on a server that never resolves).
 ///
-/// 120 attempts at [`WARM_UP_POLL_INTERVAL`] gives 60s of polling on top of the
-/// initial [`RUST_ANALYZER_INITIAL_LOAD_WAIT_SECS`] settle — matching the
-/// load-tolerant 60s deadline this crate's sibling `ra_pull_readiness.rs` uses
-/// for the same "real rust-analyzer, cold under CI load" scenario. The prior
-/// budget of 20 attempts (10s of polling, ~13s total) was tuned for an idle
-/// machine: under full `--workspace` parallelism a cold rust-analyzer is
-/// CPU-starved and routinely still indexing past 13s, so these routing tests
-/// failed intermittently and load-dependently even though `lsp-ipc-serial`
-/// already caps this crate's tests to one real analyzer at a time (see
+/// This is a deadline rather than an attempt count on purpose. An attempt count
+/// times [`WARM_UP_POLL_INTERVAL`] only describes the elapsed time when every
+/// attempt returns promptly, so it states a bound it does not hold; a deadline
+/// bounds the polling itself.
+///
+/// The budget has been raised twice, and only ever the budget — the assertions
+/// never moved: 10s (tuned for an idle machine), then 60s (matching the sibling
+/// `ra_pull_readiness.rs`), now 120s.
+///
+/// TWO independent deadlines bound these tests, and they fail through DIFFERENT
+/// surfaces. This one is the second:
+///
+/// 1. The per-request LSP timeout — `SAH_LSP_REQUEST_TIMEOUT_SECS`, which
+///    `.cargo/config.toml` sets to 120s for test runs over the shipped 30s
+///    default. `is_transient_not_ready` does not match a timeout, so a request
+///    that spends its whole budget takes the `Err(e) => panic!` arm on the spot.
+///    This budget cannot absorb that — the loop never gets another attempt.
+/// 2. This budget, which is the ONLY path to the trailing
+///    `assert!(resolved, ...)`.
+///
+/// Either way the failure is a deadline, never a lost lock. Forcing the
+/// per-request timeout down to 1s under ~250 competing CPU hogs reproduces
+/// surface 1 verbatim — `LSP request 'textDocument/prepareRename' (id=13) timed
+/// out after 1s` — and no red run ever showed a content or ordering mismatch.
+/// Completion time scales with starvation while the result stays identical:
+/// 3.1s idle, 11-28s at load average 125-317. The one `--workspace` failure that
+/// prompted the last raise was never captured, so which of the two surfaces it
+/// took is unknown.
+///
+/// Each loop below drives exactly one leader, one follower, and one
+/// rust-analyzer, strictly in sequence, so nothing here can race. The atomicity
+/// contract the test name refers to is pinned deterministically elsewhere, by
+/// `dispatch_lsp_multi_request_runs_steps_in_order_under_one_lock` in
+/// `request_api.rs`, which uses a fake transport and no clock.
+///
+/// `lsp-ipc-serial` already caps this crate to one real analyzer at a time (see
 /// `.config/nextest.toml`) — the contention comes from every other package's
-/// tests sharing the same CPU, not from a second concurrent analyzer.
-const WARM_UP_MAX_ATTEMPTS: u32 = 120;
+/// tests sharing the same CPU, not from a second concurrent analyzer. One
+/// continuous poll also beats a nextest `retries` of the same wall budget: a
+/// retry restarts the analyzer cold each attempt and throws the indexing away,
+/// whereas one longer poll lets the same analyzer keep indexing throughout.
+///
+/// The deadline is checked between attempts, so a request that runs to its own
+/// per-request timeout can still overrun it, and the 300s `slow-timeout` kill
+/// can fire before the assertion prints. Bounding that would mean lowering
+/// deadline 1, and no evidence asks for it: with the real 120s per-request
+/// timeout, the slowest observed run was 28s.
+const WARM_UP_BUDGET: Duration = Duration::from_secs(120);
 
 /// Poll interval between warm-up attempts.
 const WARM_UP_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -291,7 +327,8 @@ async fn follower_request_with_document_gets_real_definition_without_leader_preo
     // bounded retry until the real cross-reference resolves.
     let mut last = String::new();
     let mut resolved = false;
-    for _ in 0..WARM_UP_MAX_ATTEMPTS {
+    let warm_up_deadline = Instant::now() + WARM_UP_BUDGET;
+    while Instant::now() < warm_up_deadline {
         // The DB handle (DbRef) is !Send, so the synchronous op call — open
         // workspace, build the routed context, run get_definition — is scoped in
         // its own block so ws/db/ctx all drop BEFORE the await below. The router
@@ -424,7 +461,8 @@ async fn follower_multi_step_rename_gets_real_leader_edits_under_one_lock() {
     // bounded retry until the real rename resolves.
     let mut last = String::new();
     let mut resolved = false;
-    for _ in 0..WARM_UP_MAX_ATTEMPTS {
+    let warm_up_deadline = Instant::now() + WARM_UP_BUDGET;
+    while Instant::now() < warm_up_deadline {
         // The DB handle (DbRef) is !Send, so the synchronous op call is scoped in
         // its own block so ws/db/ctx all drop BEFORE the await below. The multi
         // router closure bridges to the async client via block_in_place.
