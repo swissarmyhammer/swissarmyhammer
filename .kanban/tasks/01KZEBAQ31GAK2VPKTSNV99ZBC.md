@@ -156,10 +156,31 @@ comments:
     - evidence: cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean; cargo nextest run --workspace — 13862 tests run: 13862 passed (7 slow), 0 failed, 0 skipped
     - next: none
   timestamp: 2026-08-08T16:36:22.240429+00:00
+- actor: claude-code
+  id: 01kzh3zfp6dsfdkvfj0mn265v8
+  text: |-
+    ### review — clean
+    - evidence: `review sha 23dc610f7..5b026d3b5` (18 files) — findings 0, confirmed 0, refuted 0; 9 validator/file pairs attempted, 0 failed, 0 skipped. No prior Review Findings section, no unchecked items.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-08T16:40:56.262285+00:00
+- actor: claude-code
+  id: 01kzh403yrs0jkrgzywdkexmcf
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 16 files; 4 rules (complexity-typescript, complexity-swift, complexity-go, function-length-go), 8 fixtures, VALIDATOR.md, 3 rosters. RED verified 15 ways: 10 threshold breaks, 3 dropped-config breaks, 2 supersedes breaks
+    - test: green — cargo nextest run --workspace, 13862 passed, 0 failed, 0 skipped; cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean
+    - commit: 5b026d3b5 — 18 files; staged by explicit path because a parallel session shares this tree
+    - review: clean — 0 findings, 9 pairs attempted, 0 failed, 0 skipped on `review sha 23dc610f7..5b026d3b5`
+    - result: task moved to done
+
+    Tools installed during the work: eslint-plugin-sonarjs@4.2.0 (npm -g), gocognit v1.2.1 and funlen v0.2.0 (go install). swiftlint 0.65.0 and golangci-lint 2.12.2 were already present.
+
+    Note for later cards: `~/.validators/code-hygiene/` holds an older `sah init` snapshot that shadows the builtins by the documented precedence, so doctor rows for new builtin rules must be checked in a scratch project until that snapshot is refreshed.
+  timestamp: 2026-08-08T16:41:17.016722+00:00
 depends_on:
 - 01KZEBACVE127AV1BTD3DFHNXG
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffcc80
 title: 'complexity tool rules: TypeScript + Swift + Go'
 ---
 Extend the complexity and function-length tool rules to the other languages. Follow the pattern from ^3dfhnxg.
