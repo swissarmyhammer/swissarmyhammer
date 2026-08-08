@@ -1,7 +1,8 @@
 //! Find code in a file that is duplicated elsewhere in the codebase.
 //!
 //! For each chunk in the target file(s), finds semantically similar chunks
-//! in other files using embedding cosine similarity. Results are grouped
+//! in the rest of the codebase — other files AND the other chunks of the
+//! same file — using embedding cosine similarity. Results are grouped
 //! by source chunk — each group answers "this piece of your file looks
 //! like these places elsewhere."
 
@@ -40,7 +41,8 @@ pub struct DuplicateMatch {
 pub struct DuplicateGroup {
     /// The chunk from the target file.
     pub source: ChunkRef,
-    /// Similar chunks found in other files, sorted by similarity (descending).
+    /// Similar chunks found elsewhere — in other files or elsewhere in the
+    /// same file — sorted by similarity (descending).
     pub duplicates: Vec<DuplicateMatch>,
 }
 
@@ -75,7 +77,9 @@ pub struct FindDuplicatesResult {
     pub groups: Vec<DuplicateGroup>,
     /// Total chunks in the target file(s).
     pub source_chunks: usize,
-    /// Total chunks compared against (from other files).
+    /// Chunks each source chunk was ranked against: every eligible chunk in
+    /// the corpus except the source chunk itself. Zero when the target file
+    /// has no eligible chunks.
     pub compared_chunks: usize,
 }
 
@@ -92,9 +96,10 @@ fn chunk_ref(chunk: &LoadedChunk) -> ChunkRef {
 
 /// Find chunks in `file` that are duplicated elsewhere in the codebase.
 ///
-/// For each chunk in the target file, compares its embedding against all
-/// chunks in other files. Returns groups where the source chunk has at
-/// least one match above `min_similarity`.
+/// For each chunk in the target file, compares its embedding against every
+/// other chunk in the corpus — chunks in other files AND the other chunks of
+/// the same file. A chunk never matches itself. Returns groups where the
+/// source chunk has at least one match above `min_similarity`.
 ///
 /// # Errors
 ///
@@ -123,41 +128,47 @@ pub fn find_duplicates_in(
     file: &str,
     options: &FindDuplicatesOptions,
 ) -> FindDuplicatesResult {
-    let mut source_chunks_list = Vec::new();
-    let mut other_chunks = Vec::new();
+    // The connection-backed path filters `LENGTH(text) >= min_chunk_bytes`
+    // in SQL; apply the identical size floor here so the corpus can be loaded
+    // once, unfiltered, and reused.
+    let eligible: Vec<&LoadedChunk> = corpus
+        .iter()
+        .filter(|chunk| chunk.text.len() >= options.min_chunk_bytes)
+        .collect();
 
-    for chunk in corpus {
-        // The connection-backed path filters `LENGTH(text) >= min_chunk_bytes`
-        // in SQL; apply the identical size floor here so the corpus can be loaded
-        // once, unfiltered, and reused.
-        if chunk.text.len() < options.min_chunk_bytes {
-            continue;
-        }
-        if chunk.file_path == file {
-            source_chunks_list.push(chunk);
-        } else {
-            other_chunks.push(chunk);
-        }
-    }
-
-    let source_chunks = source_chunks_list.len();
-    let compared_chunks = other_chunks.len();
+    let source_chunks = eligible
+        .iter()
+        .filter(|chunk| chunk.file_path == file)
+        .count();
+    // Every source chunk is ranked against the whole eligible pool minus
+    // itself — including the rest of its own file, so intra-file copies are
+    // visible. When the file has no eligible chunks, nothing is compared.
+    let compared_chunks = if source_chunks == 0 {
+        0
+    } else {
+        eligible.len() - 1
+    };
 
     let mut groups = Vec::new();
 
-    for src in &source_chunks_list {
-        // Rank the other chunks via the shared bounded top-k primitive instead of
-        // collecting EVERY above-threshold match and truncating. The old path
-        // cloned each matching chunk's full `text` (via `chunk_ref`) before the
-        // truncate, so a hot source chunk against a large corpus transiently
-        // materialized a huge fraction of it for a result that keeps
+    for src in eligible.iter().filter(|chunk| chunk.file_path == file) {
+        // Rank the candidate chunks via the shared bounded top-k primitive
+        // instead of collecting EVERY above-threshold match and truncating. The
+        // old path cloned each matching chunk's full `text` (via `chunk_ref`)
+        // before the truncate, so a hot source chunk against a large corpus
+        // transiently materialized a huge fraction of it for a result that keeps
         // `max_per_chunk`. Now the heap retains only `(&chunk, score)` and we
         // clone text for the kept matches alone.
+        //
+        // Identity (`std::ptr::eq` into the shared `eligible` pool) excludes
+        // the source chunk itself; every other chunk — same file or not — is a
+        // candidate.
         let ranked = top_k_by_cosine(
             &src.embedding,
-            other_chunks
+            eligible
                 .iter()
-                .map(|other| (*other, other.embedding.as_slice())),
+                .filter(|candidate| !std::ptr::eq(**candidate, *src))
+                .map(|candidate| (*candidate, candidate.embedding.as_slice())),
             options.min_similarity,
             options.max_per_chunk,
         )
@@ -267,6 +278,66 @@ mod tests {
         assert_eq!(group.duplicates.len(), 1);
         assert_eq!(group.duplicates[0].chunk.file_path, "src/legacy.rs");
         assert!(group.duplicates[0].similarity > 0.99);
+    }
+
+    /// Two near-identical blocks inside ONE file must be reported as
+    /// duplicates of each other, and a chunk must never match itself.
+    ///
+    /// Fixture modeled on `apps/swissarmyhammer-cli/src/signal_handler.rs`,
+    /// where the block at lines 6-25 repeats at lines 38-57. Uses the default
+    /// thresholds (min_similarity 0.85, min_chunk_bytes 100, max_per_chunk 5).
+    #[test]
+    fn test_finds_duplicate_within_same_file() {
+        let conn = test_db();
+        insert_file(&conn, "src/signal_handler.rs");
+
+        let text_first = "fn install_sigint_handler() { let flag = Arc::new(AtomicBool::new(false)); signal_hook::flag::register(SIGINT, flag.clone()).expect(\"register SIGINT\"); spawn_watcher(flag); }";
+        let text_second = "fn install_sigterm_handler() { let flag = Arc::new(AtomicBool::new(false)); signal_hook::flag::register(SIGTERM, flag.clone()).expect(\"register SIGTERM\"); spawn_watcher(flag); }";
+        // Nearly identical embeddings = near-duplicate code, same file.
+        insert_chunk(
+            &conn,
+            "src/signal_handler.rs",
+            6,
+            25,
+            Some("install_sigint_handler"),
+            text_first,
+            &[0.9, 0.1, 0.0],
+        );
+        insert_chunk(
+            &conn,
+            "src/signal_handler.rs",
+            38,
+            57,
+            Some("install_sigterm_handler"),
+            text_second,
+            &[0.89, 0.11, 0.01],
+        );
+
+        let result = find_duplicates(
+            &conn,
+            "src/signal_handler.rs",
+            &FindDuplicatesOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.source_chunks, 2);
+        // Each source chunk is ranked against the pool minus itself.
+        assert_eq!(result.compared_chunks, 1);
+        assert_eq!(result.groups.len(), 2);
+        for group in &result.groups {
+            assert_eq!(
+                group.duplicates.len(),
+                1,
+                "each chunk matches only the OTHER chunk, never itself"
+            );
+            let duplicate = &group.duplicates[0];
+            assert_eq!(duplicate.chunk.file_path, "src/signal_handler.rs");
+            assert_ne!(
+                duplicate.chunk.start_line, group.source.start_line,
+                "a chunk must not match itself"
+            );
+            assert!(duplicate.similarity > 0.99);
+        }
     }
 
     #[test]

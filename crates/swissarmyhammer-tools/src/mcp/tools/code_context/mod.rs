@@ -1571,7 +1571,9 @@ fn search_code_with_query_embedding(
 
 /// Execute the "find duplicates" operation.
 ///
-/// For each chunk in the target file, finds similar chunks in other files.
+/// For each chunk in the target file, finds similar chunks elsewhere —
+/// in other files or elsewhere in the same file. A chunk never matches
+/// itself.
 fn execute_find_duplicates(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
