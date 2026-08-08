@@ -4,15 +4,16 @@
 //! within cloned repositories. Supports GitHub shorthand (`owner/repo`),
 //! HTTPS URLs, SSH URLs, `#ref` fragments, and `@skill-name` suffixes.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use url::Url;
 
+use crate::frontmatter;
 use crate::package_type::{self, PackageType};
 use crate::registry::RegistryError;
 
 /// Classified install source.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InstallSource {
     /// A local filesystem path.
     LocalPath(String),
@@ -23,7 +24,7 @@ pub enum InstallSource {
 }
 
 /// Parsed git source with all the pieces needed to clone and discover packages.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GitSource {
     /// The URL to clone (HTTPS or SSH).
     pub clone_url: String,
@@ -38,7 +39,7 @@ pub struct GitSource {
 }
 
 /// A package discovered inside a cloned repository.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscoveredPackage {
     /// Package name from frontmatter.
     pub name: String,
@@ -100,98 +101,107 @@ pub fn parse_git_source(
     spec: &str,
     skill_override: Option<&str>,
 ) -> Result<GitSource, RegistryError> {
-    let select = skill_override.map(|s| s.to_string());
+    parse_ssh_source(spec, skill_override)
+        .or_else(|| parse_url_source(spec, skill_override))
+        .or_else(|| parse_shorthand_source(spec, skill_override))
+        .ok_or_else(|| {
+            RegistryError::Validation(format!("cannot parse '{}' as a git source", spec))
+        })
+}
 
-    // SSH URL: git@host:owner/repo.git
-    if spec.starts_with("git@") {
-        let display = spec
-            .strip_prefix("git@")
-            .and_then(|s| s.strip_suffix(".git"))
-            .unwrap_or(spec)
-            .replace(':', "/");
-        return Ok(GitSource {
-            clone_url: spec.to_string(),
-            git_ref: None,
-            subpath: None,
-            select,
-            display_name: display,
-        });
+/// Parse an SSH spec, `git@host:owner/repo.git`.
+///
+/// Returns `None` when `spec` does not open with `git@`.
+fn parse_ssh_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    let rest = spec.strip_prefix("git@")?;
+    let display = rest.strip_suffix(".git").unwrap_or(rest).replace(':', "/");
+
+    Some(GitSource {
+        clone_url: spec.to_string(),
+        git_ref: None,
+        subpath: None,
+        select: select.map(str::to_string),
+        display_name: display,
+    })
+}
+
+/// Parse a full URL spec, with an optional `#ref` fragment naming a branch,
+/// tag, or commit.
+///
+/// Returns `None` when `spec` is not a URL.
+fn parse_url_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    let mut url = Url::parse(spec).ok()?;
+    let git_ref = url.fragment().map(|f| f.to_string());
+    url.set_fragment(None);
+
+    let mut clone_url = url.to_string();
+    // Ensure .git suffix for GitHub/GitLab
+    if (clone_url.contains("github.com") || clone_url.contains("gitlab.com"))
+        && !clone_url.ends_with(".git")
+    {
+        clone_url = format!("{}.git", clone_url.trim_end_matches('/'));
     }
 
-    // Try parsing as a URL
-    if let Ok(mut url) = Url::parse(spec) {
-        let git_ref = url.fragment().map(|f| f.to_string());
-        url.set_fragment(None);
+    let display = url
+        .path()
+        .trim_start_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
 
-        let mut clone_url = url.to_string();
-        // Ensure .git suffix for GitHub/GitLab
-        if (clone_url.contains("github.com") || clone_url.contains("gitlab.com"))
-            && !clone_url.ends_with(".git")
-        {
-            clone_url = format!("{}.git", clone_url.trim_end_matches('/'));
-        }
+    Some(GitSource {
+        clone_url,
+        git_ref,
+        subpath: None,
+        select: select.map(str::to_string),
+        display_name: display,
+    })
+}
 
-        let display = url
-            .path()
-            .trim_start_matches('/')
-            .trim_end_matches(".git")
-            .to_string();
-
-        return Ok(GitSource {
-            clone_url,
-            git_ref,
-            subpath: None,
-            select,
-            display_name: display,
-        });
+/// Parse a GitHub shorthand spec: `owner/repo`, `owner/repo@skill`, or
+/// `owner/repo#ref`.
+///
+/// `select` is the `--skill` flag, which takes precedence over an inline
+/// `@skill` suffix. Returns `None` when `spec` carries a space or a URL
+/// scheme, or when the base is not one `owner/repo` pair.
+fn parse_shorthand_source(spec: &str, select: Option<&str>) -> Option<GitSource> {
+    if spec.contains(' ') || spec.contains("://") {
+        return None;
     }
 
-    // GitHub shorthand: owner/repo, owner/repo@skill, owner/repo#ref
-    // Must contain exactly one `/` and no spaces
-    if !spec.contains(' ') && !spec.contains("://") {
-        // Split off #ref first
-        let (base, git_ref) = if let Some((b, r)) = spec.split_once('#') {
-            (b, Some(r.to_string()))
-        } else {
-            (spec, None)
-        };
+    let (base, git_ref) = split_once_owned(spec, '#');
+    let (base, shorthand_select) = split_once_owned(base, '@');
 
-        // Split off @skill-name (for shorthand like owner/repo@skill)
-        let (base, shorthand_select) = if let Some((b, s)) = base.split_once('@') {
-            (b, Some(s.to_string()))
-        } else {
-            (base, None)
-        };
-
-        // --skill override takes precedence over inline @skill
-        let final_select = select.or(shorthand_select);
-
-        // Validate it looks like owner/repo
-        let parts: Vec<&str> = base.split('/').collect();
-        if parts.len() == 2
-            && !parts[0].is_empty()
-            && !parts[1].is_empty()
-            && parts[0]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-            && parts[1]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-        {
-            return Ok(GitSource {
-                clone_url: format!("https://github.com/{}.git", base),
-                git_ref,
-                subpath: None,
-                select: final_select,
-                display_name: base.to_string(),
-            });
-        }
+    let (owner, repo) = base.split_once('/')?;
+    if !is_shorthand_segment(owner) || !is_shorthand_segment(repo) {
+        return None;
     }
 
-    Err(RegistryError::Validation(format!(
-        "cannot parse '{}' as a git source",
-        spec
-    )))
+    Some(GitSource {
+        clone_url: format!("https://github.com/{}.git", base),
+        git_ref,
+        subpath: None,
+        select: select.map(str::to_string).or(shorthand_select),
+        display_name: base.to_string(),
+    })
+}
+
+/// Split `spec` at the first `separator`, owning the tail.
+///
+/// Returns the whole of `spec` and `None` when `separator` is absent.
+fn split_once_owned(spec: &str, separator: char) -> (&str, Option<String>) {
+    match spec.split_once(separator) {
+        Some((head, tail)) => (head, Some(tail.to_string())),
+        None => (spec, None),
+    }
+}
+
+/// Whether `segment` is a usable owner or repository name in GitHub
+/// shorthand.
+fn is_shorthand_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
 /// Clone a git repository into a temporary directory.
@@ -204,7 +214,7 @@ pub fn parse_git_source(
 /// Shallow cloning is used only when it is safe:
 ///   * If a specific `git_ref` is pinned it may name a branch/tag/commit that a
 ///     depth-1 clone of the default branch would not contain, so that (rare)
-///     case falls back to a full clone followed by [`checkout_ref`].
+///     case falls back to a full clone followed by a checkout of that ref.
 ///   * libgit2 does not support shallow clones of local (`file://`) remotes, so
 ///     those also take the full-clone path (they are already fast).
 pub fn git_clone(source: &GitSource) -> Result<tempfile::TempDir, RegistryError> {
@@ -322,10 +332,10 @@ fn classify_git_error(err: git2::Error, url: &str) -> RegistryError {
         || msg.contains("name or service not known")
         || msg.contains("could not resolve")
     {
-        return RegistryError::Validation(format!("DNS resolution failed for '{}': {}", url, err));
+        return RegistryError::Validation(format!("dns resolution failed for '{}': {}", url, err));
     }
 
-    RegistryError::Validation(format!("Git clone failed for '{}': {}", url, err))
+    RegistryError::Validation(format!("git clone failed for '{}': {}", url, err))
 }
 
 /// Priority directories to search for packages within a cloned repo.
@@ -351,107 +361,239 @@ const MAX_SCAN_DEPTH: usize = 5;
 /// 4. Recursive scan (max depth 5)
 ///
 /// Deduplicates by package name.
+///
+/// Every directory the search reads stays inside the clone.
+///
+/// # Errors
+///
+/// Returns an error when `repo_dir` does not resolve to a real directory,
+/// when the repository holds no package, or when `subpath` or `select` names
+/// none.
 pub fn discover_packages(
     repo_dir: &Path,
     subpath: Option<&str>,
     select: Option<&str>,
 ) -> Result<Vec<DiscoveredPackage>, RegistryError> {
-    let mut packages = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
-
-    // 1. If subpath given, look only there
     if let Some(sub) = subpath {
-        let target = repo_dir.join(sub);
-        if target.is_dir() {
-            scan_dir_for_package(&target, &mut packages, &mut seen_names);
-            if !packages.is_empty() {
-                return filter_by_select(packages, select);
-            }
-        }
-        return Err(RegistryError::Validation(format!(
-            "subpath '{}' not found or contains no packages",
-            sub
-        )));
+        return discover_in_subpath(repo_dir, sub, select);
     }
 
-    // 2. Check root
-    scan_dir_for_package(repo_dir, &mut packages, &mut seen_names);
+    let mut scan = RepoScan::open(repo_dir)?;
 
-    // 3. Check priority directories
+    // 1. Check root
+    scan.scan_dir(repo_dir);
+
+    // 2. Check priority directories
     for dir_name in PRIORITY_DIRS {
-        let dir = repo_dir.join(dir_name);
-        if dir.is_dir() {
-            // Each subdirectory in a priority dir might be a package
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        scan_dir_for_package(&path, &mut packages, &mut seen_names);
-                    }
-                }
-            }
-        }
+        scan.scan_child_dirs(&repo_dir.join(dir_name));
     }
 
-    // 4. If still nothing, recursive scan
-    if packages.is_empty() {
-        scan_recursive(repo_dir, &mut packages, &mut seen_names, 0);
+    // 3. If still nothing, recursive scan
+    if scan.is_empty() {
+        scan.scan_recursive(repo_dir, 0);
     }
 
-    if packages.is_empty() {
+    if scan.is_empty() {
         return Err(RegistryError::Validation(
             "no packages found in repository (expected SKILL.md, VALIDATOR.md + rules/, TOOL.md, or .claude-plugin/plugin.json)"
                 .to_string(),
         ));
     }
 
-    filter_by_select(packages, select)
+    filter_by_select(scan.into_packages(), select)
 }
 
-/// Check a single directory for a package and add it if found.
-fn scan_dir_for_package(
-    dir: &Path,
-    packages: &mut Vec<DiscoveredPackage>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    if let Some(pkg_type) = package_type::detect_package_type(dir) {
+/// Discover packages under one subpath of a cloned repository.
+///
+/// The subpath names one package directory, so the search stops there instead
+/// of falling back to the priority directories or a recursive scan.
+///
+/// The subpath is untrusted text -- it comes from the install spec -- and it
+/// indexes a third-party repository. Two checks hold the search inside the
+/// clone: [`subpath_stays_inside`] refuses text that names a location outside
+/// it, and [`RepoScan`] refuses a directory that resolves outside it once
+/// every symbolic link is followed.
+///
+/// # Errors
+///
+/// Returns an error when the subpath leaves the repository, when it is not a
+/// directory, when it holds no package, or when `select` names no package it
+/// holds.
+fn discover_in_subpath(
+    repo_dir: &Path,
+    subpath: &str,
+    select: Option<&str>,
+) -> Result<Vec<DiscoveredPackage>, RegistryError> {
+    if !subpath_stays_inside(subpath) {
+        return Err(RegistryError::Validation(format!(
+            "subpath '{}' leaves the repository",
+            subpath
+        )));
+    }
+
+    let mut scan = RepoScan::open(repo_dir)?;
+    scan.scan_dir(&repo_dir.join(subpath));
+
+    if scan.is_empty() {
+        return Err(RegistryError::Validation(format!(
+            "subpath '{}' not found or contains no packages",
+            subpath
+        )));
+    }
+
+    filter_by_select(scan.into_packages(), select)
+}
+
+/// Whether the text of `subpath` names a location inside the repository.
+///
+/// Only a relative path of ordinary segments can stay inside the clone. A
+/// leading separator, a drive prefix, and a `..` segment each name something
+/// outside it.
+fn subpath_stays_inside(subpath: &str) -> bool {
+    Path::new(subpath)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
+/// One walk of a cloned repository, collecting the packages it holds.
+///
+/// A cloned repository is third-party content, so a symbolic link it carries
+/// may point anywhere on the host. The scan owns the canonical repository
+/// root and resolves every directory against it, so a walk that would leave
+/// the clone reads nothing.
+struct RepoScan {
+    /// The canonical repository root. Every directory read stays inside it.
+    root: PathBuf,
+    /// The packages collected so far, in discovery order.
+    packages: Vec<DiscoveredPackage>,
+    /// The package names already collected, so each package is reported once.
+    seen: std::collections::HashSet<String>,
+}
+
+impl RepoScan {
+    /// Open a scan of the repository checked out at `repo_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `repo_dir` does not resolve to a real directory.
+    fn open(repo_dir: &Path) -> Result<Self, RegistryError> {
+        let root = repo_dir.canonicalize().map_err(|e| {
+            RegistryError::Validation(format!(
+                "cannot read repository directory '{}': {}",
+                repo_dir.display(),
+                e
+            ))
+        })?;
+
+        Ok(Self {
+            root,
+            packages: Vec::new(),
+            seen: std::collections::HashSet::new(),
+        })
+    }
+
+    /// Whether `dir` resolves to a location inside the repository.
+    ///
+    /// Resolution follows every symbolic link, so a link that points out of
+    /// the clone answers `false`. A directory that resolves to nothing -- one
+    /// that is missing, or that is not a directory -- also answers `false`,
+    /// because the scan has nothing to read there.
+    fn contains(&self, dir: &Path) -> bool {
+        dir.canonicalize()
+            .is_ok_and(|resolved| resolved.starts_with(&self.root))
+    }
+
+    /// Check a single directory for a package and collect the one it holds.
+    fn scan_dir(&mut self, dir: &Path) {
+        if !self.contains(dir) {
+            return;
+        }
+
+        let Some(pkg_type) = package_type::detect_package_type(dir) else {
+            return;
+        };
+
+        // Every type but Plugin names itself in the frontmatter of its
+        // manifest; a plugin names itself in the JSON of its.
         let name = match pkg_type {
-            PackageType::Skill => {
-                let md_file = dir.join("SKILL.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
-            PackageType::Validator => {
-                let md_file = dir.join("VALIDATOR.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
-            PackageType::Tool => {
-                let md_file = dir.join("TOOL.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
-            }
             PackageType::Plugin => extract_name_from_plugin_json(dir),
-            PackageType::Agent => {
-                let md_file = dir.join("AGENT.md");
-                std::fs::read_to_string(&md_file)
-                    .ok()
-                    .and_then(|c| extract_name_from_frontmatter(&c))
+            manifest_type => {
+                frontmatter::file_field(&dir.join(manifest_type.manifest_file()), "name")
             }
         };
 
-        if let Some(name) = name {
-            if seen.insert(name.clone()) {
-                packages.push(DiscoveredPackage {
-                    name,
-                    package_type: pkg_type,
-                    path: dir.to_path_buf(),
-                });
+        let Some(name) = name else {
+            return;
+        };
+
+        if self.seen.insert(name.clone()) {
+            self.packages.push(DiscoveredPackage {
+                name,
+                package_type: pkg_type,
+                path: dir.to_path_buf(),
+            });
+        }
+    }
+
+    /// Check each immediate subdirectory of `dir` for a package.
+    ///
+    /// A `dir` that is missing, that is not a directory, or that resolves
+    /// outside the repository holds no subdirectory to check, so it adds
+    /// nothing.
+    fn scan_child_dirs(&mut self, dir: &Path) {
+        if !self.contains(dir) {
+            return;
+        }
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.scan_dir(&path);
             }
         }
+    }
+
+    /// Walk `dir` and the directories under it, to [`MAX_SCAN_DEPTH`].
+    fn scan_recursive(&mut self, dir: &Path, depth: usize) {
+        if depth > MAX_SCAN_DEPTH || !self.contains(dir) {
+            return;
+        }
+
+        // Skip hidden dirs (except .claude, .avp) and common noise
+        let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if depth > 0 && dir_name.starts_with('.') && dir_name != ".claude" && dir_name != ".avp" {
+            return;
+        }
+        if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor") {
+            return;
+        }
+
+        self.scan_dir(dir);
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.scan_recursive(&path, depth + 1);
+            }
+        }
+    }
+
+    /// Whether the scan has collected no package.
+    fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+
+    /// The packages the scan collected, in discovery order.
+    fn into_packages(self) -> Vec<DiscoveredPackage> {
+        self.packages
     }
 }
 
@@ -464,53 +606,6 @@ fn extract_name_from_plugin_json(dir: &Path) -> Option<String> {
     let content = std::fs::read_to_string(&path).ok()?;
     let json: serde_json::Value = crate::parse_jsonc(&content).ok()?;
     json.get("name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-/// Recursively scan for packages up to MAX_SCAN_DEPTH.
-fn scan_recursive(
-    dir: &Path,
-    packages: &mut Vec<DiscoveredPackage>,
-    seen: &mut std::collections::HashSet<String>,
-    depth: usize,
-) {
-    if depth > MAX_SCAN_DEPTH {
-        return;
-    }
-
-    // Skip hidden dirs (except .claude, .avp) and common noise
-    let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if depth > 0 && dir_name.starts_with('.') && dir_name != ".claude" && dir_name != ".avp" {
-        return;
-    }
-    if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor") {
-        return;
-    }
-
-    scan_dir_for_package(dir, packages, seen);
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                scan_recursive(&path, packages, seen, depth + 1);
-            }
-        }
-    }
-}
-
-/// Extract the `name` field from YAML frontmatter.
-fn extract_name_from_frontmatter(content: &str) -> Option<String> {
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return None;
-    }
-    let rest = &content[3..];
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).ok()?;
-    yaml.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
 }
@@ -539,6 +634,11 @@ fn filter_by_select(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::frontmatter::fixtures::{
+        write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+        OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
 
     // --- classify_source tests ---
 
@@ -745,6 +845,53 @@ mod tests {
         assert!(matches!(result, RegistryError::Validation(_)));
     }
 
+    #[test]
+    fn test_classify_git_error_messages_open_lowercase() {
+        let cases = [
+            (
+                git2::ErrorCode::Auth,
+                git2::ErrorClass::Net,
+                "authentication required",
+            ),
+            (
+                git2::ErrorCode::NotFound,
+                git2::ErrorClass::Net,
+                "repository not found",
+            ),
+            (
+                git2::ErrorCode::GenericError,
+                git2::ErrorClass::Net,
+                "failed to resolve host",
+            ),
+            (
+                git2::ErrorCode::GenericError,
+                git2::ErrorClass::None,
+                "something else went wrong",
+            ),
+        ];
+
+        for (code, class, git_message) in cases {
+            let classified = classify_git_error(
+                git2::Error::new(code, class, git_message),
+                "https://example.com/repo.git",
+            );
+            let message = match &classified {
+                RegistryError::Unauthorized(message)
+                | RegistryError::NotFound(message)
+                | RegistryError::Validation(message) => message.clone(),
+                other => panic!("unexpected error variant: {other}"),
+            };
+            let opening = message
+                .chars()
+                .next()
+                .expect("a classified message is never empty");
+            assert!(
+                !opening.is_uppercase(),
+                "a git error message must open lowercase, got {message:?}"
+            );
+        }
+    }
+
     // --- discover_packages tests ---
 
     #[test]
@@ -910,26 +1057,202 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- extract_name_from_frontmatter tests ---
+    // The frontmatter reader and its delimiter rule are stated once, in
+    // `crate::frontmatter`. Discovery is pinned against the same four fixtures
+    // anyway, because it is the one reader whose input this repository does
+    // not control: a third-party repository writes the package files a scan
+    // walks, so the delimiter rule must hold on the discovery path itself and
+    // not only on the reader it delegates to.
 
     #[test]
-    fn test_extract_name_valid() {
-        let content = "---\nname: my-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
+    fn test_scan_dir_keeps_every_key_past_a_three_hyphen_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+        let packages = scan.into_packages();
+
+        assert_eq!(packages.len(), 1);
         assert_eq!(
-            extract_name_from_frontmatter(content),
-            Some("my-skill".to_string())
+            packages[0].name, "test-skill",
+            "a three-hyphen run inside the description must not cut the frontmatter short"
         );
     }
 
     #[test]
-    fn test_extract_name_no_frontmatter() {
-        assert_eq!(extract_name_from_frontmatter("# Just markdown"), None);
+    fn test_scan_dir_skips_a_skill_whose_opening_line_carries_trailing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
     }
 
     #[test]
-    fn test_extract_name_no_name_field() {
-        let content = "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n";
-        assert_eq!(extract_name_from_frontmatter(content), None);
+    fn test_scan_dir_skips_a_skill_whose_opening_line_is_four_hyphens() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn test_scan_dir_skips_a_skill_with_no_closing_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn test_scan_dir_for_package_names_a_skill_from_its_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("SKILL.md"),
+            "---\nname: my-skill\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n",
+        )
+        .unwrap();
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+        let packages = scan.into_packages();
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "my-skill");
+        assert_eq!(packages[0].package_type, PackageType::Skill);
+    }
+
+    #[test]
+    fn test_scan_dir_for_package_skips_a_skill_whose_frontmatter_names_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("SKILL.md"),
+            "---\nmetadata:\n  version: \"1.0.0\"\n---\n# Skill\n",
+        )
+        .unwrap();
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn test_scan_dir_for_package_skips_a_skill_carrying_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("SKILL.md"), "# Just markdown").unwrap();
+
+        let mut scan = RepoScan::open(dir.path()).unwrap();
+        scan.scan_dir(dir.path());
+
+        assert!(scan.is_empty());
+    }
+
+    // --- containment tests ---
+
+    /// A repository directory beside a package that sits outside it.
+    struct RepoAndOutsidePackage {
+        /// The repository a scan is rooted at.
+        repo: PathBuf,
+        /// A package directory that sits outside the repository.
+        outside: PathBuf,
+    }
+
+    /// Create a repository directory and, beside it, a package outside it.
+    ///
+    /// Both live under `root`, so a subpath of `../outside/pkg` reaches the
+    /// package from the repository.
+    fn repo_and_outside_package(root: &Path) -> RepoAndOutsidePackage {
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+
+        let outside = root.join("outside").join("pkg");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            outside.join("SKILL.md"),
+            "---\nname: outside-skill\n---\n# Outside\n",
+        )
+        .unwrap();
+
+        RepoAndOutsidePackage { repo, outside }
+    }
+
+    #[test]
+    fn test_discover_refuses_a_subpath_that_climbs_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+
+        let result = discover_packages(&tree.repo, Some("../outside/pkg"), None);
+
+        assert!(
+            result.is_err(),
+            "a subpath that climbs out of the repository must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_discover_refuses_an_absolute_subpath() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+
+        let result = discover_packages(&tree.repo, tree.outside.to_str(), None);
+
+        assert!(
+            result.is_err(),
+            "an absolute subpath must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_refuses_a_subpath_that_links_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+        std::os::unix::fs::symlink(&tree.outside, tree.repo.join("link")).unwrap();
+
+        let result = discover_packages(&tree.repo, Some("link"), None);
+
+        assert!(
+            result.is_err(),
+            "a subpath that resolves outside the repository must be refused, got {:?}",
+            result
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skips_a_priority_directory_that_links_out_of_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = repo_and_outside_package(dir.path());
+        let outside_store = tree.outside.parent().unwrap().to_path_buf();
+        std::os::unix::fs::symlink(&outside_store, tree.repo.join("skills")).unwrap();
+
+        let result = discover_packages(&tree.repo, None, None);
+
+        assert!(
+            result.is_err(),
+            "a priority directory that resolves outside the repository holds no \
+             package of this repository, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_install_source_clones() {
+        let source = InstallSource::GitRepo(parse_git_source("owner/repo", None).unwrap());
+
+        assert_eq!(source.clone(), source);
     }
 
     // --- integration tests (require network) ---
@@ -1004,8 +1327,8 @@ mod tests {
         let temp_dir = git_clone(&source).unwrap();
         let packages = discover_packages(temp_dir.path(), None, None).unwrap();
         for pkg in &packages {
-            let content = std::fs::read_to_string(pkg.path.join("SKILL.md")).unwrap();
-            let name = extract_name_from_frontmatter(&content);
+            let name =
+                frontmatter::file_field(&pkg.path.join(PackageType::Skill.manifest_file()), "name");
             assert_eq!(
                 name.as_deref(),
                 Some(pkg.name.as_str()),

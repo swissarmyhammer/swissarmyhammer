@@ -1072,11 +1072,16 @@ impl ClaudeAgent {
     ///
     /// Returns a PromptResponse with StopReason::Refusal and appropriate metadata
     /// when Claude refuses to respond to a request.
+    ///
+    /// `cache_usage` is the turn's prompt-cache usage. A refused turn still
+    /// consumed the primed prefix, so its reuse is real telemetry and rides
+    /// the response `_meta` exactly as it does on a turn that answered.
     pub(crate) fn create_refusal_response(
         &self,
         session_id: &str,
         is_streaming: bool,
         chunk_count: Option<usize>,
+        cache_usage: Option<crate::protocol_translator::CacheUsage>,
     ) -> PromptResponse {
         let mut meta = serde_json::Map::new();
         meta.insert("refusal_detected".to_string(), serde_json::json!(true));
@@ -1088,6 +1093,7 @@ impl ClaudeAgent {
                 meta.insert("chunks_processed".to_string(), serde_json::json!(count));
             }
         }
+        crate::agent_prompt_handling::attach_cache_usage(&mut meta, cache_usage);
 
         PromptResponse::new(StopReason::Refusal).meta(meta)
     }

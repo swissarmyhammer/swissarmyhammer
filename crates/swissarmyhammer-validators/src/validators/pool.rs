@@ -897,15 +897,15 @@ async fn run_prompt(
     );
 
     // Parse per-turn prompt-cache usage from the response `_meta` (the
-    // `cache_usage` key the claude agent attaches via
-    // `agent_prompt_handling::build_streaming_response`), mirroring
+    // `CacheUsage::META_KEY` entry both of the claude agent's prompt paths
+    // attach via `agent_prompt_handling::attach_cache_usage`), mirroring
     // `claude_agent::execute_prompt_with_agent`. `None` for backends that report
     // no usage. This is the only warm/cold reuse signal on the claude backend,
     // whose fork attaches no native token counts.
     let cache_usage = prompt_response
         .meta
         .as_ref()
-        .and_then(|meta| meta.get("cache_usage"))
+        .and_then(|meta| meta.get(claude_agent::protocol_translator::CacheUsage::META_KEY))
         .and_then(claude_agent::protocol_translator::CacheUsage::from_meta_json);
 
     Ok(SessionTurn {
@@ -1216,7 +1216,10 @@ mod tests {
             let usage = self.usage;
             Box::pin(async move {
                 let mut meta = serde_json::Map::new();
-                meta.insert("cache_usage".to_string(), usage.to_meta_json());
+                meta.insert(
+                    claude_agent::protocol_translator::CacheUsage::META_KEY.to_string(),
+                    usage.to_meta_json(),
+                );
                 Ok(
                     PromptResponse::new(agent_client_protocol::schema::StopReason::EndTurn)
                         .meta(meta),

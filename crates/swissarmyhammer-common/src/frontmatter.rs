@@ -1,15 +1,16 @@
 //! Shared frontmatter parsing functionality
 //!
 //! [`split_frontmatter_body`] splits text on line-anchored `---` delimiters.
-//! Five readers of the frontmatter + markdown body format call it: the entity
-//! `io.rs` and `store.rs` readers, `parse_ralph_file` in the ralph MCP tool,
-//! the prompt health check, and [`parse_frontmatter`] (through
-//! [`parse_frontmatter_with_expansion`]). All five therefore agree on the
-//! delimiter rule.
+//! These readers of the frontmatter + markdown body format call it, and so
+//! agree on one delimiter rule: the entity `io.rs` and `store.rs` readers,
+//! `parse_ralph_file` in the ralph MCP tool, the prompt health check, the two
+//! model-config readers in `swissarmyhammer-config`, `parse_frontmatter` in
+//! `mirdan`'s `list.rs`, and [`parse_frontmatter`] here (through
+//! [`parse_frontmatter_with_expansion`]).
 //!
-//! It is not the only frontmatter split in the workspace, though.
-//! `swissarmyhammer-templating`, `swissarmyhammer-merge`, and `mirdan` each
-//! carry a further copy of their own.
+//! It is not the only frontmatter split in the workspace, though. Other
+//! crates carry copies of their own -- `swissarmyhammer-templating`,
+//! `swissarmyhammer-merge`, and `mirdan` outside `list.rs` among them.
 //!
 //! # YAML Include Expansion
 //!
@@ -55,12 +56,10 @@ fn is_delimiter_line(raw: &str) -> bool {
 
 /// Split frontmatter + body text on line-anchored `---` delimiters.
 ///
-/// Five readers of the frontmatter + markdown body format call it -- the
-/// entity `io.rs` and `store.rs` readers, `parse_ralph_file`, the prompt
-/// health check, and [`parse_frontmatter`] -- so the delimiter rule holds the
-/// same for those five. It is not the only frontmatter split in the
-/// workspace: other crates carry copies of their own. Call this one from a
-/// new reader rather than writing another.
+/// Every reader the module documentation names calls it, so the delimiter
+/// rule holds the same for all of them. It is not the only frontmatter split
+/// in the workspace: other crates carry copies of their own. Call this one
+/// from a new reader rather than writing another.
 ///
 /// The opening delimiter is the first line of `content` and must be exactly
 /// three hyphens. The frontmatter runs to the next delimiter line. Returns

@@ -253,8 +253,14 @@ mod applier_tests {
     use serial_test::serial;
     use swissarmyhammer_common::reporter::NullReporter;
 
+    use swissarmyhammer_common::frontmatter::split_frontmatter_body;
+
     use super::super::{init_profile, Profile, Selector};
     use super::*;
+    use crate::frontmatter::fixtures::{
+        NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS, OPENING_LINE_WITH_TRAILING_TEXT,
+        THREE_HYPHEN_RUN_IN_DESCRIPTION,
+    };
     use crate::test_support::MirdanConfigGuard;
 
     /// Write a synthetic single-agent (generic) config whose detect dir is the
@@ -437,16 +443,45 @@ mod applier_tests {
     /// A [`serde_yaml_ng::Mapping`] rather than a `BTreeMap` so that a key
     /// emitted twice is rejected here instead of silently collapsing to its
     /// last value — the `#[serde(flatten)]` failure this test guards against.
-    fn frontmatter_map(md: &str) -> serde_yaml_ng::Mapping {
-        let after_open = md
-            .trim()
-            .strip_prefix("---")
-            .expect("SKILL.md must open with frontmatter");
-        let end = after_open
-            .find("\n---")
-            .expect("SKILL.md frontmatter must be terminated");
-        serde_yaml_ng::from_str(&after_open[..end])
-            .expect("frontmatter must be a YAML mapping with no duplicate keys")
+    ///
+    /// [`split_frontmatter_body`] makes the split, so only a line that is
+    /// exactly three hyphens delimits the block.
+    ///
+    /// Returns the reason as an error rather than panicking, so the caller
+    /// names the file the bad frontmatter came from.
+    fn frontmatter_map(md: &str) -> Result<serde_yaml_ng::Mapping, String> {
+        let (frontmatter, _body) = split_frontmatter_body(md).ok_or(
+            "SKILL.md must open and close its frontmatter with a line of exactly three hyphens",
+        )?;
+        serde_yaml_ng::from_str(frontmatter)
+            .map_err(|e| format!("frontmatter must be a YAML mapping with no duplicate keys: {e}"))
+    }
+
+    #[test]
+    fn test_frontmatter_map_keeps_every_key_past_a_three_hyphen_run() {
+        let fm = frontmatter_map(THREE_HYPHEN_RUN_IN_DESCRIPTION).unwrap();
+
+        assert_eq!(
+            fm.get("name").and_then(|v| v.as_str()),
+            Some("test-skill"),
+            "a three-hyphen run inside the description must not cut the frontmatter short"
+        );
+        assert!(fm.contains_key("metadata"));
+    }
+
+    #[test]
+    fn test_frontmatter_map_rejects_an_opening_line_with_trailing_text() {
+        assert!(frontmatter_map(OPENING_LINE_WITH_TRAILING_TEXT).is_err());
+    }
+
+    #[test]
+    fn test_frontmatter_map_rejects_an_opening_line_of_four_hyphens() {
+        assert!(frontmatter_map(OPENING_LINE_OF_FOUR_HYPHENS).is_err());
+    }
+
+    #[test]
+    fn test_frontmatter_map_rejects_a_file_with_no_closing_delimiter() {
+        assert!(frontmatter_map(NO_CLOSING_DELIMITER).is_err());
     }
 
     /// Real deploy path: `init_profile` re-renders every builtin skill through
@@ -489,10 +524,12 @@ mod applier_tests {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            let source_fm = frontmatter_map(&std::fs::read_to_string(&source_md).unwrap());
+            let source_fm = frontmatter_map(&std::fs::read_to_string(&source_md).unwrap())
+                .unwrap_or_else(|e| panic!("{source_md:?}: {e}"));
 
             let deployed_md = project.join(".skills").join(&name).join("SKILL.md");
-            let deployed_fm = frontmatter_map(&std::fs::read_to_string(&deployed_md).unwrap());
+            let deployed_fm = frontmatter_map(&std::fs::read_to_string(&deployed_md).unwrap())
+                .unwrap_or_else(|e| panic!("{deployed_md:?}: {e}"));
 
             for (key, value) in &source_fm {
                 let key = key.as_str().expect("frontmatter keys must be strings");

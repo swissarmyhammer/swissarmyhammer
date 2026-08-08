@@ -1554,6 +1554,7 @@ impl From<&crate::session::Message> for ClaudeMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::PathGuard;
     use tempfile::tempdir;
 
     fn create_test_translator() -> Arc<ProtocolTranslator> {
@@ -1885,38 +1886,6 @@ mod tests {
         assert!(response["response"]["response"].is_null());
     }
 
-    /// Restores `PATH` on drop. `PATH` is process-wide, so callers must run
-    /// under `#[serial_test::serial(path_env)]` to keep this from
-    /// interleaving with any other test that also touches `PATH`.
-    struct PathGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathGuard {
-        /// Prepend `dir` to `PATH` for the guard's lifetime, so a program
-        /// name with no path separator (e.g. `"claude"`) resolves to a
-        /// binary placed in `dir`.
-        fn prepend(dir: &std::path::Path) -> Self {
-            let original = std::env::var_os("PATH");
-            let mut new_path = std::ffi::OsString::from(dir);
-            if let Some(existing) = &original {
-                new_path.push(":");
-                new_path.push(existing);
-            }
-            std::env::set_var("PATH", &new_path);
-            Self { original }
-        }
-    }
-
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
     /// Maximum number of 50ms polling attempts while waiting for the fake
     /// `claude` script (spawned by
     /// `spawn_process_and_consume_init_skips_trigger_when_configured`) to
@@ -1933,7 +1902,7 @@ mod tests {
     /// capture file — proving the production write path directly, not a
     /// mock at the `ClaudeProcess` boundary.
     #[tokio::test]
-    #[serial_test::serial(path_env)]
+    #[serial_test::serial]
     async fn spawn_process_and_consume_init_skips_trigger_when_configured() {
         use std::os::unix::fs::PermissionsExt;
 

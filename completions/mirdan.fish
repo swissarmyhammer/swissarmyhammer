@@ -112,7 +112,7 @@ complete -c mirdan -n "__fish_mirdan_using_subcommand list" -l plugins -d 'Show 
 complete -c mirdan -n "__fish_mirdan_using_subcommand list" -l json -d 'Output as JSON'
 complete -c mirdan -n "__fish_mirdan_using_subcommand list" -s d -l debug -d 'Enable debug output to stderr'
 complete -c mirdan -n "__fish_mirdan_using_subcommand list" -s y -l yes -d 'Skip confirmation prompts (useful for CI/CD)'
-complete -c mirdan -n "__fish_mirdan_using_subcommand list" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c mirdan -n "__fish_mirdan_using_subcommand list" -s h -l help -d 'Print help'
 complete -c mirdan -n "__fish_mirdan_using_subcommand search" -l agent -d 'Limit operations to a single agent (e.g. claude-code, cursor)' -r
 complete -c mirdan -n "__fish_mirdan_using_subcommand search" -l json -d 'Output as JSON'
 complete -c mirdan -n "__fish_mirdan_using_subcommand search" -s d -l debug -d 'Enable debug output to stderr'

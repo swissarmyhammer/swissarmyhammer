@@ -4,17 +4,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::agents;
-use crate::package_type::is_valid_package_name;
+use crate::package_type::{self, is_valid_package_name, PackageType};
 use crate::registry::RegistryError;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
-/// Reject a name the registry cannot accept for a new package.
+/// Refuse a name the package registry will not accept.
+///
+/// Every `mirdan new` command applies the same rule, so it is stated once.
 ///
 /// # Errors
 ///
 /// Returns [`RegistryError::Validation`] when `name` is not a valid package
 /// name.
-fn validate_package_name(name: &str) -> Result<(), RegistryError> {
+fn check_package_name(name: &str) -> Result<(), RegistryError> {
     if is_valid_package_name(name) {
         return Ok(());
     }
@@ -25,36 +27,33 @@ fn validate_package_name(name: &str) -> Result<(), RegistryError> {
     )))
 }
 
-/// Refuse to scaffold over a directory that is already there.
+/// Refuse a scaffold whose target directory is already there.
+///
+/// Every `mirdan new` command writes into a directory it creates, so none of
+/// them may write over one that exists.
 ///
 /// # Errors
 ///
-/// Returns [`RegistryError::Validation`] when `path` already exists.
-fn ensure_dir_not_exists(path: &Path) -> Result<(), RegistryError> {
-    if !path.exists() {
+/// Returns [`RegistryError::Validation`] when `base_dir` exists.
+fn check_base_dir_not_exists(base_dir: &Path) -> Result<(), RegistryError> {
+    if !base_dir.exists() {
         return Ok(());
     }
     Err(RegistryError::Validation(format!(
         "directory already exists: {}",
-        path.display()
+        base_dir.display()
     )))
 }
 
 /// Run the `mirdan new skill` command.
 ///
 /// Creates a skill scaffold following the agentskills.io spec.
-///
-/// # Errors
-///
-/// Returns [`RegistryError`] when the name is invalid, the target directory
-/// already exists, no agent is detected for a global create, or a file cannot
-/// be written.
 pub fn run_new_skill(
     name: &str,
     global: bool,
     agent_filter: Option<&str>,
 ) -> Result<(), RegistryError> {
-    validate_package_name(name)?;
+    check_package_name(name)?;
 
     let base_dir = if global {
         // Deploy to first matching agent's global skill dir
@@ -69,7 +68,7 @@ pub fn run_new_skill(
         PathBuf::from(name)
     };
 
-    ensure_dir_not_exists(&base_dir)?;
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure per agentskills.io spec
     let scripts_dir = base_dir.join("scripts");
@@ -102,7 +101,7 @@ Describe when and how an agent should use this skill.
 "#,
         name = name
     );
-    fs::write(base_dir.join("SKILL.md"), skill_md)?;
+    fs::write(base_dir.join(PackageType::Skill.manifest_file()), skill_md)?;
 
     // Write reference file
     let reference_md = format!(
@@ -135,13 +134,8 @@ TODO: Add reference documentation, API specs, or other context the agent needs.
 /// Run the `mirdan new validator` command.
 ///
 /// Creates a validator scaffold following the AVP spec.
-///
-/// # Errors
-///
-/// Returns [`RegistryError`] when the name is invalid, the target directory
-/// already exists, or a file cannot be written.
 pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> {
-    validate_package_name(name)?;
+    check_package_name(name)?;
 
     let base_dir = if global {
         // Global validators live in the shared home-dotfile store `~/.validators/`
@@ -151,10 +145,10 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
         PathBuf::from(name)
     };
 
-    ensure_dir_not_exists(&base_dir)?;
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure
-    let rules_dir = base_dir.join("rules");
+    let rules_dir = base_dir.join(package_type::VALIDATOR_RULES_DIR);
     fs::create_dir_all(&rules_dir)?;
 
     // Write VALIDATOR.md
@@ -177,7 +171,10 @@ Rules are automatically discovered from the `rules/` directory.
 "#,
         name = name
     );
-    fs::write(base_dir.join("VALIDATOR.md"), validator_md)?;
+    fs::write(
+        base_dir.join(PackageType::Validator.manifest_file()),
+        validator_md,
+    )?;
 
     // Write example rule
     let example_rule = r#"---
@@ -249,14 +246,8 @@ mirdan publish
 /// Run the `mirdan new tool` command.
 ///
 /// Creates a tool scaffold with TOOL.md (MCP server definition) and README.md.
-///
-/// # Errors
-///
-/// Returns [`RegistryError`] when the name is invalid, the XDG data directory
-/// cannot be resolved, the target directory already exists, or a file cannot
-/// be written.
 pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
-    validate_package_name(name)?;
+    check_package_name(name)?;
 
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
@@ -270,7 +261,7 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    ensure_dir_not_exists(&base_dir)?;
+    check_base_dir_not_exists(&base_dir)?;
 
     fs::create_dir_all(&base_dir)?;
 
@@ -304,7 +295,7 @@ Describe any environment variables or configuration needed.
 "#,
         name = name
     );
-    fs::write(base_dir.join("TOOL.md"), tool_md)?;
+    fs::write(base_dir.join(PackageType::Tool.manifest_file()), tool_md)?;
 
     // Write README.md
     let readme = format!(
@@ -352,14 +343,8 @@ mirdan publish
 ///
 /// Creates a Claude Code plugin scaffold with .claude-plugin/plugin.json,
 /// commands/, skills/, and README.md.
-///
-/// # Errors
-///
-/// Returns [`RegistryError`] when the name is invalid, the Claude Code agent
-/// has no configured global plugin path, the target directory already exists,
-/// or a file cannot be written.
 pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
-    validate_package_name(name)?;
+    check_package_name(name)?;
 
     let base_dir = if global {
         let config = agents::load_agents_config()?;
@@ -383,13 +368,15 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    ensure_dir_not_exists(&base_dir)?;
+    check_base_dir_not_exists(&base_dir)?;
 
     // Create directory structure
-    let plugin_meta_dir = base_dir.join(".claude-plugin");
+    let plugin_manifest = base_dir.join(PackageType::Plugin.manifest_file());
     let commands_dir = base_dir.join("commands");
     let skills_dir = base_dir.join("skills");
-    fs::create_dir_all(&plugin_meta_dir)?;
+    if let Some(plugin_meta_dir) = plugin_manifest.parent() {
+        fs::create_dir_all(plugin_meta_dir)?;
+    }
     fs::create_dir_all(&commands_dir)?;
     fs::create_dir_all(&skills_dir)?;
 
@@ -402,7 +389,7 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
         }
     });
     fs::write(
-        plugin_meta_dir.join("plugin.json"),
+        plugin_manifest,
         serde_json::to_string_pretty(&plugin_json).unwrap() + "\n",
     )?;
 
@@ -483,7 +470,6 @@ mirdan publish
 mod tests {
     use super::*;
     use serial_test::serial;
-    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
     #[serial]
@@ -493,9 +479,11 @@ mod tests {
         let skill_dir = dir.path().join(name);
 
         // Create in the temp dir by changing cwd temporarily
-        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let result = run_new_skill(name, false, None);
+        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(skill_dir.join("SKILL.md").exists());
@@ -512,9 +500,11 @@ mod tests {
         let name = "test-validator";
         let val_dir = dir.path().join(name);
 
-        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let result = run_new_validator(name, false);
+        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(val_dir.join("VALIDATOR.md").exists());
@@ -543,9 +533,11 @@ mod tests {
         let name = "existing-skill";
         std::fs::create_dir(dir.path().join(name)).unwrap();
 
-        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let result = run_new_skill(name, false, None);
+        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
     }
@@ -557,9 +549,11 @@ mod tests {
         let name = "test-tool";
         let tool_dir = dir.path().join(name);
 
-        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let result = run_new_tool(name, false);
+        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(tool_dir.join("TOOL.md").exists());
@@ -584,9 +578,11 @@ mod tests {
         let name = "test-plugin";
         let plugin_dir = dir.path().join(name);
 
-        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let result = run_new_plugin(name, false);
+        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(plugin_dir.join(".claude-plugin/plugin.json").exists());
@@ -605,5 +601,51 @@ mod tests {
     fn test_new_plugin_invalid_name() {
         assert!(run_new_plugin("INVALID", false).is_err());
         assert!(run_new_plugin("", false).is_err());
+    }
+
+    #[test]
+    fn test_check_base_dir_not_exists_refuses_a_directory_that_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = check_base_dir_not_exists(dir.path());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_base_dir_not_exists_accepts_a_directory_that_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = check_base_dir_not_exists(&dir.path().join("absent"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_package_name_refuses_an_invalid_name() {
+        assert!(check_package_name("INVALID").is_err());
+        assert!(check_package_name("").is_err());
+        assert!(check_package_name("double--hyphen").is_err());
+        assert!(check_package_name("good-name").is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_new_refuses_a_validator_tool_or_plugin_directory_that_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["existing-validator", "existing-tool", "existing-plugin"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let validator = run_new_validator("existing-validator", false);
+        let tool = run_new_tool("existing-tool", false);
+        let plugin = run_new_plugin("existing-plugin", false);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(validator.is_err());
+        assert!(tool.is_err());
+        assert!(plugin.is_err());
     }
 }

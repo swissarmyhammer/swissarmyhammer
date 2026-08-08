@@ -638,8 +638,37 @@ comments:
     - No retry fired. Checked the full nextest log for `RETRY`/`FAIL`/`ERROR`/`TIMEOUT`/`ABORT` markers — none present. (Note: `.config/nextest.toml` has a pre-existing scoped `retries = 2` override for a different, unrelated test — `swissarmyhammer-diagnostics::diagnose_reports_target_and_broken_dependent_not_clean` — which did not need to retry in this run either.)
     - next: none — merge.rs extraction is green.
   timestamp: 2026-08-08T08:57:48.186341+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzg9xxsqsxfmz0mt66kqv9e2
+  text: |
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (5a3f49842) — 9 validators attempted, 0 failed, 0 findings; all 38 prior findings checked
+    - next: task moved to done
+  timestamp: 2026-08-08T09:05:42.199696+00:00
+- actor: claude-code
+  id: 01kzga2gc9bc233jetddjbq7we
+  text: |
+    ### finish iteration 5 — clean
+    - implement: changed — 5 files. New `crates/mirdan/src/merge.rs` holds `merge_unique`, written test-first. Three call sites route through it. Zero copies of the loop remain.
+    - test: green — cargo nextest run --workspace twice, 13789 passed / 0 failed / 0 skipped each, no retry fired; fmt, clippy -D warnings clean
+    - commit: 5a3f49842 refactor(mirdan): extract merge_unique to end target-merge duplication (^qh5fnpd)
+    - review: clean — 9 validators attempted, 0 findings
+    - task moved to done by the review gate
+
+    Card closed. Findings by round: 28, 7, 1, 1, 0.
+
+    The root defect is fixed and confirmed at the root: zero raw `set_current_dir` calls remain in `crates/mirdan`, and every working-directory change goes through `CurrentDirGuard` and its process-global mutex. Before the fix, `cargo test -p mirdan --lib` failed 4 of 5 runs; after, 10 of 10 pass.
+
+    Work that came out of this card and is tracked on its own cards, not lost:
+    - ^7mk3pnp — a flaky `claude-agent` test, found during a suite run, not papered over with a retry
+    - ^dx797t0 and ^3q3vstp — pre-existing issues in untouched code that the file-scoped review surfaced
+
+    Two facts worth keeping for later work on this repo:
+    1. `cargo nextest` runs each test in its own process, so it is structurally blind to shared-process-state races — working directory, environment variables, process-global statics. It passed all 8 pre-fix runs while `cargo test --lib` failed 4 of 5.
+    2. No validator declares a `*.toml` or `*.md` glob, so `.config/nextest.toml` and documentation changes get zero automated review coverage. Every finding against them in this card came from direct judgement.
+  timestamp: 2026-08-08T09:08:12.297184+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc780
 title: mirdan lib tests fail at random under parallel execution
 ---
 `cargo test -p mirdan --lib` fails with a different set of tests on each run. It passes every time with `--test-threads=1`.

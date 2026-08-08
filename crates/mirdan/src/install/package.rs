@@ -7,15 +7,19 @@ use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::agents;
+use crate::frontmatter;
 use crate::git_source::{self, InstallSource};
 use crate::lockfile::{self, LockedPackage, Lockfile};
-use crate::mcp_config;
+use crate::mcp_config::{self, ServersKey, ToolName};
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 
 use super::deploy::{
     deploy_agent_to_agents, deploy_plugin, deploy_skill_to_agents, deploy_tool, deploy_validator,
 };
+
+/// The version recorded for a package whose manifest names none.
+const DEFAULT_VERSION: &str = "0.0.0";
 
 /// How [`run_install`] resolves a package spec to its source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,16 +132,12 @@ async fn run_install_local(
     })?;
 
     // Read name and version from frontmatter (or plugin.json for plugins)
-    let (name, version) = match pkg_type {
-        PackageType::Skill => read_frontmatter(&dir.join("SKILL.md"))?,
-        PackageType::Validator => read_frontmatter(&dir.join("VALIDATOR.md"))?,
-        PackageType::Tool => read_frontmatter(&dir.join("TOOL.md"))?,
-        PackageType::Plugin => {
-            let plugin_name =
-                mcp_config::read_plugin_json(&dir.join(".claude-plugin/plugin.json"))?;
-            (plugin_name, "0.0.0".to_string())
-        }
-        PackageType::Agent => read_frontmatter(&dir.join("AGENT.md"))?,
+    let FrontmatterMetadata { name, version } = match pkg_type {
+        PackageType::Plugin => FrontmatterMetadata {
+            name: mcp_config::read_plugin_json(&dir.join(PackageType::Plugin.manifest_file()))?,
+            version: DEFAULT_VERSION.to_string(),
+        },
+        manifest_type => read_frontmatter(&dir.join(manifest_type.manifest_file()))?,
     };
 
     tracing::debug!("Installing {} from local path ({})...", name, pkg_type);
@@ -195,19 +195,10 @@ async fn run_install_git(
 
         // Read version from frontmatter (or plugin.json for plugins)
         let version = match pkg.package_type {
-            PackageType::Skill => read_frontmatter(&pkg.path.join("SKILL.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Validator => read_frontmatter(&pkg.path.join("VALIDATOR.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Tool => read_frontmatter(&pkg.path.join("TOOL.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
-            PackageType::Plugin => "0.0.0".to_string(),
-            PackageType::Agent => read_frontmatter(&pkg.path.join("AGENT.md"))
-                .map(|(_, v)| v)
-                .unwrap_or_else(|_| "0.0.0".to_string()),
+            PackageType::Plugin => DEFAULT_VERSION.to_string(),
+            manifest_type => read_frontmatter(&pkg.path.join(manifest_type.manifest_file()))
+                .map(|metadata| metadata.version)
+                .unwrap_or_else(|_| DEFAULT_VERSION.to_string()),
         };
 
         record_locked_package(
@@ -295,50 +286,37 @@ fn log_installed(
     }
 }
 
-/// YAML frontmatter delimiter line.
-const FRONTMATTER_DELIMITER: &str = "---";
+/// What a package manifest states about itself in its frontmatter.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FrontmatterMetadata {
+    /// The package name, from the `name` key.
+    pub(crate) name: String,
+    /// The package version, from `metadata.version` or from a top-level
+    /// `version`. A manifest that names neither gets [`DEFAULT_VERSION`].
+    pub(crate) version: String,
+}
 
 /// Read name and version from YAML frontmatter of a markdown file.
+///
+/// The [`frontmatter`] module makes the split and the parse. A manifest that
+/// names no version gets [`DEFAULT_VERSION`].
 ///
 /// # Errors
 ///
 /// Returns an error when the file cannot be read, the frontmatter is missing
 /// or unterminated, the YAML does not parse, or the `name` key is absent.
-pub(crate) fn read_frontmatter(path: &Path) -> Result<(String, String), RegistryError> {
-    let content = std::fs::read_to_string(path)?;
-    let content = content.trim();
+pub(crate) fn read_frontmatter(path: &Path) -> Result<FrontmatterMetadata, RegistryError> {
+    let yaml = frontmatter::read_file(path)?;
 
-    if !content.starts_with(FRONTMATTER_DELIMITER) {
-        return Err(RegistryError::Validation(format!(
-            "{} must start with YAML frontmatter ({FRONTMATTER_DELIMITER})",
-            path.display()
-        )));
-    }
-
-    let rest = &content[FRONTMATTER_DELIMITER.len()..];
-    let end = rest.find(FRONTMATTER_DELIMITER).ok_or_else(|| {
-        RegistryError::Validation(format!("no closing --- in {} frontmatter", path.display()))
-    })?;
-
-    let frontmatter = &rest[..end];
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)
-        .map_err(|e| RegistryError::Validation(format!("invalid YAML frontmatter: {}", e)))?;
-
-    let name = yaml
-        .get("name")
-        .and_then(|v| v.as_str())
+    let name = frontmatter::field(&yaml, "name")
         .ok_or_else(|| RegistryError::Validation("missing 'name' in frontmatter".to_string()))?
         .to_string();
 
-    let version = yaml
-        .get("metadata")
-        .and_then(|m| m.get("version"))
-        .and_then(|v| v.as_str())
-        .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
-        .unwrap_or("0.0.0")
+    let version = frontmatter::metadata_field(&yaml, "version")
+        .unwrap_or(DEFAULT_VERSION)
         .to_string();
 
-    Ok((name, version))
+    Ok(FrontmatterMetadata { name, version })
 }
 
 /// Install a package from the registry.
@@ -347,7 +325,7 @@ async fn run_install_registry(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
-    let (name, version) = parse_package_spec(package_spec);
+    let PackageSpec { name, version } = parse_package_spec(package_spec);
 
     // Try authenticated client first, fall back to unauthenticated for public packages
     let client = match RegistryClient::authenticated() {
@@ -607,8 +585,8 @@ fn register_mcp_server_across_agents(
         };
         mcp_config::register_mcp_server(
             &config_path,
-            &mcp_cfg.servers_key,
-            name,
+            &ServersKey::new(&mcp_cfg.servers_key),
+            &ToolName::new(name),
             entry,
             &mcp_cfg.entry_extras,
         )?;
@@ -713,7 +691,7 @@ pub async fn run_install_mcp(
         name,
         LockedPackage {
             package_type: PackageType::Tool,
-            version: "0.0.0".to_string(),
+            version: DEFAULT_VERSION.to_string(),
             resolved: format!("mcp:{}", entry.command),
             integrity: String::new(),
             installed_at: chrono::Utc::now().to_rfc3339(),
@@ -751,12 +729,26 @@ pub async fn install_package(
     run_install(&spec, agent_filter, global, InstallMode::Auto, None).await
 }
 
+/// A package spec split into the package it names and the version it pins.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PackageSpec {
+    /// The package name.
+    pub name: String,
+    /// The version the spec pins, or `None` when it pins none.
+    pub version: Option<String>,
+}
+
 /// Parse a package spec like "name" or "name@version".
-pub fn parse_package_spec(spec: &str) -> (String, Option<String>) {
-    if let Some((name, version)) = spec.rsplit_once('@') {
-        (name.to_string(), Some(version.to_string()))
-    } else {
-        (spec.to_string(), None)
+pub fn parse_package_spec(spec: &str) -> PackageSpec {
+    match spec.rsplit_once('@') {
+        Some((name, version)) => PackageSpec {
+            name: name.to_string(),
+            version: Some(version.to_string()),
+        },
+        None => PackageSpec {
+            name: spec.to_string(),
+            version: None,
+        },
     }
 }
 

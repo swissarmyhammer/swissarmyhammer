@@ -7,7 +7,7 @@ use crate::agents::{
     self, agent_global_agent_dir, agent_global_skill_dir, agent_project_agent_dir,
     agent_project_skill_dir, AgentDef,
 };
-use crate::mcp_config;
+use crate::mcp_config::{self, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::store;
 
@@ -285,8 +285,8 @@ pub(crate) fn deploy_tool(
             if let Some(config_path) = config_path {
                 mcp_config::register_mcp_server(
                     &config_path,
-                    &mcp_cfg.servers_key,
-                    name,
+                    &ServersKey::new(&mcp_cfg.servers_key),
+                    &ToolName::new(name),
                     &entry,
                     &mcp_cfg.entry_extras,
                 )?;
@@ -392,8 +392,8 @@ fn register_plugin_mcp_servers(agent: &AgentDef, target: &Path, global: bool) {
         };
         let _ = mcp_config::register_mcp_server(
             &config_path,
-            &mcp_cfg.servers_key,
-            server_name,
+            &ServersKey::new(&mcp_cfg.servers_key),
+            &ToolName::new(server_name),
             &entry,
             &mcp_cfg.entry_extras,
         );

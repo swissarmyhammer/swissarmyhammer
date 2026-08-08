@@ -1,12 +1,13 @@
 //! Shared command dispatch logic used by both the CLI and Tauri app binaries.
 
 use crate::deploy_result::{DeployAction, DeployResult};
+use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::{
     agents, auth, completions, doctor, info, install, list, new, outdated, publish, search, status,
     sync,
 };
-use crate::{Cli, Commands, ListFilterArgs, NewKind};
+use crate::{Cli, Commands, NewKind};
 
 /// Map a command result to a process exit code: run `on_ok` on the success
 /// value and return 0, or print `Error: <e>` to stderr and return 1.
@@ -22,24 +23,6 @@ fn handle_result<T, E: std::fmt::Display>(result: Result<T, E>, on_ok: impl FnOn
             eprintln!("Error: {e}");
             1
         }
-    }
-}
-
-/// Translate the `mirdan list` type flags into a [`list::PackageFilter`].
-///
-/// The flags share a clap argument group, so at most one is ever set and the
-/// no-flag case is [`list::PackageFilter::All`].
-fn package_filter(flags: &ListFilterArgs) -> list::PackageFilter {
-    if flags.skills {
-        list::PackageFilter::SkillsOnly
-    } else if flags.validators {
-        list::PackageFilter::ValidatorsOnly
-    } else if flags.tools {
-        list::PackageFilter::ToolsOnly
-    } else if flags.plugins {
-        list::PackageFilter::PluginsOnly
-    } else {
-        list::PackageFilter::All
     }
 }
 
@@ -147,9 +130,22 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
             handle_deploy_result(install::run_uninstall(name, agent_filter, *global).await)
         }
 
-        Commands::List { filter, json } => {
-            handle_registry_result(list::run_list(package_filter(filter), agent_filter, *json))
-        }
+        Commands::List {
+            skills,
+            validators,
+            tools,
+            plugins,
+            json,
+        } => handle_registry_result(list::run_list(
+            &list::PackageFilter::from_flags([
+                (*skills, PackageType::Skill),
+                (*validators, PackageType::Validator),
+                (*tools, PackageType::Tool),
+                (*plugins, PackageType::Plugin),
+            ]),
+            agent_filter,
+            *json,
+        )),
 
         Commands::Search { query, json } => match query {
             Some(q) => handle_registry_result(search::run_search(q, *json).await),

@@ -1,5 +1,9 @@
 use swissarmyhammer_common::lifecycle::InitScope;
 
+use crate::frontmatter::fixtures::{
+    write_skill_md, NO_CLOSING_DELIMITER, OPENING_LINE_OF_FOUR_HYPHENS,
+    OPENING_LINE_WITH_TRAILING_TEXT, THREE_HYPHEN_RUN_IN_DESCRIPTION,
+};
 use crate::lockfile::{LockedPackage, Lockfile};
 use crate::mcp_config;
 use crate::package_type::{self, PackageType};
@@ -8,7 +12,7 @@ use crate::registry::RegistryError;
 use super::*;
 use serial_test::serial;
 use swissarmyhammer_common::reporter::NullReporter;
-use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 #[test]
 fn test_find_packages_by_git_source_uppercase_scheme_and_host() {
@@ -36,16 +40,16 @@ fn test_find_packages_by_git_source_uppercase_scheme_and_host() {
 
 #[test]
 fn test_parse_package_spec_name_only() {
-    let (name, version) = parse_package_spec("no-secrets");
-    assert_eq!(name, "no-secrets");
-    assert_eq!(version, None);
+    let spec = parse_package_spec("no-secrets");
+    assert_eq!(spec.name, "no-secrets");
+    assert_eq!(spec.version, None);
 }
 
 #[test]
 fn test_parse_package_spec_with_version() {
-    let (name, version) = parse_package_spec("no-secrets@1.2.3");
-    assert_eq!(name, "no-secrets");
-    assert_eq!(version, Some("1.2.3".to_string()));
+    let spec = parse_package_spec("no-secrets@1.2.3");
+    assert_eq!(spec.name, "no-secrets");
+    assert_eq!(spec.version, Some("1.2.3".to_string()));
 }
 
 #[test]
@@ -336,9 +340,9 @@ fn test_read_frontmatter_skill() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "1.2.3");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "1.2.3");
 }
 
 #[test]
@@ -347,9 +351,9 @@ fn test_read_frontmatter_missing_version_defaults() {
     let md = dir.path().join("SKILL.md");
     std::fs::write(&md, "---\nname: test-skill\n---\n# Test\n").unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "0.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "0.0.0");
 }
 
 #[test]
@@ -362,9 +366,9 @@ fn test_read_frontmatter_metadata_version() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "2.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "2.0.0");
 }
 
 #[test]
@@ -377,9 +381,9 @@ fn test_read_frontmatter_metadata_preferred() {
     )
     .unwrap();
 
-    let (name, version) = read_frontmatter(&md).unwrap();
-    assert_eq!(name, "test-skill");
-    assert_eq!(version, "2.0.0");
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "2.0.0");
 }
 
 #[test]
@@ -396,6 +400,40 @@ fn test_read_frontmatter_no_frontmatter_errors() {
     let dir = tempfile::tempdir().unwrap();
     let md = dir.path().join("SKILL.md");
     std::fs::write(&md, "# Just markdown\nNo frontmatter here.\n").unwrap();
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_keeps_every_key_past_a_three_hyphen_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), THREE_HYPHEN_RUN_IN_DESCRIPTION);
+
+    let metadata = read_frontmatter(&md).unwrap();
+    assert_eq!(metadata.name, "test-skill");
+    assert_eq!(metadata.version, "1.2.3");
+}
+
+#[test]
+fn test_read_frontmatter_rejects_an_opening_line_with_trailing_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), OPENING_LINE_WITH_TRAILING_TEXT);
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_rejects_an_opening_line_of_four_hyphens() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), OPENING_LINE_OF_FOUR_HYPHENS);
+
+    assert!(read_frontmatter(&md).is_err());
+}
+
+#[test]
+fn test_read_frontmatter_rejects_a_file_with_no_closing_delimiter() {
+    let dir = tempfile::tempdir().unwrap();
+    let md = write_skill_md(dir.path(), NO_CLOSING_DELIMITER);
 
     assert!(read_frontmatter(&md).is_err());
 }
@@ -630,9 +668,9 @@ fn test_local_tool_detection_and_frontmatter() {
     assert_eq!(pkg_type, Some(PackageType::Tool));
 
     // read_frontmatter extracts name + version
-    let (name, version) = read_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
-    assert_eq!(name, "fs-tool");
-    assert_eq!(version, "1.0.0");
+    let metadata = read_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
+    assert_eq!(metadata.name, "fs-tool");
+    assert_eq!(metadata.version, "1.0.0");
 
     // MCP frontmatter parses correctly
     let yaml = mcp_config::parse_yaml_frontmatter(&tool_dir.join("TOOL.md")).unwrap();
@@ -654,7 +692,8 @@ fn test_local_tool_detection_and_frontmatter() {
 #[serial]
 fn test_deploy_tool_creates_store_and_mcp_json() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Create a source tool with a real MCP server reference
     let src = work.path().join("src-tool");
@@ -715,13 +754,16 @@ fn test_deploy_tool_creates_store_and_mcp_json() {
         "production",
         "env should be passed through"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_tool() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Deploy
     let src = work.path().join("src-tool");
@@ -754,13 +796,16 @@ fn test_deploy_and_uninstall_tool() {
         mcp["mcpServers"]["fs-tool"].is_null(),
         "Server entry should be removed from .mcp.json"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_tool_preserves_existing_mcp_servers() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Pre-populate .mcp.json with an existing server
     std::fs::write(
@@ -816,16 +861,21 @@ fn test_deploy_tool_preserves_existing_mcp_servers() {
         mcp["mcpServers"]["fs-tool"].is_null(),
         "Uninstalled tool should be gone"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_tool_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let result = uninstall_tool("nonexistent-tool", None, false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- plugin: detection, deploy, uninstall ---
@@ -849,7 +899,8 @@ fn test_local_plugin_detection() {
 #[serial]
 fn test_deploy_plugin_creates_files() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let src = work.path().join("src-plugin");
     make_local_plugin(&src, "test-plugin", false);
@@ -883,13 +934,16 @@ fn test_deploy_plugin_creates_files() {
     )
     .unwrap();
     assert_eq!(json["name"].as_str().unwrap(), "test-plugin");
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_plugin() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let src = work.path().join("src-plugin");
     make_local_plugin(&src, "test-plugin", false);
@@ -900,13 +954,16 @@ fn test_deploy_and_uninstall_plugin() {
 
     uninstall_plugin("test-plugin", None, false).unwrap();
     assert!(!deployed.exists(), "Plugin dir should be removed");
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_plugin_with_bundled_mcp() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Create a plugin that bundles an .mcp.json
     let src = work.path().join("src-plugin");
@@ -937,16 +994,21 @@ fn test_deploy_plugin_with_bundled_mcp() {
             .unwrap(),
         "node"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_plugin_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let result = uninstall_plugin("nonexistent-plugin", None, false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- e2e: tool install → lockfile → list → uninstall ---
@@ -955,7 +1017,8 @@ fn test_uninstall_plugin_not_found() {
 #[serial]
 fn test_e2e_tool_install_list_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // 1. Create and deploy a tool using @modelcontextprotocol/server-filesystem
     let src = work.path().join("src-tool");
@@ -991,7 +1054,10 @@ fn test_e2e_tool_install_list_uninstall() {
     assert_eq!(mcp["mcpServers"]["fs-tool"]["command"], "npx");
 
     // 5. Verify list discovers the tool
-    let packages = crate::list::discover_packages(crate::list::PackageFilter::ToolsOnly, None);
+    let packages = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Tool]),
+        None,
+    );
     let tool_pkgs: Vec<_> = packages.iter().filter(|p| p.name == "fs-tool").collect();
     assert_eq!(tool_pkgs.len(), 1, "list --tools should find fs-tool");
     assert_eq!(tool_pkgs[0].package_type, PackageType::Tool);
@@ -1011,13 +1077,16 @@ fn test_e2e_tool_install_list_uninstall() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_e2e_plugin_install_list_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // 1. Create and deploy a plugin
     let src = work.path().join("src-plugin");
@@ -1050,7 +1119,10 @@ fn test_e2e_plugin_install_list_uninstall() {
     assert!(deployed.join("commands/greet.md").exists());
 
     // 5. Verify list discovers the plugin
-    let packages = crate::list::discover_packages(crate::list::PackageFilter::PluginsOnly, None);
+    let packages = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Plugin]),
+        None,
+    );
     let plugin_pkgs: Vec<_> = packages
         .iter()
         .filter(|p| p.name == "test-plugin")
@@ -1075,6 +1147,8 @@ fn test_e2e_plugin_install_list_uninstall() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
@@ -1088,9 +1162,9 @@ fn test_local_skill_detection_and_frontmatter() {
     assert_eq!(pkg_type, Some(PackageType::Skill));
 
     // read_frontmatter extracts name + version
-    let (name, version) = read_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
-    assert_eq!(name, "my-skill");
-    assert_eq!(version, "1.2.3");
+    let metadata = read_frontmatter(&skill_dir.join("SKILL.md")).unwrap();
+    assert_eq!(metadata.name, "my-skill");
+    assert_eq!(metadata.version, "1.2.3");
 }
 
 #[test]
@@ -1102,9 +1176,9 @@ fn test_local_validator_detection_and_frontmatter() {
     let pkg_type = package_type::detect_package_type(&val_dir);
     assert_eq!(pkg_type, Some(PackageType::Validator));
 
-    let (name, version) = read_frontmatter(&val_dir.join("VALIDATOR.md")).unwrap();
-    assert_eq!(name, "my-validator");
-    assert_eq!(version, "0.1.0");
+    let metadata = read_frontmatter(&val_dir.join("VALIDATOR.md")).unwrap();
+    assert_eq!(metadata.name, "my-validator");
+    assert_eq!(metadata.version, "0.1.0");
 }
 
 // --- validator deploy + uninstall (no agents required) ---
@@ -1113,7 +1187,8 @@ fn test_local_validator_detection_and_frontmatter() {
 #[serial]
 fn test_deploy_validator_creates_files() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Create a source validator
     let src = work.path().join("src-val");
@@ -1127,13 +1202,16 @@ fn test_deploy_validator_creates_files() {
     let deployed = work.path().join(".validators/test-val");
     assert!(deployed.join("VALIDATOR.md").exists());
     assert!(deployed.join("rules/no-secrets.md").exists());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_validator() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Deploy
     let src = work.path().join("src-val");
@@ -1146,16 +1224,21 @@ fn test_deploy_and_uninstall_validator() {
     // Uninstall
     uninstall_validator("test-val", false).unwrap();
     assert!(!deployed.exists(), "Validator dir should be removed");
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_validator_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let result = uninstall_validator("nonexistent", false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- lockfile round-trip for git-installed packages ---
@@ -1311,7 +1394,8 @@ fn test_find_packages_by_git_url_with_dot_git_suffix() {
 #[serial]
 fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Create and deploy
     let src = work.path().join("src-val");
@@ -1352,6 +1436,8 @@ fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.get_package("e2e-val").is_none());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- cross-type coexistence and duplicate install tests ---
@@ -1360,7 +1446,8 @@ fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
 #[serial]
 async fn test_e2e_all_four_types_coexist() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // 1. Install a skill
     let skill_src = work.path().join("src-skill");
@@ -1399,7 +1486,7 @@ async fn test_e2e_all_four_types_coexist() {
         .exists());
 
     // 6. Verify list discovers all four
-    let all = crate::list::discover_packages(crate::list::PackageFilter::All, None);
+    let all = crate::list::discover_packages(&crate::list::PackageFilter::all(), None);
     let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
     assert!(
         names.contains(&"test-skill"),
@@ -1423,27 +1510,37 @@ async fn test_e2e_all_four_types_coexist() {
     );
 
     // 7. Verify type-specific filters work
-    let skills_only = crate::list::discover_packages(crate::list::PackageFilter::SkillsOnly, None);
+    let skills_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Skill]),
+        None,
+    );
     assert!(skills_only
         .iter()
         .all(|p| p.package_type == PackageType::Skill));
     assert!(skills_only.iter().any(|p| p.name == "test-skill"));
 
-    let tools_only = crate::list::discover_packages(crate::list::PackageFilter::ToolsOnly, None);
+    let tools_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Tool]),
+        None,
+    );
     assert!(tools_only
         .iter()
         .all(|p| p.package_type == PackageType::Tool));
     assert!(tools_only.iter().any(|p| p.name == "test-tool"));
 
-    let plugins_only =
-        crate::list::discover_packages(crate::list::PackageFilter::PluginsOnly, None);
+    let plugins_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Plugin]),
+        None,
+    );
     assert!(plugins_only
         .iter()
         .all(|p| p.package_type == PackageType::Plugin));
     assert!(plugins_only.iter().any(|p| p.name == "test-plugin"));
 
-    let vals_only =
-        crate::list::discover_packages(crate::list::PackageFilter::ValidatorsOnly, None);
+    let vals_only = crate::list::discover_packages(
+        &crate::list::PackageFilter::only([PackageType::Validator]),
+        None,
+    );
     assert!(vals_only
         .iter()
         .all(|p| p.package_type == PackageType::Validator));
@@ -1478,13 +1575,16 @@ async fn test_e2e_all_four_types_coexist() {
         work.path().join(".skills/test-skill/SKILL.md").exists(),
         "Skill should survive validator uninstall"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_tool_twice_overwrites_cleanly() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Deploy v1
     let src_v1 = work.path().join("src-v1");
@@ -1506,8 +1606,11 @@ fn test_deploy_tool_twice_overwrites_cleanly() {
     deploy_tool("fs-tool", &src_v2, None, false).unwrap();
 
     // Store should have v2 content
-    let (_, version) = read_frontmatter(&store.join("TOOL.md")).unwrap();
-    assert_eq!(version, "2.0.0", "Version should be updated to 2.0.0");
+    let metadata = read_frontmatter(&store.join("TOOL.md")).unwrap();
+    assert_eq!(
+        metadata.version, "2.0.0",
+        "Version should be updated to 2.0.0"
+    );
 
     // MCP config should still have exactly one entry for fs-tool (not duplicated)
     let mcp: serde_json::Value =
@@ -1520,13 +1623,16 @@ fn test_deploy_tool_twice_overwrites_cleanly() {
     // Clean uninstall should still work
     uninstall_tool("fs-tool", None, false).unwrap();
     assert!(!store.exists());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_plugin_twice_overwrites_cleanly() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Deploy v1
     let src_v1 = work.path().join("src-v1");
@@ -1558,6 +1664,8 @@ fn test_deploy_plugin_twice_overwrites_cleanly() {
     // Uninstall should still work cleanly
     uninstall_plugin("my-plugin", None, false).unwrap();
     assert!(!deployed.exists());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
@@ -1568,7 +1676,8 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
     use crate::git_source;
 
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     // Clone anthropics/skills
     let source = git_source::parse_git_source("anthropics/skills", None).unwrap();
@@ -1627,6 +1736,8 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- metadata-only tool install tests ---
@@ -1635,7 +1746,8 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
 #[serial]
 async fn test_install_tool_from_mcp_config_registers_server() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1690,13 +1802,16 @@ async fn test_install_tool_from_mcp_config_registers_server() {
     let pkg = lf.get_package("brave-search").unwrap();
     assert_eq!(pkg.package_type, PackageType::Tool);
     assert_eq!(pkg.version, "1.0.0");
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[tokio::test]
 #[serial]
 async fn test_install_tool_from_tool_md_content() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let tool_md = r#"---
 name: test-tool
@@ -1752,13 +1867,16 @@ mcp:
     let pkg = lf.get_package("test-tool").unwrap();
     assert_eq!(pkg.package_type, PackageType::Tool);
     assert_eq!(pkg.version, "2.0.0");
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[tokio::test]
 #[serial]
 async fn test_install_tool_from_metadata_rejects_non_tool() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let version_detail = crate::registry::types::VersionDetail {
         name: "some-skill".to_string(),
@@ -1784,6 +1902,8 @@ async fn test_install_tool_from_metadata_rejects_non_tool() {
         "Error should mention not a tool: {}",
         err
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 /// Rejecting a non-tool package is an input-applicability failure, so it must
@@ -1794,7 +1914,7 @@ async fn test_install_tool_from_metadata_rejects_non_tool() {
 async fn test_install_tool_from_metadata_non_tool_is_validation_error() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     let version_detail = crate::registry::types::VersionDetail {
         name: "some-skill".to_string(),
@@ -1827,7 +1947,7 @@ async fn test_install_tool_from_metadata_non_tool_is_validation_error() {
 async fn test_install_tool_from_metadata_accepts_capitalized_tool_type() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1862,7 +1982,8 @@ async fn test_install_tool_from_metadata_accepts_capitalized_tool_type() {
 #[serial]
 async fn test_install_tool_from_mcp_config_then_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let old_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1907,6 +2028,8 @@ async fn test_install_tool_from_mcp_config_then_uninstall() {
         json["mcpServers"]["ephemeral-tool"].is_null(),
         "Server should be removed after uninstall"
     );
+
+    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
@@ -2036,7 +2159,7 @@ fn test_safe_dir_name_rejects_traversal_and_accepts_nested() {
 fn test_uninstall_skill_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".skills")).unwrap();
     let victim = work.path().join("victim");
@@ -2059,7 +2182,7 @@ fn test_uninstall_skill_rejects_path_traversal_name() {
 fn test_uninstall_validator_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".validators")).unwrap();
     let victim = work.path().join("victim");
@@ -2082,7 +2205,7 @@ fn test_uninstall_validator_rejects_path_traversal_name() {
 fn test_uninstall_agent_at_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".agents")).unwrap();
     let victim = work.path().join("victim");
@@ -2105,7 +2228,7 @@ fn test_uninstall_agent_at_rejects_path_traversal_name() {
 fn test_uninstall_tool_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".tools")).unwrap();
     let victim = work.path().join("victim");
@@ -2128,7 +2251,7 @@ fn test_uninstall_tool_rejects_path_traversal_name() {
 fn test_uninstall_plugin_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
     let victim = work.path().join("victim");
     std::fs::create_dir_all(&victim).unwrap();

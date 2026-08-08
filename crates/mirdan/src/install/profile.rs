@@ -20,8 +20,7 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
-use crate::mcp_config::{self, McpServerEntry};
-use crate::merge::merge_unique;
+use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -403,7 +402,7 @@ fn install_profile_items<T>(
             root,
             kind.is_skill,
         )?;
-        merge_unique(&mut targets, deployed);
+        merge_targets(&mut targets, deployed);
     }
 
     // Drop a discovery README at the store root so a user browsing the store
@@ -664,6 +663,15 @@ fn stage_and_deploy_rendered(
         deploy_skill_to_agents_at(name, &item_dir, None, global, root)
     } else {
         deploy_agent_to_agents_at(name, &item_dir, None, global, root)
+    }
+}
+
+/// Append `new` targets to `targets`, skipping duplicates (preserving order).
+fn merge_targets(targets: &mut Vec<String>, new: Vec<String>) {
+    for target in new {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
     }
 }
 
@@ -953,8 +961,8 @@ fn register_mcp_server_at(
         |mcp_cfg, config_path| {
             mcp_config::register_mcp_server(
                 config_path,
-                &mcp_cfg.servers_key,
-                server_name,
+                &ServersKey::new(&mcp_cfg.servers_key),
+                &ToolName::new(server_name),
                 entry,
                 &mcp_cfg.entry_extras,
             )?;
@@ -978,7 +986,11 @@ fn unregister_mcp_server_at(
         "Removed",
         "from",
         |mcp_cfg, config_path| {
-            mcp_config::unregister_mcp_server(config_path, &mcp_cfg.servers_key, server_name)
+            mcp_config::unregister_mcp_server(
+                config_path,
+                &ServersKey::new(&mcp_cfg.servers_key),
+                &ToolName::new(server_name),
+            )
         },
     )
 }

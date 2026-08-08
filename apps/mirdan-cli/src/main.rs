@@ -300,11 +300,17 @@ mod tests {
     fn test_cli_parsing_list() {
         let cli = Cli::parse_from(["mirdan", "list"]);
         match cli.command {
-            Commands::List { filter, json } => {
-                assert!(!filter.skills);
-                assert!(!filter.validators);
-                assert!(!filter.tools);
-                assert!(!filter.plugins);
+            Commands::List {
+                skills,
+                validators,
+                tools,
+                plugins,
+                json,
+            } => {
+                assert!(!skills);
+                assert!(!validators);
+                assert!(!tools);
+                assert!(!plugins);
                 assert!(!json);
             }
             _ => panic!("Expected List command"),
@@ -315,7 +321,7 @@ mod tests {
     fn test_cli_parsing_list_skills() {
         let cli = Cli::parse_from(["mirdan", "list", "--skills"]);
         match cli.command {
-            Commands::List { filter, .. } => assert!(filter.skills),
+            Commands::List { skills, .. } => assert!(skills),
             _ => panic!("Expected List command"),
         }
     }
@@ -324,7 +330,7 @@ mod tests {
     fn test_cli_parsing_list_validators() {
         let cli = Cli::parse_from(["mirdan", "list", "--validators"]);
         match cli.command {
-            Commands::List { filter, .. } => assert!(filter.validators),
+            Commands::List { validators, .. } => assert!(validators),
             _ => panic!("Expected List command"),
         }
     }
@@ -333,7 +339,7 @@ mod tests {
     fn test_cli_parsing_list_tools() {
         let cli = Cli::parse_from(["mirdan", "list", "--tools"]);
         match cli.command {
-            Commands::List { filter, .. } => assert!(filter.tools),
+            Commands::List { tools, .. } => assert!(tools),
             _ => panic!("Expected List command"),
         }
     }
@@ -342,18 +348,9 @@ mod tests {
     fn test_cli_parsing_list_plugins() {
         let cli = Cli::parse_from(["mirdan", "list", "--plugins"]);
         match cli.command {
-            Commands::List { filter, .. } => assert!(filter.plugins),
+            Commands::List { plugins, .. } => assert!(plugins),
             _ => panic!("Expected List command"),
         }
-    }
-
-    #[test]
-    fn test_cli_parsing_list_rejects_two_type_flags() {
-        // Each `--<type>` flag says "show only <type>", so two of them state
-        // contradictory intents. They share one clap argument group, which
-        // makes the combination a parse error instead of a silent union.
-        let result = Cli::try_parse_from(["mirdan", "list", "--skills", "--tools"]);
-        assert!(result.is_err());
     }
 
     #[test]

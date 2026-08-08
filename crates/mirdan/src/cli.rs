@@ -4,7 +4,7 @@
 //! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
 //! generate documentation, man pages, and shell completions at build time.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 /// Mirdan - Universal package manager for AI coding agents.
 ///
@@ -46,7 +46,6 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "AGENT_ID")]
     pub agent: Option<String>,
 
-    /// The subcommand the user asked for.
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -69,7 +68,6 @@ pub enum Commands {
 
     /// Create a new package from template
     New {
-        /// The kind of package to scaffold.
         #[command(subcommand)]
         kind: NewKind,
     },
@@ -108,16 +106,19 @@ pub enum Commands {
     },
 
     /// List installed packages
-    ///
-    /// The --skills, --validators, --tools, and --plugins flags are mutually
-    /// exclusive: each one narrows the listing to a single package type, so at
-    /// most one of them may be given. Passing two, such as
-    /// `mirdan list --skills --tools`, is an error. Pass no type flag to list
-    /// every type.
     List {
-        /// Which package type to list, if only one.
-        #[command(flatten)]
-        filter: ListFilterArgs,
+        /// Show only skills
+        #[arg(long)]
+        skills: bool,
+        /// Show only validators
+        #[arg(long)]
+        validators: bool,
+        /// Show only tools
+        #[arg(long)]
+        tools: bool,
+        /// Show only plugins
+        #[arg(long)]
+        plugins: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -243,28 +244,6 @@ Examples:
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-}
-
-/// The `mirdan list` package-type flags.
-///
-/// Each flag narrows the listing to one package type. They share one clap
-/// argument group, so clap rejects any two of them together, and no flag at
-/// all means "list every type".
-#[derive(Args, Debug)]
-#[group(multiple = false)]
-pub struct ListFilterArgs {
-    /// Show only skills
-    #[arg(long)]
-    pub skills: bool,
-    /// Show only validators
-    #[arg(long)]
-    pub validators: bool,
-    /// Show only tools
-    #[arg(long)]
-    pub tools: bool,
-    /// Show only plugins
-    #[arg(long)]
-    pub plugins: bool,
 }
 
 /// Which kind of package `mirdan new` scaffolds.

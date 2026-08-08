@@ -126,15 +126,50 @@ enum NonStreamingChunkOutcome {
     /// Stream drained naturally. The caller stores `response_content` as the
     /// assistant message and embeds it as `claude_response` in the response
     /// `_meta` for diagnostics/replay. `chunk_count` is logged at info level.
+    /// `cache_usage` is the turn's prompt-cache usage, folded across the
+    /// stream by [`fold_cache_usage`], for the caller to attach to the
+    /// response `_meta`.
     Finished {
         response_content: String,
         chunk_count: u64,
+        cache_usage: Option<crate::protocol_translator::CacheUsage>,
     },
     /// Stream terminated early with a fully-built terminal response — either
     /// `StopReason::Cancelled` (cancellation observed mid-stream) or
     /// `StopReason::MaxTokens` (per-turn output cap fired). The caller
     /// returns this response directly without further accumulation.
     EarlyReturn(PromptResponse),
+}
+
+/// Fold one chunk's prompt-cache usage into a turn's running value.
+///
+/// A turn can carry more than one `result` message, so the last one that
+/// reported a populated `usage` object wins; a chunk carrying no usage leaves
+/// the running value alone. Both prompt paths fold with this one function, so
+/// they can never disagree about a turn's reuse.
+fn fold_cache_usage(
+    running: Option<crate::protocol_translator::CacheUsage>,
+    chunk: Option<crate::protocol_translator::CacheUsage>,
+) -> Option<crate::protocol_translator::CacheUsage> {
+    chunk.or(running)
+}
+
+/// Attach a turn's prompt-cache usage to a response `_meta` map.
+///
+/// The review fleet decides whether a forked task ran warm or cold from this
+/// key alone, so both prompt paths must write it — a path that omits it
+/// reports every warm fork as cold. A turn that reported no usage writes no
+/// key, so an absent key reads as "no cache metrics" rather than "no reuse".
+pub(crate) fn attach_cache_usage(
+    meta: &mut serde_json::Map<String, serde_json::Value>,
+    cache_usage: Option<crate::protocol_translator::CacheUsage>,
+) {
+    if let Some(usage) = cache_usage {
+        meta.insert(
+            crate::protocol_translator::CacheUsage::META_KEY.to_string(),
+            usage.to_meta_json(),
+        );
+    }
 }
 
 impl crate::agent::ClaudeAgent {
@@ -349,9 +384,7 @@ impl crate::agent::ClaudeAgent {
                 claude_stop_reason = Some(reason.clone());
             }
 
-            if let Some(usage) = chunk.cache_usage {
-                cache_usage = Some(usage);
-            }
+            cache_usage = fold_cache_usage(cache_usage, chunk.cache_usage);
 
             if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
             {
@@ -413,9 +446,10 @@ impl crate::agent::ClaudeAgent {
     /// that actually runs in production.
     ///
     /// Returns either:
-    /// - `Finished { response_content, chunk_count }` when the stream drained
-    ///   naturally; the caller stores the accumulated `claude_response` and
-    ///   builds the final `EndTurn` response, or
+    /// - `Finished { response_content, chunk_count, cache_usage }` when the
+    ///   stream drained naturally; the caller stores the accumulated
+    ///   `claude_response`, attaches `cache_usage` to the response `_meta`,
+    ///   and builds the final `EndTurn` response, or
     /// - `EarlyReturn(response)` when cancellation or the output-token cap
     ///   fired mid-stream and produced a terminal `PromptResponse` directly.
     async fn process_non_streaming_chunks(
@@ -431,6 +465,7 @@ impl crate::agent::ClaudeAgent {
         let mut response_content = String::new();
         let mut chunk_count: u64 = 0;
         let mut output_tokens: u64 = 0;
+        let mut cache_usage: Option<crate::protocol_translator::CacheUsage> = None;
 
         while let Some(chunk) = futures::StreamExt::next(stream).await {
             if self.cancellation_manager.is_cancelled(session_id_str).await {
@@ -454,6 +489,7 @@ impl crate::agent::ClaudeAgent {
 
             chunk_count += 1;
             response_content.push_str(&chunk.content);
+            cache_usage = fold_cache_usage(cache_usage, chunk.cache_usage);
 
             // Skip protocol-metadata-only chunks the same way the streaming
             // path does — anything that carries no payload (no text, no
@@ -500,6 +536,7 @@ impl crate::agent::ClaudeAgent {
         Ok(NonStreamingChunkOutcome::Finished {
             response_content,
             chunk_count,
+            cache_usage,
         })
     }
 
@@ -739,9 +776,11 @@ impl crate::agent::ClaudeAgent {
 
     /// Build final streaming response with stop reason and prompt-cache usage.
     ///
-    /// `cache_usage` (when present) is serialized into the response `_meta` map
-    /// under the `cache_usage` key as a JSON object, so the `CollectedResponse`
-    /// assembled in `lib.rs` can surface the per-turn Anthropic cache metrics.
+    /// `cache_usage` (when present) rides the response `_meta` map via
+    /// [`attach_cache_usage`] — the same helper the non-streaming path uses —
+    /// so the `CollectedResponse` assembled in `lib.rs` and the review
+    /// validator pool both see the per-turn Anthropic cache metrics whichever
+    /// path served the turn.
     async fn build_streaming_response(
         &self,
         session_id_str: &str,
@@ -761,9 +800,7 @@ impl crate::agent::ClaudeAgent {
         let stop_reason = Self::map_claude_stop_reason(claude_stop_reason);
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("streaming".to_string(), serde_json::json!(true));
-        if let Some(usage) = cache_usage {
-            meta_map.insert("cache_usage".to_string(), usage.to_meta_json());
-        }
+        attach_cache_usage(&mut meta_map, cache_usage);
         Ok(PromptResponse::new(stop_reason).meta(meta_map))
     }
 
@@ -1337,10 +1374,11 @@ impl crate::agent::ClaudeAgent {
             )
             .await?;
 
-        let response_content = match chunk_outcome {
+        let (response_content, cache_usage) = match chunk_outcome {
             NonStreamingChunkOutcome::Finished {
                 response_content,
                 chunk_count,
+                cache_usage,
             } => {
                 tracing::info!(
                     "Received Claude API response ({} bytes, {} chunks) for session: {}",
@@ -1348,7 +1386,7 @@ impl crate::agent::ClaudeAgent {
                     chunk_count,
                     session_id
                 );
-                response_content
+                (response_content, cache_usage)
             }
             NonStreamingChunkOutcome::EarlyReturn(response) => return Ok(response),
         };
@@ -1361,7 +1399,12 @@ impl crate::agent::ClaudeAgent {
                 session_id,
                 response_content
             );
-            return Ok(self.create_refusal_response(&session_id.to_string(), false, None));
+            return Ok(self.create_refusal_response(
+                &session_id.to_string(),
+                false,
+                None,
+                cache_usage,
+            ));
         }
 
         // Check for cancellation after Claude API request but before storing
@@ -1383,6 +1426,9 @@ impl crate::agent::ClaudeAgent {
                 "response_length".to_string(),
                 serde_json::json!(response_content.len()),
             );
+            // The turn ran to completion before the cancellation was observed,
+            // so its prompt-cache usage is known and real telemetry.
+            attach_cache_usage(&mut meta, cache_usage);
 
             return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta));
         }
@@ -1415,6 +1461,7 @@ impl crate::agent::ClaudeAgent {
             "session_messages".to_string(),
             serde_json::json!(session.context.len() + 1),
         );
+        attach_cache_usage(&mut meta, cache_usage);
 
         Ok(PromptResponse::new(StopReason::EndTurn).meta(meta))
     }
@@ -1945,12 +1992,17 @@ mod tests {
             NonStreamingChunkOutcome::Finished {
                 response_content,
                 chunk_count,
+                cache_usage,
             } => {
                 assert!(
                     response_content.is_empty(),
                     "tool-result-only stream has no assistant text"
                 );
                 assert_eq!(chunk_count, 1, "exactly one chunk was produced");
+                assert!(
+                    cache_usage.is_none(),
+                    "a stream whose chunks reported no usage reports no cache usage"
+                );
             }
             other => panic!("expected Finished outcome, got {:?}", other),
         }
@@ -2345,5 +2397,212 @@ mod tests {
                 other
             ),
         }
+    }
+
+    // =========================================================================
+    // Prompt-cache usage on the non-streaming path — the review fleet's only
+    // warm/cold prefix-reuse signal
+    // =========================================================================
+
+    /// Prompt-cache read count the scripted CLI reports: the "this turn was
+    /// served from a warm prefix" signal the review fleet keys on.
+    const SCRIPTED_CACHE_READ_TOKENS: u64 = 68_324;
+    /// Prompt-cache write count the scripted CLI reports beside the read.
+    const SCRIPTED_CACHE_CREATION_TOKENS: u64 = 56;
+    /// Input token count the scripted CLI reports, so the fixture carries the
+    /// same four-key `usage` object the real CLI sends.
+    const SCRIPTED_INPUT_TOKENS: u64 = 68_400;
+    /// Output token count the scripted CLI reports.
+    const SCRIPTED_OUTPUT_TOKENS: u64 = 7;
+    /// Reply the scripted CLI gives when the test wants the turn read as a
+    /// refusal. Matches one of `ClaudeAgent::is_response_refusal`'s patterns.
+    const SCRIPTED_REFUSAL_REPLY: &str = "I must decline that request.";
+    /// Wall-clock budget for the scripted turn. The script answers instantly,
+    /// so overrunning this means the turn wedged — fail loudly instead of
+    /// hanging the suite.
+    const SCRIPTED_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Write an executable stand-in for the `claude` CLI into `dir`, whose
+    /// one turn answers with `reply` and reports a warm prompt cache.
+    ///
+    /// It answers the two lines one session writes to the real CLI's stdin,
+    /// with the stream-json lines the real CLI answers them with:
+    ///
+    /// 1. the init trigger `spawn_process_and_consume_init` sends — answered
+    ///    with a `system`/`init` line and the `result` line that closes that
+    ///    turn, which is what `consume_remaining_init_response` waits for;
+    /// 2. the prompt itself — answered with `reply` as one assistant text
+    ///    line and the `result` line whose `usage` object reports a warm
+    ///    cache read.
+    ///
+    /// The trailing `cat` holds stdin open so the agent's reader never hits
+    /// EOF before it has consumed that second result line.
+    fn write_scripted_claude(dir: &std::path::Path, reply: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = format!(
+            "#!/bin/sh\n\
+             read -r _init_trigger\n\
+             printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[]}}'\n\
+             printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\
+             \"stop_reason\":\"end_turn\"}}'\n\
+             read -r _prompt\n\
+             printf '%s\\n' '{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\
+             \"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}]}}}}'\n\
+             printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\
+             \"stop_reason\":\"end_turn\",\"usage\":{{\
+             \"cache_read_input_tokens\":{read},\
+             \"cache_creation_input_tokens\":{created},\
+             \"input_tokens\":{input},\
+             \"output_tokens\":{output}}}}}'\n\
+             exec cat >/dev/null\n",
+            reply = reply,
+            read = SCRIPTED_CACHE_READ_TOKENS,
+            created = SCRIPTED_CACHE_CREATION_TOKENS,
+            input = SCRIPTED_INPUT_TOKENS,
+            output = SCRIPTED_OUTPUT_TOKENS,
+        );
+
+        let script_path = dir.join("claude");
+        std::fs::write(&script_path, script).expect("the scripted claude must be writable");
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .expect("the scripted claude must be executable");
+    }
+
+    /// Drive one non-streaming turn against a scripted `claude` that answers
+    /// with `reply`, and hand back the resulting response `_meta`.
+    ///
+    /// Callers must hold a [`crate::test_support::PathGuard`] and a
+    /// [`crate::test_support::StateDirGuard`] for the call — the two guards
+    /// this helper's `PATH` shim and the agent's session store need — which is
+    /// why it takes them rather than creating them: they must outlive the
+    /// agent, and each caller is `#[serial]` for exactly that reason.
+    async fn scripted_turn_meta(reply: &str, bin_dir: &std::path::Path) -> serde_json::Value {
+        write_scripted_claude(bin_dir, reply);
+
+        let (agent, _rx) = crate::agent::ClaudeAgent::new(AgentConfig::default())
+            .await
+            .expect("agent construction must succeed");
+        // No `streaming` client capability: exactly what the review fleet
+        // sends, and what routes the turn onto the non-streaming path.
+        agent
+            .initialize(agent_client_protocol::schema::InitializeRequest::new(
+                1.into(),
+            ))
+            .await
+            .expect("initialize must succeed");
+
+        let cwd = tempfile::tempdir().expect("a temp dir for the session cwd");
+        let session_id = agent
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                cwd.path().to_path_buf(),
+            ))
+            .await
+            .expect("session creation must succeed")
+            .session_id;
+
+        let response = tokio::time::timeout(
+            SCRIPTED_TURN_TIMEOUT,
+            agent.prompt(PromptRequest::new(
+                session_id,
+                vec![ContentBlock::Text(TextContent::new(
+                    "review this".to_string(),
+                ))],
+            )),
+        )
+        .await
+        .expect("the scripted turn must finish within its budget")
+        .expect("the scripted turn must succeed");
+
+        serde_json::Value::Object(
+            response
+                .meta
+                .expect("a turn whose CLI reported usage must carry response meta"),
+        )
+    }
+
+    /// Read the `cache_usage` object out of a response `_meta`, failing with
+    /// the whole map when the key is missing.
+    fn cache_usage_of(meta: &serde_json::Value) -> &serde_json::Value {
+        meta.get("cache_usage").unwrap_or_else(|| {
+            panic!("the non-streaming response meta must carry cache_usage, got {meta}")
+        })
+    }
+
+    /// Assert a `cache_usage` object reports the scripted CLI's warm read and
+    /// cold write.
+    fn assert_scripted_cache_usage(cache: &serde_json::Value) {
+        assert_eq!(
+            cache
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(SCRIPTED_CACHE_READ_TOKENS),
+            "the warm cache read the CLI reported must reach the response meta"
+        );
+        assert_eq!(
+            cache
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(SCRIPTED_CACHE_CREATION_TOKENS),
+            "the cold-write count the CLI reported must reach it too"
+        );
+    }
+
+    /// A turn served from a warm Anthropic prompt cache reports that usage on
+    /// `PromptResponse._meta.cache_usage` when it ran the NON-streaming path.
+    ///
+    /// The review fleet's ACP client sends no `streaming` client capability
+    /// (`review::drive::run_pipeline_in_connection` builds
+    /// `ClientCapabilities` with no `meta`), so [`Self::should_stream`] is
+    /// false and every fleet turn runs `handle_non_streaming_prompt`. The
+    /// fleet then classifies a fork warm or cold from this one key alone —
+    /// `validators::pool` parses it onto `SessionTurn::cache_usage` and
+    /// `review::fleet::prime::classify_reuse` reads it. A prompt path that
+    /// drops the key reports every warm fork as cold.
+    ///
+    /// Drives the real agent against a scripted `claude` executable on `PATH`,
+    /// so this covers the whole wire path — CLI stdout line ->
+    /// `parse_result_message` -> final `MessageChunk` -> response `_meta` —
+    /// rather than a mock at any one of its seams.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_warm_non_streaming_turn_reports_cache_usage_on_the_response_meta() {
+        let _state = crate::test_support::StateDirGuard::new();
+        let bin_dir = tempfile::tempdir().expect("a temp dir for the scripted claude");
+        let _path_guard = crate::test_support::PathGuard::prepend(bin_dir.path());
+
+        let meta = scripted_turn_meta("ok", bin_dir.path()).await;
+
+        assert_eq!(
+            meta.get("streaming").and_then(|v| v.as_bool()),
+            Some(false),
+            "the turn must have run the non-streaming path, which is what the \
+             review fleet's capability-free client selects: {meta}"
+        );
+        assert_scripted_cache_usage(cache_usage_of(&meta));
+    }
+
+    /// A refused turn reports its prompt-cache usage too.
+    ///
+    /// A refusal is a completed turn: the CLI consumed the primed prefix and
+    /// reported the read, and the pool builds a `SessionTurn` from a
+    /// `StopReason::Refusal` response exactly as it does from an answered
+    /// one. Dropping the usage here would put the same "every fork ran cold"
+    /// lie back into the fleet log for every refused task.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_refused_turn_still_reports_its_cache_usage() {
+        let _state = crate::test_support::StateDirGuard::new();
+        let bin_dir = tempfile::tempdir().expect("a temp dir for the scripted claude");
+        let _path_guard = crate::test_support::PathGuard::prepend(bin_dir.path());
+
+        let meta = scripted_turn_meta(SCRIPTED_REFUSAL_REPLY, bin_dir.path()).await;
+
+        assert_eq!(
+            meta.get("refusal_detected").and_then(|v| v.as_bool()),
+            Some(true),
+            "the scripted reply must have been read as a refusal: {meta}"
+        );
+        assert_scripted_cache_usage(cache_usage_of(&meta));
     }
 }

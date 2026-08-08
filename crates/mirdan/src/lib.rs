@@ -19,7 +19,7 @@ pub mod banner;
 pub mod builtin_validators;
 mod cli;
 /// The clap command tree and its argument types.
-pub use cli::{Cli, Commands, ListFilterArgs, NewKind};
+pub use cli::{Cli, Commands, NewKind};
 /// Shell completion script generation for the `mirdan` binary.
 pub mod completions;
 /// Structured result types for deploy/uninstall operations.
@@ -32,6 +32,8 @@ mod dispatch;
 pub use dispatch::{dispatch, format_deploy_results};
 /// Diagnostic checks for Mirdan setup and configuration.
 pub mod doctor;
+/// Shared YAML frontmatter reading for the package manifests mirdan reads.
+mod frontmatter;
 /// Git-based package installation support.
 pub mod git_source;
 /// Detailed information about a single package.

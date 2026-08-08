@@ -215,8 +215,6 @@ Remove an installed package
 
 List installed packages
 
-The --skills, --validators, --tools, and --plugins flags are mutually exclusive: each one narrows the listing to a single package type, so at most one of them may be given. Passing two, such as `mirdan list --skills --tools`, is an error. Pass no type flag to list every type.
-
 **Usage:** `mirdan list [OPTIONS]`
 
 ###### **Options:**

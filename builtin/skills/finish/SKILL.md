@@ -21,6 +21,39 @@ Drive kanban tasks all the way to `done` — orchestrating `/implement`, `/test`
 
 **IMPORTANT** each of the skill driven steps should be run in an appropriate sub agent to minimize context bloat in this session.
 
+**IMPORTANT — block on every sub agent.** `Agent` starts the sub agent and returns
+at once. It does not wait. If you end your turn here, the `ralph` Stop hook starts
+you again, the step is still running, and you have nothing to report. That repeats
+for as long as the step runs.
+
+So every `Agent` call is followed at once by a blocking read of its result:
+
+```json
+{"tool": "TaskOutput", "task_id": "<the agentId Agent returned>", "block": true, "timeout": 600000}
+```
+
+`TaskOutput` holds inside the turn until the sub agent finishes, then gives you the
+step record block. The turn never ends while a step runs, so the Stop hook never
+fires.
+
+Rules:
+
+- One `Agent` call, then one `TaskOutput` call. Never two `Agent` calls in a row.
+- Use the largest timeout the tool accepts. A test run on a large workspace takes
+  more than ten minutes.
+- **Call `TaskOutput` once for each step.** A `TaskOutput` that returns
+  `status: running` hit its own ceiling. Do not call it again. On a sub agent that
+  still runs, `TaskOutput` returns the raw transcript of the sub agent, not the
+  step record — tens of thousands of tokens of tool calls you already delegated
+  to keep out of this context. A second call costs that again and still gives no
+  result.
+- After a `status: running`, end the turn. The harness sends a task notification
+  when the sub agent finishes, and that notification carries the step record.
+  The `ralph` Stop hook may start you once or twice while you wait. Answer with
+  one short line and end the turn again. That is cheap; a transcript dump is not.
+- Never `sleep` in a shell, and never poll `ListAgents` in a loop. Neither one
+  tells you anything.
+
 
 ## Invocation
 

@@ -46,6 +46,15 @@ pub struct CacheUsage {
 }
 
 impl CacheUsage {
+    /// The `PromptResponse._meta` key whose value is a [`Self::to_meta_json`]
+    /// object.
+    ///
+    /// Every writer (both of the agent's prompt paths) and every reader
+    /// ([`crate::execute_prompt_with_agent`], and the review validator pool
+    /// that turns it into a warm-or-cold reuse verdict) names the key from
+    /// here, so the two sides cannot drift apart.
+    pub const META_KEY: &'static str = "cache_usage";
+
     /// JSON object keys carrying each field across the `PromptResponse._meta`
     /// boundary. Used by both [`Self::to_meta_json`] and [`Self::from_meta_json`]
     /// so the wire format stays symmetric and single-sourced.

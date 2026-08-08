@@ -235,7 +235,7 @@ pub async fn execute_prompt_with_agent(
     let cache_usage = prompt_response
         .meta
         .as_ref()
-        .and_then(|meta| meta.get("cache_usage"))
+        .and_then(|meta| meta.get(crate::protocol_translator::CacheUsage::META_KEY))
         .and_then(crate::protocol_translator::CacheUsage::from_meta_json);
 
     Ok(CollectedResponse {
