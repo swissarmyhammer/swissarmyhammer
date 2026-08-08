@@ -190,6 +190,7 @@ fn read_frontmatter_field(path: &Path, field: &str) -> String {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
     fn test_read_frontmatter_field_metadata_fallback() {
@@ -219,8 +220,7 @@ metadata:
     #[serial]
     fn test_show_local_info_agent_filter_skips_validators() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator
         let val_dir = dir.path().join(".validators/test-val");
@@ -234,16 +234,13 @@ metadata:
         // With agent filter, validator lookup is skipped
         let found = show_local_info("test-val", Some("claude-code"));
         assert!(!found);
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_show_local_info_no_filter_finds_validator() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator
         let val_dir = dir.path().join(".validators/test-val");
@@ -257,7 +254,5 @@ metadata:
         // Without agent filter, validator should be found
         let found = show_local_info("test-val", None);
         assert!(found);
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 }

@@ -472,6 +472,7 @@ mirdan publish
 mod tests {
     use super::*;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
     #[serial]
@@ -481,11 +482,9 @@ mod tests {
         let skill_dir = dir.path().join(name);
 
         // Create in the temp dir by changing cwd temporarily
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let result = run_new_skill(name, false, None);
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(skill_dir.join("SKILL.md").exists());
@@ -502,11 +501,9 @@ mod tests {
         let name = "test-validator";
         let val_dir = dir.path().join(name);
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let result = run_new_validator(name, false);
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(val_dir.join("VALIDATOR.md").exists());
@@ -535,11 +532,9 @@ mod tests {
         let name = "existing-skill";
         std::fs::create_dir(dir.path().join(name)).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let result = run_new_skill(name, false, None);
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
     }
@@ -551,11 +546,9 @@ mod tests {
         let name = "test-tool";
         let tool_dir = dir.path().join(name);
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let result = run_new_tool(name, false);
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(tool_dir.join("TOOL.md").exists());
@@ -580,11 +573,9 @@ mod tests {
         let name = "test-plugin";
         let plugin_dir = dir.path().join(name);
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let result = run_new_plugin(name, false);
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         assert!(plugin_dir.join(".claude-plugin/plugin.json").exists());

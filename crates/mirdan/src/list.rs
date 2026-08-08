@@ -463,6 +463,7 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
     fn test_read_frontmatter_version_skill() {
@@ -548,8 +549,7 @@ metadata:
     #[serial]
     fn test_run_list_agent_filter_suppresses_validators() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator structure
         let val_dir = dir.path().join(".validators/test-val");
@@ -565,8 +565,6 @@ metadata:
         // With agent filter, validators should be suppressed
         let result = run_list(false, false, false, false, Some("claude-code"), true);
         assert!(result.is_ok());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
@@ -647,8 +645,7 @@ metadata:
     #[serial]
     fn test_run_list_no_filter_shows_validators() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator structure
         let val_dir = dir.path().join(".validators/test-val");
@@ -664,7 +661,5 @@ metadata:
         // Without agent filter, validators should appear
         let result = run_list(false, false, false, false, None, true);
         assert!(result.is_ok());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 }

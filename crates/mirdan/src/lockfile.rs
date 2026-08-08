@@ -345,6 +345,11 @@ mod tests {
     /// the historical behaviour where the lockfile sits next to the project tree.
     #[test]
     fn test_lockfile_root_for_scope_project() {
+        // Pin the working directory for the whole test: it is process-global
+        // state, and a parallel test that moves it would break both reads.
+        let dir = tempfile::tempdir().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
+
         let cwd = std::env::current_dir().unwrap();
         let project = lockfile_root_for_scope(&InitScope::Project).unwrap();
         let local = lockfile_root_for_scope(&InitScope::Local).unwrap();

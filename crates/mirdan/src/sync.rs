@@ -225,6 +225,7 @@ mod tests {
     use super::*;
     use crate::lockfile::LockedPackage;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
     fn test_sync_empty_project() {
@@ -345,8 +346,7 @@ mod tests {
         // Isolate CWD so the project-relative `.validators/` lookup resolves to
         // the (empty) tempdir rather than whatever directory the test runner
         // happens to be in.
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let mut lf = Lockfile::default();
         lf.add_package(
@@ -364,8 +364,6 @@ mod tests {
 
         let report = sync(dir.path(), None, false).unwrap();
 
-        std::env::set_current_dir(old_dir).unwrap();
-
         assert_eq!(report.packages_verified, 0);
         assert_eq!(report.missing_packages, vec!["my-validator"]);
     }
@@ -378,8 +376,7 @@ mod tests {
         // verified by sync — not reported missing. This guards against the
         // validator branch checking the wrong (old avp) layout.
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Deploy a validator where `validators_dir(false)` resolves it.
         let val_dir = crate::install::validators_dir(false).join("my-validator");
@@ -401,8 +398,6 @@ mod tests {
         lf.save(dir.path()).unwrap();
 
         let report = sync(dir.path(), None, false).unwrap();
-
-        std::env::set_current_dir(old_dir).unwrap();
 
         assert_eq!(report.packages_verified, 1);
         assert!(report.missing_packages.is_empty());

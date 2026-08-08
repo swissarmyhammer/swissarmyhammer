@@ -8,7 +8,7 @@ use crate::registry::RegistryError;
 use super::*;
 use serial_test::serial;
 use swissarmyhammer_common::reporter::NullReporter;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
 #[test]
 fn test_find_packages_by_git_source_uppercase_scheme_and_host() {
@@ -654,8 +654,7 @@ fn test_local_tool_detection_and_frontmatter() {
 #[serial]
 fn test_deploy_tool_creates_store_and_mcp_json() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Create a source tool with a real MCP server reference
     let src = work.path().join("src-tool");
@@ -716,16 +715,13 @@ fn test_deploy_tool_creates_store_and_mcp_json() {
         "production",
         "env should be passed through"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_tool() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Deploy
     let src = work.path().join("src-tool");
@@ -758,16 +754,13 @@ fn test_deploy_and_uninstall_tool() {
         mcp["mcpServers"]["fs-tool"].is_null(),
         "Server entry should be removed from .mcp.json"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_tool_preserves_existing_mcp_servers() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Pre-populate .mcp.json with an existing server
     std::fs::write(
@@ -823,21 +816,16 @@ fn test_deploy_tool_preserves_existing_mcp_servers() {
         mcp["mcpServers"]["fs-tool"].is_null(),
         "Uninstalled tool should be gone"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_tool_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let result = uninstall_tool("nonexistent-tool", None, false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- plugin: detection, deploy, uninstall ---
@@ -861,8 +849,7 @@ fn test_local_plugin_detection() {
 #[serial]
 fn test_deploy_plugin_creates_files() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let src = work.path().join("src-plugin");
     make_local_plugin(&src, "test-plugin", false);
@@ -896,16 +883,13 @@ fn test_deploy_plugin_creates_files() {
     )
     .unwrap();
     assert_eq!(json["name"].as_str().unwrap(), "test-plugin");
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_plugin() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let src = work.path().join("src-plugin");
     make_local_plugin(&src, "test-plugin", false);
@@ -916,16 +900,13 @@ fn test_deploy_and_uninstall_plugin() {
 
     uninstall_plugin("test-plugin", None, false).unwrap();
     assert!(!deployed.exists(), "Plugin dir should be removed");
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_plugin_with_bundled_mcp() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Create a plugin that bundles an .mcp.json
     let src = work.path().join("src-plugin");
@@ -956,21 +937,16 @@ fn test_deploy_plugin_with_bundled_mcp() {
             .unwrap(),
         "node"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_plugin_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let result = uninstall_plugin("nonexistent-plugin", None, false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- e2e: tool install → lockfile → list → uninstall ---
@@ -979,8 +955,7 @@ fn test_uninstall_plugin_not_found() {
 #[serial]
 fn test_e2e_tool_install_list_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // 1. Create and deploy a tool using @modelcontextprotocol/server-filesystem
     let src = work.path().join("src-tool");
@@ -1036,16 +1011,13 @@ fn test_e2e_tool_install_list_uninstall() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_e2e_plugin_install_list_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // 1. Create and deploy a plugin
     let src = work.path().join("src-plugin");
@@ -1103,8 +1075,6 @@ fn test_e2e_plugin_install_list_uninstall() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
@@ -1143,8 +1113,7 @@ fn test_local_validator_detection_and_frontmatter() {
 #[serial]
 fn test_deploy_validator_creates_files() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Create a source validator
     let src = work.path().join("src-val");
@@ -1158,16 +1127,13 @@ fn test_deploy_validator_creates_files() {
     let deployed = work.path().join(".validators/test-val");
     assert!(deployed.join("VALIDATOR.md").exists());
     assert!(deployed.join("rules/no-secrets.md").exists());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_and_uninstall_validator() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Deploy
     let src = work.path().join("src-val");
@@ -1180,21 +1146,16 @@ fn test_deploy_and_uninstall_validator() {
     // Uninstall
     uninstall_validator("test-val", false).unwrap();
     assert!(!deployed.exists(), "Validator dir should be removed");
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_uninstall_validator_not_found() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let result = uninstall_validator("nonexistent", false);
     assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- lockfile round-trip for git-installed packages ---
@@ -1350,8 +1311,7 @@ fn test_find_packages_by_git_url_with_dot_git_suffix() {
 #[serial]
 fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Create and deploy
     let src = work.path().join("src-val");
@@ -1392,8 +1352,6 @@ fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.get_package("e2e-val").is_none());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- cross-type coexistence and duplicate install tests ---
@@ -1402,8 +1360,7 @@ fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
 #[serial]
 async fn test_e2e_all_four_types_coexist() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // 1. Install a skill
     let skill_src = work.path().join("src-skill");
@@ -1519,16 +1476,13 @@ async fn test_e2e_all_four_types_coexist() {
         work.path().join(".skills/test-skill/SKILL.md").exists(),
         "Skill should survive validator uninstall"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_tool_twice_overwrites_cleanly() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Deploy v1
     let src_v1 = work.path().join("src-v1");
@@ -1564,16 +1518,13 @@ fn test_deploy_tool_twice_overwrites_cleanly() {
     // Clean uninstall should still work
     uninstall_tool("fs-tool", None, false).unwrap();
     assert!(!store.exists());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_deploy_plugin_twice_overwrites_cleanly() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Deploy v1
     let src_v1 = work.path().join("src-v1");
@@ -1605,8 +1556,6 @@ fn test_deploy_plugin_twice_overwrites_cleanly() {
     // Uninstall should still work cleanly
     uninstall_plugin("my-plugin", None, false).unwrap();
     assert!(!deployed.exists());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
@@ -1617,8 +1566,7 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
     use crate::git_source;
 
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     // Clone anthropics/skills
     let source = git_source::parse_git_source("anthropics/skills", None).unwrap();
@@ -1677,8 +1625,6 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
     lf.save(work.path()).unwrap();
     let lf = Lockfile::load(work.path()).unwrap();
     assert!(lf.packages.is_empty());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 // --- metadata-only tool install tests ---
@@ -1687,8 +1633,7 @@ fn test_e2e_clone_anthropics_deploy_validator_uninstall_by_url() {
 #[serial]
 async fn test_install_tool_from_mcp_config_registers_server() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1743,16 +1688,13 @@ async fn test_install_tool_from_mcp_config_registers_server() {
     let pkg = lf.get_package("brave-search").unwrap();
     assert_eq!(pkg.package_type, PackageType::Tool);
     assert_eq!(pkg.version, "1.0.0");
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[tokio::test]
 #[serial]
 async fn test_install_tool_from_tool_md_content() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let tool_md = r#"---
 name: test-tool
@@ -1808,16 +1750,13 @@ mcp:
     let pkg = lf.get_package("test-tool").unwrap();
     assert_eq!(pkg.package_type, PackageType::Tool);
     assert_eq!(pkg.version, "2.0.0");
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[tokio::test]
 #[serial]
 async fn test_install_tool_from_metadata_rejects_non_tool() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let version_detail = crate::registry::types::VersionDetail {
         name: "some-skill".to_string(),
@@ -1843,8 +1782,6 @@ async fn test_install_tool_from_metadata_rejects_non_tool() {
         "Error should mention not a tool: {}",
         err
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 /// Rejecting a non-tool package is an input-applicability failure, so it must
@@ -1855,7 +1792,7 @@ async fn test_install_tool_from_metadata_rejects_non_tool() {
 async fn test_install_tool_from_metadata_non_tool_is_validation_error() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let version_detail = crate::registry::types::VersionDetail {
         name: "some-skill".to_string(),
@@ -1888,7 +1825,7 @@ async fn test_install_tool_from_metadata_non_tool_is_validation_error() {
 async fn test_install_tool_from_metadata_accepts_capitalized_tool_type() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1923,8 +1860,7 @@ async fn test_install_tool_from_metadata_accepts_capitalized_tool_type() {
 #[serial]
 async fn test_install_tool_from_mcp_config_then_uninstall() {
     let work = tempfile::tempdir().unwrap();
-    let old_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let mcp = crate::registry::types::McpConfig {
         command: "npx".to_string(),
@@ -1969,8 +1905,6 @@ async fn test_install_tool_from_mcp_config_then_uninstall() {
         json["mcpServers"]["ephemeral-tool"].is_null(),
         "Server should be removed after uninstall"
     );
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]
@@ -2100,7 +2034,7 @@ fn test_safe_dir_name_rejects_traversal_and_accepts_nested() {
 fn test_uninstall_skill_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".skills")).unwrap();
     let victim = work.path().join("victim");
@@ -2123,7 +2057,7 @@ fn test_uninstall_skill_rejects_path_traversal_name() {
 fn test_uninstall_validator_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".validators")).unwrap();
     let victim = work.path().join("victim");
@@ -2146,7 +2080,7 @@ fn test_uninstall_validator_rejects_path_traversal_name() {
 fn test_uninstall_agent_at_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".agents")).unwrap();
     let victim = work.path().join("victim");
@@ -2169,7 +2103,7 @@ fn test_uninstall_agent_at_rejects_path_traversal_name() {
 fn test_uninstall_tool_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     std::fs::create_dir_all(work.path().join(".tools")).unwrap();
     let victim = work.path().join("victim");
@@ -2192,7 +2126,7 @@ fn test_uninstall_tool_rejects_path_traversal_name() {
 fn test_uninstall_plugin_rejects_path_traversal_name() {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
+    let _cwd = CurrentDirGuard::new(work.path()).unwrap();
 
     let victim = work.path().join("victim");
     std::fs::create_dir_all(&victim).unwrap();
