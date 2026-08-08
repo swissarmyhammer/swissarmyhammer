@@ -38,21 +38,27 @@ fires.
 
 Rules:
 
-- One `Agent` call, then one `TaskOutput` call. Never two `Agent` calls in a row.
-- Use the largest timeout the tool accepts. A test run on a large workspace takes
-  more than ten minutes.
-- **Call `TaskOutput` once for each step.** A `TaskOutput` that returns
-  `status: running` hit its own ceiling. Do not call it again. On a sub agent that
-  still runs, `TaskOutput` returns the raw transcript of the sub agent, not the
-  step record — tens of thousands of tokens of tool calls you already delegated
-  to keep out of this context. A second call costs that again and still gives no
-  result.
-- After a `status: running`, end the turn. The harness sends a task notification
-  when the sub agent finishes, and that notification carries the step record.
-  The `ralph` Stop hook may start you once or twice while you wait. Answer with
-  one short line and end the turn again. That is cheap; a transcript dump is not.
+- One `Agent` call, then `TaskOutput` on that id. Never two `Agent` calls in a row.
+- Use the largest timeout the tool accepts. `600000` is the ceiling.
+- **`status: running` means call `TaskOutput` again, with the same id.** Keep
+  calling until it returns `status: completed`. A step that runs 25 minutes takes
+  three calls. Never end the turn between them.
+- Never end the turn while a step runs. Ending the turn is what fires the `ralph`
+  Stop hook, and the hook starts you again with the step still running and nothing
+  to report. Do that and you emit "waiting" forever. The two wake mechanisms fight:
+  `ralph` blocks stopping, and the task notification only arrives after you stop.
+  Staying inside `TaskOutput` is what keeps them apart.
+- A `TaskOutput` that times out returns the sub agent's raw transcript, not the
+  step record. That is a real cost, roughly ten thousand tokens per timeout, and
+  it is the price of a quiet loop. Pay it. Read nothing in the dump — the only
+  line that matters is `status`, and the step record arrives on the call that
+  returns `completed`.
 - Never `sleep` in a shell, and never poll `ListAgents` in a loop. Neither one
   tells you anything.
+
+If a `TaskOutput` returns an error rather than `running` or `completed`, the sub
+agent is gone. Treat the step as `stuck`, write the ledger entry, and report it.
+Do not silently start the step over.
 
 
 ## Invocation
