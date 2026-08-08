@@ -268,10 +268,11 @@ mod tests {
     /// prompt rules it supersedes.
     ///
     /// This is the one group whose `supersedes` differs per rule, so each row
-    /// carries its own list. One `cargo clippy` run decides both Rust gates, so
-    /// the Rust rule replaces both prompt rules; ruff names one lint for each
-    /// Python gate, so Python takes one rule for each. Every other language
-    /// keeps the `complexity` probe and both prompt rules.
+    /// carries its own list. One run decides both gates for Rust, TypeScript
+    /// and Swift, so those rules replace both prompt rules; Python and Go name
+    /// one tool for each gate, so each takes one rule for each. Dart keeps the
+    /// `complexity` probe and both prompt rules, because its only metrics tool
+    /// is commercial.
     const CODE_HYGIENE_COMPLEXITY_TOOL_RULES: &[(&str, &[&str])] = &[
         (
             "complexity-rust",
@@ -279,6 +280,16 @@ mod tests {
         ),
         ("complexity-python", &["cognitive-complexity"]),
         ("function-length-python", &["function-length"]),
+        (
+            "complexity-typescript",
+            &["cognitive-complexity", "function-length"],
+        ),
+        (
+            "complexity-swift",
+            &["cognitive-complexity", "function-length"],
+        ),
+        ("complexity-go", &["cognitive-complexity"]),
+        ("function-length-go", &["function-length"]),
     ];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and

@@ -1282,10 +1282,10 @@ mod tests {
     /// the prompt rules it supersedes.
     ///
     /// This is the one roster whose rows do not share a `supersedes` list. One
-    /// `cargo clippy` run decides both gates, so the Rust rule replaces both
-    /// prompt rules; ruff names one lint for each Python gate, so Python takes
-    /// one rule for each. Every other language keeps the `complexity` probe and
-    /// both prompt rules.
+    /// run decides both gates for Rust, TypeScript and Swift, so those rules
+    /// replace both prompt rules; Python and Go name one tool for each gate, so
+    /// each takes one rule for each. Dart keeps the `complexity` probe and both
+    /// prompt rules, because its only metrics tool is commercial.
     const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
         (
             "rust",
@@ -1302,6 +1302,18 @@ mod tests {
             "function-length-python",
             SUPERSEDES_FUNCTION_LENGTH,
         ),
+        (
+            "nodejs",
+            "complexity-typescript",
+            SUPERSEDES_BOTH_COMPLEXITY_GATES,
+        ),
+        (
+            "swift",
+            "complexity-swift",
+            SUPERSEDES_BOTH_COMPLEXITY_GATES,
+        ),
+        ("go", "complexity-go", SUPERSEDES_COGNITIVE_COMPLEXITY),
+        ("go", "function-length-go", SUPERSEDES_FUNCTION_LENGTH),
     ];
 
     /// A cargo package holding one undocumented public item and one documented

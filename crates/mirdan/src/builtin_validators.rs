@@ -249,6 +249,14 @@ mod tests {
             "complexity-python.pass.py.tmpl",
             "function-length-python.fail.py.tmpl",
             "function-length-python.pass.py.tmpl",
+            "complexity-typescript.fail.ts.tmpl",
+            "complexity-typescript.pass.ts.tmpl",
+            "complexity-swift.fail.swift.tmpl",
+            "complexity-swift.pass.swift.tmpl",
+            "complexity-go.fail.go.tmpl",
+            "complexity-go.pass.go.tmpl",
+            "function-length-go.fail.go.tmpl",
+            "function-length-go.pass.go.tmpl",
         ] {
             assert!(
                 code_hygiene_files

@@ -39,37 +39,53 @@ A tool reports by position and the prompt rule reports by repetition, so a tool
 rule reports the one-off literal the prompt rule carves out. Each tool rule's own
 file states the measurement behind its thresholds.
 
-## Complexity and length: three tool rules, and a probe that stays
+## Complexity and length: seven tool rules, and a probe that stays
 
 `cognitive-complexity` and `function-length` are two prompt rules over one
 concern — a function a reader cannot hold in their head. A linter decides both
-for the languages that have one, so three tool rules supersede them:
+for the languages that have one, so seven tool rules supersede them.
+
+Three languages settle both gates in one run, so each of those rules names both
+prompt rules:
 
 - `complexity-rust` — one `cargo clippy` run over four lints:
   `excessive_nesting` at `6`, `too_many_lines` at `250`, `too_many_arguments`
-  at `7`, and `type_complexity` at `250`. One run decides both gates, so this
-  rule names both prompt rules.
-- `complexity-python` — ruff `C901` at `max-complexity=15`. Supersedes
-  `cognitive-complexity`.
-- `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
-  statement count 250 code lines of Python measures out to. Supersedes
-  `function-length`.
+  at `7`, and `type_complexity` at `250`.
+- `complexity-typescript` — one `eslint` run over
+  `sonarjs/cognitive-complexity` at `15` and `max-lines-per-function` at `250`
+  with blank lines and comments skipped.
+- `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
+  with `ignores_case_statements` on, and `function_body_length` at `250`.
 
-A tool measures its own way. Clippy's `excessive_nesting` counts lexical
-nesting depth, `C901` counts McCabe decision points, and neither is the
-published Sonar cognitive complexity the `complexity` probe computes, so the
-numbers need not agree. Each tool rule's own file states what its tool measures
-and what the threshold rests on.
+Two languages name one tool for each gate, so each takes one rule for each:
 
-The two languages split on the nesting gate. Rust keeps it: nesting depth is
-the backbone of the Sonar cognitive metric, and `excessive_nesting` measures
-exactly that. Python drops it, because ruff names no nesting rule. That is the
-trade for Python — one number every reviewer gets the same, in place of two
-numbers an agent reads off a probe.
+- `complexity-python` — ruff `C901` at `max-complexity=15`, and
+  `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
+  statement count 250 code lines of Python measures out to.
+- `complexity-go` — `gocognit -over 15`, and `function-length-go` — `funlen`
+  through golangci-lint at `lines: 250` with `ignore-comments` on.
 
-The `complexity` probe stays. Every language without a healthy tool rule — and
-every Rust or Python workspace whose tool doctor cannot find — keeps the probe
-and the prompt rules. That is the designed fallback, not a gap.
+A tool measures its own way, and only two of the five complexity gates are the
+published Sonar cognitive complexity the `complexity` probe computes:
+`sonarjs/cognitive-complexity` and `gocognit` are that algorithm, clippy's
+`excessive_nesting` counts lexical nesting depth, `C901` counts McCabe decision
+points, and swiftlint's `cyclomatic_complexity` counts decision points with
+`switch` arms left out. So the numbers need not agree. Each tool rule's own file
+states what its tool measures and what the threshold rests on.
+
+The languages split on the nesting gate. Rust keeps it: nesting depth is the
+backbone of the Sonar cognitive metric, and `excessive_nesting` measures exactly
+that. TypeScript and Go keep it another way, because the Sonar metric charges a
+function for its nesting inside the one score. Python and Swift drop it, because
+ruff names no nesting rule and swiftlint's `nesting` rule measures nested type
+and function declarations rather than nested conditions.
+
+Dart takes no tool rule; see the rejection recorded below. It keeps the
+`complexity` probe and both prompt rules.
+
+The `complexity` probe stays. Dart, every other language, and every workspace
+whose tool doctor cannot find keep the probe and the prompt rules. That is the
+designed fallback, not a gap.
 
 ## Dead code: two tool rules beside the prompt rule
 
@@ -89,8 +105,8 @@ alone:
 
 ## Tools measured and rejected
 
-Four candidates were measured and rejected. Each was installed and run before
-the verdict.
+Five candidates were rejected. Four were installed and run before the verdict;
+the fifth cannot be installed on the terms this set needs.
 
 ### `clippy::cognitive_complexity` — rejected
 
@@ -160,3 +176,22 @@ projects change to the directory containing the Package.swift."
 Periphery needs an Xcode project or an SPM package, and it builds that project
 to index it. A review pass cannot pay a full build, and the fixture contract
 gives a tool one loose file.
+
+### DCM — rejected, and this is why Dart has no complexity tool rule
+
+Dart's complexity and length metrics. It is the only Dart tool that computes
+them, and it is not one this set can ship, so Dart keeps the `complexity` probe
+and both prompt rules. That is a recorded verdict, not an oversight.
+
+`dart_code_metrics` on pub.dev is discontinued at 5.7.6 and declares no
+replacement package; its homepage now points at `dcm.dev`, which is a commercial
+product. The Free tier is one seat and stops at 50k analyzed lines of code, and
+a CI/CD license key — what an unattended review run needs — starts at the Teams
+plan.
+
+Both halves of the tool-rule contract fail on that. `install.commands` must pin
+a version, and there is no free pinnable package left to pin: the pub package is
+discontinued and the live product installs against a license. And a rule whose
+tool needs a purchased key cannot degrade to its prompt rule cleanly for the
+projects that do not hold one — it would be missing on every machine but the
+buyer's.

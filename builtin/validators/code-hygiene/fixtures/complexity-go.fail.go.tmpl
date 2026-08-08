@@ -1,0 +1,30 @@
+// Package fixtures holds the Go fixtures of the `complexity-go` tool rule.
+//
+// This file holds one function over the cognitive complexity gate:
+// ComplexFoldGrid nests six control-flow blocks, and the Sonar algorithm
+// charges each one its own depth, so it scores 21 against the gate of 15.
+//
+// The tool must report it. A tool upgrade that stops reporting the shape makes
+// the doctor mark the rule unusable.
+package fixtures
+
+// ComplexFoldGrid folds a grid of readings into one band, one nested block for
+// each test.
+func ComplexFoldGrid(grid [][]int, limit int) int {
+	band := 0
+	for _, row := range grid {
+		for _, cell := range row {
+			if cell > 0 {
+				if cell < limit {
+					for band < cell {
+						if band%2 == 0 {
+							band += 2
+						}
+						band++
+					}
+				}
+			}
+		}
+	}
+	return band
+}
