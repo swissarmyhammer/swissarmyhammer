@@ -5,19 +5,26 @@ position_column: todo
 position_ordinal: ffa580
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
 ---
-The `no-commented-code` rule is a pure prompt rule today: the LLM reads comments and decides by eye. Move it up the tiers.
+## STANDING ORDER
 
-Step 1 — Python tool rule (tier 3):
-- `no-commented-code-python` in `code-hygiene/rules/`: `ruff check --isolated --no-cache --select ERA --output-format json "$@"` piped through jq. `supersedes: no-commented-code`, match `**/*.py` + project_types [python].
-- Inline suppression is `# noqa: ERA001`. State it in the rule body.
-- Fail/pass fixture pair. The fail fixture holds a commented-out function and a commented-out block of statements; the pass fixture holds real doc comments, a TODO with prose, and a "don't do this" example — the carve-outs must not fire.
+This card is a decision, not a proposal. Your job is to implement it exactly.
+- Do NOT downgrade this to a probe that feeds a prompt rule. The parse verdict decides. Zero LLM calls for this rule on matched files is the acceptance bar.
+- Do NOT keep the prompt rule running for matched files. Supersede it.
+- Do NOT file a follow-up card in place of doing the work.
+- Stop and escalate ONLY when a step is impossible. Report the exact command and its output.
 
-Step 2 — comment-reparse probe (tier 2, every parsed language):
-- New tree-sitter probe `commented-code` beside the complexity probe: for each comment block (consecutive comment nodes) in a changed file, strip the comment markers and re-parse the text with the file's own grammar. Report a row when the block is over 5 lines AND the reparse yields statements with a low error-node ratio. Each row: file, line, line count, statement count, error ratio.
-- The probe measures; the prompt rule decides. Rewrite `no-commented-code.md` in the complexity-rule style: "the rows are computed for you — report the rows, apply the carve-outs (doc examples, `don't do this` samples, TODO sketches), never scan comments by eye, and an empty list for a parsed file means nothing to report."
-- Register in the probe catalog; the catalog row builds FROM the impl; wire `probes: [commented-code]` into the code-hygiene VALIDATOR.md.
-- Unit tests per language family: a Rust block comment holding real code yields a row; a rustdoc example does not (doc comments are their own node kinds — exclude them in the probe, not in prose).
+## The work
 
-Languages without a grammar keep the plain prompt path, as with the complexity rule.
+Correction: the first version of this card made the tree-sitter reparse a probe feeding the prompt rule. That was wrong. The verdict is objective — comment content either parses as code for the file's language or it does not. No LLM reads it.
 
-#tool-validators
+1. New sah op (in swissarmyhammer-sem / code-context, where the grammar roster lives): for each file argument, extract comment blocks with tree-sitter, strip the comment markers, and re-parse the text with the file's own grammar. A block over 5 lines whose reparse yields 2 or more statements/items with an error-node ratio under a fixed threshold IS commented-out code. Emit one line per block: `path:line: commented-out code (<n> lines parse as <language>)`. Exclude doc-comment node kinds structurally — a documentation example is never a finding, by grammar node kind and not by prose.
+
+2. Tool rule `no-commented-code-parsed` in `code-hygiene/rules/`: files scope, `run: sah <op> "$@"`, `supersedes: no-commented-code`. The match lists the extensions the grammar roster covers, explicitly. A language without a grammar keeps the prompt rule — fallback by match, the designed degradation. Doctor: the tool is sah itself, so `check_command` names the sah binary; no install commands. Resolve the binary the way the engine invokes itself (env or current_exe), never a bare PATH assumption.
+
+3. The exemption contract is structural, never prose: put intentional example code in a doc comment, or keep the block at 5 lines or fewer. State this in the rule body.
+
+4. Drop the separate ruff ERA rule from the earlier plan — one owner per finding, and the reparse op covers Python. Note ERA in the rule body as the cross-check used to validate the Python fixtures.
+
+5. Fixtures: fail fixtures hold a commented-out function of 6+ lines for at least Rust, Python, and TypeScript; pass fixtures hold a doc-comment example, a TODO with prose, and a short 2-line snippet. Unit tests in the sem crate for the extractor per language family. Extend the shipped-rules acceptance test. Acceptance: a review of a file whose only defect is a commented-out block reports it with zero LLM validator calls for that rule.
+
+#tool-validators #objectivity

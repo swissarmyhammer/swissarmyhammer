@@ -285,6 +285,17 @@ comments:
     - review: clean — 27 attempted, 6 confirmed, 9 refuted, 0 recordable; all 6 dropped as pre-existing test code. All 9 prior findings verified closed in the tree. Task moved to done.
     - Engine observation worth a card: `review sha` scopes by FILE, not by hunk, so each round mines new pre-existing content out of a file the task once touched. Four rounds on this card each named a different cause, and round 4's crop came entirely from lines this task never edited. The finish guardrail measures ONE finding surviving three rounds, so it correctly did not trip — but this failure mode is an unbounded supply of distinct findings from outside the delta. The fix belongs in review scoping.
   timestamp: 2026-08-07T18:43:23.415099+00:00
+- actor: claude-code
+  id: 01kzgse1n9rqcemjb6gefp2g4w
+  text: |-
+    ### DECISION REVERSED (2026-08-08)
+
+    This card's framing was mistaken. It told the implementer "Do NOT supersede the `dead-code` prompt rule" and accepted only 100%-certainty slices (Go U1000, Python unreachable). That preserved the LLM's judgment. The goal of tool rules is the opposite: eliminate the judgment with objectivity.
+
+    The mistake: the card treated the work-in-process-scaffolding carve-out as inherently subjective. It is not — it becomes an annotation contract (`#[expect(dead_code, reason)]`, `//lint:ignore U1000`, `// periphery:ignore`). Staged code carries the marker, or it is dead. The other carve-outs (exported API, tests, entry points) were always machine facts the compilers exempt natively.
+
+    The rejections of knip and periphery judged the tools against the wrong bar (zero-config cleanliness) instead of configuring them per the contract. Superseded by ^0v7nysz, which covers the full matrix row: Rust compiler + cargo machete (^s6bn43j), ts-prune, vulture, dart analyze unused, periphery, Go compiler + U1000.
+  timestamp: 2026-08-08T13:36:39.081392+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffffc280
 title: 'dead-code tools: evaluate narrow deterministic checks'

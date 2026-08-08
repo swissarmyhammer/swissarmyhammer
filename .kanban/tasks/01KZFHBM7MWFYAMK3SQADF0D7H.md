@@ -26,4 +26,4 @@ Do this:
 
 Found while evaluating jscpd for ^3b49ewn. jscpd was rejected; this gap is the one true finding of that evaluation.
 
-#tool-validators
+#tool-validators #objectivity

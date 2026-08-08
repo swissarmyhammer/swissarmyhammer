@@ -1,0 +1,1 @@
+{"id":"01KZGSEBRV4DMMWVB6X7VD3QG2","timestamp":"2026-08-08T13:36:49.435113Z","op":"create","item_id":"01KZGSEBRT8DYSN1TNDGC6TZR9","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: objectivity\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: objectivity\n","transaction_id":null}

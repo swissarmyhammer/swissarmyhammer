@@ -132,8 +132,25 @@ comments:
     - also filed: `^6c3ry21`, the orphaned `magic-numbers` and `naming` validator sets that `sah init` never prunes.
     - next: `/review`.
   timestamp: 2026-08-08T12:55:37.430351+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzgqpyyydtnhthm1tpjqkh8b
+  text: |
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (ab778d1dc3ceae037c2231b37a0de9edf0ecc1a4) — 0 findings, 0 confirmed, 38 refuted, 9 validators attempted, 0 failed, 0 skipped
+    - next: task moved to done
+  timestamp: 2026-08-08T13:06:34.078202+00:00
+- actor: claude-code
+  id: 01kzgqqsqc8smaw85739pzr47h
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 17 files (data-driven narrowed to the table check; new magic-numbers prompt rule; 4 tool rules with fail/pass fixtures)
+    - test: green — cargo nextest run --workspace, 13858 passed, 0 failed, 0 skipped; clippy clean; fmt clean
+    - commit: ab778d1dc3ceae037c2231b37a0de9edf0ecc1a4
+    - review: clean — 0 findings, 38 candidates refuted, 9 validators attempted
+    - next: none — task is in done
+  timestamp: 2026-08-08T13:07:01.484834+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc980
 title: magic-numbers tool rules + split the data-driven prompt rule
 ---
 Step 1 — split the `data-driven` prompt rule in `builtin/validators/code-hygiene`:
