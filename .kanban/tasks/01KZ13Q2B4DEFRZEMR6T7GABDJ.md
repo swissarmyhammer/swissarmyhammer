@@ -169,8 +169,37 @@ comments:
     - discovery, unrelated: the first workspace run failed `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes`. It passes alone and it passed on the second full run. It is a load-sensitive flake in a broadcast-lag test, with no path to mirdan. It is not tracked here; file it separately if it repeats.
     - next: `/review`.
   timestamp: 2026-08-07T19:18:19.405908+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kzetwxwrtrk7h8yygh93hazy
+  text: |
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit `69c71c696`), task mode
+    - evidence: zero findings. counts: findings 0, confirmed 0, refuted 0, attempted 9, failed 0, skipped 0. No prior `## Review Findings` section on this card, so nothing is unchecked.
+    - acceptance audited against the code at HEAD, not only against the commit range:
+      - No frontmatter split of mirdan's own remains. `rg 'strip_prefix("---")|find("---")|find("\n---")|starts_with("---")' crates/mirdan/` returns one hit, a doc comment in `crates/mirdan/src/frontmatter/fixtures.rs`. Every named site imports `crate::frontmatter`: `install/package.rs`, `mcp_config.rs`, `info.rs`, `git_source.rs`, `list.rs`. `install/applier.rs` calls `split_frontmatter_body` directly.
+      - `install/uninstall.rs` `read_skill_frontmatter_name` still delegates: `read_frontmatter(path).ok().map(|metadata| metadata.name)`. It inherits the fix.
+      - One test per site, four each, against the four shared fixtures: `git_source.rs` (`RepoScan::scan_dir`), `info.rs`, `mcp_config.rs`, `install/tests.rs` (`read_frontmatter`), `install/applier.rs` (`frontmatter_map`), and `frontmatter.rs` itself.
+      - Three-hyphen run in a `description: >-` folded block scalar keeps every key: fixture `THREE_HYPHEN_RUN_IN_DESCRIPTION` places `name` and `metadata` after the block scalar, so a truncating split loses them.
+      - `----` and `---x` open nothing: fixtures `OPENING_LINE_OF_FOUR_HYPHENS` and `OPENING_LINE_WITH_TRAILING_TEXT`, pinned at every site.
+      - No closing delimiter is rejected: fixture `NO_CLOSING_DELIMITER`, whose value holds a `---` run.
+      - No behavior change for well-formed input. `git show 69c71c696 -- crates/mirdan/src/git_source.rs` is additive: one fixtures import, one comment rewritten, four new tests. No production line and no pre-existing test changed. Recorded run: 13645 passed, 0 failed, 0 skipped.
+    - next: none. Task moved to `done`.
+  timestamp: 2026-08-07T19:23:46.456154+00:00
+- actor: claude-code
+  id: 01kzetxsha4wdcjzcrz4263fsk
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — crates/mirdan/src/git_source.rs (+60/-3, tests only, no production line changed); 4 new tests. Four of five acceptance items already held at HEAD from the sibling work on ^0zer2xf. The gap: commit a95954c6c deleted `extract_name_from_frontmatter` as dead and its four delimiter tests went with it, leaving `RepoScan::scan_dir` — the one reader of untrusted third-party repository content — with no delimiter coverage on its own path. RED proved by reinstating the pre-fix split from 60f6a1247^: 3 of 4 failed, each for its predicted reason.
+    - test: green — cargo nextest run --workspace, 13645 passed, 0 failed, 0 skipped; clippy -D warnings clean; cargo fmt --all clean
+    - commit: 69c71c696
+    - review: clean — zero findings, 9 passes attempted, 0 failed. Acceptance audited against the code at HEAD, not only the commit range.
+
+    Task moved to `done` by the review gate.
+
+    Flake worth knowing, unrelated to this card: `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes` failed once under full workspace load and passed alone and on a second full run.
+  timestamp: 2026-08-07T19:24:14.762714+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffb280
 title: Four more mirdan frontmatter substring splits beyond list.rs
 ---
 ^0zer2xf covers `mirdan/src/list.rs` only. Four more production sites in `mirdan` carry the same bare `---` substring split.
