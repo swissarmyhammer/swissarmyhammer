@@ -1,15 +1,26 @@
-//! The crate root that makes the `missing-docs-rust` fixtures a cargo package.
+//! The crate root that makes the Rust fixtures of `code-hygiene` a cargo
+//! package.
 //!
-//! `cargo clippy` lints a package, never a loose file, so both fixture files
-//! are modules here. The doctor runs the rule's script in this directory and
-//! reads the findings of each fixture file on its own.
+//! `cargo clippy` lints a package, never a loose file, so every Rust fixture
+//! file is a module here. The doctor runs each rule's script in this directory
+//! and reads the findings of one fixture file at a time.
 
-/// The failing fixture: it holds the undocumented public items the tool must
-/// report.
+/// The failing fixture of `missing-docs-rust`: it holds the undocumented public
+/// items the tool must report.
 #[path = "missing-docs-rust.fail.rs"]
-pub mod fail;
+pub mod missing_docs_fail;
 
-/// The passing fixture: every public item in it is documented, so the tool
-/// must report nothing.
+/// The passing fixture of `missing-docs-rust`: every public item in it is
+/// documented, so the tool must report nothing.
 #[path = "missing-docs-rust.pass.rs"]
-pub mod pass;
+pub mod missing_docs_pass;
+
+/// The failing fixture of `complexity-rust`: it holds one function over each
+/// gate, so the tool must report both.
+#[path = "complexity-rust.fail.rs"]
+pub mod complexity_fail;
+
+/// The passing fixture of `complexity-rust`: the same two shapes under the
+/// gates, so the tool must report nothing.
+#[path = "complexity-rust.pass.rs"]
+pub mod complexity_pass;

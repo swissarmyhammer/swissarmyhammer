@@ -264,6 +264,23 @@ mod tests {
         "magic-numbers-swift",
     ];
 
+    /// The complexity tool rules `code-hygiene` carries, each paired with the
+    /// prompt rules it supersedes.
+    ///
+    /// This is the one group whose `supersedes` differs per rule, so each row
+    /// carries its own list. One `cargo clippy` run decides both Rust gates, so
+    /// the Rust rule replaces both prompt rules; ruff names one lint for each
+    /// Python gate, so Python takes one rule for each. Every other language
+    /// keeps the `complexity` probe and both prompt rules.
+    const CODE_HYGIENE_COMPLEXITY_TOOL_RULES: &[(&str, &[&str])] = &[
+        (
+            "complexity-rust",
+            &["cognitive-complexity", "function-length"],
+        ),
+        ("complexity-python", &["cognitive-complexity"]),
+        ("function-length-python", &["function-length"]),
+    ];
+
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
     /// `complexity` for `cognitive-complexity` (the rest are in-file
@@ -295,13 +312,19 @@ mod tests {
             .iter()
             .chain(CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.iter())
             .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter())
-            .chain(CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.iter());
+            .chain(CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.iter())
+            .chain(
+                CODE_HYGIENE_COMPLEXITY_TOOL_RULES
+                    .iter()
+                    .map(|(name, _)| name),
+            );
         assert_eq!(
             ruleset.rules.len(),
             CODE_HYGIENE_PROMPT_RULES.len()
                 + CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.len()
                 + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len()
-                + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len(),
+                + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len()
+                + CODE_HYGIENE_COMPLEXITY_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
         for expected in expected_rules {
@@ -314,7 +337,8 @@ mod tests {
         // Each tool rule carries a tool block, and supersedes exactly what its
         // group promises: the documentation tools replace the `missing-docs`
         // prompt rule, the magic-number tools replace the `magic-numbers`
-        // prompt rule, and the dead-code tools replace nothing.
+        // prompt rule, the dead-code tools replace nothing, and each complexity
+        // tool replaces the gates its own tool decides.
         let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
             .iter()
             .map(|name| (name, ["missing-docs"].as_slice()))
@@ -327,6 +351,11 @@ mod tests {
                 CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES
                     .iter()
                     .map(|name| (name, ["magic-numbers"].as_slice())),
+            )
+            .chain(
+                CODE_HYGIENE_COMPLEXITY_TOOL_RULES
+                    .iter()
+                    .map(|(name, superseded)| (name, *superseded)),
             );
         for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset

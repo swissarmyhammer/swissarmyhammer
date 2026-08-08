@@ -39,7 +39,39 @@ A tool reports by position and the prompt rule reports by repetition, so a tool
 rule reports the one-off literal the prompt rule carves out. Each tool rule's own
 file states the measurement behind its thresholds.
 
-## Dead code: which tools this set uses, and which it rejects
+## Complexity and length: three tool rules, and a probe that stays
+
+`cognitive-complexity` and `function-length` are two prompt rules over one
+concern — a function a reader cannot hold in their head. A linter decides both
+for the languages that have one, so three tool rules supersede them:
+
+- `complexity-rust` — one `cargo clippy` run over four lints:
+  `excessive_nesting` at `6`, `too_many_lines` at `250`, `too_many_arguments`
+  at `7`, and `type_complexity` at `250`. One run decides both gates, so this
+  rule names both prompt rules.
+- `complexity-python` — ruff `C901` at `max-complexity=15`. Supersedes
+  `cognitive-complexity`.
+- `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
+  statement count 250 code lines of Python measures out to. Supersedes
+  `function-length`.
+
+A tool measures its own way. Clippy's `excessive_nesting` counts lexical
+nesting depth, `C901` counts McCabe decision points, and neither is the
+published Sonar cognitive complexity the `complexity` probe computes, so the
+numbers need not agree. Each tool rule's own file states what its tool measures
+and what the threshold rests on.
+
+The two languages split on the nesting gate. Rust keeps it: nesting depth is
+the backbone of the Sonar cognitive metric, and `excessive_nesting` measures
+exactly that. Python drops it, because ruff names no nesting rule. That is the
+trade for Python — one number every reviewer gets the same, in place of two
+numbers an agent reads off a probe.
+
+The `complexity` probe stays. Every language without a healthy tool rule — and
+every Rust or Python workspace whose tool doctor cannot find — keeps the probe
+and the prompt rules. That is the designed fallback, not a gap.
+
+## Dead code: two tool rules beside the prompt rule
 
 The `dead-code` prompt rule owns the judgment half of dead code. Its carve-outs
 — entry points, exported public API, and work-in-process scaffolding — need a
@@ -55,8 +87,31 @@ alone:
 - `unreachable-code-python` — `vulture --min-confidence 100`. A statement behind
   a jump that always runs can have no future consumer.
 
-Three candidates were measured and rejected. Each was installed and run before
+## Tools measured and rejected
+
+Four candidates were measured and rejected. Each was installed and run before
 the verdict.
+
+### `clippy::cognitive_complexity` — rejected
+
+Clippy's own branch count, and the obvious candidate for the `complexity-rust`
+rule. Rejected because it walks the macro-expanded AST.
+
+This workspace builds `tracing` with the `log` feature. The log bridge expands
+each call site into many branches, and clippy attributes those branches to the
+caller. Measured on two probe crates with a byte-identical `src/lib.rs`, one
+building `tracing` with `default-features = false` and one with the `log`
+feature on: a flat, zero-branch function holding six `tracing` calls scores 7
+without the feature and 43 with it.
+
+The noise grows with how often a function logs, so no threshold separates it
+from real branching, and the pipe cannot filter it — the finding carries a
+function and a number, nothing more. At the gate of 15 it reports 460 findings
+across this workspace, the mass of them sitting just over the gate.
+
+`clippy::excessive_nesting` replaces it. On the same probe pair it reports
+identical spans with and without the `log` feature, so the macro expansion
+never reaches it.
 
 ### `cargo machete` — rejected
 

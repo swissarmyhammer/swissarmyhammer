@@ -1,0 +1,305 @@
+//! The failing fixture of the `complexity-rust` tool rule.
+//!
+//! It holds one function over each gate the rule can exercise in a fixture.
+//! Both shapes are free functions in a module file, so each carries one level
+//! of item overhead: the function body is level 1.
+//!
+//! - `fold_grid` nests six control-flow blocks, so its innermost block sits at
+//!   nesting level 7 against the gate of 6.
+//! - `mix_state` runs 262 code lines against the line gate of 250.
+//!
+//! The tool must report both. A tool upgrade that stops reporting one of the
+//! two makes the doctor mark the rule unusable.
+
+/// Folds a grid of readings into one band, one nested block for each test.
+///
+/// The shape under measurement is a free function at control-flow depth 6:
+/// `for`, `for`, `if`, `if`, `while`, `if`. A free function body is level 1,
+/// so the innermost `if` block sits at nesting level 7, one over the gate.
+pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    for row in grid {
+        for cell in row {
+            if *cell > 0 {
+                if *cell < limit {
+                    while band < *cell {
+                        if band % 2 == 0 {
+                            band += 2;
+                        }
+                        band += 1;
+                    }
+                }
+            }
+        }
+    }
+    band
+}
+
+/// Folds a seed into a state, one unrolled mixing step for each round.
+///
+/// The body is mechanical on purpose. Its one job is to stand over the line
+/// gate, so the tool has a long function to report.
+pub fn mix_state(seed: u64) -> u64 {
+    let mut state = seed;
+    state = state.wrapping_mul(31).wrapping_add(0);
+    state = state.rotate_left(1);
+    state = state.wrapping_mul(31).wrapping_add(1);
+    state = state.rotate_left(2);
+    state = state.wrapping_mul(31).wrapping_add(2);
+    state = state.rotate_left(3);
+    state = state.wrapping_mul(31).wrapping_add(3);
+    state = state.rotate_left(4);
+    state = state.wrapping_mul(31).wrapping_add(4);
+    state = state.rotate_left(5);
+    state = state.wrapping_mul(31).wrapping_add(5);
+    state = state.rotate_left(6);
+    state = state.wrapping_mul(31).wrapping_add(6);
+    state = state.rotate_left(7);
+    state = state.wrapping_mul(31).wrapping_add(7);
+    state = state.rotate_left(8);
+    state = state.wrapping_mul(31).wrapping_add(8);
+    state = state.rotate_left(9);
+    state = state.wrapping_mul(31).wrapping_add(9);
+    state = state.rotate_left(10);
+    state = state.wrapping_mul(31).wrapping_add(10);
+    state = state.rotate_left(11);
+    state = state.wrapping_mul(31).wrapping_add(11);
+    state = state.rotate_left(12);
+    state = state.wrapping_mul(31).wrapping_add(12);
+    state = state.rotate_left(13);
+    state = state.wrapping_mul(31).wrapping_add(13);
+    state = state.rotate_left(14);
+    state = state.wrapping_mul(31).wrapping_add(14);
+    state = state.rotate_left(15);
+    state = state.wrapping_mul(31).wrapping_add(15);
+    state = state.rotate_left(16);
+    state = state.wrapping_mul(31).wrapping_add(16);
+    state = state.rotate_left(17);
+    state = state.wrapping_mul(31).wrapping_add(17);
+    state = state.rotate_left(18);
+    state = state.wrapping_mul(31).wrapping_add(18);
+    state = state.rotate_left(19);
+    state = state.wrapping_mul(31).wrapping_add(19);
+    state = state.rotate_left(20);
+    state = state.wrapping_mul(31).wrapping_add(20);
+    state = state.rotate_left(21);
+    state = state.wrapping_mul(31).wrapping_add(21);
+    state = state.rotate_left(22);
+    state = state.wrapping_mul(31).wrapping_add(22);
+    state = state.rotate_left(23);
+    state = state.wrapping_mul(31).wrapping_add(23);
+    state = state.rotate_left(24);
+    state = state.wrapping_mul(31).wrapping_add(24);
+    state = state.rotate_left(25);
+    state = state.wrapping_mul(31).wrapping_add(25);
+    state = state.rotate_left(26);
+    state = state.wrapping_mul(31).wrapping_add(26);
+    state = state.rotate_left(27);
+    state = state.wrapping_mul(31).wrapping_add(27);
+    state = state.rotate_left(28);
+    state = state.wrapping_mul(31).wrapping_add(28);
+    state = state.rotate_left(29);
+    state = state.wrapping_mul(31).wrapping_add(29);
+    state = state.rotate_left(30);
+    state = state.wrapping_mul(31).wrapping_add(30);
+    state = state.rotate_left(31);
+    state = state.wrapping_mul(31).wrapping_add(31);
+    state = state.rotate_left(32);
+    state = state.wrapping_mul(31).wrapping_add(32);
+    state = state.rotate_left(33);
+    state = state.wrapping_mul(31).wrapping_add(33);
+    state = state.rotate_left(34);
+    state = state.wrapping_mul(31).wrapping_add(34);
+    state = state.rotate_left(35);
+    state = state.wrapping_mul(31).wrapping_add(35);
+    state = state.rotate_left(36);
+    state = state.wrapping_mul(31).wrapping_add(36);
+    state = state.rotate_left(37);
+    state = state.wrapping_mul(31).wrapping_add(37);
+    state = state.rotate_left(38);
+    state = state.wrapping_mul(31).wrapping_add(38);
+    state = state.rotate_left(39);
+    state = state.wrapping_mul(31).wrapping_add(39);
+    state = state.rotate_left(40);
+    state = state.wrapping_mul(31).wrapping_add(40);
+    state = state.rotate_left(41);
+    state = state.wrapping_mul(31).wrapping_add(41);
+    state = state.rotate_left(42);
+    state = state.wrapping_mul(31).wrapping_add(42);
+    state = state.rotate_left(43);
+    state = state.wrapping_mul(31).wrapping_add(43);
+    state = state.rotate_left(44);
+    state = state.wrapping_mul(31).wrapping_add(44);
+    state = state.rotate_left(45);
+    state = state.wrapping_mul(31).wrapping_add(45);
+    state = state.rotate_left(46);
+    state = state.wrapping_mul(31).wrapping_add(46);
+    state = state.rotate_left(47);
+    state = state.wrapping_mul(31).wrapping_add(47);
+    state = state.rotate_left(48);
+    state = state.wrapping_mul(31).wrapping_add(48);
+    state = state.rotate_left(49);
+    state = state.wrapping_mul(31).wrapping_add(49);
+    state = state.rotate_left(50);
+    state = state.wrapping_mul(31).wrapping_add(50);
+    state = state.rotate_left(51);
+    state = state.wrapping_mul(31).wrapping_add(51);
+    state = state.rotate_left(52);
+    state = state.wrapping_mul(31).wrapping_add(52);
+    state = state.rotate_left(53);
+    state = state.wrapping_mul(31).wrapping_add(53);
+    state = state.rotate_left(54);
+    state = state.wrapping_mul(31).wrapping_add(54);
+    state = state.rotate_left(55);
+    state = state.wrapping_mul(31).wrapping_add(55);
+    state = state.rotate_left(56);
+    state = state.wrapping_mul(31).wrapping_add(56);
+    state = state.rotate_left(57);
+    state = state.wrapping_mul(31).wrapping_add(57);
+    state = state.rotate_left(58);
+    state = state.wrapping_mul(31).wrapping_add(58);
+    state = state.rotate_left(59);
+    state = state.wrapping_mul(31).wrapping_add(59);
+    state = state.rotate_left(60);
+    state = state.wrapping_mul(31).wrapping_add(60);
+    state = state.rotate_left(61);
+    state = state.wrapping_mul(31).wrapping_add(61);
+    state = state.rotate_left(62);
+    state = state.wrapping_mul(31).wrapping_add(62);
+    state = state.rotate_left(63);
+    state = state.wrapping_mul(31).wrapping_add(63);
+    state = state.rotate_left(1);
+    state = state.wrapping_mul(31).wrapping_add(64);
+    state = state.rotate_left(2);
+    state = state.wrapping_mul(31).wrapping_add(65);
+    state = state.rotate_left(3);
+    state = state.wrapping_mul(31).wrapping_add(66);
+    state = state.rotate_left(4);
+    state = state.wrapping_mul(31).wrapping_add(67);
+    state = state.rotate_left(5);
+    state = state.wrapping_mul(31).wrapping_add(68);
+    state = state.rotate_left(6);
+    state = state.wrapping_mul(31).wrapping_add(69);
+    state = state.rotate_left(7);
+    state = state.wrapping_mul(31).wrapping_add(70);
+    state = state.rotate_left(8);
+    state = state.wrapping_mul(31).wrapping_add(71);
+    state = state.rotate_left(9);
+    state = state.wrapping_mul(31).wrapping_add(72);
+    state = state.rotate_left(10);
+    state = state.wrapping_mul(31).wrapping_add(73);
+    state = state.rotate_left(11);
+    state = state.wrapping_mul(31).wrapping_add(74);
+    state = state.rotate_left(12);
+    state = state.wrapping_mul(31).wrapping_add(75);
+    state = state.rotate_left(13);
+    state = state.wrapping_mul(31).wrapping_add(76);
+    state = state.rotate_left(14);
+    state = state.wrapping_mul(31).wrapping_add(77);
+    state = state.rotate_left(15);
+    state = state.wrapping_mul(31).wrapping_add(78);
+    state = state.rotate_left(16);
+    state = state.wrapping_mul(31).wrapping_add(79);
+    state = state.rotate_left(17);
+    state = state.wrapping_mul(31).wrapping_add(80);
+    state = state.rotate_left(18);
+    state = state.wrapping_mul(31).wrapping_add(81);
+    state = state.rotate_left(19);
+    state = state.wrapping_mul(31).wrapping_add(82);
+    state = state.rotate_left(20);
+    state = state.wrapping_mul(31).wrapping_add(83);
+    state = state.rotate_left(21);
+    state = state.wrapping_mul(31).wrapping_add(84);
+    state = state.rotate_left(22);
+    state = state.wrapping_mul(31).wrapping_add(85);
+    state = state.rotate_left(23);
+    state = state.wrapping_mul(31).wrapping_add(86);
+    state = state.rotate_left(24);
+    state = state.wrapping_mul(31).wrapping_add(87);
+    state = state.rotate_left(25);
+    state = state.wrapping_mul(31).wrapping_add(88);
+    state = state.rotate_left(26);
+    state = state.wrapping_mul(31).wrapping_add(89);
+    state = state.rotate_left(27);
+    state = state.wrapping_mul(31).wrapping_add(90);
+    state = state.rotate_left(28);
+    state = state.wrapping_mul(31).wrapping_add(91);
+    state = state.rotate_left(29);
+    state = state.wrapping_mul(31).wrapping_add(92);
+    state = state.rotate_left(30);
+    state = state.wrapping_mul(31).wrapping_add(93);
+    state = state.rotate_left(31);
+    state = state.wrapping_mul(31).wrapping_add(94);
+    state = state.rotate_left(32);
+    state = state.wrapping_mul(31).wrapping_add(95);
+    state = state.rotate_left(33);
+    state = state.wrapping_mul(31).wrapping_add(96);
+    state = state.rotate_left(34);
+    state = state.wrapping_mul(31).wrapping_add(97);
+    state = state.rotate_left(35);
+    state = state.wrapping_mul(31).wrapping_add(98);
+    state = state.rotate_left(36);
+    state = state.wrapping_mul(31).wrapping_add(99);
+    state = state.rotate_left(37);
+    state = state.wrapping_mul(31).wrapping_add(100);
+    state = state.rotate_left(38);
+    state = state.wrapping_mul(31).wrapping_add(101);
+    state = state.rotate_left(39);
+    state = state.wrapping_mul(31).wrapping_add(102);
+    state = state.rotate_left(40);
+    state = state.wrapping_mul(31).wrapping_add(103);
+    state = state.rotate_left(41);
+    state = state.wrapping_mul(31).wrapping_add(104);
+    state = state.rotate_left(42);
+    state = state.wrapping_mul(31).wrapping_add(105);
+    state = state.rotate_left(43);
+    state = state.wrapping_mul(31).wrapping_add(106);
+    state = state.rotate_left(44);
+    state = state.wrapping_mul(31).wrapping_add(107);
+    state = state.rotate_left(45);
+    state = state.wrapping_mul(31).wrapping_add(108);
+    state = state.rotate_left(46);
+    state = state.wrapping_mul(31).wrapping_add(109);
+    state = state.rotate_left(47);
+    state = state.wrapping_mul(31).wrapping_add(110);
+    state = state.rotate_left(48);
+    state = state.wrapping_mul(31).wrapping_add(111);
+    state = state.rotate_left(49);
+    state = state.wrapping_mul(31).wrapping_add(112);
+    state = state.rotate_left(50);
+    state = state.wrapping_mul(31).wrapping_add(113);
+    state = state.rotate_left(51);
+    state = state.wrapping_mul(31).wrapping_add(114);
+    state = state.rotate_left(52);
+    state = state.wrapping_mul(31).wrapping_add(115);
+    state = state.rotate_left(53);
+    state = state.wrapping_mul(31).wrapping_add(116);
+    state = state.rotate_left(54);
+    state = state.wrapping_mul(31).wrapping_add(117);
+    state = state.rotate_left(55);
+    state = state.wrapping_mul(31).wrapping_add(118);
+    state = state.rotate_left(56);
+    state = state.wrapping_mul(31).wrapping_add(119);
+    state = state.rotate_left(57);
+    state = state.wrapping_mul(31).wrapping_add(120);
+    state = state.rotate_left(58);
+    state = state.wrapping_mul(31).wrapping_add(121);
+    state = state.rotate_left(59);
+    state = state.wrapping_mul(31).wrapping_add(122);
+    state = state.rotate_left(60);
+    state = state.wrapping_mul(31).wrapping_add(123);
+    state = state.rotate_left(61);
+    state = state.wrapping_mul(31).wrapping_add(124);
+    state = state.rotate_left(62);
+    state = state.wrapping_mul(31).wrapping_add(125);
+    state = state.rotate_left(63);
+    state = state.wrapping_mul(31).wrapping_add(126);
+    state = state.rotate_left(1);
+    state = state.wrapping_mul(31).wrapping_add(127);
+    state = state.rotate_left(2);
+    state = state.wrapping_mul(31).wrapping_add(128);
+    state = state.rotate_left(3);
+    state = state.wrapping_mul(31).wrapping_add(129);
+    state = state.rotate_left(4);
+    state
+}

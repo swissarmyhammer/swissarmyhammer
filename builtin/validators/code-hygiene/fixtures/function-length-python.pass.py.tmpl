@@ -1,0 +1,159 @@
+"""The passing fixture of the `function-length-python` tool rule.
+
+It holds the same shape under the gate: `mix_state` runs 142 statements against
+the gate of 180. The tool must report nothing. A threshold that stopped
+applying would report the function, and the pair would fail.
+"""
+
+WORD_SIZE = 64
+MODULUS = 2**WORD_SIZE
+
+
+def mix_state(seed):
+    """Fold a seed into a state, one unrolled mixing step for each round.
+
+    The body is mechanical on purpose, and shorter than the failing fixture's.
+    It stands under the statement gate, so the tool must leave it alone.
+    """
+    state = seed
+    state = (state * 31 + 0) % MODULUS
+    state = ((state << 1) | (state >> (WORD_SIZE - 1))) % MODULUS
+    state = (state * 31 + 1) % MODULUS
+    state = ((state << 2) | (state >> (WORD_SIZE - 2))) % MODULUS
+    state = (state * 31 + 2) % MODULUS
+    state = ((state << 3) | (state >> (WORD_SIZE - 3))) % MODULUS
+    state = (state * 31 + 3) % MODULUS
+    state = ((state << 4) | (state >> (WORD_SIZE - 4))) % MODULUS
+    state = (state * 31 + 4) % MODULUS
+    state = ((state << 5) | (state >> (WORD_SIZE - 5))) % MODULUS
+    state = (state * 31 + 5) % MODULUS
+    state = ((state << 6) | (state >> (WORD_SIZE - 6))) % MODULUS
+    state = (state * 31 + 6) % MODULUS
+    state = ((state << 7) | (state >> (WORD_SIZE - 7))) % MODULUS
+    state = (state * 31 + 7) % MODULUS
+    state = ((state << 8) | (state >> (WORD_SIZE - 8))) % MODULUS
+    state = (state * 31 + 8) % MODULUS
+    state = ((state << 9) | (state >> (WORD_SIZE - 9))) % MODULUS
+    state = (state * 31 + 9) % MODULUS
+    state = ((state << 10) | (state >> (WORD_SIZE - 10))) % MODULUS
+    state = (state * 31 + 10) % MODULUS
+    state = ((state << 11) | (state >> (WORD_SIZE - 11))) % MODULUS
+    state = (state * 31 + 11) % MODULUS
+    state = ((state << 12) | (state >> (WORD_SIZE - 12))) % MODULUS
+    state = (state * 31 + 12) % MODULUS
+    state = ((state << 13) | (state >> (WORD_SIZE - 13))) % MODULUS
+    state = (state * 31 + 13) % MODULUS
+    state = ((state << 14) | (state >> (WORD_SIZE - 14))) % MODULUS
+    state = (state * 31 + 14) % MODULUS
+    state = ((state << 15) | (state >> (WORD_SIZE - 15))) % MODULUS
+    state = (state * 31 + 15) % MODULUS
+    state = ((state << 16) | (state >> (WORD_SIZE - 16))) % MODULUS
+    state = (state * 31 + 16) % MODULUS
+    state = ((state << 17) | (state >> (WORD_SIZE - 17))) % MODULUS
+    state = (state * 31 + 17) % MODULUS
+    state = ((state << 18) | (state >> (WORD_SIZE - 18))) % MODULUS
+    state = (state * 31 + 18) % MODULUS
+    state = ((state << 19) | (state >> (WORD_SIZE - 19))) % MODULUS
+    state = (state * 31 + 19) % MODULUS
+    state = ((state << 20) | (state >> (WORD_SIZE - 20))) % MODULUS
+    state = (state * 31 + 20) % MODULUS
+    state = ((state << 21) | (state >> (WORD_SIZE - 21))) % MODULUS
+    state = (state * 31 + 21) % MODULUS
+    state = ((state << 22) | (state >> (WORD_SIZE - 22))) % MODULUS
+    state = (state * 31 + 22) % MODULUS
+    state = ((state << 23) | (state >> (WORD_SIZE - 23))) % MODULUS
+    state = (state * 31 + 23) % MODULUS
+    state = ((state << 24) | (state >> (WORD_SIZE - 24))) % MODULUS
+    state = (state * 31 + 24) % MODULUS
+    state = ((state << 25) | (state >> (WORD_SIZE - 25))) % MODULUS
+    state = (state * 31 + 25) % MODULUS
+    state = ((state << 26) | (state >> (WORD_SIZE - 26))) % MODULUS
+    state = (state * 31 + 26) % MODULUS
+    state = ((state << 27) | (state >> (WORD_SIZE - 27))) % MODULUS
+    state = (state * 31 + 27) % MODULUS
+    state = ((state << 28) | (state >> (WORD_SIZE - 28))) % MODULUS
+    state = (state * 31 + 28) % MODULUS
+    state = ((state << 29) | (state >> (WORD_SIZE - 29))) % MODULUS
+    state = (state * 31 + 29) % MODULUS
+    state = ((state << 30) | (state >> (WORD_SIZE - 30))) % MODULUS
+    state = (state * 31 + 30) % MODULUS
+    state = ((state << 31) | (state >> (WORD_SIZE - 31))) % MODULUS
+    state = (state * 31 + 31) % MODULUS
+    state = ((state << 32) | (state >> (WORD_SIZE - 32))) % MODULUS
+    state = (state * 31 + 32) % MODULUS
+    state = ((state << 33) | (state >> (WORD_SIZE - 33))) % MODULUS
+    state = (state * 31 + 33) % MODULUS
+    state = ((state << 34) | (state >> (WORD_SIZE - 34))) % MODULUS
+    state = (state * 31 + 34) % MODULUS
+    state = ((state << 35) | (state >> (WORD_SIZE - 35))) % MODULUS
+    state = (state * 31 + 35) % MODULUS
+    state = ((state << 36) | (state >> (WORD_SIZE - 36))) % MODULUS
+    state = (state * 31 + 36) % MODULUS
+    state = ((state << 37) | (state >> (WORD_SIZE - 37))) % MODULUS
+    state = (state * 31 + 37) % MODULUS
+    state = ((state << 38) | (state >> (WORD_SIZE - 38))) % MODULUS
+    state = (state * 31 + 38) % MODULUS
+    state = ((state << 39) | (state >> (WORD_SIZE - 39))) % MODULUS
+    state = (state * 31 + 39) % MODULUS
+    state = ((state << 40) | (state >> (WORD_SIZE - 40))) % MODULUS
+    state = (state * 31 + 40) % MODULUS
+    state = ((state << 41) | (state >> (WORD_SIZE - 41))) % MODULUS
+    state = (state * 31 + 41) % MODULUS
+    state = ((state << 42) | (state >> (WORD_SIZE - 42))) % MODULUS
+    state = (state * 31 + 42) % MODULUS
+    state = ((state << 43) | (state >> (WORD_SIZE - 43))) % MODULUS
+    state = (state * 31 + 43) % MODULUS
+    state = ((state << 44) | (state >> (WORD_SIZE - 44))) % MODULUS
+    state = (state * 31 + 44) % MODULUS
+    state = ((state << 45) | (state >> (WORD_SIZE - 45))) % MODULUS
+    state = (state * 31 + 45) % MODULUS
+    state = ((state << 46) | (state >> (WORD_SIZE - 46))) % MODULUS
+    state = (state * 31 + 46) % MODULUS
+    state = ((state << 47) | (state >> (WORD_SIZE - 47))) % MODULUS
+    state = (state * 31 + 47) % MODULUS
+    state = ((state << 48) | (state >> (WORD_SIZE - 48))) % MODULUS
+    state = (state * 31 + 48) % MODULUS
+    state = ((state << 49) | (state >> (WORD_SIZE - 49))) % MODULUS
+    state = (state * 31 + 49) % MODULUS
+    state = ((state << 50) | (state >> (WORD_SIZE - 50))) % MODULUS
+    state = (state * 31 + 50) % MODULUS
+    state = ((state << 51) | (state >> (WORD_SIZE - 51))) % MODULUS
+    state = (state * 31 + 51) % MODULUS
+    state = ((state << 52) | (state >> (WORD_SIZE - 52))) % MODULUS
+    state = (state * 31 + 52) % MODULUS
+    state = ((state << 53) | (state >> (WORD_SIZE - 53))) % MODULUS
+    state = (state * 31 + 53) % MODULUS
+    state = ((state << 54) | (state >> (WORD_SIZE - 54))) % MODULUS
+    state = (state * 31 + 54) % MODULUS
+    state = ((state << 55) | (state >> (WORD_SIZE - 55))) % MODULUS
+    state = (state * 31 + 55) % MODULUS
+    state = ((state << 56) | (state >> (WORD_SIZE - 56))) % MODULUS
+    state = (state * 31 + 56) % MODULUS
+    state = ((state << 57) | (state >> (WORD_SIZE - 57))) % MODULUS
+    state = (state * 31 + 57) % MODULUS
+    state = ((state << 58) | (state >> (WORD_SIZE - 58))) % MODULUS
+    state = (state * 31 + 58) % MODULUS
+    state = ((state << 59) | (state >> (WORD_SIZE - 59))) % MODULUS
+    state = (state * 31 + 59) % MODULUS
+    state = ((state << 60) | (state >> (WORD_SIZE - 60))) % MODULUS
+    state = (state * 31 + 60) % MODULUS
+    state = ((state << 61) | (state >> (WORD_SIZE - 61))) % MODULUS
+    state = (state * 31 + 61) % MODULUS
+    state = ((state << 62) | (state >> (WORD_SIZE - 62))) % MODULUS
+    state = (state * 31 + 62) % MODULUS
+    state = ((state << 63) | (state >> (WORD_SIZE - 63))) % MODULUS
+    state = (state * 31 + 63) % MODULUS
+    state = ((state << 1) | (state >> (WORD_SIZE - 1))) % MODULUS
+    state = (state * 31 + 64) % MODULUS
+    state = ((state << 2) | (state >> (WORD_SIZE - 2))) % MODULUS
+    state = (state * 31 + 65) % MODULUS
+    state = ((state << 3) | (state >> (WORD_SIZE - 3))) % MODULUS
+    state = (state * 31 + 66) % MODULUS
+    state = ((state << 4) | (state >> (WORD_SIZE - 4))) % MODULUS
+    state = (state * 31 + 67) % MODULUS
+    state = ((state << 5) | (state >> (WORD_SIZE - 5))) % MODULUS
+    state = (state * 31 + 68) % MODULUS
+    state = ((state << 6) | (state >> (WORD_SIZE - 6))) % MODULUS
+    state = (state * 31 + 69) % MODULUS
+    state = ((state << 7) | (state >> (WORD_SIZE - 7))) % MODULUS
+    return state

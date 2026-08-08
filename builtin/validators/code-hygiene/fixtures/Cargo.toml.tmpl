@@ -1,8 +1,10 @@
-# The Rust fixtures of the `missing-docs-rust` tool rule, as a package.
+# The Rust fixtures of the `missing-docs-rust` and `complexity-rust` tool
+# rules, as a package.
 #
-# `cargo clippy` needs a package to lint, so the two fixture files are modules
-# of this one. `[workspace]` stops cargo from joining the repository workspace
-# above this directory, so the tool sees the fixtures and nothing else.
+# `cargo clippy` needs a package to lint, so every Rust fixture file is a
+# module of this one. `[workspace]` stops cargo from joining the repository
+# workspace above this directory, so the tool sees the fixtures and nothing
+# else.
 [package]
 name = "code-hygiene-fixtures"
 version = "0.0.0"

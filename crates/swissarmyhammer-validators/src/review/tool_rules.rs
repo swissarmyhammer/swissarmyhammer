@@ -1193,21 +1193,48 @@ mod tests {
     /// The prompt rule every shipped missing-docs tool rule supersedes.
     const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
 
-    /// A second prompt rule name, for the tool rule that supersedes two.
+    /// The prompt rule that owns the length gate. The Rust complexity tool rule
+    /// supersedes it beside `cognitive-complexity`, and the Python one owns it
+    /// alone.
     const FUNCTION_LENGTH_PROMPT_RULE: &str = "function-length";
+
+    /// The prompt rule that owns the branching gate.
+    const COGNITIVE_COMPLEXITY_PROMPT_RULE: &str = "cognitive-complexity";
+
+    /// What a missing-docs tool rule supersedes.
+    const SUPERSEDES_MISSING_DOCS: &[&str] = &[MISSING_DOCS_PROMPT_RULE];
+
+    /// What a dead-code tool rule supersedes: nothing.
+    const SUPERSEDES_NOTHING: &[&str] = &[];
+
+    /// What a magic-numbers tool rule supersedes.
+    const SUPERSEDES_MAGIC_NUMBERS: &[&str] = &[MAGIC_NUMBERS_PROMPT_RULE];
+
+    /// What a tool rule that decides both complexity gates supersedes.
+    const SUPERSEDES_BOTH_COMPLEXITY_GATES: &[&str] = &[
+        COGNITIVE_COMPLEXITY_PROMPT_RULE,
+        FUNCTION_LENGTH_PROMPT_RULE,
+    ];
+
+    /// What a tool rule that decides the branching gate alone supersedes.
+    const SUPERSEDES_COGNITIVE_COMPLEXITY: &[&str] = &[COGNITIVE_COMPLEXITY_PROMPT_RULE];
+
+    /// What a tool rule that decides the length gate alone supersedes.
+    const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
 
     /// The shipped missing-docs tool rule for Rust, the one the pipeline
     /// acceptance test drives end to end.
     const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
 
-    /// Every shipped missing-docs tool rule, with the project type it serves.
-    const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str)] = &[
-        ("rust", RUST_MISSING_DOCS_RULE),
-        ("python", "missing-docs-python"),
-        ("nodejs", "missing-docs-typescript"),
-        ("go", "missing-docs-go"),
-        ("swift", "missing-docs-swift"),
-        ("flutter", "missing-docs-dart"),
+    /// Every shipped missing-docs tool rule, with the project type it serves
+    /// and the prompt rules it supersedes.
+    const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
+        ("rust", RUST_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
+        ("python", "missing-docs-python", SUPERSEDES_MISSING_DOCS),
+        ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
+        ("go", "missing-docs-go", SUPERSEDES_MISSING_DOCS),
+        ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),
+        ("flutter", "missing-docs-dart", SUPERSEDES_MISSING_DOCS),
     ];
 
     /// The prompt rule the dead-code tool rules run beside, never in place of.
@@ -1223,9 +1250,9 @@ mod tests {
     /// carve-outs — entry points, exported public API, work-in-process
     /// scaffolding — because those need judgment. Each tool rule here adds one
     /// deterministic check beside that rule, never in place of it.
-    const SHIPPED_DEAD_CODE_RULES: &[(&str, &str)] = &[
-        ("go", "unused-code-go"),
-        ("python", PYTHON_UNREACHABLE_CODE_RULE),
+    const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
+        ("go", "unused-code-go", SUPERSEDES_NOTHING),
+        ("python", PYTHON_UNREACHABLE_CODE_RULE, SUPERSEDES_NOTHING),
     ];
 
     /// The prompt rule every shipped magic-numbers tool rule supersedes.
@@ -1236,11 +1263,45 @@ mod tests {
     /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
     /// unnamed literal, and the Dart check needs a `custom_lint` package, so
     /// both languages keep the `magic-numbers` prompt rule.
-    const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str)] = &[
-        ("python", "magic-numbers-python"),
-        ("nodejs", "magic-numbers-typescript"),
-        ("go", "magic-numbers-go"),
-        ("swift", "magic-numbers-swift"),
+    const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
+        ("python", "magic-numbers-python", SUPERSEDES_MAGIC_NUMBERS),
+        (
+            "nodejs",
+            "magic-numbers-typescript",
+            SUPERSEDES_MAGIC_NUMBERS,
+        ),
+        ("go", "magic-numbers-go", SUPERSEDES_MAGIC_NUMBERS),
+        ("swift", "magic-numbers-swift", SUPERSEDES_MAGIC_NUMBERS),
+    ];
+
+    /// The shipped complexity tool rule for Rust, the one the pipeline
+    /// acceptance test drives end to end.
+    const RUST_COMPLEXITY_RULE: &str = "complexity-rust";
+
+    /// Every shipped complexity tool rule, with the project type it serves and
+    /// the prompt rules it supersedes.
+    ///
+    /// This is the one roster whose rows do not share a `supersedes` list. One
+    /// `cargo clippy` run decides both gates, so the Rust rule replaces both
+    /// prompt rules; ruff names one lint for each Python gate, so Python takes
+    /// one rule for each. Every other language keeps the `complexity` probe and
+    /// both prompt rules.
+    const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
+        (
+            "rust",
+            RUST_COMPLEXITY_RULE,
+            SUPERSEDES_BOTH_COMPLEXITY_GATES,
+        ),
+        (
+            "python",
+            "complexity-python",
+            SUPERSEDES_COGNITIVE_COMPLEXITY,
+        ),
+        (
+            "python",
+            "function-length-python",
+            SUPERSEDES_FUNCTION_LENGTH,
+        ),
     ];
 
     /// A cargo package holding one undocumented public item and one documented
@@ -1381,6 +1442,120 @@ mod tests {
         );
     }
 
+    /// A cargo package holding one function over the nesting gate and nothing
+    /// else the four lints report. `[workspace]` keeps cargo inside the
+    /// temporary directory.
+    const COMPLEX_PACKAGE_MANIFEST: &str = concat!(
+        "[package]\nname = \"complex-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        "\n[workspace]\n",
+    );
+
+    /// The library of [`COMPLEX_PACKAGE_MANIFEST`]. `fold_grid` is a free
+    /// function at control-flow depth 6, and a free function body is itself one
+    /// level, so its innermost block sits at nesting level 7 against the gate
+    /// of 6. The Rust tool rule must report it once. The body stays well under
+    /// the line gate and takes two arguments, so the same run reports nothing
+    /// else.
+    const COMPLEX_LIB_RS: &str = r#"//! A probe crate for the shipped Rust complexity tool rule.
+
+/// Folds a grid of readings into one band, one nested block for each test.
+pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    for row in grid {
+        for cell in row {
+            if *cell > 0 {
+                if *cell < limit {
+                    while band < *cell {
+                        if band % 2 == 0 {
+                            band += 2;
+                        }
+                        band += 1;
+                    }
+                }
+            }
+        }
+    }
+    band
+}
+"#;
+
+    /// The library path inside the complexity probe package, as the work-list
+    /// holds it.
+    const COMPLEX_LIB_PATH: &str = "src/lib.rs";
+
+    /// A one-validator work-list over `path` for the builtin `code-hygiene`
+    /// set, naming both complexity prompt rules and the Rust tool rule.
+    fn complexity_work(path: &str, content: &str) -> WorkList {
+        WorkList::new(
+            "a function over the nesting gate",
+            vec![ValidatorWork::new(
+                CODE_HYGIENE_SET,
+                RuleNames::new([
+                    COGNITIVE_COMPLEXITY_PROMPT_RULE.to_string(),
+                    FUNCTION_LENGTH_PROMPT_RULE.to_string(),
+                    RUST_COMPLEXITY_RULE.to_string(),
+                ]),
+                ProbeNames::new([]),
+                [FileWork::new(path, vec![], vec![], content, vec![])],
+            )],
+        )
+    }
+
+    /// Acceptance: the shipped Rust complexity tool rule reports an over-complex
+    /// function on a real cargo workspace, through the real clippy pipeline,
+    /// and suppresses both prompt rules it supersedes.
+    ///
+    /// The suppression half is what a rule that supersedes two names buys. A
+    /// healthy `complexity-rust` must silence `cognitive-complexity` AND
+    /// `function-length` for the file, so no LLM re-reads a gate the tool
+    /// already decided.
+    ///
+    /// The reporting half also proves the threshold reached clippy.
+    /// `excessive-nesting-threshold` defaults to `0`, which turns the lint off
+    /// altogether, so the probe reports only when the script's temporary
+    /// `clippy.toml` is the file `CLIPPY_CONF_DIR` names.
+    #[test]
+    fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("Cargo.toml"), COMPLEX_PACKAGE_MANIFEST).unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join(COMPLEX_LIB_PATH), COMPLEX_LIB_RS).unwrap();
+        let loader = builtin_loader();
+        let work = complexity_work(COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
+
+        let plan = plan_tool_rules(&work, &loader, &["rust"]);
+
+        let run = plan
+            .runs()
+            .iter()
+            .find(|run| run.rule() == RUST_COMPLEXITY_RULE)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the shipped Rust complexity tool rule must plan a run; fallbacks: {:?}",
+                    plan.fallbacks()
+                )
+            });
+        assert_eq!(run.files(), [COMPLEX_LIB_PATH.to_string()]);
+        let suppressed = plan
+            .suppression()
+            .suppressed_rules(CODE_HYGIENE_SET, COMPLEX_LIB_PATH);
+        for prompt_rule in SUPERSEDES_BOTH_COMPLEXITY_GATES {
+            assert!(
+                suppressed.contains(*prompt_rule),
+                "a healthy tool rule that supersedes two prompt rules must suppress both; \
+                 `{prompt_rule}` is missing from {suppressed:?}"
+            );
+        }
+
+        verify_run_reports_one_finding(
+            run,
+            repo.path(),
+            COMPLEX_LIB_PATH,
+            RUST_COMPLEXITY_RULE,
+            "too nested",
+        );
+    }
+
     /// A Python module with one statement stranded behind a `return`.
     const UNREACHABLE_MODULE_PY: &str = concat!(
         "\"\"\"A probe module for the shipped Python unreachable-code tool rule.\"\"\"\n\n\n",
@@ -1466,13 +1641,24 @@ mod tests {
         );
     }
 
+    /// Names the prompt rules a roster row expects, for a failure message.
+    fn supersedes_label(expected: &[&str]) -> String {
+        match expected.is_empty() {
+            true => "nothing".to_string(),
+            false => expected.join(", "),
+        }
+    }
+
     /// Drives every rule in `rules` through the real pre-install and doctor
     /// path, and holds each one to the fixture contract.
     ///
-    /// Each pair names a project type and the tool rule that serves it. For
-    /// each, the helper runs the same pre-install `sah init` runs, reads the
-    /// doctor row, and asserts the row supersedes `expected_supersedes` —
-    /// `None` for a rule that must leave its prompt rule running.
+    /// Each row names a project type, the tool rule that serves it, and the
+    /// prompt rules that rule must supersede — empty for a rule that must leave
+    /// its prompt rule running. For each row, the helper runs the same
+    /// pre-install `sah init` runs, reads the doctor row, and asserts what the
+    /// row supersedes. The list belongs to the row rather than to the call
+    /// because one roster — the complexity rules — mixes rules that replace one
+    /// prompt rule with a rule that replaces two.
     ///
     /// A rule whose tool the machine does not have — and whose install commands
     /// could not get it — is reported as degraded, which is the documented
@@ -1485,19 +1671,11 @@ mod tests {
     /// `rule_kind` names the group in the failure messages — the prompt rule the
     /// group is named for, whether the group replaces that rule or runs beside
     /// it — so a failing run says which roster came up empty.
-    fn verify_shipped_tool_rules_pass_fixtures(
-        rules: &[(&str, &str)],
-        expected_supersedes: &[&str],
-        rule_kind: &str,
-    ) {
+    fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule_kind: &str) {
         let loader = builtin_loader();
         let mut exercised = 0;
-        let expected_label = match expected_supersedes.is_empty() {
-            true => "nothing".to_string(),
-            false => expected_supersedes.join(", "),
-        };
 
-        for (project_type, rule_name) in rules {
+        for (project_type, rule_name, expected_supersedes) in rules {
             let project_types = [*project_type];
             crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
 
@@ -1511,9 +1689,9 @@ mod tests {
                 });
             assert_eq!(
                 row.supersedes.names(),
-                expected_supersedes,
-                "{rule_name} must supersede {expected_label}, the contract every {rule_kind} \
-                 tool rule keeps"
+                *expected_supersedes,
+                "{rule_name} must supersede {}, the contract every {rule_kind} tool rule keeps",
+                supersedes_label(expected_supersedes)
             );
             if row.presence == ToolPresence::Present {
                 assert!(
@@ -1544,7 +1722,6 @@ mod tests {
     fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
         verify_shipped_tool_rules_pass_fixtures(
             SHIPPED_MISSING_DOCS_RULES,
-            &[MISSING_DOCS_PROMPT_RULE],
             MISSING_DOCS_PROMPT_RULE,
         );
     }
@@ -1559,11 +1736,7 @@ mod tests {
     /// files the tool covers, which is exactly the regression to prevent.
     #[test]
     fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(
-            SHIPPED_DEAD_CODE_RULES,
-            &[],
-            DEAD_CODE_PROMPT_RULE,
-        );
+        verify_shipped_tool_rules_pass_fixtures(SHIPPED_DEAD_CODE_RULES, DEAD_CODE_PROMPT_RULE);
     }
 
     /// Acceptance: every shipped magic-numbers tool rule passes its fixture pair
@@ -1580,8 +1753,24 @@ mod tests {
     fn every_shipped_magic_numbers_tool_rule_passes_its_fixtures() {
         verify_shipped_tool_rules_pass_fixtures(
             SHIPPED_MAGIC_NUMBERS_RULES,
-            &[MAGIC_NUMBERS_PROMPT_RULE],
             MAGIC_NUMBERS_PROMPT_RULE,
+        );
+    }
+
+    /// Acceptance: every shipped complexity tool rule passes its fixture pair
+    /// in doctor, and supersedes exactly the gates its own tool decides.
+    ///
+    /// The `supersedes` assertion is the load-bearing half. `complexity-rust`
+    /// must name both prompt rules, because one `cargo clippy` run answers
+    /// both; naming only one would leave an agent re-reading the probe for the
+    /// gate the tool already decided. The two Python rules must name one each,
+    /// because ruff decides one gate per lint; naming both from either rule
+    /// would silence a gate no tool measures.
+    #[test]
+    fn every_shipped_complexity_tool_rule_passes_its_fixtures() {
+        verify_shipped_tool_rules_pass_fixtures(
+            SHIPPED_COMPLEXITY_RULES,
+            COGNITIVE_COMPLEXITY_PROMPT_RULE,
         );
     }
 

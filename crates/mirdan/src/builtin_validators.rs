@@ -243,6 +243,12 @@ mod tests {
             "magic-numbers-go.pass.go.tmpl",
             "magic-numbers-swift.fail.swift.tmpl",
             "magic-numbers-swift.pass.swift.tmpl",
+            "complexity-rust.fail.rs.tmpl",
+            "complexity-rust.pass.rs.tmpl",
+            "complexity-python.fail.py.tmpl",
+            "complexity-python.pass.py.tmpl",
+            "function-length-python.fail.py.tmpl",
+            "function-length-python.pass.py.tmpl",
         ] {
             assert!(
                 code_hygiene_files
