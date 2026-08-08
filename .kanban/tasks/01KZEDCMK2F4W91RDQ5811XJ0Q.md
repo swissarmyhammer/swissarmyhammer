@@ -184,8 +184,41 @@ comments:
     - evidence: 1 source file — crates/claude-agent/src/test_support.rs. Both `pub(crate) use` re-exports (`StateDirGuard`, `PathGuard`) now carry `///` doc comments instead of `//`. `cargo fmt` applied. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0. `cargo nextest run -p claude-agent`: 1090 passed, 0 failed, 0 skipped. The 30 pre-existing findings moved to new card ^k24scye (untagged); ^811xj0q's newest findings section now holds only the checked `test_support.rs:36` item plus the pointer line.
     - next: /review
   timestamp: 2026-08-08T12:07:36.777275+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzgmhceegd4ay2t8qq7my2p5
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~2..HEAD` — 0 findings, 0 confirmed, 0 refuted; 9 validators attempted, 0 failed, 0 skipped, no file over the prompt cap.
+    - scope: `d2581a87a` (13 comment lines `//` -> `///` on the two `test_support.rs` re-exports) and `a539bbb53` (board data only). One code file changed: `crates/claude-agent/src/test_support.rs`.
+    - prior findings verified resolved: `SCRIPTED_TURN_TIMEOUT_SECS` at `agent_prompt_handling.rs:2422`, used at :2428; `sh_quote` at :2438 applies the POSIX `'` -> `'\''` transform; `EnvVarGuard` at `swissarmyhammer-common/src/test_utils.rs:284` and `PathGuard` at :350 hold the extracted guard, claude-agent re-exports it; `PathGuard::prepend` takes `impl AsRef<Path>` at :358; both `test_support.rs` re-exports now carry `///` doc comments.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-08T12:11:05.550078+00:00
+- actor: claude-code
+  id: 01kzgmjmjw9hbvtsah72addvfd
+  text: |
+    ### finish iteration 3 — clean
+    - implement: changed — both `pub(crate) use` re-exports in crates/claude-agent/src/test_support.rs now use `///`. The engine named one; the sweep found the same cause on the other.
+    - test: green — cargo nextest run -p claude-agent, 1090 passed / 0 failed / 0 skipped; fmt, clippy -D warnings clean. A doc-comment change did not need the full workspace suite; the prior round ran it at 13857 passed.
+    - commit: d2581a87a docs(claude-agent): use doc comments for test_support re-exports (^811xj0q); a539bbb53 chore(kanban): record checkpoint and prior review-pass cards
+    - review: clean — 9 validators attempted, 0 findings, 0 files over the prompt cap
+    - task moved to done by the review gate
+
+    Card closed.
+
+    The substantive result: the review fleet's warm prefix reuse can now engage. The card's own diagnosis was wrong and was corrected during work — the streaming path already attached `cache_usage` from commit a067b678c, and the fleet never takes the streaming path, because `run_pipeline_in_connection` builds `ClientCapabilities` with no `.meta(...)`. The real defect was the non-streaming path holding the final chunk's `cache_usage` and dropping it.
+
+    A real security defect was found and fixed on the way: `write_scripted_claude` crossed a JSON layer and a single-quoted `/bin/sh` layer with no escaping. Proved with a watched RED — a reply of `'; touch <canary> ; '` really executed the `touch` — then GREEN through `printf_json_line` and `sh_quote`.
+
+    **Note on review scope for whoever picks up the next card.** Two rounds on this card surfaced far more findings about pre-existing code than about the change:
+    - Round 1 used `review file` on 7 whole files: 104 findings, 4 belonged to the card.
+    - Round 2 used the commit range, but the range spanned 20 files because the env-guard extraction routed call sites through them: 31 recorded, 1 belonged to the card.
+
+    Use a commit range, not `review file`, and expect a wide-but-shallow refactor to pull unrelated files into scope. Findings that land on pre-existing lines belong on their own card.
+
+    Cards split off from this one, all untagged so they do not hold the tool-validators batch open: ^ycnvwyp, ^zs3m73t, ^m0dtzk4, ^xypyc7g, ^5gcr0vk, ^k24scye, ^f7vd3ha.
+  timestamp: 2026-08-08T12:11:46.652787+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc880
 title: 'review fleet: warm prefix reuse never engages — every fork runs cold'
 ---
 DIAGNOSED 2026-08-07 from ../swissarmyhammer-main/.sah/mcp.7341.log. The forks ARE warm. The telemetry is broken. This is a log-lies defect, not a performance defect.
