@@ -122,6 +122,19 @@ The `tool` block keys:
   the fix. A fix hint is text for a person. The install lifecycle never runs
   it, and it never enters `install.commands`.
 
+Every script runs with `SAH_BIN` in its environment, naming the `sah` binary
+the engine is running inside. A rule whose tool IS sah — the review engine
+calling one of its own ops — writes `"$SAH_BIN"` and never a bare `sah`, so it
+can never reach an older copy that happens to sit first on `PATH`. The engine
+resolves the value in three steps: an `SAH_BIN` already in the environment,
+then `std::env::current_exe()` when its file stem is `sah`, then the bare name.
+Such a rule declares no install commands — there is no package to pin, and a
+review is already running inside the tool — so its `doctor.fix_hint` names what
+a person does when `check_command` still fails.
+
+`sah tool` renders a JSON result as YAML, which this contract cannot read, so
+an op a tool rule calls returns PLAIN TEXT: the finding lines and nothing else.
+
 The script's contract is its stdout. One finding per line, in either shape:
 
 - `path:line: message` — the common linter line convention, easy to make

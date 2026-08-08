@@ -2,6 +2,7 @@
 
 pub mod lsp_helpers;
 
+pub mod find_commented_code;
 pub mod find_duplicates;
 pub mod get_blastradius;
 pub mod get_callgraph;

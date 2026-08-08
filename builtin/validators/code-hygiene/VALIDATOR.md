@@ -87,6 +87,39 @@ The `complexity` probe stays. Dart, every other language, and every workspace
 whose tool doctor cannot find keep the probe and the prompt rules. That is the
 designed fallback, not a gap.
 
+## Commented-out code: one tool rule, and the parse as the judge
+
+`no-commented-code-parsed` supersedes the `no-commented-code` prompt rule for
+eleven languages, and its tool is `sah` itself. The op it runs —
+`sah tool code_context commented_code find` — extracts each comment block with
+tree-sitter, strips the delimiters, and hands the text back to the grammar the
+file itself is parsed with. Text that re-parses as two or more statements with
+almost no error nodes IS code; text that does not is prose.
+
+One rule reads eleven languages, which is what makes this rule unlike every
+other one in the set: the verdict is a re-parse rather than a language-specific
+linter, so Rust, Python, TypeScript, TSX, JavaScript, Go, Java, C, C++, C# and
+Swift all take the same rule.
+
+Five languages the grammar roster parses take no verdict, and each is a
+measured decision. `bash`, `ruby` and `elixir` accept a paren-less call, so a
+line of English parses as a command with arguments and a paragraph of prose
+re-parses as clean code. `php` needs an opening tag a comment's text never
+carries. `fortran` has no delimiter convention that separates documentation
+from a disabled line. Those five, and every language the roster does not parse,
+keep the prompt rule.
+
+The exemption is structural on both halves. Documentation is excluded before
+any gate runs — by the grammar's own doc-marker node in Rust, and by the
+comment's own opening delimiter everywhere else — and a block of five lines or
+fewer is under the gate. There is no ignore marker, because the thing the tool
+reads is the grammar: move an example into a doc comment and the grammar
+exempts it.
+
+`ruff`'s `ERA001` was used to cross-check the Python fixtures rather than
+shipped as a rule of its own. One finding has one owner, and the re-parse op
+already covers Python.
+
 ## Dead code: six tool rules, and the prompt rule as the fallback
 
 Dead code is objective. Six tool rules supersede the `dead-code` prompt rule,

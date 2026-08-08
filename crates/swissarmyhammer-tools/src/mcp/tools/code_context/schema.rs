@@ -59,6 +59,10 @@ fn generate_code_context_examples() -> Vec<Value> {
             "value": {"op": "query ast", "query": "(function_item name: (identifier) @name)", "language": "rust"}
         }),
         json!({
+            "description": "Report the comment blocks that re-parse as code",
+            "value": {"op": "find commented_code", "files": ["src/main.rs"]}
+        }),
+        json!({
             "description": "Traverse call graph from a symbol",
             "value": {"op": "get callgraph", "symbol": "process_request", "direction": "outbound"}
         }),
@@ -275,7 +279,7 @@ mod tests {
         let schema = generate_code_context_schema_full(&ops);
 
         assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 14);
+        assert_eq!(schema["examples"].as_array().unwrap().len(), 15);
     }
 
     #[test]

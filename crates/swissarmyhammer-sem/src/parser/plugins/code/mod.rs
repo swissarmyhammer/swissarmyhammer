@@ -1,3 +1,4 @@
+mod commented_code;
 mod complexity;
 mod entity_extractor;
 mod languages;
@@ -13,6 +14,7 @@ pub use languages::is_code_file;
 
 /// Cognitive complexity computed from the parse, so a reviewer compares numbers
 /// instead of counting nesting by eye. See [`complexity`].
+pub use commented_code::{commented_code_blocks, commented_code_extensions, CommentedCodeBlock};
 pub use complexity::{
     cognitive_complexity, FileComplexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
     NESTING_DEPTH_THRESHOLD,

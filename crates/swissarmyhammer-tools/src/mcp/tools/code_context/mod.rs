@@ -12,6 +12,7 @@
 //! - `clear status`: Wipe all index data
 //! - `lsp status`: Show detected languages, LSP servers, and install status
 //! - `detect projects`: Detect project types in the workspace and return guidelines
+//! - `find commented_code`: Comment blocks that re-parse as code in the file's own language
 //!
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
 //! opening a `CodeContextWorkspace` from the `ToolContext` working directory.
@@ -30,12 +31,12 @@ use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 use std::path::Path;
 use swissarmyhammer_code_context::{
-    BlastRadiusOptions, BlockingStatus, BuildLayer, CallGraphDirection, CallGraphOptions,
-    CodeContextWorkspace, DiagnosticSeverity, FindDuplicatesOptions, GetCodeActionsOptions,
-    GetDefinitionOptions, GetDiagnosticsOptions, GetHoverOptions, GetImplementationsOptions,
-    GetInboundCallsOptions, GetReferencesOptions, GetSymbolOptions, GetTypeDefinitionOptions,
-    GrepOptions, IndexLayer, LayeredContext, QueryAstOptions, SearchCodeOptions,
-    SearchSymbolOptions, WorkspaceSymbolLiveOptions,
+    find_commented_code, BlastRadiusOptions, BlockingStatus, BuildLayer, CallGraphDirection,
+    CallGraphOptions, CodeContextWorkspace, DiagnosticSeverity, FindDuplicatesOptions,
+    GetCodeActionsOptions, GetDefinitionOptions, GetDiagnosticsOptions, GetHoverOptions,
+    GetImplementationsOptions, GetInboundCallsOptions, GetReferencesOptions, GetSymbolOptions,
+    GetTypeDefinitionOptions, GrepOptions, IndexLayer, LayeredContext, QueryAstOptions,
+    SearchCodeOptions, SearchSymbolOptions, WorkspaceSymbolLiveOptions,
 };
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
@@ -544,6 +545,29 @@ impl Operation for QueryAst {
     }
 }
 
+/// Operation metadata for the commented-out-code re-parse verdict.
+#[derive(Debug, Default)]
+pub struct FindCommentedCode;
+
+static FIND_COMMENTED_CODE_PARAMS: &[ParamMeta] = &[ParamMeta::new("files")
+    .description("File paths to read, relative to the workspace root or absolute")
+    .param_type(ParamType::Array)];
+
+impl Operation for FindCommentedCode {
+    fn verb(&self) -> &'static str {
+        "find"
+    }
+    fn noun(&self) -> &'static str {
+        "commented_code"
+    }
+    fn description(&self) -> &'static str {
+        "Report each comment block that re-parses as code in the file's own language, one `path:line: message` line per block"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        FIND_COMMENTED_CODE_PARAMS
+    }
+}
+
 /// Operation metadata for project detection.
 #[derive(Debug, Default)]
 pub struct DetectProjects;
@@ -890,6 +914,7 @@ static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
 static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
+static FIND_COMMENTED_CODE_OP: Lazy<FindCommentedCode> = Lazy::new(FindCommentedCode::default);
 static DETECT_PROJECTS_OP: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
 static GET_RENAME_EDITS_OP: Lazy<GetRenameEdits> = Lazy::new(GetRenameEdits::default);
 static GET_DIAGNOSTICS_OP: Lazy<GetDiagnostics> = Lazy::new(GetDiagnostics::default);
@@ -912,6 +937,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*SEARCH_CODE_OP as &dyn Operation,
         &*FIND_DUPLICATES_OP as &dyn Operation,
         &*QUERY_AST_OP as &dyn Operation,
+        &*FIND_COMMENTED_CODE_OP as &dyn Operation,
         &*GET_CALLGRAPH_OP as &dyn Operation,
         &*GET_BLASTRADIUS_OP as &dyn Operation,
         &*GET_CODE_STATUS_OP as &dyn Operation,
@@ -1167,6 +1193,7 @@ impl McpTool for CodeContextTool {
             "search code" => execute_search_code(&arguments, context).await,
             "find duplicates" => execute_find_duplicates(&arguments, context),
             "query ast" => execute_query_ast(&arguments, context),
+            "find commented_code" => execute_find_commented_code(&arguments, context),
             "get callgraph" => execute_get_callgraph(&arguments, context),
             "get blastradius" => execute_get_blastradius(&arguments, context),
             "get status" => execute_get_status(context),
@@ -1187,12 +1214,12 @@ impl McpTool for CodeContextTool {
             "get implementations" => execute_get_implementations(&arguments, context).await,
             "get code_actions" => execute_get_code_actions(&arguments, context).await,
             "" => Err(McpError::invalid_params(
-                "missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
+                "missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
+                    "unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                     other
                 ),
                 None,
@@ -1704,6 +1731,44 @@ fn execute_query_ast(
     )
     .map_err(context_err)?;
     json_result(&result)
+}
+
+/// Execute the "find commented_code" operation.
+///
+/// Reads each named file and reports the comment blocks that re-parse as code
+/// in that file's own language. The result is PLAIN TEXT, one
+/// `path:line: message` line per block and nothing else, because the
+/// `no-commented-code-parsed` tool rule runs this op through `sah tool` and the
+/// review engine parses its stdout directly. A JSON result would reach that
+/// script as YAML, which the contract cannot read.
+///
+/// No workspace is opened. The verdict is a parse of the files named, so the
+/// op answers without the code-context index and runs in a scratch directory
+/// that holds no `.code-context` database — which is where the rule's doctor
+/// fixtures live.
+fn execute_find_commented_code(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let files: Vec<String> = args
+        .get("files")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| McpError::invalid_params("missing required parameter 'files'", None))?
+        .iter()
+        .filter_map(|item| item.as_str().map(String::from))
+        .collect();
+
+    let working_dir = context
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+
+    let report = find_commented_code(&working_dir, &files)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join("\n");
+    Ok(CallToolResult::success(vec![Content::text(report)]))
 }
 
 /// Execute the "get callgraph" operation.
@@ -3204,7 +3269,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 24);
+        assert_eq!(ops.len(), 25);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -3212,6 +3277,7 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "search code"));
         assert!(ops.iter().any(|o| o.op_string() == "find duplicates"));
         assert!(ops.iter().any(|o| o.op_string() == "query ast"));
+        assert!(ops.iter().any(|o| o.op_string() == "find commented_code"));
         assert!(ops.iter().any(|o| o.op_string() == "get callgraph"));
         assert!(ops.iter().any(|o| o.op_string() == "get blastradius"));
         assert!(ops.iter().any(|o| o.op_string() == "get status"));
@@ -3266,7 +3332,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 24);
+        assert_eq!(op_schemas.len(), 25);
 
         // The per-op signature map is carried on the full schema.
         assert!(schema["x-op-signatures"].is_object());

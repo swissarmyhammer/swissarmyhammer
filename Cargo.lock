@@ -7878,6 +7878,7 @@ dependencies = [
  "swissarmyhammer-lsp",
  "swissarmyhammer-project-detection",
  "swissarmyhammer-search",
+ "swissarmyhammer-sem",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
