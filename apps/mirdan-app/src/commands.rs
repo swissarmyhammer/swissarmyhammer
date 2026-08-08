@@ -65,7 +65,7 @@ pub struct SearchResult {
 /// List all installed packages.
 #[tauri::command]
 pub fn list_packages() -> Vec<PackageInfo> {
-    let packages = mirdan::list::discover_packages(false, false, false, false, None);
+    let packages = mirdan::list::discover_packages(mirdan::list::PackageFilter::All, None);
 
     packages
         .into_iter()

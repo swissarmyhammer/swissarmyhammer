@@ -59,8 +59,27 @@ comments:
     - evidence: `cargo fmt --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean (0 warnings); `cargo nextest run --workspace` — 13782 tests run: 13782 passed (139 slow), 0 failed, 0 skipped.
     - next: ready for review/commit.
   timestamp: 2026-08-08T03:09:25.462337+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzfns6mynapye8nz9xfttmh8
+  text: |
+    ### review — clean
+    - evidence: `{"op": "review sha", "sha": "HEAD~1..HEAD"}` (= b3ab023d8) returned "Nothing in scope to review" — counts: 0 findings, 0 confirmed, 0 refuted, 0 attempted, 0 failed, 0 skipped. The commit touches only `.kanban/**` and `builtin/validators/duplication/VALIDATOR.md`. All 14 registered validators match source-code extensions only; none has a glob for `.md`, so no validator/file pair was formed. This confirms the implement step's `dump validators` result of `rule_count: 0` for the `md` extension.
+    - next: task moves to done. No findings section appended, because the engine returned none.
+  timestamp: 2026-08-08T03:13:35.902487+00:00
+- actor: claude-code
+  id: 01kzfnvj787z0g6c58hzt8fbxm
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 1 file, builtin/validators/duplication/VALIDATOR.md
+    - test: green — cargo nextest run --workspace, 13782 passed, 0 failed, 0 skipped; fmt, clippy -D warnings clean
+    - commit: b3ab023d8 docs(validators): record jscpd rejected against duplicates probe (^3b49ewn)
+    - review: clean — 0 findings, 0 of 14 validators attempted
+    - task moved to done by the review gate
+
+    Note on the review: the pass was vacuous. No validator declares a `.md` glob, so no validator/file pair could form for a documentation-only commit. The `clean` result means "nothing in scope", not "the text was checked".
+  timestamp: 2026-08-08T03:14:53.288740+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc680
 title: 'duplication: evaluate jscpd against the duplicates probe'
 ---
 Evaluate `jscpd` (one tool, ~150 languages) against the in-house `duplicates` tree-sitter probe that the duplication validator already consumes.

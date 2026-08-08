@@ -1,8 +1,8 @@
 //! Mirdan List - List installed packages (skills, validators, tools, plugins).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::agents::{self, agent_project_skill_dir};
+use crate::agents::{self, agent_project_skill_dir, DetectedAgent};
 use crate::lockfile::Lockfile;
 use crate::mcp_config;
 use crate::package_type::PackageType;
@@ -13,148 +13,211 @@ use crate::table;
 /// An installed package found during scanning.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
+    /// Display name, taken from frontmatter or the terminal path segment.
     pub name: String,
     /// The lockfile key (source URL or name) used for install/uninstall operations.
     pub source: String,
+    /// One-line summary, taken from frontmatter. Empty when absent.
     pub description: String,
+    /// Which kind of package this is.
     pub package_type: PackageType,
+    /// Package version, or `latest` when the frontmatter declares none.
     pub version: String,
+    /// Where the package was found — an agent name or a store location label.
     pub targets: Vec<String>,
+}
+
+/// Which package types `list` scans.
+///
+/// The `mirdan list` flags `--skills`, `--validators`, `--tools`, and
+/// `--plugins` each narrow the scan to one type, and clap rejects any two of
+/// them together. [`PackageFilter::All`] is the no-flag default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PackageFilter {
+    /// Scan every package type.
+    #[default]
+    All,
+    /// Scan installed skills only.
+    SkillsOnly,
+    /// Scan installed validators only.
+    ValidatorsOnly,
+    /// Scan installed tools only.
+    ToolsOnly,
+    /// Scan installed plugins only.
+    PluginsOnly,
+}
+
+impl PackageFilter {
+    /// Whether this filter selects `package_type`.
+    fn includes(self, package_type: PackageType) -> bool {
+        match self {
+            Self::All => true,
+            Self::SkillsOnly => package_type == PackageType::Skill,
+            Self::ValidatorsOnly => package_type == PackageType::Validator,
+            Self::ToolsOnly => package_type == PackageType::Tool,
+            Self::PluginsOnly => package_type == PackageType::Plugin,
+        }
+    }
 }
 
 /// Discover installed packages by scanning the filesystem.
 ///
 /// Scans agent skill directories, ./.validators/, .tools/, and agent plugin dirs.
 /// Returns a deduplicated, sorted list.
-///
-/// When a type-specific flag is set (e.g. skills_only), only that type is scanned.
-/// When no flags are set, all types are scanned.
 pub fn discover_packages(
-    skills_only: bool,
-    validators_only: bool,
-    tools_only: bool,
-    plugins_only: bool,
+    filter: PackageFilter,
     agent_filter: Option<&str>,
 ) -> Vec<InstalledPackage> {
     let mut packages: Vec<InstalledPackage> = Vec::new();
 
-    // If any specific filter is set, only scan that type.
-    // If none are set, scan all types.
-    let scan_all = !skills_only && !validators_only && !tools_only && !plugins_only;
-
-    // Scan skills from the central store and agent project directories.
-    //
-    // The store (`~/.skills/` global, `.skills/` project) is the source of truth
-    // for installed packages. Agent directories (`.claude/skills/`, etc.) contain
-    // symlinks into the store, which can break (e.g. when `~/.claude` is itself
-    // a symlink to iCloud). Scanning the store directly is robust.
-    //
-    // We also scan agent project-level directories for skills installed without
-    // the store (e.g. manually placed skills).
-    if skills_only || scan_all {
-        // Global store
-        let global_store = store::skill_store_dir(true);
-        if global_store.exists() {
-            scan_skills_recursive(&global_store, &global_store, "global", &mut packages);
-        }
-
-        // Project store — skip if it resolves to the same path as global.
-        // Note: canonicalize() fails when a path doesn't exist or isn't accessible
-        // (e.g. permission denied). In those cases skip_project is false and both
-        // stores are scanned, which may produce duplicates if the project store is
-        // an inaccessible symlink to the global store. This is unlikely in practice.
-        let project_store = store::skill_store_dir(false);
-        let skip_project = project_store
-            .canonicalize()
-            .ok()
-            .zip(global_store.canonicalize().ok())
-            .is_some_and(|(p, g)| p == g);
-        if !skip_project && project_store.exists() {
-            scan_skills_recursive(&project_store, &project_store, "project", &mut packages);
-        }
-
-        // Also scan agent project-level skill dirs for non-store skills
-        if let Ok(config) = agents::load_agents_config() {
-            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
-
-            for agent in &agents {
-                let skill_dir = agent_project_skill_dir(&agent.def);
-                if skill_dir.exists() {
-                    scan_skills(&skill_dir, &agent.def.name, &mut packages);
-                }
-            }
-        }
+    if filter.includes(PackageType::Skill) {
+        discover_skills(agent_filter, &mut packages);
     }
 
-    // Scan validators from ./.validators/ (project) and ~/.validators/ (global)
-    // Skip when --agent is set: validators are not agent-scoped
-    if (validators_only || scan_all) && agent_filter.is_none() {
-        let local_validators = crate::install::validators_dir(false);
-        if local_validators.exists() {
-            scan_validators(&local_validators, ".validators/", &mut packages);
-        }
-
-        let global_validators = crate::install::validators_dir(true);
-        if global_validators.exists() {
-            scan_validators(&global_validators, "~/.validators/", &mut packages);
-        }
+    // Validators are not agent-scoped, so an --agent filter suppresses them.
+    if filter.includes(PackageType::Validator) && agent_filter.is_none() {
+        discover_validators(&mut packages);
     }
 
-    // Scan tools from .tools/ and ~/.tools/
-    if tools_only || scan_all {
-        scan_tools(&store::tool_store_dir(false), ".tools/", &mut packages);
-        scan_tools(&store::tool_store_dir(true), "~/.tools/", &mut packages);
+    if filter.includes(PackageType::Tool) {
+        discover_tools(&mut packages);
     }
 
-    // Scan plugins from agent plugin directories
-    if plugins_only || scan_all {
-        if let Ok(config) = agents::load_agents_config() {
-            let agents = agents::resolve_target_agents(&config, agent_filter).unwrap_or_default();
-
-            for agent in &agents {
-                // Project-level plugins
-                if let Some(plugin_dir) = agents::agent_project_plugin_dir(&agent.def) {
-                    if plugin_dir.exists() {
-                        scan_plugins(&plugin_dir, &agent.def.name, &mut packages);
-                    }
-                }
-                // Global plugins
-                if let Some(plugin_dir) = agents::agent_global_plugin_dir(&agent.def) {
-                    if plugin_dir.exists() {
-                        scan_plugins(
-                            &plugin_dir,
-                            &format!("{} (global)", agent.def.name),
-                            &mut packages,
-                        );
-                    }
-                }
-            }
-        }
+    if filter.includes(PackageType::Plugin) {
+        discover_plugins(agent_filter, &mut packages);
     }
 
     let mut merged = merge_packages(packages);
+    enrich_sources_from_lockfiles(&mut merged);
+    merged
+}
 
-    // Enrich source field from lockfiles so callers (e.g. GUI) can pass
-    // the correct identifier for uninstall/update operations.
-    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
-    for dir in lockfile_dirs.iter().flatten() {
-        if let Ok(lf) = Lockfile::load(dir) {
-            for pkg in &mut merged {
-                // If source is just the display name, try to find the full lockfile key
-                if pkg.source == pkg.name {
-                    for key in lf.packages.keys() {
-                        let last_segment = key.rsplit('/').next().unwrap_or(key);
-                        if last_segment == pkg.name {
-                            pkg.source = key.clone();
-                            break;
-                        }
-                    }
-                }
+/// Resolve the agents to scan, or an empty list when detection fails.
+fn target_agents(agent_filter: Option<&str>) -> Vec<DetectedAgent> {
+    let Ok(config) = agents::load_agents_config() else {
+        return Vec::new();
+    };
+    agents::resolve_target_agents(&config, agent_filter).unwrap_or_default()
+}
+
+/// Whether two paths resolve to the same directory on disk.
+///
+/// `canonicalize` fails when a path does not exist or is not accessible (e.g.
+/// permission denied), and this reports `false` in that case.
+fn resolves_to_same_dir(left: &Path, right: &Path) -> bool {
+    left.canonicalize()
+        .ok()
+        .zip(right.canonicalize().ok())
+        .is_some_and(|(l, r)| l == r)
+}
+
+/// Scan the skill stores and each agent's project skill directory.
+///
+/// The store (`~/.skills/` global, `.skills/` project) is the source of truth
+/// for installed packages. Agent directories (`.claude/skills/`, etc.) contain
+/// symlinks into the store, which can break (e.g. when `~/.claude` is itself a
+/// symlink to iCloud). Scanning the store directly is robust. The agent
+/// project-level directories are scanned too, for skills installed without the
+/// store (e.g. manually placed skills).
+fn discover_skills(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
+    let global_store = store::skill_store_dir(true);
+    if global_store.exists() {
+        scan_skills_recursive(&global_store, &global_store, "global", packages);
+    }
+
+    // A project store that resolves to the global store would list every skill
+    // twice, so scan it only when it is a distinct directory.
+    let project_store = store::skill_store_dir(false);
+    if !resolves_to_same_dir(&project_store, &global_store) && project_store.exists() {
+        scan_skills_recursive(&project_store, &project_store, "project", packages);
+    }
+
+    for agent in target_agents(agent_filter) {
+        let skill_dir = agent_project_skill_dir(&agent.def);
+        if skill_dir.exists() {
+            scan_skills(&skill_dir, &agent.def.name, packages);
+        }
+    }
+}
+
+/// Scan the project and global validator directories.
+fn discover_validators(packages: &mut Vec<InstalledPackage>) {
+    let local = crate::install::validators_dir(false);
+    if local.exists() {
+        scan_validators(&local, ".validators/", packages);
+    }
+
+    let global = crate::install::validators_dir(true);
+    if global.exists() {
+        scan_validators(&global, "~/.validators/", packages);
+    }
+}
+
+/// Scan the project and global tool stores.
+fn discover_tools(packages: &mut Vec<InstalledPackage>) {
+    scan_tools(&store::tool_store_dir(false), ".tools/", packages);
+    scan_tools(&store::tool_store_dir(true), "~/.tools/", packages);
+}
+
+/// Scan each agent's project and global plugin directories.
+fn discover_plugins(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
+    for agent in target_agents(agent_filter) {
+        scan_plugin_dir(
+            agents::agent_project_plugin_dir(&agent.def),
+            &agent.def.name,
+            packages,
+        );
+        scan_plugin_dir(
+            agents::agent_global_plugin_dir(&agent.def),
+            &format!("{} (global)", agent.def.name),
+            packages,
+        );
+    }
+}
+
+/// Scan one optional plugin directory, when the agent has one and it exists.
+fn scan_plugin_dir(dir: Option<PathBuf>, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
+    let Some(dir) = dir else {
+        return;
+    };
+    if dir.exists() {
+        scan_plugins(&dir, agent_name, packages);
+    }
+}
+
+/// The directories searched for a lockfile: the home directory, then the CWD.
+fn lockfile_search_dirs() -> [Option<PathBuf>; 2] {
+    [dirs::home_dir(), std::env::current_dir().ok()]
+}
+
+/// Find the lockfile key that names `name`, either outright or as its last
+/// path segment.
+fn lockfile_key_for(lockfile: &Lockfile, name: &str) -> Option<String> {
+    lockfile
+        .packages
+        .keys()
+        .find(|key| *key == name || key.rsplit('/').next().unwrap_or(key) == name)
+        .cloned()
+}
+
+/// Replace each bare display name in `source` with the package's full lockfile
+/// key, so callers (e.g. the GUI) can pass the identifier that
+/// uninstall/update expect.
+fn enrich_sources_from_lockfiles(packages: &mut [InstalledPackage]) {
+    for dir in lockfile_search_dirs().iter().flatten() {
+        let Ok(lockfile) = Lockfile::load(dir) else {
+            continue;
+        };
+        for pkg in packages.iter_mut() {
+            // A source that already differs from the name carries the key.
+            if pkg.source != pkg.name {
+                continue;
+            }
+            if let Some(key) = lockfile_key_for(&lockfile, &pkg.name) {
+                pkg.source = key;
             }
         }
     }
-
-    merged
 }
 
 /// Get the mirdan.ai registry URL for a package.
@@ -163,42 +226,29 @@ pub fn discover_packages(
 /// source like `https://github.com/owner/repo/skill`), then constructs
 /// `https://mirdan.ai/package/{url_encoded_source}`.
 pub fn registry_url(name: &str) -> String {
-    use crate::lockfile::Lockfile;
+    let key = lockfile_search_dirs()
+        .iter()
+        .flatten()
+        .filter_map(|dir| Lockfile::load(dir).ok())
+        .find_map(|lockfile| lockfile_key_for(&lockfile, name));
 
-    let lockfile_dirs = [dirs::home_dir(), std::env::current_dir().ok()];
-
-    for dir in lockfile_dirs.iter().flatten() {
-        if let Ok(lf) = Lockfile::load(dir) {
-            for key in lf.packages.keys() {
-                let last_segment = key.rsplit('/').next().unwrap_or(key);
-                if last_segment == name || key == name {
-                    return format!("https://mirdan.ai/package/{}", urlencoding::encode(key));
-                }
-            }
-        }
-    }
-
-    format!("https://mirdan.ai/package/{}", urlencoding::encode(name))
+    let target = key.as_deref().unwrap_or(name);
+    format!("https://mirdan.ai/package/{}", urlencoding::encode(target))
 }
 
 /// Run the list command.
 ///
 /// Scans all package locations for installed packages.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the discovered packages cannot be rendered.
 pub fn run_list(
-    skills_only: bool,
-    validators_only: bool,
-    tools_only: bool,
-    plugins_only: bool,
+    filter: PackageFilter,
     agent_filter: Option<&str>,
     json: bool,
 ) -> Result<(), RegistryError> {
-    let packages = discover_packages(
-        skills_only,
-        validators_only,
-        tools_only,
-        plugins_only,
-        agent_filter,
-    );
+    let packages = discover_packages(filter, agent_filter);
 
     if json {
         let entries: Vec<serde_json::Value> = packages
@@ -444,19 +494,23 @@ fn merge_packages(packages: Vec<InstalledPackage>) -> Vec<InstalledPackage> {
     let mut merged: Vec<InstalledPackage> = Vec::new();
 
     for pkg in packages {
-        if let Some(existing) = merged.iter_mut().find(|p| p.name == pkg.name) {
-            for target in pkg.targets {
-                if !existing.targets.contains(&target) {
-                    existing.targets.push(target);
-                }
-            }
-        } else {
-            merged.push(pkg);
+        match merged.iter_mut().find(|p| p.name == pkg.name) {
+            Some(existing) => merge_targets(existing, pkg.targets),
+            None => merged.push(pkg),
         }
     }
 
     merged.sort_by(|a, b| a.name.cmp(&b.name));
     merged
+}
+
+/// Add every target `existing` does not already carry.
+fn merge_targets(existing: &mut InstalledPackage, targets: Vec<String>) {
+    for target in targets {
+        if !existing.targets.contains(&target) {
+            existing.targets.push(target);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -539,9 +593,15 @@ metadata:
     }
 
     #[test]
+    #[serial]
     fn test_run_list_empty() {
+        // `run_list` reads the process working directory (project store,
+        // agent detection, lockfile lookup), so pin it to an empty tempdir.
+        let dir = tempfile::tempdir().unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+
         // Should not panic even with no packages
-        let result = run_list(false, false, false, false, None, true);
+        let result = run_list(PackageFilter::All, None, true);
         assert!(result.is_ok());
     }
 
@@ -563,7 +623,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // With agent filter, validators should be suppressed
-        let result = run_list(false, false, false, false, Some("claude-code"), true);
+        let result = run_list(PackageFilter::All, Some("claude-code"), true);
         assert!(result.is_ok());
     }
 
@@ -659,7 +719,7 @@ metadata:
         std::fs::write(val_dir.join("rules/rule.md"), "# Rule").unwrap();
 
         // Without agent filter, validators should appear
-        let result = run_list(false, false, false, false, None, true);
+        let result = run_list(PackageFilter::All, None, true);
         assert!(result.is_ok());
     }
 }

@@ -4,7 +4,7 @@
 //! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
 //! generate documentation, man pages, and shell completions at build time.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 /// Mirdan - Universal package manager for AI coding agents.
 ///
@@ -107,18 +107,8 @@ pub enum Commands {
 
     /// List installed packages
     List {
-        /// Show only skills
-        #[arg(long)]
-        skills: bool,
-        /// Show only validators
-        #[arg(long)]
-        validators: bool,
-        /// Show only tools
-        #[arg(long)]
-        tools: bool,
-        /// Show only plugins
-        #[arg(long)]
-        plugins: bool,
+        #[command(flatten)]
+        filter: ListFilterArgs,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -244,6 +234,28 @@ Examples:
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+}
+
+/// The `mirdan list` package-type flags.
+///
+/// Each flag narrows the listing to one package type. They share one clap
+/// argument group, so clap rejects any two of them together, and no flag at
+/// all means "list every type".
+#[derive(Args, Debug)]
+#[group(multiple = false)]
+pub struct ListFilterArgs {
+    /// Show only skills
+    #[arg(long)]
+    pub skills: bool,
+    /// Show only validators
+    #[arg(long)]
+    pub validators: bool,
+    /// Show only tools
+    #[arg(long)]
+    pub tools: bool,
+    /// Show only plugins
+    #[arg(long)]
+    pub plugins: bool,
 }
 
 /// Which kind of package `mirdan new` scaffolds.

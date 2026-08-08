@@ -19,7 +19,7 @@ pub mod banner;
 pub mod builtin_validators;
 mod cli;
 /// The clap command tree and its argument types.
-pub use cli::{Cli, Commands, NewKind};
+pub use cli::{Cli, Commands, ListFilterArgs, NewKind};
 /// Shell completion script generation for the `mirdan` binary.
 pub mod completions;
 /// Structured result types for deploy/uninstall operations.

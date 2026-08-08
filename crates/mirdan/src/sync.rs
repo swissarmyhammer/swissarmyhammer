@@ -8,11 +8,11 @@
 //! in all detected agent directories. This correctly handles nested store paths
 //! (e.g. `anthropics/skills/algorithmic-art`) that arise from URL-based installs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agents::{
     self, agent_global_agent_dir, agent_global_skill_dir, agent_project_agent_dir,
-    agent_project_skill_dir,
+    agent_project_skill_dir, AgentDef, DetectedAgent,
 };
 use crate::lockfile::Lockfile;
 use crate::package_type::PackageType;
@@ -20,7 +20,7 @@ use crate::registry::RegistryError;
 use crate::store;
 
 /// Report of what `sync` did.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SyncReport {
     /// Number of symlinks created.
     pub links_created: u32,
@@ -38,6 +38,12 @@ pub struct SyncReport {
 ///
 /// Uses the lockfile as the source of truth rather than scanning the filesystem,
 /// which correctly handles nested store paths from URL-based installs.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the agents configuration cannot be loaded,
+/// the `--agent` filter names no known agent, the lockfile cannot be read or
+/// parsed, or a missing symlink cannot be created.
 pub fn sync(
     project_root: &Path,
     agent_filter: Option<&str>,
@@ -47,149 +53,12 @@ pub fn sync(
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
 
     let mut report = SyncReport::default();
-    let store_dir = store::skill_store_dir(global);
 
     // Load lockfile — this is the source of truth for what's installed
     let lf = Lockfile::load(project_root)?;
 
     for (name, pkg) in &lf.packages {
-        match pkg.package_type {
-            PackageType::Skill => {
-                let sanitized = store::sanitize_dir_name(name);
-                let store_path = store_dir.join(&sanitized);
-
-                if !store_path.exists() {
-                    report.missing_packages.push(name.clone());
-                    continue;
-                }
-
-                report.packages_verified += 1;
-
-                // Ensure symlinks exist in each agent's skill directory
-                for agent in &agents {
-                    let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
-                    let agent_skill_dir = if global {
-                        agent_global_skill_dir(&agent.def)
-                    } else {
-                        agent_project_skill_dir(&agent.def)
-                    };
-                    let link_path = agent_skill_dir.join(&link_name);
-
-                    // Skip if link already exists and is valid
-                    if std::fs::symlink_metadata(&link_path).is_ok() {
-                        continue;
-                    }
-
-                    // Create missing symlink
-                    store::create_skill_link(&store_path, &link_path)?;
-                    report.links_created += 1;
-                }
-            }
-            PackageType::Tool => {
-                // Verify MCP config exists in at least one agent
-                let mut found = false;
-                for agent in &agents {
-                    if let Some(mcp_def) = &agent.def.mcp_config {
-                        let config_path = if global {
-                            agents::agent_global_mcp_config(&agent.def)
-                        } else {
-                            agents::agent_project_mcp_config(&agent.def)
-                        };
-                        if let Some(path) = config_path {
-                            if path.exists() {
-                                if let Ok(content) = std::fs::read_to_string(&path) {
-                                    // Agent MCP configs are user-written (Zed/VS
-                                    // Code ship JSONC). Mirror the lenient input
-                                    // format we accept on install.
-                                    if let Ok(settings) = crate::parse_jsonc(&content) {
-                                        if settings
-                                            .get(&mcp_def.servers_key)
-                                            .and_then(|s| s.get(name))
-                                            .is_some()
-                                        {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if found {
-                    report.packages_verified += 1;
-                } else {
-                    report.missing_packages.push(name.clone());
-                }
-            }
-            PackageType::Plugin => {
-                // Verify plugin directory exists in at least one agent
-                let mut found = false;
-                for agent in &agents {
-                    let plugin_dir = if global {
-                        agents::agent_global_plugin_dir(&agent.def)
-                    } else {
-                        agents::agent_project_plugin_dir(&agent.def)
-                    };
-                    if let Some(base_dir) = plugin_dir {
-                        let target = base_dir.join(store::sanitize_dir_name(name));
-                        if target.exists() {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if found {
-                    report.packages_verified += 1;
-                } else {
-                    report.missing_packages.push(name.clone());
-                }
-            }
-            PackageType::Validator => {
-                let validators_dir = crate::install::validators_dir(global);
-                let val_path = validators_dir.join(store::sanitize_dir_name(name));
-                if val_path.exists() {
-                    report.packages_verified += 1;
-                } else {
-                    report.missing_packages.push(name.clone());
-                }
-            }
-            PackageType::Agent => {
-                let sanitized = store::sanitize_dir_name(name);
-                let agent_store = store::agent_store_dir(global);
-                let store_path = agent_store.join(&sanitized);
-
-                if !store_path.exists() {
-                    report.missing_packages.push(name.clone());
-                    continue;
-                }
-
-                report.packages_verified += 1;
-
-                // Ensure symlinks exist in each coding agent's agent directory
-                for agent in &agents {
-                    let agent_dir = if global {
-                        agent_global_agent_dir(&agent.def)
-                    } else {
-                        agent_project_agent_dir(&agent.def)
-                    };
-
-                    if let Some(base_dir) = agent_dir {
-                        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
-                        let link_path = base_dir.join(&link_name);
-
-                        // Skip if link already exists and is valid
-                        if std::fs::symlink_metadata(&link_path).is_ok() {
-                            continue;
-                        }
-
-                        // Create missing symlink
-                        store::create_skill_link(&store_path, &link_path)?;
-                        report.links_created += 1;
-                    }
-                }
-            }
-        }
+        verify_package(name, pkg.package_type, &agents, global, &mut report)?;
     }
 
     // Record which agents we synced
@@ -200,7 +69,182 @@ pub fn sync(
     Ok(report)
 }
 
+/// Verify one lockfile entry, and create any symlink it is missing.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when a missing symlink cannot be created.
+fn verify_package(
+    name: &str,
+    package_type: PackageType,
+    agents: &[DetectedAgent],
+    global: bool,
+    report: &mut SyncReport,
+) -> Result<(), RegistryError> {
+    match package_type {
+        PackageType::Skill => verify_linked_package(
+            name,
+            &store::skill_store_dir(global),
+            agents,
+            |def| Some(skill_dir_for(def, global)),
+            report,
+        ),
+        PackageType::Agent => verify_linked_package(
+            name,
+            &store::agent_store_dir(global),
+            agents,
+            |def| agent_dir_for(def, global),
+            report,
+        ),
+        PackageType::Tool => {
+            record_presence(report, name, tool_is_configured(name, agents, global));
+            Ok(())
+        }
+        PackageType::Plugin => {
+            record_presence(report, name, plugin_is_installed(name, agents, global));
+            Ok(())
+        }
+        PackageType::Validator => {
+            record_presence(report, name, validator_is_installed(name, global));
+            Ok(())
+        }
+    }
+}
+
+/// Count a package as verified, or record it as missing.
+fn record_presence(report: &mut SyncReport, name: &str, present: bool) {
+    if present {
+        report.packages_verified += 1;
+    } else {
+        report.missing_packages.push(name.to_string());
+    }
+}
+
+/// Resolve the skill directory an agent links skills into.
+fn skill_dir_for(def: &AgentDef, global: bool) -> PathBuf {
+    if global {
+        agent_global_skill_dir(def)
+    } else {
+        agent_project_skill_dir(def)
+    }
+}
+
+/// Resolve the subagent directory an agent links agents into, when it has one.
+fn agent_dir_for(def: &AgentDef, global: bool) -> Option<PathBuf> {
+    if global {
+        agent_global_agent_dir(def)
+    } else {
+        agent_project_agent_dir(def)
+    }
+}
+
+/// Verify a store-backed package, and link it into every agent directory that
+/// does not hold it yet.
+///
+/// `store_root` is the store the package lives in. `agent_dir` resolves the
+/// per-agent directory the link belongs in, and returns `None` for an agent
+/// that has no such directory.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when a missing symlink cannot be created.
+fn verify_linked_package(
+    name: &str,
+    store_root: &Path,
+    agents: &[DetectedAgent],
+    agent_dir: impl Fn(&AgentDef) -> Option<PathBuf>,
+    report: &mut SyncReport,
+) -> Result<(), RegistryError> {
+    let sanitized = store::sanitize_dir_name(name);
+    let store_path = store_root.join(&sanitized);
+
+    if !store_path.exists() {
+        report.missing_packages.push(name.to_string());
+        return Ok(());
+    }
+
+    report.packages_verified += 1;
+
+    for agent in agents {
+        let Some(base_dir) = agent_dir(&agent.def) else {
+            continue;
+        };
+        let link_name = store::symlink_name(&sanitized, &agent.def.symlink_policy);
+        let link_path = base_dir.join(&link_name);
+
+        // Skip if link already exists and is valid
+        if std::fs::symlink_metadata(&link_path).is_ok() {
+            continue;
+        }
+
+        // Create missing symlink
+        store::create_skill_link(&store_path, &link_path)?;
+        report.links_created += 1;
+    }
+
+    Ok(())
+}
+
+/// Whether any target agent's MCP config already declares the tool `name`.
+fn tool_is_configured(name: &str, agents: &[DetectedAgent], global: bool) -> bool {
+    agents
+        .iter()
+        .any(|agent| agent_declares_mcp_server(agent, name, global))
+}
+
+/// Whether one agent's MCP config file declares a server named `name`.
+fn agent_declares_mcp_server(agent: &DetectedAgent, name: &str, global: bool) -> bool {
+    let Some(mcp_def) = &agent.def.mcp_config else {
+        return false;
+    };
+    let config_path = if global {
+        agents::agent_global_mcp_config(&agent.def)
+    } else {
+        agents::agent_project_mcp_config(&agent.def)
+    };
+    let Some(path) = config_path else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    // Agent MCP configs are user-written (Zed/VS Code ship JSONC). Mirror the
+    // lenient input format we accept on install.
+    let Ok(settings) = crate::parse_jsonc(&content) else {
+        return false;
+    };
+    settings
+        .get(&mcp_def.servers_key)
+        .and_then(|servers| servers.get(name))
+        .is_some()
+}
+
+/// Whether any target agent already holds a plugin directory named `name`.
+fn plugin_is_installed(name: &str, agents: &[DetectedAgent], global: bool) -> bool {
+    let sanitized = store::sanitize_dir_name(name);
+    agents.iter().any(|agent| {
+        let plugin_dir = if global {
+            agents::agent_global_plugin_dir(&agent.def)
+        } else {
+            agents::agent_project_plugin_dir(&agent.def)
+        };
+        plugin_dir.is_some_and(|base_dir| base_dir.join(&sanitized).exists())
+    })
+}
+
+/// Whether the validator `name` is deployed to the validators directory.
+fn validator_is_installed(name: &str, global: bool) -> bool {
+    crate::install::validators_dir(global)
+        .join(store::sanitize_dir_name(name))
+        .exists()
+}
+
 /// CLI wrapper for `mirdan sync`.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the current directory cannot be read, or
+/// when [`sync`] fails.
 pub fn run_sync(agent_filter: Option<&str>, global: bool) -> Result<(), RegistryError> {
     let project_root = std::env::current_dir()?;
     let report = sync(&project_root, agent_filter, global)?;
@@ -228,8 +272,13 @@ mod tests {
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
     #[test]
+    #[serial]
     fn test_sync_empty_project() {
         let dir = tempfile::tempdir().unwrap();
+        // `sync(.., global=false)` resolves every store and agent path relative
+        // to the process working directory, so pin it to the tempdir.
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
+
         let report = sync(dir.path(), None, false).unwrap();
         assert_eq!(report.links_created, 0);
         assert_eq!(report.packages_verified, 0);
@@ -246,8 +295,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_sync_skill_missing_from_store() {
         let dir = tempfile::tempdir().unwrap();
+        // The skill store lookup goes through `skill_store_dir(false)`, which
+        // is CWD-relative. Pin the CWD so a `.skills/ghost-skill` directory
+        // under the repo root cannot make this test see the skill.
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Write a lockfile with a skill that's not in the store
         let mut lf = Lockfile::default();
@@ -270,11 +324,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_sync_skill_present_in_store() {
-        // Use tempdir as isolated project root — no set_current_dir needed
-        // because sync() takes project_root explicitly and skill_store_dir(false)
-        // returns relative ".skills/" which we create under the tempdir.
+        // `skill_store_dir(false)` returns the relative ".skills/", which the
+        // OS resolves against the process working directory, not against the
+        // `project_root` argument. Pin the CWD to the tempdir so the store
+        // this test creates is the store sync reads.
         let dir = tempfile::tempdir().unwrap();
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a skill in the store relative to tempdir
         let store = dir.path().join(".skills/my-skill");
@@ -296,20 +353,21 @@ mod tests {
         );
         lf.save(dir.path()).unwrap();
 
-        // Note: skill_store_dir(false) returns ".skills/" which is relative to CWD,
-        // not project_root. The store path check uses the relative path, so this test
-        // verifies the lockfile loading but the store existence check depends on CWD.
-        // In production, CWD is the project root. For this test, we verify lockfile
-        // loading works correctly — store verification is covered by the tempdir setup.
         let report = sync(dir.path(), None, false).unwrap();
         assert!(!report.agents_synced.is_empty());
+        assert_eq!(report.packages_verified, 1);
+        assert!(report.missing_packages.is_empty());
     }
 
     #[test]
+    #[serial]
     fn test_sync_nested_store_path() {
         // Verify that URL-based package names with nested store paths
         // are resolved correctly through sanitize_dir_name
         let dir = tempfile::tempdir().unwrap();
+        // The store lookup is CWD-relative, and this test asserts the package
+        // is missing, so pin the CWD away from any real `.skills/` tree.
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         // Write lockfile with URL-based package name
         let mut lf = Lockfile::default();
@@ -404,8 +462,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_sync_mcp_missing() {
         let dir = tempfile::tempdir().unwrap();
+        // `agent_project_mcp_config` is CWD-relative, and this test asserts
+        // the tool is missing, so pin the CWD away from any real agent config
+        // that already declares a `sah` server.
+        let _cwd = CurrentDirGuard::new(dir.path()).unwrap();
 
         let mut lf = Lockfile::default();
         lf.add_package(

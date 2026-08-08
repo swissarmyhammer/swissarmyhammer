@@ -1,28 +1,60 @@
 //! Mirdan New - Scaffold a new skill, validator, tool, or plugin package.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::agents;
 use crate::package_type::is_valid_package_name;
 use crate::registry::RegistryError;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
+/// Reject a name the registry cannot accept for a new package.
+///
+/// # Errors
+///
+/// Returns [`RegistryError::Validation`] when `name` is not a valid package
+/// name.
+fn validate_package_name(name: &str) -> Result<(), RegistryError> {
+    if is_valid_package_name(name) {
+        return Ok(());
+    }
+    Err(RegistryError::Validation(format!(
+        "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
+         no leading/trailing/consecutive hyphens",
+        name
+    )))
+}
+
+/// Refuse to scaffold over a directory that is already there.
+///
+/// # Errors
+///
+/// Returns [`RegistryError::Validation`] when `path` already exists.
+fn ensure_dir_not_exists(path: &Path) -> Result<(), RegistryError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    Err(RegistryError::Validation(format!(
+        "directory already exists: {}",
+        path.display()
+    )))
+}
+
 /// Run the `mirdan new skill` command.
 ///
 /// Creates a skill scaffold following the agentskills.io spec.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the name is invalid, the target directory
+/// already exists, no agent is detected for a global create, or a file cannot
+/// be written.
 pub fn run_new_skill(
     name: &str,
     global: bool,
     agent_filter: Option<&str>,
 ) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    validate_package_name(name)?;
 
     let base_dir = if global {
         // Deploy to first matching agent's global skill dir
@@ -37,12 +69,7 @@ pub fn run_new_skill(
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    ensure_dir_not_exists(&base_dir)?;
 
     // Create directory structure per agentskills.io spec
     let scripts_dir = base_dir.join("scripts");
@@ -108,14 +135,13 @@ TODO: Add reference documentation, API specs, or other context the agent needs.
 /// Run the `mirdan new validator` command.
 ///
 /// Creates a validator scaffold following the AVP spec.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the name is invalid, the target directory
+/// already exists, or a file cannot be written.
 pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    validate_package_name(name)?;
 
     let base_dir = if global {
         // Global validators live in the shared home-dotfile store `~/.validators/`
@@ -125,12 +151,7 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    ensure_dir_not_exists(&base_dir)?;
 
     // Create directory structure
     let rules_dir = base_dir.join("rules");
@@ -228,14 +249,14 @@ mirdan publish
 /// Run the `mirdan new tool` command.
 ///
 /// Creates a tool scaffold with TOOL.md (MCP server definition) and README.md.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the name is invalid, the XDG data directory
+/// cannot be resolved, the target directory already exists, or a file cannot
+/// be written.
 pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    validate_package_name(name)?;
 
     let base_dir = if global {
         ManagedDirectory::<AvpConfig>::xdg_data()
@@ -249,12 +270,7 @@ pub fn run_new_tool(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    ensure_dir_not_exists(&base_dir)?;
 
     fs::create_dir_all(&base_dir)?;
 
@@ -336,14 +352,14 @@ mirdan publish
 ///
 /// Creates a Claude Code plugin scaffold with .claude-plugin/plugin.json,
 /// commands/, skills/, and README.md.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] when the name is invalid, the Claude Code agent
+/// has no configured global plugin path, the target directory already exists,
+/// or a file cannot be written.
 pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
-    if !is_valid_package_name(name) {
-        return Err(RegistryError::Validation(format!(
-            "invalid package name '{}'. Must be 1-64 chars, lowercase alphanumeric with hyphens, \
-             no leading/trailing/consecutive hyphens",
-            name
-        )));
-    }
+    validate_package_name(name)?;
 
     let base_dir = if global {
         let config = agents::load_agents_config()?;
@@ -367,12 +383,7 @@ pub fn run_new_plugin(name: &str, global: bool) -> Result<(), RegistryError> {
         PathBuf::from(name)
     };
 
-    if base_dir.exists() {
-        return Err(RegistryError::Validation(format!(
-            "directory already exists: {}",
-            base_dir.display()
-        )));
-    }
+    ensure_dir_not_exists(&base_dir)?;
 
     // Create directory structure
     let plugin_meta_dir = base_dir.join(".claude-plugin");
