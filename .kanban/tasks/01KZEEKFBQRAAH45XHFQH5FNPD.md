@@ -270,6 +270,197 @@ comments:
     - Checked for `#[ignore]` on real tests workspace-wide: none found (only doc/string-literal mentions in swissarmyhammer-validators and swissarmyhammer-sem parser fixtures).
     - next: none — build is clean.
   timestamp: 2026-08-08T05:24:00.452954+00:00
+- actor: claude-code
+  id: 01kzfxdmxyyyc5cgyms23b4aae
+  text: |-
+    ## Correction: a background investigation contradicted two claims I wrote, and I fixed both
+
+    I had launched a read-only agent to reproduce the leader/follower failure. It finished after I posted the verdict, and it found things I had wrong. Recording them, because the earlier comment stands corrected.
+
+    ### It captured the red run I said I could not
+
+    Under ~250 spinning CPU hogs (load average 317) with `SAH_LSP_REQUEST_TIMEOUT_SECS=1`, three of three runs failed with the same text:
+
+    ```
+    thread 'follower_multi_step_rename_gets_real_leader_edits_under_one_lock' panicked at
+    crates/swissarmyhammer-diagnostics/tests/leader_follower_request_ipc.rs:486:23:
+    get_rename_edits via leader multi router: LSP error: leader LSP multi request failed:
+    remote error: lsp multi request failed: JSON-RPC error:
+    LSP request 'textDocument/prepareRename' (id=13) timed out after 1s
+    ```
+
+    "timed out after 1s" verbatim. No red run showed any content or ordering mismatch, and completion time scales monotonically with starvation while the result stays identical: 3.1s idle, 11-28s at load average 125-317. **DEADLINE is confirmed, now with the captured failing run finding #2 asked for**, not only by construction.
+
+    ### What I got wrong
+
+    **1. I wrote a false bound.** My doc comment claimed "3s + 120s of polling stays well inside the 300s hard kill". `WARM_UP_MAX_ATTEMPTS` bounded ITERATIONS, not wall time. One request that runs to its own 120s timeout blocks a single iteration far longer than the poll interval, so the stated bound was not the bound that held. Fixed: the constant is now `WARM_UP_BUDGET: Duration` and both loops run `while Instant::now() < warm_up_deadline`, so the polling budget means what it says. The residual overrun — the deadline is only checked between attempts — is now stated explicitly instead of being papered over.
+
+    **2. I implied the raise addresses the observed failure. It may not.** There are TWO deadlines on this path and they fail through DIFFERENT surfaces:
+
+    - **Per-request LSP timeout** — `SAH_LSP_REQUEST_TIMEOUT_SECS` (`.cargo/config.toml` sets 120s for test runs; `DEFAULT_LSP_REQUEST_TIMEOUT_SECS` is 30s in the shipped binary). `is_transient_not_ready` does not match "timed out", so this takes the `Err(e) => panic!` arm on the spot. **Raising the warm-up budget cannot help here — the loop never gets another attempt.** This is the surface every reproduced red took.
+    - **Warm-up budget** — the only path to `assert!(resolved, ...)`. This is the only surface the raise addresses.
+
+    The single original `--workspace` failure was never captured, so which surface it took is unknown. The doc comment now says exactly that instead of claiming coverage it cannot prove. Git history shows the per-request surface has bitten this same test before (`^0js`, "textDocument/rename request times out after 30s", fixed by 320e952ab making the timeout env-tunable).
+
+    **I did not raise `SAH_LSP_REQUEST_TIMEOUT_SECS`.** No evidence asks for it — the slowest observed run with the real 120s timeout was 28s — and adding a second mitigation for one cause is precisely the error finding `.config/nextest.toml:131` called out.
+
+    ### One more thing worth knowing
+
+    The atomicity contract this test's name refers to is already pinned deterministically elsewhere, by `dispatch_lsp_multi_request_runs_steps_in_order_under_one_lock` in `request_api.rs`, which uses a fake transport and no clock. So the real-analyzer test is a wiring/end-to-end check, and the lock contract does not depend on it.
+
+    ### Re-verified after the correction
+
+    - `cargo nextest run -p swissarmyhammer-diagnostics` — 85 passed, 0 skipped; the leader/follower rename test at 3.135s.
+    - `cargo nextest run --workspace` — 13783 passed, 0 failed, 0 skipped, zero retries.
+    - `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  timestamp: 2026-08-08T05:27:05.918572+00:00
+- actor: claude-code
+  id: 01kzfxdz5ztc7rbvf76few9x53
+  text: |-
+    ### implement — changed
+
+    - evidence: 12 files. Same set as the previous step record, with `crates/swissarmyhammer-diagnostics/tests/leader_follower_request_ipc.rs` revised again: `WARM_UP_MAX_ATTEMPTS: u32` replaced by `WARM_UP_BUDGET: Duration`, both poll loops converted from `for _ in 0..N` to `while Instant::now() < warm_up_deadline`, and the doc comment corrected — it no longer states a wall-clock bound the iteration count did not hold, and no longer implies the raise covers the observed failure.
+    - findings: 28 of 28 checked.
+    - leader/follower verdict: DEADLINE, now with a captured red run (`LSP request 'textDocument/prepareRename' (id=13) timed out after 1s`) rather than argument alone. Two deadline surfaces identified; only the warm-up budget was raised, and the per-request timeout was deliberately left alone for want of evidence.
+    - tests: `cargo nextest run --workspace` 13783 passed / 0 failed / 0 skipped, zero retries; `cargo test -p mirdan --lib` green 5 of 5; `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - next: `/review`.
+  timestamp: 2026-08-08T05:27:16.415354+00:00
+- actor: claude-code
+  id: 01kzg052sgb3y2hhkhj53fse6z
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~3..HEAD` — 9 confirmed, 5 refuted, 18 attempted, 0 failed. 7 recorded: crates/mirdan/src/cli.rs:50, crates/mirdan/src/cli.rs:72, crates/mirdan/src/cli.rs:111, crates/mirdan/src/list.rs:144, crates/mirdan/src/list.rs:351, crates/mirdan/src/list.rs:429, crates/mirdan/src/sync.rs:124
+    - dropped: 2 magic-numbers findings on crates/swissarmyhammer-diagnostics/tests/leader_follower_request_ipc.rs:200 and :205. Both ask to extract named constants from test code authored in 95a1c04c7b (2026-06-21) that this range never touched. The review skill's blanket exception on refactoring pre-existing tests applies.
+    - prior round: all 28 findings from 2026-08-07 23:14 verified genuinely resolved. nextest retry now filters one named test and the whole-binary and model-loader retries are gone; model-loader TEST_TIMEOUT stays 30s as the single mitigation; PackageFilter enum replaces the four bool params at every call site; SyncReport derives Clone; four `# Errors` sections added in sync.rs; new.rs has shared validate_package_name and ensure_dir_not_exists; sync.rs holds 7 CurrentDirGuard uses.
+    - the three focus areas all hold. `mirdan list --skills --tools` is now a clap parse error via `#[group(multiple = false)]` on ListFilterArgs; no caller, doc, script, or test depended on the old union. The warm-up deadline is re-checked on every looping path in both loops and WARM_UP_MAX_ATTEMPTS is fully gone. test_sync_skill_present_in_store pins CWD to the tempdir it builds, so `packages_verified == 1` really reads `.skills/my-skill`.
+    - `.config/nextest.toml` again received zero automated coverage: no validator declares a `*.toml` match glob.
+    - next: fix the 7 recorded findings, then re-review.
+  timestamp: 2026-08-08T06:14:50.928876+00:00
+- actor: claude-code
+  id: 01kzg08km5w782se22c0wcx1y6
+  text: |
+    ### finish iteration 2 — findings
+    - implement: changed — 12 files, all 28 prior findings closed
+    - test: green — cargo nextest run --workspace, 13783 passed, 0 failed, 0 skipped, zero retries fired; cargo test -p mirdan --lib 433 passed; fmt, clippy -D warnings clean
+    - commit: f264ce1d9 narrow retries to the one test with evidence; c9ace5d33 raise the warm-up deadline on evidence, not guesswork; 09f0dadec replace bool filter params with a PackageFilter enum
+    - review: findings — 7 open. crates/mirdan/src/cli.rs:50, :72, :111; crates/mirdan/src/list.rs:144, :351, :429; crates/mirdan/src/sync.rs:124
+    - engine counts: 9 confirmed, 5 refuted, 18 attempted, 0 failed; 2 dropped by the written test-code exception
+
+    **Watch this oscillation.** The three `list.rs` duplication findings are a direct result of the last round. Round 2 told the author to cut `discover_packages` complexity by extracting one scan helper for each package type. That extraction made five near-identical helpers, and the duplication validator now reports them. One parameterized function satisfies both rules. Five siblings satisfy neither. Do not answer this by putting the complexity back.
+
+    **All 28 prior findings were verified mechanically, not from the check marks.** The whole-binary retry is gone, the model-loader retry is gone, `PackageFilter` reaches every call site, `SyncReport` derives `Clone`, and sync.rs holds 7 `CurrentDirGuard` uses.
+
+    **Open doc gap, not recorded as an engine finding because no validator matches Markdown**: `doc/src/reference/mirdan-cli.md:222` lists the four list flags and does not say they are mutually exclusive. The generated reference does not tell a reader that `mirdan list --skills --tools` now fails.
+
+    **Structural gap, repeating**: `.config/nextest.toml` got zero automated coverage again. None of the 14 validators declares a `*.toml` glob. Both nextest changes in this range were judged by hand.
+  timestamp: 2026-08-08T06:16:46.469228+00:00
+- actor: claude-code
+  id: 01kzg0pnc4xnqby42esybf5ee5
+  text: |-
+    Picked the card back up from `review`. Working the 7 open findings in `## Review Findings (2026-08-08 00:28)`, plus the documentation gap the driver named.
+
+    Rules preloaded once: `{"op": "dump validators", "paths": ["crates/mirdan/src/list.rs", "doc/src/reference/mirdan-cli.md"]}` — 9 validators, 34 rules. The tool reports `"doc/src/reference/mirdan-cli.md": []`: NO validator matches Markdown, which is why the doc gap is a driver finding and not engine output.
+
+    ## Research
+
+    **`doc/src/reference/mirdan-cli.md` IS generated.** `apps/mirdan-cli/build.rs` does `#[path = "../../crates/mirdan/src/cli.rs"] mod cli;`, builds `cli::Cli::command()`, and calls `doc_gen::generate_markdown_with_brew(&cmd, repo_root/"doc/src/reference", "mirdan", ...)`. The same build script also writes `docs/` man pages and `completions/`. So the mutual-exclusion sentence must be written into the clap definition and the file regenerated, never hand-edited. clap-markdown renders a command's `long_about` as a paragraph under the heading (see the `mirdan search` section), so a second paragraph on the `Commands::List` doc comment is what reaches the page.
+
+    **`list.rs` — why the last round produced five siblings.** Round 2 asked for one scan helper per package type to cut `discover_packages` complexity. The five helpers (`scan_skills`, `scan_validators`, `scan_tools`, `scan_plugins`, `scan_skills_recursive`) all repeat `read_dir` -> `flatten` loop -> `is_dir` + marker-file check -> build `InstalledPackage` -> push. Measured differences, and only these:
+
+    1. marker file — `SKILL.md` / `VALIDATOR.md` / `TOOL.md` / `.claude-plugin/plugin.json`
+    2. an extra required directory — validators alone need `rules/`
+    3. `PackageType`
+    4. metadata format — YAML frontmatter vs `plugin.json`
+    5. where the display name comes from — the directory name (flat skill/validator/tool scans) vs the metadata (store skill scan, plugin scan)
+    6. where `source` comes from — the display name (flat) vs the store-relative provenance path (store scan)
+    7. whether the walk descends — only the store nests packages under `owner/repo/skill`
+
+    1-4 are per package TYPE, so they become one `PackageSpec` data value per type. 5-7 are per SCAN, so they become fields of one `Scan` value. That is one parameterized walk, and no sibling functions.
+
+    **Difference 5 is a real behaviour difference, and it is kept.** `scan_skills` names a package by its directory; `scan_skills_recursive` names it by frontmatter with a directory fallback; `scan_plugins` names it from `plugin.json` with a directory fallback. Collapsing all three onto "metadata name first" would make `list` rename any package whose directory and declared name disagree. The findings ask to remove duplication, not to change what `list` prints, so the name source stays an explicit parameter (`Naming`).
+
+    **`sync.rs:124` is four sites, not two.** `skill_dir_for` and `agent_dir_for` are the two the finding names, but `agent_declares_mcp_server` and `plugin_is_installed` each carry the same inline `if global { agent_global_X(def) } else { agent_project_X(def) }`. Every one of the eight `agents::agent_{global,project}_*` functions takes `&AgentDef` and returns `PathBuf` or `Option<PathBuf>`, so one generic `scoped_agent_path` covers all four sites. Removing the cause from the whole file means all four.
+
+    **`cli.rs` undocumented fields are exactly three**: `Cli::command`, `Commands::New::kind`, `Commands::List::filter`. Each is a `#[command(subcommand)]` or `#[command(flatten)]` field, for which clap ignores doc comments, so documenting them cannot move any help text.
+
+    Blast radius: `scan_*`, `discover_*`, `skill_dir_for`, `agent_dir_for` are all private to their module. The only cross-crate reader of `list.rs` is `apps/mirdan-app/src/commands.rs`, which calls `mirdan::list::read_frontmatter_name` — untouched. Two tests call `scan_skills_recursive` directly and move to the new entry point with their assertions unchanged.
+  timestamp: 2026-08-08T06:24:27.012762+00:00
+- actor: claude-code
+  id: 01kzg2f0m811de8vd14anykcck
+  text: |-
+    ## How the three `list.rs` duplication findings were closed without re-raising the complexity finding
+
+    The oscillation warning was right: round 2 asked for one scan helper per package type, and that made five near-identical helpers. The fix is ONE parameterized walk, expressed as data.
+
+    `scan_skills`, `scan_validators`, `scan_tools`, `scan_plugins`, `scan_skills_recursive`, `scan_plugin_dir`, `discover_validators`, and `discover_tools` are all DELETED. In their place:
+
+    - `PackageSpec` — the per-TYPE difference as data: `package_type`, `metadata_file`, `required_subdir`, `format`. Four `static` values, `SKILL_SPEC` / `VALIDATOR_SPEC` / `TOOL_SPEC` / `PLUGIN_SPEC`. `PackageSpec::matches` decides whether a directory holds that type; `PackageSpec::declared` reads its metadata.
+    - `MetadataFormat` — `Frontmatter` or `PluginJson`. This is the "metadata reader enum (YAML vs JSON)" finding `:429` asked for, so plugins go through the same implementation as the markdown types.
+    - `Scan` — the per-SCAN difference as fields: `spec`, `target`, `store_root`, `naming`. `Scan::walk` is the one and only directory walk; `Scan::package_at` builds the one and only `InstalledPackage`.
+    - `discover_scope_pair` — the project-then-global pair `:144` named, driven by a two-row table `[(false, project_label), (true, global_label)]` instead of two copied blocks. `discover_packages` calls it directly for validators and for tools, so no per-type sibling function survives.
+
+    `store_root: Option<&Path>` carries recursion AND provenance keying, because both follow from one fact: a store nests packages under `owner/repo/skill`, an agent directory does not.
+
+    **`naming` is a separate field on purpose, and this is the one thing a reviewer should check hardest.** The three name sources genuinely differ today: `scan_skills` used the directory name, `scan_skills_recursive` used the frontmatter name with a directory fallback, and `scan_plugins` used the `plugin.json` name with a directory fallback. Folding them all onto "metadata name first" would collapse the parameter, and it would also rename any listed package whose directory and declared name disagree. That is a user-visible output change the findings did not ask for, so the difference stays an argument. Five siblings satisfy neither rule; one function with this argument satisfies both.
+
+    `discover_packages` did NOT absorb the complexity back. It is four flat `if` statements over `PackageFilter::includes`, depth 1.
+
+    ## Verification that BOTH gates are clear
+
+    Ran the real review engine per file, not judgement:
+
+    - `{"op": "review file", "path": "crates/mirdan/src/list.rs"}` — `attempted: 9, failed: 0, skipped: 0`. The `code-hygiene` validator owns the `complexity` probe and reported NO function over the complexity gate of 15 or the condition-nesting gate of 4. The `duplication` validator owns the `duplicates` probe and reported NO near-identical block.
+    - `{"op": "review file", "path": "crates/mirdan/src/sync.rs"}` — `findings: 0, confirmed: 0, attempted: 9`.
+    - `{"op": "review file", "path": "crates/mirdan/src/cli.rs"}` — `findings: 0, confirmed: 0, attempted: 9`.
+
+    That run turned up ONE new confirmed finding, and it is now fixed rather than left for the next round: `crates/mirdan/src/list.rs:293` — `run_list` returns `Result<(), RegistryError>` yet called `.unwrap()` on `serde_json::to_string_pretty`. It now uses `.map_err(|error| RegistryError::Json(error.to_string()))?`. That `.unwrap()` was pre-existing production code, not part of this card's change, but it sits in a file this card edits.
+
+    ## `sync.rs:124` — four sites, not the two the finding named
+
+    `skill_dir_for` and `agent_dir_for` are gone. `scoped_agent_path<T>(def, global, global_path: fn(&AgentDef) -> T, project_path: fn(&AgentDef) -> T)` replaces them. Removing the cause from the WHOLE file meant two more inline copies of the same `if global { … } else { … }` shape also route through it: the MCP config lookup in `agent_declares_mcp_server`, and the plugin directory lookup in `plugin_is_installed`. All four scope selections in the file are now one function.
+
+    ## `cli.rs` — three fields, and the reference regenerated
+
+    `Cli::command`, `Commands::New::kind`, and `Commands::List::filter` were the only undocumented items in the file; each now has a doc comment. All three are `#[command(subcommand)]` or `#[command(flatten)]` fields, for which clap ignores doc comments, so no help text moved.
+
+    **The documentation gap: `doc/src/reference/mirdan-cli.md` IS GENERATED, and it was regenerated, not hand-edited.** `apps/mirdan-cli/build.rs` compiles `crates/mirdan/src/cli.rs` via `#[path = "../../crates/mirdan/src/cli.rs"]` and calls `doc_gen::generate_markdown_with_brew(&cmd, "doc/src/reference", "mirdan", …)`. The mutual-exclusion sentence therefore had to be written into the clap definition: `Commands::List` gained a second doc-comment paragraph, which clap-markdown renders under the command heading. `cargo build -p mirdan-cli` regenerated the page. The diff it produced:
+
+    ```
+     List installed packages
+
+    +The --skills, --validators, --tools, and --plugins flags are mutually exclusive: each one narrows the listing to a single package type, so at most one of them may be given. Passing two, such as `mirdan list --skills --tools`, is an error. Pass no type flag to list every type.
+    +
+     **Usage:** `mirdan list [OPTIONS]`
+    ```
+
+    The same build script also regenerated `completions/_mirdan` and `completions/mirdan.fish`, which embed the same long help. Those two files are in the diff for that reason alone.
+
+    ## A flake I hit, and why it is not this card's
+
+    `cargo nextest run --workspace` failed once on `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes`. It is in `crates/claude-agent/src/lib.rs`, which this card does not touch. It passed alone, passed 10 of 10 `-p claude-agent --lib -j 24` runs, and passed 5 of 5 under about 200 CPU hogs at load average 24 — so the trigger is still unproven. Reading the test: it needs a 2-slot broadcast ring to overflow, but the collector runs on its own worker thread and every send awaits, so a collector that gets scheduled between sends drains the ring and the expected `Lagged` never happens. The assertion depends on a scheduling accident. Recorded as its own card ^7mk3pnp with that analysis and the reproduction attempts, and explicitly NOT answered with a retry. The next full `--workspace` run was green: 13783 passed, 0 failed, 0 skipped.
+  timestamp: 2026-08-08T06:55:13.544111+00:00
+- actor: claude-code
+  id: 01kzg2fb2zb082ch6vsrg6qbmt
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — `crates/mirdan/src/cli.rs`, `crates/mirdan/src/list.rs`, `crates/mirdan/src/sync.rs`, plus the three files `apps/mirdan-cli/build.rs` regenerates: `doc/src/reference/mirdan-cli.md`, `completions/_mirdan`, `completions/mirdan.fish`.
+    - findings: 7 of 7 checked. None dropped, softened, or deferred. One extra confirmed finding found by my own verification run (`list.rs:293`, `.unwrap()` on `serde_json::to_string_pretty` in `run_list`) was fixed in the same pass.
+    - both gates verified by the engine, not by judgement: `review file` on `crates/mirdan/src/list.rs` reports `attempted: 9, failed: 0, skipped: 0` with NO cognitive-complexity row (gates 15 / depth 4) and NO duplication row. `review file` on `sync.rs` and on `cli.rs` each report `findings: 0`.
+    - tests: `cargo nextest run --workspace` — 13783 tests run, 13783 passed (124 slow), 0 failed, 0 skipped, zero retries fired. `cargo test -p mirdan --lib` — 433 passed, 0 failed. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - new card raised, not fixed here: ^7mk3pnp, the `claude-agent` lagged-collector test that races the scheduler.
+    - next: `/review`.
+  timestamp: 2026-08-08T06:55:24.255654+00:00
+- actor: claude-code
+  id: 01kzg3byjsqp2hrr96p6z19yqp
+  text: |-
+    ### test — green
+    - evidence: `cargo nextest run --workspace` run twice: 13783 passed, 0 failed, 0 skipped both times (350.2s, then 312.4s). No retry fired on either run. Known flake `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes` passed both times (tracked on ^7mk3pnp, not touched).
+    - `cargo test -p mirdan --lib`: 433 passed, 0 failed, 0 ignored — no working-directory races.
+    - `cargo fmt --check`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo build -p mirdan-cli`: generated files already up to date. md5 of `doc/src/reference/mirdan-cli.md`, `completions/_mirdan`, `completions/mirdan.fish` unchanged before/after rebuild. The uncommitted diff on those files is the task's own regeneration, not staleness.
+    - next: no fixes were needed. Board can move this task to review/done per the pipeline.
+  timestamp: 2026-08-08T07:11:01.721981+00:00
 position_column: doing
 position_ordinal: '8480'
 title: mirdan lib tests fail at random under parallel execution
@@ -321,3 +512,13 @@ This is pre-existing. It was found while shipping the dead-code tool rules (^tee
 - [x] `crates/mirdan/src/sync.rs:308` — test_sync_nested_store_path calls sync(..., global=false) with a URL-based Skill package. The sync function uses CWD-relative paths (skill_store_dir(false)) to look up the store. The test expects the package to be reported as missing (it doesn't create the store). Without isolating CWD, if the repo root has a .anthropics/skills/ directory tree, the test will fail unexpectedly. The validator tests (test_sync_validator_missing at line 342 and test_sync_validator_present_in_project_dir at line 371) now correctly isolate CWD using CurrentDirGuard. This test has the same pattern and should do the same. Add `#[serial]` to test_sync_nested_store_path and use `let _cwd = CurrentDirGuard::new(dir.path()).unwrap();` before calling sync() to ensure deterministic behavior regardless of the repo root's .skills/ directory contents.
 - [x] `crates/mirdan/src/sync.rs:406` — test_sync_mcp_missing calls sync(..., global=false) with a Tool (MCP) package, which uses CWD-relative paths (agent_project_mcp_config(false)) to look up MCP configs. The test expects the tool to be reported as missing (it doesn't create an MCP config). Without isolating CWD, if the repo root or a parent config directory has an MCP server named 'sah', the test will fail unexpectedly. The validator tests (test_sync_validator_missing at line 342 and test_sync_validator_present_in_project_dir at line 371) now correctly isolate CWD using CurrentDirGuard. This test has the same pattern and should do the same. Add `#[serial]` to test_sync_mcp_missing and use `let _cwd = CurrentDirGuard::new(dir.path()).unwrap();` before calling sync() to ensure deterministic behavior regardless of any agent MCP configs present in the actual CWD.
 - [x] `crates/model-loader/tests/download_progress_test.rs:27` — The raised `TEST_TIMEOUT` (10s to 30s) and the new `retries = 2` in `.config/nextest.toml` are two mitigations for one diagnosed cause, so neither is validated by the recorded run. See the `.config/nextest.toml:131` finding. Keep the mitigation that the evidence supports and remove the other.
+
+## Review Findings (2026-08-08 00:28)
+
+- [x] `crates/mirdan/src/cli.rs:50` — missing documentation for a struct field.
+- [x] `crates/mirdan/src/cli.rs:72` — missing documentation for a struct field.
+- [x] `crates/mirdan/src/cli.rs:111` — missing documentation for a struct field.
+- [x] `crates/mirdan/src/list.rs:144` — discover_validators (lines 144–154) and discover_tools (lines 157–160) are near-identical blocks. Both follow the same pattern: get local directory, call scan function with label, get global directory, call scan function with label. The only differences are the directory getter functions, scan functions called, and labels — these are one function with parameters waiting to be extracted. Extract a shared function, e.g. `fn discover_package_pair_from_stores<F, S>(local_dir: F, global_dir: F, label_local: &str, label_global: &str, scan: S, packages: &mut Vec<InstalledPackage>)` where F returns `PathBuf` or `bool` for existence, and S is a function reference to the scan function. This eliminates the duplicate local/global scanning pattern and makes the intent (scan both scopes) explicit.
+- [x] `crates/mirdan/src/list.rs:351` — scan_skills (lines 351–374), scan_validators (lines 377–400), and scan_tools (lines 403–426) are near-identical blocks differing only by metadata filename, additional directory checks, PackageType enum value, and parameter name (agent_name vs location). This is one function with parameters waiting to be extracted. Extract a shared function, e.g. `fn scan_packages_in_dir(dir: &Path, metadata_file: &str, extra_check: Option<impl Fn(&Path) -> bool>, package_type: PackageType, target: &str, packages: &mut Vec<InstalledPackage>)`. Call it from scan_skills, scan_validators, and scan_tools, passing the differing parameters (metadata filename, validators' "rules" directory check, PackageType, target name). This eliminates the maintenance burden of keeping three identical loops in sync.
+- [x] `crates/mirdan/src/list.rs:429` — scan_plugins (lines 429–450) participates in the same duplication pattern as scan_skills, scan_validators, scan_tools, and scan_skills_recursive. It repeats: read_dir → flatten loop → is_dir and metadata-file-exists checks → package creation. The metadata is JSON instead of YAML, but the core structure is identical. When extracting the shared scan function, parameterize it to accept a metadata reader closure or enum (YAML vs JSON) so scan_plugins can also use the shared implementation. This unifies all five scan functions under one pattern.
+- [x] `crates/mirdan/src/sync.rs:124` — skill_dir_for (lines 124–130) and agent_dir_for (lines 133–139) are nearly-identical: both follow the same if-global pattern, differing only in function names and return type (PathBuf vs Option<PathBuf>). This is one function with a parameter waiting to be extracted. Extract a generic helper, e.g. `fn resolve_agent_dir<F, T>(def: &AgentDef, global: bool, global_fn: F, project_fn: F) -> T where F: Fn(&AgentDef) -> T`. Or create a single parameterized function that accepts function pointers for the global and project resolvers. Alternatively, use a trait or enum dispatch to parameterize which dir type is being resolved.

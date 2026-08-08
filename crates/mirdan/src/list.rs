@@ -10,6 +10,9 @@ use crate::registry::RegistryError;
 use crate::store;
 use crate::table;
 
+/// Version reported for a package whose metadata declares none.
+const UNVERSIONED: &str = "latest";
+
 /// An installed package found during scanning.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
@@ -76,11 +79,16 @@ pub fn discover_packages(
 
     // Validators are not agent-scoped, so an --agent filter suppresses them.
     if filter.includes(PackageType::Validator) && agent_filter.is_none() {
-        discover_validators(&mut packages);
+        discover_scope_pair(
+            &VALIDATOR_SPEC,
+            crate::install::validators_dir,
+            ".validators/",
+            &mut packages,
+        );
     }
 
     if filter.includes(PackageType::Tool) {
-        discover_tools(&mut packages);
+        discover_scope_pair(&TOOL_SPEC, store::tool_store_dir, ".tools/", &mut packages);
     }
 
     if filter.includes(PackageType::Plugin) {
@@ -121,67 +129,86 @@ fn resolves_to_same_dir(left: &Path, right: &Path) -> bool {
 /// store (e.g. manually placed skills).
 fn discover_skills(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
     let global_store = store::skill_store_dir(true);
-    if global_store.exists() {
-        scan_skills_recursive(&global_store, &global_store, "global", packages);
-    }
+    skill_store_scan(&global_store, "global").walk(&global_store, packages);
 
     // A project store that resolves to the global store would list every skill
     // twice, so scan it only when it is a distinct directory.
     let project_store = store::skill_store_dir(false);
-    if !resolves_to_same_dir(&project_store, &global_store) && project_store.exists() {
-        scan_skills_recursive(&project_store, &project_store, "project", packages);
+    if !resolves_to_same_dir(&project_store, &global_store) {
+        skill_store_scan(&project_store, "project").walk(&project_store, packages);
     }
 
     for agent in target_agents(agent_filter) {
-        let skill_dir = agent_project_skill_dir(&agent.def);
-        if skill_dir.exists() {
-            scan_skills(&skill_dir, &agent.def.name, packages);
+        Scan {
+            spec: &SKILL_SPEC,
+            target: &agent.def.name,
+            store_root: None,
+            naming: Naming::DirectoryName,
         }
+        .walk(&agent_project_skill_dir(&agent.def), packages);
     }
 }
 
-/// Scan the project and global validator directories.
-fn discover_validators(packages: &mut Vec<InstalledPackage>) {
-    let local = crate::install::validators_dir(false);
-    if local.exists() {
-        scan_validators(&local, ".validators/", packages);
-    }
-
-    let global = crate::install::validators_dir(true);
-    if global.exists() {
-        scan_validators(&global, "~/.validators/", packages);
+/// A scan of the skill store rooted at `root`, recorded under `target`.
+fn skill_store_scan<'a>(root: &'a Path, target: &'a str) -> Scan<'a> {
+    Scan {
+        spec: &SKILL_SPEC,
+        target,
+        store_root: Some(root),
+        naming: Naming::DeclaredName,
     }
 }
 
-/// Scan the project and global tool stores.
-fn discover_tools(packages: &mut Vec<InstalledPackage>) {
-    scan_tools(&store::tool_store_dir(false), ".tools/", packages);
-    scan_tools(&store::tool_store_dir(true), "~/.tools/", packages);
+/// Scan a package type's project directory, then its global directory.
+///
+/// `dir_for_scope` resolves that type's directory for a scope — `false` for the
+/// project scope, `true` for the global one. Each scope is recorded under the
+/// directory it reads: `project_label` as given, and the same label under `~/`
+/// for the global scope.
+fn discover_scope_pair(
+    spec: &PackageSpec,
+    dir_for_scope: fn(bool) -> PathBuf,
+    project_label: &str,
+    packages: &mut Vec<InstalledPackage>,
+) {
+    let global_label = format!("~/{project_label}");
+    for (global, label) in [(false, project_label), (true, global_label.as_str())] {
+        Scan {
+            spec,
+            target: label,
+            store_root: None,
+            naming: Naming::DirectoryName,
+        }
+        .walk(&dir_for_scope(global), packages);
+    }
 }
 
 /// Scan each agent's project and global plugin directories.
 fn discover_plugins(agent_filter: Option<&str>, packages: &mut Vec<InstalledPackage>) {
     for agent in target_agents(agent_filter) {
-        scan_plugin_dir(
-            agents::agent_project_plugin_dir(&agent.def),
-            &agent.def.name,
-            packages,
-        );
-        scan_plugin_dir(
-            agents::agent_global_plugin_dir(&agent.def),
-            &format!("{} (global)", agent.def.name),
-            packages,
-        );
-    }
-}
+        let scopes = [
+            (
+                agents::agent_project_plugin_dir(&agent.def),
+                agent.def.name.clone(),
+            ),
+            (
+                agents::agent_global_plugin_dir(&agent.def),
+                format!("{} (global)", agent.def.name),
+            ),
+        ];
 
-/// Scan one optional plugin directory, when the agent has one and it exists.
-fn scan_plugin_dir(dir: Option<PathBuf>, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
-    let Some(dir) = dir else {
-        return;
-    };
-    if dir.exists() {
-        scan_plugins(&dir, agent_name, packages);
+        for (dir, target) in scopes {
+            let Some(dir) = dir else {
+                continue;
+            };
+            Scan {
+                spec: &PLUGIN_SPEC,
+                target: &target,
+                store_root: None,
+                naming: Naming::DeclaredName,
+            }
+            .walk(&dir, packages);
+        }
     }
 }
 
@@ -263,7 +290,9 @@ pub fn run_list(
             })
             .collect();
         let output = serde_json::json!({ "packages": entries });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        let rendered = serde_json::to_string_pretty(&output)
+            .map_err(|error| RegistryError::Json(error.to_string()))?;
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -292,161 +321,196 @@ pub fn run_list(
     Ok(())
 }
 
-/// Recursively scan a store directory for skill packages (any nested dir containing SKILL.md).
-///
-/// The store uses nested paths like `~/.skills/owner/repo/skill/SKILL.md`.
-/// The skill name is derived from the path relative to the store root.
-fn scan_skills_recursive(
-    dir: &Path,
-    store_root: &Path,
-    location: &str,
-    packages: &mut Vec<InstalledPackage>,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
+/// How a package type's metadata file is read.
+#[derive(Debug, Clone, Copy)]
+enum MetadataFormat {
+    /// YAML frontmatter at the head of a markdown file.
+    Frontmatter,
+    /// A Claude Code `plugin.json` manifest, which declares a name and nothing
+    /// else this listing shows.
+    PluginJson,
+}
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if path.join("SKILL.md").exists() {
-                let skill_md = path.join("SKILL.md");
-                // Store-relative path preserves provenance (e.g.
-                // `0xdarkmatter/claude-mods/explain`) — use as source key.
-                let source = path
-                    .strip_prefix(store_root)
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| {
-                        path.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default()
-                    });
-                // Display name: frontmatter name, or terminal path segment. Never a full path.
-                let name = read_frontmatter_name(&skill_md).unwrap_or_else(|| {
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                });
-                let description = read_frontmatter_description(&skill_md);
-                let version = read_frontmatter_version(&skill_md);
-                packages.push(InstalledPackage {
-                    source,
-                    name,
-                    description,
-                    package_type: PackageType::Skill,
-                    version,
-                    targets: vec![location.to_string()],
-                });
-            } else {
-                // Recurse into subdirectories
-                scan_skills_recursive(&path, store_root, location, packages);
+/// Where a scan takes a package's display name from.
+#[derive(Debug, Clone, Copy)]
+enum Naming {
+    /// The package directory's own name.
+    DirectoryName,
+    /// The name the package metadata declares, falling back to the directory
+    /// name when it declares none.
+    DeclaredName,
+}
+
+/// The display fields a package's metadata file declares.
+struct DeclaredMetadata {
+    /// The declared name, when the metadata carries one.
+    name: Option<String>,
+    /// One-line summary. Empty when the metadata carries none.
+    description: String,
+    /// The declared version, or [`UNVERSIONED`].
+    version: String,
+}
+
+/// How one package type is recognized on disk.
+///
+/// Every type lives in its own directory and is told apart by the metadata file
+/// that directory holds. Holding that difference as data lets [`Scan`] read
+/// every type, instead of one near-identical scan function per type.
+#[derive(Debug, Clone, Copy)]
+struct PackageSpec {
+    /// The kind of package a matching directory holds.
+    package_type: PackageType,
+    /// The metadata file, relative to the package directory, that must exist.
+    metadata_file: &'static str,
+    /// A directory, relative to the package directory, that must also exist.
+    /// `None` when the metadata file alone identifies the type.
+    required_subdir: Option<&'static str>,
+    /// How to read [`PackageSpec::metadata_file`].
+    format: MetadataFormat,
+}
+
+/// Skills carry a `SKILL.md` with YAML frontmatter.
+static SKILL_SPEC: PackageSpec = PackageSpec {
+    package_type: PackageType::Skill,
+    metadata_file: "SKILL.md",
+    required_subdir: None,
+    format: MetadataFormat::Frontmatter,
+};
+
+/// Validators carry a `VALIDATOR.md` beside the `rules/` directory it indexes.
+static VALIDATOR_SPEC: PackageSpec = PackageSpec {
+    package_type: PackageType::Validator,
+    metadata_file: "VALIDATOR.md",
+    required_subdir: Some("rules"),
+    format: MetadataFormat::Frontmatter,
+};
+
+/// Tools carry a `TOOL.md` with YAML frontmatter.
+static TOOL_SPEC: PackageSpec = PackageSpec {
+    package_type: PackageType::Tool,
+    metadata_file: "TOOL.md",
+    required_subdir: None,
+    format: MetadataFormat::Frontmatter,
+};
+
+/// Plugins carry a `.claude-plugin/plugin.json` manifest.
+static PLUGIN_SPEC: PackageSpec = PackageSpec {
+    package_type: PackageType::Plugin,
+    metadata_file: ".claude-plugin/plugin.json",
+    required_subdir: None,
+    format: MetadataFormat::PluginJson,
+};
+
+impl PackageSpec {
+    /// Whether `path` is a directory holding a package of this type.
+    fn matches(&self, path: &Path) -> bool {
+        path.is_dir()
+            && path.join(self.metadata_file).exists()
+            && self
+                .required_subdir
+                .is_none_or(|subdir| path.join(subdir).is_dir())
+    }
+
+    /// Read the display fields the package in `path` declares.
+    fn declared(&self, path: &Path) -> DeclaredMetadata {
+        let file = path.join(self.metadata_file);
+        match self.format {
+            MetadataFormat::Frontmatter => DeclaredMetadata {
+                name: read_frontmatter_name(&file),
+                description: read_frontmatter_description(&file),
+                version: read_frontmatter_version(&file),
+            },
+            MetadataFormat::PluginJson => DeclaredMetadata {
+                name: mcp_config::read_plugin_json(&file).ok(),
+                description: String::new(),
+                version: UNVERSIONED.to_string(),
+            },
+        }
+    }
+}
+
+/// One scan of a directory for installed packages.
+///
+/// This is the single walk every package type goes through. The differences
+/// between scanning a skill store, an agent skill directory, the validator
+/// directories, the tool stores, and an agent plugin directory are these fields
+/// and nothing else.
+struct Scan<'a> {
+    /// The package type to recognize.
+    spec: &'a PackageSpec,
+    /// Label recorded in [`InstalledPackage::targets`] — an agent name, or a
+    /// store location such as `global` or `~/.tools/`.
+    target: &'a str,
+    /// The store root, when the directory walked is a package store.
+    ///
+    /// A store nests packages under their provenance path (e.g.
+    /// `owner/repo/skill`), so a store scan descends into every subdirectory
+    /// that is not itself a package, and keys each package by its path relative
+    /// to this root. `None` reads one level of package directories, each keyed
+    /// by its display name.
+    store_root: Option<&'a Path>,
+    /// Where the display name comes from.
+    naming: Naming,
+}
+
+impl Scan<'_> {
+    /// Add every package this scan finds under `dir` to `packages`.
+    fn walk(&self, dir: &Path, packages: &mut Vec<InstalledPackage>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if self.spec.matches(&path) {
+                packages.push(self.package_at(&path));
+            } else if self.store_root.is_some() && path.is_dir() {
+                self.walk(&path, packages);
             }
         }
     }
-}
 
-/// Scan a directory for skill packages (subdirs containing SKILL.md).
-fn scan_skills(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
+    /// Build the record for the package directory `path`.
+    fn package_at(&self, path: &Path) -> InstalledPackage {
+        let dir_name = directory_name(path);
+        let declared = self.spec.declared(path);
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("SKILL.md").exists() {
-            let skill_md = path.join("SKILL.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&skill_md);
-            let version = read_frontmatter_version(&skill_md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Skill,
-                version,
-                targets: vec![agent_name.to_string()],
-            });
+        // A display name is never a full path — it is the declared name or the
+        // terminal path segment.
+        let name = match self.naming {
+            Naming::DirectoryName => dir_name,
+            Naming::DeclaredName => declared.name.unwrap_or(dir_name),
+        };
+        let source = match self.store_root {
+            // The store-relative path preserves provenance (e.g.
+            // `0xdarkmatter/claude-mods/explain`), so it is the lockfile key.
+            Some(root) => store_relative_key(path, root),
+            None => name.clone(),
+        };
+
+        InstalledPackage {
+            source,
+            name,
+            description: declared.description,
+            package_type: self.spec.package_type,
+            version: declared.version,
+            targets: vec![self.target.to_string()],
         }
     }
 }
 
-/// Scan a directory for validator packages (subdirs containing VALIDATOR.md + rules/).
-fn scan_validators(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("VALIDATOR.md").exists() && path.join("rules").is_dir() {
-            let md = path.join("VALIDATOR.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&md);
-            let version = read_frontmatter_version(&md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Validator,
-                version,
-                targets: vec![location.to_string()],
-            });
-        }
-    }
+/// The path of `path` relative to the store root `root`, falling back to the
+/// terminal path segment when `path` does not sit under `root`.
+fn store_relative_key(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|relative| relative.to_string_lossy().to_string())
+        .unwrap_or_else(|_| directory_name(path))
 }
 
-/// Scan a directory for tool packages (subdirs containing TOOL.md).
-fn scan_tools(dir: &Path, location: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join("TOOL.md").exists() {
-            let md = path.join("TOOL.md");
-            let name = entry.file_name().to_string_lossy().to_string();
-            let description = read_frontmatter_description(&md);
-            let version = read_frontmatter_version(&md);
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description,
-                package_type: PackageType::Tool,
-                version,
-                targets: vec![location.to_string()],
-            });
-        }
-    }
-}
-
-/// Scan a directory for plugin packages (subdirs containing .claude-plugin/plugin.json).
-fn scan_plugins(dir: &Path, agent_name: &str, packages: &mut Vec<InstalledPackage>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join(".claude-plugin").join("plugin.json").exists() {
-            let name = mcp_config::read_plugin_json(&path.join(".claude-plugin/plugin.json"))
-                .unwrap_or_else(|_| entry.file_name().to_string_lossy().to_string());
-            packages.push(InstalledPackage {
-                source: name.clone(),
-                name,
-                description: String::new(),
-                package_type: PackageType::Plugin,
-                version: "latest".to_string(),
-                targets: vec![agent_name.to_string()],
-            });
-        }
-    }
+/// The terminal segment of `path`, or an empty string when it has none.
+fn directory_name(path: &Path) -> String {
+    path.file_name()
+        .map(|segment| segment.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 /// Parse YAML frontmatter from a markdown file, returning the parsed YAML value.
@@ -476,7 +540,8 @@ fn read_frontmatter_description(path: &Path) -> String {
 
 /// Read version from YAML frontmatter of SKILL.md, VALIDATOR.md, or TOOL.md.
 ///
-/// Checks `metadata.version` first, then top-level `version`. Falls back to "latest".
+/// Checks `metadata.version` first, then top-level `version`. Falls back to
+/// [`UNVERSIONED`].
 fn read_frontmatter_version(path: &Path) -> String {
     parse_frontmatter(path)
         .and_then(|yaml| {
@@ -486,7 +551,7 @@ fn read_frontmatter_version(path: &Path) -> String {
                 .or_else(|| yaml.get("version").and_then(|v| v.as_str()))
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| "latest".to_string())
+        .unwrap_or_else(|| UNVERSIONED.to_string())
 }
 
 /// Merge packages with the same name (combining targets).
@@ -628,7 +693,7 @@ metadata:
     }
 
     #[test]
-    fn test_scan_skills_recursive_nested_structure() {
+    fn test_skill_store_scan_nested_structure() {
         let dir = tempfile::tempdir().unwrap();
         let store_root = dir.path();
 
@@ -642,7 +707,7 @@ metadata:
         .unwrap();
 
         let mut packages = Vec::new();
-        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+        skill_store_scan(store_root, "global").walk(store_root, &mut packages);
 
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "my-skill");
@@ -653,7 +718,7 @@ metadata:
     }
 
     #[test]
-    fn test_scan_skills_recursive_uses_dir_name_when_no_frontmatter_name() {
+    fn test_skill_store_scan_uses_dir_name_when_no_frontmatter_name() {
         let dir = tempfile::tempdir().unwrap();
         let store_root = dir.path();
 
@@ -662,7 +727,7 @@ metadata:
         std::fs::write(skill_dir.join("SKILL.md"), "# No frontmatter\n").unwrap();
 
         let mut packages = Vec::new();
-        scan_skills_recursive(store_root, store_root, "global", &mut packages);
+        skill_store_scan(store_root, "global").walk(store_root, &mut packages);
 
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "fallback-skill");

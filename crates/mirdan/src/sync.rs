@@ -86,14 +86,21 @@ fn verify_package(
             name,
             &store::skill_store_dir(global),
             agents,
-            |def| Some(skill_dir_for(def, global)),
+            |def| {
+                Some(scoped_agent_path(
+                    def,
+                    global,
+                    agent_global_skill_dir,
+                    agent_project_skill_dir,
+                ))
+            },
             report,
         ),
         PackageType::Agent => verify_linked_package(
             name,
             &store::agent_store_dir(global),
             agents,
-            |def| agent_dir_for(def, global),
+            |def| scoped_agent_path(def, global, agent_global_agent_dir, agent_project_agent_dir),
             report,
         ),
         PackageType::Tool => {
@@ -120,21 +127,22 @@ fn record_presence(report: &mut SyncReport, name: &str, present: bool) {
     }
 }
 
-/// Resolve the skill directory an agent links skills into.
-fn skill_dir_for(def: &AgentDef, global: bool) -> PathBuf {
+/// Resolve one of an agent's paths by scope: `global_path` when `global`, and
+/// `project_path` otherwise.
+///
+/// Every agent path this module reads — skill directory, subagent directory,
+/// MCP config, plugin directory — comes as a global/project pair, and every one
+/// is chosen the same way. This is that choice, written once for all of them.
+fn scoped_agent_path<T>(
+    def: &AgentDef,
+    global: bool,
+    global_path: fn(&AgentDef) -> T,
+    project_path: fn(&AgentDef) -> T,
+) -> T {
     if global {
-        agent_global_skill_dir(def)
+        global_path(def)
     } else {
-        agent_project_skill_dir(def)
-    }
-}
-
-/// Resolve the subagent directory an agent links agents into, when it has one.
-fn agent_dir_for(def: &AgentDef, global: bool) -> Option<PathBuf> {
-    if global {
-        agent_global_agent_dir(def)
-    } else {
-        agent_project_agent_dir(def)
+        project_path(def)
     }
 }
 
@@ -197,11 +205,12 @@ fn agent_declares_mcp_server(agent: &DetectedAgent, name: &str, global: bool) ->
     let Some(mcp_def) = &agent.def.mcp_config else {
         return false;
     };
-    let config_path = if global {
-        agents::agent_global_mcp_config(&agent.def)
-    } else {
-        agents::agent_project_mcp_config(&agent.def)
-    };
+    let config_path = scoped_agent_path(
+        &agent.def,
+        global,
+        agents::agent_global_mcp_config,
+        agents::agent_project_mcp_config,
+    );
     let Some(path) = config_path else {
         return false;
     };
@@ -223,11 +232,12 @@ fn agent_declares_mcp_server(agent: &DetectedAgent, name: &str, global: bool) ->
 fn plugin_is_installed(name: &str, agents: &[DetectedAgent], global: bool) -> bool {
     let sanitized = store::sanitize_dir_name(name);
     agents.iter().any(|agent| {
-        let plugin_dir = if global {
-            agents::agent_global_plugin_dir(&agent.def)
-        } else {
-            agents::agent_project_plugin_dir(&agent.def)
-        };
+        let plugin_dir = scoped_agent_path(
+            &agent.def,
+            global,
+            agents::agent_global_plugin_dir,
+            agents::agent_project_plugin_dir,
+        );
         plugin_dir.is_some_and(|base_dir| base_dir.join(&sanitized).exists())
     })
 }

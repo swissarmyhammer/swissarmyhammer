@@ -46,6 +46,7 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "AGENT_ID")]
     pub agent: Option<String>,
 
+    /// The subcommand the user asked for.
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -68,6 +69,7 @@ pub enum Commands {
 
     /// Create a new package from template
     New {
+        /// The kind of package to scaffold.
         #[command(subcommand)]
         kind: NewKind,
     },
@@ -106,7 +108,14 @@ pub enum Commands {
     },
 
     /// List installed packages
+    ///
+    /// The --skills, --validators, --tools, and --plugins flags are mutually
+    /// exclusive: each one narrows the listing to a single package type, so at
+    /// most one of them may be given. Passing two, such as
+    /// `mirdan list --skills --tools`, is an error. Pass no type flag to list
+    /// every type.
     List {
+        /// Which package type to list, if only one.
         #[command(flatten)]
         filter: ListFilterArgs,
         /// Output as JSON
