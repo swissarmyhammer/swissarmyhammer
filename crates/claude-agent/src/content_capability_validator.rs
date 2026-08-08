@@ -11,20 +11,32 @@ use tracing::{debug, warn};
 /// Errors that can occur during content capability validation
 #[derive(Debug, Error, Clone)]
 pub enum ContentCapabilityError {
+    /// The prompt carried a content type the client never declared support for.
     #[error("invalid content type: agent does not support {content_type} content")]
     UnsupportedContentType {
+        /// Content type the prompt carried, such as `image` or `audio`.
         content_type: String,
+        /// Whether the client declared the capability this content type needs.
         declared_capability: bool,
+        /// Capability the client must declare, in ACP spelling.
         required_capability: String,
+        /// Content types this client may send, given what it declared.
         supported_types: Vec<String>,
     },
 
+    /// A content block failed validation for a reason the payload names.
     #[error("content validation failed: {reason}")]
-    ValidationFailed { reason: String },
+    ValidationFailed {
+        /// What the validator objected to.
+        reason: String,
+    },
 
+    /// More than one content block in the same prompt failed validation.
     #[error("multiple content capability violations: {violation_count} issues")]
     MultipleViolations {
+        /// How many content blocks failed.
         violation_count: usize,
+        /// The failure recorded for each rejected content block.
         violations: Vec<ContentCapabilityError>,
     },
 }
@@ -89,7 +101,55 @@ impl ContentCapabilityError {
     }
 }
 
+/// Content types every ACP client accepts, whatever it declared.
+const BASELINE_CONTENT_TYPES: &[&str] = &["text", "resource_link"];
+
+/// One content type that a client must declare before it may send it.
+///
+/// Everything that differs between the image, audio and embedded resource
+/// gates is held here as data, so the gate itself is written once.
+struct OptionalCapability {
+    /// Content type name reported to the caller.
+    content_type: &'static str,
+    /// Reads this capability out of what the client declared.
+    is_declared: fn(&PromptCapabilities) -> bool,
+    /// Capability the client must declare, in ACP spelling.
+    required_capability: &'static str,
+}
+
+impl OptionalCapability {
+    /// Image content, gated on `promptCapabilities.image`.
+    const IMAGE: Self = Self {
+        content_type: "image",
+        is_declared: |capabilities| capabilities.image,
+        required_capability: "promptCapabilities.image",
+    };
+
+    /// Audio content, gated on `promptCapabilities.audio`.
+    const AUDIO: Self = Self {
+        content_type: "audio",
+        is_declared: |capabilities| capabilities.audio,
+        required_capability: "promptCapabilities.audio",
+    };
+
+    /// Embedded resource content, gated on
+    /// `promptCapabilities.embeddedContext`.
+    const RESOURCE: Self = Self {
+        content_type: "resource",
+        is_declared: |capabilities| capabilities.embedded_context,
+        required_capability: "promptCapabilities.embeddedContext",
+    };
+}
+
+/// Every optional content capability, in the order the validator reports them.
+const OPTIONAL_CAPABILITIES: &[OptionalCapability] = &[
+    OptionalCapability::IMAGE,
+    OptionalCapability::AUDIO,
+    OptionalCapability::RESOURCE,
+];
+
 /// Content capability validator for ACP compliance
+#[derive(Debug)]
 pub struct ContentCapabilityValidator {
     prompt_capabilities: PromptCapabilities,
 }
@@ -112,82 +172,59 @@ impl ContentCapabilityValidator {
             std::mem::discriminant(content)
         );
 
+        // ACP requires strict content validation against declared capabilities:
+        // 1. Text and ResourceLink: Always supported (baseline)
+        // 2. Image: Only if promptCapabilities.image: true
+        // 3. Audio: Only if promptCapabilities.audio: true
+        // 4. Resource: Only if promptCapabilities.embedded_context: true
+        //
+        // This prevents protocol violations and ensures capability contract compliance.
         match content {
-            // ACP requires strict content validation against declared capabilities:
-            // 1. Text and ResourceLink: Always supported (baseline)
-            // 2. Image: Only if promptCapabilities.image: true
-            // 3. Audio: Only if promptCapabilities.audio: true
-            // 4. Resource: Only if promptCapabilities.embedded_context: true
-            //
-            // This prevents protocol violations and ensures capability contract compliance.
-            ContentBlock::Text(_) => {
-                // Text content is always allowed (baseline ACP requirement)
-                debug!("Text content always allowed");
+            ContentBlock::Text(_) | ContentBlock::ResourceLink(_) => {
+                debug!("baseline content type always allowed");
                 Ok(())
             }
-
-            ContentBlock::ResourceLink(_) => {
-                // Resource link content is always allowed (baseline ACP requirement)
-                debug!("ResourceLink content always allowed");
-                Ok(())
-            }
-
-            ContentBlock::Image(_) => {
-                if self.prompt_capabilities.image {
-                    debug!("Image content allowed - capability enabled");
-                    Ok(())
-                } else {
-                    warn!("Image content blocked - capability not enabled");
-                    Err(ContentCapabilityError::UnsupportedContentType {
-                        content_type: "image".to_string(),
-                        declared_capability: false,
-                        required_capability: "promptCapabilities.image".to_string(),
-                        supported_types: self.get_supported_content_types(),
-                    })
-                }
-            }
-
-            ContentBlock::Audio(_) => {
-                if self.prompt_capabilities.audio {
-                    debug!("Audio content allowed - capability enabled");
-                    Ok(())
-                } else {
-                    warn!("Audio content blocked - capability not enabled");
-                    Err(ContentCapabilityError::UnsupportedContentType {
-                        content_type: "audio".to_string(),
-                        declared_capability: false,
-                        required_capability: "promptCapabilities.audio".to_string(),
-                        supported_types: self.get_supported_content_types(),
-                    })
-                }
-            }
-
+            ContentBlock::Image(_) => self.check_optional_capability(&OptionalCapability::IMAGE),
+            ContentBlock::Audio(_) => self.check_optional_capability(&OptionalCapability::AUDIO),
             ContentBlock::Resource(_) => {
-                if self.prompt_capabilities.embedded_context {
-                    debug!("Resource content allowed - embedded context capability enabled");
-                    Ok(())
-                } else {
-                    warn!("Resource content blocked - embedded context capability not enabled");
-                    Err(ContentCapabilityError::UnsupportedContentType {
-                        content_type: "resource".to_string(),
-                        declared_capability: false,
-                        required_capability: "promptCapabilities.embeddedContext".to_string(),
-                        supported_types: self.get_supported_content_types(),
-                    })
-                }
+                self.check_optional_capability(&OptionalCapability::RESOURCE)
             }
-
             _ => {
-                // Unknown or unsupported content block type
-                warn!("Unknown content block type blocked");
+                warn!("unknown content block type blocked");
                 Err(ContentCapabilityError::UnsupportedContentType {
                     content_type: "unknown".to_string(),
                     declared_capability: false,
                     required_capability: "none".to_string(),
-                    supported_types: self.get_supported_content_types(),
+                    supported_types: self.supported_content_types(),
                 })
             }
         }
+    }
+
+    /// Allow content whose capability the client declared, and reject it when
+    /// the client did not.
+    fn check_optional_capability(
+        &self,
+        capability: &OptionalCapability,
+    ) -> Result<(), ContentCapabilityError> {
+        if (capability.is_declared)(&self.prompt_capabilities) {
+            debug!(
+                content_type = capability.content_type,
+                "content allowed, capability declared"
+            );
+            return Ok(());
+        }
+
+        warn!(
+            content_type = capability.content_type,
+            "content blocked, capability not declared"
+        );
+        Err(ContentCapabilityError::UnsupportedContentType {
+            content_type: capability.content_type.to_string(),
+            declared_capability: false,
+            required_capability: capability.required_capability.to_string(),
+            supported_types: self.supported_content_types(),
+        })
     }
 
     /// Validate an array of content blocks against declared capabilities
@@ -224,23 +261,19 @@ impl ContentCapabilityValidator {
         Ok(())
     }
 
-    /// Get list of currently supported content types based on capabilities
-    fn get_supported_content_types(&self) -> Vec<String> {
-        let mut supported = vec!["text".to_string(), "resource_link".to_string()];
-
-        if self.prompt_capabilities.image {
-            supported.push("image".to_string());
-        }
-
-        if self.prompt_capabilities.audio {
-            supported.push("audio".to_string());
-        }
-
-        if self.prompt_capabilities.embedded_context {
-            supported.push("resource".to_string());
-        }
-
-        supported
+    /// The content types this client may send: the baseline types, plus every
+    /// optional capability it declared.
+    fn supported_content_types(&self) -> Vec<String> {
+        BASELINE_CONTENT_TYPES
+            .iter()
+            .map(|name| (*name).to_string())
+            .chain(
+                OPTIONAL_CAPABILITIES
+                    .iter()
+                    .filter(|capability| (capability.is_declared)(&self.prompt_capabilities))
+                    .map(|capability| capability.content_type.to_string()),
+            )
+            .collect()
     }
 
     /// Get the underlying prompt capabilities
@@ -489,10 +522,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_supported_content_types() {
+    fn test_supported_content_types() {
         let capabilities = create_test_capabilities(true, false, true);
         let validator = ContentCapabilityValidator::new(capabilities);
-        let supported = validator.get_supported_content_types();
+        let supported = validator.supported_content_types();
 
         assert!(supported.contains(&"text".to_string()));
         assert!(supported.contains(&"resource_link".to_string()));

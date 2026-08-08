@@ -203,14 +203,20 @@ impl ClaudeAgent {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionRestoreError::Corrupt`] if the reconstructed session
-    /// cannot be inserted into the in-memory `SessionManager`.
+    /// Returns [`SessionRestoreError::Corrupt`] if the record carries a working
+    /// directory that is not absolute, or if the reconstructed session cannot be
+    /// inserted into the in-memory `SessionManager`.
     pub fn rehydrate_in_memory_session(
         &self,
         session_id: SessionId,
         record: &SessionRecord,
     ) -> Result<(), SessionRestoreError> {
-        let mut session = Session::new(session_id, record.cwd.clone());
+        let mut session = Session::new(session_id, record.cwd.clone()).map_err(|e| {
+            SessionRestoreError::Corrupt {
+                session_id: record.session_id.clone(),
+                detail: format!("record carries an unusable working directory: {e}"),
+            }
+        })?;
         session.mcp_servers = record
             .mcp_servers
             .iter()

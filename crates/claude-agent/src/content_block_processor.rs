@@ -1,7 +1,8 @@
 use crate::base64_processor::{Base64Processor, Base64ProcessorError};
 use crate::content_security_validator::{ContentSecurityError, ContentSecurityValidator};
 use crate::error::ToJsonRpcError;
-use crate::size_validator::{SizeValidationError, SizeValidator};
+use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
+use crate::size_validator::{SizeLimits, SizeValidationError, SizeValidator};
 use crate::url_validation;
 use agent_client_protocol::schema::{ContentBlock, TextContent};
 use serde_json::{json, Value};
@@ -11,49 +12,167 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use url::Url;
 
-/// Configuration struct for enhanced security settings
-#[derive(Debug)]
-pub struct EnhancedSecurityConfig {
+/// How many extra attempts a failed content block gets during batch recovery.
+const MAX_RETRIES: u32 = 3;
+
+/// Milliseconds in a second, the first backoff step.
+const MS_PER_SECOND: u64 = 1000;
+
+/// Longest a retry waits, in milliseconds.
+const MAX_BACKOFF_MS: u64 = 10_000;
+
+/// Factor the backoff grows by on each further attempt.
+const BACKOFF_BASE: u64 = 2;
+
+/// MIME type used when a blob resource declares none.
+const DEFAULT_BLOB_MIME_TYPE: &str = "text/plain";
+
+/// A [`Base64Processor`] decode method, as the shared media path passes it
+/// around.
+type MediaDecoder = fn(&Base64Processor, &str, &str) -> Result<Vec<u8>, Base64ProcessorError>;
+
+/// The limits and switches that decide how a [`ContentBlockProcessor`] treats
+/// a content block.
+///
+/// These settings are named fields rather than positional arguments, so a call
+/// site says which switch it sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentValidationConfig {
+    /// Largest decoded resource accepted, in bytes.
     pub max_resource_size: usize,
+    /// Whether URIs on content blocks are parsed and checked.
     pub enable_uri_validation: bool,
+    /// Whether a content kind must be declared before it is processed.
     pub enable_capability_validation: bool,
+    /// Which content kinds the agent declares, by capability name.
     pub supported_capabilities: HashMap<String, bool>,
+    /// Whether a failed block is retried and replaced instead of aborting the
+    /// batch.
     pub enable_batch_recovery: bool,
+}
+
+impl Default for ContentValidationConfig {
+    fn default() -> Self {
+        let mut supported_capabilities = HashMap::new();
+        supported_capabilities.insert("text".to_string(), true);
+        supported_capabilities.insert("image".to_string(), true);
+        supported_capabilities.insert("audio".to_string(), false); // Disabled by default
+        supported_capabilities.insert("resource".to_string(), true);
+        supported_capabilities.insert("resource_link".to_string(), true);
+
+        Self {
+            max_resource_size: SizeLimits::default().max_content_size,
+            enable_uri_validation: true,
+            enable_capability_validation: true,
+            supported_capabilities,
+            enable_batch_recovery: true,
+        }
+    }
+}
+
+impl ContentValidationConfig {
+    /// The default settings with the resource size cap and the URI switch set.
+    ///
+    /// [`ContentBlockProcessor::new`] and
+    /// [`ContentBlockProcessor::with_enhanced_security`] both take just these
+    /// two settings, and both build their configuration here.
+    #[must_use]
+    pub fn with_resource_limit(max_resource_size: usize, enable_uri_validation: bool) -> Self {
+        Self {
+            max_resource_size,
+            enable_uri_validation,
+            ..Default::default()
+        }
+    }
+}
+
+/// Configuration struct for enhanced security settings
+#[derive(Debug, Clone)]
+pub struct EnhancedSecurityConfig {
+    /// Limits and switches applied to every block.
+    pub validation: ContentValidationConfig,
+    /// Security validator applied to every block.
     pub content_security_validator: ContentSecurityValidator,
 }
 
+/// Why [`ContentBlockProcessor`] refused or failed to process a content block.
+///
+/// The variants cover structural faults in the block, capability and size
+/// policy, URI faults, and failures forwarded from the base64 and security
+/// validators.
 #[derive(Debug, Error, Clone)]
 pub enum ContentBlockProcessorError {
+    /// Base64 decoding or checking failed.
     #[error("Base64 processing error: {0}")]
     Base64Error(#[from] Base64ProcessorError),
+    /// An embedded resource failed validation. The payload names the fault.
     #[error("resource validation error: {0}")]
     ResourceValidation(String),
+    /// A resource link failed validation. The payload names the fault.
     #[error("ResourceLink validation error: {0}")]
     ResourceLinkValidation(String),
+    /// The content block is of a kind the processor does not handle.
     #[error("unsupported content type: {0}")]
     UnsupportedContentType(String),
+    /// A field the content block must carry is absent. The payload names it.
     #[error("missing required field: {0}")]
     MissingRequiredField(String),
+    /// A URI on the content block cannot be parsed.
     #[error("invalid URI format: {0}")]
     InvalidUri(String),
+    /// The content is larger than the configured size limit.
     #[error("content size exceeds limit: {actual} > {limit} bytes")]
-    ContentSizeExceeded { actual: usize, limit: usize },
+    ContentSizeExceeded {
+        /// Size the content holds, in bytes.
+        actual: usize,
+        /// Largest accepted size, in bytes.
+        limit: usize,
+    },
+    /// An annotation on the content block is malformed.
     #[error("invalid annotation: {0}")]
     InvalidAnnotation(String),
+    /// The agent does not declare the capability this content kind needs.
     #[error("capability not supported: {capability}")]
-    CapabilityNotSupported { capability: String },
+    CapabilityNotSupported {
+        /// Name of the capability the content needs.
+        capability: String,
+    },
+    /// Content-level validation failed. The payload names the fault.
     #[error("content validation failed: {details}")]
-    ContentValidationFailed { details: String },
+    ContentValidationFailed {
+        /// What the validator objected to.
+        details: String,
+    },
+    /// The content block does not have the shape its kind requires.
     #[error("invalid content structure: {details}")]
-    InvalidContentStructure { details: String },
+    InvalidContentStructure {
+        /// What was wrong with the structure.
+        details: String,
+    },
+    /// Processing needed more memory than the budget allows.
     #[error("memory allocation failed during processing")]
     MemoryAllocationFailed,
+    /// Some blocks in a batch failed and recovery could not save the batch.
     #[error("batch processing partially failed: {successful}/{total} items processed")]
-    PartialBatchFailure { successful: usize, total: usize },
+    PartialBatchFailure {
+        /// Number of blocks processed successfully.
+        successful: usize,
+        /// Number of blocks in the batch.
+        total: usize,
+    },
+    /// The content behind a resource link could not be fetched.
     #[error("resource link fetch failed: {uri}")]
-    ResourceLinkFetchFailed { uri: String },
+    ResourceLinkFetchFailed {
+        /// URI that could not be fetched.
+        uri: String,
+    },
+    /// The content array as a whole failed validation.
     #[error("content array validation failed: {details}")]
-    ContentArrayValidationFailed { details: String },
+    ContentArrayValidationFailed {
+        /// What the validator objected to.
+        details: String,
+    },
+    /// The [`ContentSecurityValidator`] refused the content.
     #[error("content security validation failed: {0}")]
     ContentSecurityValidationFailed(#[from] ContentSecurityError),
 }
@@ -72,11 +191,11 @@ impl ToJsonRpcError for ContentBlockProcessorError {
             | Self::CapabilityNotSupported { .. }
             | Self::ContentValidationFailed { .. }
             | Self::InvalidContentStructure { .. }
-            | Self::ContentArrayValidationFailed { .. } => -32602, // Invalid params
+            | Self::ContentArrayValidationFailed { .. } => INVALID_PARAMS,
             Self::MemoryAllocationFailed
             | Self::PartialBatchFailure { .. }
             | Self::ResourceLinkFetchFailed { .. }
-            | Self::ContentSecurityValidationFailed(_) => -32603, // Internal error
+            | Self::ContentSecurityValidationFailed(_) => INTERNAL_ERROR,
         }
     }
 
@@ -173,38 +292,152 @@ impl From<SizeValidationError> for ContentBlockProcessorError {
     }
 }
 
-#[derive(Debug)]
+/// One content block after [`ContentBlockProcessor`] has decoded and checked
+/// it.
+///
+/// Every block, whatever its kind, yields a text representation a language
+/// model can read. Binary kinds also carry their decoded bytes.
+#[derive(Debug, Clone)]
 pub struct ProcessedContent {
+    /// Kind of the block, with the details that kind carries.
     pub content_type: ProcessedContentType,
+    /// Text a language model reads in place of the block.
     pub text_representation: String,
+    /// Decoded bytes, for the kinds that carry a payload.
     pub binary_data: Option<Vec<u8>>,
+    /// Extra facts about the block, such as its MIME type and source URI.
     pub metadata: HashMap<String, String>,
+    /// Size of the block as it arrived, in bytes.
     pub size_bytes: usize,
 }
 
-#[derive(Debug, Clone)]
-pub enum ProcessedContentType {
-    Text,
+/// Declare [`ProcessedContentType`] and its counting keys from one table.
+///
+/// Each row gives a variant, the fields that variant carries, and the key a
+/// [`ContentProcessingSummary`] counts it under. A new content kind is one new
+/// row, not a variant here and a matching arm somewhere else that can drift
+/// away from it.
+macro_rules! processed_content_types {
+    (
+        $(
+            $(#[$variant_doc:meta])*
+            $variant:ident $({ $($(#[$field_doc:meta])* $field:ident : $field_type:ty),* $(,)? })?
+                => $counting_key:literal
+        ),* $(,)?
+    ) => {
+        /// The kind of a [`ProcessedContent`], with the details that kind carries.
+        #[derive(Debug, Clone)]
+        pub enum ProcessedContentType {
+            $(
+                $(#[$variant_doc])*
+                $variant $({ $($(#[$field_doc])* $field : $field_type),* })?,
+            )*
+        }
+
+        impl ProcessedContentType {
+            /// The key a [`ContentProcessingSummary`] counts this kind under.
+            pub fn counting_key(&self) -> &'static str {
+                match self {
+                    $( Self::$variant $({ $($field: _),* })? => $counting_key, )*
+                }
+            }
+        }
+    };
+}
+
+processed_content_types! {
+    /// Plain text.
+    Text => "text",
+    /// An image decoded from base64.
     Image {
+        /// MIME type the block declared.
         mime_type: String,
-    },
+    } => "image",
+    /// Audio decoded from base64.
     Audio {
+        /// MIME type the block declared.
         mime_type: String,
-    },
+    } => "audio",
+    /// A resource carried inline, as text or as a base64 blob.
     EmbeddedResource {
+        /// URI the resource names, when it names one.
         uri: Option<String>,
+        /// MIME type the resource declared, when it declared one.
         mime_type: Option<String>,
-    },
+    } => "resource",
+    /// A reference to a resource held elsewhere.
     ResourceLink {
+        /// URI the link names.
         uri: String,
-    },
+    } => "resource_link",
+}
+
+/// Running totals gathered while a batch of content blocks is processed.
+///
+/// Both the strict batch path and the recovering batch path fold their results
+/// in here, so the two agree on what a summary holds.
+#[derive(Debug, Default)]
+struct ContentAccumulator {
+    text_content: String,
+    has_binary_content: bool,
+    processed_contents: Vec<ProcessedContent>,
+    total_size: usize,
+    content_type_counts: HashMap<String, usize>,
+}
+
+impl ContentAccumulator {
+    /// Fold one successfully processed block into the running totals.
+    ///
+    /// `type_key` is the counting key for the block's kind.
+    fn accumulate(&mut self, processed: ProcessedContent, type_key: &str) {
+        self.text_content.push_str(&processed.text_representation);
+
+        if processed.binary_data.is_some() {
+            self.has_binary_content = true;
+        }
+
+        self.total_size += processed.size_bytes;
+        *self
+            .content_type_counts
+            .entry(type_key.to_string())
+            .or_insert(0) += 1;
+
+        self.processed_contents.push(processed);
+    }
+
+    /// Record a placeholder that stands in for a block that failed.
+    ///
+    /// A placeholder contributes its text but counts toward no kind and adds
+    /// no size, because no real content was processed.
+    fn accumulate_fallback(&mut self, fallback: ProcessedContent) {
+        self.text_content.push_str(&fallback.text_representation);
+        self.processed_contents.push(fallback);
+    }
+
+    /// Turn the running totals into the summary the caller returns.
+    fn into_summary(self) -> ContentProcessingSummary {
+        ContentProcessingSummary {
+            processed_contents: self.processed_contents,
+            combined_text: self.text_content,
+            has_binary_content: self.has_binary_content,
+            total_size_bytes: self.total_size,
+            content_type_counts: self.content_type_counts,
+        }
+    }
 }
 
 // IMPORTANT: Do not add timeouts to content processing operations.
 // Content processing should be allowed to complete regardless of size or complexity.
 // Timeouts create artificial limitations and poor user experience by interrupting
 // legitimate processing of large or complex content. Users cannot predict when
-// operations will be artificially terminated, leading to frustration and unreliable behavior.
+/// Decodes and checks ACP content blocks, one at a time or in batches.
+///
+/// Each block is validated for structure, for the capability its kind needs
+/// and for size, then decoded into a [`ProcessedContent`] carrying a text
+/// representation and, for binary kinds, the decoded bytes. A batch either
+/// fails on the first bad block or recovers from it, depending on
+/// `enable_batch_recovery`.
+#[derive(Debug)]
 pub struct ContentBlockProcessor {
     base64_processor: Base64Processor,
     enable_uri_validation: bool,
@@ -217,95 +450,45 @@ pub struct ContentBlockProcessor {
 
 impl Default for ContentBlockProcessor {
     fn default() -> Self {
-        let mut supported_capabilities = HashMap::new();
-        supported_capabilities.insert("text".to_string(), true);
-        supported_capabilities.insert("image".to_string(), true);
-        supported_capabilities.insert("audio".to_string(), false); // Disabled by default
-        supported_capabilities.insert("resource".to_string(), true);
-        supported_capabilities.insert("resource_link".to_string(), true);
-
-        let size_validator = SizeValidator::default();
-
-        Self {
-            base64_processor: Base64Processor::default(),
-            enable_uri_validation: true,
-            enable_capability_validation: true,
-            supported_capabilities,
-            enable_batch_recovery: true,
-            content_security_validator: None, // Default to no enhanced security validation
-            size_validator,
-        }
+        Self::from_parts(
+            Base64Processor::default(),
+            ContentValidationConfig::default(),
+            // Default to no enhanced security validation.
+            None,
+        )
     }
 }
 
 impl ContentBlockProcessor {
+    /// Build a processor around `base64_processor`.
+    ///
+    /// `max_resource_size` caps a decoded resource in bytes, and
+    /// `enable_uri_validation` turns URI parsing on or off. Every other
+    /// setting keeps its [`Default`] value, so batch recovery is on and no
+    /// [`ContentSecurityValidator`] is attached.
     pub fn new(
         base64_processor: Base64Processor,
         max_resource_size: usize,
         enable_uri_validation: bool,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: max_resource_size,
-            ..Default::default()
-        });
-
-        Self {
+        Self::from_parts(
             base64_processor,
-            enable_uri_validation,
-            size_validator,
-            ..Default::default()
-        }
+            ContentValidationConfig::with_resource_limit(max_resource_size, enable_uri_validation),
+            None,
+        )
     }
 
-    pub fn new_with_config(
+    /// Build a processor from the full settings and the optional security
+    /// validator.
+    ///
+    /// Every constructor, [`Default`] included, lands here, so the size
+    /// validator is derived from `config` in exactly one place.
+    fn from_parts(
         base64_processor: Base64Processor,
-        max_resource_size: usize,
-        enable_uri_validation: bool,
-        enable_capability_validation: bool,
-        supported_capabilities: HashMap<String, bool>,
-        enable_batch_recovery: bool,
+        config: ContentValidationConfig,
+        content_security_validator: Option<ContentSecurityValidator>,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: max_resource_size,
-            ..Default::default()
-        });
-
-        Self {
-            base64_processor,
-            enable_uri_validation,
-            enable_capability_validation,
-            supported_capabilities,
-            enable_batch_recovery,
-            content_security_validator: None,
-            size_validator,
-        }
-    }
-
-    pub fn with_enhanced_security(
-        base64_processor: Base64Processor,
-        max_resource_size: usize,
-        enable_uri_validation: bool,
-        content_security_validator: ContentSecurityValidator,
-    ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: max_resource_size,
-            ..Default::default()
-        });
-
-        Self {
-            base64_processor,
-            enable_uri_validation,
-            content_security_validator: Some(content_security_validator),
-            size_validator,
-            ..Default::default()
-        }
-    }
-
-    pub fn with_enhanced_security_config(
-        base64_processor: Base64Processor,
-        config: EnhancedSecurityConfig,
-    ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
+        let size_validator = SizeValidator::new(SizeLimits {
             max_content_size: config.max_resource_size,
             ..Default::default()
         });
@@ -316,9 +499,54 @@ impl ContentBlockProcessor {
             enable_capability_validation: config.enable_capability_validation,
             supported_capabilities: config.supported_capabilities,
             enable_batch_recovery: config.enable_batch_recovery,
-            content_security_validator: Some(config.content_security_validator),
+            content_security_validator,
             size_validator,
         }
+    }
+
+    /// Build a processor with every limit and switch set explicitly.
+    ///
+    /// The switches arrive as one named [`ContentValidationConfig`] rather
+    /// than as positional booleans. No [`ContentSecurityValidator`] is
+    /// attached.
+    pub fn new_with_config(
+        base64_processor: Base64Processor,
+        config: ContentValidationConfig,
+    ) -> Self {
+        Self::from_parts(base64_processor, config, None)
+    }
+
+    /// Build a processor that also runs `content_security_validator` on every
+    /// block.
+    ///
+    /// Every setting other than `max_resource_size` and
+    /// `enable_uri_validation` keeps its [`Default`] value.
+    pub fn with_enhanced_security(
+        base64_processor: Base64Processor,
+        max_resource_size: usize,
+        enable_uri_validation: bool,
+        content_security_validator: ContentSecurityValidator,
+    ) -> Self {
+        Self::from_parts(
+            base64_processor,
+            ContentValidationConfig::with_resource_limit(max_resource_size, enable_uri_validation),
+            Some(content_security_validator),
+        )
+    }
+
+    /// Build a processor from a full [`EnhancedSecurityConfig`].
+    ///
+    /// This is [`ContentBlockProcessor::new_with_config`] with the security
+    /// validator attached, taking its arguments as one struct.
+    pub fn with_enhanced_security_config(
+        base64_processor: Base64Processor,
+        config: EnhancedSecurityConfig,
+    ) -> Self {
+        Self::from_parts(
+            base64_processor,
+            config.validation,
+            Some(config.content_security_validator),
+        )
     }
 
     /// Validate capability is supported
@@ -440,235 +668,340 @@ impl ContentBlockProcessor {
             }
             ContentBlock::Image(image_content) => {
                 self.validate_capability("image")?;
-                // Decode and validate image data using existing base64_processor
-                let decoded_data = self
-                    .base64_processor
-                    .decode_image_data(&image_content.data, &image_content.mime_type)?;
-
-                // Check resource size limit
-                self.size_validator
-                    .validate_content_size(decoded_data.len())?;
-
-                let mut metadata = HashMap::new();
-                metadata.insert("mime_type".to_string(), image_content.mime_type.clone());
-                metadata.insert("data_size".to_string(), decoded_data.len().to_string());
-
-                if let Some(ref uri) = image_content.uri {
-                    if self.enable_uri_validation {
-                        self.validate_uri(uri)?;
-                    }
-                    metadata.insert("source_uri".to_string(), uri.clone());
-                }
-
-                let text_representation = format!(
-                    "[Image content: {} ({} bytes){}]",
-                    image_content.mime_type,
-                    decoded_data.len(),
-                    if let Some(ref uri) = image_content.uri {
-                        format!(" from {}", uri)
-                    } else {
-                        " (embedded)".to_string()
-                    }
-                );
-
-                Ok(ProcessedContent {
-                    content_type: ProcessedContentType::Image {
-                        mime_type: image_content.mime_type.clone(),
-                    },
-                    text_representation,
-                    binary_data: Some(decoded_data),
-                    metadata,
-                    size_bytes: image_content.data.len(),
-                })
+                self.process_image_content(image_content)
             }
-            ContentBlock::Audio(audio_content) => {
-                // Decode and validate audio data using existing base64_processor
-                let decoded_data = self
-                    .base64_processor
-                    .decode_audio_data(&audio_content.data, &audio_content.mime_type)?;
-
-                // Check resource size limit
-                self.size_validator
-                    .validate_content_size(decoded_data.len())?;
-
-                let mut metadata = HashMap::new();
-                metadata.insert("mime_type".to_string(), audio_content.mime_type.clone());
-                metadata.insert("data_size".to_string(), decoded_data.len().to_string());
-
-                let text_representation = format!(
-                    "[Audio content: {} ({} bytes)]",
-                    audio_content.mime_type,
-                    decoded_data.len()
-                );
-
-                Ok(ProcessedContent {
-                    content_type: ProcessedContentType::Audio {
-                        mime_type: audio_content.mime_type.clone(),
-                    },
-                    text_representation,
-                    binary_data: Some(decoded_data),
-                    metadata,
-                    size_bytes: audio_content.data.len(),
-                })
-            }
+            ContentBlock::Audio(audio_content) => self.process_audio_content(audio_content),
             ContentBlock::Resource(resource_content) => {
-                use agent_client_protocol::schema::EmbeddedResourceResource;
-
-                let mut metadata = HashMap::new();
-
-                match &resource_content.resource {
-                    EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                        // Validate URI if present and validation is enabled
-                        if self.enable_uri_validation && !text_resource.uri.is_empty() {
-                            self.validate_uri(&text_resource.uri)?;
-                        }
-
-                        // Extract metadata
-                        if !text_resource.uri.is_empty() {
-                            metadata.insert("uri".to_string(), text_resource.uri.clone());
-                        }
-                        if let Some(ref mime_type) = text_resource.mime_type {
-                            metadata.insert("mime_type".to_string(), mime_type.clone());
-                        }
-
-                        let size_bytes = text_resource.text.len();
-                        metadata.insert("resource_type".to_string(), "text".to_string());
-                        metadata.insert("data_size".to_string(), size_bytes.to_string());
-
-                        // Validate size
-                        self.size_validator.validate_content_size(size_bytes)?;
-
-                        // Create text representation
-                        let text_representation = format!(
-                            "[Text Resource{}{}: {} bytes]",
-                            if let Some(ref mime_type) = text_resource.mime_type {
-                                format!(": {}", mime_type)
-                            } else {
-                                String::new()
-                            },
-                            if !text_resource.uri.is_empty() {
-                                format!(" from {}", text_resource.uri)
-                            } else {
-                                " (embedded)".to_string()
-                            },
-                            size_bytes
-                        );
-
-                        Ok(ProcessedContent {
-                            content_type: ProcessedContentType::EmbeddedResource {
-                                uri: if text_resource.uri.is_empty() {
-                                    None
-                                } else {
-                                    Some(text_resource.uri.clone())
-                                },
-                                mime_type: text_resource.mime_type.clone(),
-                            },
-                            text_representation,
-                            binary_data: None,
-                            metadata,
-                            size_bytes,
-                        })
-                    }
-                    EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                        // Validate URI if present and validation is enabled
-                        if self.enable_uri_validation && !blob_resource.uri.is_empty() {
-                            self.validate_uri(&blob_resource.uri)?;
-                        }
-
-                        // Decode blob data
-                        let decoded_data = if let Some(ref mime_type) = blob_resource.mime_type {
-                            // Decode with mime type validation
-                            self.base64_processor
-                                .decode_blob_data(&blob_resource.blob, mime_type)?
-                        } else {
-                            // Decode without mime type validation using generic approach
-                            // Use a permissive mime type for resources without explicit type
-                            self.base64_processor
-                                .decode_blob_data(&blob_resource.blob, "text/plain")?
-                        };
-
-                        // Validate size
-                        self.size_validator
-                            .validate_content_size(decoded_data.len())?;
-
-                        // Extract metadata
-                        if !blob_resource.uri.is_empty() {
-                            metadata.insert("uri".to_string(), blob_resource.uri.clone());
-                        }
-                        if let Some(ref mime_type) = blob_resource.mime_type {
-                            metadata.insert("mime_type".to_string(), mime_type.clone());
-                        }
-                        metadata.insert("resource_type".to_string(), "blob".to_string());
-                        metadata.insert("data_size".to_string(), decoded_data.len().to_string());
-
-                        // Create text representation
-                        let text_representation = format!(
-                            "[Blob Resource{}{}: {} bytes]",
-                            if let Some(ref mime_type) = blob_resource.mime_type {
-                                format!(": {}", mime_type)
-                            } else {
-                                String::new()
-                            },
-                            if !blob_resource.uri.is_empty() {
-                                format!(" from {}", blob_resource.uri)
-                            } else {
-                                " (embedded)".to_string()
-                            },
-                            decoded_data.len()
-                        );
-
-                        Ok(ProcessedContent {
-                            content_type: ProcessedContentType::EmbeddedResource {
-                                uri: if blob_resource.uri.is_empty() {
-                                    None
-                                } else {
-                                    Some(blob_resource.uri.clone())
-                                },
-                                mime_type: blob_resource.mime_type.clone(),
-                            },
-                            text_representation,
-                            binary_data: Some(decoded_data),
-                            metadata,
-                            size_bytes: blob_resource.blob.len(),
-                        })
-                    }
-                    _ => {
-                        // Unknown or unsupported resource type
-                        Err(ContentBlockProcessorError::InvalidContentStructure {
-                            details: "Unsupported resource type".to_string(),
-                        })
-                    }
-                }
+                self.process_embedded_resource(resource_content)
             }
-            ContentBlock::ResourceLink(resource_link) => {
-                let mut metadata = HashMap::new();
-
-                if self.enable_uri_validation {
-                    self.validate_uri(&resource_link.uri)?;
-                }
-
-                metadata.insert("uri".to_string(), resource_link.uri.clone());
-
-                // Add any available resource link metadata
-                // Note: Using the pattern from existing code which only accesses .uri
-                let text_representation = format!("[Resource Link: {}]", resource_link.uri);
-
-                Ok(ProcessedContent {
-                    content_type: ProcessedContentType::ResourceLink {
-                        uri: resource_link.uri.clone(),
-                    },
-                    text_representation,
-                    binary_data: None,
-                    metadata,
-                    size_bytes: 0, // ResourceLink doesn't contain actual content data
-                })
-            }
+            ContentBlock::ResourceLink(resource_link) => self.process_resource_link(resource_link),
             _ => {
                 // Unknown or unsupported content block type
                 Err(ContentBlockProcessorError::InvalidContentStructure {
                     details: "Unsupported content block type".to_string(),
                 })
             }
+        }
+    }
+
+    /// Describe where a payload came from, for a text representation.
+    ///
+    /// An empty or absent URI means the payload travelled inline.
+    fn describe_source(uri: Option<&str>) -> String {
+        match uri {
+            Some(uri) if !uri.is_empty() => format!(" from {}", uri),
+            _ => " (embedded)".to_string(),
+        }
+    }
+
+    /// Describe a declared MIME type, for a text representation.
+    fn describe_mime_type(mime_type: Option<&str>) -> String {
+        match mime_type {
+            Some(mime_type) => format!(": {}", mime_type),
+            None => String::new(),
+        }
+    }
+
+    /// Decode a base64 media payload and check it against the size limit.
+    ///
+    /// `decode` is the [`Base64Processor`] method that suits the media kind.
+    fn decode_media_payload(
+        &self,
+        decode: MediaDecoder,
+        encoded: &str,
+        mime_type: &str,
+    ) -> Result<Vec<u8>, ContentBlockProcessorError> {
+        let decoded_data = decode(&self.base64_processor, encoded, mime_type)?;
+        self.size_validator
+            .validate_content_size(decoded_data.len())?;
+        Ok(decoded_data)
+    }
+
+    /// The metadata every decoded payload carries: its MIME type and the size
+    /// of the decoded bytes.
+    fn decoded_content_metadata(mime_type: &str, decoded_size: usize) -> HashMap<String, String> {
+        let mut metadata = HashMap::new();
+        metadata.insert("mime_type".to_string(), mime_type.to_string());
+        metadata.insert("data_size".to_string(), decoded_size.to_string());
+        metadata
+    }
+
+    /// Assemble a decoded media payload into a [`ProcessedContent`].
+    ///
+    /// `encoded_size` is the size of the payload as it arrived, before
+    /// decoding, which is what a block reports as its size.
+    fn build_media_content(
+        content_type: ProcessedContentType,
+        text_representation: String,
+        decoded_data: Vec<u8>,
+        metadata: HashMap<String, String>,
+        encoded_size: usize,
+    ) -> ProcessedContent {
+        ProcessedContent {
+            content_type,
+            text_representation,
+            binary_data: Some(decoded_data),
+            metadata,
+            size_bytes: encoded_size,
+        }
+    }
+
+    /// Decode an image content block and describe it.
+    fn process_image_content(
+        &self,
+        image_content: &agent_client_protocol::schema::ImageContent,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        let decoded_data = self.decode_media_payload(
+            Base64Processor::decode_image_data,
+            &image_content.data,
+            &image_content.mime_type,
+        )?;
+
+        let mut metadata =
+            Self::decoded_content_metadata(&image_content.mime_type, decoded_data.len());
+
+        if let Some(ref uri) = image_content.uri {
+            if self.enable_uri_validation {
+                self.validate_uri(uri)?;
+            }
+            metadata.insert("source_uri".to_string(), uri.clone());
+        }
+
+        let text_representation = format!(
+            "[Image content: {} ({} bytes){}]",
+            image_content.mime_type,
+            decoded_data.len(),
+            Self::describe_source(image_content.uri.as_deref()),
+        );
+
+        Ok(Self::build_media_content(
+            ProcessedContentType::Image {
+                mime_type: image_content.mime_type.clone(),
+            },
+            text_representation,
+            decoded_data,
+            metadata,
+            image_content.data.len(),
+        ))
+    }
+
+    /// Decode an audio content block and describe it.
+    ///
+    /// An audio block carries no URI, so its text representation names no
+    /// source.
+    fn process_audio_content(
+        &self,
+        audio_content: &agent_client_protocol::schema::AudioContent,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        let decoded_data = self.decode_media_payload(
+            Base64Processor::decode_audio_data,
+            &audio_content.data,
+            &audio_content.mime_type,
+        )?;
+
+        let metadata = Self::decoded_content_metadata(&audio_content.mime_type, decoded_data.len());
+
+        let text_representation = format!(
+            "[Audio content: {} ({} bytes)]",
+            audio_content.mime_type,
+            decoded_data.len()
+        );
+
+        Ok(Self::build_media_content(
+            ProcessedContentType::Audio {
+                mime_type: audio_content.mime_type.clone(),
+            },
+            text_representation,
+            decoded_data,
+            metadata,
+            audio_content.data.len(),
+        ))
+    }
+
+    /// Dispatch an embedded resource to the text or blob path.
+    fn process_embedded_resource(
+        &self,
+        resource_content: &agent_client_protocol::schema::EmbeddedResource,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        use agent_client_protocol::schema::EmbeddedResourceResource;
+
+        match &resource_content.resource {
+            EmbeddedResourceResource::TextResourceContents(text_resource) => {
+                self.process_text_resource(text_resource)
+            }
+            EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
+                self.process_blob_resource(blob_resource)
+            }
+            _ => {
+                // Unknown or unsupported resource type
+                Err(ContentBlockProcessorError::InvalidContentStructure {
+                    details: "Unsupported resource type".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Validate an inline resource's URI, then record its URI and MIME type in
+    /// its metadata.
+    ///
+    /// An empty URI is neither validated nor recorded. Validation runs only
+    /// when the processor sets `enable_uri_validation`.
+    fn validate_and_record_resource_uri(
+        &self,
+        uri: &str,
+        mime_type: Option<&str>,
+        metadata: &mut HashMap<String, String>,
+    ) -> Result<(), ContentBlockProcessorError> {
+        if !uri.is_empty() {
+            if self.enable_uri_validation {
+                self.validate_uri(uri)?;
+            }
+            metadata.insert("uri".to_string(), uri.to_string());
+        }
+
+        if let Some(mime_type) = mime_type {
+            metadata.insert("mime_type".to_string(), mime_type.to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Render the text representation of an inline resource.
+    ///
+    /// `resource_type` names the payload kind as the reader sees it, `Text` or
+    /// `Blob`.
+    fn resource_text_representation(
+        resource_type: &str,
+        mime_type: Option<&str>,
+        uri: &str,
+        size_bytes: usize,
+    ) -> String {
+        format!(
+            "[{} Resource{}{}: {} bytes]",
+            resource_type,
+            Self::describe_mime_type(mime_type),
+            Self::describe_source(Some(uri)),
+            size_bytes
+        )
+    }
+
+    /// Check and describe a text resource carried inline.
+    fn process_text_resource(
+        &self,
+        text_resource: &agent_client_protocol::schema::TextResourceContents,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        let mut metadata = HashMap::new();
+        self.validate_and_record_resource_uri(
+            &text_resource.uri,
+            text_resource.mime_type.as_deref(),
+            &mut metadata,
+        )?;
+
+        let size_bytes = text_resource.text.len();
+        metadata.insert("resource_type".to_string(), "text".to_string());
+        metadata.insert("data_size".to_string(), size_bytes.to_string());
+
+        // Validate size
+        self.size_validator.validate_content_size(size_bytes)?;
+
+        let text_representation = Self::resource_text_representation(
+            "Text",
+            text_resource.mime_type.as_deref(),
+            &text_resource.uri,
+            size_bytes,
+        );
+
+        Ok(ProcessedContent {
+            content_type: ProcessedContentType::EmbeddedResource {
+                uri: Self::optional_uri(&text_resource.uri),
+                mime_type: text_resource.mime_type.clone(),
+            },
+            text_representation,
+            binary_data: None,
+            metadata,
+            size_bytes,
+        })
+    }
+
+    /// Decode and describe a base64 blob resource carried inline.
+    fn process_blob_resource(
+        &self,
+        blob_resource: &agent_client_protocol::schema::BlobResourceContents,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        let mut metadata = HashMap::new();
+        self.validate_and_record_resource_uri(
+            &blob_resource.uri,
+            blob_resource.mime_type.as_deref(),
+            &mut metadata,
+        )?;
+
+        // Decode blob data. A resource with no declared MIME type is decoded
+        // against a permissive one.
+        let mime_type = blob_resource
+            .mime_type
+            .as_deref()
+            .unwrap_or(DEFAULT_BLOB_MIME_TYPE);
+        let decoded_data = self.decode_media_payload(
+            Base64Processor::decode_blob_data,
+            &blob_resource.blob,
+            mime_type,
+        )?;
+
+        metadata.insert("resource_type".to_string(), "blob".to_string());
+        metadata.insert("data_size".to_string(), decoded_data.len().to_string());
+
+        let text_representation = Self::resource_text_representation(
+            "Blob",
+            blob_resource.mime_type.as_deref(),
+            &blob_resource.uri,
+            decoded_data.len(),
+        );
+
+        Ok(ProcessedContent {
+            content_type: ProcessedContentType::EmbeddedResource {
+                uri: Self::optional_uri(&blob_resource.uri),
+                mime_type: blob_resource.mime_type.clone(),
+            },
+            text_representation,
+            binary_data: Some(decoded_data),
+            metadata,
+            size_bytes: blob_resource.blob.len(),
+        })
+    }
+
+    /// Describe a resource link, which carries a URI and no payload.
+    fn process_resource_link(
+        &self,
+        resource_link: &agent_client_protocol::schema::ResourceLink,
+    ) -> Result<ProcessedContent, ContentBlockProcessorError> {
+        let mut metadata = HashMap::new();
+
+        if self.enable_uri_validation {
+            self.validate_uri(&resource_link.uri)?;
+        }
+
+        metadata.insert("uri".to_string(), resource_link.uri.clone());
+
+        let text_representation = format!("[Resource Link: {}]", resource_link.uri);
+
+        Ok(ProcessedContent {
+            content_type: ProcessedContentType::ResourceLink {
+                uri: resource_link.uri.clone(),
+            },
+            text_representation,
+            binary_data: None,
+            metadata,
+            // A resource link carries no content data of its own.
+            size_bytes: 0,
+        })
+    }
+
+    /// Turn a resource URI into `None` when the resource carries none.
+    fn optional_uri(uri: &str) -> Option<String> {
+        if uri.is_empty() {
+            None
+        } else {
+            Some(uri.to_string())
         }
     }
 
@@ -782,11 +1115,7 @@ impl ContentBlockProcessor {
         &self,
         content_blocks: &[ContentBlock],
     ) -> Result<ContentProcessingSummary, ContentBlockProcessorError> {
-        let mut text_content = String::new();
-        let mut has_binary_content = false;
-        let mut processed_contents = Vec::new();
-        let mut total_size = 0;
-        let mut content_type_counts = HashMap::new();
+        let mut accumulator = ContentAccumulator::default();
 
         for (index, content_block) in content_blocks.iter().enumerate() {
             debug!(
@@ -800,29 +1129,11 @@ impl ContentBlockProcessor {
                 e
             })?;
 
-            // Accumulate text representation
-            text_content.push_str(&processed.text_representation);
-
-            // Track binary content
-            if processed.binary_data.is_some() {
-                has_binary_content = true;
-            }
-
-            // Update size and type counts
-            total_size += processed.size_bytes;
-            let type_key = self.get_content_type_key(&processed.content_type);
-            *content_type_counts.entry(type_key.to_string()).or_insert(0) += 1;
-
-            processed_contents.push(processed);
+            let type_key = processed.content_type.counting_key().to_string();
+            accumulator.accumulate(processed, &type_key);
         }
 
-        Ok(ContentProcessingSummary {
-            processed_contents,
-            combined_text: text_content,
-            has_binary_content,
-            total_size_bytes: total_size,
-            content_type_counts,
-        })
+        Ok(accumulator.into_summary())
     }
 
     /// Process content blocks with error recovery (partial processing)
@@ -830,11 +1141,7 @@ impl ContentBlockProcessor {
         &self,
         content_blocks: &[ContentBlock],
     ) -> Result<ContentProcessingSummary, ContentBlockProcessorError> {
-        let mut text_content = String::new();
-        let mut has_binary_content = false;
-        let mut processed_contents = Vec::new();
-        let mut total_size = 0;
-        let mut content_type_counts = HashMap::new();
+        let mut accumulator = ContentAccumulator::default();
         let mut successful_count = 0;
         let mut processing_errors = Vec::new();
 
@@ -845,24 +1152,11 @@ impl ContentBlockProcessor {
                 content_blocks.len()
             );
 
-            match self.process_content_block_with_retry(content_block, 3) {
+            match self.process_content_block_with_retry(content_block, MAX_RETRIES) {
                 Ok(processed) => {
                     successful_count += 1;
-
-                    // Accumulate text representation
-                    text_content.push_str(&processed.text_representation);
-
-                    // Track binary content
-                    if processed.binary_data.is_some() {
-                        has_binary_content = true;
-                    }
-
-                    // Update size and type counts
-                    total_size += processed.size_bytes;
-                    let type_key = self.get_content_type_key(&processed.content_type);
-                    *content_type_counts.entry(type_key.to_string()).or_insert(0) += 1;
-
-                    processed_contents.push(processed);
+                    let type_key = processed.content_type.counting_key().to_string();
+                    accumulator.accumulate(processed, &type_key);
                 }
                 Err(e) => {
                     error!(
@@ -871,19 +1165,19 @@ impl ContentBlockProcessor {
                     );
 
                     // Add placeholder for failed content
-                    let fallback_content = self.create_fallback_content(index, &e);
+                    accumulator.accumulate_fallback(self.create_fallback_content(index, &e));
 
                     // Store error for reporting
                     processing_errors.push((index, e));
-                    text_content.push_str(&fallback_content.text_representation);
-                    processed_contents.push(fallback_content);
                 }
             }
         }
 
-        // If too many failures, return batch failure error
-        if successful_count == 0 && !processing_errors.is_empty() {
-            return Err(processing_errors.into_iter().next().unwrap().1);
+        // If every block failed, report the first failure rather than a summary
+        if successful_count == 0 {
+            if let Some((_index, error)) = processing_errors.into_iter().next() {
+                return Err(error);
+            }
         }
 
         if successful_count < content_blocks.len() {
@@ -894,13 +1188,7 @@ impl ContentBlockProcessor {
             );
         }
 
-        Ok(ContentProcessingSummary {
-            processed_contents,
-            combined_text: text_content,
-            has_binary_content,
-            total_size_bytes: total_size,
-            content_type_counts,
-        })
+        Ok(accumulator.into_summary())
     }
 
     /// Process content block with retry logic
@@ -913,41 +1201,52 @@ impl ContentBlockProcessor {
 
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                // Exponential backoff
-                let backoff_ms = std::cmp::min(1000 * (2_u64.pow(attempt - 1)), 10000);
-                debug!(
-                    "Retrying content block processing after {}ms (attempt {})",
-                    backoff_ms,
-                    attempt + 1
-                );
-                std::thread::sleep(Duration::from_millis(backoff_ms));
+                Self::sleep_before_retry(attempt);
             }
 
             match self.process_content_block(content_block) {
                 Ok(processed) => {
-                    if attempt > 0 {
-                        debug!(
-                            "Content block processing succeeded on attempt {}",
-                            attempt + 1
-                        );
-                    }
+                    Self::log_retry_success(attempt);
                     return Ok(processed);
                 }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    // Don't retry certain non-transient errors
-                    if let Some(ref error) = last_error {
-                        if self.is_non_retryable_error(error) {
-                            debug!("Non-retryable error encountered, not retrying: {}", error);
-                            break;
-                        }
-                    }
+                // Don't retry certain non-transient errors
+                Err(error) if self.is_non_retryable_error(&error) => {
+                    debug!("Non-retryable error encountered, not retrying: {}", error);
+                    last_error = Some(error);
+                    break;
                 }
+                Err(error) => last_error = Some(error),
             }
         }
 
-        Err(last_error.unwrap())
+        Err(last_error.expect("the retry loop runs at least once and records its error"))
+    }
+
+    /// Wait out the exponential backoff before retry number `attempt`.
+    ///
+    /// The wait doubles with each attempt, starting at [`MS_PER_SECOND`] and
+    /// stopping at [`MAX_BACKOFF_MS`].
+    fn sleep_before_retry(attempt: u32) {
+        let backoff_ms = std::cmp::min(
+            MS_PER_SECOND * BACKOFF_BASE.pow(attempt - 1),
+            MAX_BACKOFF_MS,
+        );
+        debug!(
+            "Retrying content block processing after {}ms (attempt {})",
+            backoff_ms,
+            attempt + 1
+        );
+        std::thread::sleep(Duration::from_millis(backoff_ms));
+    }
+
+    /// Record that a retry succeeded. The first attempt is not a retry.
+    fn log_retry_success(attempt: u32) {
+        if attempt > 0 {
+            debug!(
+                "Content block processing succeeded on attempt {}",
+                attempt + 1
+            );
+        }
     }
 
     /// Check if error should not be retried
@@ -994,26 +1293,20 @@ impl ContentBlockProcessor {
             size_bytes: 0,
         }
     }
-
-    /// Get content type key for counting
-    fn get_content_type_key(&self, content_type: &ProcessedContentType) -> &str {
-        match content_type {
-            ProcessedContentType::Text => "text",
-            ProcessedContentType::Image { .. } => "image",
-            ProcessedContentType::Audio { .. } => "audio",
-            ProcessedContentType::EmbeddedResource { .. } => "resource",
-            ProcessedContentType::ResourceLink { .. } => "resource_link",
-        }
-    }
 }
 
 /// Summary of processing multiple content blocks
 #[derive(Debug)]
 pub struct ContentProcessingSummary {
+    /// Every block of the batch, in order, including failure placeholders.
     pub processed_contents: Vec<ProcessedContent>,
+    /// Text representations of every block, joined in order.
     pub combined_text: String,
+    /// Whether any block carried decoded bytes.
     pub has_binary_content: bool,
+    /// Sum of the sizes of the blocks processed successfully, in bytes.
     pub total_size_bytes: usize,
+    /// How many blocks of each kind the batch processed successfully.
     pub content_type_counts: HashMap<String, usize>,
 }
 
@@ -1035,11 +1328,13 @@ mod tests {
 
         ContentBlockProcessor::new_with_config(
             Base64Processor::default(),
-            sizes::content::MAX_RESOURCE_MODERATE,
-            true,
-            true,
-            supported_capabilities,
-            true,
+            ContentValidationConfig {
+                max_resource_size: sizes::content::MAX_RESOURCE_MODERATE,
+                enable_uri_validation: true,
+                enable_capability_validation: true,
+                supported_capabilities,
+                enable_batch_recovery: true,
+            },
         )
     }
 

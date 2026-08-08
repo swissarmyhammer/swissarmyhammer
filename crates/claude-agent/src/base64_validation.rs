@@ -22,12 +22,20 @@
 
 use thiserror::Error;
 
+/// Why [`validate_base64_format`] rejected a string.
+///
+/// Each variant names one of the three checks the function runs, in the order
+/// it runs them.
 #[derive(Debug, Error, Clone)]
 pub enum Base64ValidationError {
+    /// The string holds no characters at all.
     #[error("empty base64 data")]
     EmptyData,
+    /// The string holds a character outside the base64 alphabet, the padding
+    /// character and whitespace.
     #[error("contains invalid characters")]
     InvalidCharacters,
+    /// The string length is not a multiple of four once whitespace is removed.
     #[error("invalid base64 padding")]
     InvalidPadding,
 }

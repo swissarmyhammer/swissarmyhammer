@@ -1,8 +1,5 @@
-use crate::base64_processor::Base64ProcessorError;
-use crate::content_block_processor::ContentBlockProcessorError;
-use crate::content_security_validator::ContentSecurityError;
 use crate::error::{JsonRpcError, ToJsonRpcError};
-use crate::mime_type_validator::MimeTypeValidationError;
+use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -17,50 +14,96 @@ use uuid::Uuid;
 //
 // All errors must include structured data for client handling.
 
-/// Content processing error with ACP compliance
-#[derive(Debug, Error)]
+/// Why the agent rejected a content block.
+///
+/// Each variant maps to a JSON-RPC error code and to a structured data payload
+/// that tells the client how to correct the request. See
+/// [`ToJsonRpcError::to_error_data`].
+#[derive(Debug, Error, Clone)]
 pub enum ContentProcessingError {
+    /// The content block does not follow the ACP shape.
     #[error("invalid content block structure: {0}")]
     InvalidStructure(String),
 
+    /// The agent does not handle this kind of content block.
     #[error("unsupported content type: {content_type}, supported types: {supported:?}")]
     UnsupportedContentType {
+        /// Content type the caller sent.
         content_type: String,
+        /// Every content type the agent accepts.
         supported: Vec<String>,
     },
 
+    /// The base64 payload does not decode.
     #[error("invalid base64 data: {0}")]
     InvalidBase64(String),
 
+    /// The content is larger than the configured limit.
     #[error("content size exceeded: {size} > {limit}")]
-    ContentSizeExceeded { size: usize, limit: usize },
+    ContentSizeExceeded {
+        /// Size of the content the caller sent, in bytes.
+        size: usize,
+        /// Largest size the agent accepts, in bytes.
+        limit: usize,
+    },
 
+    /// The payload bytes disagree with the declared MIME type.
     #[error("MIME type validation failed: {mime_type} does not match content format")]
-    MimeTypeMismatch { mime_type: String },
+    MimeTypeMismatch {
+        /// MIME type the caller declared.
+        mime_type: String,
+    },
 
+    /// The client did not declare the capability this content needs.
     #[error("content capability not supported: {capability}")]
-    CapabilityNotSupported { capability: String },
+    CapabilityNotSupported {
+        /// Capability the content needs.
+        capability: String,
+    },
 
+    /// A security check rejected the content.
     #[error("security validation failed: {reason}")]
-    SecurityViolation { reason: String },
+    SecurityViolation {
+        /// Why the security check rejected the content. The client payload
+        /// leaves this out, so the agent discloses nothing.
+        reason: String,
+    },
 
+    /// Too little memory is free to process the content.
     #[error("memory pressure: insufficient memory for content processing")]
     MemoryPressure,
 
+    /// The processing queue is full, so the agent refused the work.
     #[error("resource contention: processing queue full")]
     ResourceContention,
 
+    /// The URI is not well formed.
     #[error("invalid URI format: {uri}")]
-    InvalidUri { uri: String },
+    InvalidUri {
+        /// URI the caller sent.
+        uri: String,
+    },
 
+    /// The content block leaves out a field the agent needs.
     #[error("missing required field: {field}")]
-    MissingRequiredField { field: String },
+    MissingRequiredField {
+        /// Name of the absent field.
+        field: String,
+    },
 
+    /// The content is well formed but breaks a validation rule.
     #[error("content validation failed: {details}")]
-    ContentValidationFailed { details: String },
+    ContentValidationFailed {
+        /// What the validator objected to.
+        details: String,
+    },
 
+    /// The agent cannot tell which format the content bytes carry.
     #[error("format detection failed: {reason}")]
-    FormatDetectionFailed { reason: String },
+    FormatDetectionFailed {
+        /// Why format detection failed.
+        reason: String,
+    },
 }
 
 impl ToJsonRpcError for ContentProcessingError {
@@ -76,8 +119,8 @@ impl ToJsonRpcError for ContentProcessingError {
             | Self::InvalidUri { .. }
             | Self::MissingRequiredField { .. }
             | Self::ContentValidationFailed { .. }
-            | Self::FormatDetectionFailed { .. } => -32602, // Invalid params
-            Self::MemoryPressure | Self::ResourceContention => -32603, // Internal error
+            | Self::FormatDetectionFailed { .. } => INVALID_PARAMS,
+            Self::MemoryPressure | Self::ResourceContention => INTERNAL_ERROR,
         }
     }
 
@@ -156,12 +199,19 @@ impl ToJsonRpcError for ContentProcessingError {
     }
 }
 
-/// Error context for debugging and correlation
-#[derive(Debug, Clone)]
+/// Facts that tie one content processing error to the request that caused it.
+///
+/// [`convert_error_to_acp`] copies these fields into the structured error data,
+/// so the client and the log show the same correlation identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorContext {
+    /// Identifier that ties this error to one request across the logs.
     pub correlation_id: String,
+    /// Step of the content pipeline that failed, such as `validation`.
     pub processing_stage: String,
+    /// Content type in process when the error occurred, when the stage knows it.
     pub content_type: Option<String>,
+    /// Extra facts for the log, such as a request or user identifier.
     pub metadata: HashMap<String, String>,
 }
 
@@ -178,123 +228,46 @@ impl Default for ErrorContext {
 
 // TODO: use the To/From trait system for type conversions
 
-/// Convert ContentSecurityError to ACP-compliant JSON-RPC error
-pub fn convert_content_security_error_to_acp(
-    error: ContentSecurityError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
+/// Write the correlation fields of `ctx` into the structured error data object.
+///
+/// Does nothing when `data` is not a JSON object, because only an object can
+/// carry the extra fields.
+fn insert_error_context_fields(data: &mut Value, ctx: ErrorContext) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
+    obj.insert("stage".to_string(), json!(ctx.processing_stage));
+    if let Some(content_type) = ctx.content_type {
+        obj.insert("contentType".to_string(), json!(content_type));
     }
-
-    json_rpc_error
 }
 
-/// Convert Base64ProcessorError to ACP-compliant JSON-RPC error
-pub fn convert_base64_error_to_acp(
-    error: Base64ProcessorError,
+/// Convert any error to an ACP-compliant JSON-RPC error, with optional context.
+///
+/// The error supplies the JSON-RPC code, the message and the structured data.
+/// When `context` is present and the structured data is a JSON object, the
+/// correlation identifier, the processing stage and the content type are added
+/// to that object. Every content error type goes through this one function, so
+/// they all produce the same payload shape.
+pub fn convert_error_to_acp<E: ToJsonRpcError>(
+    error: E,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
     let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
+    if let (Some(ctx), Some(data)) = (context, json_rpc_error.data.as_mut()) {
+        insert_error_context_fields(data, ctx);
     }
-
-    json_rpc_error
-}
-
-/// Convert MimeTypeValidationError to ACP-compliant JSON-RPC error
-pub fn convert_mime_type_error_to_acp(
-    error: MimeTypeValidationError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
-}
-
-/// Convert ContentBlockProcessorError to ACP-compliant JSON-RPC error
-pub fn convert_content_block_error_to_acp(
-    error: ContentBlockProcessorError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
-}
-/// Convert enhanced ContentProcessingError to ACP-compliant JSON-RPC error
-pub fn convert_content_processing_error_to_acp(
-    error: ContentProcessingError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
     json_rpc_error
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base64_processor::Base64ProcessorError;
+    use crate::content_block_processor::ContentBlockProcessorError;
+    use crate::content_security_validator::ContentSecurityError;
+    use crate::mime_type_validator::MimeTypeValidationError;
 
     #[test]
     fn test_base64_error_conversion() {
@@ -306,9 +279,9 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_base64_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
             json_rpc_error.message,
             "invalid base64 format: Invalid padding"
@@ -338,9 +311,9 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_base64_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
             json_rpc_error.message,
             "data exceeds maximum size limit of 1024 bytes (actual: 2048)"
@@ -363,9 +336,9 @@ mod tests {
             capability: "audio".to_string(),
         };
 
-        let json_rpc_error = convert_content_processing_error_to_acp(error, None);
+        let json_rpc_error = convert_error_to_acp(error, None);
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert!(json_rpc_error.message.contains("audio"));
 
         if let Some(data) = json_rpc_error.data {
@@ -383,9 +356,9 @@ mod tests {
             reason: "sensitive internal details".to_string(),
         };
 
-        let json_rpc_error = convert_content_processing_error_to_acp(error, None);
+        let json_rpc_error = convert_error_to_acp(error, None);
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
             json_rpc_error.message,
             "security validation failed: sensitive internal details"
@@ -415,7 +388,7 @@ mod tests {
         let error = ContentProcessingError::InvalidStructure("malformed json".to_string());
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert!(json_rpc_error
             .message
             .contains("invalid content block structure"));
@@ -434,7 +407,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
@@ -442,7 +415,7 @@ mod tests {
         let error = ContentProcessingError::InvalidBase64("bad padding".to_string());
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert!(json_rpc_error.message.contains("invalid base64"));
     }
 
@@ -454,7 +427,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
             assert_eq!(data["providedSize"], 5000);
             assert_eq!(data["maxSize"], 4096);
@@ -468,7 +441,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
@@ -476,7 +449,7 @@ mod tests {
         let error = ContentProcessingError::MemoryPressure;
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32603);
+        assert_eq!(json_rpc_error.code, INTERNAL_ERROR);
         assert!(json_rpc_error.message.contains("memory"));
     }
 
@@ -485,7 +458,7 @@ mod tests {
         let error = ContentProcessingError::ResourceContention;
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32603);
+        assert_eq!(json_rpc_error.code, INTERNAL_ERROR);
     }
 
     #[test]
@@ -495,7 +468,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
@@ -505,7 +478,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
@@ -515,7 +488,7 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
@@ -525,13 +498,11 @@ mod tests {
         };
         let json_rpc_error = error.to_json_rpc_error();
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
     }
 
     #[test]
     fn test_convert_content_security_error_with_context() {
-        use crate::content_security_validator::ContentSecurityError;
-
         let error = ContentSecurityError::SecurityValidationFailed {
             reason: "blocked".to_string(),
             policy_violated: "strict".to_string(),
@@ -544,9 +515,9 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_content_security_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
             assert_eq!(data["correlationId"], "test-sec-001");
             assert_eq!(data["stage"], "security_scan");
@@ -570,9 +541,9 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_mime_type_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
             assert_eq!(data["correlationId"], "test-mime-001");
         }
@@ -589,9 +560,9 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_content_block_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
-        assert_eq!(json_rpc_error.code, -32602);
+        assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
             assert_eq!(data["correlationId"], "test-cb-001");
         }

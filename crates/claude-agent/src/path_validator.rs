@@ -13,6 +13,19 @@ pub enum Permission {
     Execute,
 }
 
+/// Mode bits (read, write, execute) that apply when the process owns the file.
+#[cfg(unix)]
+const OWNER_MODE_BITS: (u32, u32, u32) = (0o400, 0o200, 0o100);
+
+/// Mode bits (read, write, execute) that apply when the process shares the
+/// file's group.
+#[cfg(unix)]
+const GROUP_MODE_BITS: (u32, u32, u32) = (0o040, 0o020, 0o010);
+
+/// Mode bits (read, write, execute) that apply to every other process.
+#[cfg(unix)]
+const OTHER_MODE_BITS: (u32, u32, u32) = (0o004, 0o002, 0o001);
+
 /// ACP-compliant path validator with comprehensive security and platform validation
 #[derive(Debug, Clone)]
 pub struct PathValidator {
@@ -29,38 +42,61 @@ pub struct PathValidator {
 /// Errors that can occur during path validation
 #[derive(Debug, Error, PartialEq)]
 pub enum PathValidationError {
+    /// ACP requires an absolute path, and the caller gave a relative one. The
+    /// payload carries the path.
     #[error("path is not absolute: {0}")]
     NotAbsolute(String),
 
+    /// The path holds a `..` segment or another pattern that climbs out of its
+    /// directory. The payload carries the path.
     #[error("path traversal attempt detected in: {0}")]
     PathTraversalAttempt(String),
 
+    /// The path holds a `.` or `..` component after normalization. The payload
+    /// carries the path.
     #[error("path contains relative components: {0}")]
     RelativeComponent(String),
 
+    /// The path is longer than the configured limit. The payload carries the
+    /// length of the path and the limit, in that order.
     #[error("path too long: {0} characters > maximum allowed ({1})")]
     PathTooLong(usize, usize),
 
+    /// The file system could not resolve the path to a canonical form. The
+    /// payload carries the path and the reason, in that order.
     #[error("path canonicalization failed for {0}: {1}")]
     CanonicalizationFailed(String, String),
 
+    /// The path resolves outside every allowed root. The payload carries the
+    /// path.
     #[error("path outside allowed boundaries: {0}")]
     OutsideBoundaries(String),
 
+    /// The path is under a blocked prefix. The payload carries the path.
     #[error("path is blocked: {0}")]
     Blocked(String),
 
+    /// The path is not a valid path on this platform. The payload carries the
+    /// path.
     #[error("invalid path format: {0}")]
     InvalidFormat(String),
 
+    /// The path holds a null byte, which no file system accepts.
     #[error("path contains null bytes")]
     NullBytesInPath,
 
+    /// The caller gave an empty path.
     #[error("empty path provided")]
     EmptyPath,
 
+    /// This process may not do what the caller asked to the file.
     #[error("insufficient permissions for path {path}: missing {required}")]
-    InsufficientPermissions { path: String, required: String },
+    InsufficientPermissions {
+        /// Path the caller asked about.
+        path: String,
+        /// Permissions this process does not hold, separated by commas.
+        required: String,
+    },
 }
 
 impl From<SizeValidationError> for PathValidationError {
@@ -105,24 +141,36 @@ impl PathValidator {
         }
     }
 
-    /// Create a path validator with allowed root directories
-    pub fn with_allowed_roots(roots: Vec<PathBuf>) -> Self {
+    /// Create a path validator with allowed root directories.
+    ///
+    /// Takes any iterable of paths, so a `Vec`, an array or an iterator all
+    /// work.
+    pub fn with_allowed_roots(roots: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             allowed_roots: Self::canonicalize_roots(roots),
             ..Self::new()
         }
     }
 
-    /// Create a path validator with blocked paths
-    pub fn with_blocked_paths(blocked: Vec<PathBuf>) -> Self {
+    /// Create a path validator with blocked paths.
+    ///
+    /// Takes any iterable of paths, so a `Vec`, an array or an iterator all
+    /// work.
+    pub fn with_blocked_paths(blocked: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             blocked_paths: Self::canonicalize_roots(blocked),
             ..Self::new()
         }
     }
 
-    /// Create a path validator with both allowed roots and blocked paths
-    pub fn with_allowed_and_blocked(allowed: Vec<PathBuf>, blocked: Vec<PathBuf>) -> Self {
+    /// Create a path validator with both allowed roots and blocked paths.
+    ///
+    /// Takes any iterable of paths for each list, so a `Vec`, an array or an
+    /// iterator all work.
+    pub fn with_allowed_and_blocked(
+        allowed: impl IntoIterator<Item = PathBuf>,
+        blocked: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
         Self {
             allowed_roots: Self::canonicalize_roots(allowed),
             blocked_paths: Self::canonicalize_roots(blocked),
@@ -142,7 +190,7 @@ impl PathValidator {
     /// Roots that cannot be canonicalized (e.g. they do not exist yet) are kept
     /// as-is on a best-effort basis: a non-existent blocked root cannot match a
     /// real file anyway, and a non-existent allowed root simply admits nothing.
-    fn canonicalize_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    fn canonicalize_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
         roots
             .into_iter()
             .map(|root| root.canonicalize().unwrap_or(root))
@@ -372,6 +420,148 @@ impl PathValidator {
         ))
     }
 
+    /// The name a [`Permission`] carries in logs and error messages.
+    fn permission_name(permission: Permission) -> &'static str {
+        match permission {
+            Permission::Read => "read",
+            Permission::Write => "write",
+            Permission::Execute => "execute",
+        }
+    }
+
+    /// Read the metadata the permission checks need.
+    ///
+    /// Metadata this process cannot read is itself a permission failure, so a
+    /// missing or unreadable path is reported as insufficient permissions.
+    fn permission_metadata(
+        path: &Path,
+        required: &[Permission],
+    ) -> Result<std::fs::Metadata, PathValidationError> {
+        std::fs::metadata(path).map_err(|e| {
+            let permission_names: Vec<&str> = required
+                .iter()
+                .copied()
+                .map(Self::permission_name)
+                .collect();
+
+            tracing::warn!(
+                security_event = "permission_check_failed",
+                path = %path.display(),
+                required_permissions = ?permission_names,
+                error = %e,
+                "Failed to check permissions - metadata not accessible"
+            );
+
+            PathValidationError::InsufficientPermissions {
+                path: path.to_string_lossy().to_string(),
+                required: permission_names.join(", "),
+            }
+        })
+    }
+
+    /// The (read, write, execute) mode bits that govern this process.
+    ///
+    /// Unix applies exactly one of the owner, group and other triples, chosen
+    /// by how the process relates to the file.
+    #[cfg(unix)]
+    fn applicable_mode_bits(metadata: &std::fs::Metadata) -> (u32, u32, u32) {
+        use std::os::unix::fs::MetadataExt;
+
+        // Get current process uid/gid
+        // SAFETY: These are read-only system calls that always succeed
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+
+        if metadata.uid() == uid {
+            OWNER_MODE_BITS
+        } else if metadata.gid() == gid {
+            GROUP_MODE_BITS
+        } else {
+            OTHER_MODE_BITS
+        }
+    }
+
+    /// Check each required permission against the Unix mode bits.
+    ///
+    /// This cannot reuse `check_binary_permissions` in the `swissarmyhammer-cli`
+    /// application. That function is private to a downstream binary crate, so
+    /// this library cannot call it without inverting the dependency. It also
+    /// answers a different question: it tests whether ANY execute bit is set,
+    /// to advise `chmod +x`, and reports through a diagnostic `Check` record.
+    /// This method tests whether THIS process holds each requested permission,
+    /// by the owner, group or other triple that applies to it, and returns a
+    /// typed error.
+    #[cfg(unix)]
+    fn validate_unix_permissions(
+        path: &Path,
+        required: &[Permission],
+        metadata: &std::fs::Metadata,
+    ) -> Result<(), PathValidationError> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = metadata.permissions().mode();
+        let (read_bit, write_bit, execute_bit) = Self::applicable_mode_bits(metadata);
+
+        for permission in required {
+            let required_bit = match permission {
+                Permission::Read => read_bit,
+                Permission::Write => write_bit,
+                Permission::Execute => execute_bit,
+            };
+
+            if mode & required_bit != 0 {
+                continue;
+            }
+
+            let permission_name = Self::permission_name(*permission);
+
+            tracing::warn!(
+                security_event = "insufficient_permissions",
+                path = %path.display(),
+                required_permission = permission_name,
+                mode = format!("{:o}", mode),
+                "Insufficient permissions for file operation"
+            );
+
+            return Err(PathValidationError::InsufficientPermissions {
+                path: path.to_string_lossy().to_string(),
+                required: permission_name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Check each required permission against the Windows read-only attribute.
+    ///
+    /// Windows exposes only that one attribute here. Readable metadata implies
+    /// read permission, and execute follows the file extension, which would
+    /// need Windows API calls this validator does not make.
+    #[cfg(windows)]
+    fn validate_windows_permissions(
+        path: &Path,
+        required: &[Permission],
+        metadata: &std::fs::Metadata,
+    ) -> Result<(), PathValidationError> {
+        let write_denied =
+            required.contains(&Permission::Write) && metadata.permissions().readonly();
+        if !write_denied {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            security_event = "insufficient_permissions",
+            path = %path.display(),
+            required_permission = "write",
+            "File is read-only, write permission denied"
+        );
+
+        Err(PathValidationError::InsufficientPermissions {
+            path: path.to_string_lossy().to_string(),
+            required: "write".to_string(),
+        })
+    }
+
     /// Validate that the current process has the required permissions for the path.
     ///
     /// This method performs explicit permission checking as required by ACP file security policy.
@@ -390,119 +580,13 @@ impl PathValidator {
         path: &Path,
         required: &[Permission],
     ) -> Result<(), PathValidationError> {
-        // Get file metadata to check permissions
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(e) => {
-                // If we can't read metadata, we don't have permissions
-                let permission_names: Vec<&str> = required
-                    .iter()
-                    .map(|p| match p {
-                        Permission::Read => "read",
-                        Permission::Write => "write",
-                        Permission::Execute => "execute",
-                    })
-                    .collect();
-
-                tracing::warn!(
-                    security_event = "permission_check_failed",
-                    path = %path.display(),
-                    required_permissions = ?permission_names,
-                    error = %e,
-                    "Failed to check permissions - metadata not accessible"
-                );
-
-                return Err(PathValidationError::InsufficientPermissions {
-                    path: path.to_string_lossy().to_string(),
-                    required: permission_names.join(", "),
-                });
-            }
-        };
+        let metadata = Self::permission_metadata(path, required)?;
 
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-            let mode = metadata.permissions().mode();
-            // Get current process uid/gid
-            // SAFETY: These are read-only system calls that always succeed
-            let uid = unsafe { libc::getuid() };
-            let gid = unsafe { libc::getgid() };
-
-            // Check which permission bits apply (owner, group, or other)
-            let (read_bit, write_bit, execute_bit) = if metadata.uid() == uid {
-                // Owner permissions
-                (0o400, 0o200, 0o100)
-            } else if metadata.gid() == gid {
-                // Group permissions
-                (0o040, 0o020, 0o010)
-            } else {
-                // Other permissions
-                (0o004, 0o002, 0o001)
-            };
-
-            for permission in required {
-                let has_permission = match permission {
-                    Permission::Read => mode & read_bit != 0,
-                    Permission::Write => mode & write_bit != 0,
-                    Permission::Execute => mode & execute_bit != 0,
-                };
-
-                if !has_permission {
-                    let permission_name = match permission {
-                        Permission::Read => "read",
-                        Permission::Write => "write",
-                        Permission::Execute => "execute",
-                    };
-
-                    tracing::warn!(
-                        security_event = "insufficient_permissions",
-                        path = %path.display(),
-                        required_permission = permission_name,
-                        mode = format!("{:o}", mode),
-                        "Insufficient permissions for file operation"
-                    );
-
-                    return Err(PathValidationError::InsufficientPermissions {
-                        path: path.to_string_lossy().to_string(),
-                        required: permission_name.to_string(),
-                    });
-                }
-            }
-        }
+        Self::validate_unix_permissions(path, required, &metadata)?;
 
         #[cfg(windows)]
-        {
-            // On Windows, check read-only flag for write operations
-            for permission in required {
-                match permission {
-                    Permission::Write => {
-                        if metadata.permissions().readonly() {
-                            tracing::warn!(
-                                security_event = "insufficient_permissions",
-                                path = %path.display(),
-                                required_permission = "write",
-                                "File is read-only, write permission denied"
-                            );
-
-                            return Err(PathValidationError::InsufficientPermissions {
-                                path: path.to_string_lossy().to_string(),
-                                required: "write".to_string(),
-                            });
-                        }
-                    }
-                    Permission::Read => {
-                        // If we can read metadata, we can read the file
-                        // Windows doesn't have a read-only check that prevents reading
-                    }
-                    Permission::Execute => {
-                        // Windows execute permission is based on file extension
-                        // We'll consider any existing file as potentially executable
-                        // More granular checking would require Windows API calls
-                    }
-                }
-            }
-        }
+        Self::validate_windows_permissions(path, required, &metadata)?;
 
         Ok(())
     }

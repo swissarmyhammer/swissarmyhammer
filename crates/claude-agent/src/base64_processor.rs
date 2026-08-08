@@ -2,37 +2,161 @@ use crate::base64_validation;
 use crate::constants::sizes;
 use crate::content_security_validator::{ContentSecurityError, ContentSecurityValidator};
 use crate::error::ToJsonRpcError;
+use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use crate::mime_type_validator::{MimeTypeValidationError, MimeTypeValidator};
-use crate::size_validator::{SizeValidationError, SizeValidator};
+use crate::size_validator::{SizeLimits, SizeValidationError, SizeValidator};
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use thiserror::Error;
 
+/// Shortest buffer the suspicious-pattern heuristics can judge, in bytes.
+///
+/// A shorter buffer holds too little evidence, so it is always accepted.
+const MIN_HEURISTIC_DATA_LEN: usize = 16;
+
+/// Divisor that fixes the share of null bytes treated as suspicious.
+///
+/// More than `len / 2` null bytes is over 50% of the buffer, which suggests
+/// corrupted data or a padding attack rather than real content.
+const NULL_BYTE_THRESHOLD_RATIO: usize = 2;
+
+/// Bytes needed to read the DOS/Windows `MZ` magic signature.
+const DOS_HEADER_MIN_SIZE: usize = 2;
+
+/// Bytes needed to read the Linux ELF `\x7fELF` magic signature.
+const ELF_HEADER_MIN_SIZE: usize = 4;
+
+/// Bytes needed to read the truncated Mach-O magic signature.
+const MACHO_PARTIAL_HEADER_MIN_SIZE: usize = 3;
+
+/// Bytes needed to read the full Mach-O magic signature.
+const MACHO_FULL_HEADER_MIN_SIZE: usize = 4;
+
+/// Magic signatures that mark an embedded executable, with the byte count each
+/// signature needs and the platform it identifies.
+const EXECUTABLE_SIGNATURES: &[(&[u8], usize, &str)] = &[
+    (b"MZ", DOS_HEADER_MIN_SIZE, "DOS/Windows executable"),
+    (b"\x7fELF", ELF_HEADER_MIN_SIZE, "Linux ELF executable"),
+    (
+        b"\xfe\xed\xfa",
+        MACHO_PARTIAL_HEADER_MIN_SIZE,
+        "Mach-O binary (partial)",
+    ),
+    (
+        b"\xcf\xfa\xed\xfe",
+        MACHO_FULL_HEADER_MIN_SIZE,
+        "Mach-O binary",
+    ),
+];
+
+/// MIME types [`Base64Processor`] accepts on a blob payload by default.
+const DEFAULT_BLOB_MIME_TYPES: &[&str] = &[
+    // Image types
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    // Audio types
+    "audio/wav",
+    "audio/mp3",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/aac",
+    // Other types
+    "application/pdf",
+    "text/plain",
+];
+
+/// Content kinds [`Base64Processor`] declares by default, by capability name.
+const DEFAULT_SUPPORTED_CAPABILITIES: &[&str] = &["image", "audio", "text"];
+
+/// A [`MimeTypeValidator`] method that gates one content category, as
+/// [`MediaKind`] holds it.
+type MimeTypeGate =
+    fn(&MimeTypeValidator, &str, Option<&[u8]>) -> Result<(), MimeTypeValidationError>;
+
+/// Everything that differs between decoding one media kind and the next, held
+/// as data so the decode path itself is written once.
+struct MediaKind {
+    /// Capability the agent must declare, which is also the content type
+    /// reported to the [`ContentSecurityValidator`].
+    capability: &'static str,
+    /// Gate the declared MIME type against the decoded bytes.
+    validate_mime: MimeTypeGate,
+}
+
+impl MediaKind {
+    /// Image payloads, gated by the image MIME allow-list and magic bytes.
+    const IMAGE: Self = Self {
+        capability: "image",
+        validate_mime: MimeTypeValidator::validate_image_mime_type,
+    };
+
+    /// Audio payloads, gated by the audio MIME allow-list and magic bytes.
+    const AUDIO: Self = Self {
+        capability: "audio",
+        validate_mime: MimeTypeValidator::validate_audio_mime_type,
+    };
+}
+
+/// Everything that can go wrong while decoding and checking base64 content.
+///
+/// The variants split into three groups: format faults in the encoded text,
+/// policy faults such as a disallowed MIME type or an unsupported capability,
+/// and validation faults raised by the MIME type and security validators.
 #[derive(Debug, Error, Clone)]
 pub enum Base64ProcessorError {
+    /// The text is not valid base64. The payload names the fault.
     #[error("invalid base64 format: {0}")]
     InvalidBase64(String),
+    /// The decoded content is larger than the configured size limit.
     #[error("data exceeds maximum size limit of {limit} bytes (actual: {actual})")]
-    SizeExceeded { limit: usize, actual: usize },
+    SizeExceeded {
+        /// Largest accepted size, in bytes.
+        limit: usize,
+        /// Size the content actually holds, in bytes.
+        actual: usize,
+    },
+    /// The declared image format is not one the processor accepts.
     #[error("unsupported image format: {0}")]
     UnsupportedImageFormat(String),
+    /// The declared audio format is not one the processor accepts.
     #[error("unsupported audio format: {0}")]
     UnsupportedAudioFormat(String),
+    /// The magic bytes of the decoded content disagree with the declared format.
     #[error("format validation failed: expected {expected}, but data appears to be {actual}")]
-    FormatMismatch { expected: String, actual: String },
+    FormatMismatch {
+        /// Format the declared MIME type calls for.
+        expected: String,
+        /// Format the magic bytes point to.
+        actual: String,
+    },
+    /// The MIME type is not on the allow-list for this content kind.
     #[error("MIME type not allowed: {0}")]
     MimeTypeNotAllowed(String),
+    /// The decoded content is larger than the memory budget for processing.
     #[error("memory allocation failed: insufficient memory for processing")]
     MemoryAllocationFailed,
+    /// The agent does not declare the capability this content kind needs.
     #[error("capability not supported: {capability}")]
-    CapabilityNotSupported { capability: String },
+    CapabilityNotSupported {
+        /// Name of the capability the content needs.
+        capability: String,
+    },
+    /// A built-in security heuristic rejected the decoded content.
     #[error("security validation failed")]
     SecurityValidationFailed,
+    /// The optional [`ContentSecurityValidator`] rejected the content.
     #[error("enhanced security validation failed: {0}")]
     EnhancedSecurityValidationFailed(#[from] ContentSecurityError),
+    /// Content-level validation failed. The payload names the fault.
     #[error("content validation failed: {details}")]
-    ContentValidationFailed { details: String },
+    ContentValidationFailed {
+        /// What the validator objected to.
+        details: String,
+    },
+    /// The [`MimeTypeValidator`] rejected the declared MIME type.
     #[error("MIME type validation failed: {0}")]
     MimeTypeValidationFailed(#[from] MimeTypeValidationError),
 }
@@ -48,10 +172,10 @@ impl ToJsonRpcError for Base64ProcessorError {
             | Self::UnsupportedAudioFormat(_)
             | Self::CapabilityNotSupported { .. }
             | Self::SecurityValidationFailed
-            | Self::ContentValidationFailed { .. } => -32602, // Invalid params
+            | Self::ContentValidationFailed { .. } => INVALID_PARAMS,
             Self::MemoryAllocationFailed
             | Self::EnhancedSecurityValidationFailed(_)
-            | Self::MimeTypeValidationFailed(_) => -32603, // Internal error
+            | Self::MimeTypeValidationFailed(_) => INTERNAL_ERROR,
         }
     }
 
@@ -130,12 +254,67 @@ impl From<SizeValidationError> for Base64ProcessorError {
     }
 }
 
+/// The limits and switches that decide how a [`Base64Processor`] treats a
+/// payload.
+///
+/// These settings are named fields rather than positional arguments, so no
+/// call site can swap the two byte counts or the two switches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Base64ValidationConfig {
+    /// Largest base64 payload accepted, in bytes.
+    pub max_base64_size: usize,
+    /// Largest decoded payload held in memory, in bytes.
+    pub max_memory_usage: usize,
+    /// Whether a content kind must be declared before it is decoded.
+    pub enable_capability_validation: bool,
+    /// Whether the built-in security heuristics run over the decoded bytes.
+    pub enable_security_validation: bool,
+    /// Which content kinds the agent declares, by capability name.
+    pub supported_capabilities: HashSet<String>,
+}
+
+impl Default for Base64ValidationConfig {
+    fn default() -> Self {
+        Self {
+            max_base64_size: SizeLimits::default().max_base64_size,
+            max_memory_usage: sizes::memory::MAX_BASE64_MEMORY,
+            enable_capability_validation: true,
+            enable_security_validation: true,
+            supported_capabilities: DEFAULT_SUPPORTED_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect(),
+        }
+    }
+}
+
+impl Base64ValidationConfig {
+    /// The default settings with the base64 payload cap set.
+    ///
+    /// [`Base64Processor::new`] and
+    /// [`Base64Processor::with_enhanced_security`] both take just this one
+    /// setting, and both build their configuration here.
+    #[must_use]
+    pub fn with_max_size(max_base64_size: usize) -> Self {
+        Self {
+            max_base64_size,
+            ..Default::default()
+        }
+    }
+}
+
 // IMPORTANT: Do not add timeouts to content processing operations.
 // Content processing should be allowed to complete regardless of size or complexity.
 // Timeouts create artificial limitations and poor user experience by interrupting
 // legitimate processing of large or complex content. Users cannot predict when
-// operations will be artificially terminated, leading to frustration and unreliable behavior.
-#[derive(Clone)]
+/// Decodes base64 image, audio and blob payloads, and checks each one.
+///
+/// A decode runs four gates in order: the capability the content kind needs,
+/// the optional [`ContentSecurityValidator`], the base64 format and size
+/// limits, and finally the declared MIME type against the decoded bytes. Build
+/// one with [`Base64Processor::new`] for size limits alone, or with
+/// [`Base64Processor::with_enhanced_security`] to add the security validator.
+#[derive(Clone, Debug)]
 pub struct Base64Processor {
     allowed_blob_mime_types: HashSet<String>,
     max_memory_usage: usize,
@@ -149,119 +328,83 @@ pub struct Base64Processor {
 
 impl Default for Base64Processor {
     fn default() -> Self {
-        let mut allowed_blob_mime_types = HashSet::new();
-        // Image types
-        allowed_blob_mime_types.insert("image/png".to_string());
-        allowed_blob_mime_types.insert("image/jpeg".to_string());
-        allowed_blob_mime_types.insert("image/gif".to_string());
-        allowed_blob_mime_types.insert("image/webp".to_string());
-        // Audio types
-        allowed_blob_mime_types.insert("audio/wav".to_string());
-        allowed_blob_mime_types.insert("audio/mp3".to_string());
-        allowed_blob_mime_types.insert("audio/mpeg".to_string());
-        allowed_blob_mime_types.insert("audio/ogg".to_string());
-        allowed_blob_mime_types.insert("audio/aac".to_string());
-        // Other types
-        allowed_blob_mime_types.insert("application/pdf".to_string());
-        allowed_blob_mime_types.insert("text/plain".to_string());
-
-        let mut supported_capabilities = HashSet::new();
-        supported_capabilities.insert("image".to_string());
-        supported_capabilities.insert("audio".to_string());
-        supported_capabilities.insert("text".to_string());
-
-        let size_validator = SizeValidator::default();
-
-        Self {
-            allowed_blob_mime_types,
-            max_memory_usage: sizes::memory::MAX_BASE64_MEMORY,
-            enable_capability_validation: true,
-            enable_security_validation: true,
-            supported_capabilities,
-            content_security_validator: None,
-            mime_type_validator: MimeTypeValidator::moderate(),
-            size_validator,
-        }
+        Self::from_parts(Base64ValidationConfig::default(), None)
     }
 }
 
 impl Base64Processor {
+    /// Build a processor that accepts base64 payloads up to `max_size` bytes.
+    ///
+    /// Every other setting keeps its [`Default`] value: capability and security
+    /// validation are on, and the MIME type policy is
+    /// [`MimeTypeValidator::moderate`].
     pub fn new(max_size: usize) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_base64_size: max_size,
-            ..Default::default()
-        });
-
-        Self {
-            size_validator,
-            ..Default::default()
-        }
+        Self::from_parts(Base64ValidationConfig::with_max_size(max_size), None)
     }
 
-    pub fn new_with_config(
-        max_size: usize,
-        max_memory_usage: usize,
-        enable_capability_validation: bool,
-        enable_security_validation: bool,
-        supported_capabilities: HashSet<String>,
+    /// Build a processor from the full settings and the optional security
+    /// validator.
+    ///
+    /// Every constructor, [`Default`] included, lands here, so the size
+    /// validator is derived from `config` in exactly one place.
+    fn from_parts(
+        config: Base64ValidationConfig,
+        content_security_validator: Option<ContentSecurityValidator>,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_base64_size: max_size,
+        let size_validator = SizeValidator::new(SizeLimits {
+            max_base64_size: config.max_base64_size,
             ..Default::default()
         });
 
         Self {
-            max_memory_usage,
-            enable_capability_validation,
-            enable_security_validation,
-            supported_capabilities,
-            content_security_validator: None,
+            allowed_blob_mime_types: DEFAULT_BLOB_MIME_TYPES
+                .iter()
+                .map(|mime_type| (*mime_type).to_string())
+                .collect(),
+            max_memory_usage: config.max_memory_usage,
+            enable_capability_validation: config.enable_capability_validation,
+            enable_security_validation: config.enable_security_validation,
+            supported_capabilities: config.supported_capabilities,
+            content_security_validator,
             mime_type_validator: MimeTypeValidator::moderate(),
             size_validator,
-            ..Default::default()
         }
     }
 
+    /// Build a processor with every limit and switch set explicitly.
+    ///
+    /// The limits and switches arrive as one named [`Base64ValidationConfig`]
+    /// rather than as positional byte counts and booleans. No
+    /// [`ContentSecurityValidator`] is attached.
+    pub fn new_with_config(config: Base64ValidationConfig) -> Self {
+        Self::from_parts(config, None)
+    }
+
+    /// Build a processor that also runs `content_security_validator` on the
+    /// raw base64 text before decoding.
+    ///
+    /// `max_size` caps the base64 payload. Every other setting keeps its
+    /// [`Default`] value.
     pub fn with_enhanced_security(
         max_size: usize,
         content_security_validator: ContentSecurityValidator,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_base64_size: max_size,
-            ..Default::default()
-        });
-
-        Self {
-            content_security_validator: Some(content_security_validator),
-            mime_type_validator: MimeTypeValidator::moderate(),
-            size_validator,
-            ..Default::default()
-        }
+        Self::from_parts(
+            Base64ValidationConfig::with_max_size(max_size),
+            Some(content_security_validator),
+        )
     }
 
+    /// Build a processor with every limit and switch set explicitly, plus a
+    /// [`ContentSecurityValidator`] that runs on the raw base64 text.
+    ///
+    /// This is [`Base64Processor::new_with_config`] with the security validator
+    /// attached.
     pub fn with_enhanced_security_config(
-        max_size: usize,
-        max_memory_usage: usize,
-        enable_capability_validation: bool,
-        enable_security_validation: bool,
-        supported_capabilities: HashSet<String>,
+        config: Base64ValidationConfig,
         content_security_validator: ContentSecurityValidator,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_base64_size: max_size,
-            ..Default::default()
-        });
-
-        Self {
-            max_memory_usage,
-            enable_capability_validation,
-            enable_security_validation,
-            supported_capabilities,
-            content_security_validator: Some(content_security_validator),
-            mime_type_validator: MimeTypeValidator::moderate(),
-            size_validator,
-            ..Default::default()
-        }
+        Self::from_parts(config, Some(content_security_validator))
     }
 
     /// Check if a capability is supported
@@ -300,47 +443,74 @@ impl Base64Processor {
     /// Check for suspicious patterns in binary data
     fn contains_suspicious_patterns(&self, data: &[u8]) -> bool {
         // Basic heuristic checks for potentially malicious content
-        if data.len() < 16 {
+        if data.len() < MIN_HEURISTIC_DATA_LEN {
             return false;
         }
 
         // Check for excessive null bytes (possible data corruption or attack)
         let null_count = data.iter().filter(|&&b| b == 0).count();
-        if null_count > data.len() / 2 {
+        if null_count > data.len() / NULL_BYTE_THRESHOLD_RATIO {
             return true;
         }
 
         // Check for patterns that might indicate embedded executables
-        if data.len() >= 2 && data.starts_with(b"MZ") {
-            return true; // DOS/Windows executable
-        }
-        if data.len() >= 4 && data.starts_with(b"\x7fELF") {
-            return true; // Linux ELF executable
-        }
-        if data.len() >= 3 && data.starts_with(b"\xfe\xed\xfa") {
-            return true; // Mach-O binary (partial)
-        }
-        if data.len() >= 4 && data.starts_with(b"\xcf\xfa\xed\xfe") {
-            return true; // Mach-O binary
-        }
-
-        false
+        EXECUTABLE_SIGNATURES
+            .iter()
+            .any(|(magic, min_size, _platform)| data.len() >= *min_size && data.starts_with(magic))
     }
 
+    /// Run the optional enhanced security validator over the raw base64 text.
+    ///
+    /// `content_type` names the content kind for the validator's own limits.
+    /// Returns `Ok(())` when no validator is attached.
+    fn validate_enhanced_security(
+        &self,
+        data: &str,
+        content_type: &str,
+    ) -> Result<(), Base64ProcessorError> {
+        let Some(validator) = self.content_security_validator.as_ref() else {
+            return Ok(());
+        };
+        validator
+            .validate_base64_security(data, content_type)
+            .map_err(|_e| Base64ProcessorError::SecurityValidationFailed)
+    }
+
+    /// Decode base64 `data` as an image of `mime_type`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Base64ProcessorError::CapabilityNotSupported`] when the agent
+    /// does not declare the `image` capability,
+    /// [`Base64ProcessorError::SecurityValidationFailed`] when a security check
+    /// rejects the content, [`Base64ProcessorError::InvalidBase64`] when the
+    /// text is malformed, [`Base64ProcessorError::SizeExceeded`] when the
+    /// payload is over the limit, and
+    /// [`Base64ProcessorError::MimeTypeValidationFailed`] when the decoded
+    /// bytes disagree with `mime_type`.
     pub fn decode_image_data(
         &self,
         data: &str,
         mime_type: &str,
     ) -> Result<Vec<u8>, Base64ProcessorError> {
-        // Validate capability support
-        self.validate_capability("image")?;
+        self.decode_media_data(&MediaKind::IMAGE, data, mime_type)
+    }
 
-        // Enhanced security validation if available
-        if let Some(ref validator) = self.content_security_validator {
-            validator
-                .validate_base64_security(data, "image")
-                .map_err(|_e| Base64ProcessorError::SecurityValidationFailed)?;
-        }
+    /// Decode base64 `data` as media of `kind`, declared as `mime_type`.
+    ///
+    /// Image and audio payloads run the same four gates in the same order and
+    /// differ only in the capability they need and the MIME type gate they
+    /// pass, both of which [`MediaKind`] carries.
+    fn decode_media_data(
+        &self,
+        kind: &MediaKind,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Vec<u8>, Base64ProcessorError> {
+        // Validate capability support
+        self.validate_capability(kind.capability)?;
+
+        self.validate_enhanced_security(data, kind.capability)?;
 
         // Validate base64 format and size limits
         self.validate_base64_format(data)?;
@@ -352,8 +522,7 @@ impl Base64Processor {
             .map_err(|e| Base64ProcessorError::InvalidBase64(e.to_string()))?;
 
         // Use centralized MIME type validator with format validation
-        self.mime_type_validator
-            .validate_image_mime_type(mime_type, Some(&decoded))?;
+        (kind.validate_mime)(&self.mime_type_validator, mime_type, Some(&decoded))?;
 
         // Security validation
         self.perform_security_validation(&decoded)?;
@@ -361,40 +530,43 @@ impl Base64Processor {
         Ok(decoded)
     }
 
+    /// Decode base64 `data` as audio of `mime_type`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Base64ProcessorError::CapabilityNotSupported`] when the agent
+    /// does not declare the `audio` capability,
+    /// [`Base64ProcessorError::SecurityValidationFailed`] when a security check
+    /// rejects the content, [`Base64ProcessorError::InvalidBase64`] when the
+    /// text is malformed, [`Base64ProcessorError::SizeExceeded`] when the
+    /// payload is over the limit, and
+    /// [`Base64ProcessorError::MimeTypeValidationFailed`] when the decoded
+    /// bytes disagree with `mime_type`.
     pub fn decode_audio_data(
         &self,
         data: &str,
         mime_type: &str,
     ) -> Result<Vec<u8>, Base64ProcessorError> {
-        // Validate capability support
-        self.validate_capability("audio")?;
-
-        // Enhanced security validation if available
-        if let Some(ref validator) = self.content_security_validator {
-            validator
-                .validate_base64_security(data, "audio")
-                .map_err(|_e| Base64ProcessorError::SecurityValidationFailed)?;
-        }
-
-        // Validate base64 format and size limits
-        self.validate_base64_format(data)?;
-        self.check_size_limits(data)?;
-
-        // Perform base64 decoding
-        let decoded = general_purpose::STANDARD
-            .decode(data)
-            .map_err(|e| Base64ProcessorError::InvalidBase64(e.to_string()))?;
-
-        // Use centralized MIME type validator with format validation
-        self.mime_type_validator
-            .validate_audio_mime_type(mime_type, Some(&decoded))?;
-
-        // Security validation
-        self.perform_security_validation(&decoded)?;
-
-        Ok(decoded)
+        self.decode_media_data(&MediaKind::AUDIO, data, mime_type)
     }
 
+    /// Decode base64 `data` as an arbitrary blob of `mime_type`.
+    ///
+    /// The capability checked follows `mime_type`: `image` for `image/*`,
+    /// `audio` for `audio/*`, and `text` for everything else. Unlike the image
+    /// and audio paths, the decoded bytes are not matched against magic bytes;
+    /// only the MIME type allow-list applies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Base64ProcessorError::CapabilityNotSupported`] when the agent
+    /// does not declare the capability the MIME type implies,
+    /// [`Base64ProcessorError::MimeTypeNotAllowed`] when `mime_type` is off the
+    /// allow-list, [`Base64ProcessorError::SecurityValidationFailed`] when a
+    /// security check rejects the content,
+    /// [`Base64ProcessorError::InvalidBase64`] when the text is malformed, and
+    /// [`Base64ProcessorError::SizeExceeded`] when the payload is over the
+    /// limit.
     pub fn decode_blob_data(
         &self,
         data: &str,
@@ -410,12 +582,7 @@ impl Base64Processor {
         };
         self.validate_capability(capability)?;
 
-        // Enhanced security validation if available
-        if let Some(ref validator) = self.content_security_validator {
-            validator
-                .validate_base64_security(data, "blob")
-                .map_err(|_e| Base64ProcessorError::SecurityValidationFailed)?;
-        }
+        self.validate_enhanced_security(data, "blob")?;
 
         // Validate MIME type and base64 format
         self.validate_mime_type(mime_type, &self.allowed_blob_mime_types)?;

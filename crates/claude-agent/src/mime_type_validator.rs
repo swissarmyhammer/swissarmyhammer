@@ -1,38 +1,127 @@
 use crate::error::ToJsonRpcError;
+use crate::json_rpc_codes::INVALID_PARAMS;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use thiserror::Error;
 
+/// Reason recorded on [`MimeTypeValidationError::SecurityBlocked`].
+const SECURITY_BLOCKED_REASON: &str = "MIME type blocked for security reasons";
+
+/// Format name reported when magic-byte detection recognises nothing.
+const UNKNOWN_FORMAT: &str = "unknown";
+
+/// MIME type to expected image format, as magic-byte detection names it.
+const IMAGE_MIME_FORMATS: &[(&str, &str)] = &[
+    ("image/png", "png"),
+    ("image/jpeg", "jpeg"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+];
+
+/// MIME type to expected audio format, as magic-byte detection names it.
+const AUDIO_MIME_FORMATS: &[(&str, &str)] = &[
+    ("audio/wav", "wav"),
+    ("audio/mp3", "mp3"),
+    ("audio/mpeg", "mp3"),
+    ("audio/ogg", "ogg"),
+    ("audio/aac", "aac"),
+];
+
+/// Fewest bytes any image magic-byte check reads — the JPEG `FF D8` marker.
+const IMAGE_HEADER_MIN_SIZE: usize = 2;
+
+/// Bytes in the PNG signature.
+const PNG_SIGNATURE_SIZE: usize = 8;
+
+/// Bytes in a GIF signature, either `GIF87a` or `GIF89a`.
+const GIF_SIGNATURE_SIZE: usize = 6;
+
+/// Bytes a RIFF container needs before its format tag can be read.
+const RIFF_HEADER_SIZE: usize = 12;
+
+/// Bytes in the leading `RIFF` signature of a RIFF container.
+const RIFF_SIGNATURE_SIZE: usize = 4;
+
+/// Offset of the four-byte format tag inside a RIFF container.
+const RIFF_FORMAT_OFFSET: usize = 8;
+
+/// Fewest bytes any audio magic-byte check reads.
+const AUDIO_HEADER_MIN_SIZE: usize = 4;
+
+/// Bytes in an AAC ADTS frame header.
+const AAC_HEADER_MIN_SIZE: usize = 7;
+
+/// First byte of both an MP3 and an AAC ADTS frame sync word.
+const FRAME_SYNC_FIRST_BYTE: u8 = 0xFF;
+
+/// Bits of the second MP3 frame-sync byte that carry the sync pattern.
+const MP3_SYNC_MASK: u8 = 0xE0;
+
+/// Value [`MP3_SYNC_MASK`] must select for an MP3 frame.
+const MP3_SYNC_PATTERN: u8 = 0xE0;
+
+/// Bits of the second AAC ADTS byte that carry the sync pattern.
+const AAC_SYNC_MASK: u8 = 0xF0;
+
+/// Value [`AAC_SYNC_MASK`] must select for an AAC ADTS frame.
+const AAC_SYNC_PATTERN: u8 = 0xF0;
+
+/// Why [`MimeTypeValidator`] rejected a MIME type or a payload.
+///
+/// The variants cover the three gates the validator runs: the security
+/// deny-list, the per-category allow-list, and the magic-byte format check.
 #[derive(Debug, Error, Clone)]
 pub enum MimeTypeValidationError {
+    /// The MIME type is off the allow-list for this content category.
     #[error("unsupported MIME type for {content_type}: {mime_type}")]
     UnsupportedMimeType {
+        /// Content category being validated, such as `image` or `audio`.
         content_type: String,
+        /// MIME type the caller declared.
         mime_type: String,
+        /// Every MIME type the category accepts.
         allowed_types: Vec<String>,
+        /// Advice for the caller, when the validator can offer any.
         suggestion: Option<String>,
     },
+    /// The MIME type is on the policy's security deny-list.
     #[error("MIME type blocked for security reasons: {mime_type}")]
     SecurityBlocked {
+        /// MIME type the caller declared.
         mime_type: String,
+        /// Why the deny-list holds this MIME type.
         reason: String,
+        /// Content categories the caller may use instead.
         allowed_categories: Vec<String>,
     },
+    /// The magic bytes of the payload disagree with the declared MIME type.
     #[error("MIME type format validation failed: expected {expected}, detected {detected}")]
     FormatMismatch {
+        /// Format the declared MIME type calls for.
         expected: String,
+        /// Format the magic bytes point to, or `unknown`.
         detected: String,
+        /// MIME type the caller declared.
         mime_type: String,
     },
+    /// The MIME type is not written as `type/subtype`.
     #[error("invalid MIME type format: {mime_type}")]
-    InvalidFormat { mime_type: String },
+    InvalidFormat {
+        /// MIME type the caller declared.
+        mime_type: String,
+    },
+    /// Content-level validation failed. The payload names the fault.
     #[error("content validation failed: {details}")]
-    ContentValidation { details: String },
+    ContentValidation {
+        /// What the validator objected to.
+        details: String,
+    },
 }
 
 impl ToJsonRpcError for MimeTypeValidationError {
     fn to_json_rpc_code(&self) -> i32 {
-        -32602 // All MIME type validation errors are invalid params
+        // Every MIME type validation error is a caller mistake.
+        INVALID_PARAMS
     }
 
     fn to_error_data(&self) -> Option<Value> {
@@ -103,14 +192,27 @@ pub enum ValidationLevel {
     Permissive,
 }
 
+/// The MIME type rules a [`MimeTypeValidator`] enforces.
+///
+/// A policy holds one allow-list for each content category, a deny-list that
+/// overrides them, and two switches that turn magic-byte matching and security
+/// filtering on or off. Build one with [`MimeTypePolicy::strict`],
+/// [`MimeTypePolicy::moderate`] or [`MimeTypePolicy::permissive`].
 #[derive(Debug, Clone)]
 pub struct MimeTypePolicy {
+    /// How aggressively this policy validates, for reporting and comparison.
     pub validation_level: ValidationLevel,
+    /// MIME types accepted for image content.
     pub allowed_image_types: HashSet<String>,
+    /// MIME types accepted for audio content.
     pub allowed_audio_types: HashSet<String>,
+    /// MIME types accepted for embedded resource content.
     pub allowed_resource_types: HashSet<String>,
+    /// MIME types refused outright, whatever the allow-lists say.
     pub blocked_types: HashSet<String>,
+    /// Whether payload magic bytes must match the declared MIME type.
     pub require_format_validation: bool,
+    /// Whether the deny-list is consulted at all.
     pub enable_security_filtering: bool,
 }
 
@@ -215,9 +317,156 @@ impl MimeTypePolicy {
 
         policy
     }
+
+    /// The allow-list that governs image content.
+    fn image_types(&self) -> &HashSet<String> {
+        &self.allowed_image_types
+    }
+
+    /// The allow-list that governs audio content.
+    fn audio_types(&self) -> &HashSet<String> {
+        &self.allowed_audio_types
+    }
+
+    /// The allow-list that governs embedded resource content.
+    fn resource_types(&self) -> &HashSet<String> {
+        &self.allowed_resource_types
+    }
 }
 
-#[derive(Clone)]
+/// The magic-byte half of a [`MimeCategory`].
+struct FormatSpec {
+    /// Reads a format name out of a payload's leading bytes.
+    detect: fn(&[u8]) -> Option<String>,
+    /// MIME type to the format name [`Self::detect`] reports for it.
+    mime_formats: &'static [(&'static str, &'static str)],
+}
+
+/// Everything that differs between one content category's MIME type gate and
+/// the next, held as data so the gate itself is written once.
+struct MimeCategory {
+    /// Category name reported on an allow-list rejection.
+    name: &'static str,
+    /// Categories the caller may use instead, reported on a deny-list rejection.
+    allowed_categories: &'static [&'static str],
+    /// Picks this category's allow-list out of the policy.
+    allowed_types: fn(&MimeTypePolicy) -> &HashSet<String>,
+    /// Advice offered when the allow-list rejects a MIME type.
+    suggestion: &'static str,
+    /// How a payload's magic bytes are matched, for categories that have
+    /// recognisable binary formats.
+    format: Option<FormatSpec>,
+}
+
+impl MimeCategory {
+    /// Image content: the image allow-list plus magic-byte matching.
+    const IMAGE: Self = Self {
+        name: "image",
+        allowed_categories: &["image"],
+        allowed_types: MimeTypePolicy::image_types,
+        suggestion: "Convert image to supported format like PNG or JPEG",
+        format: Some(FormatSpec {
+            detect: detect_image_format,
+            mime_formats: IMAGE_MIME_FORMATS,
+        }),
+    };
+
+    /// Audio content: the audio allow-list plus magic-byte matching.
+    const AUDIO: Self = Self {
+        name: "audio",
+        allowed_categories: &["audio"],
+        allowed_types: MimeTypePolicy::audio_types,
+        suggestion: "Convert audio to supported format like WAV or MP3",
+        format: Some(FormatSpec {
+            detect: detect_audio_format,
+            mime_formats: AUDIO_MIME_FORMATS,
+        }),
+    };
+
+    /// Embedded resource content, which carries no format the validator can
+    /// recognise from magic bytes.
+    const RESOURCE: Self = Self {
+        name: "resource",
+        allowed_categories: &["text", "application"],
+        allowed_types: MimeTypePolicy::resource_types,
+        suggestion: "Use plain text or JSON format",
+        format: None,
+    };
+}
+
+/// Does `types` hold `mime_type`?
+///
+/// RFC 2045 makes MIME types case-insensitive, so neither side of the
+/// comparison may depend on ASCII case.
+fn contains_mime_type(types: &HashSet<String>, mime_type: &str) -> bool {
+    types
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(mime_type))
+}
+
+/// Name the image format `data` starts with, or `None` when nothing matches.
+fn detect_image_format(data: &[u8]) -> Option<String> {
+    if data.len() < IMAGE_HEADER_MIN_SIZE {
+        return None;
+    }
+
+    if data.len() >= PNG_SIGNATURE_SIZE && data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png".to_string())
+    } else if data.starts_with(b"\xFF\xD8") {
+        Some("jpeg".to_string())
+    } else if data.len() >= GIF_SIGNATURE_SIZE
+        && (data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a"))
+    {
+        Some("gif".to_string())
+    } else if is_riff_container(data, b"WEBP") {
+        Some("webp".to_string())
+    } else {
+        None
+    }
+}
+
+/// Name the audio format `data` starts with, or `None` when nothing matches.
+fn detect_audio_format(data: &[u8]) -> Option<String> {
+    if data.len() < AUDIO_HEADER_MIN_SIZE {
+        return None;
+    }
+
+    if is_riff_container(data, b"WAVE") {
+        Some("wav".to_string())
+    } else if has_frame_sync(data, AUDIO_HEADER_MIN_SIZE, MP3_SYNC_MASK, MP3_SYNC_PATTERN) {
+        Some("mp3".to_string())
+    } else if data.starts_with(b"OggS") {
+        Some("ogg".to_string())
+    } else if has_frame_sync(data, AAC_HEADER_MIN_SIZE, AAC_SYNC_MASK, AAC_SYNC_PATTERN) {
+        Some("aac".to_string())
+    } else {
+        None
+    }
+}
+
+/// Is `data` a RIFF container whose four-byte format tag is `format_tag`?
+fn is_riff_container(data: &[u8], format_tag: &[u8; RIFF_SIGNATURE_SIZE]) -> bool {
+    data.len() >= RIFF_HEADER_SIZE
+        && &data[0..RIFF_SIGNATURE_SIZE] == b"RIFF"
+        && &data[RIFF_FORMAT_OFFSET..RIFF_HEADER_SIZE] == format_tag
+}
+
+/// Does `data` open with a frame sync word — `0xFF` followed by a second byte
+/// whose `mask` bits equal `pattern`?
+///
+/// `min_len` is the smallest complete header the caller's format needs.
+fn has_frame_sync(data: &[u8], min_len: usize, mask: u8, pattern: u8) -> bool {
+    data.len() >= min_len && data[0] == FRAME_SYNC_FIRST_BYTE && (data[1] & mask) == pattern
+}
+
+/// Checks a declared MIME type, and optionally the payload behind it, against
+/// a [`MimeTypePolicy`].
+///
+/// Each `validate_*_mime_type` method runs the same three gates: the security
+/// deny-list, the allow-list for that content category, and — for image and
+/// audio, when the policy asks for it — a magic-byte check that the payload
+/// really is the format the MIME type declares.
+#[derive(Clone, Debug)]
 pub struct MimeTypeValidator {
     policy: MimeTypePolicy,
 }
@@ -258,98 +507,115 @@ impl MimeTypeValidator {
     //
     // MIME type validation prevents security issues and ensures proper content handling.
 
+    /// Validate `mime_type` — and optionally `data` — for one content category.
+    ///
+    /// Runs the deny-list, then the category's allow-list, then the magic-byte
+    /// check when the policy asks for one, the category has a
+    /// [`FormatSpec`] and `data` is present. Every public
+    /// `validate_*_mime_type` method is this method with its own
+    /// [`MimeCategory`].
+    ///
+    /// Every MIME type comparison ignores ASCII case, as RFC 2045 requires.
+    fn validate_for_category(
+        &self,
+        category: &MimeCategory,
+        mime_type: &str,
+        data: Option<&[u8]>,
+    ) -> Result<(), MimeTypeValidationError> {
+        if self.policy.enable_security_filtering && self.is_mime_type_blocked(mime_type) {
+            return Err(MimeTypeValidationError::SecurityBlocked {
+                mime_type: mime_type.to_string(),
+                reason: SECURITY_BLOCKED_REASON.to_string(),
+                allowed_categories: category
+                    .allowed_categories
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect(),
+            });
+        }
+
+        let allowed_types = (category.allowed_types)(&self.policy);
+        if !contains_mime_type(allowed_types, mime_type) {
+            return Err(MimeTypeValidationError::UnsupportedMimeType {
+                content_type: category.name.to_string(),
+                mime_type: mime_type.to_string(),
+                allowed_types: allowed_types.iter().cloned().collect(),
+                suggestion: Some(category.suggestion.to_string()),
+            });
+        }
+
+        match (
+            self.policy.require_format_validation,
+            &category.format,
+            data,
+        ) {
+            (true, Some(format), Some(data)) => {
+                Self::validate_format_matches_mime(data, mime_type, format)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Validate `mime_type` for image content, and match `data` against it.
+    ///
+    /// Pass `data` to have the payload's magic bytes checked against the
+    /// declared MIME type; pass `None` to check the MIME type alone. The
+    /// magic-byte check runs only when the policy sets
+    /// [`MimeTypePolicy::require_format_validation`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MimeTypeValidationError::SecurityBlocked`] when the deny-list
+    /// holds `mime_type`, [`MimeTypeValidationError::UnsupportedMimeType`] when
+    /// it is off the image allow-list, and
+    /// [`MimeTypeValidationError::FormatMismatch`] when `data` is not the
+    /// declared format.
     pub fn validate_image_mime_type(
         &self,
         mime_type: &str,
         data: Option<&[u8]>,
     ) -> Result<(), MimeTypeValidationError> {
-        // Check security blocking first
-        if self.policy.enable_security_filtering && self.is_mime_type_blocked(mime_type) {
-            return Err(MimeTypeValidationError::SecurityBlocked {
-                mime_type: mime_type.to_string(),
-                reason: "MIME type blocked for security reasons".to_string(),
-                allowed_categories: vec!["image".to_string()],
-            });
-        }
-
-        // Check if MIME type is allowed for images
-        if !self.policy.allowed_image_types.contains(mime_type) {
-            return Err(MimeTypeValidationError::UnsupportedMimeType {
-                content_type: "image".to_string(),
-                mime_type: mime_type.to_string(),
-                allowed_types: self.policy.allowed_image_types.iter().cloned().collect(),
-                suggestion: self.suggest_alternative_mime_type(mime_type, "image"),
-            });
-        }
-
-        // Validate actual format matches declared MIME type
-        if self.policy.require_format_validation {
-            if let Some(data) = data {
-                self.validate_image_format_matches_mime(data, mime_type)?;
-            }
-        }
-
-        Ok(())
+        self.validate_for_category(&MimeCategory::IMAGE, mime_type, data)
     }
 
+    /// Validate `mime_type` for audio content, and match `data` against it.
+    ///
+    /// Pass `data` to have the payload's magic bytes checked against the
+    /// declared MIME type; pass `None` to check the MIME type alone. The
+    /// magic-byte check runs only when the policy sets
+    /// [`MimeTypePolicy::require_format_validation`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MimeTypeValidationError::SecurityBlocked`] when the deny-list
+    /// holds `mime_type`, [`MimeTypeValidationError::UnsupportedMimeType`] when
+    /// it is off the audio allow-list, and
+    /// [`MimeTypeValidationError::FormatMismatch`] when `data` is not the
+    /// declared format.
     pub fn validate_audio_mime_type(
         &self,
         mime_type: &str,
         data: Option<&[u8]>,
     ) -> Result<(), MimeTypeValidationError> {
-        // Check security blocking first
-        if self.policy.enable_security_filtering && self.is_mime_type_blocked(mime_type) {
-            return Err(MimeTypeValidationError::SecurityBlocked {
-                mime_type: mime_type.to_string(),
-                reason: "MIME type blocked for security reasons".to_string(),
-                allowed_categories: vec!["audio".to_string()],
-            });
-        }
-
-        // Check if MIME type is allowed for audio
-        if !self.policy.allowed_audio_types.contains(mime_type) {
-            return Err(MimeTypeValidationError::UnsupportedMimeType {
-                content_type: "audio".to_string(),
-                mime_type: mime_type.to_string(),
-                allowed_types: self.policy.allowed_audio_types.iter().cloned().collect(),
-                suggestion: self.suggest_alternative_mime_type(mime_type, "audio"),
-            });
-        }
-
-        // Validate actual format matches declared MIME type
-        if self.policy.require_format_validation {
-            if let Some(data) = data {
-                self.validate_audio_format_matches_mime(data, mime_type)?;
-            }
-        }
-
-        Ok(())
+        self.validate_for_category(&MimeCategory::AUDIO, mime_type, data)
     }
 
+    /// Validate `mime_type` for embedded resource content.
+    ///
+    /// Resources carry no binary format the validator can recognise, so only
+    /// the deny-list and the resource allow-list apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MimeTypeValidationError::SecurityBlocked`] when the deny-list
+    /// holds `mime_type`, and
+    /// [`MimeTypeValidationError::UnsupportedMimeType`] when it is off the
+    /// resource allow-list.
     pub fn validate_resource_mime_type(
         &self,
         mime_type: &str,
     ) -> Result<(), MimeTypeValidationError> {
-        // Check security blocking first
-        if self.policy.enable_security_filtering && self.is_mime_type_blocked(mime_type) {
-            return Err(MimeTypeValidationError::SecurityBlocked {
-                mime_type: mime_type.to_string(),
-                reason: "MIME type blocked for security reasons".to_string(),
-                allowed_categories: vec!["text".to_string(), "application".to_string()],
-            });
-        }
-
-        // Check if MIME type is allowed for resources
-        if !self.policy.allowed_resource_types.contains(mime_type) {
-            return Err(MimeTypeValidationError::UnsupportedMimeType {
-                content_type: "resource".to_string(),
-                mime_type: mime_type.to_string(),
-                allowed_types: self.policy.allowed_resource_types.iter().cloned().collect(),
-                suggestion: self.suggest_alternative_mime_type(mime_type, "resource"),
-            });
-        }
-
-        Ok(())
+        self.validate_for_category(&MimeCategory::RESOURCE, mime_type, None)
     }
 
     /// Return `true` when the MIME type is not on the policy's deny-list — the
@@ -360,164 +626,88 @@ impl MimeTypeValidator {
     }
 
     fn is_mime_type_blocked(&self, mime_type: &str) -> bool {
-        self.policy.blocked_types.contains(mime_type)
+        contains_mime_type(&self.policy.blocked_types, mime_type)
     }
 
-    fn suggest_alternative_mime_type(
-        &self,
-        _mime_type: &str,
-        content_type: &str,
-    ) -> Option<String> {
-        match content_type {
-            "image" => Some("Convert image to supported format like PNG or JPEG".to_string()),
-            "audio" => Some("Convert audio to supported format like WAV or MP3".to_string()),
-            "resource" => Some("Use plain text or JSON format".to_string()),
-            _ => None,
-        }
-    }
-
-    fn validate_image_format_matches_mime(
-        &self,
+    /// Match the magic bytes of `data` against the format `mime_type` declares.
+    ///
+    /// A MIME type absent from `format.mime_formats` carries no format
+    /// expectation, so it passes. A payload the detector cannot recognise is
+    /// reported as [`UNKNOWN_FORMAT`] and is a mismatch. The table lookup
+    /// ignores ASCII case, as RFC 2045 requires.
+    fn validate_format_matches_mime(
         data: &[u8],
         mime_type: &str,
+        format: &FormatSpec,
     ) -> Result<(), MimeTypeValidationError> {
-        let detected_format = self.detect_image_format(data);
-
-        let expected_format = match mime_type {
-            "image/png" => Some("png"),
-            "image/jpeg" => Some("jpeg"),
-            "image/gif" => Some("gif"),
-            "image/webp" => Some("webp"),
-            _ => None,
+        let Some(expected) = format
+            .mime_formats
+            .iter()
+            .find(|(mime, _)| mime.eq_ignore_ascii_case(mime_type))
+            .map(|(_, name)| *name)
+        else {
+            return Ok(());
         };
 
-        match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) if expected != detected => {
-                return Err(MimeTypeValidationError::FormatMismatch {
-                    expected: expected.to_string(),
-                    detected: detected.to_string(),
-                    mime_type: mime_type.to_string(),
-                });
-            }
-            (Some(expected), None) => {
-                // Expected a specific format but couldn't detect it - this is an error
-                return Err(MimeTypeValidationError::FormatMismatch {
-                    expected: expected.to_string(),
-                    detected: "unknown".to_string(),
-                    mime_type: mime_type.to_string(),
-                });
-            }
-            _ => {}
+        let detected = (format.detect)(data);
+        let detected = detected.as_deref().unwrap_or(UNKNOWN_FORMAT);
+        if detected == expected {
+            return Ok(());
         }
 
-        Ok(())
-    }
-
-    fn validate_audio_format_matches_mime(
-        &self,
-        data: &[u8],
-        mime_type: &str,
-    ) -> Result<(), MimeTypeValidationError> {
-        let detected_format = self.detect_audio_format(data);
-
-        let expected_format = match mime_type {
-            "audio/wav" => Some("wav"),
-            "audio/mp3" | "audio/mpeg" => Some("mp3"),
-            "audio/ogg" => Some("ogg"),
-            "audio/aac" => Some("aac"),
-            _ => None,
-        };
-
-        match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) if expected != detected => {
-                return Err(MimeTypeValidationError::FormatMismatch {
-                    expected: expected.to_string(),
-                    detected: detected.to_string(),
-                    mime_type: mime_type.to_string(),
-                });
-            }
-            (Some(expected), None) => {
-                // Expected a specific format but couldn't detect it - this is an error
-                return Err(MimeTypeValidationError::FormatMismatch {
-                    expected: expected.to_string(),
-                    detected: "unknown".to_string(),
-                    mime_type: mime_type.to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
-    fn detect_image_format(&self, data: &[u8]) -> Option<String> {
-        if data.len() < 2 {
-            return None;
-        }
-
-        // Debug output for testing
-        #[cfg(test)]
-        {
-            println!(
-                "Detecting image format for {} bytes: {:02X?}",
-                data.len(),
-                &data[..data.len().min(12)]
-            );
-        }
-
-        // PNG: starts with 8-byte signature
-        if data.len() >= 8 && data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            #[cfg(test)]
-            println!("Detected PNG format");
-            Some("png".to_string())
-        // JPEG: starts with FFD8
-        } else if data.starts_with(b"\xFF\xD8") {
-            #[cfg(test)]
-            println!("Detected JPEG format");
-            Some("jpeg".to_string())
-        // GIF: starts with GIF87a or GIF89a
-        } else if data.len() >= 6 && (data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
-            #[cfg(test)]
-            println!("Detected GIF format");
-            Some("gif".to_string())
-        // WebP: RIFF....WEBP
-        } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-            #[cfg(test)]
-            println!("Detected WebP format");
-            Some("webp".to_string())
-        } else {
-            #[cfg(test)]
-            println!("Unknown image format");
-            None
-        }
-    }
-
-    fn detect_audio_format(&self, data: &[u8]) -> Option<String> {
-        if data.len() < 4 {
-            return None;
-        }
-
-        // WAV: RIFF....WAVE (need at least 12 bytes)
-        if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE" {
-            Some("wav".to_string())
-        // MP3: Frame sync bits FF Ex
-        } else if data.len() >= 4 && data[0] == 0xFF && (data[1] & 0xE0) == 0xE0 {
-            Some("mp3".to_string())
-        // OGG: starts with "OggS"
-        } else if data.len() >= 4 && data.starts_with(b"OggS") {
-            Some("ogg".to_string())
-        // AAC ADTS: FF Fx
-        } else if data.len() >= 7 && data[0] == 0xFF && (data[1] & 0xF0) == 0xF0 {
-            Some("aac".to_string())
-        } else {
-            None
-        }
+        Err(MimeTypeValidationError::FormatMismatch {
+            expected: expected.to_string(),
+            detected: detected.to_string(),
+            mime_type: mime_type.to_string(),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An Ogg container header — enough magic bytes for `audio/ogg` detection,
+    /// and therefore a mismatch for any other declared audio MIME type.
+    const OGG_HEADER: &[u8] = b"OggS\x00\x02\x00\x00\x00\x00\x00\x00";
+
+    #[test]
+    fn test_allow_list_lookup_is_case_insensitive() {
+        let validator = MimeTypeValidator::moderate();
+
+        // RFC 2045 makes MIME types case-insensitive. The allow-list holds
+        // lowercase entries, so an uppercase spelling must still be accepted.
+        assert!(validator
+            .validate_image_mime_type("IMAGE/PNG", None)
+            .is_ok());
+        assert!(validator
+            .validate_audio_mime_type("Audio/Wav", None)
+            .is_ok());
+        assert!(validator.validate_resource_mime_type("Text/Plain").is_ok());
+    }
+
+    #[test]
+    fn test_deny_list_lookup_is_case_insensitive() {
+        let validator = MimeTypeValidator::strict();
+
+        assert!(!validator.is_mime_type_secure("Application/JavaScript"));
+    }
+
+    #[test]
+    fn test_format_check_runs_for_uppercase_mime_type() {
+        let validator = MimeTypeValidator::moderate();
+
+        // `AUDIO/WAV` must reach the magic-byte check just as `audio/wav` does.
+        // An Ogg payload is the wrong format, so the check must report it.
+        let error = validator
+            .validate_audio_mime_type("AUDIO/WAV", Some(OGG_HEADER))
+            .expect_err("an uppercase MIME type must still run format validation");
+
+        assert!(matches!(
+            error,
+            MimeTypeValidationError::FormatMismatch { .. }
+        ));
+    }
 
     #[test]
     fn test_mime_type_policy_levels() {
@@ -654,7 +844,7 @@ mod tests {
 
         // Invalid data for PNG MIME type
         let jpeg_data = b"\xFF\xD8\xFF\xE0\x00\x10JFIF";
-        let detected_format = validator.detect_image_format(jpeg_data);
+        let detected_format = detect_image_format(jpeg_data);
         println!("JPEG data detected as: {:?}", detected_format);
         let result = validator.validate_image_mime_type("image/png", Some(jpeg_data));
         println!("PNG validation with JPEG data result: {:?}", result);
@@ -683,7 +873,7 @@ mod tests {
 
         // Invalid data for WAV MIME type
         let mp3_data = b"\xFF\xFB\x90\x00";
-        let detected_format = validator.detect_audio_format(mp3_data);
+        let detected_format = detect_audio_format(mp3_data);
         println!("MP3 data detected as: {:?}", detected_format);
         let result = validator.validate_audio_mime_type("audio/wav", Some(mp3_data));
         println!("WAV validation with MP3 data result: {:?}", result);
@@ -716,38 +906,35 @@ mod tests {
 
     #[test]
     fn test_format_detection() {
-        let validator = MimeTypeValidator::default();
-
         // Test PNG detection - use exact PNG header
         let png_data = b"\x89PNG\r\n\x1a\n";
         println!("PNG test data bytes: {:02X?}", png_data);
-        let detected = validator.detect_image_format(png_data);
+        let detected = detect_image_format(png_data);
         println!("PNG detected: {:?}", detected);
         assert_eq!(detected, Some("png".to_string()));
 
         // Test JPEG detection
         let jpeg_data = b"\xFF\xD8\xFF\xE0";
-        let detected = validator.detect_image_format(jpeg_data);
+        let detected = detect_image_format(jpeg_data);
         assert_eq!(detected, Some("jpeg".to_string()));
 
         // Test WAV detection - use exact RIFF/WAVE header
         let wav_data = b"RIFF\x24\x08\x00\x00WAVE";
         println!("WAV test data bytes: {:02X?}", wav_data);
-        let detected = validator.detect_audio_format(wav_data);
+        let detected = detect_audio_format(wav_data);
         println!("WAV detected: {:?}", detected);
         assert_eq!(detected, Some("wav".to_string()));
 
         // Test MP3 detection
         let mp3_data = b"\xFF\xFB\x90\x00";
-        let detected = validator.detect_audio_format(mp3_data);
+        let detected = detect_audio_format(mp3_data);
         assert_eq!(detected, Some("mp3".to_string()));
     }
 
     #[test]
     fn test_png_detection_basic() {
-        let validator = MimeTypeValidator::default();
         let png_header = b"\x89PNG\r\n\x1a\n";
-        let result = validator.detect_image_format(png_header);
+        let result = detect_image_format(png_header);
         println!("Basic PNG detection: {:?}", result);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), "png");

@@ -3355,6 +3355,7 @@ mod session_record_tests {
     /// Build a live `Session` with the given cwd and no messages.
     fn empty_session(cwd: &str) -> Session {
         Session::new(InternalSessionId::new(), PathBuf::from(cwd))
+            .expect("test working directory must be absolute")
     }
 
     /// `session_record_from` maps a live session's id, cwd, and update stream
