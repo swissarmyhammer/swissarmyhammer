@@ -188,10 +188,29 @@ comments:
     - evidence: 5 files — `builtin/validators/code-hygiene/rules/complexity-rust.md`, `builtin/validators/code-hygiene/fixtures/complexity-rust.fail.rs.tmpl`, `builtin/validators/code-hygiene/fixtures/complexity-rust.pass.rs.tmpl`, `builtin/validators/code-hygiene/VALIDATOR.md`, `crates/swissarmyhammer-validators/src/review/tool_rules.rs`. Tests: 526 passed in the `swissarmyhammer-validators` lib, 7 passed in mirdan `builtin_validators`, 0 failed. `cargo fmt --check` and `cargo clippy --all-targets` clean on both crates. RED verified five ways before GREEN, and each gate isolated on the fail fixture at script level.
     - next: `/review`. The three test rosters needed no edit; the rule name and both fixture names did not change.
   timestamp: 2026-08-08T14:24:10.575098+00:00
+- actor: claude-code
+  id: 01kzgwr0yyzvf3rra45sfj3mj3
+  text: |-
+    ### review — clean
+    - evidence: `review sha 68edd7698..bf5b5fc1e` (commit bf5b5fc1e, 17 files) — 0 findings, 0 confirmed, 0 refuted; 9 validators attempted, 0 failed, 0 skipped. No prior `## Review Findings` section and no open checklist items on the card.
+    - next: none. Task moved to `done`. The lint choice is settled in `## Decision (settled)`; the review did not re-open it.
+  timestamp: 2026-08-08T14:34:31.774541+00:00
+- actor: claude-code
+  id: 01kzgws43prh671nkzz0sn8525
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 5 files; Rust rule moved to the four adopted lints, false nesting claim deleted, fixtures rebuilt to trip both gates, `cognitive_complexity` rejection recorded in VALIDATOR.md
+    - test: green — cargo nextest run --workspace, 13862 passed, 0 failed, 0 skipped; cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean
+    - commit: bf5b5fc1e — 17 files, 1870 insertions, 67 deletions; staged by explicit path because a parallel session shares this tree
+    - review: clean — 0 findings, 9 validators attempted, 0 failed, 0 skipped on `review sha 68edd7698..bf5b5fc1e`
+    - result: task moved to done
+
+    Iteration 1 ended `stuck` on the `clippy::cognitive_complexity` blocker. It was resolved by a lint survey of the full clippy 0.1.97 lint list, not by the card's fallback: `clippy::excessive_nesting` is uncontaminated by macro expansion and carries the nesting dimension of the prompt rule, so `supersedes: [cognitive-complexity, function-length]` holds as the card originally required.
+  timestamp: 2026-08-08T14:35:07.766174+00:00
 depends_on:
 - 01KZEB9V0GBG049K0PPGWHWYT8
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffca80
 title: 'complexity tool rules: Rust + Python (clippy, ruff)'
 ---
 Add tool rules to `builtin/validators/code-hygiene` that supersede the `cognitive-complexity` and `function-length` prompt rules. Follow the missing-docs pattern and the README contract.
