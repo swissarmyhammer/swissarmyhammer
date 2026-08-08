@@ -104,8 +104,25 @@ comments:
     - context: verified the whole workspace after the `parse_validator`/`parse_validator_with_expansion`/`parse_validator_internal` signature change (PathBuf → &Path) in `crates/swissarmyhammer-validators/src/validators/parser.rs`, its re-export in `validators/mod.rs`, callers in `loader.rs`, and the stricter doctor.rs assertion.
     - next: none — build is clean, ready for the next step.
   timestamp: 2026-08-08T02:44:17.437009+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzfmhghephvthq1r9sny0ask
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (d01050a61) — 0 findings, 0 confirmed, 12 refuted, 18 attempted, 0 failed, 0 skipped. Both prior findings (doctor.rs:1160 singular fallback note, parser.rs:189 `&Path` signature) are checked.
+    - next: task moved to `done`.
+  timestamp: 2026-08-08T02:51:55.310154+00:00
+- actor: claude-code
+  id: 01kzfmn1aeyxh5wvjgknd8x5a9
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 3 files, both findings closed and checked
+    - test: green — cargo nextest run --workspace, 13782 passed, 0 failed, 0 skipped; fmt, clippy -D warnings clean
+    - commit: d01050a61 fix(validators): pass Path not owned PathBuf, pin doctor fallback note (^gwhwyt8)
+    - review: clean — 18 validator pairs attempted, 0 findings, 12 refuted
+    - task moved to done by the review gate
+  timestamp: 2026-08-08T02:53:50.798409+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffc580
 title: 'validators: `supersedes` accepts one name or a list'
 ---
 Change `Rule.supersedes` from `Option<String>` to a one-or-many value.

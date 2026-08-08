@@ -27,8 +27,40 @@ comments:
 
     **Separate gap, filed on its own card**: `find_duplicates_in` removes the source file from its own corpus, so the probe cannot report a duplicate inside one file. Measured 0 intra-file pairs out of 91480. jscpd found 470 prod-to-prod intra-file pairs. This is a probe fix, not an argument for jscpd.
   timestamp: 2026-08-08T01:56:07.993440+00:00
-position_column: todo
-position_ordinal: ff9480
+- actor: claude-code
+  id: 01kzfmt4p2xmd5fhgqwxqkkvv3
+  text: |
+    Recorded outcome (b) in `builtin/validators/duplication/VALIDATOR.md`. Documentation only. No probe, no tool rule, no code.
+
+    The new section copies the heading style of `builtin/validators/code-hygiene/VALIDATOR.md`, which is the precedent for this record: a `## Which tools this set uses, and which it rejects` heading, then one `### <tool> — rejected` block for each measured candidate.
+
+    The section holds every measured number from the evaluation comment:
+    - overlap: 7102 of 7207 sites (98.5%), every site of 3147 of 3199 clusters (98.4%)
+    - unique yield: 60 pairs (1.5%), median 8 lines, 35 of 60 are file-header `use` blocks
+    - the probe finds 3.5 times more sites, because cosine similarity catches renamed-identifier near-duplicates
+    - test noise: 60.6% inline `#[cfg(test)]`, 17.0% more under `tests/`, 2428 of 3199 clusters all-test
+    - `supersedes: duplication` is not possible: path-glob-only scoping, 4857 instances in inline test modules inside production files
+
+    `{"op": "dump validators", "paths": ["builtin/validators/duplication/VALIDATOR.md"]}` returns `rule_count: 0` for the `md` extension. No review rule applies to this file.
+
+    `cargo nextest run -p swissarmyhammer-validators`: 523 tests run, 523 passed, 0 skipped. No test asserts on the contents of this file.
+  timestamp: 2026-08-08T02:56:38.082887+00:00
+- actor: claude-code
+  id: 01kzfmt9me1dv4tmxce8hm8v1s
+  text: |
+    ### implement — changed
+    - evidence: 1 file — builtin/validators/duplication/VALIDATOR.md (+32 lines). `cargo nextest run -p swissarmyhammer-validators`: 523 run, 523 passed, 0 skipped.
+    - next: /review
+  timestamp: 2026-08-08T02:56:43.150039+00:00
+- actor: claude-code
+  id: 01kzfnhj2pwz8bs4z6tp10hh6k
+  text: |-
+    ### test — green
+    - evidence: `cargo fmt --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean (0 warnings); `cargo nextest run --workspace` — 13782 tests run: 13782 passed (139 slow), 0 failed, 0 skipped.
+    - next: ready for review/commit.
+  timestamp: 2026-08-08T03:09:25.462337+00:00
+position_column: doing
+position_ordinal: '8480'
 title: 'duplication: evaluate jscpd against the duplicates probe'
 ---
 Evaluate `jscpd` (one tool, ~150 languages) against the in-house `duplicates` tree-sitter probe that the duplication validator already consumes.
