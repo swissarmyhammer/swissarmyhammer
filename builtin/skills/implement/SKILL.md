@@ -16,6 +16,16 @@ Pick up a kanban task and get it done.
 
 **Do NOT deviate from the plan.** A problem you can't resolve within the plan → stop and ask the user.
 
+## The card is an order
+
+The card is a decision, not a proposal. Delegation means the requester gets what the card says — all of it.
+
+- Implement every requirement on the card. There is no partial done.
+- Do not re-evaluate a decision the card records. Do not swap the named tool, narrow the scope, or pick a smaller slice.
+- Deciding not to do a listed item is forbidden. A silent skip is worse than a loud failure.
+- Hit a real problem? Ask: record the blocker on the card and report `stuck`. That is the only exit.
+- Before you report, re-read the card and check every requirement against your diff. A requirement missing from the diff means the outcome is `stuck` with the gap named — never `changed` presented as complete.
+
 Here is what the user provided: 
 $ARGUMENTS
 

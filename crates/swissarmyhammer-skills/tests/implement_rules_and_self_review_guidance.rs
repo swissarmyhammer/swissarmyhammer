@@ -161,3 +161,52 @@ fn implement_skill_leaves_review_to_the_review_step() {
 
     offset_of(&body, HANDOFF_STEP, "keep its handoff step");
 }
+
+/// The skill must bind the agent to the card: the card is an order, every
+/// requirement gets implemented, silent scope-narrowing is forbidden, and the
+/// only exit from a requirement is a recorded blocker with a `stuck` outcome.
+/// A missing requirement reported as `changed` is the fire-a-human failure
+/// mode this section exists to prevent.
+#[test]
+fn implement_skill_binds_the_agent_to_the_card() {
+    let body = rendered_builtin_instructions("implement");
+
+    // Each phrase the obedience contract must carry, with the requirement it
+    // encodes.
+    let required_markers: &[(&str, &str)] = &[
+        (
+            "The card is a decision, not a proposal",
+            "state that the card is a decision, not a proposal",
+        ),
+        (
+            "Implement every requirement on the card",
+            "require implementing every requirement on the card",
+        ),
+        (
+            "Deciding not to do a listed item is forbidden",
+            "forbid deciding not to do a listed item",
+        ),
+        (
+            "Do not re-evaluate a decision the card records",
+            "forbid re-evaluating decisions recorded on the card",
+        ),
+        (
+            "record the blocker on the card and report `stuck`",
+            "make a recorded blocker plus `stuck` the only exit",
+        ),
+        (
+            "re-read the card and check every requirement against your diff",
+            "require a card-versus-diff completeness check before reporting",
+        ),
+        (
+            "never `changed` presented as complete",
+            "forbid reporting `changed` when a requirement is missing",
+        ),
+    ];
+    for (marker, requirement) in required_markers {
+        assert!(
+            body.contains(marker),
+            "the implement skill must {requirement} (marker {marker:?})"
+        );
+    }
+}
