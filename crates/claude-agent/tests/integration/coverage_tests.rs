@@ -1520,9 +1520,9 @@ fn test_session_id_to_uuid_string() {
 }
 
 #[test]
-fn test_session_id_ulid_string() {
+fn test_session_id_to_ulid_string() {
     let id = claude_agent::session::SessionId::new();
-    let ulid = id.ulid_string();
+    let ulid = id.to_ulid_string();
     assert_eq!(ulid.len(), 26);
     assert_eq!(ulid, id.to_string());
 }

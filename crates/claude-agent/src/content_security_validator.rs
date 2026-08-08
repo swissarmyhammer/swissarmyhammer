@@ -1,6 +1,7 @@
 use crate::base64_validation;
 use crate::constants::sizes;
 use crate::error::ToJsonRpcError;
+use crate::json_rpc_codes::{INVALID_PARAMS, SERVER_ERROR};
 use crate::size_validator::{SizeValidationError, SizeValidator};
 use crate::url_validation;
 use agent_client_protocol::schema::ContentBlock;
@@ -13,43 +14,162 @@ use thiserror::Error;
 use tracing::{debug, warn};
 use url::Url;
 
+/// Largest content array a [`SecurityPolicy::strict`] policy accepts.
+const STRICT_MAX_CONTENT_ARRAY_LENGTH: usize = 10;
+
+/// Requests each minute a [`SecurityPolicy::strict`] policy accepts.
+const STRICT_RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 60;
+
+/// Largest content array a [`SecurityPolicy::moderate`] policy accepts.
+const MODERATE_MAX_CONTENT_ARRAY_LENGTH: usize = 50;
+
+/// Requests each minute a [`SecurityPolicy::moderate`] policy accepts.
+const MODERATE_RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 300;
+
+/// Bytes a base64 group carries: three bytes encode as four characters.
+const BASE64_DECODED_BYTES_PER_GROUP: usize = 3;
+
+/// Characters a base64 group occupies: four characters carry three bytes.
+const BASE64_ENCODED_CHARS_PER_GROUP: usize = 4;
+
+/// Size charged to an embedded resource block, in bytes.
+///
+/// The real payload is not read during the array-size estimate, so every
+/// resource block is charged this conservative figure.
+const RESOURCE_CONTENT_SIZE_ESTIMATE: usize = 1024;
+
+/// Size charged to a resource-link block, in bytes.
+///
+/// A link carries only a URI, so it costs far less than an embedded resource.
+const RESOURCE_LINK_SIZE_ESTIMATE: usize = 512;
+
+/// Base64 characters read when sniffing a content type.
+///
+/// Magic-number detection needs about the first 512 bytes, and 684 base64
+/// characters decode to roughly that many bytes.
+const CONTENT_SNIFF_SAMPLE_BASE64_CHARS: usize = 684;
+
+/// Shortest string the repetition heuristic can judge, in characters.
+const MIN_DATA_LENGTH_FOR_REPETITION_CHECK: usize = 100;
+
+/// Characters taken from the front of a string as the repetition sample.
+const REPETITION_SAMPLE_LEN: usize = 50;
+
+/// How often the sample may repeat before the string is called repetitive.
+const MAX_REPETITION_COUNT: usize = 10;
+
+/// MIME type that declares opaque bytes, so no format check applies.
+const OPAQUE_BINARY_MIME_TYPE: &str = "application/octet-stream";
+
+/// Estimate the decoded size of `encoded_len` base64 characters, in bytes.
+///
+/// Base64 encodes three bytes as four characters, so the decoded size is
+/// about three quarters of the encoded length.
+fn estimated_base64_decoded_size(encoded_len: usize) -> usize {
+    (encoded_len * BASE64_DECODED_BYTES_PER_GROUP) / BASE64_ENCODED_CHARS_PER_GROUP
+}
+
+/// Why [`ContentSecurityValidator`] refused a content block.
+///
+/// The variants cover the whole security surface: policy checks, threat
+/// heuristics, URI and SSRF checks, base64 and MIME type checks, and the
+/// denial-of-service limits on size, array length and request rate.
 #[derive(Debug, Error, Clone)]
 pub enum ContentSecurityError {
+    /// A policy check refused the content.
     #[error("content security validation failed: {reason} (policy: {policy_violated})")]
     SecurityValidationFailed {
+        /// What the check objected to.
         reason: String,
+        /// Name of the policy rule that was broken.
         policy_violated: String,
     },
+    /// A threat heuristic recognised something dangerous in the content.
     #[error("suspicious content detected: {threat_type} - {details}")]
     SuspiciousContentDetected {
+        /// Kind of threat the heuristic recognised.
         threat_type: String,
+        /// Evidence the heuristic recorded.
         details: String,
     },
+    /// A denial-of-service guard fired.
     #[error("DoS protection triggered: {protection_type} (threshold: {threshold})")]
     DoSProtectionTriggered {
+        /// Which guard fired.
         protection_type: String,
+        /// The limit and the observed value.
         threshold: String,
     },
+    /// A URI broke a scheme, length or deny-list rule.
     #[error("URI security violation: {uri} - {reason}")]
-    UriSecurityViolation { uri: String, reason: String },
+    UriSecurityViolation {
+        /// URI that was refused.
+        uri: String,
+        /// Why it was refused.
+        reason: String,
+    },
+    /// Base64 content was malformed or over a limit.
     #[error("Base64 security violation: {reason}")]
-    Base64SecurityViolation { reason: String },
+    Base64SecurityViolation {
+        /// Why the base64 content was refused.
+        reason: String,
+    },
+    /// The bytes do not match the MIME type the caller declared.
     #[error("content type spoofing detected: declared {declared}, actual {actual}")]
-    ContentTypeSpoofingDetected { declared: String, actual: String },
+    ContentTypeSpoofingDetected {
+        /// MIME type the caller declared.
+        declared: String,
+        /// MIME type magic-number sniffing found.
+        actual: String,
+    },
+    /// Text content holds a pattern sanitization refuses to pass.
     #[error("content sanitization failed: {reason}")]
-    ContentSanitizationFailed { reason: String },
+    ContentSanitizationFailed {
+        /// Which pattern was found.
+        reason: String,
+    },
+    /// A URI points at a private or otherwise protected network target.
     #[error("SSRF protection triggered: {target} - {reason}")]
-    SsrfProtectionTriggered { target: String, reason: String },
+    SsrfProtectionTriggered {
+        /// Host or address the URI names.
+        target: String,
+        /// Why the target is protected.
+        reason: String,
+    },
+    /// Content is larger than the memory budget for processing.
     #[error("memory limit exceeded: {actual} > {limit} bytes")]
-    MemoryLimitExceeded { actual: usize, limit: usize },
+    MemoryLimitExceeded {
+        /// Size the content holds, in bytes.
+        actual: usize,
+        /// Largest accepted size, in bytes.
+        limit: usize,
+    },
+    /// The caller sent requests faster than the policy allows.
     #[error("rate limit exceeded: {operation}")]
-    RateLimitExceeded { operation: String },
+    RateLimitExceeded {
+        /// Operation that was rate limited.
+        operation: String,
+    },
+    /// The content array holds more blocks than the policy allows.
     #[error("content array too large: {length} > {max_length}")]
-    ContentArrayTooLarge { length: usize, max_length: usize },
+    ContentArrayTooLarge {
+        /// Number of blocks the array holds.
+        length: usize,
+        /// Largest accepted number of blocks.
+        max_length: usize,
+    },
+    /// The content declares an encoding the validator does not support.
     #[error("invalid content encoding: {encoding}")]
-    InvalidContentEncoding { encoding: String },
+    InvalidContentEncoding {
+        /// Encoding the caller declared.
+        encoding: String,
+    },
+    /// A malicious-pattern heuristic matched.
     #[error("malicious pattern detected: {pattern_type}")]
-    MaliciousPatternDetected { pattern_type: String },
+    MaliciousPatternDetected {
+        /// Kind of pattern that matched.
+        pattern_type: String,
+    },
 }
 
 impl ToJsonRpcError for ContentSecurityError {
@@ -66,8 +186,8 @@ impl ToJsonRpcError for ContentSecurityError {
             | Self::MemoryLimitExceeded { .. }
             | Self::ContentArrayTooLarge { .. }
             | Self::InvalidContentEncoding { .. }
-            | Self::MaliciousPatternDetected { .. } => -32602, // Invalid params
-            Self::RateLimitExceeded { .. } => -32000, // Server error
+            | Self::MaliciousPatternDetected { .. } => INVALID_PARAMS,
+            Self::RateLimitExceeded { .. } => SERVER_ERROR,
         }
     }
 
@@ -175,10 +295,20 @@ impl From<SizeValidationError> for ContentSecurityError {
     }
 }
 
+/// How aggressively a [`SecurityPolicy`] refuses content.
+///
+/// The level selects the whole preset — size limits, URI rules, heuristics and
+/// rate limits — rather than one setting.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SecurityLevel {
+    /// Smallest limits, HTTPS only, every heuristic on. Use for untrusted
+    /// input.
     Strict,
+    /// Wider limits and more URI schemes, with every heuristic still on. This
+    /// is the level the defaults use.
     Moderate,
+    /// Widest limits, every heuristic off. Use only for trusted or debug
+    /// input.
     Permissive,
 }
 
@@ -187,26 +317,49 @@ pub enum SecurityLevel {
 // Timeouts create artificial limitations and poor user experience by interrupting
 // legitimate processing of large or complex content. Users cannot predict when
 // operations will be artificially terminated, leading to frustration and unreliable behavior.
+/// The rules a [`ContentSecurityValidator`] enforces.
+///
+/// A policy holds the size and rate limits, the URI allow-list and deny-lists,
+/// and a switch for each heuristic. Build one with [`SecurityPolicy::strict`],
+/// [`SecurityPolicy::moderate`] or [`SecurityPolicy::permissive`] rather than
+/// filling the fields by hand.
 #[derive(Debug, Clone)]
 pub struct SecurityPolicy {
+    /// Preset this policy came from, for reporting and comparison.
     pub level: SecurityLevel,
+    /// Largest decoded base64 payload accepted, in bytes.
     pub max_base64_size: usize,
+    /// Largest estimated size of one content array, in bytes.
     pub max_total_content_size: usize,
+    /// Largest number of blocks accepted in one content array.
     pub max_content_array_length: usize,
+    /// URI schemes the policy accepts, such as `https`.
     pub allowed_uri_schemes: HashSet<String>,
+    /// Whether URIs are checked against private and local network targets.
     pub enable_ssrf_protection: bool,
+    /// Whether magic-number sniffing runs on binary payloads.
     pub enable_content_sniffing: bool,
+    /// Whether a payload must match the MIME type it declares.
     pub enable_format_validation: bool,
+    /// Whether text content is checked for script-injection patterns.
     pub enable_content_sanitization: bool,
+    /// Whether base64 payloads are checked for malicious patterns.
     pub enable_malicious_pattern_detection: bool,
+    /// Regular expressions that refuse a matching URI.
     pub blocked_uri_patterns: Vec<String>,
+    /// CIDR ranges that refuse a URI resolving into them.
     pub blocked_ip_ranges: Vec<String>,
+    /// Longest URI accepted, in characters.
     pub max_uri_length: usize,
+    /// Whether the request rate limit is enforced at all.
     pub enable_rate_limiting: bool,
+    /// Requests each minute the policy accepts.
     pub rate_limit_requests_per_minute: u32,
 }
 
 impl SecurityPolicy {
+    /// Build the tightest policy: HTTPS only, smallest limits, every
+    /// heuristic on. Use it for untrusted input.
     pub fn strict() -> Self {
         let mut allowed_schemes = HashSet::new();
         allowed_schemes.insert("https".to_string());
@@ -215,7 +368,7 @@ impl SecurityPolicy {
             level: SecurityLevel::Strict,
             max_base64_size: sizes::content::MAX_CONTENT_STRICT,
             max_total_content_size: sizes::content::MAX_RESOURCE_STRICT,
-            max_content_array_length: 10,
+            max_content_array_length: STRICT_MAX_CONTENT_ARRAY_LENGTH,
             allowed_uri_schemes: allowed_schemes,
             enable_ssrf_protection: true,
             enable_content_sniffing: true,
@@ -238,10 +391,12 @@ impl SecurityPolicy {
             ],
             max_uri_length: sizes::uri::MAX_URI_LENGTH,
             enable_rate_limiting: true,
-            rate_limit_requests_per_minute: 60,
+            rate_limit_requests_per_minute: STRICT_RATE_LIMIT_REQUESTS_PER_MINUTE,
         }
     }
 
+    /// Build the balanced policy: `https`, `http` and `file` URIs, wider size
+    /// limits, every heuristic still on. This is the level the defaults use.
     pub fn moderate() -> Self {
         let mut allowed_schemes = HashSet::new();
         allowed_schemes.insert("https".to_string());
@@ -252,7 +407,7 @@ impl SecurityPolicy {
             level: SecurityLevel::Moderate,
             max_base64_size: sizes::content::MAX_CONTENT_MODERATE,
             max_total_content_size: sizes::content::MAX_RESOURCE_MODERATE,
-            max_content_array_length: 50,
+            max_content_array_length: MODERATE_MAX_CONTENT_ARRAY_LENGTH,
             allowed_uri_schemes: allowed_schemes,
             enable_ssrf_protection: true,
             enable_content_sniffing: true,
@@ -263,10 +418,12 @@ impl SecurityPolicy {
             blocked_ip_ranges: vec!["127.0.0.0/8".to_string(), "::1/128".to_string()],
             max_uri_length: sizes::uri::MAX_URI_LENGTH,
             enable_rate_limiting: true,
-            rate_limit_requests_per_minute: 300,
+            rate_limit_requests_per_minute: MODERATE_RATE_LIMIT_REQUESTS_PER_MINUTE,
         }
     }
 
+    /// Build the loosest policy: widest limits and every heuristic off. Use it
+    /// only for trusted or debug input.
     pub fn permissive() -> Self {
         let mut allowed_schemes = HashSet::new();
         allowed_schemes.insert("https".to_string());
@@ -295,6 +452,14 @@ impl SecurityPolicy {
     }
 }
 
+/// Applies a [`SecurityPolicy`] to ACP content blocks.
+///
+/// The validator checks a block's size, its URI, its base64 payload and the
+/// MIME type it declares, and refuses anything the policy forbids. Build one
+/// from a preset with [`ContentSecurityValidator::strict`],
+/// [`ContentSecurityValidator::moderate`] or
+/// [`ContentSecurityValidator::permissive`], or from a policy of your own with
+/// [`ContentSecurityValidator::new`].
 #[derive(Debug)]
 pub struct ContentSecurityValidator {
     policy: SecurityPolicy,
@@ -325,6 +490,12 @@ impl Clone for ContentSecurityValidator {
 }
 
 impl ContentSecurityValidator {
+    /// Build a validator from `policy`, compiling its URI deny-list patterns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentSecurityError::SecurityValidationFailed`] when a
+    /// pattern in `blocked_uri_patterns` is not a valid regular expression.
     pub fn new(policy: SecurityPolicy) -> Result<Self, ContentSecurityError> {
         let mut blocked_uri_regexes = Vec::new();
         for pattern in &policy.blocked_uri_patterns {
@@ -353,18 +524,34 @@ impl ContentSecurityValidator {
         })
     }
 
+    /// Build a validator on [`SecurityPolicy::strict`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the error [`ContentSecurityValidator::new`] reports.
     pub fn strict() -> Result<Self, ContentSecurityError> {
         Self::new(SecurityPolicy::strict())
     }
 
+    /// Build a validator on [`SecurityPolicy::moderate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the error [`ContentSecurityValidator::new`] reports.
     pub fn moderate() -> Result<Self, ContentSecurityError> {
         Self::new(SecurityPolicy::moderate())
     }
 
+    /// Build a validator on [`SecurityPolicy::permissive`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the error [`ContentSecurityValidator::new`] reports.
     pub fn permissive() -> Result<Self, ContentSecurityError> {
         Self::new(SecurityPolicy::permissive())
     }
 
+    /// The policy this validator enforces.
     pub fn policy(&self) -> &SecurityPolicy {
         &self.policy
     }
@@ -450,23 +637,20 @@ impl ContentSecurityValidator {
                     total_estimated_size += text.text.len();
                 }
                 ContentBlock::Image(image) => {
-                    // Base64 encoded size is ~4/3 of actual size
-                    total_estimated_size += (image.data.len() * 3) / 4;
+                    total_estimated_size += estimated_base64_decoded_size(image.data.len());
                 }
                 ContentBlock::Audio(audio) => {
-                    total_estimated_size += (audio.data.len() * 3) / 4;
+                    total_estimated_size += estimated_base64_decoded_size(audio.data.len());
                 }
                 ContentBlock::Resource(_) => {
-                    // Conservative estimate for resource content
-                    total_estimated_size += 1024; // 1KB estimate
+                    total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE;
                 }
                 ContentBlock::ResourceLink(_) => {
-                    // URI-based content has minimal memory impact
-                    total_estimated_size += 512; // 512B estimate
+                    total_estimated_size += RESOURCE_LINK_SIZE_ESTIMATE;
                 }
                 _ => {
-                    // Unknown content type - use conservative estimate
-                    total_estimated_size += 1024; // 1KB estimate
+                    // Unknown content type - charge the conservative estimate
+                    total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE;
                 }
             }
         }
@@ -502,7 +686,7 @@ impl ContentSecurityValidator {
         content_type: &str,
     ) -> Result<(), ContentSecurityError> {
         // Check size limits before processing
-        let estimated_decoded_size = (data.len() * 3) / 4;
+        let estimated_decoded_size = estimated_base64_decoded_size(data.len());
         if estimated_decoded_size > self.policy.max_base64_size {
             return Err(ContentSecurityError::Base64SecurityViolation {
                 reason: format!(
@@ -628,49 +812,81 @@ impl ContentSecurityValidator {
 
         match &resource_content.resource {
             EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                // Validate URI
-                if !text_resource.uri.is_empty() {
-                    self.validate_uri_security(&text_resource.uri)?;
-                }
-
-                // Validate text content
-                if !text_resource.text.is_empty() && self.policy.enable_content_sanitization {
-                    self.validate_text_content_safety(&text_resource.text)?;
-                }
+                self.validate_text_resource(text_resource)
             }
             EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                // Validate URI
-                if !blob_resource.uri.is_empty() {
-                    self.validate_uri_security(&blob_resource.uri)?;
-                }
-
-                // Validate base64 blob data
-                if !blob_resource.blob.is_empty() {
-                    self.validate_base64_security(&blob_resource.blob, "resource")?;
-
-                    // Validate content type consistency if MIME type is provided
-                    if self.policy.enable_format_validation {
-                        if let Some(ref mime_type) = blob_resource.mime_type {
-                            if mime_type != "application/octet-stream" {
-                                self.validate_content_type_consistency(
-                                    &blob_resource.blob,
-                                    mime_type,
-                                )?;
-                            }
-                        }
-                    }
-                }
+                self.validate_blob_resource(blob_resource)
             }
-            _ => {
-                // Unknown or unsupported resource type - reject for security
-                return Err(ContentSecurityError::SecurityValidationFailed {
-                    reason: "Unsupported resource type".to_string(),
-                    policy_violated: "resource_type_allowlist".to_string(),
-                });
-            }
+            // Unknown or unsupported resource type - reject for security
+            _ => Err(ContentSecurityError::SecurityValidationFailed {
+                reason: "Unsupported resource type".to_string(),
+                policy_violated: "resource_type_allowlist".to_string(),
+            }),
+        }
+    }
+
+    /// Validate the URI and the text of a text resource.
+    ///
+    /// An empty URI is skipped, and the text is checked only when the policy
+    /// sets [`SecurityPolicy::enable_content_sanitization`].
+    fn validate_text_resource(
+        &self,
+        text_resource: &agent_client_protocol::schema::TextResourceContents,
+    ) -> Result<(), ContentSecurityError> {
+        if !text_resource.uri.is_empty() {
+            self.validate_uri_security(&text_resource.uri)?;
+        }
+
+        if !text_resource.text.is_empty() && self.policy.enable_content_sanitization {
+            self.validate_text_content_safety(&text_resource.text)?;
         }
 
         Ok(())
+    }
+
+    /// Validate the URI, the base64 payload and the MIME type of a blob
+    /// resource.
+    ///
+    /// An empty URI is skipped, and an empty blob ends the check.
+    fn validate_blob_resource(
+        &self,
+        blob_resource: &agent_client_protocol::schema::BlobResourceContents,
+    ) -> Result<(), ContentSecurityError> {
+        if !blob_resource.uri.is_empty() {
+            self.validate_uri_security(&blob_resource.uri)?;
+        }
+
+        if blob_resource.blob.is_empty() {
+            return Ok(());
+        }
+
+        self.validate_base64_security(&blob_resource.blob, "resource")?;
+        self.validate_blob_mime_type_consistency(blob_resource)
+    }
+
+    /// Match a blob's bytes against the MIME type it declares.
+    ///
+    /// Returns `Ok(())` when the policy does not set
+    /// [`SecurityPolicy::enable_format_validation`], when the blob declares no
+    /// MIME type, or when it declares [`OPAQUE_BINARY_MIME_TYPE`], which names
+    /// no format to match.
+    fn validate_blob_mime_type_consistency(
+        &self,
+        blob_resource: &agent_client_protocol::schema::BlobResourceContents,
+    ) -> Result<(), ContentSecurityError> {
+        if !self.policy.enable_format_validation {
+            return Ok(());
+        }
+
+        let Some(mime_type) = blob_resource.mime_type.as_deref() else {
+            return Ok(());
+        };
+
+        if mime_type == OPAQUE_BINARY_MIME_TYPE {
+            return Ok(());
+        }
+
+        self.validate_content_type_consistency(&blob_resource.blob, mime_type)
     }
 
     /// Sniff content type from binary data using magic numbers
@@ -728,7 +944,7 @@ impl ContentSecurityValidator {
 
         // Decode a portion of the base64 data to check magic numbers
         // We only need the first 512 bytes for magic number detection
-        let sample_size = std::cmp::min(base64_data.len(), 684); // 684 base64 chars = ~512 bytes
+        let sample_size = std::cmp::min(base64_data.len(), CONTENT_SNIFF_SAMPLE_BASE64_CHARS);
         let sample = &base64_data[..sample_size];
 
         // Decode the sample
@@ -812,20 +1028,13 @@ impl ContentSecurityValidator {
 
     /// Check if data contains overly repetitive patterns
     fn is_overly_repetitive(&self, data: &str) -> bool {
-        if data.len() < 100 {
+        if data.len() < MIN_DATA_LENGTH_FOR_REPETITION_CHECK {
             return false;
         }
 
-        // Sample check: if first 50 characters repeat more than 10 times
-        if data.len() >= 50 {
-            let sample = &data[0..50];
-            let count = data.matches(sample).count();
-            if count > 10 {
-                return true;
-            }
-        }
-
-        false
+        // Sample check: does the head of the string repeat too often?
+        let sample = &data[0..REPETITION_SAMPLE_LEN];
+        data.matches(sample).count() > MAX_REPETITION_COUNT
     }
 
     /// Validate text content for potentially dangerous content

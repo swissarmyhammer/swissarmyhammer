@@ -1,7 +1,30 @@
 //! Error types for the Claude Agent
 
+use crate::json_rpc_codes::{
+    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
+};
 use serde_json::Value;
+use std::fmt::Display;
 use thiserror::Error;
+
+/// Serialize an error as a one-field struct holding its `Display` text.
+///
+/// `McpError` and `AgentError` both cross the ACP boundary as a plain message,
+/// so both `Serialize` impls delegate here and stay in step.
+fn serialize_error_as_display<S, E>(
+    serializer: S,
+    struct_name: &'static str,
+    error: &E,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    E: Display + ?Sized,
+{
+    use serde::ser::SerializeStruct;
+    let mut state = serializer.serialize_struct(struct_name, 1)?;
+    state.serialize_field("error", &error.to_string())?;
+    state.end()
+}
 
 /// JSON-RPC 2.0 error structure following ACP specification
 #[derive(Debug, Clone)]
@@ -150,23 +173,20 @@ impl serde::Serialize for McpError {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("McpError", 1)?;
-        state.serialize_field("error", &self.to_string())?;
-        state.end()
+        serialize_error_as_display(serializer, "McpError", self)
     }
 }
 
 impl ToJsonRpcError for McpError {
     fn to_json_rpc_code(&self) -> i32 {
         match self {
-            McpError::ProtocolError(_) => -32600,       // Invalid Request
-            McpError::SerializationFailed(_) => -32700, // Parse error
-            McpError::ServerError(_) => -32000,         // Server error
-            McpError::RequestTimeout => -32000,         // Server error
-            McpError::ConnectionClosed => -32000,       // Server error
-            McpError::ProcessCrashed => -32000,         // Server error
-            _ => -32603,                                // Internal error (default)
+            McpError::ProtocolError(_) => INVALID_REQUEST,
+            McpError::SerializationFailed(_) => PARSE_ERROR,
+            McpError::ServerError(_) => SERVER_ERROR,
+            McpError::RequestTimeout => SERVER_ERROR,
+            McpError::ConnectionClosed => SERVER_ERROR,
+            McpError::ProcessCrashed => SERVER_ERROR,
+            _ => INTERNAL_ERROR,
         }
     }
 }
@@ -231,28 +251,25 @@ impl serde::Serialize for AgentError {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("AgentError", 1)?;
-        state.serialize_field("error", &self.to_string())?;
-        state.end()
+        serialize_error_as_display(serializer, "AgentError", self)
     }
 }
 
 impl ToJsonRpcError for AgentError {
     fn to_json_rpc_code(&self) -> i32 {
         match self {
-            AgentError::Process(_) => -32000, // Server error
+            AgentError::Process(_) => SERVER_ERROR,
             AgentError::Mcp(mcp_error) => mcp_error.to_json_rpc_code(),
-            AgentError::PathValidation(_) => -32602, // Invalid params
-            AgentError::Protocol(_) => -32600,       // Invalid Request
-            AgentError::MethodNotFound(_) => -32601, // Method not found
-            AgentError::InvalidRequest(_) => -32602, // Invalid params
-            AgentError::Internal(_) => -32603,       // Internal error
-            AgentError::PermissionDenied(_) => -32000, // Server error
-            AgentError::ToolExecution(_) => -32000,  // Server error
-            AgentError::Session(_) => -32000,        // Server error
-            AgentError::Config(_) => -32000,         // Server error
-            _ => -32603,                             // Internal error (default)
+            AgentError::PathValidation(_) => INVALID_PARAMS,
+            AgentError::Protocol(_) => INVALID_REQUEST,
+            AgentError::MethodNotFound(_) => METHOD_NOT_FOUND,
+            AgentError::InvalidRequest(_) => INVALID_PARAMS,
+            AgentError::Internal(_) => INTERNAL_ERROR,
+            AgentError::PermissionDenied(_) => SERVER_ERROR,
+            AgentError::ToolExecution(_) => SERVER_ERROR,
+            AgentError::Session(_) => SERVER_ERROR,
+            AgentError::Config(_) => SERVER_ERROR,
+            _ => INTERNAL_ERROR,
         }
     }
 }

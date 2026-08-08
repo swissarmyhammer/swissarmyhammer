@@ -9,6 +9,12 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use ulid::Ulid;
 
+/// How often [`SessionManager::new`] sweeps expired sessions, in seconds (5 minutes).
+const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 300;
+
+/// How long [`SessionManager::new`] keeps an idle session, in seconds (1 hour).
+const DEFAULT_MAX_SESSION_AGE_SECS: u64 = 3600;
+
 /// Internal session identifier for sessions this agent itself created.
 ///
 /// # Format
@@ -94,9 +100,9 @@ impl SessionId {
     /// # Example
     /// ```ignore
     /// let session_id = SessionId::new();
-    /// let ulid_str = session_id.ulid_string(); // "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    /// let ulid_str = session_id.to_ulid_string(); // "01ARZ3NDEKTSV4RRFFQ69G5FAV"
     /// ```
-    pub fn ulid_string(&self) -> String {
+    pub fn to_ulid_string(&self) -> String {
         self.0.to_string()
     }
 
@@ -461,8 +467,8 @@ impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            cleanup_interval: Duration::from_secs(300), // 5 minutes
-            max_session_age: Duration::from_secs(3600), // 1 hour
+            cleanup_interval: Duration::from_secs(DEFAULT_CLEANUP_INTERVAL_SECS),
+            max_session_age: Duration::from_secs(DEFAULT_MAX_SESSION_AGE_SECS),
         }
     }
 

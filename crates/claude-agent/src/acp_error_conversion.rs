@@ -178,27 +178,45 @@ impl Default for ErrorContext {
 
 // TODO: use the To/From trait system for type conversions
 
+/// Write the correlation fields of `ctx` into the structured error data object.
+///
+/// Does nothing when `data` is not a JSON object, because only an object can
+/// carry the extra fields.
+fn insert_error_context_fields(data: &mut Value, ctx: ErrorContext) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
+    obj.insert("stage".to_string(), json!(ctx.processing_stage));
+    if let Some(content_type) = ctx.content_type {
+        obj.insert("contentType".to_string(), json!(content_type));
+    }
+}
+
+/// Convert any error to an ACP-compliant JSON-RPC error, with optional context.
+///
+/// The error supplies the JSON-RPC code, the message and the structured data.
+/// When `context` is present and the structured data is a JSON object, the
+/// correlation identifier, the processing stage and the content type are added
+/// to that object. Every `convert_*_error_to_acp` function delegates here, so
+/// each error type produces the same payload shape.
+pub fn add_error_context<E: ToJsonRpcError>(
+    error: E,
+    context: Option<ErrorContext>,
+) -> JsonRpcError {
+    let mut json_rpc_error = error.to_json_rpc_error();
+    if let (Some(ctx), Some(data)) = (context, json_rpc_error.data.as_mut()) {
+        insert_error_context_fields(data, ctx);
+    }
+    json_rpc_error
+}
+
 /// Convert ContentSecurityError to ACP-compliant JSON-RPC error
 pub fn convert_content_security_error_to_acp(
     error: ContentSecurityError,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
+    add_error_context(error, context)
 }
 
 /// Convert Base64ProcessorError to ACP-compliant JSON-RPC error
@@ -206,22 +224,7 @@ pub fn convert_base64_error_to_acp(
     error: Base64ProcessorError,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
+    add_error_context(error, context)
 }
 
 /// Convert MimeTypeValidationError to ACP-compliant JSON-RPC error
@@ -229,22 +232,7 @@ pub fn convert_mime_type_error_to_acp(
     error: MimeTypeValidationError,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
+    add_error_context(error, context)
 }
 
 /// Convert ContentBlockProcessorError to ACP-compliant JSON-RPC error
@@ -252,44 +240,15 @@ pub fn convert_content_block_error_to_acp(
     error: ContentBlockProcessorError,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
+    add_error_context(error, context)
 }
+
 /// Convert enhanced ContentProcessingError to ACP-compliant JSON-RPC error
 pub fn convert_content_processing_error_to_acp(
     error: ContentProcessingError,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
-    let mut json_rpc_error = error.to_json_rpc_error();
-
-    // Add correlation context if available
-    if let Some(ctx) = context {
-        if let Some(ref mut data) = json_rpc_error.data {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("correlationId".to_string(), json!(ctx.correlation_id));
-                obj.insert("stage".to_string(), json!(ctx.processing_stage));
-                if let Some(content_type) = ctx.content_type {
-                    obj.insert("contentType".to_string(), json!(content_type));
-                }
-            }
-        }
-    }
-
-    json_rpc_error
+    add_error_context(error, context)
 }
 
 #[cfg(test)]

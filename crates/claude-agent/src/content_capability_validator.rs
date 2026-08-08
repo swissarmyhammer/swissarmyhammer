@@ -90,6 +90,7 @@ impl ContentCapabilityError {
 }
 
 /// Content capability validator for ACP compliance
+#[derive(Debug)]
 pub struct ContentCapabilityValidator {
     prompt_capabilities: PromptCapabilities,
 }
