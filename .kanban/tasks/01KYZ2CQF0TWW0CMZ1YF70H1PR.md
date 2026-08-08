@@ -448,8 +448,95 @@ comments:
 
     No failures found. No fixes needed. Task left in `doing`, not committed, not pushed, per instructions.
   timestamp: 2026-08-08T20:13:25.867112+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kzhg6tvgsrqww5zrk600nke1
+  text: |-
+    ### commit — changed
+    - evidence: 5125059a3 fix(claude-agent): return typed error from Session::new instead of panicking on relative path
+    - confirmed HEAD before commit was 5f8a07a8e (as expected); working tree matched iteration 4 scope only (Session::new typed-error fix, session_validation.rs, error-conversion consolidation, Base64Processor/ContentBlockProcessor from_parts consolidation, SecurityPreset table, coverage_tests.rs, kanban task state); no scratch or unrelated files; no secrets in diff
+    - next: leave in doing; awaiting review step
+  timestamp: 2026-08-08T20:14:39.984992+00:00
+- actor: claude-code
+  id: 01kzhhzj9wh70jd4p4y37q0mak
+  text: |-
+    ### review — stuck (sub agent died mid-run)
+
+    The review agent ran the engine on `5125059a3` and got a result, then terminated on an API error before it could write the findings into the description. The findings below are recovered from its run so the work is not lost. They are recorded here as a comment, NOT as a `## Review Findings` checklist section, because the agent never completed that write — a later round must formalise them.
+
+    - scope: `review sha HEAD~1..HEAD`, HEAD verified as `5125059a343449f43c357abfb921a7ecb3057e8a` before the run.
+    - engine result: 34 findings.
+    - the resolved capitalisation conflict did NOT recur.
+
+    The 34 findings:
+
+    1. `crates/claude-agent/src/agent.rs:1` — file exceeds the review prompt cap (344350 bytes); the `duplication` validator could not read it. Split the file.
+    2. `crates/claude-agent/src/base64_processor.rs:283` — `.iter().map(|x| (*x).to_string()).collect()` duplicated at 283 and 360; extract a `strings_from_static_slices` helper.
+    3. `crates/claude-agent/src/base64_processor.rs:581` — capability name `"text"` hardcoded; define `CAP_TEXT`.
+    4. `crates/claude-agent/src/content_block_processor.rs:60` — capability name `"resource"` hardcoded; define `CAP_RESOURCE`.
+    5. `crates/claude-agent/src/content_block_processor.rs:300` — `ProcessedContent` missing `PartialEq` and `Eq`.
+    6. `crates/claude-agent/src/content_block_processor.rs:329` — `ProcessedContentType` missing `PartialEq` and `Eq`.
+    7. `crates/claude-agent/src/content_block_processor.rs:577` — `"image"` hardcoded; use `CAP_IMAGE`.
+    8. `crates/claude-agent/src/content_block_processor.rs:617` — `"resource_link"` hardcoded; use `CAP_RESOURCE_LINK`.
+    9. `crates/claude-agent/src/content_block_processor.rs:666` — `"text"` hardcoded; use `CAP_TEXT`.
+    10. `crates/claude-agent/src/content_block_processor.rs:670` — `"image"` hardcoded; use `CAP_IMAGE`.
+    11. `crates/claude-agent/src/content_block_processor.rs:1324` — `"image"` hardcoded in test code.
+    12. `crates/claude-agent/src/content_block_processor.rs:1325` — `"audio"` hardcoded in test code.
+    13. `crates/claude-agent/src/session.rs:528` — parameter `cwd: PathBuf` should be `impl AsRef<Path>`.
+    14. `crates/claude-agent/src/session.rs:913` — the literal `"test working directory must be absolute"` appears 8 times in tests; extract a constant.
+    15. `crates/claude-agent/src/session.rs:988` — hardcoded 60-second timeout in test config.
+    16. `crates/claude-agent/src/session_resume.rs:139` — RFC 3339 parsing duplicated between `check_record_expiration` and `check_record_integrity`.
+    17. `crates/claude-agent/src/session_resume.rs:164` — same duplication, second site.
+    18. `crates/claude-agent/src/session_resume.rs:214` — `SessionRestoreError::Corrupt` wrapping duplicated at 214-219 and 229-234.
+    19. `crates/claude-agent/src/session_validation.rs:222` — `validate_mcp_http_config` and `validate_mcp_sse_config` near-identical; parameterise by transport.
+    20. `crates/claude-agent/src/session_validation.rs:247` — same duplication, second site.
+    21. `crates/claude-agent/tests/integration/coverage_tests.rs:1` — file exceeds the cap (366210 bytes); not read by `duplication`. Split the file.
+    22-28. `coverage_tests.rs` `:313`, `:328`, `:336`, `:540`, `:657`, `:691`, `:724` — hardcoded timeouts, buffer sizes and an exit code; name them.
+    29. `coverage_tests.rs:1547` — `test_session_new` covers only the success case; add the relative-path error case.
+    30. `coverage_tests.rs:1573` — `test_session_turn_counters` covers only the success case.
+    31-32. `coverage_tests.rs:1586`, `:1590` — hardcoded token counts 100 and 50.
+    33. `coverage_tests.rs:1601` — `test_session_available_commands` covers only the success case.
+    34. `coverage_tests.rs:2284` — hardcoded 60-second cache duration.
+
+    Findings 29, 30 and 33 are the substantive ones: iteration 4 made `Session::new` return a `Result`, and these say the tests still only exercise the success path. That is a real gap in the change this commit made.
+  timestamp: 2026-08-08T20:45:39.004399+00:00
+- actor: claude-code
+  id: 01kzhj0pdy7713674gtm6zvsvx
+  text: |-
+    ### finish iteration 4 — stuck
+
+    - implement: changed — 9 files. Closed all 19 findings from the 14:06 round. `Session::new` returns `SessionSetupResult<Self>` instead of panicking on a relative path (test written failing-first). The five `convert_*_error_to_acp` wrappers deleted; `Base64Processor`/`ContentBlockProcessor` constructors funnel through one `from_parts`; the three `SecurityPolicy` builders became a `SecurityPreset` table.
+    - test: green — `cargo nextest run --workspace` 13649 passed, 0 skipped; clippy clean. Containment verified by grep: `Session::new` has 8 call sites, all inside claude-agent.
+    - commit: 5125059a3 fix(claude-agent): return typed error from Session::new instead of panicking on relative path
+    - review: STUCK. The review agent ran the engine and got 34 findings, then died on an API server error before writing them to the description. A second agent it spawned to compare prior rounds died the same way. The 34 findings are preserved in the comment above.
+
+    ## GUARDRAIL TRIPPED — the loop stops here
+
+    Four findings have now appeared in THREE consecutive review rounds:
+
+    - `crates/claude-agent/tests/integration/coverage_tests.rs:1` — the file exceeds the review prompt cap, so the `duplication` validator cannot read it. Rounds 12:56, 14:06, and this one.
+    - `crates/claude-agent/tests/integration/coverage_tests.rs:336`, `:540`, `:724` — hardcoded test timeouts and buffer sizes. Rounds 12:56, 14:06, and this one.
+
+    They recur because the loop cannot resolve them. The review skill's pre-existing-test exemption drops them every round, so they never become requirements and no round ever fixes them; then the next round raises them again. That is a closed cycle, not slow progress. Per the finish protocol a finding that survives three rounds means the task is stuck, and the task must NOT be forced to `done`.
+
+    ## What a person needs to decide
+
+    1. `coverage_tests.rs` is 366210 bytes against a 262144-byte cap — 1.4× over, and it grew every round (365706 → 365790 → 366210). The `duplication` validator has NEVER read this file in any round. Every "clean" reading of that file so far has been a coverage gap, not a pass. Either split the file or raise the cap; the exemption forbids this card from doing the former.
+    2. The same structural problem now affects SOURCE, not just tests: `crates/claude-agent/src/agent.rs` is 344350 bytes and was skipped by `duplication` this round for the same reason. That is new this round and will recur.
+    3. Scope. This card was written to lowercase error Display messages. Four rounds have closed 255 findings and turned it into a crate-wide documentation, API-design and duplication refactor. The remaining 34 findings continue that expansion. The error-message work the card actually names is long finished and verified.
+
+    ## What is finished and green
+
+    The original acceptance criteria are met and have stayed met for four rounds:
+    - `rg '#\[error\("[A-Z]' crates/claude-agent/src` returns only acronym, CamelCase and proper-noun starts.
+    - `cargo nextest run -p claude-agent` green; the workspace suite is 13649 passing, 0 skipped.
+    - `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+
+    Three real correctness bugs were also fixed along the way, none of which the original card named: four case-sensitive MIME comparisons that violated RFC 2045, and the `Session::new` panic on a relative path.
+
+    Task left in `review` with 34 unformalised findings. Not forced to done.
+  timestamp: 2026-08-08T20:46:15.998418+00:00
+position_column: review
+position_ordinal: '8280'
 title: Lowercase the capitalized error Display messages in claude-agent
 ---
 `builtin/validators/rust/rules/error-handling.md` states: Display messages on errors are lowercase, with no trailing punctuation.
