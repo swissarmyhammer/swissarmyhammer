@@ -1,0 +1,80 @@
+// The passing fixture of the `magic-numbers-swift` tool rule.
+//
+// Every position the failing fixture leaves unnamed — a condition, a switch
+// case, an operation, and a call argument — reads a named constant here, and the
+// rest of the file holds each context the rule allows: the carve-out values, a
+// stored property, a type property, an enumeration raw value, and a default
+// parameter. The tool must report nothing. A tool upgrade that reports one
+// anyway makes the doctor mark the rule unusable.
+
+/// The status code the condition below reads.
+let notFoundStatus = 404
+/// The tier the switch case below reads.
+let premiumTier = 20
+/// The byte count the operation below reads.
+let maxBufferBytes = 4096
+/// The delay the call argument below reads.
+let retryDelayMillis = 250
+
+/// Take a delay so the call-argument position below has a callee.
+public func schedule(delayMillis: Int) -> Int {
+    return delayMillis
+}
+
+/// Test a condition against a named constant.
+public func condition(status: Int) -> Bool {
+    if status == notFoundStatus {
+        return true
+    }
+    return false
+}
+
+/// Match a switch case against a named constant.
+public func switchCase(tier: Int) -> Int {
+    switch tier {
+    case premiumTier:
+        return 1
+    default:
+        return 0
+    }
+}
+
+/// Multiply by a named constant.
+public func operation(size: Int) -> Int {
+    return size * maxBufferBytes
+}
+
+/// Pass a named constant as a call argument.
+public func argument() -> Int {
+    return schedule(delayMillis: retryDelayMillis)
+}
+
+/// Test 0, 1, -1, and 100 against a condition — the values the rule allows.
+public func carvedOut(index: Int, total: Int) -> Int {
+    if index == 0 || index == 1 || index == -1 || index == 100 {
+        return total
+    }
+    return index
+}
+
+/// Take a default parameter, a position the rule allows.
+public func defaultValue(size: Int = 512) -> Int {
+    return size
+}
+
+/// Hold a stored property and a type property, both positions the rule allows.
+public struct Holder {
+    /// A stored property with its own value.
+    public let capacity = 64
+
+    /// A type property with its own value.
+    public static let limit = 128
+}
+
+/// Hold enumeration raw values, a position the rule allows.
+public enum Tier: Int {
+    /// The first tier.
+    case basic = 10
+    /// The second tier.
+    case premium = 20
+}

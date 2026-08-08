@@ -17,6 +17,28 @@ probes:
 
 # Code Hygiene
 
+## Hardcoded values: two rules, one concern each
+
+`data-driven` and `magic-numbers` split what one rule used to hold.
+
+- `data-driven` owns the **shape**: a `match`/`switch` or `if`/`else if` chain over
+  a known set whose arms differ only in constants is a table written out longhand.
+  Reading the arms and deciding they differ only in constants is a judgment no
+  tool makes, so no tool rule supersedes it.
+- `magic-numbers` owns the **name**: a literal repeated across sites, or a shared
+  configuration value, needs one constant. Four tool rules supersede it, each for
+  the languages a linter can decide — `magic-numbers-python` (ruff `PLR2004`),
+  `magic-numbers-typescript` (eslint `no-magic-numbers`), `magic-numbers-go`
+  (`mnd`), and `magic-numbers-swift` (swiftlint `no_magic_numbers`).
+
+Rust and Dart keep the `magic-numbers` prompt rule. No healthy Rust lint reports
+an unnamed literal, and the Dart check needs a `custom_lint` package, which is a
+dependency of the project under review rather than a tool the rule can install.
+
+A tool reports by position and the prompt rule reports by repetition, so a tool
+rule reports the one-off literal the prompt rule carves out. Each tool rule's own
+file states the measurement behind its thresholds.
+
 ## Dead code: which tools this set uses, and which it rejects
 
 The `dead-code` prompt rule owns the judgment half of dead code. Its carve-outs

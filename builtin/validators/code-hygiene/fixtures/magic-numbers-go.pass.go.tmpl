@@ -1,0 +1,68 @@
+// Package fixtures holds the Go fixtures of the `magic-numbers-go` tool rule.
+//
+// Every position the failing fixture leaves unnamed — a condition, a switch
+// case, an operation, a return, and a call argument — reads a named constant
+// here, and the last two functions hold the contexts the rule allows: the
+// carve-out values and a short variable binding. The tool must report nothing. A
+// tool upgrade that reports one anyway makes the doctor mark the rule unusable.
+package fixtures
+
+const (
+	// namedNotFoundStatus is the status code the condition below reads.
+	namedNotFoundStatus = 404
+	// namedPremiumTier is the tier the switch case below reads.
+	namedPremiumTier = 20
+	// namedMaxBufferBytes is the byte count the operation below reads.
+	namedMaxBufferBytes = 4096
+	// namedDefaultSize is the size the return below reads.
+	namedDefaultSize = 512
+	// namedRetryDelayMillis is the delay the call argument below reads.
+	namedRetryDelayMillis = 250
+)
+
+// NamedSchedule takes a delay so the call-argument position below has a callee.
+func NamedSchedule(delayMillis int) int { return delayMillis }
+
+// NamedCondition tests a condition against a named constant.
+func NamedCondition(status int) bool {
+	if status == namedNotFoundStatus {
+		return true
+	}
+	return false
+}
+
+// NamedSwitchCase matches a switch case against a named constant.
+func NamedSwitchCase(tier int) int {
+	switch tier {
+	case namedPremiumTier:
+		return 1
+	}
+	return 0
+}
+
+// NamedOperation multiplies by a named constant, binding the product to a name
+// first so it mirrors the failing fixture's `operation` position.
+func NamedOperation(size int) int {
+	scaled := size * namedMaxBufferBytes
+	return scaled
+}
+
+// NamedReturn returns a named constant.
+func NamedReturn() int { return namedDefaultSize }
+
+// NamedArgument passes a named constant as a call argument.
+func NamedArgument() int { return NamedSchedule(namedRetryDelayMillis) }
+
+// NamedCarvedOut tests 0, 1, and -1 — the values the rule always allows.
+func NamedCarvedOut(index, total int) int {
+	if index == 0 || index == 1 || index == -1 {
+		return total
+	}
+	return index
+}
+
+// NamedBinding binds a literal to a name, a position the rule allows.
+func NamedBinding() int {
+	capacity := 64
+	return capacity
+}

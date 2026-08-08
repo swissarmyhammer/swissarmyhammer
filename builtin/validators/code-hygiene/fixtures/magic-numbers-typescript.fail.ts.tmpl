@@ -1,0 +1,28 @@
+/**
+ * The failing fixture of the `magic-numbers-typescript` tool rule.
+ *
+ * This file holds one unnamed literal in every position the passing fixture
+ * names — a comparison, an operation, and a call argument. The tool must report
+ * each one. A tool upgrade that stops reporting a position makes the doctor mark
+ * the rule unusable.
+ */
+
+/** Take a delay so the call-argument position below has a callee. */
+export function schedule(delayMillis: number): number {
+  return delayMillis;
+}
+
+/** Compare against an unnamed literal. */
+export function comparison(status: number): boolean {
+  return status === 404;
+}
+
+/** Multiply by an unnamed literal. */
+export function operation(size: number): number {
+  return size * 4096;
+}
+
+/** Pass an unnamed literal as a call argument. */
+export function argument(): number {
+  return schedule(250);
+}

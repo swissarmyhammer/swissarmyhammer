@@ -1228,6 +1228,21 @@ mod tests {
         ("python", PYTHON_UNREACHABLE_CODE_RULE),
     ];
 
+    /// The prompt rule every shipped magic-numbers tool rule supersedes.
+    const MAGIC_NUMBERS_PROMPT_RULE: &str = "magic-numbers";
+
+    /// Every shipped magic-numbers tool rule, with the project type it serves.
+    ///
+    /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
+    /// unnamed literal, and the Dart check needs a `custom_lint` package, so
+    /// both languages keep the `magic-numbers` prompt rule.
+    const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str)] = &[
+        ("python", "magic-numbers-python"),
+        ("nodejs", "magic-numbers-typescript"),
+        ("go", "magic-numbers-go"),
+        ("swift", "magic-numbers-swift"),
+    ];
+
     /// A cargo package holding one undocumented public item and one documented
     /// one. `[workspace]` keeps cargo inside the temporary directory.
     const UNDOCUMENTED_PACKAGE_MANIFEST: &str = concat!(
@@ -1548,6 +1563,25 @@ mod tests {
             SHIPPED_DEAD_CODE_RULES,
             &[],
             DEAD_CODE_PROMPT_RULE,
+        );
+    }
+
+    /// Acceptance: every shipped magic-numbers tool rule passes its fixture pair
+    /// in doctor, and supersedes the `magic-numbers` prompt rule.
+    ///
+    /// The pass fixture is the load-bearing half here. Each of these tools will
+    /// report every inline literal at its default settings, and the rule's
+    /// configuration narrows it to the contexts the prompt rule names. The pass
+    /// fixture holds the carve-outs — `0`, `1`, `-1`, a value a declaration
+    /// already names — so a configuration that stopped applying makes the pair
+    /// fail. [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
+    /// contract, including what a machine without the tool proves.
+    #[test]
+    fn every_shipped_magic_numbers_tool_rule_passes_its_fixtures() {
+        verify_shipped_tool_rules_pass_fixtures(
+            SHIPPED_MAGIC_NUMBERS_RULES,
+            &[MAGIC_NUMBERS_PROMPT_RULE],
+            MAGIC_NUMBERS_PROMPT_RULE,
         );
     }
 

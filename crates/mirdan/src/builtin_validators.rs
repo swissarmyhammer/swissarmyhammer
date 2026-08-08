@@ -235,6 +235,14 @@ mod tests {
             "unused-code-go.pass.go.tmpl",
             "unreachable-code-python.fail.py.tmpl",
             "unreachable-code-python.pass.py.tmpl",
+            "magic-numbers-python.fail.py.tmpl",
+            "magic-numbers-python.pass.py.tmpl",
+            "magic-numbers-typescript.fail.ts.tmpl",
+            "magic-numbers-typescript.pass.ts.tmpl",
+            "magic-numbers-go.fail.go.tmpl",
+            "magic-numbers-go.pass.go.tmpl",
+            "magic-numbers-swift.fail.swift.tmpl",
+            "magic-numbers-swift.pass.swift.tmpl",
         ] {
             assert!(
                 code_hygiene_files

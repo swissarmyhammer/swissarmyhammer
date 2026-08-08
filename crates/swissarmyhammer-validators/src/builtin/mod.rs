@@ -229,6 +229,7 @@ mod tests {
         "cognitive-complexity",
         "missing-docs",
         "data-driven",
+        "magic-numbers",
         "dead-code",
     ];
 
@@ -250,6 +251,18 @@ mod tests {
     /// question a tool can settle alone, and run beside that rule.
     const CODE_HYGIENE_DEAD_CODE_TOOL_RULES: &[&str] =
         &["unused-code-go", "unreachable-code-python"];
+
+    /// The magic-number tool rules `code-hygiene` carries. Each supersedes the
+    /// `magic-numbers` prompt rule for the language it serves. Rust and Dart
+    /// have no rule here: no healthy Rust lint reports an unnamed literal, and
+    /// the Dart check needs a `custom_lint` package, so both languages keep the
+    /// prompt rule.
+    const CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES: &[&str] = &[
+        "magic-numbers-python",
+        "magic-numbers-typescript",
+        "magic-numbers-go",
+        "magic-numbers-swift",
+    ];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
@@ -281,12 +294,14 @@ mod tests {
         let expected_rules = CODE_HYGIENE_PROMPT_RULES
             .iter()
             .chain(CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.iter())
-            .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter());
+            .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter())
+            .chain(CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.iter());
         assert_eq!(
             ruleset.rules.len(),
             CODE_HYGIENE_PROMPT_RULES.len()
                 + CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.len()
-                + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len(),
+                + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len()
+                + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
         for expected in expected_rules {
@@ -298,6 +313,7 @@ mod tests {
 
         // Each tool rule carries a tool block, and supersedes exactly what its
         // group promises: the documentation tools replace the `missing-docs`
+        // prompt rule, the magic-number tools replace the `magic-numbers`
         // prompt rule, and the dead-code tools replace nothing.
         let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
             .iter()
@@ -306,6 +322,11 @@ mod tests {
                 CODE_HYGIENE_DEAD_CODE_TOOL_RULES
                     .iter()
                     .map(|name| (name, [].as_slice())),
+            )
+            .chain(
+                CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES
+                    .iter()
+                    .map(|name| (name, ["magic-numbers"].as_slice())),
             );
         for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset

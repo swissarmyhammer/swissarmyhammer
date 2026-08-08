@@ -1,0 +1,22 @@
+"""The failing fixture of the `magic-numbers-python` tool rule.
+
+This file holds one unnamed literal in every comparison kind the passing fixture
+names — equality, ordering, and a chained comparison. The tool must report each
+one. A tool upgrade that stops reporting a kind makes the doctor mark the rule
+unusable.
+"""
+
+
+def equality(status: int) -> bool:
+    """Compare for equality against an unnamed literal."""
+    return status == 404
+
+
+def ordering(size: int) -> bool:
+    """Compare for order against an unnamed literal."""
+    return size > 4096
+
+
+def chained(ratio: int) -> bool:
+    """Compare against an unnamed literal on each side of a chain."""
+    return 10 <= ratio <= 90

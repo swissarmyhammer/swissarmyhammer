@@ -1,0 +1,79 @@
+/**
+ * The passing fixture of the `magic-numbers-typescript` tool rule.
+ *
+ * Every position the failing fixture leaves unnamed — a comparison, an
+ * operation, and a call argument — reads a named constant here, and the rest of
+ * the file holds each context the rule's configuration allows: the carve-out
+ * values, an array index, a default value, a class field, a `readonly`
+ * property, an enumeration member, and a numeric literal type. The tool must
+ * report nothing. A tool upgrade that reports one anyway makes the doctor mark
+ * the rule unusable.
+ */
+
+/** The status code the comparison below reads. */
+const NOT_FOUND_STATUS = 404;
+/** The byte count the operation below reads. */
+const MAX_BUFFER_BYTES = 4096;
+/** The delay the call argument below reads. */
+const RETRY_DELAY_MILLIS = 250;
+
+/** Take a delay so the call-argument position below has a callee. */
+export function schedule(delayMillis: number): number {
+  return delayMillis;
+}
+
+/** Compare against a named constant. */
+export function comparison(status: number): boolean {
+  return status === NOT_FOUND_STATUS;
+}
+
+/** Multiply by a named constant. */
+export function operation(size: number): number {
+  return size * MAX_BUFFER_BYTES;
+}
+
+/** Pass a named constant as a call argument. */
+export function argument(): number {
+  return schedule(RETRY_DELAY_MILLIS);
+}
+
+/** Compare against 0, 1, and -1, the values the rule always allows. */
+export function carvedOut(index: number, total: number): number {
+  if (index === 0) {
+    return total;
+  }
+  if (index === -1) {
+    return total - 1;
+  }
+  return index;
+}
+
+/** Read an array index, a position the configuration allows. */
+export function arrayIndex(items: number[]): number {
+  return items[2];
+}
+
+/** Take a default value, a position the configuration allows. */
+export function defaultValue(size = 512): number {
+  return size;
+}
+
+/** Hold a class field and a `readonly` property, both positions the configuration allows. */
+export class Holder {
+  /** A class field with its own initial value. */
+  capacity = 64;
+
+  /** A `readonly` property with its own value. */
+  readonly limit = 128;
+}
+
+/** Hold enumeration members, a position the configuration allows. */
+export enum Tier {
+  /** The first tier. */
+  Basic = 10,
+  /** The second tier. */
+  Premium = 20,
+}
+
+/** A numeric literal type, a position the configuration allows. */
+export type WordSize = 16 | 32 | 64;

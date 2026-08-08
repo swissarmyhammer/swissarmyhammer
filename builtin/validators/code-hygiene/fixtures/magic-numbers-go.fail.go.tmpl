@@ -1,0 +1,41 @@
+// Package fixtures holds the Go fixtures of the `magic-numbers-go` tool rule.
+//
+// This file holds one unnamed literal in every position the passing fixture
+// names — a condition, a switch case, an operation, a return, and a call
+// argument. The tool must report each one. A tool upgrade that stops reporting a
+// position makes the doctor mark the rule unusable.
+package fixtures
+
+// MagicSchedule takes a delay so the call-argument position below has a callee.
+func MagicSchedule(delayMillis int) int { return delayMillis }
+
+// MagicCondition tests a condition against an unnamed literal.
+func MagicCondition(status int) bool {
+	if status == 404 {
+		return true
+	}
+	return false
+}
+
+// MagicSwitchCase matches a switch case against an unnamed literal.
+func MagicSwitchCase(tier int) int {
+	switch tier {
+	case 20:
+		return 1
+	}
+	return 0
+}
+
+// MagicOperation multiplies by an unnamed literal. The product is bound to a
+// name first, because `mnd` attributes a literal inside a `return` to its
+// `return` check and the `operation` check would otherwise go uncovered.
+func MagicOperation(size int) int {
+	scaled := size * 4096
+	return scaled
+}
+
+// MagicReturn returns an unnamed literal.
+func MagicReturn() int { return 512 }
+
+// MagicArgument passes an unnamed literal as a call argument.
+func MagicArgument() int { return MagicSchedule(250) }

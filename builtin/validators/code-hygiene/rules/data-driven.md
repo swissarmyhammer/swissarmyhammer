@@ -1,6 +1,6 @@
 ---
 name: data-driven
-description: Detect hardcoding that should be data — tables, named constants, config
+description: Detect a match/if-chain over a known set that is really a table
 ---
 
 # Data-Driven Validator
@@ -10,33 +10,30 @@ data rather than as parallel, hand-maintained code paths.
 
 ## What to Check
 
-Examine the changed code for hardcoding that should be data:
+Examine the changed code for one defect:
 
-1. **Match/if-chain that is a table**: a `match`/`switch` or `if`/`else if` chain
-   over a *known set* whose arms differ only in constants. That is a table (a
-   map/array of rows), not control flow — one code path interpreting data, not N
-   parallel arms a human must keep in lockstep.
-2. **Repeated literals → named constant**: the same literal value appearing in
-   several places. Name it once (a `const`/config entry) so it changes in one
-   place.
-3. **Repeated or cross-cutting configuration → named constant**: a timeout,
-   limit, threshold, size, port, or URL that appears in **more than one place**,
-   or is a genuine knob shared/exported across a module. This is rule 2 applied
-   to configuration values, and it is bound by the **same carve-outs below** —
-   it is NOT a license to name every inline literal. A single configuration
-   value used **once** at an obvious call site (a buffer capacity passed to one
-   `channel(…)`, a timeout on one call) is a one-off, not a finding.
+**A match/if-chain that is a table.** A `match`/`switch` or `if`/`else if` chain
+over a *known set* whose arms differ only in constants. That is a table (a
+map/array of rows), not control flow — one code path interpreting data, not N
+parallel arms a human must keep in lockstep.
+
+Read the arms and ask what differs between them. When only the constants differ,
+the chain is a table written out longhand.
 
 ## Why This Matters
 
 - A table is read and extended without touching code logic; parallel arms drift.
-- A named constant changes in one place; scattered literals get missed.
 - Declarative data is far easier to verify correct than branching control flow.
 
 ## Carve-outs (Don't Flag)
 
 - Arms that differ in *behavior*, not just constants, are genuinely different
   code paths — a table does not capture them.
-- `0`, `1`, `-1`, and conventional values (a `<< 8`, `100` for percent) read
-  clearly inline and need no constant.
-- Genuinely one-off literals used exactly once in an obvious context.
+- A chain over an *open* set, where the reader cannot see every case the code
+  must handle, is control flow. A table needs a known set of rows.
+
+## What This Rule Does Not Own
+
+An unnamed literal is the `magic-numbers` rule's concern, not this one. This rule
+reports the shape of the control flow around the constants; it never reports a
+constant for want of a name.
