@@ -3,7 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -197,17 +197,28 @@ pub enum SessionIdError {
     /// - Invalid: `01ARZ3NDEKTSV4RRFFQ69G5FAV!!!` (invalid characters)
     /// - Valid: `01ARZ3NDEKTSV4RRFFQ69G5FAV`
     #[error("invalid ULID format in session ID '{provided}': {error}")]
-    InvalidUlid { provided: String, error: String },
+    InvalidUlid {
+        /// Session ID string the caller gave.
+        provided: String,
+        /// Why the ULID parser rejected it.
+        error: String,
+    },
 }
 
 /// A conversation session containing context and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    /// Unique identifier for this session.
     pub id: SessionId,
+    /// When the session was created.
     pub created_at: SystemTime,
+    /// When the session was last read or written.
     pub last_accessed: SystemTime,
+    /// Every message exchanged in this session, oldest first.
     pub context: Vec<Message>,
+    /// Capabilities the client declared, once it has connected.
     pub client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
+    /// Names of the MCP servers this session may reach.
     pub mcp_servers: Vec<String>,
     /// Working directory for this session (ACP requirement - must be absolute path)
     pub cwd: PathBuf,
@@ -280,12 +291,15 @@ impl Session {
     ///
     /// # Arguments
     /// * `id` - Unique session identifier (ULID)
-    /// * `cwd` - Working directory for the session (must be absolute path as per ACP spec)
+    /// * `cwd` - Working directory for the session (must be absolute path as per ACP spec).
+    ///   Takes anything that reads as a path, such as `&str`, `&Path`, `String` or `PathBuf`.
     ///
     /// # Panics
     /// This function will panic if the working directory is not absolute, as this violates
     /// the ACP specification requirement that sessions must have absolute working directories.
-    pub fn new(id: SessionId, cwd: PathBuf) -> Self {
+    pub fn new(id: SessionId, cwd: impl AsRef<Path>) -> Self {
+        let cwd = cwd.as_ref().to_path_buf();
+
         // ACP requires absolute working directory - validate this at session creation
         if !cwd.is_absolute() {
             panic!(
@@ -325,12 +339,15 @@ impl Session {
         self.last_accessed = SystemTime::now();
     }
 
-    /// Update available commands for this session
+    /// Update available commands for this session.
+    ///
+    /// Takes any iterable of commands, so a `Vec`, an array or an iterator all
+    /// work.
     pub fn update_available_commands(
         &mut self,
-        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
+        commands: impl IntoIterator<Item = agent_client_protocol::schema::AvailableCommand>,
     ) {
-        self.available_commands = commands;
+        self.available_commands = commands.into_iter().collect();
         self.last_accessed = SystemTime::now();
     }
 
@@ -378,13 +395,13 @@ impl Session {
         self.turn_token_count
     }
 
-    /// Get the current turn request count
-    pub fn get_turn_request_count(&self) -> u64 {
+    /// The number of language model requests made in the current turn.
+    pub fn turn_request_count(&self) -> u64 {
         self.turn_request_count
     }
 
-    /// Get the current turn token count
-    pub fn get_turn_token_count(&self) -> u64 {
+    /// The tokens consumed in the current turn, input plus output.
+    pub fn turn_token_count(&self) -> u64 {
         self.turn_token_count
     }
 }
@@ -392,7 +409,9 @@ impl Session {
 /// Session event storing ACP SessionUpdate with timestamp
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    /// When the update was recorded.
     pub timestamp: SystemTime,
+    /// The ACP session update this message carries.
     pub update: agent_client_protocol::schema::SessionUpdate,
 }
 
@@ -407,9 +426,13 @@ impl Message {
 
     /// Create text message from role and content string
     ///
-    /// Convenience constructor that wraps text in appropriate SessionUpdate variant
-    pub fn new(role: MessageRole, content: String) -> Self {
+    /// Convenience constructor that wraps text in appropriate SessionUpdate variant.
+    ///
+    /// Takes anything that converts to a `String`, such as `&str` or `String`.
+    pub fn new(role: MessageRole, content: impl Into<String>) -> Self {
         use agent_client_protocol::schema::{ContentBlock, SessionUpdate, TextContent};
+
+        let content = content.into();
 
         let update = match role {
             MessageRole::User => {
@@ -442,8 +465,11 @@ impl Message {
 /// Message role for simple text message construction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageRole {
+    /// The person driving the session wrote the message.
     User,
+    /// The agent wrote the message.
     Assistant,
+    /// The runtime wrote the message. It is rendered with a `[System]` prefix.
     System,
 }
 
@@ -671,11 +697,16 @@ impl SessionManager {
 
     /// Update available commands for a session and return whether an update was sent
     /// Returns true if commands changed and update was needed, false if no change
+    ///
+    /// Takes any iterable of commands, so a `Vec`, an array or an iterator all
+    /// work.
     pub fn update_available_commands(
         &self,
         session_id: &SessionId,
-        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
+        commands: impl IntoIterator<Item = agent_client_protocol::schema::AvailableCommand>,
     ) -> crate::Result<bool> {
+        let commands: Vec<_> = commands.into_iter().collect();
+
         let mut sessions = self
             .sessions
             .write()

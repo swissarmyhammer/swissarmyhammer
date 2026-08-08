@@ -178,6 +178,142 @@ comments:
     - no stale cargo/cmake build-lock processes found before the run (only rust-analyzer and sccache processes were present).
     - next: leave in doing for review.
   timestamp: 2026-08-08T17:53:25.697036+00:00
+- actor: claude-code
+  id: 01kzh885de7s47x1skgacw3w8s
+  text: |-
+    ### commit — changed
+    - evidence: f75efff68 fix(claude-agent): close 112 review findings on error messages and validators
+    - files: crates/claude-agent/src/{acp_error_conversion,base64_processor,base64_validation,content_block_processor,content_capability_validator,content_security_validator,error,mime_type_validator,path_validator,session}.rs, crates/claude-agent/tests/integration/coverage_tests.rs, builtin/validators/rust/rules/error-handling.md, .kanban/tasks/01KYZ2CQF0TWW0CMZ1YF70H1PR.{md,jsonl}
+    - next: local commit only, not pushed. Task stays in doing.
+  timestamp: 2026-08-08T17:55:34.958760+00:00
+- actor: claude-code
+  id: 01kzhajw02mcn6vtwnaymztnyq
+  text: |-
+    ### review — findings
+
+    - scope: `review sha HEAD~1..HEAD` — the checkpoint commit `f75efff68` only, not the accumulated task diff. Verified `git rev-parse HEAD` = `f75efff682a4baa7be9f591460983e364caba912` before the run.
+    - evidence: engine counts `findings: 123, confirmed: 126, refuted: 20, attempted: 44, failed: 0, skipped: 1`. 111 recorded as open checklist items in the new `## Review Findings (2026-08-08 12:56)` section. The 125 items from the 2026-08-04 section stay checked and untouched.
+    - the resolved conflict did NOT recur. `review get validator rust` shows the deployed `error-handling` rule carries the acronym / CamelCase / proper-noun carve-out, and the engine raised no lowercase-Display finding this round. `MCP server error`, `MIME type format validation failed`, `Base64 security violation` and `LoadSession capability not supported` were not reported.
+    - 12 findings dropped by the skill's pre-existing-test exemption, listed under a "Dropped" heading in the new section: 9 in `coverage_tests.rs` (this commit changed only the `to_ulid_string` rename there), 1 in the `content_security_validator.rs` test module (the diff touches nothing below line 1035), 2 in the `session.rs` test module.
+    - one file is a review coverage gap, not a clean result: `crates/claude-agent/tests/integration/coverage_tests.rs` is 365706 rendered bytes against the 262144-byte per-file cap, so the `duplication` validator could not read it.
+    - the new findings are mostly in territory the last round did not name: `missing documentation` on enum variants and struct fields (not only the public items the 2026-08-04 round cited), Rust API design (`get_` prefixes, concrete `Vec`/`PathBuf`/`String` parameters), three case-sensitive MIME comparisons that RFC 2045 says must be case-insensitive, and duplication in the helpers the last round introduced.
+    - next: task stays in `review` with 111 open findings.
+
+    step: review
+    outcome: findings
+    evidence: 111 findings — crates/claude-agent/src/{acp_error_conversion.rs, content_block_processor.rs, content_capability_validator.rs, content_security_validator.rs, error.rs, mime_type_validator.rs, path_validator.rs, session.rs}
+    task: ^f70h1pr
+  timestamp: 2026-08-08T18:36:22.914887+00:00
+- actor: claude-code
+  id: 01kzhamhp38gpagkw9q1vhf1qy
+  text: |-
+    ### finish iteration 2 — findings
+
+    - conflict: resolved by the user. The rule now carves out all-caps acronyms, CamelCase identifiers and proper nouns. Amended in BOTH `builtin/validators/rust/rules/error-handling.md` and the deployed `/Users/wballard/.validators/rust/rules/error-handling.md` that the engine actually reads. The 13 conflict items are checked, with no code change.
+    - implement: changed — 12 files, 1447 insertions, 775 deletions. Closed all 112 open findings from the 2026-08-04 round.
+    - test: green — `cargo nextest run --workspace` 13645 passed, 0 skipped; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+    - commit: f75efff68 fix(claude-agent): close 112 review findings on error messages and validators
+    - review: findings — 111 open, recorded in a new `## Review Findings (2026-08-08 12:56)` section. Engine counts: findings 123, confirmed 126, refuted 20, attempted 44, failed 0, skipped 1.
+
+    Guardrail check: NOT triggered. No finding repeats from iteration 1 — every item from the 2026-08-04 section is closed and the 111 new items name different lines and different rules. Two iterations, two different finding sets, so the loop continues.
+
+    The new findings group as:
+
+    - 63 `missing documentation` on enum variants and struct fields. The last round cited only public items, so the cause was removed at a narrower level than the rule reaches.
+    - Rust API design items the last round never raised: the `get_` prefix on `get_turn_request_count`/`get_turn_token_count`, and concrete `Vec<PathBuf>`, `PathBuf`, `String`, `Vec<AvailableCommand>` parameters that the rule says must be generic.
+    - 3 correctness findings: case-sensitive MIME comparisons that RFC 2045 requires be case-insensitive, at `content_security_validator.rs:885`, `mime_type_validator.rs:363` and `mime_type_validator.rs:501`. The `:885` site is in code THIS commit introduced. These are the highest-value items in the set.
+    - Fresh duplication inside the helpers iteration 2 added — `process_image_content`/`process_audio_content`, `process_text_resource`/`process_blob_resource`, and the `validate_*_mime_type` pair.
+
+    Open coverage gap, recorded so it is not read as a clean pass: `crates/claude-agent/tests/integration/coverage_tests.rs` is 365706 rendered bytes against the 262144-byte per-file cap, so the `duplication` validator could not read it.
+  timestamp: 2026-08-08T18:37:17.891773+00:00
+- actor: claude-code
+  id: 01kzhbwpgkq19va3bsgjgjrgr1
+  text: |-
+    Iteration 3. Closed all 111 open findings in the `## Review Findings (2026-08-08 12:56)` section. The 2026-08-04 section stays checked and untouched.
+
+    ## The three correctness bugs came first, with TDD
+
+    RFC 2045 makes MIME types case-insensitive. Four sites compared them case-sensitively — the three the findings named, plus one the findings did not, which is the same cause in the same file.
+
+    - `content_security_validator.rs` — `mime_type == OPAQUE_BINARY_MIME_TYPE` is now `eq_ignore_ascii_case`.
+    - `mime_type_validator.rs` — the allow-list lookup, the deny-list lookup (`is_mime_type_blocked`, NOT cited by any finding but the same defect) and the format-table `find` all ignore ASCII case now.
+
+    The allow-list and deny-list lookups share one helper, `contains_mime_type`, which compares both sides with `eq_ignore_ascii_case`. That is stronger than lowercasing the query: `MimeTypePolicy`'s fields are `pub`, so a caller can insert an uppercase entry, and a query-only normalisation would still miss it.
+
+    RED first, verified: four new tests failed with the expected assertions before the fix and pass after.
+    - `test_blob_mime_type_consistency_skips_uppercase_opaque_binary` — a PNG payload declared `Application/Octet-Stream` was read as a spoofed content type.
+    - `test_allow_list_lookup_is_case_insensitive` — `IMAGE/PNG`, `Audio/Wav`, `Text/Plain`.
+    - `test_deny_list_lookup_is_case_insensitive` — `Application/JavaScript`.
+    - `test_format_check_runs_for_uppercase_mime_type` — `AUDIO/WAV` now reaches the magic-byte check.
+
+    ## Duplication
+
+    - `mime_type_validator.rs` — the `validate_*_mime_type` trio and the `validate_*_format_matches_mime` pair are gone as parallel code. A `MimeCategory` const table (`IMAGE`, `AUDIO`, `RESOURCE`) holds the category name, the allow-list accessor, the reported categories, the suggestion text and an optional `FormatSpec`. One `validate_for_category` reads the table; each public method is a one-line delegation. `detect_image_format` / `detect_audio_format` became free functions, which is why their test call sites lost the `validator.` receiver.
+    - `content_block_processor.rs` — the image/audio pair now share `decode_media_payload`, `decoded_content_metadata` and `build_media_content`. The text/blob resource pair now share `validate_and_record_resource_uri` and `resource_text_representation`.
+    - `content_capability_validator.rs` — the Text and ResourceLink arms merged into one pattern. Image, Audio and Resource became an `OptionalCapability` const table read by one `check_optional_capability`. `supported_content_types` reads the same table instead of three parallel `if` blocks.
+
+    ## Rust API design
+
+    - `get_turn_request_count()` -> `turn_request_count()`, `get_turn_token_count()` -> `turn_token_count()`. Grepped the whole workspace: the only call sites outside the definition are 6 assertions in `tests/integration/coverage_tests.rs`, all updated. Two more `get_` getters that no finding named fell to the same rule in files I was already editing: `get_content_type_key` (now `ProcessedContentType::counting_key`) and `get_supported_content_types` (now `supported_content_types`).
+    - `PathValidator::with_allowed_roots`, `with_blocked_paths`, `with_allowed_and_blocked` and the private `canonicalize_roots` take `impl IntoIterator<Item = PathBuf>`.
+    - `Session::new` takes `impl AsRef<Path>`; `Message::new` takes `impl Into<String>`; both `update_available_commands` methods take `impl IntoIterator<Item = AvailableCommand>`.
+    - Worth recording: every existing call site already passed `PathBuf`, `String` or `Vec`, so widening the bounds needed no call-site edit at all. Only the two renamed getters rippled.
+    - `ContentBlockProcessor::new_with_config` no longer takes adjacent bools. A new `ContentValidationConfig` carries the five limits and switches as named fields, and `EnhancedSecurityConfig` now composes it rather than restating them.
+
+    ## Documentation
+
+    All eight named files now report ZERO under the lint the `missing-docs-rust` validator runs (`cargo clippy -p claude-agent --lib -- -W missing_docs`), down from 28 in `acp_error_conversion.rs`, 17 in `error.rs`, 13 in `session.rs`, 13 in `path_validator.rs` and 10 in `content_capability_validator.rs`. Enum variants and struct fields included, whole file swept, not only the cited lines.
+
+    Debt that remains is in files no finding named, so it stays out of scope: `session_errors.rs` (100), `config.rs` (31), `terminal_manager.rs` (17), `mcp.rs` (11), `tools.rs` (9), `size_validator.rs` (9), `lib.rs` (7), `conversation_manager.rs` (7), `permissions.rs` (2), `protocol_translator.rs` (1).
+
+    ## Magic numbers
+
+    - `mime_type_validator.rs` — `IMAGE_HEADER_MIN_SIZE`, `PNG_SIGNATURE_SIZE`, `GIF_SIGNATURE_SIZE`, `RIFF_HEADER_SIZE`, `RIFF_SIGNATURE_SIZE`, `RIFF_FORMAT_OFFSET`, `AUDIO_HEADER_MIN_SIZE`, `AAC_HEADER_MIN_SIZE`, `FRAME_SYNC_FIRST_BYTE`, `MP3_SYNC_MASK`, `MP3_SYNC_PATTERN`, `AAC_SYNC_MASK`, `AAC_SYNC_PATTERN`. The repeated RIFF and frame-sync arithmetic collapsed into `is_riff_container` and `has_frame_sync`.
+    - `content_security_validator.rs` — `ELF_EXECUTABLE_BASE64_PREFIX` and `PE_EXECUTABLE_BASE64_PREFIXES`. The finding named only `f0VMR`; `TVq` and `TVo` are the same cause in the same function, so they are named too, and the test data derives from the constants instead of restating them.
+    - `acp_error_conversion.rs` — 20 hardcoded JSON-RPC codes replaced with `INVALID_PARAMS` / `INTERNAL_ERROR` from the crate's existing `json_rpc_codes` module. `grep -- "-326"` on that file now returns nothing.
+
+    ## The `reuse` finding — investigated, they cannot share code
+
+    `path_validator.rs:451` asked whether `validate_unix_permissions` duplicates `check_binary_permissions` in `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:82`. It cannot, for two independent reasons, and I recorded both as a doc comment on the method so the next reviewer does not repeat the investigation.
+
+    1. Structure. `check_binary_permissions` is a private free function inside `apps/swissarmyhammer-cli`, a binary crate. `Cargo.toml` carries no dependency edge in either direction between that app and `crates/claude-agent`. A library cannot call a private item in a downstream application without inverting the dependency, which `ARCHITECTURE.md` forbids.
+    2. Semantics. They answer different questions. `check_binary_permissions` tests whether ANY execute bit is set (`mode & 0o111`), to advise `chmod +x`, and reports by pushing a diagnostic `Check` record; a metadata read failure is silently ignored. `validate_unix_permissions` tests whether THIS process holds each requested permission, selecting the owner, group or other triple by comparing the file's uid/gid against the process uid/gid, and returns a typed error. Generalising one into the other would change a user-facing doctor message and lose the octal mode it prints.
+
+    ## One thing worth knowing for the next round
+
+    `ProcessedContentType` is now generated by a `processed_content_types!` macro that declares the enum and its counting keys from one table. Finding `:1179` asked for exactly this ("use a macro to generate both the enum variants and the mapping"), because Rust cannot index a const array by an enum variant that carries a payload. Variant doc comments survive through `$(#[$variant_doc:meta])*`. Adding a content kind is now one row.
+
+    ## Verification
+
+    - `cargo build -p claude-agent --all-targets` — clean, zero warnings.
+    - `cargo nextest run -p claude-agent` — 1091 tests run, 1091 passed, 0 skipped (1087 before; the 4 new ones are the case-insensitivity regression tests).
+    - `cargo clippy -p claude-agent --all-targets -- -D warnings` — clean, exit 0.
+    - `cargo check -p swissarmyhammer-validators -p swissarmyhammer-agent -p acp-conformance --all-targets` — clean, exit 0.
+    - `cargo fmt -p claude-agent -- --check` — clean.
+    - `cargo clippy -p claude-agent --lib -- -W missing_docs` — zero for all eight named files.
+
+    Environment note: no stale `cargo` or `cmake` process held the build lock this time. Only two `rust-analyzer` processes were running, and they did not block anything.
+
+    ### implement — changed
+    - evidence: 12 files — crates/claude-agent/src/{acp_error_conversion.rs, base64_processor.rs, content_block_processor.rs, content_capability_validator.rs, content_security_integration_tests.rs, content_security_validator.rs, error.rs, mime_type_validator.rs, path_validator.rs, session.rs}, crates/claude-agent/tests/integration/coverage_tests.rs. All 111 checklist items in the 2026-08-08 section marked `- [x]`. `base64_processor.rs` carries a one-hunk `cargo fmt` normalisation only.
+    - next: ready for `/review`
+  timestamp: 2026-08-08T18:59:13.555918+00:00
+- actor: claude-code
+  id: 01kzhc7390n56nqj034h7kekyy
+  text: |-
+    ### test — green
+
+    I ran the full workspace test gate. All tests pass. No warnings. No skipped tests.
+
+    Steps:
+    1. I checked for old cargo or cmake processes. I found none. I did not need to kill any process.
+    2. I searched the whole workspace for the renamed symbols: `get_turn_request_count`, `get_turn_token_count`, `turn_request_count`, `turn_token_count`, `ContentValidationConfig`, `new_with_config`, `ProcessedContentType`, `processed_content_types!`, `contains_mime_type`. All uses stay inside `crates/claude-agent`. The one match outside this crate (`GitHubConverter::new_with_config` in `crates/markdowndown`) is a different, unrelated method. The API change does not break other crates.
+    3. I ran `cargo nextest run --workspace`. Result: 13649 tests run, 13649 passed, 0 skipped, 0 failed. Duration: 126.786s.
+    4. I ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`. Result: clean build, no warning lines, no error lines, exit code 0. This run also compiled and checked `swissarmyhammer-tools`, which depends on `claude-agent` and was not part of the earlier crate-scope check.
+
+    - evidence: `cargo nextest run --workspace` — 13649 passed, 0 failed, 0 skipped; `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, 0 warnings
+    - next: The task can move to review.
+  timestamp: 2026-08-08T19:04:54.304125+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Lowercase the capitalized error Display messages in claude-agent
@@ -355,3 +491,133 @@ Every item below is therefore correct as it stands. The code does not change for
 - [x] `crates/claude-agent/tests/integration/coverage_tests.rs:167` — validator flags the `"MCP server error"` assertion; same MCP-acronym conflict.
 - [x] `crates/claude-agent/tests/integration/coverage_tests.rs:227` — validator flags the `"MCP message serialization"` assertion; same MCP-acronym conflict.
 - [x] `crates/claude-agent/tests/integration/coverage_tests.rs:2399` — validator flags the `"invalid ULID"` assertion; ULID mid-string was deliberately preserved after lowering only the leading word, matching the acronym exception.
+
+## Review Findings (2026-08-08 12:56)
+
+> Scope: `review sha HEAD~1..HEAD` — the checkpoint commit `f75efff68` only, not the accumulated task diff.
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/claude-agent/tests/integration/coverage_tests.rs` — 365706 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+The `error-handling` rule now carries the acronym / CamelCase / proper-noun carve-out, and the engine raised no lowercase-Display finding. The conflict recorded on 2026-08-04 did not recur.
+
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:24` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:27` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:28` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:29` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:33` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:36` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:36` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:39` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:39` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:42` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:42` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:45` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:45` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:48` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:51` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:54` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:54` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:57` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:57` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:60` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:60` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:63` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:63` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:79` — Hardcoded JSON-RPC error code -32602 appears in a match arm, and the same value is defined as the constant INVALID_PARAMS elsewhere in the codebase (used in base64_processor.rs). The magic number should be replaced with the named constant to avoid repetition and ensure consistency. Import the constants from json_rpc_codes at the top of the file (`use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};`) and replace the hardcoded -32602 with INVALID_PARAMS on line 79 and -32603 with INTERNAL_ERROR on line 80.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:80` — Hardcoded JSON-RPC error code -32603 appears in a match arm, and the same value is defined as the constant INTERNAL_ERROR elsewhere in the codebase (used in base64_processor.rs). The magic number should be replaced with the named constant to avoid repetition and ensure consistency. Import the constants from json_rpc_codes at the top of the file (`use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};`) and replace the hardcoded -32603 with INTERNAL_ERROR on line 80.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:80` — Hardcoded JSON-RPC error code -32603 (Internal error) should use the named constant INTERNAL_ERROR from the json_rpc_codes module. Import INTERNAL_ERROR from crate::json_rpc_codes and replace `-32603` with `INTERNAL_ERROR`.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:162` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:163` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:164` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:165` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_block_processor.rs:423` — Function has adjacent bool parameters (enable_uri_validation at parameter 3 and enable_capability_validation at parameter 4), making call sites unreadable: e.g., `new_with_config(proc, size, true, false, ...)` obscures which bool configures what. Extract configuration flags into a struct or enum: create a `ValidatorConfig { uri_validation: bool, capability_validation: bool, batch_recovery: bool }` and pass a single config parameter, or use a builder pattern for this constructor with multiple optional settings.
+- [x] `crates/claude-agent/src/content_block_processor.rs:663` — Metadata initialization and insertion is duplicated identically in process_image_content (663-665) and process_audio_content (706-708); both create metadata HashMap and insert mime_type and data_size fields identically, differing only in variable names. Extract into a helper function: `fn create_decoded_content_metadata(mime_type: String, decoded_size: usize) -> HashMap<String, String>` that both process_image_content and process_audio_content can call.
+- [x] `crates/claude-agent/src/content_block_processor.rs:681` — ProcessedContent construction is duplicated identically in process_image_content (681-689) and process_audio_content (716-724), differing only by content_type variant and the source object for mime_type and size_bytes fields. Extract into a helper method: `fn build_media_content(content_type: ProcessedContentType, text_representation: String, decoded_data: Vec<u8>, metadata: HashMap<String, String>, original_size: usize) -> ProcessedContent` that both functions call, reducing the 9-line duplication to a single function call.
+- [x] `crates/claude-agent/src/content_block_processor.rs:758` — URI validation logic is duplicated identically in process_text_resource (758-760) and process_blob_resource (805-807); both validate the same way, differing only in variable names. Extract URI validation into a helper function: `fn validate_and_record_uri(&mut self, uri: &str, metadata: &mut HashMap<String, String>) -> Result<(), ContentBlockProcessorError>` that both functions can call.
+- [x] `crates/claude-agent/src/content_block_processor.rs:763` — URI and MIME type metadata extraction is duplicated identically in process_text_resource (763-768) and process_blob_resource (824-829); both insert uri and mime_type metadata the same way, differing only in variable names. Extract metadata insertion into a helper function: `fn extract_resource_metadata(metadata: &mut HashMap<String, String>, uri: &str, mime_type: Option<&str>)` that both functions can call after URI validation.
+- [x] `crates/claude-agent/src/content_block_processor.rs:778` — Text representation format string is duplicated identically in process_text_resource (778-783) and process_blob_resource (834-839), differing only by the resource type literal string and the size variable name. Extract into a helper method: `fn create_resource_text_representation(resource_type: &str, mime_type: Option<&str>, uri: &str, size: usize) -> String` that both functions call, replacing the 6-line duplicated format! calls with a single function call.
+- [x] `crates/claude-agent/src/content_block_processor.rs:1179` — The `get_content_type_key` method (lines 1179–1187) is a match over ProcessedContentType variants where each arm has identical logic (return a string constant). The arms differ only in the enum variant matched and the constant string returned. This is a table (variant → key string) written as a match expression. Refactor to express the mapping as a data structure. Options: (1) Define a const array of tuples mapping variant names to key strings; (2) Use a helper function that builds the mapping once and reuses it; (3) Use a macro to generate both the enum variants and the mapping. This separates the data (the variant→key pairs) from the control flow (the match).
+- [x] `crates/claude-agent/src/content_capability_validator.rs:15` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:16` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:17` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:18` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:19` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:23` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:23` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:26` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:27` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:28` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:124` — Match arms for always-allowed content types are duplicated identically in Text (124-128) and ResourceLink (130-134) cases; both contain identical structure with debug message and Ok() return, differing only by the content type name in the debug string. Extract into a helper method: `fn allow_baseline_content_type(type_name: &str) -> Result<(), ContentCapabilityError> { debug!("{} content always allowed", type_name); Ok(()) }` and call it from both match arms, or consolidate the two arms into a single pattern `ContentBlock::Text(_) | ContentBlock::ResourceLink(_) => { ... }`.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:136` — The Image, Audio, and Resource branches of this match (lines 136–179) follow an identical control-flow pattern; only the constants differ (capability field name, content type string, and required capability name). This is a table written as parallel code, not a single code path interpreting data. Extract the capability checks into a table—either a match over a static array of tuples or a helper method that maps each content type to its capability field name and required capability string. This reduces the risk of drift between the three parallel arms and makes adding new content types require only a data entry, not parallel code duplication.
+- [x] `crates/claude-agent/src/content_capability_validator.rs:166` — Capability validation logic is duplicated identically for Resource (166-179), Image (136-149), and Audio (151-164) match arms; all contain the same if-else pattern checking a capability flag and conditionally returning an error, differing only by capability field name, content_type string, and required_capability string. Extract into a helper method: `fn check_optional_capability(&self, enabled: bool, content_type: &str, capability_name: &str) -> Result<(), ContentCapabilityError>` and call it from each match arm, reducing the three 14-line blocks to three one-line calls.
+- [x] `crates/claude-agent/src/content_security_validator.rs:885` — The new comparison `mime_type == OPAQUE_BINARY_MIME_TYPE` is case-sensitive, but MIME types are case-insensitive per RFC 2045. If a caller passes 'Application/Octet-Stream' (uppercase), the comparison fails to match the constant 'application/octet-stream' (lowercase), and the optimization to skip validation silently fails. No test covers uppercase MIME types. Use case-insensitive comparison: `if mime_type.eq_ignore_ascii_case(OPAQUE_BINARY_MIME_TYPE)`. Add one test passing 'Application/Octet-Stream' and verify the function returns Ok().
+- [x] `crates/claude-agent/src/content_security_validator.rs:1017` — Magic byte string 'f0VMR' (ELF executable header) hardcoded without explanation or named constant. This is a specific binary signature that should be extracted. Define `const ELF_EXECUTABLE_HEADER: &str = "f0VMR";` and use it here and in line 1173 test data.
+- [x] `crates/claude-agent/src/error.rs:32` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/error.rs:33` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/error.rs:34` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/error.rs:206` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:209` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:212` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:215` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:218` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:221` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:224` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:227` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:230` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:233` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:236` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:239` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:242` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/error.rs:245` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:363` — The case-sensitive set lookup `!allowed_types.contains(mime_type)` will reject uppercase MIME types even though MIME types are case-insensitive per RFC 2045. The allowed_types HashSet contains lowercase entries (line 195: 'image/png'), so 'Image/PNG' is silently rejected as unsupported. No test covers uppercase MIME types. Normalize before lookup or use case-insensitive comparison. Add one test passing 'IMAGE/PNG' and verify it is accepted.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:422` — validate_audio_mime_type (lines 422–435) is a near-verbatim copy of validate_image_mime_type (lines 393–406), differing only in the category string ("audio" vs "image"), the policy field (&self.policy.allowed_audio_types vs &self.policy.allowed_image_types), the allowed_categories slice (&["audio"] vs &["image"]), and the format validation function (Self::validate_audio_format_matches_mime vs Self::validate_image_format_matches_mime). These are one function with parameters. Refactor into a single parameterized helper method that accepts the category name, policy field, allowed_categories, and format-validation function as arguments.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:501` — The case-sensitive equality comparison `*mime == mime_type` in the find() closure will fail to match uppercase MIME types even though MIME types are case-insensitive per RFC 2045. The mime_formats table (line 14–28) contains lowercase keys, so 'AUDIO/WAV' will not match 'audio/wav', and format validation is skipped. No test covers uppercase MIME types. Use case-insensitive comparison: `mime.eq_ignore_ascii_case(mime_type)` in the find closure. Add one test passing 'AUDIO/WAV' and verify format validation runs correctly.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:534` — validate_audio_format_matches_mime (lines 534–546) is a near-verbatim copy of validate_image_format_matches_mime (lines 520–532), differing only in the detect function passed (Self::detect_audio_format vs Self::detect_image_format) and the format table (AUDIO_MIME_FORMATS vs IMAGE_MIME_FORMATS). These are one function with parameters, not two methods. Extract a shared helper method that accepts the detector function and format table as parameters, eliminating the copy.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:549` — Magic number 2 hardcoded as minimum image data length without named constant. This represents the minimum bytes needed for JPEG format detection. Define `const IMAGE_HEADER_MIN_SIZE: usize = 2;` and replace `data.len() < 2` with `data.len() < IMAGE_HEADER_MIN_SIZE`.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:579` — Multiple magic numbers hardcoded for WebP format detection: 12 for RIFF header size, 4 and 8 for byte offsets. These should be named constants. Define constants: `const WEBP_RIFF_HEADER_SIZE: usize = 12; const RIFF_SIGNATURE_SIZE: usize = 4; const RIFF_FORMAT_OFFSET: usize = 8;` and use them here.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:596` — Multiple magic numbers hardcoded for WAV/RIFF format detection: 12 for RIFF size, 4 and 8 for byte offsets. These should be named constants. Reuse constants from WebP detection or define `const WAV_RIFF_HEADER_SIZE: usize = 12;` and use consistent offset constants.
+- [x] `crates/claude-agent/src/mime_type_validator.rs:605` — Magic number 7 hardcoded as minimum AAC ADTS data length, and 0xF0 used as bit mask without explanation. These should be named constants. Define `const AAC_HEADER_MIN_SIZE: usize = 7; const AAC_SYNC_MASK: u8 = 0xF0; const AAC_SYNC_PATTERN: u8 = 0xF0;` and use them.
+- [x] `crates/claude-agent/src/path_validator.rs:46` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:49` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:52` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:55` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:58` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:61` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:64` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:67` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:70` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:73` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:76` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/path_validator.rs:76` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/path_validator.rs:122` — Method accepts concrete `Vec<PathBuf>` instead of a generic type. The Rust API design principle is to accept trait bounds like `impl IntoIterator<Item=PathBuf>` to allow callers to pass any iterable, not just `Vec`. This provides flexibility without runtime cost. Change signature to accept a generic: `pub fn with_allowed_roots<I: IntoIterator<Item=PathBuf>>(roots: I) -> Self` and collect inside: `Self { allowed_roots: Self::canonicalize_roots(roots.into_iter().collect()), ..Self::new() }`.
+- [x] `crates/claude-agent/src/path_validator.rs:130` — Method accepts concrete `Vec<PathBuf>` instead of a generic type, violating the principle of accepting generics not concrete types. Change to: `pub fn with_blocked_paths<I: IntoIterator<Item=PathBuf>>(blocked: I) -> Self` and collect inside.
+- [x] `crates/claude-agent/src/path_validator.rs:138` — Method accepts concrete `Vec<PathBuf>` for both parameters instead of generic types, violating the principle of accepting generics not concrete types. Change to: `pub fn with_allowed_and_blocked<A: IntoIterator<Item=PathBuf>, B: IntoIterator<Item=PathBuf>>(allowed: A, blocked: B) -> Self` and collect both inside.
+- [x] `crates/claude-agent/src/path_validator.rs:451` — validate_unix_permissions implements Unix file permission validation logic that is 0.90 similar to existing check_binary_permissions in apps/swissarmyhammer-cli/src/commands/doctor/checks.rs; the high similarity suggests the author should verify whether existing code can be reused or extended instead of reimplementing. Investigate apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:82 check_binary_permissions to determine whether it can be reused or extended to provide validate_unix_permissions functionality instead of reimplementing.
+- [x] `crates/claude-agent/src/session.rs:200` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:206` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:207` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:208` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:209` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:210` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:211` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:288` — Method accepts concrete `PathBuf` for a path parameter. The Rust API design principle is to accept generic trait bounds like `impl AsRef<Path>` to allow callers to pass `&str`, `&Path`, `String`, or `PathBuf`. This follows the standard library pattern used by `File::open` and `env::set_current_dir`. Change signature to: `pub fn new(id: SessionId, cwd: impl AsRef<Path>) -> Self` and convert inside: `let cwd = cwd.as_ref().to_path_buf();`.
+- [x] `crates/claude-agent/src/session.rs:329` — Method accepts concrete `Vec<AvailableCommand>` instead of a generic type. The Rust API design principle is to accept trait bounds like `impl IntoIterator<Item=AvailableCommand>` to allow callers to pass any iterable. Change signature to accept a generic: `pub fn update_available_commands<I: IntoIterator<Item=agent_client_protocol::schema::AvailableCommand>>(&mut self, commands: I)` and collect inside: `self.available_commands = commands.into_iter().collect();`.
+- [x] `crates/claude-agent/src/session.rs:382` — Method uses `get_` prefix on a simple getter. The Rust API design principle is to use the field name directly without the `get_` prefix: use `turn_request_count()` instead of `get_turn_request_count()`. Rename to: `pub fn turn_request_count(&self) -> u64`.
+- [x] `crates/claude-agent/src/session.rs:387` — Method uses `get_` prefix on a simple getter. The Rust API design principle is to use the field name directly without the `get_` prefix: use `turn_token_count()` instead of `get_turn_token_count()`. Rename to: `pub fn turn_token_count(&self) -> u64`.
+- [x] `crates/claude-agent/src/session.rs:395` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:396` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/session.rs:411` — Method accepts concrete `String` instead of accepting generic types. The Rust API design principle is to use `impl Into<String>` to allow callers to pass `&str`, `String`, or other types that convert to `String`. Change signature to: `pub fn new(role: MessageRole, content: impl Into<String>) -> Self` and convert inside: `let content = content.into();`.
+- [x] `crates/claude-agent/src/session.rs:445` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/session.rs:446` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/session.rs:447` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/session.rs:674` — Method accepts concrete `Vec<AvailableCommand>` instead of a generic type. The Rust API design principle is to accept trait bounds like `impl IntoIterator<Item=AvailableCommand>` to allow callers to pass any iterable. Change signature to accept a generic: `pub fn update_available_commands<I: IntoIterator<Item=agent_client_protocol::schema::AvailableCommand>>(&self, session_id: &SessionId, commands: I)` and collect inside when calling the session method.
+
+### Dropped by the review skill's pre-existing-test exemption
+
+The engine confirmed 123 findings. The 12 below ask to restyle test code that already existed, so the skill drops them and they are not requirements. `git diff HEAD~1..HEAD` shows this commit changed only one line pair in `coverage_tests.rs` (the `to_ulid_string` rename) and touched nothing below line 1035 of `content_security_validator.rs` or inside the `session.rs` test module.
+
+- `crates/claude-agent/tests/integration/coverage_tests.rs:1` — split the over-cap test file into smaller modules.
+- `crates/claude-agent/tests/integration/coverage_tests.rs:313`, `:328`, `:336`, `:540`, `:563`, `:724`, `:1429`, `:1430` — name the hardcoded test timeouts and buffer sizes.
+- `crates/claude-agent/src/content_security_validator.rs:1157` — derive the test's block count from `MODERATE_MAX_CONTENT_ARRAY_LENGTH`.
+- `crates/claude-agent/src/session.rs:1213`, `:1223` — name the test cleanup interval and expiration wait.

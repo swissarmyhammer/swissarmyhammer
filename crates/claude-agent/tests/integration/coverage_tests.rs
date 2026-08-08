@@ -1570,26 +1570,26 @@ fn test_session_turn_counters() {
     let id = claude_agent::session::SessionId::new();
     let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
 
-    assert_eq!(session.get_turn_request_count(), 0);
-    assert_eq!(session.get_turn_token_count(), 0);
+    assert_eq!(session.turn_request_count(), 0);
+    assert_eq!(session.turn_token_count(), 0);
 
     let count = session.increment_turn_requests();
     assert_eq!(count, 1);
-    assert_eq!(session.get_turn_request_count(), 1);
+    assert_eq!(session.turn_request_count(), 1);
 
     let count = session.increment_turn_requests();
     assert_eq!(count, 2);
 
     let tokens = session.add_turn_tokens(100);
     assert_eq!(tokens, 100);
-    assert_eq!(session.get_turn_token_count(), 100);
+    assert_eq!(session.turn_token_count(), 100);
 
     let tokens = session.add_turn_tokens(50);
     assert_eq!(tokens, 150);
 
     session.reset_turn_counters();
-    assert_eq!(session.get_turn_request_count(), 0);
-    assert_eq!(session.get_turn_token_count(), 0);
+    assert_eq!(session.turn_request_count(), 0);
+    assert_eq!(session.turn_token_count(), 0);
 }
 
 #[test]

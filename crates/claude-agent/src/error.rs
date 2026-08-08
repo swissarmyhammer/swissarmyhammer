@@ -29,8 +29,11 @@ where
 /// JSON-RPC 2.0 error structure following ACP specification
 #[derive(Debug, Clone)]
 pub struct JsonRpcError {
+    /// JSON-RPC error code that tells the peer which fault occurred.
     pub code: i32,
+    /// Text of the fault, taken from the error's `Display` output.
     pub message: String,
+    /// Extra structured detail about the fault, when the error supplies any.
     pub data: Option<Value>,
 }
 
@@ -202,45 +205,61 @@ impl McpError {
 /// Main error type for the Claude Agent
 #[derive(Error, Debug)]
 pub enum AgentError {
+    /// The Claude process failed. The payload names the fault.
     #[error("Claude process error: {0}")]
     Process(String),
 
+    /// An MCP server operation failed. See [`McpError`].
     #[error("MCP error: {0}")]
     Mcp(#[from] McpError),
 
+    /// A path did not pass validation.
     #[error("path validation error: {0}")]
     PathValidation(#[from] crate::path_validator::PathValidationError),
 
+    /// A message broke the ACP protocol. The payload names the fault.
     #[error("protocol error: {0}")]
     Protocol(String),
 
+    /// A session operation failed. The payload names the fault.
     #[error("session error: {0}")]
     Session(String),
 
+    /// A tool ran and failed. The payload names the fault.
     #[error("tool execution error: {0}")]
     ToolExecution(String),
 
+    /// The configuration holds an invalid value. The payload names the fault.
     #[error("configuration error: {0}")]
     Config(String),
 
+    /// The server failed for a reason no other variant covers.
+    ///
+    /// The payload names the fault.
     #[error("server error: {0}")]
     ServerError(String),
 
+    /// A read or write operation failed.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// JSON serialization or deserialization failed.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// The client refused permission. The payload names the operation.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    /// The request holds invalid parameters. The payload names the fault.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
+    /// The requested method does not exist. The payload names the method.
     #[error("method not found: {0}")]
     MethodNotFound(String),
 
+    /// An internal fault stopped the operation. The payload names the fault.
     #[error("internal error: {0}")]
     Internal(String),
 }

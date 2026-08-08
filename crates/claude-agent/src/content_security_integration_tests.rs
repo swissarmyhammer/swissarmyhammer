@@ -46,11 +46,13 @@ mod tests {
         supported_capabilities.insert("resource_link".to_string(), true);
 
         let config = crate::content_block_processor::EnhancedSecurityConfig {
-            max_resource_size: 5 * 1024 * 1024, // 5MB resource limit
-            enable_uri_validation: true,
-            enable_capability_validation: true,
-            supported_capabilities,
-            enable_batch_recovery: true,
+            validation: crate::content_block_processor::ContentValidationConfig {
+                max_resource_size: 5 * 1024 * 1024, // 5MB resource limit
+                enable_uri_validation: true,
+                enable_capability_validation: true,
+                supported_capabilities,
+                enable_batch_recovery: true,
+            },
             content_security_validator: security_validator,
         };
 
@@ -73,11 +75,13 @@ mod tests {
         supported_capabilities.insert("resource_link".to_string(), true);
 
         let config = crate::content_block_processor::EnhancedSecurityConfig {
-            max_resource_size: 50 * 1024 * 1024, // 50MB resource limit
-            enable_uri_validation: true,
-            enable_capability_validation: true,
-            supported_capabilities,
-            enable_batch_recovery: true,
+            validation: crate::content_block_processor::ContentValidationConfig {
+                max_resource_size: 50 * 1024 * 1024, // 50MB resource limit
+                enable_uri_validation: true,
+                enable_capability_validation: true,
+                supported_capabilities,
+                enable_batch_recovery: true,
+            },
             content_security_validator: security_validator,
         };
 
@@ -100,11 +104,13 @@ mod tests {
         supported_capabilities.insert("resource_link".to_string(), true);
 
         let config = crate::content_block_processor::EnhancedSecurityConfig {
-            max_resource_size: 500 * 1024 * 1024, // 500MB resource limit
-            enable_uri_validation: false,         // disable URI validation for permissive mode
-            enable_capability_validation: true,
-            supported_capabilities,
-            enable_batch_recovery: true,
+            validation: crate::content_block_processor::ContentValidationConfig {
+                max_resource_size: 500 * 1024 * 1024, // 500MB resource limit
+                enable_uri_validation: false,         // disable URI validation for permissive mode
+                enable_capability_validation: true,
+                supported_capabilities,
+                enable_batch_recovery: true,
+            },
             content_security_validator: security_validator,
         };
 

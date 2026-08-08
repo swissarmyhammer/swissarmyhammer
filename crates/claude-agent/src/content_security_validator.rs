@@ -61,6 +61,12 @@ const MAX_REPETITION_COUNT: usize = 10;
 /// MIME type that declares opaque bytes, so no format check applies.
 const OPAQUE_BINARY_MIME_TYPE: &str = "application/octet-stream";
 
+/// Base64 prefix a Windows PE executable produces, from the `MZ` DOS header.
+const PE_EXECUTABLE_BASE64_PREFIXES: [&str; 2] = ["TVq", "TVo"];
+
+/// Base64 prefix an ELF executable produces, from the `\x7FELF` header.
+const ELF_EXECUTABLE_BASE64_PREFIX: &str = "f0VMR";
+
 /// Estimate the decoded size of `encoded_len` base64 characters, in bytes.
 ///
 /// Base64 encodes three bytes as four characters, so the decoded size is
@@ -882,7 +888,7 @@ impl ContentSecurityValidator {
             return Ok(());
         };
 
-        if mime_type == OPAQUE_BINARY_MIME_TYPE {
+        if mime_type.eq_ignore_ascii_case(OPAQUE_BINARY_MIME_TYPE) {
             return Ok(());
         }
 
@@ -1010,11 +1016,14 @@ impl ContentSecurityValidator {
         // Check for suspicious patterns that might indicate embedded executables or malicious content
 
         // Look for patterns that might decode to executable headers
-        if data.starts_with("TVq") || data.starts_with("TVo") {
+        if PE_EXECUTABLE_BASE64_PREFIXES
+            .iter()
+            .any(|prefix| data.starts_with(prefix))
+        {
             return Some("potential_pe_executable".to_string());
         }
 
-        if data.starts_with("f0VMR") {
+        if data.starts_with(ELF_EXECUTABLE_BASE64_PREFIX) {
             return Some("potential_elf_executable".to_string());
         }
 
@@ -1067,8 +1076,30 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::TextContent;
 
+    /// The eight-byte PNG signature, base64 encoded. Content sniffing reports
+    /// this as `image/png`.
+    const PNG_SIGNATURE_BASE64: &str = "iVBORw0KGgo=";
+
     fn create_test_validator() -> ContentSecurityValidator {
         ContentSecurityValidator::moderate().unwrap()
+    }
+
+    #[test]
+    fn test_blob_mime_type_consistency_skips_uppercase_opaque_binary() {
+        use agent_client_protocol::schema::BlobResourceContents;
+
+        let validator = create_test_validator();
+
+        // RFC 2045 makes MIME types case-insensitive, so a blob declared as
+        // `Application/Octet-Stream` must skip the format check exactly as the
+        // lowercase spelling does. Without that, the PNG payload below reads as
+        // a spoofed content type.
+        let blob_resource = BlobResourceContents::new(PNG_SIGNATURE_BASE64, "")
+            .mime_type("Application/Octet-Stream");
+
+        assert!(validator
+            .validate_blob_mime_type_consistency(&blob_resource)
+            .is_ok());
     }
 
     #[test]
@@ -1168,16 +1199,16 @@ mod tests {
     fn test_malicious_pattern_detection() {
         let validator = create_test_validator();
 
-        // Test executable detection
-        let pe_executable_base64 = "TVqQAAMAAAAEAAAA"; // PE header in base64
-        let elf_executable_base64 = "f0VMRgIBAQAAAAA"; // ELF header in base64
+        // Test executable detection: each signature prefix plus filler.
+        let pe_executable_base64 = format!("{}QAAMAAAAEAAAA", PE_EXECUTABLE_BASE64_PREFIXES[0]);
+        let elf_executable_base64 = format!("{}gIBAQAAAAA", ELF_EXECUTABLE_BASE64_PREFIX);
 
         if validator.policy.enable_malicious_pattern_detection {
             assert!(validator
-                .detect_malicious_base64_patterns(pe_executable_base64)
+                .detect_malicious_base64_patterns(&pe_executable_base64)
                 .is_some());
             assert!(validator
-                .detect_malicious_base64_patterns(elf_executable_base64)
+                .detect_malicious_base64_patterns(&elf_executable_base64)
                 .is_some());
         }
 

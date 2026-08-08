@@ -42,38 +42,61 @@ pub struct PathValidator {
 /// Errors that can occur during path validation
 #[derive(Debug, Error, PartialEq)]
 pub enum PathValidationError {
+    /// ACP requires an absolute path, and the caller gave a relative one. The
+    /// payload carries the path.
     #[error("path is not absolute: {0}")]
     NotAbsolute(String),
 
+    /// The path holds a `..` segment or another pattern that climbs out of its
+    /// directory. The payload carries the path.
     #[error("path traversal attempt detected in: {0}")]
     PathTraversalAttempt(String),
 
+    /// The path holds a `.` or `..` component after normalization. The payload
+    /// carries the path.
     #[error("path contains relative components: {0}")]
     RelativeComponent(String),
 
+    /// The path is longer than the configured limit. The payload carries the
+    /// length of the path and the limit, in that order.
     #[error("path too long: {0} characters > maximum allowed ({1})")]
     PathTooLong(usize, usize),
 
+    /// The file system could not resolve the path to a canonical form. The
+    /// payload carries the path and the reason, in that order.
     #[error("path canonicalization failed for {0}: {1}")]
     CanonicalizationFailed(String, String),
 
+    /// The path resolves outside every allowed root. The payload carries the
+    /// path.
     #[error("path outside allowed boundaries: {0}")]
     OutsideBoundaries(String),
 
+    /// The path is under a blocked prefix. The payload carries the path.
     #[error("path is blocked: {0}")]
     Blocked(String),
 
+    /// The path is not a valid path on this platform. The payload carries the
+    /// path.
     #[error("invalid path format: {0}")]
     InvalidFormat(String),
 
+    /// The path holds a null byte, which no file system accepts.
     #[error("path contains null bytes")]
     NullBytesInPath,
 
+    /// The caller gave an empty path.
     #[error("empty path provided")]
     EmptyPath,
 
+    /// This process may not do what the caller asked to the file.
     #[error("insufficient permissions for path {path}: missing {required}")]
-    InsufficientPermissions { path: String, required: String },
+    InsufficientPermissions {
+        /// Path the caller asked about.
+        path: String,
+        /// Permissions this process does not hold, separated by commas.
+        required: String,
+    },
 }
 
 impl From<SizeValidationError> for PathValidationError {
@@ -118,24 +141,36 @@ impl PathValidator {
         }
     }
 
-    /// Create a path validator with allowed root directories
-    pub fn with_allowed_roots(roots: Vec<PathBuf>) -> Self {
+    /// Create a path validator with allowed root directories.
+    ///
+    /// Takes any iterable of paths, so a `Vec`, an array or an iterator all
+    /// work.
+    pub fn with_allowed_roots(roots: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             allowed_roots: Self::canonicalize_roots(roots),
             ..Self::new()
         }
     }
 
-    /// Create a path validator with blocked paths
-    pub fn with_blocked_paths(blocked: Vec<PathBuf>) -> Self {
+    /// Create a path validator with blocked paths.
+    ///
+    /// Takes any iterable of paths, so a `Vec`, an array or an iterator all
+    /// work.
+    pub fn with_blocked_paths(blocked: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             blocked_paths: Self::canonicalize_roots(blocked),
             ..Self::new()
         }
     }
 
-    /// Create a path validator with both allowed roots and blocked paths
-    pub fn with_allowed_and_blocked(allowed: Vec<PathBuf>, blocked: Vec<PathBuf>) -> Self {
+    /// Create a path validator with both allowed roots and blocked paths.
+    ///
+    /// Takes any iterable of paths for each list, so a `Vec`, an array or an
+    /// iterator all work.
+    pub fn with_allowed_and_blocked(
+        allowed: impl IntoIterator<Item = PathBuf>,
+        blocked: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
         Self {
             allowed_roots: Self::canonicalize_roots(allowed),
             blocked_paths: Self::canonicalize_roots(blocked),
@@ -155,7 +190,7 @@ impl PathValidator {
     /// Roots that cannot be canonicalized (e.g. they do not exist yet) are kept
     /// as-is on a best-effort basis: a non-existent blocked root cannot match a
     /// real file anyway, and a non-existent allowed root simply admits nothing.
-    fn canonicalize_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    fn canonicalize_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
         roots
             .into_iter()
             .map(|root| root.canonicalize().unwrap_or(root))
@@ -447,6 +482,15 @@ impl PathValidator {
     }
 
     /// Check each required permission against the Unix mode bits.
+    ///
+    /// This cannot reuse `check_binary_permissions` in the `swissarmyhammer-cli`
+    /// application. That function is private to a downstream binary crate, so
+    /// this library cannot call it without inverting the dependency. It also
+    /// answers a different question: it tests whether ANY execute bit is set,
+    /// to advise `chmod +x`, and reports through a diagnostic `Check` record.
+    /// This method tests whether THIS process holds each requested permission,
+    /// by the owner, group or other triple that applies to it, and returns a
+    /// typed error.
     #[cfg(unix)]
     fn validate_unix_permissions(
         path: &Path,

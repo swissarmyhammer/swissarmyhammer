@@ -414,9 +414,7 @@ impl Base64Processor {
         // Check for patterns that might indicate embedded executables
         EXECUTABLE_SIGNATURES
             .iter()
-            .any(|(magic, min_size, _platform)| {
-                data.len() >= *min_size && data.starts_with(magic)
-            })
+            .any(|(magic, min_size, _platform)| data.len() >= *min_size && data.starts_with(magic))
     }
 
     /// Run the optional enhanced security validator over the raw base64 text.
