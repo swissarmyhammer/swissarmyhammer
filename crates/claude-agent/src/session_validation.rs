@@ -9,6 +9,40 @@ use reqwest::Url;
 use std::fs;
 use std::path::Path;
 
+/// Name the ACP requirement that a working directory path is absolute.
+///
+/// The client reads this token out of the structured error data.
+const ABSOLUTE_PATH_REQUIREMENT: &str = "absolute_path";
+
+/// An absolute working directory the client can copy, for the host platform.
+const ABSOLUTE_PATH_EXAMPLE: &str = if cfg!(windows) {
+    "C:\\Users\\username\\project"
+} else {
+    "/home/username/project"
+};
+
+/// Reject a working directory that is not absolute, as ACP requires.
+///
+/// This is the first gate of [`validate_working_directory`], and the only gate
+/// [`Session::new`](crate::session::Session::new) applies, so both report the
+/// same error for the same path.
+///
+/// # Errors
+///
+/// Returns [`SessionSetupError::WorkingDirectoryNotAbsolute`] when `path` is
+/// relative.
+pub fn require_absolute_working_directory(path: &Path) -> SessionSetupResult<()> {
+    if path.is_absolute() {
+        return Ok(());
+    }
+
+    Err(SessionSetupError::WorkingDirectoryNotAbsolute {
+        provided_path: path.to_path_buf(),
+        requirement: ABSOLUTE_PATH_REQUIREMENT.to_string(),
+        example: ABSOLUTE_PATH_EXAMPLE.to_string(),
+    })
+}
+
 /// Validate a working directory path for session setup
 ///
 /// Performs comprehensive validation according to ACP requirements:
@@ -25,18 +59,7 @@ pub fn validate_working_directory(path: &Path) -> SessionSetupResult<()> {
     // 4. Graceful degradation where possible
     // 5. Proper cleanup of partial session state on failures
 
-    // Check if path is absolute
-    if !path.is_absolute() {
-        return Err(SessionSetupError::WorkingDirectoryNotAbsolute {
-            provided_path: path.to_path_buf(),
-            requirement: "absolute_path".to_string(),
-            example: if cfg!(windows) {
-                "C:\\Users\\username\\project".to_string()
-            } else {
-                "/home/username/project".to_string()
-            },
-        });
-    }
+    require_absolute_working_directory(path)?;
 
     // Check for network paths (Windows UNC paths or other network indicators)
     let path_str = path.to_string_lossy();

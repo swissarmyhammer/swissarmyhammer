@@ -314,6 +314,140 @@ comments:
     - evidence: `cargo nextest run --workspace` — 13649 passed, 0 failed, 0 skipped; `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, 0 warnings
     - next: The task can move to review.
   timestamp: 2026-08-08T19:04:54.304125+00:00
+- actor: claude-code
+  id: 01kzhc97zs3ggf8vhgab7nsvet
+  text: |-
+    ### commit — changed
+    - evidence: 5f8a07a8e fix(claude-agent): make MIME checks case-insensitive per RFC 2045, close 111 review findings
+    - confirmed HEAD before commit was f75efff68 (as expected); working tree matched iteration 3 scope only (MIME/content validators, error conversion, session, path validator, kanban task state); no scratch or unrelated files; no secrets in diff
+    - next: leave in doing; awaiting review step
+  timestamp: 2026-08-08T19:06:04.665237+00:00
+- actor: claude-code
+  id: 01kzhe4vdr87akxwpw07ktkw8f
+  text: |-
+    ### review — findings
+
+    - scope: `review sha HEAD~1..HEAD` — the checkpoint commit `5f8a07a8e` only, not the accumulated task diff. Verified `git rev-parse HEAD` = `5f8a07a8e9a8d959008c05a50b9ddb2149df8d3f` before the run.
+    - evidence: engine counts `findings: 39, confirmed: 39, refuted: 24, attempted: 44, failed: 0, skipped: 1`. 19 recorded as open checklist items in the new `## Review Findings (2026-08-08 14:06)` section. The 236 items in the two earlier sections stay checked and untouched.
+    - the finding count fell from 111 to 19. The engine is working, and it is finding new ground each round, not the same ground.
+
+    ## Guardrail answer 1 — repeats
+
+    No open finding repeats. None of the 19 open file:line sites appears in the `## Review Findings (2026-08-04 15:45)` section or the `## Review Findings (2026-08-08 12:56)` section. I compared each site against both sections by an exact `file:line` match.
+
+    Six DROPPED findings repeat, and only from the 12:56 round: `coverage_tests.rs:1`, `:336`, `:540`, `:563`, `:724`, `:1430`. They recur because the skill's pre-existing-test exemption drops them, so no round made them requirements and no round fixed them. They are on their second round, not their third. The 2026-08-04 section names `coverage_tests.rs:161`, `:167`, `:227` and `:2399`, which are the resolved MCP-acronym conflict items; none of those returned.
+
+    Nothing has survived three rounds. The guardrail does NOT trip.
+
+    ## Guardrail answer 2 — the over-cap file recurred
+
+    `crates/claude-agent/tests/integration/coverage_tests.rs` was skipped again. It is 365790 rendered bytes against the 262144-byte per-file cap, so the `duplication` validator could not read it. Last round it was 365706 bytes. It grew by 84 bytes and is still 103646 bytes over.
+
+    This is a review coverage gap, NOT a clean pass on that file. The `duplication` validator has now failed to read it two rounds in a row. Nothing in the commit made it smaller.
+
+    ## The resolved conflict did not return
+
+    The engine raised no lowercase-Display finding. `MCP`, `MIME`, `Base64` and `LoadSession` at the start of Display messages were not reported. The carve-out in the deployed rule is holding.
+
+    ## What the 19 open findings are
+
+    - 7 in `acp_error_conversion.rs` — the five `convert_*_error_to_acp` wrappers are still near-verbatim copies of one generic delegation, plus missing `Clone` on `ContentProcessingError` and missing `PartialEq`/`Eq` on `ErrorContext`.
+    - 7 in `base64_processor.rs` — four duplicate `SizeValidator` constructions, the `decode_image_data`/`decode_audio_data` pair, adjacent bool parameters in `new_with_config`, and two same-typed size parameters that invite a swap. Note: `ContentValidationConfig` was introduced this round for `ContentBlockProcessor`; the finding at `:295` asks for the same treatment in `Base64Processor`, which did not get it.
+    - 2 in `content_block_processor.rs` — missing `Clone` on `EnhancedSecurityConfig` and `ProcessedContent`.
+    - 2 in `content_security_validator.rs` — the `strict`/`moderate`/`permissive` policy builders are three near-identical blocks, and two match arms run the same statement.
+    - 1 in `session.rs:305` — `Session::new` panics on a non-absolute path. The error-handling rule reserves panics for internal invariant violations. This is a separate rule from the resolved capitalisation carve-out.
+
+    A theme worth naming for the next iteration: the duplication findings sit in the SAME functions the last two rounds consolidated elsewhere in the file. Round 2 built `ContentValidationConfig` and shared media helpers; round 3 built `MimeCategory` and `OptionalCapability` tables. Neither round applied the same treatment to `acp_error_conversion.rs`'s five wrappers, `base64_processor.rs`'s four constructors, or `content_security_validator.rs`'s three policy builders. The cause was removed file by file, not everywhere it occurs.
+
+    - next: task stays in `review` with 19 open findings.
+
+    step: review
+    outcome: findings
+    evidence: 19 findings — crates/claude-agent/src/acp_error_conversion.rs:26, :210, :269, :277, :285, :293, :301; crates/claude-agent/src/base64_processor.rs:293, :295, :299, :325, :351, :449, :490; crates/claude-agent/src/content_block_processor.rs:56, :266; crates/claude-agent/src/content_security_validator.rs:369, :651; crates/claude-agent/src/session.rs:305. Plus one coverage gap: crates/claude-agent/tests/integration/coverage_tests.rs not read by the duplication validator, 365790 bytes over the 262144 cap.
+    task: ^f70h1pr
+  timestamp: 2026-08-08T19:38:37.880446+00:00
+- actor: claude-code
+  id: 01kzhe73j788ykwbvnbrbk26ch
+  text: |-
+    ### finish iteration 3 — findings
+
+    - implement: changed — 11 source files, 1043 insertions, 466 deletions. Closed all 111 findings from the 12:56 round. Three RFC 2045 correctness bugs fixed TDD-first, plus a fourth site (`is_mime_type_blocked`) that no finding named but that carried the same cause.
+    - test: green — `cargo nextest run --workspace` 13649 passed, 0 skipped; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean. Workspace grep confirmed the public renames reach no other crate.
+    - commit: 5f8a07a8e fix(claude-agent): make MIME checks case-insensitive per RFC 2045, close 111 review findings
+    - review: findings — 19 open in a new `## Review Findings (2026-08-08 14:06)` section. Engine counts: findings 39, confirmed 39, refuted 24, attempted 44, failed 0, skipped 1. 20 dropped by the pre-existing-test exemption.
+
+    Guardrail check: NOT triggered. The reviewer matched all 19 open findings against both prior sections; every one returned zero prior occurrences. Nothing has survived three rounds.
+
+    Six DROPPED findings repeat from the 12:56 round (`coverage_tests.rs:1`, `:336`, `:540`, `:563`, `:724`, `:1430`). They recur because the written exemption drops them, so no round ever made them requirements. That is second-round, and they are not requirements, so they do not arm the guardrail.
+
+    Trend: 112 → 111 → 19 open findings. The loop is converging.
+
+    Open items for iteration 4:
+
+    - `session.rs:305` panics on a non-absolute path. The error-handling rule reserves panics for internal invariant violations; a bad path is an expected failure mode. This is the one correctness item in the set.
+    - The remaining duplication findings name code the last two rounds consolidated ELSEWHERE. Round 2 built `ContentValidationConfig` and the shared media helpers; round 3 built the `MimeCategory` and `OptionalCapability` tables. Neither round applied that treatment to the five `convert_*_error_to_acp` wrappers, the four duplicate `SizeValidator` constructions, or the three `SecurityPolicy` builders. The cause was removed file by file instead of everywhere it occurs — iteration 4 must sweep the pattern across the crate, not one file at a time.
+
+    Standing coverage gap, second round running: `crates/claude-agent/tests/integration/coverage_tests.rs` is 365790 rendered bytes against the 262144-byte cap, so the `duplication` validator still cannot read it. It grew 84 bytes this round and sits 103646 bytes over. This file has never been read by that validator. Splitting it deserves its own card.
+  timestamp: 2026-08-08T19:39:51.751670+00:00
+- actor: claude-code
+  id: 01kzhfbymn3xn5ct1qrhbsdgn5
+  text: |-
+    Iteration 4 — closed all 19 open findings in the `## Review Findings (2026-08-08 14:06)` section. The two earlier sections were already closed and were not touched.
+
+    **Correctness item first — `session.rs:305`.** `Session::new` now returns `SessionSetupResult<Self>` instead of panicking on a relative path. TDD: rewrote `test_session_creation_with_relative_path_panics` as `test_session_creation_with_relative_path_returns_error`, watched it fail (`expected Session, found Result`), then changed the signature.
+    - The absolute-path gate moved into `session_validation::require_absolute_working_directory`, so `Session::new` and `validate_working_directory` report the same typed error for the same path. The platform example string and the `absolute_path` requirement token are now named constants.
+    - Blast radius: 17 call sites, all in claude-agent. Production sites are `SessionManager::create_session` (maps through a new shared `working_directory_rejected`, which also removed the duplicated "Working directory validation failed" format string) and `ClaudeAgent::rehydrate_in_memory_session` (maps to `SessionRestoreError::Corrupt`). The other 15 are tests and take `.expect(...)`. Nothing outside claude-agent calls it.
+
+    **Crate-wide sweeps of the three named causes.**
+
+    1. *The five `convert_*_error_to_acp` wrappers.* All five deleted. `add_error_context` was already the generic function the finding asked for, so keeping a sixth identical delegate would recreate the cause; it is renamed `convert_error_to_acp` and is now the only converter. The four wrapped error types were imported only for the wrappers, so those imports moved into the test module. Grepped the whole crate for the shape: `agent.rs::convert_session_setup_error_to_acp_error` is a real per-variant mapping, not a wrapper, and stays.
+
+    2. *The four duplicate `SizeValidator` constructions.* Swept beyond base64_processor.rs. Every constructor of `Base64Processor` and of `ContentBlockProcessor` now lands in one private `from_parts`, so the `SizeValidator::new(SizeLimits { .. })` block exists once per file instead of four times and three times. `Default` for both types delegates there too. Crate-wide there are now five `SizeValidator::new` sites, each in a different file and each setting a different limit field — no file has two.
+
+    3. *The three `SecurityPolicy` builders.* Replaced by a `SecurityPreset` table with three `const` rows and one `SecurityPolicy::from_preset`. `strict`, `moderate` and `permissive` are one line each. The five heuristic switches plus rate limiting were true/true/false in lockstep across the three presets, so the row carries one `enable_heuristics` field; the policy's own fields stay individually public and settable. URI patterns, IP ranges and the permissive rate budget became named constants.
+
+    **Other findings.** `ContentProcessingError` derives `Clone`; `ErrorContext` derives `PartialEq, Eq`; `EnhancedSecurityConfig` and `ProcessedContent` derive `Clone`. `Base64Processor::new_with_config` and `with_enhanced_security_config` take one `Base64ValidationConfig` in place of two same-typed byte counts and two adjacent bools. `decode_image_data` and `decode_audio_data` are one-line forwards into `decode_media_data`, driven by a `MediaKind` table that mirrors the existing `MimeCategory` table in mime_type_validator.rs. The duplicated `ContentBlock::Resource` and `_` arms in `validate_content_blocks_security` became one expression match with a single `_` arm.
+
+    **Deliberate non-changes, with reasons.**
+    - The finding text for the converter suggested `ContentBlock::Resource(_) | _ =>`. That trips `clippy::wildcard_in_or_patterns` and would fail the `-D warnings` gate, so the two arms were consolidated into the single `_` arm instead. Same requirement, no new warning.
+    - `SizeLimits::default/strict/permissive` have the same three-preset shape but contain no construction logic — each is a five-field data literal, already one row. Converting them would relocate code, not reduce it. `MimeTypePolicy::strict/moderate/permissive` already form a delta chain (moderate builds on strict, permissive on moderate), so there is no duplicated block there either.
+    - `MimeTypeValidator` and `ContentSecurityValidator` preset methods are forwarding one-liners into the shared `new`, which the Rust duplication carve-out exempts.
+
+    **New public API surface added:** `Base64ValidationConfig` (Debug, Clone, PartialEq, Eq, Default, `with_max_size`), `ContentValidationConfig::default` and `::with_resource_limit`, and `convert_error_to_acp`. `ContentValidationConfig` also gained `PartialEq, Eq` to match.
+
+    Gates, all run after the final edit:
+    - `cargo build -p claude-agent --all-targets` — clean
+    - `cargo nextest run -p claude-agent` — 1091 run, 1091 passed, 0 skipped
+    - `cargo clippy -p claude-agent --all-targets -- -D warnings` — clean
+    - `cargo check -p swissarmyhammer-validators -p swissarmyhammer-agent -p acp-conformance --all-targets` — clean
+    - `cargo fmt --check` — clean
+
+    Note for the next round: `crates/claude-agent/tests/integration/coverage_tests.rs` is still over the per-file prompt cap, so the `duplication` validator still cannot read it. The four `Session::new` call sites in it grew by one line each. Splitting that file still needs its own card.
+
+    ### implement — changed
+    - evidence: 9 files — crates/claude-agent/src/session.rs, session_validation.rs, session_resume.rs, acp_error_conversion.rs, base64_processor.rs, content_block_processor.rs, content_security_validator.rs, agent.rs, tests/integration/coverage_tests.rs; 19 of 19 findings flipped to `- [x]`; 1091 tests pass
+    - next: /review
+  timestamp: 2026-08-08T19:59:59.125242+00:00
+- actor: claude-code
+  id: 01kzhg4jfbdxdn625gf6jfqm42
+  text: |-
+    ### test — green
+
+    Workspace gate for iteration 4 (uncommitted, `Session::new` signature change + related deletions in claude-agent). Ran from repo root `/Users/wballard/github/swissarmyhammer/swissarmyhammer-main`.
+
+    **Containment checks (before running the gate):**
+    - `Session::new(` — grep `\bSession::new\(` workspace-wide. All 8 call sites are inside `crates/claude-agent` (`src/session.rs` x7, `src/session_resume.rs`, `src/agent.rs`, `tests/integration/coverage_tests.rs`). None outside the crate. Confirms the implementer's claim.
+    - Deleted `convert_*_error_to_acp` (5 old names: `convert_protocol_error_to_acp`, `convert_io_error_to_acp`, `convert_validation_error_to_acp`, `convert_tool_error_to_acp`, `convert_permission_error_to_acp`) — zero matches anywhere in the workspace.
+    - New `convert_error_to_acp` — defined and used only inside `crates/claude-agent/src/acp_error_conversion.rs`.
+    - `from_preset` — found in `crates/claude-agent/src/content_security_validator.rs` (the new `SecurityPreset` table, as expected) and separately in `crates/markdowndown` (`html_config_from_preset`, an unrelated pre-existing function on a different type). No conflict.
+    - `Base64Processor` / `ContentBlockProcessor` — only referenced inside `crates/claude-agent`. `swissarmyhammer-tools` depends on `claude-agent` (`Cargo.toml` workspace dep) but does not reference these constructors directly, so it only needed to compile against the new crate version — verified below.
+
+    **Gate commands run:**
+    1. `cargo nextest run --workspace` — 13649 tests run, 13649 passed, 0 skipped, 0 failed. Confirmed `swissarmyhammer-tools` tests (unit + `code_context_mcp_e2e_test` + `tools_tests` incl. `qwen_embedding_*` e2e) are present and passing in this run (e.g. `mcp::tools::code_context::tests::test_register_code_context_tools`, `code_context_mcp_e2e_test test_mcp_detects_deleted_files`, `tools_tests integration::semantic_search_e2e::qwen_embedding_semantic_search_e2e`).
+    2. `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, exit 0, 0 warnings. `swissarmyhammer-tools` compiled in this run ("Checking claude-agent" then downstream crates including `swissarmyhammer-tools` build confirmed).
+
+    No failures found. No fixes needed. Task left in `doing`, not committed, not pushed, per instructions.
+  timestamp: 2026-08-08T20:13:25.867112+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Lowercase the capitalized error Display messages in claude-agent
@@ -621,3 +755,61 @@ The engine confirmed 123 findings. The 12 below ask to restyle test code that al
 - `crates/claude-agent/tests/integration/coverage_tests.rs:313`, `:328`, `:336`, `:540`, `:563`, `:724`, `:1429`, `:1430` — name the hardcoded test timeouts and buffer sizes.
 - `crates/claude-agent/src/content_security_validator.rs:1157` — derive the test's block count from `MODERATE_MAX_CONTENT_ARRAY_LENGTH`.
 - `crates/claude-agent/src/session.rs:1213`, `:1223` — name the test cleanup interval and expiration wait.
+## Review Findings (2026-08-08 14:06)
+
+> Scope: `review sha HEAD~1..HEAD` — the checkpoint commit `5f8a07a8e` only, not the accumulated task diff.
+> Engine counts: findings 39, confirmed 39, refuted 24, attempted 44, failed 0, skipped 1.
+
+> WARNING — 1 file was not reviewed, because the rendered prompt goes over the agent prompt cap:
+> - `crates/claude-agent/tests/integration/coverage_tests.rs` — 365790 rendered bytes, over the 262144-byte per-file cap; not read by: duplication (split the file).
+>
+> This is a coverage gap, not a clean pass. The same file was over the cap in the 2026-08-08 12:56 round at 365706 bytes. It grew by 84 bytes and is still over.
+
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:26` — `ContentProcessingError` is a public error type that should implement `Clone` for consistency and to allow downstream code to clone errors when needed. The related `Base64ProcessorError` in the same codebase derives `Clone` (line 58 of base64_processor.rs), establishing the pattern. Add `Clone` to the derive list: `#[derive(Debug, Error, Clone)]` at line 26.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:210` — `ErrorContext` is a public data structure that should implement `PartialEq` and `Eq` for consistency with standard traits. Downstream crates cannot implement these traits themselves due to the orphan rule, so they must be provided here. Add `PartialEq` and `Eq` to the derive list: `#[derive(Debug, Clone, PartialEq, Eq)]` at line 210.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:269` — Five converter functions (convert_*_error_to_acp) are near-verbatim copies that differ only in the error type parameter. Each wraps add_error_context with identical logic — this is one function with a generic argument. Extract a single generic function: `pub fn convert_error_to_acp<E: ToJsonRpcError>(error: E, context: Option<ErrorContext>) -> JsonRpcError { add_error_context(error, context) }`. Delete the five wrapper functions and update call sites.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:277` — convert_base64_error_to_acp duplicates the structure of convert_content_security_error_to_acp and three others—identical wrapper logic, only the error type varies. Consolidate into one generic function; see line 269 finding.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:285` — convert_mime_type_error_to_acp is a near-verbatim copy of the other four converter functions, differing only in the error type parameter. Consolidate into one generic function; see line 269 finding.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:293` — convert_content_block_error_to_acp repeats the same wrapper pattern as the other four functions, each a pass-through to add_error_context. Consolidate into one generic function; see line 269 finding.
+- [x] `crates/claude-agent/src/acp_error_conversion.rs:301` — convert_content_processing_error_to_acp is the fifth near-verbatim copy of the converter pattern, all delegating identically to add_error_context. Consolidate into one generic function; see line 269 finding.
+- [x] `crates/claude-agent/src/base64_processor.rs:293` — `max_size: usize` and `max_memory_usage: usize` are parameters with different semantic meanings but identical types. Using newtypes prevents accidental parameter swapping and documents intent at compile time. Define newtypes for each parameter (e.g., `struct MaxBase64Size(usize)` and `struct MaxDecodedSize(usize)`), or use a single config struct parameter instead of multiple primitive parameters.
+- [x] `crates/claude-agent/src/base64_processor.rs:295` — Adjacent bool parameters in `new_with_config` reduce readability and type safety. `enable_capability_validation: bool, enable_security_validation: bool` should use an enum or config struct so callers cannot accidentally swap them. Replace the two adjacent bool parameters with a configuration struct or enum. For example, create a `struct ValidationConfig { capability: bool, security: bool }` and pass a single parameter of that type, or use `ContentValidationConfig` if it's already defined elsewhere in the codebase.
+- [x] `crates/claude-agent/src/base64_processor.rs:299` — SizeValidator creation duplicated here in new_with_config; same as line 275 and two others. Extract into helper; see line 275 finding.
+- [x] `crates/claude-agent/src/base64_processor.rs:325` — SizeValidator creation duplicated here in with_enhanced_security; same block as the other three constructors. Extract into helper; see line 275 finding.
+- [x] `crates/claude-agent/src/base64_processor.rs:351` — SizeValidator creation duplicated here in with_enhanced_security_config; fourth verbatim copy of the same pattern. Extract into helper; see line 275 finding.
+- [x] `crates/claude-agent/src/base64_processor.rs:449` — decode_image_data and decode_audio_data are near-verbatim copies that differ only in the capability checked ('image' vs 'audio'), the content_type parameter passed to validate_enhanced_security, and which MIME validator method is called (validate_image_mime_type vs validate_audio_mime_type). These should be consolidated into a single generic helper. Extract a shared helper method that takes the capability, content_type, and a closure/function pointer to the appropriate MIME validator. Replace both decode_image_data and decode_audio_data with calls to this helper.
+- [x] `crates/claude-agent/src/base64_processor.rs:490` — decode_audio_data is a near-verbatim copy of decode_image_data, differing only in the capability string ('audio' vs 'image') and the MIME type validator method called. Extract shared helper; see line 449 finding.
+- [x] `crates/claude-agent/src/content_block_processor.rs:56` — EnhancedSecurityConfig is a public struct with Clone-able fields (ContentValidationConfig is Clone, ContentSecurityValidator is Clone as evidenced by line 38's `.clone()` call) but only derives Debug, not Clone. Public types must implement all applicable traits to allow downstream crates to add them via the orphan rule. Change line 55 from `#[derive(Debug)]` to `#[derive(Debug, Clone)]`.
+- [x] `crates/claude-agent/src/content_block_processor.rs:266` — ProcessedContent is a public struct with all Clone-able fields (ProcessedContentType: Clone, String: Clone, Option<Vec<u8>>: Clone, HashMap: Clone, usize: Clone) but only derives Debug, not Clone. Public types must implement all applicable traits. Change line 265 from `#[derive(Debug)]` to `#[derive(Debug, Clone)]`.
+- [x] `crates/claude-agent/src/content_security_validator.rs:369` — SecurityPolicy::strict() and SecurityPolicy::moderate() (line 406) and SecurityPolicy::permissive() (line 433) are near-identical blocks that differ only in literal values: different security level, size limits, scheme allowlists, boolean flags, and pattern lists. These three builders should be one function parameterized by their differing values. Extract a shared builder function that accepts the differing parameters (level, max sizes, allowed schemes, enabled heuristics, blocked patterns, rate limits) and returns the configured SecurityPolicy. Call it three times with the preset values for strict, moderate, and permissive configurations, reducing ~90 lines of duplication to ~30.
+- [x] `crates/claude-agent/src/content_security_validator.rs:651` — Lines 651–652 (ContentBlock::Resource arm) and lines 657–660 (default catch-all arm) both execute the identical statement: `total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE;`. Two match arms doing the exact same thing should be consolidated into one pattern. Consolidate the two match arms using the or pattern: `ContentBlock::Resource(_) | _ => { total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE; }`. This eliminates the redundant code while preserving intent (Resource types and unknown types both charge the conservative estimate).
+- [x] `crates/claude-agent/src/session.rs:305` — Panic on bad input (non-absolute path). Per error-handling rule: 'Panics are for bugs only — internal invariant violations. Never panic on expected failure modes (bad input, missing files, network errors).' A non-absolute path is an expected failure mode, not an internal bug. Change Session::new signature to return Result<Self, SessionError> and propagate the validation error, or rely solely on SessionManager::create_session's validation (line 526) which already validates paths and converts to AgentError. If Session::new must remain infallible, remove the panic and rely on the caller's validation at a higher level.
+
+### Dropped by the review skill's pre-existing-test exemption
+
+The engine confirmed 39 findings. The 20 below ask to restyle test code that already existed, so the skill drops them and they are not requirements.
+
+Evidence that each site pre-dates this commit, from `git diff HEAD~1..HEAD`:
+
+- `path_validator.rs` — the test module opens at line 596; the commit's only hunks are at lines 42, 118, 155 and 447, all above it. Nothing in the test module changed.
+- `session.rs` — the test module opens at line 792; every hunk in the commit is above it.
+- `coverage_tests.rs` — one hunk only, at line 1570 (the turn-counter getter rename).
+- `content_security_integration_tests.rs` — the only change nests the pre-existing literals inside `ContentValidationConfig`. The literals themselves are unchanged.
+
+Dropped items:
+
+- `crates/claude-agent/src/content_security_integration_tests.rs:42` — extract the repeated capability name strings as constants.
+- `crates/claude-agent/src/content_security_integration_tests.rs:66`, `:79`, `:95`, `:108`, `:212`, `:274`, `:443`, `:451` — name the hardcoded test size limits, array sizes, iteration counts and performance thresholds.
+- `crates/claude-agent/src/path_validator.rs:1073` — name the test permission mode `0o000`.
+- `crates/claude-agent/src/path_validator.rs:1303`, `:1309`, `:1316` — name the test permission mode `0o644`.
+- `crates/claude-agent/src/session.rs:1272` — name the test cleanup-task startup wait.
+- `crates/claude-agent/tests/integration/coverage_tests.rs:1` — split the over-cap test file into smaller modules.
+- `crates/claude-agent/tests/integration/coverage_tests.rs:336`, `:540`, `:563`, `:724`, `:1430` — name the hardcoded test timeouts and buffer sizes.
+
+### Repeat check against the two earlier rounds
+
+No open finding repeats. None of the 19 file:line sites above appears in the `## Review Findings (2026-08-04 15:45)` section or the `## Review Findings (2026-08-08 12:56)` section.
+
+Six DROPPED findings repeat, all from the 2026-08-08 12:56 dropped list, and from that list only: `coverage_tests.rs:1`, `:336`, `:540`, `:563`, `:724`, `:1430`. They recur because the written exemption drops them, so no round ever made them requirements and no round ever fixed them. They are on their second round, not their third. The 2026-08-04 section names `coverage_tests.rs:161`, `:167`, `:227` and `:2399` only, which are the resolved MCP-acronym conflict items, and none of those returned.
+
+The resolved conflict did not return. The engine raised no lowercase-Display finding this round.

@@ -2,7 +2,7 @@ use crate::base64_processor::{Base64Processor, Base64ProcessorError};
 use crate::content_security_validator::{ContentSecurityError, ContentSecurityValidator};
 use crate::error::ToJsonRpcError;
 use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
-use crate::size_validator::{SizeValidationError, SizeValidator};
+use crate::size_validator::{SizeLimits, SizeValidationError, SizeValidator};
 use crate::url_validation;
 use agent_client_protocol::schema::{ContentBlock, TextContent};
 use serde_json::{json, Value};
@@ -36,7 +36,7 @@ type MediaDecoder = fn(&Base64Processor, &str, &str) -> Result<Vec<u8>, Base64Pr
 ///
 /// These settings are named fields rather than positional arguments, so a call
 /// site says which switch it sets.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentValidationConfig {
     /// Largest decoded resource accepted, in bytes.
     pub max_resource_size: usize,
@@ -51,8 +51,43 @@ pub struct ContentValidationConfig {
     pub enable_batch_recovery: bool,
 }
 
+impl Default for ContentValidationConfig {
+    fn default() -> Self {
+        let mut supported_capabilities = HashMap::new();
+        supported_capabilities.insert("text".to_string(), true);
+        supported_capabilities.insert("image".to_string(), true);
+        supported_capabilities.insert("audio".to_string(), false); // Disabled by default
+        supported_capabilities.insert("resource".to_string(), true);
+        supported_capabilities.insert("resource_link".to_string(), true);
+
+        Self {
+            max_resource_size: SizeLimits::default().max_content_size,
+            enable_uri_validation: true,
+            enable_capability_validation: true,
+            supported_capabilities,
+            enable_batch_recovery: true,
+        }
+    }
+}
+
+impl ContentValidationConfig {
+    /// The default settings with the resource size cap and the URI switch set.
+    ///
+    /// [`ContentBlockProcessor::new`] and
+    /// [`ContentBlockProcessor::with_enhanced_security`] both take just these
+    /// two settings, and both build their configuration here.
+    #[must_use]
+    pub fn with_resource_limit(max_resource_size: usize, enable_uri_validation: bool) -> Self {
+        Self {
+            max_resource_size,
+            enable_uri_validation,
+            ..Default::default()
+        }
+    }
+}
+
 /// Configuration struct for enhanced security settings
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnhancedSecurityConfig {
     /// Limits and switches applied to every block.
     pub validation: ContentValidationConfig,
@@ -262,7 +297,7 @@ impl From<SizeValidationError> for ContentBlockProcessorError {
 ///
 /// Every block, whatever its kind, yields a text representation a language
 /// model can read. Binary kinds also carry their decoded bytes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProcessedContent {
     /// Kind of the block, with the details that kind carries.
     pub content_type: ProcessedContentType,
@@ -415,24 +450,12 @@ pub struct ContentBlockProcessor {
 
 impl Default for ContentBlockProcessor {
     fn default() -> Self {
-        let mut supported_capabilities = HashMap::new();
-        supported_capabilities.insert("text".to_string(), true);
-        supported_capabilities.insert("image".to_string(), true);
-        supported_capabilities.insert("audio".to_string(), false); // Disabled by default
-        supported_capabilities.insert("resource".to_string(), true);
-        supported_capabilities.insert("resource_link".to_string(), true);
-
-        let size_validator = SizeValidator::default();
-
-        Self {
-            base64_processor: Base64Processor::default(),
-            enable_uri_validation: true,
-            enable_capability_validation: true,
-            supported_capabilities,
-            enable_batch_recovery: true,
-            content_security_validator: None, // Default to no enhanced security validation
-            size_validator,
-        }
+        Self::from_parts(
+            Base64Processor::default(),
+            ContentValidationConfig::default(),
+            // Default to no enhanced security validation.
+            None,
+        )
     }
 }
 
@@ -448,16 +471,36 @@ impl ContentBlockProcessor {
         max_resource_size: usize,
         enable_uri_validation: bool,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: max_resource_size,
+        Self::from_parts(
+            base64_processor,
+            ContentValidationConfig::with_resource_limit(max_resource_size, enable_uri_validation),
+            None,
+        )
+    }
+
+    /// Build a processor from the full settings and the optional security
+    /// validator.
+    ///
+    /// Every constructor, [`Default`] included, lands here, so the size
+    /// validator is derived from `config` in exactly one place.
+    fn from_parts(
+        base64_processor: Base64Processor,
+        config: ContentValidationConfig,
+        content_security_validator: Option<ContentSecurityValidator>,
+    ) -> Self {
+        let size_validator = SizeValidator::new(SizeLimits {
+            max_content_size: config.max_resource_size,
             ..Default::default()
         });
 
         Self {
             base64_processor,
-            enable_uri_validation,
+            enable_uri_validation: config.enable_uri_validation,
+            enable_capability_validation: config.enable_capability_validation,
+            supported_capabilities: config.supported_capabilities,
+            enable_batch_recovery: config.enable_batch_recovery,
+            content_security_validator,
             size_validator,
-            ..Default::default()
         }
     }
 
@@ -470,20 +513,7 @@ impl ContentBlockProcessor {
         base64_processor: Base64Processor,
         config: ContentValidationConfig,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: config.max_resource_size,
-            ..Default::default()
-        });
-
-        Self {
-            base64_processor,
-            enable_uri_validation: config.enable_uri_validation,
-            enable_capability_validation: config.enable_capability_validation,
-            supported_capabilities: config.supported_capabilities,
-            enable_batch_recovery: config.enable_batch_recovery,
-            content_security_validator: None,
-            size_validator,
-        }
+        Self::from_parts(base64_processor, config, None)
     }
 
     /// Build a processor that also runs `content_security_validator` on every
@@ -497,18 +527,11 @@ impl ContentBlockProcessor {
         enable_uri_validation: bool,
         content_security_validator: ContentSecurityValidator,
     ) -> Self {
-        let size_validator = SizeValidator::new(crate::size_validator::SizeLimits {
-            max_content_size: max_resource_size,
-            ..Default::default()
-        });
-
-        Self {
+        Self::from_parts(
             base64_processor,
-            enable_uri_validation,
-            content_security_validator: Some(content_security_validator),
-            size_validator,
-            ..Default::default()
-        }
+            ContentValidationConfig::with_resource_limit(max_resource_size, enable_uri_validation),
+            Some(content_security_validator),
+        )
     }
 
     /// Build a processor from a full [`EnhancedSecurityConfig`].
@@ -519,10 +542,11 @@ impl ContentBlockProcessor {
         base64_processor: Base64Processor,
         config: EnhancedSecurityConfig,
     ) -> Self {
-        Self {
-            content_security_validator: Some(config.content_security_validator),
-            ..Self::new_with_config(base64_processor, config.validation)
-        }
+        Self::from_parts(
+            base64_processor,
+            config.validation,
+            Some(config.content_security_validator),
+        )
     }
 
     /// Validate capability is supported

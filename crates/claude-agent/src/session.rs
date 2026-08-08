@@ -1,5 +1,6 @@
 //! Session management system for tracking conversation contexts and state
 
+use crate::session_errors::{SessionSetupError, SessionSetupResult};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
@@ -294,22 +295,18 @@ impl Session {
     /// * `cwd` - Working directory for the session (must be absolute path as per ACP spec).
     ///   Takes anything that reads as a path, such as `&str`, `&Path`, `String` or `PathBuf`.
     ///
-    /// # Panics
-    /// This function will panic if the working directory is not absolute, as this violates
-    /// the ACP specification requirement that sessions must have absolute working directories.
-    pub fn new(id: SessionId, cwd: impl AsRef<Path>) -> Self {
+    /// # Errors
+    /// Returns [`SessionSetupError::WorkingDirectoryNotAbsolute`] when `cwd` is
+    /// not absolute, which the ACP specification forbids. A relative path is an
+    /// expected client fault, so it is reported and never panicked on.
+    pub fn new(id: SessionId, cwd: impl AsRef<Path>) -> SessionSetupResult<Self> {
         let cwd = cwd.as_ref().to_path_buf();
 
         // ACP requires absolute working directory - validate this at session creation
-        if !cwd.is_absolute() {
-            panic!(
-                "Session working directory must be absolute path (ACP requirement), got: {}",
-                cwd.display()
-            );
-        }
+        crate::session_validation::require_absolute_working_directory(&cwd)?;
 
         let now = SystemTime::now();
-        Self {
+        Ok(Self {
             id,
             created_at: now,
             last_accessed: now,
@@ -325,7 +322,7 @@ impl Session {
             system_prompt: None,
             extra_args: Vec::new(),
             skip_init_trigger: false,
-        }
+        })
     }
 
     /// Add a message to the session context
@@ -473,6 +470,15 @@ pub enum MessageRole {
     System,
 }
 
+/// Report a rejected working directory as the agent-level session error.
+///
+/// [`SessionManager::create_session`] runs two gates over the same path — the
+/// full [`validate_working_directory`](crate::session_validation::validate_working_directory)
+/// pass and [`Session::new`] — and both faults reach the client as one message.
+fn working_directory_rejected(error: SessionSetupError) -> crate::AgentError {
+    crate::AgentError::Session(format!("Working directory validation failed: {}", error))
+}
+
 /// Thread-safe, in-memory cache of live sessions.
 ///
 /// `SessionManager` holds the sessions of the current process in a
@@ -523,12 +529,11 @@ impl SessionManager {
         client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
     ) -> crate::Result<SessionId> {
         // Validate working directory before creating session
-        crate::session_validation::validate_working_directory(&cwd).map_err(|e| {
-            crate::AgentError::Session(format!("Working directory validation failed: {}", e))
-        })?;
+        crate::session_validation::validate_working_directory(&cwd)
+            .map_err(working_directory_rejected)?;
 
         let session_id = SessionId::new();
-        let mut session = Session::new(session_id, cwd);
+        let mut session = Session::new(session_id, cwd).map_err(working_directory_rejected)?;
         session.client_capabilities = client_capabilities;
 
         let mut sessions = self
@@ -904,7 +909,8 @@ mod tests {
     fn test_session_creation() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let session = Session::new(session_id, cwd.clone());
+        let session =
+            Session::new(session_id, cwd.clone()).expect("test working directory must be absolute");
 
         assert_eq!(session.id, session_id);
         assert_eq!(session.cwd, cwd);
@@ -945,7 +951,8 @@ mod tests {
     fn test_session_add_message() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
         let initial_time = session.last_accessed;
 
         // Small delay to ensure time difference
@@ -1273,11 +1280,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Session working directory must be absolute path")]
-    fn test_session_creation_with_relative_path_panics() {
+    fn test_session_creation_with_relative_path_returns_error() {
         let session_id = SessionId::new();
         let relative_path = PathBuf::from("./relative/path");
-        let _session = Session::new(session_id, relative_path);
+
+        let result = Session::new(session_id, &relative_path);
+
+        let Err(SessionSetupError::WorkingDirectoryNotAbsolute { provided_path, .. }) = result
+        else {
+            panic!("expected a WorkingDirectoryNotAbsolute error, got {result:?}");
+        };
+        assert_eq!(provided_path, relative_path);
     }
 
     #[test]
@@ -1363,7 +1376,8 @@ mod tests {
     fn test_session_serialization_includes_working_directory() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let session = Session::new(session_id, cwd.clone());
+        let session =
+            Session::new(session_id, cwd.clone()).expect("test working directory must be absolute");
 
         // Test serialization
         let serialized = serde_json::to_string(&session).unwrap();
@@ -1426,7 +1440,8 @@ mod tests {
     fn test_session_has_available_commands_field() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let session = Session::new(session_id, cwd);
+        let session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         // Session should have an available_commands field
         assert_eq!(session.available_commands.len(), 0);
@@ -1436,7 +1451,8 @@ mod tests {
     fn test_session_update_available_commands() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         let commands = vec![
             agent_client_protocol::schema::AvailableCommand::new(
@@ -1459,7 +1475,8 @@ mod tests {
     fn test_session_detect_available_commands_changes() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
@@ -1511,7 +1528,8 @@ mod tests {
     fn test_session_detect_meta_field_changes() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         let mut initial_meta = serde_json::Map::new();
         initial_meta.insert("version".to_string(), serde_json::json!("1.0"));
@@ -1540,7 +1558,8 @@ mod tests {
     fn test_session_detect_input_field_changes() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         let input_schema = agent_client_protocol::schema::AvailableCommandInput::Unstructured(
             agent_client_protocol::schema::UnstructuredCommandInput::new(
@@ -1578,7 +1597,8 @@ mod tests {
     fn test_session_detect_meta_none_to_some_change() {
         let session_id = SessionId::new();
         let cwd = std::env::current_dir().unwrap();
-        let mut session = Session::new(session_id, cwd);
+        let mut session =
+            Session::new(session_id, cwd).expect("test working directory must be absolute");
 
         let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",

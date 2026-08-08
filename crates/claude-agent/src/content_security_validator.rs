@@ -26,6 +26,35 @@ const MODERATE_MAX_CONTENT_ARRAY_LENGTH: usize = 50;
 /// Requests each minute a [`SecurityPolicy::moderate`] policy accepts.
 const MODERATE_RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 300;
 
+/// Requests each minute a [`SecurityPolicy::permissive`] policy accepts.
+///
+/// The permissive preset turns rate limiting off, so it carries no budget.
+const PERMISSIVE_RATE_LIMIT_REQUESTS_PER_MINUTE: u32 = 0;
+
+/// URI patterns a [`SecurityPolicy::strict`] policy refuses.
+const STRICT_BLOCKED_URI_PATTERNS: &[&str] = &[
+    r"localhost",
+    r"127\..*",
+    r"192\.168\..*",
+    r"10\..*",
+    r"172\.(1[6-9]|2[0-9]|3[01])\..*",
+];
+
+/// CIDR ranges a [`SecurityPolicy::strict`] policy refuses.
+const STRICT_BLOCKED_IP_RANGES: &[&str] = &[
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "::1/128",
+];
+
+/// URI patterns a [`SecurityPolicy::moderate`] policy refuses.
+const MODERATE_BLOCKED_URI_PATTERNS: &[&str] = &[r"127\.0\.0\.1", r"localhost"];
+
+/// CIDR ranges a [`SecurityPolicy::moderate`] policy refuses.
+const MODERATE_BLOCKED_IP_RANGES: &[&str] = &["127.0.0.0/8", "::1/128"];
+
 /// Bytes a base64 group carries: three bytes encode as four characters.
 const BASE64_DECODED_BYTES_PER_GROUP: usize = 3;
 
@@ -363,98 +392,125 @@ pub struct SecurityPolicy {
     pub rate_limit_requests_per_minute: u32,
 }
 
+/// Everything that separates one [`SecurityPolicy`] preset from the next.
+///
+/// The presets differ only in these values, so [`SecurityPolicy::from_preset`]
+/// is the one place a policy is assembled and each preset is a row of data.
+struct SecurityPreset {
+    /// Preset this row describes.
+    level: SecurityLevel,
+    /// Largest decoded base64 payload accepted, in bytes.
+    max_base64_size: usize,
+    /// Largest estimated size of one content array, in bytes.
+    max_total_content_size: usize,
+    /// Largest number of blocks accepted in one content array.
+    max_content_array_length: usize,
+    /// URI schemes the preset accepts.
+    allowed_uri_schemes: &'static [&'static str],
+    /// Whether every heuristic and the rate limit are enforced. The presets
+    /// turn the checks on and off together, never one at a time.
+    enable_heuristics: bool,
+    /// Regular expressions that refuse a matching URI.
+    blocked_uri_patterns: &'static [&'static str],
+    /// CIDR ranges that refuse a URI resolving into them.
+    blocked_ip_ranges: &'static [&'static str],
+    /// Longest URI accepted, in characters.
+    max_uri_length: usize,
+    /// Requests each minute the preset accepts.
+    rate_limit_requests_per_minute: u32,
+}
+
+impl SecurityPreset {
+    /// The tightest preset: HTTPS only, smallest limits, every heuristic on.
+    const STRICT: Self = Self {
+        level: SecurityLevel::Strict,
+        max_base64_size: sizes::content::MAX_CONTENT_STRICT,
+        max_total_content_size: sizes::content::MAX_RESOURCE_STRICT,
+        max_content_array_length: STRICT_MAX_CONTENT_ARRAY_LENGTH,
+        allowed_uri_schemes: &["https"],
+        enable_heuristics: true,
+        blocked_uri_patterns: STRICT_BLOCKED_URI_PATTERNS,
+        blocked_ip_ranges: STRICT_BLOCKED_IP_RANGES,
+        max_uri_length: sizes::uri::MAX_URI_LENGTH,
+        rate_limit_requests_per_minute: STRICT_RATE_LIMIT_REQUESTS_PER_MINUTE,
+    };
+
+    /// The balanced preset: three URI schemes, wider limits, every heuristic
+    /// still on.
+    const MODERATE: Self = Self {
+        level: SecurityLevel::Moderate,
+        max_base64_size: sizes::content::MAX_CONTENT_MODERATE,
+        max_total_content_size: sizes::content::MAX_RESOURCE_MODERATE,
+        max_content_array_length: MODERATE_MAX_CONTENT_ARRAY_LENGTH,
+        allowed_uri_schemes: &["https", "http", "file"],
+        enable_heuristics: true,
+        blocked_uri_patterns: MODERATE_BLOCKED_URI_PATTERNS,
+        blocked_ip_ranges: MODERATE_BLOCKED_IP_RANGES,
+        max_uri_length: sizes::uri::MAX_URI_LENGTH,
+        rate_limit_requests_per_minute: MODERATE_RATE_LIMIT_REQUESTS_PER_MINUTE,
+    };
+
+    /// The loosest preset: widest limits and every heuristic off.
+    const PERMISSIVE: Self = Self {
+        level: SecurityLevel::Permissive,
+        max_base64_size: sizes::content::MAX_CONTENT_PERMISSIVE,
+        max_total_content_size: sizes::content::MAX_RESOURCE_PERMISSIVE,
+        max_content_array_length: sizes::messages::MAX_CONTENT_ARRAY_LENGTH,
+        allowed_uri_schemes: &["https", "http", "file", "data", "ftp"],
+        enable_heuristics: false,
+        blocked_uri_patterns: &[],
+        blocked_ip_ranges: &[],
+        max_uri_length: sizes::uri::MAX_URI_LENGTH_EXTENDED,
+        rate_limit_requests_per_minute: PERMISSIVE_RATE_LIMIT_REQUESTS_PER_MINUTE,
+    };
+}
+
+/// Copy a table of string literals into an owned collection.
+fn owned_strings<'a, C: FromIterator<String>>(values: impl IntoIterator<Item = &'a &'a str>) -> C {
+    values
+        .into_iter()
+        .map(|value| (*value).to_string())
+        .collect()
+}
+
 impl SecurityPolicy {
+    /// Build the policy a [`SecurityPreset`] row describes.
+    fn from_preset(preset: &SecurityPreset) -> Self {
+        Self {
+            level: preset.level.clone(),
+            max_base64_size: preset.max_base64_size,
+            max_total_content_size: preset.max_total_content_size,
+            max_content_array_length: preset.max_content_array_length,
+            allowed_uri_schemes: owned_strings(preset.allowed_uri_schemes),
+            enable_ssrf_protection: preset.enable_heuristics,
+            enable_content_sniffing: preset.enable_heuristics,
+            enable_format_validation: preset.enable_heuristics,
+            enable_content_sanitization: preset.enable_heuristics,
+            enable_malicious_pattern_detection: preset.enable_heuristics,
+            blocked_uri_patterns: owned_strings(preset.blocked_uri_patterns),
+            blocked_ip_ranges: owned_strings(preset.blocked_ip_ranges),
+            max_uri_length: preset.max_uri_length,
+            enable_rate_limiting: preset.enable_heuristics,
+            rate_limit_requests_per_minute: preset.rate_limit_requests_per_minute,
+        }
+    }
+
     /// Build the tightest policy: HTTPS only, smallest limits, every
     /// heuristic on. Use it for untrusted input.
     pub fn strict() -> Self {
-        let mut allowed_schemes = HashSet::new();
-        allowed_schemes.insert("https".to_string());
-
-        Self {
-            level: SecurityLevel::Strict,
-            max_base64_size: sizes::content::MAX_CONTENT_STRICT,
-            max_total_content_size: sizes::content::MAX_RESOURCE_STRICT,
-            max_content_array_length: STRICT_MAX_CONTENT_ARRAY_LENGTH,
-            allowed_uri_schemes: allowed_schemes,
-            enable_ssrf_protection: true,
-            enable_content_sniffing: true,
-            enable_format_validation: true,
-            enable_content_sanitization: true,
-            enable_malicious_pattern_detection: true,
-            blocked_uri_patterns: vec![
-                r"localhost".to_string(),
-                r"127\..*".to_string(),
-                r"192\.168\..*".to_string(),
-                r"10\..*".to_string(),
-                r"172\.(1[6-9]|2[0-9]|3[01])\..*".to_string(),
-            ],
-            blocked_ip_ranges: vec![
-                "127.0.0.0/8".to_string(),
-                "10.0.0.0/8".to_string(),
-                "172.16.0.0/12".to_string(),
-                "192.168.0.0/16".to_string(),
-                "::1/128".to_string(),
-            ],
-            max_uri_length: sizes::uri::MAX_URI_LENGTH,
-            enable_rate_limiting: true,
-            rate_limit_requests_per_minute: STRICT_RATE_LIMIT_REQUESTS_PER_MINUTE,
-        }
+        Self::from_preset(&SecurityPreset::STRICT)
     }
 
     /// Build the balanced policy: `https`, `http` and `file` URIs, wider size
     /// limits, every heuristic still on. This is the level the defaults use.
     pub fn moderate() -> Self {
-        let mut allowed_schemes = HashSet::new();
-        allowed_schemes.insert("https".to_string());
-        allowed_schemes.insert("http".to_string());
-        allowed_schemes.insert("file".to_string());
-
-        Self {
-            level: SecurityLevel::Moderate,
-            max_base64_size: sizes::content::MAX_CONTENT_MODERATE,
-            max_total_content_size: sizes::content::MAX_RESOURCE_MODERATE,
-            max_content_array_length: MODERATE_MAX_CONTENT_ARRAY_LENGTH,
-            allowed_uri_schemes: allowed_schemes,
-            enable_ssrf_protection: true,
-            enable_content_sniffing: true,
-            enable_format_validation: true,
-            enable_content_sanitization: true,
-            enable_malicious_pattern_detection: true,
-            blocked_uri_patterns: vec![r"127\.0\.0\.1".to_string(), r"localhost".to_string()],
-            blocked_ip_ranges: vec!["127.0.0.0/8".to_string(), "::1/128".to_string()],
-            max_uri_length: sizes::uri::MAX_URI_LENGTH,
-            enable_rate_limiting: true,
-            rate_limit_requests_per_minute: MODERATE_RATE_LIMIT_REQUESTS_PER_MINUTE,
-        }
+        Self::from_preset(&SecurityPreset::MODERATE)
     }
 
     /// Build the loosest policy: widest limits and every heuristic off. Use it
     /// only for trusted or debug input.
     pub fn permissive() -> Self {
-        let mut allowed_schemes = HashSet::new();
-        allowed_schemes.insert("https".to_string());
-        allowed_schemes.insert("http".to_string());
-        allowed_schemes.insert("file".to_string());
-        allowed_schemes.insert("data".to_string());
-        allowed_schemes.insert("ftp".to_string());
-
-        Self {
-            level: SecurityLevel::Permissive,
-            max_base64_size: sizes::content::MAX_CONTENT_PERMISSIVE,
-            max_total_content_size: sizes::content::MAX_RESOURCE_PERMISSIVE,
-            max_content_array_length: sizes::messages::MAX_CONTENT_ARRAY_LENGTH,
-            allowed_uri_schemes: allowed_schemes,
-            enable_ssrf_protection: false,
-            enable_content_sniffing: false,
-            enable_format_validation: false,
-            enable_content_sanitization: false,
-            enable_malicious_pattern_detection: false,
-            blocked_uri_patterns: vec![],
-            blocked_ip_ranges: vec![],
-            max_uri_length: sizes::uri::MAX_URI_LENGTH_EXTENDED,
-            enable_rate_limiting: false,
-            rate_limit_requests_per_minute: 0,
-        }
+        Self::from_preset(&SecurityPreset::PERMISSIVE)
     }
 }
 
@@ -638,27 +694,15 @@ impl ContentSecurityValidator {
         // Calculate total content size estimate
         let mut total_estimated_size = 0;
         for content_block in content_blocks {
-            match content_block {
-                ContentBlock::Text(text) => {
-                    total_estimated_size += text.text.len();
-                }
-                ContentBlock::Image(image) => {
-                    total_estimated_size += estimated_base64_decoded_size(image.data.len());
-                }
-                ContentBlock::Audio(audio) => {
-                    total_estimated_size += estimated_base64_decoded_size(audio.data.len());
-                }
-                ContentBlock::Resource(_) => {
-                    total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE;
-                }
-                ContentBlock::ResourceLink(_) => {
-                    total_estimated_size += RESOURCE_LINK_SIZE_ESTIMATE;
-                }
-                _ => {
-                    // Unknown content type - charge the conservative estimate
-                    total_estimated_size += RESOURCE_CONTENT_SIZE_ESTIMATE;
-                }
-            }
+            total_estimated_size += match content_block {
+                ContentBlock::Text(text) => text.text.len(),
+                ContentBlock::Image(image) => estimated_base64_decoded_size(image.data.len()),
+                ContentBlock::Audio(audio) => estimated_base64_decoded_size(audio.data.len()),
+                ContentBlock::ResourceLink(_) => RESOURCE_LINK_SIZE_ESTIMATE,
+                // An embedded resource, and any content type this build does
+                // not know, both charge the conservative estimate.
+                _ => RESOURCE_CONTENT_SIZE_ESTIMATE,
+            };
         }
 
         if total_estimated_size > self.policy.max_total_content_size {

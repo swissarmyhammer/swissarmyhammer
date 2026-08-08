@@ -1544,7 +1544,8 @@ fn test_session_id_from_ulid() {
 #[test]
 fn test_session_new() {
     let id = claude_agent::session::SessionId::new();
-    let session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
+    let session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
+        .expect("test working directory must be absolute");
     assert_eq!(session.id, id);
     assert_eq!(session.cwd, PathBuf::from("/tmp"));
     assert!(session.context.is_empty());
@@ -1556,7 +1557,8 @@ fn test_session_new() {
 #[test]
 fn test_session_add_message() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
+        .expect("test working directory must be absolute");
     let msg = claude_agent::session::Message::new(
         claude_agent::session::MessageRole::User,
         "hello".to_string(),
@@ -1568,7 +1570,8 @@ fn test_session_add_message() {
 #[test]
 fn test_session_turn_counters() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
+        .expect("test working directory must be absolute");
 
     assert_eq!(session.turn_request_count(), 0);
     assert_eq!(session.turn_token_count(), 0);
@@ -1595,7 +1598,8 @@ fn test_session_turn_counters() {
 #[test]
 fn test_session_available_commands() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
+        .expect("test working directory must be absolute");
 
     let cmd1 = agent_client_protocol::schema::AvailableCommand::new("test", "A test command");
 

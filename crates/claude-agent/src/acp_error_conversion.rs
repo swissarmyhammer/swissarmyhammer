@@ -1,9 +1,5 @@
-use crate::base64_processor::Base64ProcessorError;
-use crate::content_block_processor::ContentBlockProcessorError;
-use crate::content_security_validator::ContentSecurityError;
 use crate::error::{JsonRpcError, ToJsonRpcError};
 use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
-use crate::mime_type_validator::MimeTypeValidationError;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -23,7 +19,7 @@ use uuid::Uuid;
 /// Each variant maps to a JSON-RPC error code and to a structured data payload
 /// that tells the client how to correct the request. See
 /// [`ToJsonRpcError::to_error_data`].
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ContentProcessingError {
     /// The content block does not follow the ACP shape.
     #[error("invalid content block structure: {0}")]
@@ -205,9 +201,9 @@ impl ToJsonRpcError for ContentProcessingError {
 
 /// Facts that tie one content processing error to the request that caused it.
 ///
-/// [`add_error_context`] copies these fields into the structured error data,
+/// [`convert_error_to_acp`] copies these fields into the structured error data,
 /// so the client and the log show the same correlation identifier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorContext {
     /// Identifier that ties this error to one request across the logs.
     pub correlation_id: String,
@@ -252,9 +248,9 @@ fn insert_error_context_fields(data: &mut Value, ctx: ErrorContext) {
 /// The error supplies the JSON-RPC code, the message and the structured data.
 /// When `context` is present and the structured data is a JSON object, the
 /// correlation identifier, the processing stage and the content type are added
-/// to that object. Every `convert_*_error_to_acp` function delegates here, so
-/// each error type produces the same payload shape.
-pub fn add_error_context<E: ToJsonRpcError>(
+/// to that object. Every content error type goes through this one function, so
+/// they all produce the same payload shape.
+pub fn convert_error_to_acp<E: ToJsonRpcError>(
     error: E,
     context: Option<ErrorContext>,
 ) -> JsonRpcError {
@@ -265,49 +261,13 @@ pub fn add_error_context<E: ToJsonRpcError>(
     json_rpc_error
 }
 
-/// Convert ContentSecurityError to ACP-compliant JSON-RPC error
-pub fn convert_content_security_error_to_acp(
-    error: ContentSecurityError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    add_error_context(error, context)
-}
-
-/// Convert Base64ProcessorError to ACP-compliant JSON-RPC error
-pub fn convert_base64_error_to_acp(
-    error: Base64ProcessorError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    add_error_context(error, context)
-}
-
-/// Convert MimeTypeValidationError to ACP-compliant JSON-RPC error
-pub fn convert_mime_type_error_to_acp(
-    error: MimeTypeValidationError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    add_error_context(error, context)
-}
-
-/// Convert ContentBlockProcessorError to ACP-compliant JSON-RPC error
-pub fn convert_content_block_error_to_acp(
-    error: ContentBlockProcessorError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    add_error_context(error, context)
-}
-
-/// Convert enhanced ContentProcessingError to ACP-compliant JSON-RPC error
-pub fn convert_content_processing_error_to_acp(
-    error: ContentProcessingError,
-    context: Option<ErrorContext>,
-) -> JsonRpcError {
-    add_error_context(error, context)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base64_processor::Base64ProcessorError;
+    use crate::content_block_processor::ContentBlockProcessorError;
+    use crate::content_security_validator::ContentSecurityError;
+    use crate::mime_type_validator::MimeTypeValidationError;
 
     #[test]
     fn test_base64_error_conversion() {
@@ -319,7 +279,7 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_base64_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
@@ -351,7 +311,7 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_base64_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
@@ -376,7 +336,7 @@ mod tests {
             capability: "audio".to_string(),
         };
 
-        let json_rpc_error = convert_content_processing_error_to_acp(error, None);
+        let json_rpc_error = convert_error_to_acp(error, None);
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert!(json_rpc_error.message.contains("audio"));
@@ -396,7 +356,7 @@ mod tests {
             reason: "sensitive internal details".to_string(),
         };
 
-        let json_rpc_error = convert_content_processing_error_to_acp(error, None);
+        let json_rpc_error = convert_error_to_acp(error, None);
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         assert_eq!(
@@ -543,8 +503,6 @@ mod tests {
 
     #[test]
     fn test_convert_content_security_error_with_context() {
-        use crate::content_security_validator::ContentSecurityError;
-
         let error = ContentSecurityError::SecurityValidationFailed {
             reason: "blocked".to_string(),
             policy_violated: "strict".to_string(),
@@ -557,7 +515,7 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_content_security_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
@@ -583,7 +541,7 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_mime_type_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
@@ -602,7 +560,7 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let json_rpc_error = convert_content_block_error_to_acp(error, Some(context));
+        let json_rpc_error = convert_error_to_acp(error, Some(context));
 
         assert_eq!(json_rpc_error.code, INVALID_PARAMS);
         if let Some(data) = json_rpc_error.data {
