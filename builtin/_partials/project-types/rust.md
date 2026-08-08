@@ -31,3 +31,7 @@ Run `cargo fmt` and `cargo clippy` before committing.
 cargo nextest run -E 'rdeps(my-crate)'
 cargo nextest run -E 'rdeps(crate-a) | rdeps(crate-b)'
 ```
+
+**Clean Up**
+
+Cargo accumulates a lot of build files over time, slowing unit tests. Make sure to `cargo clean` once a day.
