@@ -461,6 +461,68 @@ comments:
     - `cargo build -p mirdan-cli`: generated files already up to date. md5 of `doc/src/reference/mirdan-cli.md`, `completions/_mirdan`, `completions/mirdan.fish` unchanged before/after rebuild. The uncommitted diff on those files is the task's own regeneration, not staleness.
     - next: no fixes were needed. Board can move this task to review/done per the pipeline.
   timestamp: 2026-08-08T07:11:01.721981+00:00
+- actor: claude-code
+  id: 01kzg4313ev3cg14rmbk5qfwvk
+  text: |-
+    ### review — findings
+    - evidence: 1 finding (1 confirmed, 3 refuted, 9 attempted) — crates/mirdan/src/list.rs:17
+    - scope: review sha HEAD~1..HEAD (commit 3c9892cf9 only)
+    - prior: all 35 findings from the 2026-08-07 23:14 and 2026-08-08 00:28 sections are checked
+    - no contradictory-rule conflict: round 2 asked to split discover_packages, round 3 asked to collapse the split helpers into one parameterized walk, and this round asks only to add PartialEq and Eq derives to InstalledPackage. It does not push the code back to a shape an earlier round rejected.
+    - next: add `PartialEq, Eq` to the `InstalledPackage` derive in crates/mirdan/src/list.rs
+  timestamp: 2026-08-08T07:23:37.966973+00:00
+- actor: claude-code
+  id: 01kzg46h1j5mh046z467vcstg9
+  text: |
+    ### finish iteration 3 — findings
+    - implement: changed — 6 files. Five sibling scan helpers collapsed into one parameterized walk driven by four `static PackageSpec` values. `sync.rs` gained `scoped_agent_path`. Generated doc and completions regenerated through build.rs.
+    - test: green — cargo nextest run --workspace twice, 13783 passed / 0 failed / 0 skipped each, zero retries; cargo test -p mirdan --lib 433 passed; fmt, clippy -D warnings clean; generated files confirmed unchanged by md5 after rebuild
+    - commit: 3c9892cf9 refactor(mirdan): collapse per-type scan helpers into one parameterized walk (^qh5fnpd)
+    - review: findings — 1 open. crates/mirdan/src/list.rs:17
+    - engine counts: 1 confirmed, 3 refuted, 9 attempted, 0 failed
+
+    The oscillation closed. The engine re-ran the whole fleet over list.rs, sync.rs and cli.rs and raised no repeat of the missing-docs, cognitive-complexity, nesting-depth, adjacent-bool, duplication, or `# Errors` findings. The parameterized walk clears both gates that fought in rounds 2 and 3.
+
+    Loop health check: the one open finding asks only for two derives on a struct attribute. It does not touch the scan walk and does not push toward either rejected shape. No contradictory-rule conflict.
+  timestamp: 2026-08-08T07:25:32.594063+00:00
+- actor: claude-code
+  id: 01kzg4tfdsx6xgbzwptytp9926
+  text: |-
+    Worked the one open finding from `## Review Findings (2026-08-08 02:15)`.
+
+    Finding, word for word:
+
+    `crates/mirdan/src/list.rs:17` — InstalledPackage is a public data struct whose fields all support PartialEq and Eq (String, Vec, PackageType), making these traits applicable. Deriving them allows downstream crates to compare packages for equality without reimplementing the trait. Due to orphan rules, if not provided here, downstream crates cannot add these traits. Change line 17 from `#[derive(Debug, Clone)]` to `#[derive(Debug, Clone, PartialEq, Eq)]`.
+
+    Removed the cause from the whole file, not only the named line. `crates/mirdan/src/list.rs` holds exactly two public data types:
+
+    - `InstalledPackage` — had `#[derive(Debug, Clone)]`. Now `#[derive(Debug, Clone, PartialEq, Eq)]`. Every field supports both traits: `String` x4, `Vec<String>`, and `PackageType`.
+    - `PackageFilter` — already declares `#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]`. No gap.
+
+    The remaining structs and enums in the file — `MetadataFormat`, `Naming`, `DeclaredMetadata`, `PackageSpec`, `Scan<'a>` — are private, so the orphan-rule argument the finding makes does not reach them. No derive was added where a field does not support it.
+
+    `PackageType` (`crates/mirdan/src/package_type.rs`) already derives `PartialEq, Eq`, so `InstalledPackage` compiles with the new derives and no change was needed there.
+
+    Clippy raised nothing new. It did not ask for `Hash` consistency and did not flag a derived `PartialEq` beside a manual one — the file carries no manual `PartialEq` impl.
+  timestamp: 2026-08-08T07:36:26.297036+00:00
+- actor: claude-code
+  id: 01kzg4tpd8v12y01qhnefztrf4
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/mirdan/src/list.rs. `InstalledPackage` gained `PartialEq, Eq`. `cargo fmt` made no further change. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings. `cargo nextest run -p mirdan` 435 passed, 0 skipped. `cargo nextest run --workspace` 13783 passed, 0 failed, 0 skipped.
+    - next: /review
+  timestamp: 2026-08-08T07:36:33.448980+00:00
+- actor: claude-code
+  id: 01kzg630t9esa5fz46s7nxz2ag
+  text: |-
+    ### test — green
+    - evidence: `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean (exit 0).
+    - evidence: `cargo nextest run --workspace` run 1: 13783 tests run, 13783 passed (118 slow), 0 skipped, 0 failed. One test showed a `LEAK` flag: `swissarmyhammer-hashline::properties proximity_resolves_drift`. Re-run of that single test 5x in isolation: no leak. Full `cargo nextest run --workspace` run 2: 13783 tests run, 13783 passed (118 slow), 0 skipped, 0 failed, no leak flag at all. The leak did not repeat. It is an environmental artifact of the parallel run, not a defect in the test or in `list.rs`.
+    - No retry fired in either run. Nextest ran each test one time.
+    - Known unrelated flake `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes` (card ^7mk3pnp) passed in both runs. No change made to it.
+    - Diff scope confirmed: only `crates/mirdan/src/list.rs`, one line, `#[derive(Debug, Clone)]` → `#[derive(Debug, Clone, PartialEq, Eq)]`. No other files touched. No fixes needed.
+    - next: ready for review.
+  timestamp: 2026-08-08T07:58:34.825863+00:00
 position_column: doing
 position_ordinal: '8480'
 title: mirdan lib tests fail at random under parallel execution
@@ -522,3 +584,7 @@ This is pre-existing. It was found while shipping the dead-code tool rules (^tee
 - [x] `crates/mirdan/src/list.rs:351` — scan_skills (lines 351–374), scan_validators (lines 377–400), and scan_tools (lines 403–426) are near-identical blocks differing only by metadata filename, additional directory checks, PackageType enum value, and parameter name (agent_name vs location). This is one function with parameters waiting to be extracted. Extract a shared function, e.g. `fn scan_packages_in_dir(dir: &Path, metadata_file: &str, extra_check: Option<impl Fn(&Path) -> bool>, package_type: PackageType, target: &str, packages: &mut Vec<InstalledPackage>)`. Call it from scan_skills, scan_validators, and scan_tools, passing the differing parameters (metadata filename, validators' "rules" directory check, PackageType, target name). This eliminates the maintenance burden of keeping three identical loops in sync.
 - [x] `crates/mirdan/src/list.rs:429` — scan_plugins (lines 429–450) participates in the same duplication pattern as scan_skills, scan_validators, scan_tools, and scan_skills_recursive. It repeats: read_dir → flatten loop → is_dir and metadata-file-exists checks → package creation. The metadata is JSON instead of YAML, but the core structure is identical. When extracting the shared scan function, parameterize it to accept a metadata reader closure or enum (YAML vs JSON) so scan_plugins can also use the shared implementation. This unifies all five scan functions under one pattern.
 - [x] `crates/mirdan/src/sync.rs:124` — skill_dir_for (lines 124–130) and agent_dir_for (lines 133–139) are nearly-identical: both follow the same if-global pattern, differing only in function names and return type (PathBuf vs Option<PathBuf>). This is one function with a parameter waiting to be extracted. Extract a generic helper, e.g. `fn resolve_agent_dir<F, T>(def: &AgentDef, global: bool, global_fn: F, project_fn: F) -> T where F: Fn(&AgentDef) -> T`. Or create a single parameterized function that accepts function pointers for the global and project resolvers. Alternatively, use a trait or enum dispatch to parameterize which dir type is being resolved.
+
+## Review Findings (2026-08-08 02:15)
+
+- [x] `crates/mirdan/src/list.rs:17` — InstalledPackage is a public data struct whose fields all support PartialEq and Eq (String, Vec, PackageType), making these traits applicable. Deriving them allows downstream crates to compare packages for equality without reimplementing the trait. Due to orphan rules, if not provided here, downstream crates cannot add these traits. Change line 17 from `#[derive(Debug, Clone)]` to `#[derive(Debug, Clone, PartialEq, Eq)]`.
