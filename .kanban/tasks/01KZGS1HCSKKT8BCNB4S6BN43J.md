@@ -78,8 +78,39 @@ comments:
     - evidence: cargo nextest run --workspace — 13866 passed, 0 failed, 0 skipped (11 slow, 1 leaky); cargo fmt --all --check clean; cargo clippy --workspace --all-targets -- -D warnings clean
     - next: none
   timestamp: 2026-08-08T20:32:58.163457+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzhhvqn8mbw3e6yrj649vk56
+  text: |-
+    ### review — clean
+    - evidence: `review sha 9cb8a4812..ae9dc0e94` — 18 attempted, 4 refuted, 2 candidates. Both candidates land in `test_test_integrity_reuse_and_duplication_are_unaffected_by_the_merge` (crates/swissarmyhammer-validators/src/builtin/mod.rs), pre-existing test code that the diff does not touch — the diff has two hunks only, line 174 and a new block at 399+. The review skill drops a finding whose subject is test code that already existed. Zero recordable findings. No prior `## Review Findings` section on this card.
+    - registration checked: `manifests` is in the mirdan embedded-set list (crates/mirdan/src/builtin_validators.rs) and chained into the clean-frontmatter sweep (crates/swissarmyhammer-validators/src/builtin/mod.rs:174).
+    - guards checked: `shipped_fixture_dirs` reads `builtin/validators/*/fixtures` from disk, so it covers every set, and keeps the `checked > 0` floor. `test_tool_rule_fixtures_are_embedded` walks `(set, fixtures)` pairs and indexes `&sets[set]`, which panics when a listed set is missing from the embed. Both assert real coverage.
+    - next: none — card moved to done.
+  timestamp: 2026-08-08T20:43:33.416288+00:00
+- actor: claude-code
+  id: 01kzhhx0t0w51vh7677w51xbb2
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 9 files; new `manifests/` set, `unused-dependencies-rust` rule, 3 fixtures, VALIDATOR.md reversal, 3 rosters, doc page. RED verified 8 ways
+    - test: green — cargo nextest run --workspace, 13866 passed, 0 failed, 0 skipped; cargo fmt --all --check clean; cargo clippy --workspace --all-targets -- -D warnings clean
+    - commit: ae9dc0e94 — 13 files, 802 insertions, 95 deletions
+    - review: clean — 18 attempted, 4 refuted, 2 candidates both dropped under the review skill's written pre-existing-test exception (both sit on assertions in `test_test_integrity_reuse_and_duplication_are_unaffected_by_the_merge`, which the diff never touches); zero recordable findings, on `review sha 9cb8a4812..ae9dc0e94`
+    - result: task moved to done
+
+    This completes the dead-code matrix row that ^0v7nysz began.
+
+    Measurements recorded in the rule body: cargo machete 0.9.2 in default mode found 141 unused dependencies across 40 of this workspace's 64 package manifests in 2.5s, 12 hand-checked and all real. ripgrep at HEAD: 1 finding, real. tokio-rs/tracing at HEAD: 6 findings, 5 real and 1 artifact — `tracing-subscriber`'s `regex-automata`, an optional dependency the `env-filter` feature turns on with `dep:regex-automata`. That artifact is exactly the case the ignore list exists for. `--with-metadata`, the mode the ^teemmch verdict measured misreporting `tauri-build`, is deliberately not used, and neither app appears in the 141.
+
+    Suppression proved before it was written into the rule: `ignored = ["serde"]` suppresses, and it still suppresses with a trailing comment. The `// periphery:ignore` trap from ^0v7nysz does not repeat here.
+
+    A real bug the fixture pair structurally could not see, caught by the production-path acceptance test: `cargo machete Cargo.toml` with no directory component fails to load the workspace, then exits 0 reporting clean — so a single-crate repository would have been silently unchecked. The script now always passes `$dir/Cargo.toml`.
+
+    Two guards that were scoped to `code-hygiene` alone are now set-agnostic: the fixture-template sweep in `crates/swissarmyhammer-validators/src/lib.rs` walks every `builtin/validators/*/fixtures` and keeps its `checked > 0` floor, and `test_tool_rule_fixtures_are_embedded` iterates `(set, fixtures)` pairs and panics when a listed set is missing from the embed.
+
+    Registration verified: loading and embedding are both directory scans, so a new set needs only the mirdan embedded-set roster plus the clean-frontmatter sweep. Doctor rows confirmed in a scratch project with HOME pointed at a scratch directory — nothing under the real home was read or written.
+  timestamp: 2026-08-08T20:44:15.552137+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffce80
 title: 'manifests validator set: host cargo machete (unused dependencies)'
 ---
 ## STANDING ORDER
