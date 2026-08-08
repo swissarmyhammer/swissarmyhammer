@@ -312,7 +312,7 @@ pub(crate) async fn reconcile_workspace_with_embedder(
     }
 
     // Drain the dirty set the reconcile just produced.
-    super::index_discovered_files_with_embedder(
+    super::indexing::index_discovered_files_with_embedder(
         workspace_root,
         std::sync::Arc::clone(db),
         embedder,
@@ -336,7 +336,7 @@ async fn reconcile_workspace(
     // drives both the model-download observer (whose events are discarded) and
     // the indexing pass, mirroring the watcher's own re-index path.
     let reporter = swissarmyhammer_code_context::noop_reporter();
-    let embedder = super::build_default_embedder(&reporter).await;
+    let embedder = super::indexing::build_default_embedder(&reporter).await;
     reconcile_workspace_with_embedder(workspace_root, db, embedder, reporter, shutdown).await;
 }
 
@@ -779,7 +779,7 @@ mod tests {
             let conn = db.lock().unwrap();
             super::process_file_events(&conn, &fanout, &events);
         }
-        super::super::index_discovered_files_with_embedder(
+        super::super::indexing::index_discovered_files_with_embedder(
             dir.path(),
             Arc::clone(&db),
             None,

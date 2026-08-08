@@ -92,6 +92,115 @@ comments:
     - evidence: 20 files — 6 new (`crates/swissarmyhammer-sem/src/parser/plugins/code/commented_code.rs`, `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs`, `apps/swissarmyhammer-cli/tests/commented_code_tool_rule.rs`, `builtin/validators/code-hygiene/rules/no-commented-code-parsed.md`, and the rule's two `.tmpl` fixtures), 14 modified. `cargo nextest run --workspace` 13898 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. RED verified 21 ways — 14 mutations of the extractor, 1 of `end_row`, 2 of the `SAH_BIN` export, 4 of the shipped rule file, plus 2 of the extension guard.
     - next: `/review`
   timestamp: 2026-08-08T22:01:16.312906+00:00
+- actor: claude-code
+  id: 01kzhrmsvsf8ex4kr97g2fphk3
+  text: |
+    ### review — findings
+    - evidence: 12 findings recorded, from `review sha d56e33039..d861843cf` (engine returned 14 confirmed / 9 refuted / 27 attempted; 1 file skipped over the prompt cap). Locations: `crates/swissarmyhammer-code-context/Cargo.toml:15`, `:28`, `:33`, `:34`; `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:48`; `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:1`; `crates/swissarmyhammer-tools/src/mcp/tools/code_context/schema.rs:100`, `:169`; `crates/swissarmyhammer-validators/src/doctor.rs:423`, `:521`, `:682`, `:697`.
+    - dropped: 2 duplication findings on `schema.rs:169` and `schema.rs:192` that asked to extract the repeated literal `14` into a named constant inside the pre-existing `mod tests`. The review skill drops every finding whose subject is refactoring test code that already existed.
+    - next: `/implement` the 12 checklist items, then re-review. Task stays in `review`.
+  timestamp: 2026-08-08T22:42:06.329764+00:00
+- actor: claude-code
+  id: 01kzhrpmjhq08s9vm4mashfse5
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 20 files; new commented_code extractor in sem, find_commented_code op in code-context, no-commented-code-parsed rule, SAH_BIN export on the shared shell runner, prompt_rules_for extracted from plan_fan_out. RED verified 21 ways
+    - test: green — cargo nextest run --workspace, 13898 passed, 0 failed, 0 skipped; fmt clean; clippy -D warnings clean. Targeted re-run confirmed the shared run_shell change did not break the other 24 shipped tool rules
+    - commit: d861843cf — 24 files, 2562 insertions, 28 deletions
+    - review: findings — 12 open, on `review sha d56e33039..d861843cf`. Engine: 14 confirmed, 9 refuted, 27 attempted, 0 failed, 1 file skipped; 2 dropped under the pre-existing-test exception
+
+    Findings by file:
+    - crates/swissarmyhammer-code-context/Cargo.toml:15, :28, :33, :34
+    - crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:48
+    - crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:1
+    - crates/swissarmyhammer-tools/src/mcp/tools/code_context/schema.rs:100, :169
+    - crates/swissarmyhammer-validators/src/doctor.rs:423, :521, :682, :697
+
+    Three notes for the next iteration:
+
+    The new extractor `commented_code.rs` drew ZERO findings across every validator that read it, and `fleet.rs` drew zero — the `prompt_rules_for` extraction was accepted. Both judgment calls flagged for scrutiny (Rust-only fixture pair, acceptance test in `apps/swissarmyhammer-cli/tests/`) also drew zero.
+
+    `doctor.rs:682` is the one finding specific to this change: `exe.file_stem() == Some(OsStr::new(SAH_BINARY_NAME))` compares case-sensitively, so a Windows `SAH.exe` fails the stem test. The other three doctor findings are reuse against `run_fixture()`, `command_failure_detail()` and `run_shell()` duplicating `prepare_shell_command`.
+
+    `code_context/mod.rs` renders to 520167 bytes against the 262144-byte per-file cap, so NINE validators could not read it at all — code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. This change put twelve op-wiring touch points in that file and none of them were reviewed. Card ^gsm2fq8 already exists for this exact split.
+  timestamp: 2026-08-08T22:43:06.449786+00:00
+- actor: claude-code
+  id: 01kzhs2wd533796nmv4ctq1efp
+  text: |-
+    ### Returning from review — research for the 12 findings
+
+    **Cargo.toml (4).** All four are real. `grep` over `crates/swissarmyhammer-code-context/src` for `swissarmyhammer_project_detection`, `model_embedding`, `once_cell` and `include_dir` returns zero hits each. The workspace carries no `[package.metadata.cargo-machete]` table anywhere, so there is no prevailing ignore-list pattern to follow — the rule body names deletion as the other answer, and nothing needs these to compile. Delete them.
+
+    **`find_commented_code.rs:48`.** `&[String]` → `&[&str]`. `findings_in_file` already takes `&str`, so the body is a pass-through. Six call sites, all in this file's own tests plus the op handler in the tools crate.
+
+    **`schema.rs:100` and `:169` — which number is right, measured.** Both. They count different things. `generate_code_context_examples()` really does return 15 entries (I counted them: get symbol, search symbol, list symbols, grep code, search code, find duplicates, query ast, find commented_code, get callgraph, get blastradius, get status, rebuild index, clear status, lsp status, detect projects), so `examples.len() == 15` is correct. `test_operations()` is NOT the production roster — the production roster is `CODE_CONTEXT_OPERATIONS` in `mod.rs`, which holds 25 ops. `test_operations()` is a hand-maintained subset of 14, so the two assertions never contradicted each other and no test was failing. The defect the finding actually names is the cause of that: a second, hand-copied roster in the test module that drifts from the real one every time an op lands. The fix removes the cause — `test_operations()` returns the production roster, and the two counts derive from it instead of restating a literal.
+
+    **`doctor.rs` — the three reuse findings, and where the partner lives.**
+    - `:697` `run_shell` vs `prepare_shell_command`. `prepare_shell_command` is `pub(super)` in `swissarmyhammer-tools/src/mcp/tools/shell/process.rs`, and `swissarmyhammer-tools` DEPENDS ON `swissarmyhammer-validators`, so validators cannot import it. The shared core has to move down into `swissarmyhammer-common`, which both already depend on. The two differ only in the interpreter (`bash` vs the platform shell) and in the positional arguments; the program/flag choice, the working directory and the stdio setup are the same decision written twice.
+    - `:521` `command_failure_detail`. Two more copies exist: `swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs` and `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs`, both spelling "stderr when present, exit status otherwise" by hand.
+    - `:423` `run_fixture`. There is no symbol named `fixture_replay` in the tree — the finding named the concept, and the concept is real: `run_fixture` (doctor.rs) and `run_tool_script` (`review/tool_rules.rs`) are two implementations of the same five steps — build the args from `spec.scope`, `run_shell`, map a nonzero exit through `command_failure_detail`, `parse_tool_stdout`, then attribute by `normalize_tool_path`.
+
+    **`doctor.rs:682`** is the one finding specific to this change: the `file_stem()` comparison is case-sensitive and Windows executable names are not.
+
+    **`code_context/mod.rs:1`.** Read `^gsm2fq8`. Doing the split here — see the separate comment.
+  timestamp: 2026-08-08T22:49:47.685075+00:00
+- actor: claude-code
+  id: 01kzhv3rjmftcx5zdtm10q6r6k
+  text: |-
+    ### The `code_context/mod.rs` split is DONE here — `^gsm2fq8` can be closed
+
+    The split was not deferred. `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs` was 4890 lines and 187624 bytes; it is now 337 lines and 14297 bytes. The dispatch, the schema wiring, `CodeContextTool` and the registration stayed; everything the dispatch reaches moved to a sibling:
+
+    | module | what it owns | bytes |
+    |---|---|---|
+    | `ops.rs` | one metadata struct per op, plus the roster and its accessor | 29107 |
+    | `indexing.rs` | the tree-sitter pass and the embedding pass | 25727 |
+    | `execute.rs` | the handlers backed by the stored index | 17383 |
+    | `lsp_ops.rs` | the handlers backed by a live language server | 16992 |
+    | `status.rs` | get status, rebuild index, clear status, lsp status | 14214 |
+    | `support.rs` | the supervisor, `open_workspace`, the readiness gate, the notice | 8556 |
+    | `tests/` (5 files) | the test module, split the same way | 62654 |
+
+    **The cap arithmetic, not a hope.** A rendered line costs its own bytes plus a fixed 22-byte gutter (`{line:>6} | {sha:8} {mark} | `, read off `review/fleet/render.rs`). The old file's deterministic cost was 187624 + 22 × 4890 = **295204** — already over the 262144-byte cap before a single byte of probe evidence, which is how it reached 520167. The largest file now is `ops.rs` at 29107 + 22 × 873 = **48313**, 5.4x under the cap and below `watcher.rs` (61772), the sibling in this same directory that every review has always read. Nothing in the directory is close to the cap.
+
+    **What the split does NOT change.** The public surface is identical: `mod.rs` re-exports `index_discovered_files_async`, every op struct (`pub use ops::*`), and `any_lsp_session` / `lsp_session_for_file` / `open_workspace` / `LSP_SUPERVISOR` for the two crate consumers (`mcp/server.rs`, `tools/diagnostics/mod.rs`) and the five external ones (`code-context-cli`, the integration tests).
+
+    **One thing the split removed rather than moved**, because the move made it unnecessary: `McpTool::operations()` held an `unsafe { std::mem::transmute }` to give the roster a `'static` lifetime. `CODE_CONTEXT_OPERATIONS` is a `static`, so the borrow already IS `'static`; the new `code_context_operations()` accessor returns `CODE_CONTEXT_OPERATIONS.as_slice()` and compiles with no `unsafe` at all.
+
+    **Judgment call, stated plainly.** I did NOT touch the two verbatim-duplicated 600-character "Valid operations: ..." literals in the dispatch, and I did NOT change the dispatch's behaviour in any way. The split was kept mechanical on purpose so the 115 moved tests are a real regression check on it. Those literals are now readable by the nine validators for the first time and may well be raised next round; that is the split working.
+
+    `^gsm2fq8`'s acceptance is "a review that touches any of the new files reviews them (no per-file cap skip), and the workspace stays green". Both hold. Close it.
+  timestamp: 2026-08-08T23:25:13.684242+00:00
+- actor: claude-code
+  id: 01kzhv53dwzvajmmrwwg5qjfwg
+  text: |-
+    ### The other eleven findings, and the RED ledger
+
+    **Cargo.toml (4).** All four deleted. `cargo machete 0.9.x` on the package reports nothing now. RED verified four ways: each dependency put back one at a time, and machete names exactly that one each time. No `[package.metadata.cargo-machete]` was added — the workspace carries no such table anywhere, and nothing needs these to compile.
+
+    **`find_commented_code` takes `&[&str]`.** The op handler in the tools crate now collects `Vec<&str>` straight out of the JSON array instead of allocating a `String` per path, so the change removed allocations rather than moving them. RED: the signature put back to `&[String]` is five compile errors at the call sites.
+
+    **`schema.rs` — the number that was right, and the cause behind it.** `examples.len() == 15` was correct; `test_operations()`'s 14 was a hand-copied SUBSET of the 25-op production roster, so the two assertions never actually contradicted each other and no test was failing. The defect the finding names is the second roster. `test_operations()` now returns `code_context_operations()` — the production list — and the two counts derive from `ops.len()` instead of restating a literal. A new test, `test_every_example_names_an_operation_on_the_roster`, pins the invariant that was silently broken: an example may only name an op the tool really dispatches. RED three ways: `test_operations()` truncated back to 14 ops fails the new roster test (the exact defect); the schema config stripped of `.with_examples(...)` fails the examples test; the roster accessor truncated to 24 fails the tool's own op-count test.
+
+    **`doctor.rs:682` — the case-sensitive stem.** Extracted as `is_sah_binary(&Path)` and compared with `eq_ignore_ascii_case`, with the reason written down: Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so a case-sensitive test declines the very binary it is looking for and falls through to whatever older copy sits first on `PATH`. `the_binary_stem_test_reads_the_name_and_not_its_case` drives eight spellings through it. The first draft of that table used `C:\Program Files\...` and failed on macOS for the wrong reason — `Path::file_stem` treats a backslash as an ordinary character, so the stem was the whole string; the rows are written with `/` so the same stems are exercised on every platform and CASE is what is under test. RED: the comparison put back to `==` fails the test.
+
+    **`doctor.rs:697` and `:521` — the shared shell.** `prepare_shell_command` lives in `swissarmyhammer-tools`, which DEPENDS ON `swissarmyhammer-validators`, so validators cannot import it; the shared core went down into `swissarmyhammer-common` instead, as `command::shell_command(Shell, &str) -> Command` plus `command::command_failure_detail(&Output) -> String`. Four callers now go through them: `doctor::run_shell` (adds `"$@"` and `SAH_BIN`, which is all that was ever its own), `shell/process.rs::prepare_shell_command` (adds the working directory and the environment, and converts to `tokio::process::Command`), and the two hand-written copies of "stderr when present, status otherwise" in `code_context/doctor.rs` and `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs`. `swissarmyhammer-validators` gained `swissarmyhammer-common` as a real dependency; it was already a dev-dependency, and the dev entry was folded into the real one rather than left duplicated. RED five ways on the new module: bash resolved to `sh`; the platform shell forced to bash; the failure summary always the status; always the stderr; and the bash flag wrong.
+
+    **`doctor.rs:423` — `run_fixture` and `run_tool_script`.** There is no symbol named `fixture_replay` anywhere in the tree, so the finding named the concept; the concept was real. `run_fixture` (doctor) and `run_tool_script` (review engine) were two implementations of the same five steps. Both now call `tool_rules::run_script_findings`, with `tool_rules::script_args` deciding the positional arguments from the scope. The failure comes back as a `ScriptFailure` — `Start`, `Exit`, `Contract` — so the runner reports WHAT went wrong and each caller still writes its own sentence: the doctor names the fixture it was proving, the engine names the rule it was running.
+
+    **A gap the RED sweep found and closed.** Breaking `run_script_findings` so a nonzero exit reads as a clean run left the whole doctor suite GREEN — no test anywhere exercised a tool-rule script that fails. That is load-bearing behaviour the extraction now owns, so `BROKEN_TOOL_RULE` (a script that writes to stderr and exits 4) and `test_a_nonzero_exit_is_reported_as_a_broken_tool_with_its_own_words` were added. RED two ways: the exit check removed, and the detail reduced to the status instead of the script's own words.
+
+    **Gates.** `cargo nextest run --workspace` — 13906 passed, 0 failed, 0 skipped (13898 before this pass; the eight new tests are five in `common::command`, the stem test, the example-roster test, and the broken-tool test). `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    **RED verified 17 ways** — 4 dependency restorations, 1 signature revert (compile), 3 schema mutations, 1 dispatch misroute, 1 stem-comparison revert, 1 `SAH_BIN` export removal, 5 mutations of the shared command module, and 2 of the shared script runner. Every one went RED and every one was restored to GREEN.
+  timestamp: 2026-08-08T23:25:57.564590+00:00
+- actor: claude-code
+  id: 01kzhv5an1gv5qea5j8g5f52dw
+  text: |-
+    ### implement — changed
+    - evidence: 21 files — 8 new (`crates/swissarmyhammer-common/src/command.rs`, `code_context/{ops,support,execute,indexing,status,lsp_ops}.rs`, `code_context/tests/` as 6 files), 13 modified. All 12 review findings now `- [x]`. `cargo nextest run --workspace` 13906 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. RED verified 17 ways.
+    - next: `/review`
+  timestamp: 2026-08-08T23:26:04.961522+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -119,3 +228,21 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 5. Fixtures: fail fixtures hold a commented-out function of 6+ lines for at least Rust, Python, and TypeScript; pass fixtures hold a doc-comment example, a TODO with prose, and a short 2-line snippet. Unit tests in the sem crate for the extractor per language family. Extend the shipped-rules acceptance test. Acceptance: a review of a file whose only defect is a commented-out block reports it with zero LLM validator calls for that rule.
 
 #tool-validators #objectivity
+
+## Review Findings (2026-08-08 17:13)
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs` — 520167 rendered bytes, over the 262144-byte per-file cap; not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (split the file)
+
+- [x] `crates/swissarmyhammer-code-context/Cargo.toml:15` — unused dependency `swissarmyhammer-project-detection`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `crates/swissarmyhammer-code-context/Cargo.toml:28` — unused dependency `model-embedding`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `crates/swissarmyhammer-code-context/Cargo.toml:33` — unused dependency `once_cell`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `crates/swissarmyhammer-code-context/Cargo.toml:34` — unused dependency `include_dir`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:48` — Function accepts `&[String]` (concrete type) instead of `&[&str]` (borrowed reference), forcing callers to convert string literals with `.to_string()` rather than passing them directly. This violates the guideline to accept borrowed references instead of owned concrete types for better API flexibility. Change signature from `pub fn find_commented_code(working_dir: &Path, files: &[String])` to `pub fn find_commented_code(working_dir: &Path, files: &[&str])`. The internal `findings_in_file` function at line 57 already accepts `&str`, so this change is a simple pass-through of borrowed references.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:1` — This file exceeds the review prompt cap — 520167 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity. Split the file into smaller modules that fit the review prompt cap.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/schema.rs:100` — The imports list at lines 100–103 does not include FindCommentedCode, yet the examples added at lines 62–64 reference the operation "find commented_code", and line 282 asserts examples.len() == 15. The test_operations() function at lines 105–122 provides only 14 operations (unchanged in this commit), so the schema validation will either fail or be inconsistent. Either (1) add FindCommentedCode to the imports and to test_operations(), or (2) remove the commented_code example from lines 62–64 if the operation has not yet been defined in code_context.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/schema.rs:169` — New 'find commented_code' example added (line 62-64) and example count assertion updated to 15 (line 282), but test_operations() still lists only 14 operations. The schema generation test expects 14 ops, creating a mismatch with 15 documented examples. If FindCommentedCode is a new operation, it must be added to test_operations(). Add FindCommentedCode (or the corresponding operation struct) to the test_operations() array (lines 105-122), making it 15 operations. Then update assertions on lines 169 and 192 from 14 to 15 to match.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:423` — Existing `run_fixture()` function duplicates fixture execution logic that already exists elsewhere as `fixture_replay`; similar test fixture running implementations should be consolidated. Extract fixture execution logic to a shared utility so fixture testing in both validators and conformance tests reuse the same implementation.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:521` — Existing `command_failure_detail()` function duplicates command error extraction logic; similar implementations already exist elsewhere. Extract command failure formatting into a shared utility in swissarmyhammer-common so both production and test code reuse the same error reporting logic.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:682` — The new comparison `exe.file_stem() == Some(OsStr::new(SAH_BINARY_NAME))` is case-sensitive, but executable file names on Windows are case-insensitive — if the binary is installed as `SAH.exe` or `Sah.exe`, the comparison fails even though the filesystem treats them identically. The added tests do not verify that non-canonical case variations are handled or rejected consistently across platforms. Add one regression test that mocks or verifies the behavior when `current_exe()` returns an uppercase-stemmed path (e.g., by setting `SAH_BIN` to `SAH` in the environment and confirming the fallback is used), or document that the executable name is guaranteed lowercase by the build process with a comment and a test asserting that contract.
+- [x] `crates/swissarmyhammer-validators/src/doctor.rs:697` — Existing `run_shell()` function duplicates shell command execution logic that exists elsewhere as `prepare_shell_command`; should reuse or extend existing implementation instead of maintaining a parallel copy. Investigate whether `run_shell()` can be replaced with `prepare_shell_command` or refactored to reuse it. Keeping one canonical shell runner implementation ensures consistent behavior and maintenance burden across production and test code paths.

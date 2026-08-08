@@ -20,6 +20,7 @@
 //! - Documentation-driven development with clear API contracts
 
 pub mod build_info;
+pub mod command;
 pub mod constants;
 pub mod directory;
 pub mod editor;

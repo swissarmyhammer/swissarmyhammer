@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::command::{shell_command, Shell};
 use swissarmyhammer_common::Pretty;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -525,30 +526,23 @@ pub(super) fn prepare_working_directory(
     Ok(work_dir)
 }
 
-/// Prepare shell command for execution
+/// Prepare shell command for execution.
+///
+/// The interpreter and the stream wiring come from
+/// [`shell_command`](swissarmyhammer_common::command::shell_command); this
+/// adds the working directory and the caller's environment, and hands the
+/// result to tokio so the child can be awaited.
 pub(super) fn prepare_shell_command(
     command: &str,
     work_dir: &Path,
     environment: Option<&std::collections::HashMap<String, String>>,
 ) -> Command {
-    let (program, args) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", command])
-    } else {
-        ("sh", vec!["-c", command])
-    };
-
-    let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(work_dir);
+    let mut cmd = Command::from(shell_command(Shell::Platform, command));
+    cmd.current_dir(work_dir);
 
     if let Some(env_vars) = environment {
-        for (key, value) in env_vars {
-            cmd.env(key, value);
-        }
+        cmd.envs(env_vars);
     }
-
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
 
     cmd
 }

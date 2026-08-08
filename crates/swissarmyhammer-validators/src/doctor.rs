@@ -28,14 +28,16 @@ use std::process::Output;
 
 use tempfile::TempDir;
 
+use swissarmyhammer_common::command::{command_failure_detail, shell_command, Shell};
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::error::AvpError;
 use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
-use crate::review::tool_output::parse_tool_stdout;
-use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
+use crate::review::tool_rules::{
+    normalize_tool_path, project_tool_rules, run_script_findings, script_args, ScriptFailure,
+};
 use crate::validators::types::{
-    FixHint, Rule, RuleSet, Supersedes, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
+    FixHint, Rule, RuleSet, Supersedes, ToolSpec, ValidatorMatch, ValidatorSource,
 };
 use crate::validators::ValidatorLoader;
 
@@ -427,28 +429,20 @@ fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
     let scratch = materialize_fixtures(source_dir)?;
     let fixture_dir = scratch.path();
 
-    let args: Vec<&OsStr> = match spec.scope {
-        ToolScope::Files => vec![fixture_name.as_os_str()],
-        ToolScope::Workspace => Vec::new(),
-    };
-
-    let output = run_shell(&spec.run, Some(fixture_dir), &args)
-        .map_err(|e| format!("tool failed to run on {}: {e}", fixture_label(fixture)))?;
-    if !output.status.success() {
-        return Err(format!(
-            "tool broke on {}: {}",
-            fixture_label(fixture),
-            command_failure_detail(&output),
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let findings = parse_tool_stdout(&stdout).map_err(|e| {
-        format!(
-            "tool stdout on {} broke the contract: {e}",
-            fixture_label(fixture)
-        )
-    })?;
+    let args = script_args(spec.scope, std::slice::from_ref(&fixture_name));
+    let findings =
+        run_script_findings(&spec.run, fixture_dir, &args).map_err(|failure| match failure {
+            ScriptFailure::Start(e) => {
+                format!("tool failed to run on {}: {e}", fixture_label(fixture))
+            }
+            ScriptFailure::Exit(detail) => {
+                format!("tool broke on {}: {detail}", fixture_label(fixture))
+            }
+            ScriptFailure::Contract(detail) => format!(
+                "tool stdout on {} broke the contract: {detail}",
+                fixture_label(fixture)
+            ),
+        })?;
     let about_fixture = findings
         .iter()
         .filter(|finding| {
@@ -514,17 +508,6 @@ fn fixture_label(fixture: &Path) -> String {
         .and_then(OsStr::to_str)
         .map(str::to_string)
         .unwrap_or_else(|| fixture.display().to_string())
-}
-
-/// Summarize a failed command: its stderr when present, its exit status
-/// otherwise.
-pub(crate) fn command_failure_detail(output: &Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if stderr.is_empty() {
-        format!("exited with {}", output.status)
-    } else {
-        stderr
-    }
 }
 
 /// Convert the review-engine facts into doctor [`Check`] rows.
@@ -679,28 +662,46 @@ fn sah_binary() -> OsString {
         return configured;
     }
     if let Ok(exe) = std::env::current_exe() {
-        if exe.file_stem() == Some(OsStr::new(SAH_BINARY_NAME)) {
+        if is_sah_binary(&exe) {
             return exe.into_os_string();
         }
     }
     OsString::from(SAH_BINARY_NAME)
 }
 
-/// Run a tool-rule shell snippet the way the engine does: `bash -c <script>`
-/// with `args` as the script's positional parameters (`"$@"`).
+/// Whether `exe` is the sah command line interface, judged by its file stem.
+///
+/// The comparison ignores ASCII case because a file system need not preserve
+/// it. Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so a
+/// case-sensitive stem test would decline the very binary it is looking for
+/// and fall through to the bare name on `PATH` — which on that machine is
+/// whatever older copy happens to sit first.
+fn is_sah_binary(exe: &Path) -> bool {
+    exe.file_stem()
+        .and_then(OsStr::to_str)
+        .is_some_and(|stem| stem.eq_ignore_ascii_case(SAH_BINARY_NAME))
+}
+
+/// Run a tool-rule shell snippet, with `args` as the script's positional
+/// parameters (`"$@"`).
 ///
 /// The ONE shell runner for tool-rule scripts — the doctor's fixture checks
 /// and the review engine's tool runs ([`crate::review::tool_rules`]) both go
 /// through it, so a script can never pass its fixtures under one shell and
-/// run under another. Every script gets [`SAH_BINARY_ENV`] in its environment;
-/// see [`sah_binary`].
+/// run under another. The interpreter and the stream wiring come from
+/// [`shell_command`], the same builder every other caller in the workspace
+/// spawns a shell with. What this runner adds is its own: the tool-rule
+/// contract's `"$@"` and [`SAH_BINARY_ENV`] in the environment; see
+/// [`sah_binary`].
 pub(crate) fn run_shell(
     script: &str,
     cwd: Option<&Path>,
     args: &[&OsStr],
 ) -> std::io::Result<Output> {
-    let mut command = std::process::Command::new("bash");
-    command.arg("-c").arg(script).arg("bash").args(args);
+    // `bash` is the `$0` a shell reads before `"$@"` begins, so the first real
+    // argument is not swallowed as the script's own name.
+    let mut command = shell_command(Shell::Bash, script);
+    command.arg("bash").args(args);
     command.env(SAH_BINARY_ENV, sah_binary());
     if let Some(dir) = cwd {
         command.current_dir(dir);
@@ -761,6 +762,36 @@ mod tests {
             SAH_BINARY_NAME,
             "under a test binary `current_exe` is not `sah`, so a script falls back to the name"
         );
+    }
+
+    /// Every spelling of the command line interface's own name a file system
+    /// can hand back, and whether the stem test must accept it.
+    ///
+    /// Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so
+    /// only the STEM decides and it decides without reading case. The
+    /// separators are written `/` so the same rows exercise the same stems on
+    /// every platform — the case is what is under test, not the separator.
+    const BINARY_NAME_SPELLINGS: &[(&str, bool)] = &[
+        ("/usr/local/bin/sah", true),
+        ("/Program Files/sah/SAH.EXE", true),
+        ("/Program Files/sah/Sah.exe", true),
+        ("/usr/local/bin/sah.exe", true),
+        ("/usr/local/bin/sahara", false),
+        ("/usr/local/bin/notsah", false),
+        ("/workspace/target/debug/deps/doctor-9f2c1a", false),
+        ("/usr/local/bin", false),
+    ];
+
+    #[test]
+    fn the_binary_stem_test_reads_the_name_and_not_its_case() {
+        for (path, is_sah) in BINARY_NAME_SPELLINGS {
+            assert_eq!(
+                is_sah_binary(Path::new(path)),
+                *is_sah,
+                "{path} should {}be read as the sah command line interface",
+                if *is_sah { "" } else { "not " }
+            );
+        }
     }
 
     #[test]
@@ -850,6 +881,23 @@ tool:
     check_command: "true"
 ---
 Always silent.
+"#;
+
+    /// A tool rule whose script is present but broken: it says why on stderr
+    /// and exits nonzero. Exit 0 means the tool judged the code, so a nonzero
+    /// exit is a broken tool rather than a clean run.
+    const BROKEN_TOOL_RULE: &str = r#"---
+name: broken-check
+description: A rule whose tool fails whenever it runs.
+tool:
+  scope: files
+  run: |
+    echo "the analyzer could not load its grammar" >&2
+    exit 4
+  doctor:
+    check_command: "true"
+---
+Always broken.
 "#;
 
     /// A `workspace`-scope tool rule: the script reads the whole directory it
@@ -1005,6 +1053,42 @@ Python only.
         assert_eq!(
             rule.install_commands,
             vec!["brew install definitely-not-a-real-tool-1f9c".to_string()]
+        );
+        assert!(!rule.usable());
+        assert!(rule.on_prompt_fallback());
+    }
+
+    /// A script that exits nonzero is a BROKEN tool, never a clean run, and
+    /// the row says what the script said on stderr.
+    #[test]
+    fn test_a_nonzero_exit_is_reported_as_a_broken_tool_with_its_own_words() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        write_ruleset(
+            temp.path(),
+            "tool-set",
+            TOOL_SET_MANIFEST,
+            &[("broken-check.md", BROKEN_TOOL_RULE)],
+            &[
+                ("broken-check.fail.txt", "a defect the tool must flag\n"),
+                ("broken-check.pass.txt", "clean\n"),
+            ],
+        );
+        let loader = loader_for(temp.path());
+
+        let status = check_review_engine_with(&loader, RUST_TYPES);
+
+        assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
+        let rule = &status.tool_rules[0];
+        assert_eq!(rule.presence, ToolPresence::Present);
+        let FixtureOutcome::Failed { detail } = &rule.fixtures else {
+            panic!(
+                "a script that exits nonzero must fail, got {:?}",
+                rule.fixtures
+            );
+        };
+        assert!(
+            detail.contains("the analyzer could not load its grammar"),
+            "the row must carry the script's own stderr, got {detail:?}"
         );
         assert!(!rule.usable());
         assert!(rule.on_prompt_fallback());

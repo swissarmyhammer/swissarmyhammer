@@ -7861,10 +7861,7 @@ version = "0.17.0"
 dependencies = [
  "fuzzy-matcher",
  "ignore",
- "include_dir",
  "lsp-types",
- "model-embedding",
- "once_cell",
  "rayon",
  "regex",
  "rusqlite",
@@ -7876,7 +7873,6 @@ dependencies = [
  "swissarmyhammer-entity-search",
  "swissarmyhammer-leader-election",
  "swissarmyhammer-lsp",
- "swissarmyhammer-project-detection",
  "swissarmyhammer-search",
  "swissarmyhammer-sem",
  "tempfile",

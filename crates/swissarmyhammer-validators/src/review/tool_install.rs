@@ -33,7 +33,9 @@
 use futures::future::BoxFuture;
 use regex::Regex;
 
-use crate::doctor::{check_presence, command_failure_detail, run_shell, ToolPresence};
+use swissarmyhammer_common::command::command_failure_detail;
+
+use crate::doctor::{check_presence, run_shell, ToolPresence};
 use crate::error::AvpError;
 use crate::review::scope::WorkList;
 use crate::review::tool_rules::matched_tool_rules;

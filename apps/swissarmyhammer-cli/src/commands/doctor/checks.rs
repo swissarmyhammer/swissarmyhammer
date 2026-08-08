@@ -9,6 +9,7 @@ use super::utils::*;
 use anyhow::Result;
 use std::env;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::command::command_failure_detail;
 
 /// Check names constants to avoid typos and improve maintainability
 #[allow(dead_code)]
@@ -376,12 +377,7 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
             fix: None,
         },
         Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let reason = if stderr.is_empty() {
-                format!("exited with status {}", output.status)
-            } else {
-                stderr
-            };
+            let reason = command_failure_detail(&output);
             Check {
                 name: check_name,
                 status: CheckStatus::Error,

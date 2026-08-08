@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use swissarmyhammer_common::command::command_failure_detail;
 use swissarmyhammer_project_detection::{detect_projects, ProjectType};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -62,15 +63,7 @@ fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
     // Binary exists on PATH -- now verify it actually runs
     match Command::new(cmd).arg("--version").output() {
         Ok(output) if output.status.success() => (true, path, None),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let reason = if stderr.is_empty() {
-                format!("exited with status {}", output.status)
-            } else {
-                stderr
-            };
-            (false, path, Some(reason))
-        }
+        Ok(output) => (false, path, Some(command_failure_detail(&output))),
         Err(e) => (false, path, Some(format!("failed to execute: {}", e))),
     }
 }

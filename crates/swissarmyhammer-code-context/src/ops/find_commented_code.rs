@@ -45,7 +45,7 @@ impl fmt::Display for CommentedCodeFinding {
 /// [`query_ast`](crate::ops::query_ast) keeps, and the reason the tool rule
 /// narrows its `match` to the extensions the verdict covers rather than
 /// relying on this op to say "not measured".
-pub fn find_commented_code(working_dir: &Path, files: &[String]) -> Vec<CommentedCodeFinding> {
+pub fn find_commented_code(working_dir: &Path, files: &[&str]) -> Vec<CommentedCodeFinding> {
     files
         .iter()
         .filter_map(|file| findings_in_file(working_dir, file))
@@ -99,7 +99,7 @@ mod tests {
     fn a_commented_out_function_is_reported_once() {
         let dir = workspace_with("probe.rs", COMMENTED_OUT_FUNCTION_RS);
 
-        let findings = find_commented_code(dir.path(), &["probe.rs".to_string()]);
+        let findings = find_commented_code(dir.path(), &["probe.rs"]);
 
         assert_eq!(
             findings,
@@ -131,14 +131,14 @@ mod tests {
     fn a_file_the_roster_does_not_claim_reports_nothing() {
         let dir = workspace_with("notes.txt", "// fn disabled() {}\n");
 
-        assert!(find_commented_code(dir.path(), &["notes.txt".to_string()]).is_empty());
+        assert!(find_commented_code(dir.path(), &["notes.txt"]).is_empty());
     }
 
     #[test]
     fn a_missing_file_reports_nothing_and_does_not_break_the_run() {
         let dir = tempfile::tempdir().expect("create a scratch workspace");
 
-        assert!(find_commented_code(dir.path(), &["gone.rs".to_string()]).is_empty());
+        assert!(find_commented_code(dir.path(), &["gone.rs"]).is_empty());
     }
 
     #[test]
@@ -147,10 +147,7 @@ mod tests {
         std::fs::write(dir.path().join("second.rs"), COMMENTED_OUT_FUNCTION_RS)
             .expect("write the second probe file");
 
-        let findings = find_commented_code(
-            dir.path(),
-            &["first.rs".to_string(), "second.rs".to_string()],
-        );
+        let findings = find_commented_code(dir.path(), &["first.rs", "second.rs"]);
 
         let files: Vec<&str> = findings.iter().map(|f| f.file.as_str()).collect();
         assert_eq!(files, ["first.rs", "second.rs"]);
@@ -161,8 +158,7 @@ mod tests {
         let dir = workspace_with("probe.rs", COMMENTED_OUT_FUNCTION_RS);
         let absolute = dir.path().join("probe.rs").to_string_lossy().to_string();
 
-        let findings =
-            find_commented_code(Path::new("/nonexistent"), std::slice::from_ref(&absolute));
+        let findings = find_commented_code(Path::new("/nonexistent"), &[absolute.as_str()]);
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].file, absolute);

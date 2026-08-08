@@ -54,6 +54,12 @@ swissarmyhammer-project-detection = { workspace = true }
 # status facts and converts them into checks, mirroring `mirdan::status`.
 swissarmyhammer-doctor = { workspace = true }
 
+# The shared shell-command builder and failed-command summary the tool-rule
+# runner spawns every script through, plus `CurrentDirGuard` for the loader
+# tests that pin the process working directory away from the workspace they
+# load.
+swissarmyhammer-common = { workspace = true }
+
 # ACP agent connection driven by the shared agent pool
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }
@@ -112,11 +118,6 @@ swissarmyhammer-build = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-# `CurrentDirGuard`: the loader tests pin the process working directory to a
-# DIFFERENT workspace than the one they load, proving the process CWD never
-# reaches the project validator layer. The guard is the shared RAII helper, not
-# a local copy.
-swissarmyhammer-common = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-test = { workspace = true }
 # The shared ACP mock-agent harness (MockAgent trait + adapter + dispatch) the

@@ -36,7 +36,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
 
-use crate::doctor::{check_tool_rule, command_failure_detail, run_shell};
+use swissarmyhammer_common::command::command_failure_detail;
+
+use crate::doctor::{check_tool_rule, run_shell};
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
 use crate::review::scope::{ValidatorWork, WorkList};
 use crate::review::tool_output::parse_tool_stdout;
@@ -616,6 +618,58 @@ pub fn execute_tool_runs(
     outcome
 }
 
+/// Why a tool-rule script run produced no findings.
+///
+/// The variants say WHAT went wrong and never how to word it: the doctor names
+/// the fixture it was proving, the review engine names the rule it was running,
+/// and each writes its own sentence from the same three facts.
+#[derive(Debug)]
+pub(crate) enum ScriptFailure {
+    /// The shell could not be started at all.
+    Start(std::io::Error),
+    /// The script ran and exited nonzero. Carries
+    /// [`command_failure_detail`] — the script's own stderr, or its status.
+    Exit(String),
+    /// The script exited 0, but its stdout broke the finding contract.
+    Contract(String),
+}
+
+/// The positional arguments a script of `scope` receives.
+///
+/// A `files`-scope script reads the paths it is handed. A `workspace`-scope
+/// script reads the tree it runs in and is handed none, so the caller filters
+/// its findings by path afterwards.
+pub(crate) fn script_args<S: AsRef<OsStr>>(scope: ToolScope, files: &[S]) -> Vec<&OsStr> {
+    match scope {
+        ToolScope::Files => files.iter().map(AsRef::as_ref).collect(),
+        ToolScope::Workspace => Vec::new(),
+    }
+}
+
+/// Run a tool-rule script in `dir` with `args` as its positional parameters,
+/// and parse its stdout into findings.
+///
+/// The ONE way a tool-rule script is run for its findings. The doctor's
+/// fixture checks ([`crate::doctor`]) prove a rule works by calling this, and
+/// [`run_tool_script`] uses the rule by calling this, so a rule can never pass
+/// its fixtures under one interpretation of the contract and be used under
+/// another.
+///
+/// Exit 0 means the script judged the code, whether or not it found anything;
+/// a nonzero exit is a broken tool, not a clean run.
+pub(crate) fn run_script_findings(
+    script: &str,
+    dir: &Path,
+    args: &[&OsStr],
+) -> Result<Vec<Finding>, ScriptFailure> {
+    let output = run_shell(script, Some(dir), args).map_err(ScriptFailure::Start)?;
+    if !output.status.success() {
+        return Err(ScriptFailure::Exit(command_failure_detail(&output)));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_tool_stdout(&stdout).map_err(|e| ScriptFailure::Contract(e.to_string()))
+}
+
 /// Run one tool rule's script and parse its stdout into tagged findings.
 ///
 /// The script runs with bash at `repo_root`. `scope: files` passes the run's
@@ -624,19 +678,12 @@ pub fn execute_tool_runs(
 /// the script judged the code; a nonzero exit (or stdout that violates the
 /// contract) is the error string — the raw stderr, or the parse problem.
 fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<Vec<Finding>, String> {
-    let args: Vec<&OsStr> = match run.spec.scope {
-        ToolScope::Files => run.files.iter().map(OsStr::new).collect(),
-        ToolScope::Workspace => Vec::new(),
-    };
-
-    let output = run_shell(&run.spec.run, Some(repo_root), &args)
-        .map_err(|e| format!("the run script failed to start: {e}"))?;
-    if !output.status.success() {
-        return Err(command_failure_detail(&output));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut findings = parse_tool_stdout(&stdout).map_err(|e| e.to_string())?;
+    let args = script_args(run.spec.scope, &run.files);
+    let mut findings =
+        run_script_findings(&run.spec.run, repo_root, &args).map_err(|failure| match failure {
+            ScriptFailure::Start(e) => format!("the run script failed to start: {e}"),
+            ScriptFailure::Exit(detail) | ScriptFailure::Contract(detail) => detail,
+        })?;
 
     if run.spec.scope == ToolScope::Workspace {
         let matched: BTreeSet<&str> = run.files.iter().map(String::as_str).collect();
