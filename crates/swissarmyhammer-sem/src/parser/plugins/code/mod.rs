@@ -28,7 +28,7 @@ pub use complexity::{test_census, TestCensus, TestDefect};
 /// duplicate gate, so the detector pairs code and never pairs test code. See
 /// [`duplication`].
 pub use duplication::{
-    duplication_source, DuplicationSource, DuplicationToken, TokenPoint, DUPLICATION_ALLOW_MARKER,
+    duplication_source, DuplicationDefinition, DuplicationSource, DUPLICATION_ALLOW_MARKER,
 };
 /// What a change did to a file's public surface — declarations added, removed,
 /// re-spelled, or given a different visibility — so a reviewer reads rows

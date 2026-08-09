@@ -1,6 +1,6 @@
 ---
 name: duplication-parsed
-description: A token-identical block over the minimum window IS a duplicate — decided by the grammar, not by prompt.
+description: A function, a method or a type that is nearly the whole of another one IS a duplicate — decided by the grammar, not by prompt.
 match:
   files:
     - "**/*.ts"
@@ -50,52 +50,152 @@ tool:
     fix_hint: 'put the running sah binary on PATH, or set SAH_BIN to its path'
 ---
 
-# Duplication — the tokens decide
+# Duplication — whole definitions, compared
 
-The tool is `sah` itself. `sah tool code_context duplication find` reads each
-file with the grammar the file itself is parsed with, takes every code token,
-and runs the jscpd Rust engine's rolling-hash detector over the stream. A run
-of tokens spelled the same twice IS a duplicate.
+The tool is `sah` itself. `sah tool code_context duplication find` parses each
+file with the grammar the file itself is parsed with, walks the named
+definitions the parse reports — every function, every method, every type — and
+compares one definition against another.
 
-No model reads either copy. That is the whole point of this rule: whether two
-blocks are the same text is a fact about the text, and a fact needs no
-judgment.
+The unit is the whole definition and nothing smaller. A definition that is
+nearly the whole of an earlier definition IS a duplicate.
 
-## The gate
+No model reads either copy. That is the whole point of this rule: how alike two
+definitions are is a fact about the text, and a fact needs no judgment.
 
-**Fifty tokens.** A window of 50 tokens or more, token for token identical, in
-one file or across two, is a finding. There is no similarity threshold and no
-second opinion. Fifty tokens is about a dozen lines of ordinary code; below it
-a match is the language's own grammar repeating — a `match` arm, an import
-block, a struct literal — rather than a block someone pasted.
+## The two normalizations
+
+A definition is not compared as it is written. Each one is normalized first,
+and what the normalization drops is exactly what the comparison is meant to see
+past.
+
+**A function or a method** normalizes its body. The first distinct identifier
+becomes `v1`, the second `v2`, and each literal becomes a marker of its kind.
+Two functions that differ only by their variable names, or only by one
+constant, then normalize to the same stream. That is the case the prompt rule
+always named as the real one — *"two blocks that differ only by a value are one
+function with an argument"* — and the case a token matcher cannot see at all.
+
+**A type** normalizes its members. Every declared name drops out and every
+member type stays, in order. Two records whose members carry the same types in
+the same order are one shape under two names.
+
+The consequence is worth stating plainly: a record of six `String` fields
+matches every other record of six `String` fields, whoever wrote it and for
+whatever purpose. That is what the rule reports, on purpose. Where two such
+records are genuinely unrelated, the marker comment below is the answer.
+
+## The gate, and the measurement it came from
+
+**Forty tokens, and ninety percent.** A definition of at least 40 normalized
+tokens whose stream is at least 90 percent the same as an earlier definition's
+is a finding.
+
+The similarity is the length of the longest subsequence the two normalized
+streams share, counted once on each side: `100 * 2 * shared / (left + right)`.
+It is exact integer arithmetic on a parse, so a run over the same two
+definitions always answers the same number. There is no similarity model, no
+embedding and no second opinion.
+
+Both numbers were measured over the 1183 tracked `.rs` files of this workspace,
+not chosen. Each cell is the number of findings the rule reports at that pair
+of gates:
+
+| minimum tokens | 100% | 95% | 90% | 85% | 80% |
+|---|---|---|---|---|---|
+| 20 | 588 | 759 | 1035 | 1452 | 1991 |
+| 30 | 365 | 451 | 585 | 806 | 1112 |
+| **40** | 258 | 327 | **416** | 544 | 721 |
+| 50 | 209 | 261 | 333 | 428 | 540 |
+| 60 | 173 | 219 | 280 | 359 | 452 |
+| 80 | 82 | 111 | 143 | 199 | 264 |
+| 100 | 52 | 72 | 95 | 136 | 185 |
+
+**Why forty and not twenty.** Under 40 tokens the report fills with shapes the
+language forces on every author. `has_errors` and `has_warnings` in
+`swissarmyhammer-doctor/src/runner.rs` are a 25-token pair of one-line
+accessors over the same iterator. `ModelInfo`, `PerspectiveInfo` and `AddTag`
+are three- and four-field records whose field types coincide because `String`
+and `Option<String>` are what most records hold. At 40 and above every
+sample read as a genuine copy.
+
+**Why forty and not thirty.** The 30-token band still holds real findings —
+`load_env_parsed` against `load_env_optional`, `Directory::xdg_data` against
+`Directory::xdg_cache` — and it also holds five-field records that
+coincide. The trade is stated rather than hidden: a missed finding leaves the
+review where it was, and a wrong finding is a mandatory change to correct code.
+
+**Why ninety and not one hundred.** An exact match after normalization answers
+"identical once renamed", which is not the same question as "highly
+alike". `builtin_yaml_sources` is copied between `swissarmyhammer-focus` and
+`swissarmyhammer-commands` and scores 91, because one copy carries one extra
+filter. A gate of 100 reports 258 of the 416 and drops that pair.
+
+**Why ninety and not eighty.** Under 90 the records begin to collide by shape
+alone. `ProjectSymbols`, a record of fifteen `String` fields, matches another
+all-`String` record at 85. It is not a copy.
 
 The finding names both ends:
 
-    src/writer.rs:88: verbatim duplicate of src/backup_writer.rs:41 (15 lines / 96 tokens)
+    src/writer.rs:88: fn `write_backup_row` is a near-duplicate of `write_row` at src/backup_writer.rs:41 (96 tokens, 94% alike)
 
-Comments are not tokens, so a copy with its comments rewritten is still a copy.
-Identifiers are, so a copy with its variables renamed is a different block and
-this rule says nothing about it. That case belongs to the `duplication` prompt
-rule, which still runs for every language the grammar roster does not parse.
+A definition is reported once, against the closest of the definitions before
+it, so a cluster of copies costs one finding for each copy rather than one for
+each pair.
 
-## Which engine, and why the tokens are ours
+## What the change from a token window bought
 
-The detector is `cpd-core`, the core crate of the jscpd Rust engine
-(MIT, `github.com/kucherenko/jscpd/tree/master/rust`). Its `detect_prepared`
-entry point takes the token stream its caller supplies, which is what makes
-this rule possible: the tokens come from this workspace's own tree-sitter
-roster rather than from the engine's `cpd-tokenizer`, so the same parse that
-finds the clone also decides which blocks are test code.
+This rule used to slide a 50-token window across each file's whole token stream
+and hash each window. A window knows nothing about where a definition starts or
+ends, so it reported the tail of one function matching the head of another, and
+runs of boilerplate spanning two definitions.
 
-That is the difference this rule turns on. `jscpd` run as a command scopes its
-input by path glob alone, and a path glob cannot take an inline
+| | window over tokens | whole definitions |
+|---|---|---|
+| findings | **945** | **416** |
+| tracked `.rs` files | 1155 | 1183 |
+| median finding | 67 tokens, 12 lines | 71 tokens |
+| intra-file | 389 | 159 |
+| run time | 6.7 s | 10.5 s |
+
+The 416 are 395 functions, 13 structs and 8 enums or traits. The largest read
+as real copies: `extract_verb_noun` is 347 tokens spelled identically in
+`swissarmyhammer-skills/src/parse.rs` and `swissarmyhammer-agents/src/parse.rs`;
+`generate_code_context_examples` and `generate_kanban_examples` are 378 tokens
+at 92 percent; `build_clap_arg` in `swissarmyhammer-operations/src/cli_gen.rs`
+is 98 percent of `new` in `apps/swissarmyhammer-cli/src/dynamic_cli.rs`.
+
+Eight of the 416 are wrong, and they are worth naming. A test attribute that
+carries arguments — `#[tokio::test(flavor = "multi_thread")]` — is not read as
+a test marker, so the eight `#[tokio::test(...)]` functions in
+`swissarmyhammer-tools/src/mcp/tools/review/tests.rs` are reported. Reading the
+argument form drops the count to 408. That gap is tracked on its own card.
+
+Those numbers are a whole-tree figure. The rule runs on the changed set, so a
+review sees the copies the change carries and nothing else.
+
+## Which engine, and why it is our own
+
+The comparison is this workspace's own: definitions from its tree-sitter
+roster, normalized as above, paired by a longest-common-subsequence ratio.
+
+`cpd-core`, the core crate of the jscpd Rust engine, decided the earlier
+version of this rule and has been removed. Its `detect_prepared` is a
+Rabin-Karp rolling-hash detector over a token stream — it answers "where is a
+run of N tokens spelled twice", which is the sliding window this rule no longer
+wants, and it never sees a definition, so it cannot answer how alike two whole
+definitions are. A sequence comparison answers that question and a rolling hash
+cannot, so the dependency went with the window.
+
+`jscpd` as a command stays rejected, and for the reason `VALIDATOR.md` records:
+it scopes its input by path glob alone, and a path glob cannot take an inline
 `#[cfg(test)] mod tests` out of a file that also holds production code. The
 parse can.
 
 ## The exemptions are structural, and there are two
 
-**A block inside a test definition is exempt**, decided by the parse and never
-by the file's name:
+**A definition inside a test definition is exempt**, decided by the parse and
+never by the file's name:
 
 | Language | What marks the definition |
 |---|---|
@@ -118,55 +218,67 @@ definition to read, and a whole-file rule would have to read the path.
 
 ### What the exclusion is worth, measured
 
-Over all 1155 tracked `.rs` files of this workspace, in 6.7 s: **945** findings.
-With the Rust test markers taken out of the table and nothing else changed:
-**5077**. The structural exclusion removes 4132 findings, 81.4% of the raw
-total — the same order as the 60.6% of jscpd's Rust clone instances that sit in
-inline `#[cfg(test)]` modules, recorded in this set's `VALIDATOR.md`.
+Over all 1183 tracked `.rs` files of this workspace: **416** findings. With the
+Rust test markers taken out of the table and nothing else changed: **3490**.
+The structural exclusion removes 3074 findings, 88.1% of the raw total.
 
 That gap is the whole argument for parsing rather than globbing. A path glob
-reaches none of those 4132, because they sit inside files that also hold
+reaches none of those 3074, because they sit inside files that also hold
 production code.
 
-The 945 that remain have a median of 67 tokens and 12 lines, and 389 of them
-are intra-file. A read of the largest ones finds real copies: five CLI
-`build.rs` files are the same file, and `extract_text` and `context_at` are
-copied verbatim between `swissarmyhammer-tools`' inline review tests and its
-`tests/integration/review_fixture.rs`. A duplicated test helper is a finding
-here, and on purpose: a helper is not a test definition, so no structural
-marker exempts it, and the `cognitive-complexity` rule already says the same
-thing in as many words.
+A duplicated test *helper* is still a finding, and on purpose: a helper is not
+a test definition, so no structural marker exempts it, and the
+`cognitive-complexity` rule already says the same thing in as many words.
 
-Those numbers are a whole-tree figure. The rule runs on the changed set, so a
-review sees the copies the change carries and nothing else.
-
-**A block a marker comment names is exempt.** Write
+**A definition a marker comment names is exempt.** Write
 
     // sah:allow duplication <reason>
 
-on the line above the block. The marker covers the next item, reaching past a
-doc comment and past the item's own attributes. The text is what counts and the
-delimiter never does, so `# sah:allow duplication <reason>` and
+on the line above the definition. The marker covers the next item, reaching
+past a doc comment and past the item's own attributes. The text is what counts
+and the delimiter never does, so `# sah:allow duplication <reason>` and
 `/* sah:allow duplication <reason> */` say the same thing in the languages that
 spell a comment that way.
 
 Write the reason. The marker says the copy is deliberate; the reason says what
-makes the two blocks fork rather than drift.
+makes the two definitions fork rather than drift.
 
 There is no third exemption. The carve-outs the `duplication`, `rust` and
 `swift` prompt rules describe — a derive-style stub, a forwarding one-liner, a
-conformance stub — are all far under fifty tokens, so this rule never reaches
+conformance stub — are all far under forty tokens, so this rule never reaches
 them. A carve-out that a reader would still argue for in prose is a marker
 comment here, which is what turns the argument into a fact.
 
+## Which definitions each language declares
+
+| Language | Compared as a function | Compared as a type |
+|---|---|---|
+| Rust | `fn`, including an `impl` method | `struct`, `enum`, `trait` |
+| TypeScript, TSX, JavaScript | function, class method | `interface`, `type` alias |
+| Python | `def`, including a method | `class` |
+| Go | `func`, method | `type` |
+| Swift | `func`, including a method | `class`, `struct`, `enum`, `protocol` |
+| Java | method, constructor | `class`, `interface`, `enum` |
+| C# | method, constructor | `class`, `interface`, `struct`, `enum` |
+| C, C++ | function | `struct`, `union`, `enum`, and C++ `class` |
+| Ruby | `def`, singleton method | `class`, `module` |
+| PHP | function, method | `class`, `interface`, `trait`, `enum` |
+| Fortran | `function`, `subroutine` | — |
+| Bash | function | — |
+| Elixir | `def`, `defp`, `defmacro`, `defmacrop` | — |
+
+An Elixir module and a Rust `mod` are left out on purpose: each is a namespace
+holding the definitions below it, and neither is a unit worth comparing.
+
 ## How the run is shaped
 
-The scope is `files` because a clone pair is a fact about the files handed in.
-The engine hands the changed set to one process, so a block pasted into two
-brand-new files is caught in the same run as a block repeated inside one.
+The scope is `files` because a duplicate pair is a fact about the files handed
+in. The engine hands the changed set to one process, so a definition pasted
+into two brand-new files is caught in the same run as one repeated inside a
+single file.
 
-Two blocks are paired only when they parse to the same language, so a `.rs`
-file and a `.py` file are never compared.
+Two definitions are paired only when they parse to the same language, so a
+`.rs` file and a `.py` file are never compared.
 
 The script invokes `"$SAH_BIN"`, never a bare `sah`. The review engine exports
 that variable to every tool-rule script, resolved as: an existing `SAH_BIN` in

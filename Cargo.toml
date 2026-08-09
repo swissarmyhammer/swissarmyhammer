@@ -160,11 +160,6 @@ tree-sitter-md = "0.5"
 tree-sitter-sequel = "0.3"
 md5 = "0.7"
 crc32fast = "1.5"
-# The jscpd Rust engine's core: the Rabin-Karp clone detector, taking a token
-# stream the caller supplies. Its sibling `cpd-tokenizer` is deliberately NOT
-# used — the tokens come from this workspace's own tree-sitter roster, which is
-# what lets the gate exclude test code structurally.
-cpd-core = "0.1.7"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 fs2 = "0.4"
 simsimd = "6"

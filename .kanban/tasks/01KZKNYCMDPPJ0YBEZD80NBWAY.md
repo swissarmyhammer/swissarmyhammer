@@ -1,0 +1,161 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01kzknzj35vrhd576kpqh7qjxv
+  text: |-
+    ### The owner said this three ways — record all three
+
+    - "we're not looking for repeated code blocks, we want to find methods, functions, and types that are nearly repeated"
+    - "code blocks is looking at WAY too fine grained"
+    - "look for highly duplicate types, methods, functions"
+
+    So the unit is a whole named definition and nothing smaller. A 50-token window is a few lines. At that size the detector matches fragments of logic, which is why 945 findings say almost nothing.
+
+    ### A type normalizes differently from a function
+
+    The card body states one normalization. That is right for a function body, and it is wrong for a type. Use two:
+
+    **Function or method.** Normalize the body's token stream — the first distinct identifier becomes `v1`, the second `v2`, and each literal becomes a marker of its kind. Two functions that differ only by variable names or by one constant then hash the same.
+
+    **Type.** The body is a field list, not a statement stream, so normalize the FIELD TYPES and drop the field names. Two structs whose fields have the same types in the same order are the same shape under two names, and that is the finding. Keep the field order significant at first — an order-free comparison reports more and is a separate decision, so measure it before choosing.
+
+    Per language, the definitions to walk:
+    - Rust — `fn`, `impl` methods, `struct`, `enum`, `trait`
+    - TypeScript — function, class method, `interface`, `type` alias
+    - Python — `def`, class method, `class`
+    - Go — `func`, method, `type`
+    - Swift — `func`, method, `struct`, `class`, `enum`, `protocol`
+
+    ### "Highly" duplicate needs a number, and it must be measured
+
+    The owner said "highly duplicate", not "identical". Normalized hashing gives an exact yes or no, which answers "identical after renaming" but not "highly similar". If a degree is wanted, the deterministic way is to compare the two normalized token streams and report the ratio — for example, report a pair at or above 90 percent. That stays exact and needs no LLM and no embedding.
+
+    Do not guess the number. Run it over this workspace at several thresholds, write the counts into the rule body, and pick from the measurement.
+
+    ### What to expect from the count
+
+    The current rule reports 945 over 1155 tracked `.rs` files. Most of that should disappear, because most of it is fragments. Whatever the new number is, record BOTH in the rule body so a later reader can see what the change bought.
+  timestamp: 2026-08-09T16:34:01.957497+00:00
+- actor: claude-code
+  id: 01kzkpdptaxbtf0cehnprjg5zz
+  text: |-
+    ### Research done — picked up the card
+
+    **What is there now.**
+    - `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs` gives `DuplicationSource { language, tokens, exempt }`. `tokens` is every code leaf of the file. `exempt` is the byte ranges of test definitions and of marker comments. It already reads `is_definition_kind`, `definition_name`, `declaration_header` off the parse.
+    - `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs` hands those tokens to `cpd_core::detect::detect_prepared` at a 50-token window.
+    - Only `find_duplication.rs` reads `duplication_source`, and only `execute.rs` reads `find_duplication`. The blast radius is two files.
+
+    **Design decision — `cpd-core` goes.**
+    `detect_prepared` is Rabin-Karp over a token stream. It answers "where is a run of N tokens spelled twice", which IS the sliding window this card removes. It cannot answer "how alike are these two whole definitions", because it never sees a definition. A ratio between two whole normalized streams needs a sequence comparison, so the detector becomes a longest-common-subsequence ratio over the two normalized streams. `cpd-core` then has no caller, so the dependency comes out of the root `Cargo.toml` and out of `crates/swissarmyhammer-code-context/Cargo.toml`.
+
+    **Unit and the two normalizations.**
+    - Callable (function, method): the body's token stream. The first distinct identifier becomes `v1`, the second `v2`. Each literal becomes a marker of its kind.
+    - Record (type): the whole declaration's token stream with every `name` field dropped — the definition's own name and each member's name. Field TYPES stay verbatim, so two structs with the same field types in the same order are one shape.
+
+    **Definition roster.** The comment names five languages. The rule's `match` covers the whole grammar roster and `supersedes` the prompt rules for all of it, so a language with no definition table would silently lose the rule. Every roster language gets a table.
+
+    **Order of work.** sem extractor -> detector -> measure over the tree -> thresholds into the rule body -> fixtures -> CLI acceptance test -> drop `cpd-core`.
+  timestamp: 2026-08-09T16:41:45.546551+00:00
+- actor: claude-code
+  id: 01kzkr93w1x337wqyes84gpmh2
+  text: |-
+    ### Implementation landed
+
+    **Design decision — `cpd-core` is gone.** `detect_prepared` is Rabin-Karp over a token stream. It answers "where is a run of N tokens spelled twice", which IS the window this card removes, and it never sees a whole definition, so it cannot say how alike two definitions are. The detector is now a longest-common-subsequence ratio over the two normalized streams: `100 * 2 * shared / (left + right)`, exact integer arithmetic. `cpd-core` then had no caller, so it is out of the root `Cargo.toml`, out of `crates/swissarmyhammer-code-context/Cargo.toml` and out of `Cargo.lock` (`grep '^name = "cpd' Cargo.lock` returns 0).
+
+    **The two normalizations.** A function or method normalizes its BODY: the first distinct identifier becomes `v1`, the second `v2`, each literal becomes a marker of its kind (`#num`, `#str`, `#char`, `#float`, `#bool`). A type normalizes its whole declaration with every `name` field dropped, so the member types stay and the member names go. Field order stays significant — the comment said an order-free comparison is a separate decision, so it was not taken.
+
+    **Definition roster.** Every roster language, not only the five the comment names, because the rule's `match` covers the whole roster and `supersedes` the prompt rules for all of it. A language with no table would silently lose the rule. Rust, TypeScript/TSX/JavaScript, Python, Go, Swift, Java, C#, C, C++, Ruby, PHP, Fortran, Bash and Elixir each have a table, pinned by one test each. Elixir spells a definition as a call to `def`/`defp`/`defmacro`/`defmacrop`, so it reads the call target. The node kinds were read off real parses, not guessed.
+
+    **Thresholds, measured.** The sweep ran the comparison over all 1183 tracked `.rs` files at a floor of 20 tokens and 80 percent, then counted at every gate:
+
+    | minimum tokens | 100% | 95% | 90% | 85% | 80% |
+    |---|---|---|---|---|---|
+    | 20 | 588 | 759 | 1035 | 1452 | 1991 |
+    | 30 | 365 | 451 | 585 | 806 | 1112 |
+    | **40** | 258 | 327 | **416** | 544 | 721 |
+    | 50 | 209 | 261 | 333 | 428 | 540 |
+    | 60 | 173 | 219 | 280 | 359 | 452 |
+    | 80 | 82 | 111 | 143 | 199 | 264 |
+    | 100 | 52 | 72 | 95 | 136 | 185 |
+
+    Chosen: **40 tokens, 90 percent**. Read by hand at the boundaries. Under 40: `has_errors`/`has_warnings` in `swissarmyhammer-doctor/src/runner.rs` (25 tokens, a one-line accessor pair), and `ModelInfo`, `PerspectiveInfo`, `AddTag` — small records whose field types coincide. At 40 and over: `extract_verb_noun` spelled identically in two crates (347 tokens), `build_clap_arg` against `dynamic_cli.rs`'s `new` (363 tokens, 98%), `builtin_yaml_sources` copied across three crates. Under 90: `ProjectSymbols`, fifteen `String` fields, matches another all-`String` record at 85 — a shape collision, not a copy.
+
+    **Counts, old and new, both written into the rule body.** Old: 945 findings over 1155 tracked `.rs` files, median 67 tokens and 12 lines, 389 intra-file, 6.7 s. New: 416 findings over 1183 files, median 71 tokens, 159 intra-file, 258 exact after normalization, 10.2 s. The 416 are 395 functions, 13 structs, 8 enums or traits.
+
+    **The structural exclusion re-measured.** 416 with the Rust test markers, 3490 without them. It removes 3074 findings, 88.1% of the raw total.
+
+    **RED verified for real.** The old rule was rebuilt from HEAD into this tree (`git checkout HEAD --` the seven files, `cargo build`, run, restore) and run on the new fail fixture: it reports NOTHING. The new rule reports exactly `fail.rs:32: fn ``mirrored_band`` is a near-duplicate of ``folded_band`` at fail.rs:12 (61 tokens, 100% alike)`. The pass fixture reports nothing under both.
+
+    **Found along the way, carded as `^xpf86ds`.** `attribute_names` compares the stripped attribute text for equality only, so `#[tokio::test(flavor = "multi_thread")]` is not read as a test marker. Eight of the 416 are `#[tokio::test(...)]` functions. Reading the argument form drops the count to 408, measured. The gap predates this card, so the fix is a card of its own; the rule body names the eight so the number is honest.
+
+    **My own new code tripped the new rule.** `collect_definitions` and `collect_exemptions` were near-duplicate recursive walkers (62 tokens, 90%). They are now one `collect_under` over a `Descent` enum. Re-measured: neither new file reports at the gate.
+  timestamp: 2026-08-09T17:14:12.225751+00:00
+- actor: claude-code
+  id: 01kzkr9eaj9bp9dkz1e6ndf2tx
+  text: |-
+    ### implement — changed
+    - evidence: 11 files. `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs` (definitions + the two normalizations), `crates/swissarmyhammer-sem/src/parser/plugins/code/mod.rs`, `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs` (the LCS detector), `crates/swissarmyhammer-code-context/src/lib.rs`, `crates/swissarmyhammer-code-context/Cargo.toml`, `Cargo.toml`, `Cargo.lock` (`cpd-core` removed), `builtin/validators/duplication/rules/duplication-parsed.md`, `builtin/validators/duplication/VALIDATOR.md`, both fixtures, `apps/swissarmyhammer-cli/tests/duplication_tool_rule.rs`, plus the two op descriptions in `swissarmyhammer-tools`.
+    - thresholds: 40 normalized tokens, 90 percent alike, both chosen from a sweep over 1183 tracked `.rs` files.
+    - counts: old 945 over 1155 files (median 67 tokens, 389 intra-file); new 416 over 1183 files (median 71 tokens, 159 intra-file), 10.2 s. Both in the rule body.
+    - RED: the rule rebuilt from HEAD reports nothing on the new fail fixture; the new rule reports one finding.
+    - gates: `cargo nextest run --workspace` 13986 passed / 0 failed / 0 skipped; `cargo test --doc` 6 passed; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - HEAD: 1ce5b5fd7
+    - next: `/review`
+  timestamp: 2026-08-09T17:14:22.930147+00:00
+position_column: doing
+position_ordinal: '8480'
+title: duplication compares whole definitions, not token windows — near-duplicate functions, methods and types
+---
+Correction to `^a4ebnw3`. That card built a working deterministic duplication rule, but it compares the wrong unit.
+
+## What it does now, and why that is wrong
+
+`find_duplication` slides a 50-token window across a file's whole token stream and hashes each window. A window knows nothing about where a definition starts or ends, so it reports the tail of one function matching the head of another, and runs of boilerplate that span two definitions.
+
+The owner wants the other thing: **whole named definitions — functions, methods and types — that are NEARLY the same as each other.**
+
+The measurement fits the complaint. Over 1155 tracked `.rs` files the current rule reports 945 findings with a median of 67 tokens against a 50-token floor, and 389 of them are a file matching itself. That is the shape of fragments, not of duplicated functions. Re-measure after the change and record both numbers.
+
+## The change
+
+**Unit.** Walk the definitions the tree-sitter parse already gives, and compare a definition against a definition. Do not slide a window. `swissarmyhammer-sem`'s duplication extractor already finds definitions — that is how the structural test exclusion decides what is a test — so the parse work is done.
+
+**"Nearly", and it stays deterministic.** Near-match does NOT need similarity scoring, and the cosine probe stays rejected. Normalize each definition's token stream before hashing:
+- every identifier becomes a positional placeholder — the first distinct identifier is `v1`, the second `v2`, and so on
+- every literal becomes a marker of its kind
+
+Then two functions that differ only by their variable names, or by one constant, hash the same. This is Type-2 clone detection. It is exact, it is deterministic, and it makes no LLM call, so `^a4ebnw3`'s acceptance bar holds unchanged.
+
+This also catches the case the prompt rule always named as the real one — *"two blocks that differ only by a value are one function with an argument."* The current exact-token detector cannot see that case at all.
+
+**Report.** One finding per pair, naming both definitions:
+
+    path:line: fn `fold_grid` is a near-duplicate of `fold_band` at path:line (84 tokens)
+
+**Threshold.** A minimum definition size, so one-line accessors and trivial `From` impls do not flood the report. Measure before choosing the number; do not guess it.
+
+## Keep
+
+These parts of `^a4ebnw3` were right and must survive:
+- structural test exclusion, decided by the parse and NEVER by a file path
+- the inline suppression marker
+- `supersedes: [duplication, rust, swift]` and the empty prompt-rule reading list — zero LLM calls for the set on matched files
+- the plain-text contract line the review engine parses
+
+## Fixtures
+
+The fail fixture changes. It is now two functions that differ ONLY by a renamed variable, which the current rule does not report and the new one must. Keep the single fail/pass pair — `find_fixture` matches the prefix `<rule>.fail.` and takes the first hit, so a second pair is silently ignored.
+
+## Acceptance
+
+- Two functions that differ only by identifier names are reported as one finding naming both
+- Two functions that differ only by a literal are reported
+- A fragment that spans two definitions is NOT reported
+- Zero LLM calls for the duplication set on matched files, as `^a4ebnw3` proved
+- The workspace count is re-measured and both the old and new numbers are written into the rule body
+
+#tool-validators #objectivity

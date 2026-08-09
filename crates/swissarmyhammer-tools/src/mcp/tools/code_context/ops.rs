@@ -530,7 +530,7 @@ impl Operation for FindDuplication {
         NOUN_DUPLICATION
     }
     fn description(&self) -> &'static str {
-        "Report each pair of token-identical blocks the files repeat, in one file or across two, one `path:line: message` line per pair"
+        "Report each function, method or type of the files that is a near-duplicate of another, in one file or across two, one `path:line: message` line per pair"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         FIND_DUPLICATION_PARAMS

@@ -27,7 +27,6 @@ serde_json = { workspace = true }
 swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-search = { workspace = true }
 swissarmyhammer-sem = { workspace = true }
-cpd-core = { workspace = true }
 tree-sitter = { workspace = true }
 
 [dev-dependencies]

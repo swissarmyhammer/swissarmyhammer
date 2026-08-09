@@ -26,23 +26,36 @@ become a shared function instead of N copies a human must keep in lockstep.
 
 ## Which tools this set uses
 
-The `duplication-parsed` tool rule decides the verbatim case, and it supersedes
-`duplication`, `rust` and `swift` for every language the grammar roster parses.
-The `duplicates` probe supplies the machine facts for the rest — the languages
-the roster does not parse, and the near-verbatim copy no token matcher can see.
+The `duplication-parsed` tool rule decides the near-duplicate case, and it
+supersedes `duplication`, `rust` and `swift` for every language the grammar
+roster parses. The `duplicates` probe supplies the machine facts for the rest —
+the languages the roster does not parse.
 
-### `cpd-core` — the jscpd Rust engine, embedded
+### The comparison is our own
 
-`cpd-core` 0.1.7 (MIT) is the core crate of the jscpd Rust rewrite. Its
-`detect_prepared` entry point is the Rabin-Karp rolling-hash detector, and it
-takes the token stream its caller supplies rather than tokenizing on its own.
-That signature is what makes the rule possible: the tokens come from this
-workspace's tree-sitter roster, so the same parse that finds a clone also
-decides which blocks are test code.
+The rule walks the named definitions the tree-sitter parse reports — every
+function, every method, every type — normalizes each one, and pairs two
+definitions by the length of the longest subsequence their normalized streams
+share. A function normalizes its body positionally, so a renamed variable and a
+substituted constant both fall out; a type normalizes its member types and
+drops the member names.
 
-The engine is embedded as a library, never run as a command. Its sibling
-`cpd-tokenizer` is deliberately unused; it would pull the whole `oxc` parser
-chain and give up the parse the exemptions depend on.
+Reading definitions rather than a window is what makes the exemptions possible:
+the same parse that finds a copy decides which definitions are test code.
+
+### `cpd-core` — embedded, then removed
+
+`cpd-core` 0.1.7 (MIT), the core crate of the jscpd Rust rewrite, decided the
+first version of this rule. Its `detect_prepared` entry point is a Rabin-Karp
+rolling-hash detector over a token stream, which reports where a run of N
+tokens is spelled twice.
+
+That is the wrong question. A run is not a definition: it pairs the tail of one
+function with the head of another, and it reports boilerplate spanning two
+definitions. It also never sees a whole definition, so it cannot say how alike
+two definitions are. A sequence comparison answers that and a rolling hash
+cannot, so the dependency came out with the window. Its sibling
+`cpd-tokenizer` was never used.
 
 ### `jscpd` as a command — rejected, and why that verdict stands
 
@@ -58,11 +71,13 @@ those findings are noise.
 A tool rule that ran `jscpd` as a command could not remove them. It scopes its
 input only by path glob, and 4857 clone instances sit in inline test modules
 inside files that also hold production code. No path glob can reach those. The
-rule this set ships runs the engine's detector over a tree-sitter token stream
-instead, so the exclusion is the parse rather than the path.
+rule this set ships compares tree-sitter definitions instead, so the exclusion
+is the parse rather than the path.
 
 ### What the probe still answers
 
-Cosine similarity catches the near-duplicate that has renamed identifiers, and
-a token matcher reads that pair as two different blocks. That shape is the
-prompt rule's, and the `duplicates` probe is what it reads.
+The tool rule reads only the languages the grammar roster parses. For every
+other language the `duplication` prompt rule keeps running, and the
+`duplicates` probe is the machine fact it reads. Cosine similarity is what the
+probe measures; the tool rule needs none, because a renamed identifier falls
+out of its normalization before the two definitions are compared.

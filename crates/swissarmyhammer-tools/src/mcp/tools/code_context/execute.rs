@@ -337,7 +337,8 @@ fn execute_file_report<Finding: std::fmt::Display>(
 
 /// Execute the "find duplication" operation.
 ///
-/// Reports every pair of token-identical blocks the named files repeat. The
+/// Reports every function, method or type of the named files that is a
+/// near-duplicate of another. The
 /// `duplication-parsed` tool rule reads the report — see
 /// [`execute_file_report`] for the contract it prints.
 pub(super) fn execute_find_duplication(

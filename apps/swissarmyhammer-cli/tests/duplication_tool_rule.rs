@@ -38,13 +38,15 @@ const SAH_BINARY_ENV: &str = "SAH_BIN";
 /// The path the probe file takes in the probe repository.
 const PROBE_PATH: &str = "src/lib.rs";
 
-/// A Rust file whose only defect is one block pasted twice.
+/// A Rust file whose only defect is one function copied and its variables
+/// renamed.
 ///
-/// The two copies differ in their function name and in nothing else, so the
-/// shared run of tokens is the whole body. The pair is intra-file on purpose:
-/// that is the case a path glob can never reach.
-const PASTED_BLOCK_RS: &str = concat!(
-    "//! A probe crate for the shipped verbatim-duplicate tool rule.\n",
+/// The two copies share no run of tokens at all, because every mention of
+/// the accumulator differs, so the rule this pair replaced reported nothing
+/// here. Once each body is normalized the two streams are equal. The pair is
+/// intra-file on purpose: that is the case a path glob can never reach.
+const RENAMED_COPY_RS: &str = concat!(
+    "//! A probe crate for the shipped near-duplicate tool rule.\n",
     "\n",
     "/// Folds the readings of one grid into a band.\n",
     "pub fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {\n",
@@ -68,28 +70,28 @@ const PASTED_BLOCK_RS: &str = concat!(
     "\n",
     "/// Folds the readings of one mirrored grid into a band.\n",
     "pub fn mirrored_band(grid: &[Vec<i32>], limit: i32) -> i32 {\n",
-    "    let mut band = 0;\n",
-    "    let mut seen = 0;\n",
+    "    let mut total = 0;\n",
+    "    let mut count = 0;\n",
     "    for row in grid {\n",
     "        for cell in row {\n",
     "            if *cell < limit {\n",
-    "                band += *cell;\n",
-    "                seen += 1;\n",
+    "                total += *cell;\n",
+    "                count += 1;\n",
     "            } else {\n",
-    "                band -= *cell;\n",
+    "                total -= *cell;\n",
     "            }\n",
     "        }\n",
-    "        if seen > limit {\n",
-    "            band = limit;\n",
+    "        if count > limit {\n",
+    "            total = limit;\n",
     "        }\n",
     "    }\n",
-    "    band\n",
+    "    total\n",
     "}\n",
 );
 
-/// The same two blocks, with the second one exempted by the marker comment.
-const MARKED_BLOCK_RS: &str = concat!(
-    "//! A probe crate for the shipped verbatim-duplicate tool rule.\n",
+/// The same two functions, with the marker comment on the second.
+const MARKED_COPY_RS: &str = concat!(
+    "//! A probe crate for the shipped near-duplicate tool rule.\n",
     "\n",
     "/// Folds the readings of one grid into a band.\n",
     "pub fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {\n",
@@ -114,22 +116,22 @@ const MARKED_BLOCK_RS: &str = concat!(
     "// sah:allow duplication the mirrored reading forks when it gains its own limit\n",
     "/// Folds the readings of one mirrored grid into a band.\n",
     "pub fn mirrored_band(grid: &[Vec<i32>], limit: i32) -> i32 {\n",
-    "    let mut band = 0;\n",
-    "    let mut seen = 0;\n",
+    "    let mut total = 0;\n",
+    "    let mut count = 0;\n",
     "    for row in grid {\n",
     "        for cell in row {\n",
     "            if *cell < limit {\n",
-    "                band += *cell;\n",
-    "                seen += 1;\n",
+    "                total += *cell;\n",
+    "                count += 1;\n",
     "            } else {\n",
-    "                band -= *cell;\n",
+    "                total -= *cell;\n",
     "            }\n",
     "        }\n",
-    "        if seen > limit {\n",
-    "            band = limit;\n",
+    "        if count > limit {\n",
+    "            total = limit;\n",
     "        }\n",
     "    }\n",
-    "    band\n",
+    "    total\n",
     "}\n",
 );
 
@@ -149,15 +151,15 @@ fn duplication_work(contents: &'static str) -> WorkList {
         .map(|rule| (*rule).to_string())
         .chain(std::iter::once(TOOL_RULE.to_string()));
     tool_rule_work(
-        "one block pasted twice in one file",
+        "one function copied and its variables renamed",
         DUPLICATION_SET,
         rules,
         [(PROBE_PATH, contents)],
     )
 }
 
-/// Acceptance: a review whose only defect is a pasted block reports it, and no
-/// LLM reads the duplication set for that file.
+/// Acceptance: a review whose only defect is a copied function reports it, and
+/// no LLM reads the duplication set for that file.
 ///
 /// Four claims, each checked rather than asserted:
 ///
@@ -175,11 +177,11 @@ fn duplication_work(contents: &'static str) -> WorkList {
 ///    own message.
 #[test]
 #[serial_test::serial(env)]
-fn the_shipped_duplication_tool_rule_reports_a_pasted_block_with_no_llm_call() {
+fn the_shipped_duplication_tool_rule_reports_a_renamed_copy_with_no_llm_call() {
     let _sah = EnvVarGuard::set(SAH_BINARY_ENV, env!("CARGO_BIN_EXE_sah"));
-    let repo = probe_repository(PASTED_BLOCK_RS);
+    let repo = probe_repository(RENAMED_COPY_RS);
     let loader = builtin_loader();
-    let work = duplication_work(PASTED_BLOCK_RS);
+    let work = duplication_work(RENAMED_COPY_RS);
 
     let plan = plan_tool_rules(&work, &loader, &["rust"]);
 
@@ -265,13 +267,15 @@ fn the_shipped_duplication_tool_rule_reports_a_pasted_block_with_no_llm_call() {
     assert_eq!(finding.finding.rule.as_deref(), Some(TOOL_RULE));
     assert_eq!(finding.finding.line, 24);
     assert_eq!(
-        finding.finding.claim, "verbatim duplicate of src/lib.rs:4 (18 lines / 78 tokens)",
+        finding.finding.claim,
+        "fn `mirrored_band` is a near-duplicate of `folded_band` at src/lib.rs:4 \
+         (61 tokens, 100% alike)",
         "the claim must be the op's own message, word for word"
     );
 }
 
-/// Acceptance: the same pair of blocks, with the marker comment on the second,
-/// draws no finding from the same run.
+/// Acceptance: the same pair of functions, with the marker comment on the
+/// second, draws no finding from the same run.
 ///
 /// The pass half of the pair, run through the production path rather than
 /// through the doctor. Without it a rule that reported every repeated block
@@ -280,9 +284,9 @@ fn the_shipped_duplication_tool_rule_reports_a_pasted_block_with_no_llm_call() {
 #[serial_test::serial(env)]
 fn the_shipped_duplication_tool_rule_reports_nothing_on_a_marked_copy() {
     let _sah = EnvVarGuard::set(SAH_BINARY_ENV, env!("CARGO_BIN_EXE_sah"));
-    let repo = probe_repository(MARKED_BLOCK_RS);
+    let repo = probe_repository(MARKED_COPY_RS);
     let loader = builtin_loader();
-    let work = duplication_work(MARKED_BLOCK_RS);
+    let work = duplication_work(MARKED_COPY_RS);
 
     let plan = plan_tool_rules(&work, &loader, &["rust"]);
     let run = plan
