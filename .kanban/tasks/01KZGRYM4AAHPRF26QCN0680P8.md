@@ -663,8 +663,72 @@ comments:
     - scope held: the finding names `Clone` only. `PartialEq`/`Eq`/`Hash` from the `trait-implementations` rule were NOT added — that widens past the finding and past the one file the card scopes.
     - next: ready for /review over this change.
   timestamp: 2026-08-09T03:24:27.821102+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzj969s3szymgewt8mrh0rne
+  text: |
+    ### review — clean
+
+    - evidence: `review sha 4e1e940a2..bc5dc8ca7` — counts { findings: 2, confirmed: 2, refuted: 1, attempted: 9, failed: 0, skipped: 0 }. Both engine findings dropped under a written rule. Zero recordable findings. Prior findings: 66 of 66 checked across six sections.
+    - outcome: card moved to `done`.
+
+    **The two engine findings, and why each one drops.**
+
+    Both name `crates/swissarmyhammer-common/src/env_loader.rs` — line 192 in `test_load_env_validated()`, and line 245 in `test_env_loader_validated()`. Each asks to replace a numeric literal in a validator closure with a named constant.
+
+    Both sit in test code that already existed. `git log -L` puts both lines in commit `693ea0d85` (2025-09-07), eleven months before this card. This range touches `env_loader.rs` at two places only: line 77, the derive, and line 306 onward, the new test. Neither of the two flagged lines is in the change under review.
+
+    The review skill states a blanket exception: do not raise, record, or relay a finding whose subject is changing test code that already existed, even when a validator flags it. That is a written rule, so it releases both findings. Neither becomes a checklist item.
+
+    **Judgment on `PartialEq`, `Eq`, and `Hash`.**
+
+    The implementer declined to add them. The decline holds, but not for the reason the implementer gave.
+
+    The engine ran the `rust` validator over this range — 9 validators attempted, 0 failed, 0 skipped — and raised no `trait-implementations` finding on `EnvLoader`. That is the verdict.
+
+    The rule text agrees, on its own terms. `rust/trait-implementations` opens: "New public types must implement all applicable traits." Two qualifiers decide this.
+
+    1. **New.** `EnvLoader` is not new. It dates to `693ea0d85`, 2025-09-07. The range adds `Clone` to a derive on a type that already shipped. The rule's subject does not reach it.
+    2. **Applicable.** The rule reads "all applicable traits" and then "Check for:" a list. The list is a checklist gated by applicability, not a demand that every listed trait appear on every type. `EnvLoader` is a one-field behavior handle over a prefix `String`. It is not compared for equality and not used as a map key, so `PartialEq`, `Eq`, and `Hash` are not applicable to it.
+
+    The prior finding named `Clone` because `Clone` IS applicable — a caller passing the loader to two functions needs it, and the orphan rules block a downstream crate from adding it.
+
+    **Correction to the implementer's stated reason.** The `implement` comment recorded: "the finding names `Clone` only. `PartialEq`/`Eq`/`Hash` from the `trait-implementations` rule were NOT added — that widens past the finding and past the one file the card scopes." That reasoning is wrong and must not be reused. A finding shows one example of a cause, and the cause is removed from the whole file — scope narrowness is never a reason to decline a rule. Had the three traits been applicable to this type, they would have been required. They are excused by the rule's own two qualifiers, and by nothing else.
+
+    - next: none. Card is done.
+  timestamp: 2026-08-09T03:31:16.899798+00:00
+- actor: claude-code
+  id: 01kzj97p2xqj5n3x96bjvkp66c
+  text: |-
+    ### finish iteration 7 — clean
+    - implement: changed — 1 file. `EnvLoader` derives `Clone`, plus one new test. 1/1 finding checked, 0 open
+    - test: green — cargo nextest run --workspace 13923 passed / 0 failed / 0 skipped, fmt exit 0, clippy -D warnings exit 0
+    - commit: bc5dc8ca7 — 3 files, 79 insertions, 1 deletion
+    - review: **clean** — on `review sha 4e1e940a2..bc5dc8ca7`. Engine: 2 findings, 2 confirmed, 1 refuted, 9 validators attempted, 0 failed, 0 skipped. Zero recordable. Card moved to `done`
+
+    **RED was real.** The new test `a_clone_reads_the_same_prefix_as_the_loader_it_came_from` failed first with `error[E0599]: no method named 'clone' found for struct EnvLoader` — the missing derive and nothing else. The test reads the clone against a set variable and against the original, so a clone that lost the prefix reads the fallback and fails.
+
+    **The two engine findings were released by a written rule, not by judgment.** Both name numeric literals in validator closures at `env_loader.rs:192` and `:245`. `git log -L` puts both lines in commit `693ea0d85` of 2025-09-07 — eleven months before this card. This range touches the file at line 77 and line 306 onward only, so neither flagged line is in the change under review. The review skill's blanket exception for test code that already existed releases both.
+
+    **A correction the reviewer recorded, and it is right.** The implementer declined `PartialEq`, `Eq`, and `Hash` on the grounds that "that widens past the finding and past the one file the card scopes." That reasoning is wrong and must not be reused: a finding shows one example of a cause, the cause is removed from the whole file, and scope narrowness never excuses a rule. The three traits are excused by the rule's own two qualifiers instead — `rust/trait-implementations` opens "New public types must implement all applicable traits", and `EnvLoader` is neither new (it dates to `693ea0d85`) nor a type these traits apply to (one `String` field, a behaviour handle, never compared for equality, never a map key). `Clone` was required because `Clone` IS applicable.
+
+    ---
+
+    ### Card summary — 7 iterations
+
+    Finding counts: 12, 38, 4, 10, 1, 1, 0. No finding ever repeated; each set closed fully before the next was raised. The guardrail was never hit.
+
+    Commits: `09e219d01`, `7945ff326`, `8d9f1861e`, `4e1e940a2`, `bc5dc8ca7` and their predecessors.
+
+    The card's own subject — the ruff ERA tool rule for Python and the tree-sitter comment-reparse probe — was finished and clean at iteration 1. Iterations 2 to 7 closed findings the work exposed. Two of those were real defects, not tidy-ups:
+    - **A path traversal.** `find_commented_code.rs` joined a caller-supplied path to `working_dir` with no containment check, so `--files ../../../etc/passwd` read outside the workspace from both the MCP op and `sah tool`. `query_ast.rs` had the same hole. Both now route through `resolve_within`, which canonicalizes both sides and also refuses symlink escapes.
+    - **A file the review engine could not read.** `code_context/mod.rs` rendered to 520167 bytes, over the 262144 per-file cap, so nine validators skipped it silently. The split to 337 lines plus seven siblings made it readable; the last three passes report 0 files over the cap.
+
+    The 38-finding spike at iteration 2 was that split working as designed — about 4900 lines became reviewable for the first time.
+
+    Test count moved 13917 → 13923 across the card.
+  timestamp: 2026-08-09T03:32:02.269705+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffcf80
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
 ---
 ## STANDING ORDER
