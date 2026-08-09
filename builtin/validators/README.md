@@ -263,6 +263,15 @@ types, so the tools are already there the first time a review needs them. It
 never runs step 3 — install never spends an agent turn. A tool `sah init`
 could not install is a warning that names the rule, never an error.
 
+One install runs at a time. An exclusive lock covers steps 2 and 3 together,
+so two installers never write one destination at once. A process that waits out
+the lock installs nothing and reports the tool blocked, which lands on step 4:
+the superseded prompt rule runs. The lock covers the processes that share one
+temporary directory, which on a machine that gives each user a temporary
+directory of its own means one user. Homebrew locks its own shared prefix.
+`npm install -g` under a Homebrew node writes that shared prefix and takes
+neither lock; two users installing at that moment are not serialized.
+
 ## Doctor
 
 The review engine is doctorable. `sah doctor` reports, for this project:

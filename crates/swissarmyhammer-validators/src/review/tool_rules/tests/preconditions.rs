@@ -45,9 +45,19 @@ fn checked_binaries(check_command: &str) -> Vec<&str> {
 }
 
 /// Whether one binary is on this machine's `PATH`.
+///
+/// The name rides in as the script's one positional parameter, never inside
+/// the command string. [`checked_binaries`] reads a name back out of a rule's
+/// `doctor.check_command` by splitting on whitespace, so the name can carry
+/// any character a shell reads specially; a name inside the string would be
+/// shell syntax rather than an argument to `which`.
 fn binary_present(binary: &str) -> bool {
-    crate::doctor::run_shell(&format!("{WHICH_COMMAND} {binary}"), None, &[])
-        .is_ok_and(|output| output.status.success())
+    crate::doctor::run_shell(
+        &format!("{WHICH_COMMAND} \"$@\""),
+        None,
+        &[OsStr::new(binary)],
+    )
+    .is_ok_and(|output| output.status.success())
 }
 
 /// What a precondition failure names as missing: the binaries the check
@@ -116,8 +126,9 @@ fn precondition_report(rule_name: &str, spec: &ToolSpec, detail: &str) -> String
 /// The commands are the rule's, never the test's:
 /// [`install_tool_commands`] reads `tool.install.commands` from the rule's
 /// frontmatter, returns at once when the doctor check already passes, and
-/// holds a machine-wide lock while it runs, so two test processes never
-/// write one destination together.
+/// holds an exclusive lock while it runs, so two test processes that share a
+/// temporary directory never write one destination together.
+/// [`install_tool_commands`] states how far that lock reaches.
 ///
 /// A tool the commands cannot provide fails the test, naming the binary
 /// that actually failed the check. `check_presence` is all-or-nothing over
@@ -162,6 +173,26 @@ fn the_precondition_failure_names_the_binary_that_actually_failed() {
     let missing = missing_label(&check_command);
 
     assert_eq!(missing, ABSENT_BINARY);
+}
+
+/// A binary name read out of a check command is data, never shell syntax.
+///
+/// [`checked_binaries`] splits `doctor.check_command` on whitespace, so a word
+/// it hands back can carry any character a shell reads specially. A name put
+/// inside a command string would redirect, expand, or run a command of its
+/// own; a name passed as a positional argument cannot.
+#[test]
+fn a_checked_binary_name_reaches_which_as_one_argument() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let written = temp.path().join("written-by-the-shell");
+    let binary = format!("{ABSENT_BINARY}>{}", written.display());
+
+    assert!(!binary_present(&binary), "no machine carries that binary");
+
+    assert!(
+        !written.exists(),
+        "the name must reach `which` as one argument; the shell read it as a redirect instead"
+    );
 }
 
 /// A check command whose binaries are all present failed on something else,
