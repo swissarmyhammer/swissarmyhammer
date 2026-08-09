@@ -624,6 +624,45 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-common/src/env_loader.rs (1 insertion, 1 deletion). 1 finding checked, 0 open of 65 across five sections. Gates: `cargo nextest run --workspace` 13922 passed / 0 failed / 0 skipped; `cargo fmt --all --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings. HEAD 8d9f1861e, unmoved.
     - next: ready for `/review`
   timestamp: 2026-08-09T03:07:39.078016+00:00
+- actor: claude-code
+  id: 01kzj87h8x7zh9shr5ccs83y77
+  text: |
+    ### review — findings
+    - evidence: `review sha 8d9f1861e..4e1e940a2` — counts { findings: 1, confirmed: 1, refuted: 0, attempted: 9, failed: 0, skipped: 0 }; crates/swissarmyhammer-common/src/env_loader.rs:77
+    - prior findings: all checked; the 2026-08-08 21:50 item on env_loader.rs:280 is closed
+    - literal test arrays `["TRUE", "Yes", " On "]` and `["0", "false", "off", "", "banana"]`: the engine raised no finding on either one
+    - next: add `Clone` to the `EnvLoader` derive, then re-review this range
+  timestamp: 2026-08-09T03:14:28.765535+00:00
+- actor: claude-code
+  id: 01kzj8898mb69ebgdc0wfp1tq2
+  text: |-
+    ### finish iteration 6 — findings
+    - implement: changed — 1 file, 1 line. `crates/swissarmyhammer-common/src/env_loader.rs` test loop now reads `TRUTHY_ENV_VALUES`. 1/1 finding checked, 0 open
+    - test: green — cargo nextest run --workspace 13922 passed / 0 failed / 0 skipped, fmt exit 0, clippy -D warnings exit 0
+    - commit: 4e1e940a2 — 3 files, 117 insertions, 1 deletion
+    - review: findings — 1 open, on `review sha 8d9f1861e..4e1e940a2`. Engine: 1 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped
+
+    The finding: `crates/swissarmyhammer-common/src/env_loader.rs:77` — `EnvLoader` is a public type whose fields are all `Clone`, but the type does not derive `Clone`. The Rust orphan rules stop a downstream crate from adding it.
+
+    **The whole-file sweep argument was upheld.** The implementer left two test arrays with literal values and gave a reason; the reviewer judged it correct and the engine raised no finding on either.
+    - `["TRUE", "Yes", " On "]` holds perturbed spellings — uppercase, mixed case, and surrounding space. They are deliberately NOT the contents of the constant. The test proves the loader trims and lowercases before it compares, so reading the constant would delete the perturbation the test exists to apply.
+    - `["0", "false", "off", "", "banana"]` is the complement set. A complement cannot be derived from the set it complements. `"off"` is a near-miss and `"banana"` a far-miss against the truthy list.
+
+    Finding counts by iteration: 12, 38, 4, 10, 1, 1. No finding has ever repeated.
+
+    Guardrail: NOT hit.
+  timestamp: 2026-08-09T03:14:53.332058+00:00
+- actor: claude-code
+  id: 01kzj8st9dbczm51sb49f28rq4
+  text: |
+    ### implement — changed
+    - evidence: 1 file — `crates/swissarmyhammer-common/src/env_loader.rs`. `EnvLoader` now derives `Clone` (`#[derive(Clone, Debug)]`). 1/1 finding checked, 0 open.
+    - whole-file sweep: `EnvLoader` is the ONLY public type in `env_loader.rs`. Every other item is a free function. No second type carries the same defect, so the sweep adds nothing beyond the named line.
+    - TDD: added `a_clone_reads_the_same_prefix_as_the_loader_it_came_from`. RED first — `error[E0599]: no method named clone found for struct EnvLoader`, which is the missing derive and nothing else. GREEN after the derive. The test reads the clone against a set variable AND against the original loader, so a clone that dropped the prefix reads the fallback and fails.
+    - gates: `cargo nextest run --workspace` 13923 passed / 0 failed / 0 skipped. `cargo fmt --all --check` exit 0. `cargo clippy --workspace --all-targets -- -D warnings` exit 0.
+    - scope held: the finding names `Clone` only. `PartialEq`/`Eq`/`Hash` from the `trait-implementations` rule were NOT added — that widens past the finding and past the one file the card scopes.
+    - next: ready for /review over this change.
+  timestamp: 2026-08-09T03:24:27.821102+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -734,3 +773,7 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 ## Review Findings (2026-08-08 21:50)
 
 - [x] `crates/swissarmyhammer-common/src/env_loader.rs:280` — String literals "1", "true", "yes", "on" are hardcoded in the test loop, but these exact values are already named in the TRUTHY_ENV_VALUES constant at line 18. Repeating the literals creates maintenance drift — if TRUTHY_ENV_VALUES is updated, the test array must be separately updated to stay in sync. Replace the hardcoded array with the named constant: `for value in TRUTHY_ENV_VALUES {`.
+
+## Review Findings (2026-08-08 22:09)
+
+- [x] `crates/swissarmyhammer-common/src/env_loader.rs:77` — EnvLoader is a public type with all Clone fields but does not implement Clone. Due to Rust orphan rules, downstream crates cannot add Clone if needed, preventing forward-compatible API usage (e.g., passing the loader to multiple functions without shared borrows). Add Clone to the derive macro: `#[derive(Clone, Debug)]`.

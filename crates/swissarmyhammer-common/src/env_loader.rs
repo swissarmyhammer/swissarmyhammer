@@ -74,7 +74,7 @@ where
 }
 
 /// Builder for loading multiple environment variables with consistent prefix
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EnvLoader {
     prefix: String,
 }
@@ -305,5 +305,33 @@ mod tests {
                 "{value} must read as false even against a true default"
             );
         }
+    }
+
+    /// The prefix the clone test builds its loader on.
+    const CLONE_PREFIX: &str = "SWISSARMYHAMMER_TEST_CLONE";
+
+    /// The suffix the clone test loads under [`CLONE_PREFIX`].
+    const CLONE_SUFFIX: &str = "STRING";
+
+    /// The value the clone test sets. It differs from [`CLONE_FALLBACK`], so a
+    /// clone that lost the prefix reads the fallback instead of this.
+    const CLONE_VALUE: &str = "cloned";
+
+    /// The default the clone test passes, which a correct clone never reads.
+    const CLONE_FALLBACK: &str = "unset";
+
+    #[test]
+    #[serial_test::serial(env_loader_clone)]
+    fn a_clone_reads_the_same_prefix_as_the_loader_it_came_from() {
+        let _guard = EnvVarGuard::set(format!("{CLONE_PREFIX}_{CLONE_SUFFIX}"), CLONE_VALUE);
+        let loader = EnvLoader::new(CLONE_PREFIX);
+
+        let clone = loader.clone();
+
+        assert_eq!(clone.load_string(CLONE_SUFFIX, CLONE_FALLBACK), CLONE_VALUE);
+        assert_eq!(
+            clone.load_string(CLONE_SUFFIX, CLONE_FALLBACK),
+            loader.load_string(CLONE_SUFFIX, CLONE_FALLBACK)
+        );
     }
 }
