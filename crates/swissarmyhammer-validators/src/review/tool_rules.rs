@@ -1675,17 +1675,18 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     /// `dead-code` prompt rule, and reports the stranded statement through the
     /// real vulture pipeline.
     ///
-    /// The suppression half is the load-bearing one, and it is asserted only
-    /// when the rule planned a run — a healthy tool rule suppresses whatever
-    /// its `supersedes` names, and a machine without vulture falls the rule
-    /// back to the prompt rule instead. Superseding is what makes dead code
-    /// objective for Python: the prompt rule's carve-outs for the exported
-    /// surface and for staged work become `__all__` and `# noqa: V1xx`, which
-    /// the tool reads.
+    /// The suppression half is the load-bearing one: a healthy tool rule
+    /// suppresses whatever its `supersedes` names. Superseding is what makes
+    /// dead code objective for Python — the prompt rule's carve-outs for the
+    /// exported surface and for staged work become `__all__` and
+    /// `# noqa: V1xx`, which the tool reads.
     ///
-    /// The reporting half runs under the same condition, the one
-    /// [`every_shipped_dead_code_tool_rule_passes_its_fixtures`] applies: a
-    /// missing tool degrades the rule and never blocks a review.
+    /// The test installs the tool first, the way
+    /// [`verify_shipped_tool_rules_pass_fixtures`] does, and then REQUIRES the
+    /// run. A rule that planned no run fails the test and names the plan's
+    /// fallbacks, which carry the doctor's reason. Returning early instead
+    /// would leave the test asserting nothing, and a test that cannot fail is
+    /// not a gate.
     #[test]
     fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
         let repo = tempfile::tempdir().unwrap();
@@ -1696,17 +1697,22 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         )
         .unwrap();
         let loader = builtin_loader();
+        let project_types = ["python"];
+        crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
         let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
 
-        let plan = plan_tool_rules(&work, &loader, &["python"]);
+        let plan = plan_tool_rules(&work, &loader, &project_types);
 
-        let Some(run) = plan
+        let run = plan
             .runs()
             .iter()
             .find(|run| run.rule() == PYTHON_DEAD_CODE_RULE)
-        else {
-            return;
-        };
+            .unwrap_or_else(|| {
+                panic!(
+                    "the shipped Python dead-code tool rule must plan a run; fallbacks: {:?}",
+                    plan.fallbacks()
+                )
+            });
         assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
         assert!(
             plan.suppression()
@@ -1928,9 +1934,12 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     /// package exercises that half, and only it proves the finding lands on the
     /// manifest rather than on the source file.
     ///
-    /// The run is asserted only when the rule planned one, the same condition
-    /// [`every_shipped_unused_dependency_tool_rule_passes_its_fixtures`]
-    /// applies: a missing tool degrades the rule and never blocks a review.
+    /// The test installs the tool first, the way
+    /// [`verify_shipped_tool_rules_pass_fixtures`] does, and then REQUIRES the
+    /// run. A rule that planned no run fails the test and names the plan's
+    /// fallbacks, which carry the doctor's reason. Returning early instead
+    /// would leave the test asserting nothing, and a test that cannot fail is
+    /// not a gate.
     #[test]
     fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
         let repo = tempfile::tempdir().unwrap();
@@ -1946,20 +1955,26 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         )
         .unwrap();
         let loader = builtin_loader();
+        let project_types = ["rust"];
+        crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
         let work = manifests_work(
             UNUSED_DEPENDENCY_MANIFEST_PATH,
             UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
         );
 
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
+        let plan = plan_tool_rules(&work, &loader, &project_types);
 
-        let Some(run) = plan
+        let run = plan
             .runs()
             .iter()
             .find(|run| run.rule() == RUST_UNUSED_DEPENDENCIES_RULE)
-        else {
-            return;
-        };
+            .unwrap_or_else(|| {
+                panic!(
+                    "the shipped Rust unused-dependency tool rule must plan a run; \
+                     fallbacks: {:?}",
+                    plan.fallbacks()
+                )
+            });
         assert_eq!(
             run.files(),
             [UNUSED_DEPENDENCY_MANIFEST_PATH.to_string()],

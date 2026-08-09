@@ -199,6 +199,116 @@ comments:
     - evidence: 8 files — `apps/swissarmyhammer-cli/Cargo.toml`, `apps/swissarmyhammer-cli/tests/duplication_tool_rule.rs`, `apps/swissarmyhammer-cli/tests/commented_code_tool_rule.rs`, `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs`, `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs`, `crates/swissarmyhammer-validators/src/review/test_support.rs`, `crates/swissarmyhammer-validators/src/review/tool_rules.rs`, `Cargo.lock`. 16 of 16 findings checked. `cargo nextest run --workspace` 13961 passed / 0 failed / 0 skipped (13960 before; the one new test is the `Eq`/`Hash` RED). `cargo fmt --all --check` exit 0. `cargo clippy --workspace --all-targets -- -D warnings` exit 0. `cargo machete apps/swissarmyhammer-cli` reports none. `sah tool code_context duplication find` reports zero pairs in `execute.rs`. HEAD unmoved at 68092a2ff.
     - next: `/review`
   timestamp: 2026-08-09T13:16:41.906997+00:00
+- actor: claude-code
+  id: 01kzkavjbw0t4746e1002pp8cp
+  text: |
+    ### Claim 3 — addendum, traced through the fan-out
+
+    Two facts beyond the earlier comment, both from reading the production path rather than the test.
+
+    **What holds the `supersedes` list complete.** `crates/swissarmyhammer-validators/src/builtin/mod.rs` carries `assert_eq!(duplication.rules.len(), 4)`. That guard is what stops a fifth prompt rule from being added to the set and silently escaping `supersedes: [duplication, rust, swift]`. There is NO generic validation that a `supersedes` name resolves to a real rule in its set, so a typo would suppress nothing; for this rule the acceptance test is the only thing that catches it.
+
+    **The prompt path is dead, not reordered.** `plan_fan_out` in `crates/swissarmyhammer-validators/src/review/fleet.rs` calls `prompt_rules_for`, and when the result is empty for a non-empty ruleset it logs `every rule for these files is a tool rule or superseded by a healthy one; no LLM task` and `continue`s. No task is built, so there is no agent and no prompt. The acceptance test stops one function short of `plan_fan_out`, but `prompt_rules_for` is the sole filter that `plan_fan_out` applies, so the empty list reaches that `continue`.
+
+    `prompt_rules_for` drops two kinds of rule: a tool rule, which never reaches an agent at all, and any name in the suppressed set.
+
+    **Scope of the claim, stated precisely.** Suppression is keyed `(validator, file)`, so it reaches the `duplication` set and nothing else. The `reuse` set's `reuse` rule reads near-duplicates by cosine similarity and still costs an LLM turn — it is a different validator, outside "the duplication set", so the acceptance bar is untouched by it.
+
+    **One narrowing on `attempted() == 1`.** The test builds its own `ToolReport` from `plan.runs()` filtered to `rule() == "duplication-parsed"`, rather than reading production's `tool_attempted` in `synthesize.rs`. So it proves "the shipped rule planned exactly one run", which is the right claim for this rule, rather than "the whole review attempted one tool run".
+
+    **Observation, not a finding — pre-existing shared infrastructure, unchanged by this range.** Suppression is committed at plan time, before the tool runs: `synthesize.rs` calls `plan_tool_rules`, then `execute_tool_runs`, then takes the suppression out of the plan. The `ToolFallback` branch covers plan-time health only. So a script that passes the doctor and THEN exits nonzero at run time becomes a `ToolRunError` with no prompt re-run, and those files carry zero duplication coverage for that run. This ordering came in with `^n0680p8`, not with this card, and the review engine did not raise it.
+
+    **A drift guard worth naming.** `the_shipped_duplication_tool_rule_matches_the_whole_grammar_roster` holds the rule's `match` equal to `get_all_code_extensions()`, so the glob list cannot grow wider than the roster and silence the prompt rule for files no tool reads.
+
+    Verified live: `cargo nextest run -p swissarmyhammer-cli --test duplication_tool_rule` — 3 passed, 0 failed.
+  timestamp: 2026-08-09T13:19:36.828119+00:00
+- actor: claude-code
+  id: 01kzkbqmpvwzax1f0t8neqq185
+  text: |-
+    ### review — findings
+    - evidence: `review sha 68092a2ff..bc83a4dd5` — counts {findings: 3, confirmed: 3, refuted: 6, attempted: 27, failed: 0}. 2 recorded: crates/swissarmyhammer-validators/src/review/tool_rules.rs:1707, crates/swissarmyhammer-validators/src/review/tool_rules.rs:1961. 1 released by the skill's blanket exception for test code that already existed: crates/swissarmyhammer-validators/src/review/test_support.rs:370 (asks to extract a literal in the pre-existing `seed_chunk` helper into a named constant; the line arrives in 83223a9b0, an ancestor of 68092a2ff).
+    - Both directed judgments clear. Twelve deleted CLI dependencies: 0 unsafe of 12 — no removed line carried `features`, `default-features`, `package =`, or `optional`, so feature unification cannot regress; no `[features]` table exists in the manifest; `is_terminal()` is `std::io::IsTerminal`. `test-support`: declared at crates/swissarmyhammer-validators/Cargo.toml:107, absent from any `default` list, and the module is gated at crates/swissarmyhammer-validators/src/review/mod.rs:21 with `#[cfg(any(test, feature = "test-support"))]`. The four routed call sites show no behavioural difference.
+    - next: add the missing assertion to each of the two tests so neither can pass with zero assertions, then re-review.
+  timestamp: 2026-08-09T13:34:56.731461+00:00
+- actor: claude-code
+  id: 01kzkbs48rc3dzx20gyyske1mb
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 8 files, 16/16 findings checked. Four causes removed
+    - test: green — cargo nextest run --workspace 13961 passed / 0 failed / 0 skipped, fmt exit 0, clippy -D warnings exit 0
+    - commit: bc83a4dd5 — 10 files, 275 insertions, 130 deletions
+    - review: findings — 2 open, on `review sha 68092a2ff..bc83a4dd5`. Engine: 3 findings, 3 confirmed, 6 refuted, 27 attempted, 0 failed. Two recorded, one released
+
+    **Each cause was wider than the findings cited it, and the whole-file rule caught the rest:** a twelfth unused dependency (`reqwest`, in both dependency tables), three copies of `builtin_loader` rather than two, three types missing `Hash` rather than two.
+
+    **The two open findings are a real hole, not a style point.** `tool_rules.rs:1707` and `:1961` each do `let Some(run) = plan.runs().iter().find(...) else { return; };`, so when the tool is absent the test passes with ZERO assertions. Both lines predate this range (`6e5342c26` and `ae9dc0e94`), but the pre-existing-test exception covers refactoring, deduplicating, renaming and restyling. Adding an assertion so a test can fail is none of those, so no written rule releases them.
+
+    **One finding WAS released, correctly:** `test_support.rs:370` asked that a hardcoded end line become a named constant. That line arrives in `83223a9b0`, an ancestor, and extracting a literal from existing test code is restyling. The blanket exception releases it.
+
+    **Judgment A — the twelve deleted dependencies are safe, 0 unsafe of 12.** This rests on a STATIC fact, not on a green build: no removed line carried `features`, `default-features`, `package =`, or `optional`. Every one was a bare `workspace = true` requesting exactly the workspace-root baseline, so none could be the sole source of a feature another crate unified in — removal cannot subtract from a resolved feature set. `apps/swissarmyhammer-cli/Cargo.toml` has no `[features]` table at all, so no `dep:` reference can break. The `is_terminal()` calls resolve to the std trait (`banner.rs:6` imports `std::io::IsTerminal`), and the `dirs`, `glob` and `ignore` text hits are prose in doc comments.
+
+    Noted, not a finding: `scopeguard` now has no workspace consumer, which leaves a dead `[workspace.dependencies]` entry. It breaks nothing.
+
+    **Judgment B — the `test-support` gate is sound.** The feature is declared, the manifest has no `default` key, and the module is gated `#[cfg(any(test, feature = "test-support"))]`. Nothing test-only reaches a release build. The four routed call sites carry no behavioural difference — same purpose strings, same rule order and constants, same empty `ProbeNames` and `FileWork` arguments. No test lost an assertion, was deleted, or gained `#[ignore]`.
+
+    Finding counts by iteration: 16, 2. No finding has repeated.
+
+    Guardrail: NOT hit.
+  timestamp: 2026-08-09T13:35:45.432369+00:00
+- actor: claude-code
+  id: 01kzkcf2tc984q5p7asyrg0n9d
+  text: |
+    ### The two findings, worked — and the whole-file sweep
+
+    **The defect.** Both tests did `let Some(run) = plan.runs().iter().find(...) else { return; };`. `plan_tool_rules` plans a run ONLY when `check_tool_rule(...).usable()` — otherwise the rule becomes a `ToolFallback`. So on a machine without vulture or without `cargo machete`, each test returned having asserted NOTHING and reported PASS. A test that cannot fail is not a gate.
+
+    **The fix — the established pattern, not a new one.** The same file already holds the shape twice, at `the_shipped_rust_tool_rule_reports_an_undocumented_public_item` and `the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function`:
+
+        .unwrap_or_else(|| {
+            panic!(
+                "the shipped Rust tool rule must plan a run; fallbacks: {:?}",
+                plan.fallbacks()
+            )
+        });
+
+    Both tests now use it. `plan.fallbacks()` is what NAMES the reason: each `ToolFallback` carries the doctor's `detail`.
+
+    Remedy (3) of each finding is also taken, because remedy (1) alone leaves the test at the mercy of process order. Under nextest every test is its own process, so the install that `every_shipped_dead_code_tool_rule_passes_its_fixtures` performs does not reach a test that runs first. Both tests now call `install_project_tool_rules(&loader, &project_types)` themselves, the way `verify_shipped_tool_rules_pass_fixtures` does. The call is cheap when the tool is present: `install_tool_commands` answers `AlreadyPresent` and runs nothing.
+
+    The `project_types` literal is now one binding for each test, shared by the install and by `plan_tool_rules`, so the two can never disagree.
+
+    **RED, verified, not claimed.** Each `find` was pointed at `"no-such-rule"` and the two tests were run:
+
+        thread '...the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code' panicked at
+        crates/swissarmyhammer-validators/src/review/tool_rules.rs:1711:17:
+        the shipped Python dead-code tool rule must plan a run; fallbacks: [ToolFallback {
+          validator: "code-hygiene", rule: "no-commented-code-parsed",
+          supersedes: Supersedes(["no-commented-code"]),
+          detail: "tool missing: error: unrecognized subcommand 'commented_code'\n\nUsage: sah tool code_context [OPTIONS] [COMMAND]..." }]
+
+        thread '...the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency' panicked at
+        crates/swissarmyhammer-validators/src/review/tool_rules.rs:1972:17:
+        the shipped Rust unused-dependency tool rule must plan a run; fallbacks: []
+
+    `Summary [0.592s] 2 tests run: 0 passed, 2 failed`. Before the change the same mutation stayed GREEN. Restored, both PASS.
+
+    The Python message also shows the fallback list doing its job on an UNRELATED rule — the installed `sah` on PATH has no `commented_code` subcommand — which is the same PATH condition this card already recorded.
+
+    **Whole-file sweep — no other site.** Every `return` in `tool_rules.rs` outside the two: three in production code before the `mod tests` boundary at line 729, and three inside string or doc content. No `return Ok(())`, no `#[ignore]`, no `continue`. The one conditional in the test module, `if row.presence == ToolPresence::Present` in `verify_shipped_tool_rules_pass_fixtures`, is NOT this shape — the row's `supersedes` is asserted unconditionally, and `assert!(exercised > 0, ...)` fails the test when every rule takes that branch.
+
+    **Sibling acceptance-test files — clean.** `apps/swissarmyhammer-cli/tests/commented_code_tool_rule.rs` and `apps/swissarmyhammer-cli/tests/duplication_tool_rule.rs` are the only other files that call `plan_tool_rules`, and all four of their `find` sites already carry `unwrap_or_else(|| panic!(...))` with `plan.fallbacks()`. Neither file holds a bare `return`.
+
+    **Two early returns nearby that are NOT this defect, and were not touched.** `review/fleet/tests.rs` `wait_for` returns when its condition holds and `panic!`s on timeout. `review/test_support.rs` `rename_current_branch_to` returns when the branch already carries the name. Both are correct.
+
+    **Same shape found OUTSIDE this card's scope, reported not changed.** `apps/swissarmyhammer-cli/tests/integration/doc_examples.rs` holds FOUR tests that do `if !dir.exists() { eprintln!("Skipping ..."); return; }` and then assert nothing — `test_doc_examples_*` at lines 18, 162, 184 and 251. Same defect, different file, no finding on this card, so it is left alone and reported here.
+  timestamp: 2026-08-09T13:47:44.844292+00:00
+- actor: claude-code
+  id: 01kzkcfa9fvm5vxvab1g36vtpk
+  text: |
+    ### implement — changed
+    - evidence: 1 file — `crates/swissarmyhammer-validators/src/review/tool_rules.rs`. 2 of 2 findings checked (`:1707`, `:1961`). RED verified: with each `find` pointed at `"no-such-rule"`, `2 tests run: 0 passed, 2 failed` — `the shipped Python dead-code tool rule must plan a run; fallbacks: [ToolFallback { ... detail: "tool missing: ..." }]` and `the shipped Rust unused-dependency tool rule must plan a run; fallbacks: []`. Restored, both PASS. `cargo nextest run --workspace` 13961 passed / 0 failed / 0 skipped. `cargo fmt --all --check` exit 0. `cargo clippy --workspace --all-targets -- -D warnings` exit 0. HEAD `3773be9a3` (the card named `bc83a4dd5`, now two commits back — a merge of the `review` branch landed `29272dcf3` on top).
+    - next: `/review`
+  timestamp: 2026-08-09T13:47:52.495046+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
 position_column: doing
@@ -254,3 +364,15 @@ Depends on ^adf0d7h (or close it into this card per point 3).
 - [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:26` — TokenPoint implements Eq but not Hash; Rust's Eq-implies-Hash rule requires consistency between equality and hashing to maintain invariants in HashMap/HashSet. Add Hash to the derive list: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]`.
 - [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:41` — DuplicationToken implements Eq but not Hash; Rust's Eq-implies-Hash rule requires consistency between equality and hashing to maintain invariants in HashMap/HashSet. Add Hash to the derive list: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs:319` — execute_find_duplication (lines 319–333) and execute_find_commented_code (lines 348–362) are near-verbatim duplicates: parameter extraction, working directory resolution, operation call, and result formatting are identical, differing only in the function invoked (find_duplication vs find_commented_code). Two blocks that differ only by a value are one function with an argument. Extract a shared handler function parameterized by the operation callback: extract_operation_result(args, context, operation_fn) where operation_fn is find_duplication or find_commented_code. This eliminates the repeated parameter-extraction, directory-resolution, and formatting logic.
+
+## Review Findings (2026-08-09 08:18)
+
+Scope: `68092a2ff..bc83a4dd5`.
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1707` — Test silently returns without asserting anything if the rule is not in the plan. If the tool is not installed or the rule is not planned, the test passes with zero assertions, violating the principle that every test should be able to fail. Either: (1) add an `assert!(run.is_some(), "shipped Python dead-code tool must plan a run")` before the return to make the test fail when the tool is missing, or (2) mark the test with `#[ignore]` and document why it requires the tool, or (3) use `install_project_tool_rules()` like `verify_shipped_tool_rules_pass_fixtures` does (line 1765) to guarantee the tool is installed before testing.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1961` — Test silently returns without asserting anything if the rule is not in the plan. If the tool is not installed, the test passes with zero assertions, violating the principle that every test should be able to fail. Either: (1) add an assertion before the return: `assert!(run.is_some(), "shipped Rust unused-dependency tool must plan a run")`, or (2) mark the test with `#[ignore]` and document why it requires the tool, or (3) use `install_project_tool_rules()` like the helper at line 1765 does to guarantee the tool is installed before testing.
+
+### Directed judgments this pass — both clear
+
+- Twelve deleted CLI dependencies: 0 unsafe of 12. No removed line carried `features`, `default-features`, `package =`, or `optional` — every one was a bare `workspace = true`, so it requested exactly the workspace-root baseline and could never have been the sole source of a feature another crate unified in. Removal cannot subtract from the resolved feature set. No `[features]` table exists in `apps/swissarmyhammer-cli/Cargo.toml`, so no `dep:` or implicit optional-dependency feature can break. No rename, no macro-expansion vector, no per-crate pin. `is_terminal()` resolves to `std::io::IsTerminal` (`apps/swissarmyhammer-cli/src/banner.rs:6`, `src/main.rs:367`, `src/main.rs:933`), and the `dirs`/`glob`/`ignore` text hits are prose, not code.
+- `test-support` feature gate: sound. `crates/swissarmyhammer-validators/Cargo.toml:107` declares `test-support = ["model-embedding/test-support"]`; there is no `default` key, so the feature is off unless asked for. `crates/swissarmyhammer-validators/src/review/mod.rs:21` gates the module with `#[cfg(any(test, feature = "test-support"))]`, so no test-only code reaches a release build, and every non-doc reference to `test_support` sits inside a `#[cfg(test)]` module. The four routed call sites carry no behavioural difference: same purpose strings, same rule order, same content constants, same `ProbeNames::new([])` and empty `FileWork` arguments. No test lost an assertion, was deleted, or was ignored in this range.
