@@ -1,5 +1,6 @@
 mod commented_code;
 mod complexity;
+mod duplication;
 mod entity_extractor;
 mod languages;
 mod public_surface;
@@ -23,6 +24,12 @@ pub use complexity::{
 /// skip marker, an empty body — so a reviewer reads rows instead of counting
 /// assertion calls by eye. See [`complexity::test_census`].
 pub use complexity::{test_census, TestCensus, TestDefect};
+/// The tokens and the exemptions one file contributes to the verbatim
+/// duplicate gate, so the detector pairs code and never pairs test code. See
+/// [`duplication`].
+pub use duplication::{
+    duplication_source, DuplicationSource, DuplicationToken, TokenPoint, DUPLICATION_ALLOW_MARKER,
+};
 /// What a change did to a file's public surface — declarations added, removed,
 /// re-spelled, or given a different visibility — so a reviewer reads rows
 /// instead of comparing declarations by eye, computed by the `public_surface`

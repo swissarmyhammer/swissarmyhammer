@@ -1,0 +1,103 @@
+//! The pass half of the `duplication-parsed` fixture pair.
+//!
+//! Three copies, and the rule reports none of them. Each one is an exemption
+//! the rule states, so a run that stopped reading any one of the three makes
+//! this pair fail:
+//!
+//! 1. `mirrored_band` repeats `folded_band` and carries the marker comment.
+//! 2. `mod tests` repeats a block inside a `#[cfg(test)]` module.
+//! 3. `near_edge` and `near_floor` repeat a block under the fifty-token window.
+
+/// Folds the readings of one grid into a band.
+pub fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    let mut seen = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                band += *cell;
+                seen += 1;
+            } else {
+                band -= *cell;
+            }
+        }
+        if seen > limit {
+            band = limit;
+        }
+    }
+    band
+}
+
+// sah:allow duplication the mirrored reading forks when it gains its own limit
+/// Folds the readings of one mirrored grid into a band.
+pub fn mirrored_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    let mut seen = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                band += *cell;
+                seen += 1;
+            } else {
+                band -= *cell;
+            }
+        }
+        if seen > limit {
+            band = limit;
+        }
+    }
+    band
+}
+
+/// Reads the band one step over the edge.
+pub fn near_edge(limit: i32) -> i32 {
+    limit + 1
+}
+
+/// Reads the band one step over the floor.
+pub fn near_floor(limit: i32) -> i32 {
+    limit + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds the grid the first case reads.
+    fn first_grid(limit: i32) -> Vec<Vec<i32>> {
+        let mut grid = Vec::new();
+        let mut row = Vec::new();
+        for step in 0..limit {
+            row.push(step);
+            if row.len() > 3 {
+                grid.push(row);
+                row = Vec::new();
+            }
+        }
+        grid.push(row);
+        grid
+    }
+
+    /// Builds the grid the second case reads.
+    fn second_grid(limit: i32) -> Vec<Vec<i32>> {
+        let mut grid = Vec::new();
+        let mut row = Vec::new();
+        for step in 0..limit {
+            row.push(step);
+            if row.len() > 3 {
+                grid.push(row);
+                row = Vec::new();
+            }
+        }
+        grid.push(row);
+        grid
+    }
+
+    #[test]
+    fn the_two_grids_read_the_same_band() {
+        assert_eq!(
+            folded_band(&first_grid(8), 4),
+            folded_band(&second_grid(8), 4)
+        );
+    }
+}

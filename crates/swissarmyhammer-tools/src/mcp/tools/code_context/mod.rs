@@ -12,6 +12,7 @@
 //! - `clear status`: Wipe all index data
 //! - `lsp status`: Show detected languages, LSP servers, and install status
 //! - `detect projects`: Detect project types in the workspace and return guidelines
+//! - `find duplication`: Token-identical blocks a file repeats, inside one file or across two
 //! - `find commented_code`: Comment blocks that re-parse as code in the file's own language
 //!
 //! Uses the `swissarmyhammer-code-context` crate for all operations,
@@ -72,7 +73,7 @@ const CODE_CONTEXT_DIR_WITH_SLASH: &str = ".code-context/";
 const CODE_CONTEXT_INIT_NAME: &str = "code-context";
 
 /// Every operation this tool answers, as the dispatch error messages list them.
-const VALID_OPERATIONS_LIST: &str = "'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'";
+const VALID_OPERATIONS_LIST: &str = "'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'find duplication', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'";
 
 /// Unified code context tool providing symbol lookup, search, and graph operations.
 #[derive(Clone, Debug, Default)]
@@ -302,6 +303,7 @@ impl McpTool for CodeContextTool {
             "search code" => execute::execute_search_code(&arguments, context).await,
             "find duplicates" => execute::execute_find_duplicates(&arguments, context),
             "query ast" => execute::execute_query_ast(&arguments, context),
+            "find duplication" => execute::execute_find_duplication(&arguments, context),
             "find commented_code" => execute::execute_find_commented_code(&arguments, context),
             "get callgraph" => execute::execute_get_callgraph(&arguments, context),
             "get blastradius" => execute::execute_get_blastradius(&arguments, context),

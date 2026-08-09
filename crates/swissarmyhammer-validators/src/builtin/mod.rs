@@ -640,7 +640,8 @@ mod tests {
             .get_ruleset("duplication")
             .expect("duplication should still load unchanged");
         assert_eq!(duplication.manifest.probes, vec!["duplicates".to_string()]);
-        assert_eq!(duplication.rules.len(), 3);
+        // `duplication`, `rust`, `swift` and the `duplication-parsed` tool rule.
+        assert_eq!(duplication.rules.len(), 4);
     }
 
     /// Every probe the `completeness` ruleset declares, beside the rule that

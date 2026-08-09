@@ -59,6 +59,10 @@ fn generate_code_context_examples() -> Vec<Value> {
             "value": {"op": "query ast", "query": "(function_item name: (identifier) @name)", "language": "rust"}
         }),
         json!({
+            "description": "Report the token-identical blocks a file repeats",
+            "value": {"op": "find duplication", "files": ["src/main.rs"]}
+        }),
+        json!({
             "description": "Report the comment blocks that re-parse as code",
             "value": {"op": "find commented_code", "files": ["src/main.rs"]}
         }),

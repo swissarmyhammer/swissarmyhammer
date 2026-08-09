@@ -32,7 +32,7 @@ fn test_code_context_tool_has_description() {
 fn test_code_context_tool_has_operations() {
     let tool = CodeContextTool::new();
     let ops = tool.operations();
-    assert_eq!(ops.len(), 25);
+    assert_eq!(ops.len(), 26);
     assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
     assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
     assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -40,6 +40,7 @@ fn test_code_context_tool_has_operations() {
     assert!(ops.iter().any(|o| o.op_string() == "search code"));
     assert!(ops.iter().any(|o| o.op_string() == "find duplicates"));
     assert!(ops.iter().any(|o| o.op_string() == "query ast"));
+    assert!(ops.iter().any(|o| o.op_string() == "find duplication"));
     assert!(ops.iter().any(|o| o.op_string() == "find commented_code"));
     assert!(ops.iter().any(|o| o.op_string() == "get callgraph"));
     assert!(ops.iter().any(|o| o.op_string() == "get blastradius"));
@@ -95,7 +96,7 @@ fn test_code_context_tool_full_schema_has_operation_schemas() {
     let op_schemas = schema["x-operation-schemas"]
         .as_array()
         .expect("should have x-operation-schemas");
-    assert_eq!(op_schemas.len(), 25);
+    assert_eq!(op_schemas.len(), 26);
 
     // The per-op signature map is carried on the full schema.
     assert!(schema["x-op-signatures"].is_object());

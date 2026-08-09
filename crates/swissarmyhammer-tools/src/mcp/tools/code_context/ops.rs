@@ -51,6 +51,8 @@ const NOUN_STATUS: &str = "status";
 const NOUN_INDEX: &str = "index";
 /// Noun of the duplicated-code operation.
 const NOUN_DUPLICATES: &str = "duplicates";
+/// Noun of the token-identical-block operation.
+const NOUN_DUPLICATION: &str = "duplication";
 /// Noun of the tree-sitter query operation.
 const NOUN_AST: &str = "ast";
 /// Noun of the commented-out-code operation.
@@ -512,6 +514,29 @@ impl Operation for QueryAst {
     }
 }
 
+/// Operation metadata for the token-identical duplicate gate.
+#[derive(Debug, Default)]
+pub struct FindDuplication;
+
+static FIND_DUPLICATION_PARAMS: &[ParamMeta] = &[ParamMeta::new("files")
+    .description("File paths to read, relative to the workspace root or absolute")
+    .param_type(ParamType::Array)];
+
+impl Operation for FindDuplication {
+    fn verb(&self) -> &'static str {
+        VERB_FIND
+    }
+    fn noun(&self) -> &'static str {
+        NOUN_DUPLICATION
+    }
+    fn description(&self) -> &'static str {
+        "Report each pair of token-identical blocks the files repeat, in one file or across two, one `path:line: message` line per pair"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        FIND_DUPLICATION_PARAMS
+    }
+}
+
 /// Operation metadata for the commented-out-code re-parse verdict.
 #[derive(Debug, Default)]
 pub struct FindCommentedCode;
@@ -892,6 +917,7 @@ code_context_roster![
     SearchCode,
     FindDuplicates,
     QueryAst,
+    FindDuplication,
     FindCommentedCode,
     GetCallgraph,
     GetBlastradius,

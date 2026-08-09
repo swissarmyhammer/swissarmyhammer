@@ -73,6 +73,7 @@ pub use ops::find_duplicates::{
     find_duplicates, find_duplicates_in, ChunkRef, DuplicateGroup, DuplicateMatch,
     FindDuplicatesOptions, FindDuplicatesResult,
 };
+pub use ops::find_duplication::{find_duplication, DuplicationFinding};
 pub use ops::get_blastradius::{
     get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
 };

@@ -13,9 +13,9 @@ use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 
 use swissarmyhammer_code_context::{
-    find_commented_code, BlastRadiusOptions, CallGraphDirection, CallGraphOptions,
-    FindDuplicatesOptions, GetSymbolOptions, GrepOptions, QueryAstOptions, SearchCodeOptions,
-    SearchSymbolOptions,
+    find_commented_code, find_duplication, BlastRadiusOptions, CallGraphDirection,
+    CallGraphOptions, FindDuplicatesOptions, GetSymbolOptions, GrepOptions, QueryAstOptions,
+    SearchCodeOptions, SearchSymbolOptions,
 };
 
 use super::support::{
@@ -301,6 +301,35 @@ pub(super) fn execute_query_ast(
     )
     .map_err(context_err)?;
     json_result(&result)
+}
+
+/// Execute the "find duplication" operation.
+///
+/// Reports every pair of token-identical blocks the named files repeat, as
+/// PLAIN TEXT, one `path:line: message` line per pair. The shape matches
+/// [`execute_find_commented_code`] and for the same reason: the
+/// `duplication-parsed` tool rule runs this op through `sah tool` and the
+/// review engine parses its stdout directly, where a JSON result would arrive
+/// as YAML.
+///
+/// No workspace is opened. A clone pair is a fact about the files named, so
+/// the op answers without the code-context index and runs in a scratch
+/// directory that holds no `.code-context` database — which is where the
+/// rule's doctor fixtures live.
+pub(super) fn execute_find_duplication(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let files: Vec<&str> = extract_required_str_array(args, "files")?;
+
+    let working_dir = resolve_working_dir(context);
+
+    let report = find_duplication(&working_dir, &files)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join("\n");
+    Ok(CallToolResult::success(vec![Content::text(report)]))
 }
 
 /// Execute the "find commented_code" operation.
