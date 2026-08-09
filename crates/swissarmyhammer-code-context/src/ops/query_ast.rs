@@ -162,7 +162,7 @@ pub fn query_ast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::workspace_beside_an_outside_file;
+    use crate::test_fixtures::{workspace_beside_an_outside_file, WORKSPACE_OUTSIDE_RUST_FILE};
     use std::fs;
     use tempfile::TempDir;
 
@@ -332,12 +332,13 @@ mod tests {
 
     #[test]
     fn a_relative_path_that_climbs_out_of_the_workspace_is_refused() {
-        let (_dir, workspace) = workspace_beside_an_outside_file("outside.rs", OUTSIDE_RUST_SOURCE);
+        let (_dir, workspace) =
+            workspace_beside_an_outside_file(WORKSPACE_OUTSIDE_RUST_FILE, OUTSIDE_RUST_SOURCE);
 
         let result = query_ast(
             &workspace,
             &rust_language(),
-            &["../outside.rs".to_string()],
+            &[format!("../{WORKSPACE_OUTSIDE_RUST_FILE}")],
             "(function_item name: (identifier) @name)",
             &QueryAstOptions::default(),
         )
@@ -349,8 +350,13 @@ mod tests {
 
     #[test]
     fn an_absolute_path_outside_the_workspace_is_refused() {
-        let (dir, workspace) = workspace_beside_an_outside_file("outside.rs", OUTSIDE_RUST_SOURCE);
-        let outside = dir.path().join("outside.rs").to_string_lossy().to_string();
+        let (dir, workspace) =
+            workspace_beside_an_outside_file(WORKSPACE_OUTSIDE_RUST_FILE, OUTSIDE_RUST_SOURCE);
+        let outside = dir
+            .path()
+            .join(WORKSPACE_OUTSIDE_RUST_FILE)
+            .to_string_lossy()
+            .to_string();
 
         let result = query_ast(
             &workspace,

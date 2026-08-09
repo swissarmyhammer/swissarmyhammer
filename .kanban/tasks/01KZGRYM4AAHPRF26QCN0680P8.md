@@ -458,6 +458,68 @@ comments:
     - `git status` at the end lists only the 6 source files plus this card's own `.md`/`.jsonl`. `crates/swissarmyhammer-mcp-proxy/.kanban/` exists but is tracked and committed since 5 July — pre-existing, not a stray from this run.
     - next: `/review`
   timestamp: 2026-08-09T02:12:18.134932+00:00
+- actor: claude-code
+  id: 01kzj5n7n339bk9hh7kyd6etwe
+  text: |
+    ### review — findings
+
+    - scope: `review sha 09e219d01..7945ff326` (the fourth pass, 8 files — 6 source plus this card's own `.md`/`.jsonl`).
+    - engine counts: 25 findings, 25 confirmed, 14 refuted, 9 attempted, 0 failed, 0 skipped files. No file passed the prompt cap this time.
+    - recorded: 10 findings in the `## Review Findings (2026-08-08 21:15)` section — `crates/swissarmyhammer-code-context/src/test_fixtures.rs:56`, and `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs` at 76, 81, 310, 312, 324, 326, 338, 348, 462.
+    - dropped by the skill's blanket exception (findings whose subject is restructuring test code that already existed): 13 in `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs` at 742, 749, 768, 805, 826, 869, 976, 1144, 1165, 1375, 1397, 1420 and 1444 — that file's `mod tests` starts at line 694, so every one of them names pre-existing test code; `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:209` — tests start at line 162; `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs:92` — tests start at line 43.
+    - the behaviour claim holds. Each of the four fixes was read against the diff and each preserves behaviour:
+      1. `query_ast.rs` — `DEFAULT_MAX_RESULTS` is `50`, the same value the literal held.
+      2. `test_fixtures.rs` — the module is `#[cfg(test)]` in `lib.rs`, so nothing new ships. Each of the three call sites gets the same scratch layout it built before: `query_ast` writes `outside.rs` holding `fn secret() {}`, `find_commented_code` writes `outside.rs` holding `COMMENTED_OUT_FUNCTION_RS`, and `workspace_path` gets `outside.txt` plus `inside.txt`. `tempfile::tempdir()` and `TempDir::new()` are the same call.
+      3. `indexing.rs` — the doc block now precedes `build_default_embedder` and `env_flag_enabled` keeps its own. A doc comment has no run-time effect, and the body of neither function changed.
+      4. `process.rs` — the helper sends the same signal to the same process group at the same three moments: SIGTERM in `terminate_gracefully`, SIGKILL in `force_kill`, SIGKILL in `Drop`. Off Unix the helper is a no-op, which matches the absent `#[cfg(unix)]` block it replaces, and every caller still holds its `Child::kill`. The `#[cfg(not(unix))]` arm in `terminate_gracefully` is unchanged.
+      So none of the four changed behaviour, and none of them is a finding on that count.
+    - next: work the 10 findings, then re-review the same way.
+  timestamp: 2026-08-09T02:29:31.939227+00:00
+- actor: claude-code
+  id: 01kzj5pydbdntg2a8a44927vnx
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — 6 source files. All 4 findings worked, each box flipped as that fix was verified
+    - test: green — cargo nextest run --workspace, 13917 passed, 0 failed, 0 skipped; fmt clean; clippy -D warnings clean
+    - commit: 7945ff326 — 8 files, 279 insertions, 90 deletions
+    - review: findings — 10 open, on `review sha 09e219d01..7945ff326`. Engine: 25 returned, 25 confirmed, 14 refuted, 9 attempted, 0 failed, 0 over the prompt cap; 15 dropped under the pre-existing-test exception
+
+    **The no-RED claim was judged and it holds.** The reviewer read all four against the diff: `DEFAULT_MAX_RESULTS` is the same 50; `test_fixtures.rs` is `#[cfg(test)]`-gated so no production surface grew, and each call site gets the same scratch layout; the doc block moved with neither function body changed; and `signal_process_group` sends the same signal to the same process group at the same three moments, with the `#[cfg(not(unix))]` arm untouched. None of the four changed behaviour.
+
+    **A structural observation for whoever picks this up next.** Nine of the ten findings are in `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs` — a file this iteration did not edit. It entered review scope only because a doc comment moved inside it, and the engine then read the whole file. The two causes are real: five repeats of `"UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?"` and four verbatim copies of the mark-and-continue recovery block.
+
+    That is the same dynamic that produced iteration 2's 38: fixing a line in a file pulls the whole file into scope, and the whole file's pre-existing debt comes with it. It is the review engine working correctly, but it means this card is now excavating debt in the code_context tool rather than doing its own work. The card's own subject — the commented-code parse rule — has been finished and clean since iteration 1.
+
+    Finding counts by iteration: 12, 38, 4, 10. No finding has ever repeated; each set was closed before the next was raised.
+
+    Guardrail: NOT hit by the letter of the rule. Worth a human's judgment on scope all the same.
+  timestamp: 2026-08-09T02:30:28.011644+00:00
+- actor: claude-code
+  id: 01kzj6qm4vjv5y21mxxf5y11hw
+  text: |-
+    Worked all 10 findings of the 2026-08-08 21:15 section. Three causes, removed at the source.
+
+    **1. Fixture filenames spelled inline (test_fixtures.rs).** Added `WORKSPACE_OUTSIDE_FILE`, `WORKSPACE_INSIDE_FILE`, `WORKSPACE_OUTSIDE_RUST_FILE`, and made `WORKSPACE_DIR_NAME` public. The fixture and every reader now name the files once: `ops/workspace_path.rs`, `ops/find_commented_code.rs`, `ops/query_ast.rs`. `outside.rs` was the same cause in the same fixture family (4 sites across two modules), so it is named too.
+
+    **2. `env_flag_enabled` reinvented env-boolean parsing.** Deleted it. The canonical parser is now `swissarmyhammer_common::env_loader::load_env_bool(key, default)` — the module the workspace already owns for env reading. `build_default_embedder` calls it with a new `DISABLE_EMBEDDING_ENV` constant. `markdowndown`'s `parse_env_bool` stays: markdowndown is a Tier 0 leaf with zero workspace dependencies (ARCHITECTURE.md crate tier rules), and it is pre-existing test code.
+
+    **3. Four verbatim mark-and-continue blocks + five copies of the mark SQL.** Added `MARK_FILE_TS_INDEXED_SQL` and `mark_file_ts_indexed(db, relative_path)`. Extracted `parse_dirty_file(lang_registry, file_path) -> Option<(&LanguageConfig, Arc<ParsedFile>)>`: detect language, read, set grammar, parse — all four give-up paths collapse to one `None`, so the loop now has ONE recovery site instead of four. Renumbered the step comments the collapse left stale.
+
+    **RED proved, not assumed.** Removed `.to_ascii_lowercase()` from `load_env_bool` and re-ran: `a_truthy_spelling_is_matched_without_regard_to_case_or_padding` FAILED and `an_uppercase_disable_flag_skips_the_embedder` FAILED (the ANE model loaded and returned `Some`). Reverted, both GREEN.
+
+    The indexing test asserts the skip log line as well as `is_none()`, because `is_none()` alone also holds when the model merely fails to load — the log fires only on the flag branch.
+
+    The SQL/helper extraction is behaviour-preserving: same statements, same order, same ignored-error handling. No RED was staged for it.
+
+    `indexing.rs` was not written by this card — a doc comment moved into it put it in review scope. Effort stayed on removing the two causes; the file was not redesigned.
+  timestamp: 2026-08-09T02:48:18.843645+00:00
+- actor: claude-code
+  id: 01kzj6qw2yz3hq2aajfmr7nmyy
+  text: |-
+    ### implement — changed
+    - evidence: 6 source files — crates/swissarmyhammer-code-context/src/test_fixtures.rs, crates/swissarmyhammer-code-context/src/ops/workspace_path.rs, crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs, crates/swissarmyhammer-code-context/src/ops/query_ast.rs, crates/swissarmyhammer-common/src/env_loader.rs, crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs. 10 of 10 findings checked (0 open). `cargo nextest run --workspace`: 13922 passed, 0 failed, 0 skipped. `cargo test --doc -p swissarmyhammer-common`: 25 passed. `cargo fmt --all --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - next: /review
+  timestamp: 2026-08-09T02:48:26.974566+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -551,3 +613,16 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 - [x] `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:326` — Test fixture `workspace_beside_an_outside_file()` is duplicated across three test modules instead of defined once and reused. The same function with identical structure appears in workspace_path.rs:49 and find_commented_code.rs:173. Remove this function definition and import `workspace_beside_an_outside_file` from the workspace_path module's tests instead (or create a shared test utility module if cross-crate reuse is needed).
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:110` — Public function `build_default_embedder` lacks a doc comment. Although documentation exists at lines 76–93 that describes embedder construction, it is separated from this function by the `env_flag_enabled` function definition (lines 99–108). In Rust, doc comments apply to the immediately following item, so lines 76–93 attach to `env_flag_enabled` instead, leaving `build_default_embedder` undocumented. Move the documentation from lines 76–93 (and remove the mismatched lines 94–98) to immediately precede `build_default_embedder` at line 110, or rewrite the doc comment at that location to document the actual function being defined.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:139` — Near-verbatim duplicate Unix signal-sending block. See line 88 for the shared duplication issue. Replace with call to the extracted helper function from the line 88 duplication fix.
+
+## Review Findings (2026-08-08 21:15)
+
+- [x] `crates/swissarmyhammer-code-context/src/test_fixtures.rs:56` — Hardcoded filename 'outside.txt' is repeated across test files and should be a named constant. Define pub const WORKSPACE_OUTSIDE_FILE: &str = "outside.txt" in test_fixtures.rs and use it in the fixture and in workspace_path.rs tests.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:76` — The new `env_flag_enabled` function (lines 76–90) implements case-insensitive matching of environment variable values by calling `to_ascii_lowercase()` before checking against tokens like "true", "yes", "on", but no test feeds the function a non-canonical spelling ("TRUE", "YES", "ON") to prove the case-insensitive contract holds. Add one test that sets `SAH_DISABLE_EMBEDDING=TRUE` (or similar non-canonical case) and asserts that `env_flag_enabled("SAH_DISABLE_EMBEDDING")` returns `true`, proving case-insensitive matching works.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:81` — env_flag_enabled reinvents environment-variable boolean parsing; parse_env_bool at crates/markdowndown/tests/integration/config.rs:71 duplicates this exact capability with high semantic similarity. Check whether parse_env_bool can be extracted to a shared module or imported, rather than reimplementing the same truthy-value matching logic (checking for "1", "true", "yes", "on").
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:310` — Verbatim block repeated 3 more times (lines 324, 336, 348). Error-recovery pattern ('mark file indexed and continue') should be extracted into a helper function to avoid drift when the recovery logic changes. Extract a helper function `mark_file_indexed_and_continue(db, relative_path, indexed)` and call it from all four error sites instead of repeating the block.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:312` — SQL string is repeated 5 times and should be extracted to a named constant. Define const MARK_FILE_TS_INDEXED_SQL: &str = "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?"; at the module level and reuse it.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:324` — Verbatim duplicate of block at line 310; see that finding for the fix. See line 310 finding — extract shared helper.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:326` — SQL string is repeated 5 times and should be extracted to a named constant. Extract to const MARK_FILE_TS_INDEXED_SQL: &str and reuse across all five locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:338` — SQL string is repeated 5 times and should be extracted to a named constant. Extract to const MARK_FILE_TS_INDEXED_SQL: &str and reuse across all five locations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:348` — Verbatim duplicate of block at line 310; see that finding for the fix. See line 310 finding — extract shared helper.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:462` — SQL string is repeated 5 times and should be extracted to a named constant. Extract to const MARK_FILE_TS_INDEXED_SQL: &str and reuse across all five locations.

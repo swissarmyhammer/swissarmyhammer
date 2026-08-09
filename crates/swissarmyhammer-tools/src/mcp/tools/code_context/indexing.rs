@@ -8,12 +8,67 @@
 //! them when an embedder is available.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use swissarmyhammer_code_context::SharedDb;
+use swissarmyhammer_treesitter::{LanguageConfig, LanguageRegistry, ParsedFile};
 
 /// How many files the indexer completes between progress log lines.
 ///
 /// A long pass over thousands of dirty files logs one checkpoint per this many
 /// files, so the log shows progress without one line per file.
 const INDEXING_PROGRESS_LOG_INTERVAL: u64 = 100;
+
+/// The environment variable that turns chunk embedding off for a pass.
+const DISABLE_EMBEDDING_ENV: &str = "SAH_DISABLE_EMBEDDING";
+
+/// Flag one file as tree-sitter indexed, leaving `embedded` alone.
+///
+/// Every site that finishes with a file without embedding it — the four
+/// give-up paths and the partially-embedded success path — writes this one
+/// statement.
+const MARK_FILE_TS_INDEXED_SQL: &str =
+    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?";
+
+/// Mark `relative_path` as tree-sitter indexed.
+///
+/// The dirty-file query selects `WHERE ts_indexed = 0`, so a file this pass
+/// could not chunk has to be flagged anyway; otherwise every later pass picks
+/// it up again and fails on it again. A write failure is ignored for the same
+/// reason the rest of the indexer ignores one: the pass is best-effort and the
+/// next pass retries.
+fn mark_file_ts_indexed(db: &SharedDb, relative_path: &str) {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    let _ = conn.execute(MARK_FILE_TS_INDEXED_SQL, rusqlite::params![relative_path]);
+}
+
+/// Detect `file_path`'s language, read it, and parse it.
+///
+/// Returns `None` when the roster claims no grammar for the extension, when
+/// the file cannot be read as text, when the grammar cannot be installed on a
+/// parser, or when the parse yields no tree. The indexer answers all four the
+/// same way — mark the file indexed and move to the next one — so they
+/// collapse into one absent value instead of four copies of that recovery.
+fn parse_dirty_file(
+    lang_registry: &LanguageRegistry,
+    file_path: &Path,
+) -> Option<(&'static LanguageConfig, Arc<ParsedFile>)> {
+    let lang_config = lang_registry.detect_language(file_path)?;
+    let content = std::fs::read_to_string(file_path).ok()?;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&lang_config.language()).ok()?;
+    let tree = parser.parse(&content, None)?;
+
+    let content_hash: [u8; 16] = md5::compute(content.as_bytes()).into();
+    let parsed_file = Arc::new(ParsedFile::new(
+        file_path.to_path_buf(),
+        content,
+        tree,
+        content_hash,
+    ));
+    Some((lang_config, parsed_file))
+}
 
 /// Trigger incremental tree-sitter indexing on dirty files.
 ///
@@ -73,22 +128,6 @@ pub(super) fn download_observer_for(
     })
 }
 
-/// Returns whether the named environment variable is set to a truthy value.
-///
-/// Truthy means `1`, `true`, `yes`, or `on` (case-insensitive). Any other
-/// value — including unset, empty, or `0`/`false` — is false. Used for opt-in
-/// boolean toggles like `SAH_DISABLE_EMBEDDING`.
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 /// Construct the default embedder and load it.
 ///
 /// Returns `None` and logs a warning on construction or load failure. The
@@ -121,7 +160,7 @@ pub(super) async fn build_default_embedder(
     // model load (which on a clean machine downloads gigabytes from HuggingFace
     // and otherwise dominates the run). Semantic `search code` is unavailable
     // for chunks indexed in this mode until a later pass embeds them.
-    if env_flag_enabled("SAH_DISABLE_EMBEDDING") {
+    if swissarmyhammer_common::env_loader::load_env_bool(DISABLE_EMBEDDING_ENV, false) {
         tracing::info!(
             "code-context: SAH_DISABLE_EMBEDDING set — skipping chunk embeddings this pass"
         );
@@ -202,9 +241,8 @@ pub(crate) async fn index_discovered_files_with_embedder(
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
     shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
-    use std::sync::Arc;
     use swissarmyhammer_code_context::{IndexProgress, IndexRunStats};
-    use swissarmyhammer_treesitter::{chunk::chunk_file, LanguageRegistry, ParsedFile};
+    use swissarmyhammer_treesitter::chunk::chunk_file;
 
     let run_start = std::time::Instant::now();
 
@@ -303,68 +341,17 @@ pub(crate) async fn index_discovered_files_with_embedder(
 
         let file_path = workspace_root.join(relative_path);
 
-        // 1. Detect language (no DB needed)
-        let lang_config = match lang_registry.detect_language(&file_path) {
-            Some(config) => config,
-            None => {
-                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = conn.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                    rusqlite::params![relative_path],
-                );
-                indexed += 1;
-                continue;
-            }
-        };
-
-        // 2. Read and parse file (no DB needed)
-        let content = match std::fs::read_to_string(&file_path) {
-            Ok(c) => c,
-            Err(_) => {
-                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = conn.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                    rusqlite::params![relative_path],
-                );
-                indexed += 1;
-                continue;
-            }
-        };
-
-        let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&lang_config.language()).is_err() {
-            let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-            let _ = conn.execute(
-                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                rusqlite::params![relative_path],
-            );
+        // 1. Detect the language, read the file, and parse it (no DB needed).
+        //    Any of those four steps failing means this pass cannot chunk the
+        //    file, so mark it indexed and move on rather than handing it back
+        //    to every later pass.
+        let Some((lang_config, parsed_file)) = parse_dirty_file(lang_registry, &file_path) else {
+            mark_file_ts_indexed(&db, relative_path);
             indexed += 1;
             continue;
-        }
-
-        let tree = match parser.parse(&content, None) {
-            Some(t) => t,
-            None => {
-                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = conn.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                    rusqlite::params![relative_path],
-                );
-                indexed += 1;
-                continue;
-            }
         };
 
-        let content_hash: [u8; 16] = md5::compute(content.as_bytes()).into();
-
-        let parsed_file = Arc::new(ParsedFile::new(
-            file_path.clone(),
-            content,
-            tree,
-            content_hash,
-        ));
-
-        // 3. Extract semantic chunks (no DB needed)
+        // 2. Extract semantic chunks (no DB needed)
         let chunks = chunk_file(parsed_file.clone());
         // The `done` value here is post-increment so the first file reports
         // `done: 1`. `indexed` is incremented at the bottom of the loop
@@ -377,7 +364,7 @@ pub(crate) async fn index_discovered_files_with_embedder(
             total: total as u64,
         });
 
-        // 4. Embed chunks BEFORE acquiring the DB lock. embed_text is async
+        // 3. Embed chunks BEFORE acquiring the DB lock. embed_text is async
         //    and may take 30-100ms per chunk on ANE; holding the connection
         //    mutex across that wait would starve other workers.
         let embedded_chunks =
@@ -396,7 +383,7 @@ pub(crate) async fn index_discovered_files_with_embedder(
         let all_chunks_embedded =
             embedder.is_some() && embedded_chunks.iter().all(|c| c.embedding.is_some());
 
-        // 5. Lock DB once for the entire write batch for this file
+        // 4. Lock DB once for the entire write batch for this file
         {
             let conn = db.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -431,10 +418,10 @@ pub(crate) async fn index_discovered_files_with_embedder(
                 }
             }
 
-            // 6. Extract symbols from chunks
+            // 5. Extract symbols from chunks
             let _ = swissarmyhammer_code_context::ensure_ts_symbols(&conn, relative_path);
 
-            // 7. Generate and write call edges
+            // 6. Generate and write call edges
             let source_text = parsed_file.source.as_str();
             let language = lang_config.language();
             if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
@@ -446,22 +433,17 @@ pub(crate) async fn index_discovered_files_with_embedder(
                 let _ = swissarmyhammer_code_context::write_ts_edges(&conn, relative_path, &edges);
             }
 
-            // 8. Mark file as ts_indexed. Mark embedded=1 only when every
+            // 7. Mark file as ts_indexed. Mark embedded=1 only when every
             //    chunk for the file got an embedding (or there were no chunks
             //    to embed); partial failure leaves embedded=0. The file is
             //    not re-driven by this function until ts_indexed is flipped
             //    back to 0 by something else — see the function docstring.
-            if all_chunks_embedded {
-                let _ = conn.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1, embedded = 1 WHERE file_path = ?",
-                    rusqlite::params![relative_path],
-                );
+            let mark_sql = if all_chunks_embedded {
+                "UPDATE indexed_files SET ts_indexed = 1, embedded = 1 WHERE file_path = ?"
             } else {
-                let _ = conn.execute(
-                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                    rusqlite::params![relative_path],
-                );
-            }
+                MARK_FILE_TS_INDEXED_SQL
+            };
+            let _ = conn.execute(mark_sql, rusqlite::params![relative_path]);
 
             total_chunks += chunks_written;
         }
@@ -612,4 +594,42 @@ async fn embed_file_chunks(
         );
     }
     prepared
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
+
+    /// A non-canonical spelling of a truthy flag value.
+    ///
+    /// The escape hatch is documented as case-insensitive, so a shell that
+    /// exports `SAH_DISABLE_EMBEDDING=TRUE` must disable embedding exactly as
+    /// `true` does.
+    const UPPERCASE_TRUTHY: &str = "TRUE";
+
+    /// The log line the skip branch — and only the skip branch — emits.
+    const SKIP_LOG_FRAGMENT: &str = "skipping chunk embeddings this pass";
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(sah_disable_embedding)]
+    #[tracing_test::traced_test]
+    async fn an_uppercase_disable_flag_skips_the_embedder() {
+        let _guard = EnvVarGuard::set(DISABLE_EMBEDDING_ENV, UPPERCASE_TRUTHY);
+        let reporter = swissarmyhammer_code_context::noop_reporter();
+
+        let embedder = build_default_embedder(&reporter).await;
+
+        // `is_none()` alone would also hold if the flag were missed and the
+        // model merely failed to load, so assert the skip branch's own log
+        // line as well: it fires only when the flag reads as truthy.
+        assert!(
+            embedder.is_none(),
+            "an uppercase truthy flag must skip the embedder"
+        );
+        assert!(
+            logs_contain(SKIP_LOG_FRAGMENT),
+            "the skip must come from the flag, not from a model-load failure"
+        );
+    }
 }

@@ -24,7 +24,25 @@ use crate::lsp_communication::LspJsonRpcClient;
 // ---------------------------------------------------------------------------
 
 /// The name of the workspace directory inside the scratch directory.
-const WORKSPACE_DIR_NAME: &str = "workspace";
+pub const WORKSPACE_DIR_NAME: &str = "workspace";
+
+/// The name of the plain-text file written beside the workspace by
+/// [`workspace_with_an_inside_and_an_outside_file`].
+///
+/// The fixture and every test that reaches for the outside file name it here
+/// once, so the two cannot drift apart.
+pub const WORKSPACE_OUTSIDE_FILE: &str = "outside.txt";
+
+/// The name of the plain-text file written inside the workspace by
+/// [`workspace_with_an_inside_and_an_outside_file`].
+pub const WORKSPACE_INSIDE_FILE: &str = "inside.txt";
+
+/// The name of the Rust source file the grammar-reading ops write beside the
+/// workspace with [`workspace_beside_an_outside_file`].
+///
+/// `find commented_code` and `query ast` both parse the outside file with the
+/// Rust grammar, so both name it here rather than each spelling it inline.
+pub const WORKSPACE_OUTSIDE_RUST_FILE: &str = "outside.rs";
 
 /// A scratch directory holding a workspace and, beside it, a file the workspace
 /// must not reach.
@@ -47,14 +65,14 @@ pub fn workspace_beside_an_outside_file(
 }
 
 /// The same scratch layout as [`workspace_beside_an_outside_file`], with
-/// `inside.txt` written inside the workspace as well.
+/// [`WORKSPACE_INSIDE_FILE`] written inside the workspace as well.
 ///
 /// A resolver test needs both halves: a file it must reach and a file it must
-/// not. The two files hold their own names as contents, so a test that reads
+/// not. The two files hold their own stems as contents, so a test that reads
 /// one can say which it got.
 pub fn workspace_with_an_inside_and_an_outside_file() -> (TempDir, PathBuf) {
-    let (scratch, workspace) = workspace_beside_an_outside_file("outside.txt", "outside");
-    std::fs::write(workspace.join("inside.txt"), "inside").expect("write the inside file");
+    let (scratch, workspace) = workspace_beside_an_outside_file(WORKSPACE_OUTSIDE_FILE, "outside");
+    std::fs::write(workspace.join(WORKSPACE_INSIDE_FILE), "inside").expect("write the inside file");
     (scratch, workspace)
 }
 

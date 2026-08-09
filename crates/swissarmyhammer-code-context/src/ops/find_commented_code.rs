@@ -77,7 +77,7 @@ fn findings_in_file(working_dir: &Path, file: &str) -> Option<Vec<CommentedCodeF
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::workspace_beside_an_outside_file;
+    use crate::test_fixtures::{workspace_beside_an_outside_file, WORKSPACE_OUTSIDE_RUST_FILE};
 
     /// A Rust file whose only defect is a commented-out function.
     const COMMENTED_OUT_FUNCTION_RS: &str = concat!(
@@ -171,17 +171,26 @@ mod tests {
 
     #[test]
     fn a_relative_path_that_climbs_out_of_the_working_directory_is_refused() {
-        let (_dir, workspace) =
-            workspace_beside_an_outside_file("outside.rs", COMMENTED_OUT_FUNCTION_RS);
+        let (_dir, workspace) = workspace_beside_an_outside_file(
+            WORKSPACE_OUTSIDE_RUST_FILE,
+            COMMENTED_OUT_FUNCTION_RS,
+        );
+        let climbing = format!("../{WORKSPACE_OUTSIDE_RUST_FILE}");
 
-        assert!(find_commented_code(&workspace, &["../outside.rs"]).is_empty());
+        assert!(find_commented_code(&workspace, &[climbing.as_str()]).is_empty());
     }
 
     #[test]
     fn an_absolute_path_outside_the_working_directory_is_refused() {
-        let (dir, workspace) =
-            workspace_beside_an_outside_file("outside.rs", COMMENTED_OUT_FUNCTION_RS);
-        let outside = dir.path().join("outside.rs").to_string_lossy().to_string();
+        let (dir, workspace) = workspace_beside_an_outside_file(
+            WORKSPACE_OUTSIDE_RUST_FILE,
+            COMMENTED_OUT_FUNCTION_RS,
+        );
+        let outside = dir
+            .path()
+            .join(WORKSPACE_OUTSIDE_RUST_FILE)
+            .to_string_lossy()
+            .to_string();
 
         assert!(find_commented_code(&workspace, &[outside.as_str()]).is_empty());
     }
