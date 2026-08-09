@@ -731,10 +731,12 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use crate::doctor::ToolPresence;
+    use crate::doctor::{check_presence, ToolPresence, ToolRuleStatus};
     use crate::review::scope::{FileWork, ProbeNames, RuleNames};
     use crate::review::test_support::{builtin_loader, tool_rule_work, write_tool_rule_fixtures};
-    use crate::validators::types::{Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch};
+    use crate::validators::types::{
+        FixHint, Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch,
+    };
 
     /// A shell probe that always succeeds — "the tool is installed".
     const TOOL_PRESENT: &str = "true";
@@ -1471,6 +1473,58 @@ mod tests {
         );
     }
 
+    /// The remedies a rule states for a missing tool, as one line: the install
+    /// commands in order of preference, then the `doctor.fix_hint` a tool with
+    /// no installable package carries.
+    fn remedy_label(install_commands: &[String], fix_hint: Option<&FixHint>) -> String {
+        let mut remedies: Vec<String> = install_commands.to_vec();
+        remedies.extend(fix_hint.map(ToString::to_string));
+        match remedies.is_empty() {
+            true => "the rule states no install command".to_string(),
+            false => remedies.join("  OR  "),
+        }
+    }
+
+    /// Holds a tool-rule acceptance test to the tool it needs: the test fails
+    /// naming the rule, what the doctor check reported, and the command that
+    /// installs the tool.
+    ///
+    /// A test states this precondition; it never installs the tool itself.
+    /// [`install_project_tool_rules`](crate::review::tool_install::install_project_tool_rules)
+    /// takes no path, so the rule's install commands run with no working
+    /// directory and land in the developer's HOME — `~/.local/bin` for `uv` and
+    /// `pipx`, `~/.cargo/bin` for `cargo install` — which is outside the test's
+    /// temporary directory. Under `cargo nextest` each test is its own process
+    /// and nothing locks that destination, so two tests would drive the same
+    /// installer at the same path at the same time.
+    fn require_tool_installed(loader: &ValidatorLoader, project_types: &[&str], rule_name: &str) {
+        let matched = project_tool_rules(loader, project_types)
+            .into_iter()
+            .find(|matched| matched.rule.name == rule_name)
+            .unwrap_or_else(|| {
+                panic!("`{rule_name}` must be a shipped tool rule for {project_types:?}")
+            });
+        let ToolPresence::Missing { detail } = check_presence(matched.spec) else {
+            return;
+        };
+        let install_commands = matched
+            .spec
+            .install
+            .as_ref()
+            .map(|install| install.commands.as_slice())
+            .unwrap_or_default();
+        let fix_hint = matched
+            .spec
+            .doctor
+            .as_ref()
+            .and_then(|doctor| doctor.fix_hint.as_ref());
+        panic!(
+            "`{rule_name}` needs a tool this machine does not have, so this test cannot run. \
+             The doctor check reported: {detail}. Install the tool and run the test again: {}",
+            remedy_label(install_commands, fix_hint)
+        );
+    }
+
     /// Acceptance: the shipped Rust tool rule reports an undocumented public
     /// item on a real cargo workspace, through the real clippy pipeline.
     ///
@@ -1488,9 +1542,11 @@ mod tests {
         std::fs::create_dir_all(repo.path().join("src")).unwrap();
         std::fs::write(repo.path().join(UNDOCUMENTED_LIB_PATH), UNDOCUMENTED_LIB_RS).unwrap();
         let loader = builtin_loader();
+        let project_types = ["rust"];
+        require_tool_installed(&loader, &project_types, RUST_MISSING_DOCS_RULE);
         let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
 
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
+        let plan = plan_tool_rules(&work, &loader, &project_types);
 
         let run = plan
             .runs()
@@ -1599,9 +1655,11 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         std::fs::create_dir_all(repo.path().join("src")).unwrap();
         std::fs::write(repo.path().join(COMPLEX_LIB_PATH), COMPLEX_LIB_RS).unwrap();
         let loader = builtin_loader();
+        let project_types = ["rust"];
+        require_tool_installed(&loader, &project_types, RUST_COMPLEXITY_RULE);
         let work = complexity_work(COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
 
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
+        let plan = plan_tool_rules(&work, &loader, &project_types);
 
         let run = plan
             .runs()
@@ -1681,12 +1739,12 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     /// exported surface and for staged work become `__all__` and
     /// `# noqa: V1xx`, which the tool reads.
     ///
-    /// The test installs the tool first, the way
-    /// [`verify_shipped_tool_rules_pass_fixtures`] does, and then REQUIRES the
-    /// run. A rule that planned no run fails the test and names the plan's
-    /// fallbacks, which carry the doctor's reason. Returning early instead
-    /// would leave the test asserting nothing, and a test that cannot fail is
-    /// not a gate.
+    /// The test states the tool as a precondition — [`require_tool_installed`]
+    /// names the missing tool and the command that installs it — and then
+    /// REQUIRES the run. A rule that planned no run fails the test and names
+    /// the plan's fallbacks, which carry the doctor's reason. Returning early
+    /// instead would leave the test asserting nothing, and a test that cannot
+    /// fail is not a gate.
     #[test]
     fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
         let repo = tempfile::tempdir().unwrap();
@@ -1698,7 +1756,7 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         .unwrap();
         let loader = builtin_loader();
         let project_types = ["python"];
-        crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
+        require_tool_installed(&loader, &project_types, PYTHON_DEAD_CODE_RULE);
         let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
 
         let plan = plan_tool_rules(&work, &loader, &project_types);
@@ -1745,19 +1803,22 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     ///
     /// Each row names a project type, the tool rule that serves it, and the
     /// prompt rules that rule must supersede — empty for a rule that must leave
-    /// its prompt rule running. For each row, the helper runs the same
-    /// pre-install `sah init` runs, reads the doctor row, and asserts what the
-    /// row supersedes. The list belongs to the row rather than to the call
-    /// because one roster — the complexity rules — mixes rules that replace one
-    /// prompt rule with a rule that replaces two.
+    /// its prompt rule running. For each row, the helper reads the doctor row
+    /// and asserts what the row supersedes. The list belongs to the row rather
+    /// than to the call because one roster — the complexity rules — mixes rules
+    /// that replace one prompt rule with a rule that replaces two.
     ///
-    /// A rule whose tool the machine does not have — and whose install commands
-    /// could not get it — is reported as degraded, which is the documented
-    /// behavior: a missing tool falls the rule back to its prompt rule and never
-    /// blocks a review. That state cannot run the fixtures, so the fixture
-    /// assertion applies to the rules whose tool doctor found. The exercised
-    /// count guards against every rule taking that branch and the caller
-    /// asserting nothing.
+    /// The helper never installs a tool. It reads the machine as it is, the way
+    /// [`require_tool_installed`] does, and a roster whose tools are all absent
+    /// fails naming each missing rule and the command that installs its tool.
+    ///
+    /// A rule whose tool the machine does not have is reported as degraded,
+    /// which is the documented behavior: a missing tool falls the rule back to
+    /// its prompt rule and never blocks a review. That state cannot run the
+    /// fixtures, so the fixture assertion applies to the rules whose tool doctor
+    /// found. These rosters span six languages, so one machine rarely carries
+    /// every tool; the exercised count guards against every rule taking that
+    /// branch and the caller asserting nothing.
     ///
     /// `rule_kind` names the group in the failure messages — the prompt rule the
     /// group is named for, whether the group replaces that rule or runs beside
@@ -1765,10 +1826,10 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule_kind: &str) {
         let loader = builtin_loader();
         let mut exercised = 0;
+        let mut absent = Vec::new();
 
         for (project_type, rule_name, expected_supersedes) in rules {
             let project_types = [*project_type];
-            crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
 
             let status = crate::doctor::check_review_engine_with(&loader, &project_types);
             let row = status
@@ -1792,14 +1853,28 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
                     row.degraded_detail()
                 );
                 exercised += 1;
+            } else {
+                absent.push(absent_rule_label(row));
             }
         }
 
         assert!(
             exercised > 0,
-            "no shipped {rule_kind} tool rule's tool was installed, so the fixture \
-             pairs were never run and this test asserts nothing"
+            "no shipped {rule_kind} tool rule's tool is installed, so the fixture \
+             pairs were never run and this test asserts nothing; install one of these \
+             tools and run it again: {}",
+            absent.join("; ")
         );
+    }
+
+    /// One missing rule as the roster failure message names it: the rule, then
+    /// the commands that install its tool.
+    fn absent_rule_label(row: &ToolRuleStatus) -> String {
+        format!(
+            "`{}` — {}",
+            row.rule_name,
+            remedy_label(&row.install_commands, row.fix_hint.as_ref())
+        )
     }
 
     /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
@@ -1934,12 +2009,12 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     /// package exercises that half, and only it proves the finding lands on the
     /// manifest rather than on the source file.
     ///
-    /// The test installs the tool first, the way
-    /// [`verify_shipped_tool_rules_pass_fixtures`] does, and then REQUIRES the
-    /// run. A rule that planned no run fails the test and names the plan's
-    /// fallbacks, which carry the doctor's reason. Returning early instead
-    /// would leave the test asserting nothing, and a test that cannot fail is
-    /// not a gate.
+    /// The test states the tool as a precondition — [`require_tool_installed`]
+    /// names the missing tool and the command that installs it — and then
+    /// REQUIRES the run. A rule that planned no run fails the test and names
+    /// the plan's fallbacks, which carry the doctor's reason. Returning early
+    /// instead would leave the test asserting nothing, and a test that cannot
+    /// fail is not a gate.
     #[test]
     fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
         let repo = tempfile::tempdir().unwrap();
@@ -1956,7 +2031,7 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         .unwrap();
         let loader = builtin_loader();
         let project_types = ["rust"];
-        crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
+        require_tool_installed(&loader, &project_types, RUST_UNUSED_DEPENDENCIES_RULE);
         let work = manifests_work(
             UNUSED_DEPENDENCY_MANIFEST_PATH,
             UNUSED_DEPENDENCY_PACKAGE_MANIFEST,

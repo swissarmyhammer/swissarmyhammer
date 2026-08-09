@@ -309,6 +309,74 @@ comments:
     - evidence: 1 file — `crates/swissarmyhammer-validators/src/review/tool_rules.rs`. 2 of 2 findings checked (`:1707`, `:1961`). RED verified: with each `find` pointed at `"no-such-rule"`, `2 tests run: 0 passed, 2 failed` — `the shipped Python dead-code tool rule must plan a run; fallbacks: [ToolFallback { ... detail: "tool missing: ..." }]` and `the shipped Rust unused-dependency tool rule must plan a run; fallbacks: []`. Restored, both PASS. `cargo nextest run --workspace` 13961 passed / 0 failed / 0 skipped. `cargo fmt --all --check` exit 0. `cargo clippy --workspace --all-targets -- -D warnings` exit 0. HEAD `3773be9a3` (the card named `bc83a4dd5`, now two commits back — a merge of the `review` branch landed `29272dcf3` on top).
     - next: `/review`
   timestamp: 2026-08-09T13:47:52.495046+00:00
+- actor: claude-code
+  id: 01kzkd03faq67j5ntkbhwwqtr9
+  text: |-
+    ### review — findings
+    - scope: `review sha 3773be9a3..4ac042a8b` (the checkpoint commit `4ac042a8b` only; `3773be9a3` is a merge from a parallel session and was not widened into the review)
+    - evidence: 4 findings — 2 from the engine (attempted 9, confirmed 2, refuted 0, failed 0, skipped 0) at crates/swissarmyhammer-validators/src/review/tool_rules.rs:1481 and :1595; 2 from the directed judgment on the added `install_project_tool_rules` call at crates/swissarmyhammer-validators/src/review/tool_rules.rs:1701
+    - directed judgment: the added call writes outside the test temp dir (`~/.local/bin` through `uv tool install` / `pipx install`, `~/.cargo/bin` through `cargo install`) and has no lock under nextest. It IS idempotent — `tool_install.rs:271` short-circuits on a `which` check.
+    - prior findings: both items of the 2026-08-09 08:18 section are checked and closed.
+    - next: settle findings 1-4 with one decision on how a tool-rule test guarantees its tool, then apply that decision to every tool-rule test in the file. Card stays in `review`.
+  timestamp: 2026-08-09T13:57:02.570190+00:00
+- actor: claude-code
+  id: 01kzkd1t1d0mv18vs5f6e68bbf
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 1 file, 2/2 findings checked. Two tests that passed with ZERO assertions when the tool was absent now panic and name `plan.fallbacks()`
+    - test: green — cargo nextest run --workspace 13961 passed / 0 failed / 0 skipped, fmt exit 0, clippy -D warnings exit 0
+    - commit: 4ac042a8b, parent 3773be9a3 — 3 files, 169 insertions, 24 deletions
+    - review: findings — 4 open, on `review sha 3773be9a3..4ac042a8b`. Engine: 9 attempted, 2 confirmed, 0 refuted, 0 failed, 0 skipped, plus 2 from the directed judgment
+
+    **RED was proved the right way.** Pointing each `find` at `"no-such-rule"` gave `2 tests run: 0 passed, 2 failed`. The same mutation stayed GREEN before the change. That is the correct proof for a "this test cannot fail" finding — the old code passed the mutation.
+
+    **The tree moved under this work.** A parallel session committed `29272dcf3` and merged the `review` branch, so `3773be9a3` is a merge commit and `4ac042a8b` sits on top of it. The commit step re-verified HEAD before staging and scoped the review to `4ac042a8b` alone.
+
+    **The directed judgment found a real defect, and iteration 3 introduced part of it.** The added `install_project_tool_rules` call is idempotent (`tool_install.rs:271` short-circuits on `which`) and the nextest per-process claim is correct, but the call is NOT sandboxed. It takes `(loader, project_types)` with no path argument, so it does not reach the test's `tempfile::tempdir()`. It runs the rule's declared install commands through `run_shell(command, None, &[])` at `tool_install.rs:295` — cwd `None`:
+    - `&["python"]` → `uv tool install vulture==2.14`, then `pipx install vulture==2.14`, landing in `~/.local/bin`
+    - `&["rust"]` → `cargo install cargo-machete@0.9.2 --locked`, landing in `~/.cargo/bin`
+
+    Software installed into the developer's HOME as a test side effect. Nothing locks the path — no `Mutex`, `OnceLock`, file lock, or `serial_test` — so parallel nextest processes can drive `uv`/`pipx`/`npm -g`/`go install` at one destination at once. `cargo install` escapes only because cargo holds its own `~/.cargo/.package-cache` lock.
+
+    **All four findings are ONE decision.** How does a tool-rule test guarantee its tool? If the answer is "assert the precondition and fail loudly", then findings 1 and 2 are satisfied by an assertion rather than by a new install call, and findings 3 and 4 disappear with the call. The two engine findings at `:1481` and `:1595` say the same invariant is missing from two sibling tests.
+
+    Bounding the blame fairly: the call is a pre-existing repo pattern (line 1771, reached by five tests, present before this commit), and `install_project_tool_rules` is the same function `sah init` runs in production. This commit widened an existing cause rather than inventing one.
+
+    Finding counts by iteration: 16, 2, 4. No finding has repeated.
+
+    Guardrail: NOT hit.
+  timestamp: 2026-08-09T13:57:58.445208+00:00
+- actor: claude-code
+  id: 01kzkdsgh2b3gsfx8mecjq8p0b
+  text: |-
+    ### Review pass 3 — the four findings answered as ONE decision: assert the precondition
+
+    The reviewer said the four findings share one subject. The decision taken is "a tool-rule test asserts its tool, it never installs one". Every `install_project_tool_rules` call is now out of `tool_rules.rs` tests.
+
+    **Why "install it" was the wrong answer.** `install_project_tool_rules(&loader, &project_types)` takes no path. It reaches `install_tool_commands` (`tool_install.rs`), which runs the rule's install commands through `run_shell(command, None, &[])` with cwd `None`. For `python` that is `uv tool install vulture==2.14` then `pipx install vulture==2.14` into `~/.local/bin`; for `rust` it is `cargo install cargo-machete@0.9.2 --locked` into `~/.cargo/bin`. That is software written into the developer's HOME, outside the test's `tempfile::tempdir()`, with no lock between nextest processes.
+
+    **What replaced it.**
+    - New test helper `require_tool_installed(loader, project_types, rule_name)`: finds the rule through `project_tool_rules`, runs `check_presence` (the rule's own `which`), and panics naming the rule, what the doctor check reported, and the install commands plus `fix_hint`.
+    - New test helper `remedy_label(install_commands, fix_hint)`: one formatter for the remedy line, shared by both failure paths, so the message is written once.
+    - Four sites now call it: the Rust missing-docs test, the Rust complexity test, the Python dead-code test, the Rust unused-dependency test. The last two lost their install call; the first two gained the precondition findings 1 and 2 asked for, in the form the reviewer's note allows.
+
+    **The pre-existing site.** `verify_shipped_tool_rules_pass_fixtures` also lost its install call. That site predates this card, but it is the SAME cause the finding names, and the finding says to remove the cause from the whole file rather than only from the two new sites, so it belongs here. Five tests reach it. Its documented tolerance of a missing tool stays — the rosters span six languages and a missing tool is the documented fallback — but the `exercised > 0` assertion now names each absent rule and the command that installs its tool, through the new `absent_rule_label` helper.
+
+    **RED verified twice, by making the precondition false** (PATH stripped of `~/.local/bin`, nothing installed):
+    - `the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code` FAILED with: ``dead-code-python` needs a tool this machine does not have, so this test cannot run. The doctor check reported: exited with exit status: 1. Install the tool and run the test again: uv tool install vulture==2.14  OR  pipx install vulture==2.14`.
+    - `every_shipped_magic_numbers_tool_rule_passes_its_fixtures` FAILED with the roster message naming all four absent rules and their install commands.
+
+    Both runs left the machine as they found it.
+
+    **Gates:** `cargo nextest run --workspace` 13961 passed, 0 failed, 0 skipped. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  timestamp: 2026-08-09T14:10:55.138399+00:00
+- actor: claude-code
+  id: 01kzkdsx93rdssx8mr66wrc0kf
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules.rs. All 4 open findings checked (tool_rules.rs:1481, :1595, :1701 x2). RED proved by making the precondition false: 2 tests failed naming the missing tool and its install command, with PATH stripped of ~/.local/bin. Gates: nextest workspace 13961 passed / 0 failed / 0 skipped; fmt clean; clippy -D warnings clean. HEAD 4ac042a8b.
+    - next: /review
+  timestamp: 2026-08-09T14:11:08.195080+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
 position_column: doing
@@ -376,3 +444,20 @@ Scope: `68092a2ff..bc83a4dd5`.
 
 - Twelve deleted CLI dependencies: 0 unsafe of 12. No removed line carried `features`, `default-features`, `package =`, or `optional` — every one was a bare `workspace = true`, so it requested exactly the workspace-root baseline and could never have been the sole source of a feature another crate unified in. Removal cannot subtract from the resolved feature set. No `[features]` table exists in `apps/swissarmyhammer-cli/Cargo.toml`, so no `dep:` or implicit optional-dependency feature can break. No rename, no macro-expansion vector, no per-crate pin. `is_terminal()` resolves to `std::io::IsTerminal` (`apps/swissarmyhammer-cli/src/banner.rs:6`, `src/main.rs:367`, `src/main.rs:933`), and the `dirs`/`glob`/`ignore` text hits are prose, not code.
 - `test-support` feature gate: sound. `crates/swissarmyhammer-validators/Cargo.toml:107` declares `test-support = ["model-embedding/test-support"]`; there is no `default` key, so the feature is off unless asked for. `crates/swissarmyhammer-validators/src/review/mod.rs:21` gates the module with `#[cfg(any(test, feature = "test-support"))]`, so no test-only code reaches a release build, and every non-doc reference to `test_support` sits inside a `#[cfg(test)]` module. The four routed call sites carry no behavioural difference: same purpose strings, same rule order, same content constants, same `ProbeNames::new([])` and empty `FileWork` arguments. No test lost an assertion, was deleted, or was ignored in this range.
+
+## Review Findings (2026-08-09 08:50)
+
+Scope: `3773be9a3..4ac042a8b` — the checkpoint commit `4ac042a8b` only.
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1481` — This acceptance test executes tool rules (via `verify_run_reports_one_finding` → `execute_tool_runs`), but does not install the tool first. Under nextest where each test runs in its own process, the Rust missing-docs tool may not be present. The invariant—call `install_project_tool_rules` before planning/executing tool rules—was added to similar tests at lines 1701 and 1959 but not here. Add `let project_types = ["rust"]; crate::review::tool_install::install_project_tool_rules(&loader, &project_types);` before line 1493, and replace `&[]` with `&project_types` in the `plan_tool_rules` call on that line.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1595` — This acceptance test executes tool rules (via `verify_run_reports_one_finding` → `execute_tool_runs`), but does not install the tool first. Under nextest where each test runs in its own process, the Rust complexity tool may not be present. The invariant—call `install_project_tool_rules` before planning/executing tool rules—was added to similar tests at lines 1701 and 1959 but not here. Add `let project_types = ["rust"]; crate::review::tool_install::install_project_tool_rules(&loader, &project_types);` before line 1604, and replace `&[]` with `&project_types` in the `plan_tool_rules` call on that line.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1701` — The added `install_project_tool_rules(&loader, &["python"])` call writes outside the test's temp dir. The test opens `let repo = tempfile::tempdir().unwrap();` at line 1692, but `install_project_tool_rules` takes only `(loader, project_types)` — no path argument — so it is not scoped to `repo`. It reaches `install_tool_commands` (`crates/swissarmyhammer-validators/src/review/tool_install.rs:282`), which executes the rule's install commands through `run_shell(command, None, &[])` (`tool_install.rs:295`). For `python` those commands are `uv tool install vulture==2.14` then `pipx install vulture==2.14` (`builtin/validators/code-hygiene/rules/dead-code-python.md:25`), which install into `~/.local/bin`. The same call at line 1959 with `&["rust"]` runs `cargo install cargo-machete@0.9.2 --locked` (`builtin/validators/manifests/rules/unused-dependencies-rust.md:47`), which installs into `~/.cargo/bin`. A test that installs software into the developer's HOME writes outside its sandbox. The same cause already sits at line 1771 in `verify_shipped_tool_rules_pass_fixtures`, reached by the tests at lines 1814, 1831, 1846, 1863 and 1880 — remove the cause from the whole file, not only from the two new sites. Make tool presence a precondition the test asserts, naming the missing tool and the command that installs it, or scope the install destination to the test's own temp dir. Do not install software into HOME from a test.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1701` — The added `install_project_tool_rules` call carries no lock, so two test processes can drive the same installer at the same destination at the same time. Under `cargo nextest` each test is its own process and tests run in parallel. There is no `Mutex`, `OnceLock`, file lock, or `serial_test` attribute on `install_project_tool_rules`, `install_tool_commands`, or `run_shell` in `crates/swissarmyhammer-validators/src/review/tool_install.rs` or `crates/swissarmyhammer-validators/src/review/doctor.rs`; the only `serial_test` uses are `doctor.rs:754` and `doctor.rs:798`, on unrelated env-var tests. This commit adds two more concurrent callers (lines 1701 and 1959) to the five that already reach line 1771, so on a machine that lacks the tool several processes can sit inside `uv tool install ruff==0.14.5` or `pipx install ...` writing the same `~/.local/bin/ruff`. `cargo install` is serialised by cargo's own `~/.cargo/.package-cache` lock; `uv`, `pipx`, `npm install -g` and `go install` get no such guarantee from this code. Serialise the install with a lock on the destination, or replace the install with an asserted precondition.
+
+### Note on resolving these four together
+
+Findings 1 and 2 ask for `install_project_tool_rules` at two more sites; findings 3 and 4 name a defect in that call. They share one subject, and one decision settles all four: choose how a test guarantees its tool, then apply that one way to every tool-rule test in the file. If the decision is "assert the precondition", findings 1 and 2 are satisfied by the assertion, not by a new install call.
+
+### Directed judgment this pass — idempotence is clear
+
+`install_project_tool_rules` is idempotent. `install_tool_commands` short-circuits at `crates/swissarmyhammer-validators/src/review/tool_install.rs:271` with `return ToolInstallOutcome::AlreadyPresent;` when `check_presence` reports `Present`, and `check_presence` (`doctor.rs:305`) runs the rule's `doctor.check_command`, which for these rules is a bare `which` (`builtin/validators/manifests/rules/unused-dependencies-rust.md:44`, `builtin/validators/code-hygiene/rules/dead-code-python.md:21`). The cost when the tool is present is one `bash -c which ...` per rule and nothing else, and `tool_install.rs:512` (`a_present_tool_runs_no_install_command`) holds that behaviour. It also re-checks after each command (`tool_install.rs:283`) and stops at the first command that satisfies the check, so the `pipx` fallback never runs once `uv` succeeded. No process-wide env or PATH mutation: there is no `set_var` on this path, and `doctor.rs:705` sets `SAH_BINARY_ENV` on the child `Command` only.
