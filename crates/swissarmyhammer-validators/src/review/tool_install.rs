@@ -30,12 +30,17 @@
 //! [`FixHint`](crate::validators::types::FixHint) rather than a command string,
 //! so no step of the lifecycle can run it.
 //!
-//! Installs are serialized machine-wide by [`InstallLock`]. An install command
-//! writes to a directory the whole machine shares, and only `cargo install`
+//! Installs are serialized by [`InstallLock`], and the lock covers the whole
+//! lifecycle — the declared commands and the agent turn alike. An install
+//! command writes to a directory nothing else locks, and only `cargo install`
 //! holds a lock of its own, so two installers that ran together could write one
-//! destination at the same time.
+//! destination at the same time. [`InstallLock`] states how far that
+//! serialization reaches, which is the temporary directory the installing
+//! processes share rather than the whole machine.
 
 use std::fs::{File, OpenOptions};
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use futures::future::BoxFuture;
@@ -55,11 +60,28 @@ const INSTALL_COMMAND_SUCCEEDED: &str = "the command exited 0";
 
 /// The file whose lock serializes tool installs across processes.
 ///
-/// One file for the whole machine, because a rule's install commands name no
-/// destination: `uv` and `pipx` write `~/.local/bin`, `cargo install` writes
-/// `~/.cargo/bin`, `npm install -g` and `go install` write their own bin
+/// One file for every destination at once, because a rule's install commands
+/// name no destination: `uv` and `pipx` write `~/.local/bin`, `cargo install`
+/// writes `~/.cargo/bin`, `npm install -g` and `go install` write their own bin
 /// directories. A lock over all of them is the only one this module can name.
+/// [`InstallLock`] states how far the lock on this file reaches.
 const INSTALL_LOCK_FILE_NAME: &str = "swissarmyhammer-tool-install.lock";
+
+/// How long a process waits for a contended install lock before it installs
+/// unserialized.
+///
+/// The wait is bounded because `flock(2)` conflicts between two open file
+/// descriptions even inside one process, so a process that reaches
+/// [`install_tool_commands`] while it already holds the lock — directly, or
+/// through a child an install command spawned — would otherwise block for ever
+/// with nothing reported. The bound is longer than the slowest install a
+/// shipped rule declares: `cargo install cargo-machete@0.9.2 --locked` builds
+/// the tool from source.
+const INSTALL_LOCK_WAIT: Duration = Duration::from_secs(300);
+
+/// How long the bounded wait sleeps between two tries of a contended install
+/// lock.
+const INSTALL_LOCK_RETRY: Duration = Duration::from_millis(100);
 
 /// The version-pin shapes [`install_command_pins_version`] accepts.
 ///
@@ -272,12 +294,27 @@ impl ToolInstallAgent for PoolInstallAgent<'_> {
     }
 }
 
-/// An exclusive lock over every tool install destination, held while install
-/// commands run and released when the guard drops.
+/// An exclusive lock over every tool install destination at once, held while
+/// install commands run and released when the guard drops.
 ///
 /// `fs2` locks the open file description, so the lock holds between processes
 /// as well as between threads. That is what `cargo nextest` needs: each test is
 /// its own process, and several of them can reach one destination at once.
+///
+/// # How far the lock reaches
+///
+/// The lock file sits in [`std::env::temp_dir`], which reads `$TMPDIR` and
+/// falls back to `/tmp`. So the lock covers every process that resolves the
+/// same temporary directory, and nothing more: on a machine that gives each
+/// user a temporary directory of their own — macOS does — it serializes every
+/// install this user runs, and it serializes nothing against a second user or
+/// against a process launched with a different `$TMPDIR`.
+///
+/// That reach fits the destinations a rule's install commands actually write.
+/// `~/.local/bin`, `~/.cargo/bin` and the npm and go bin directories all belong
+/// to one user. Homebrew is the exception — it writes a prefix every user of
+/// the machine shares — and Homebrew takes a lock of its own for that.
+#[derive(Debug)]
 struct InstallLock {
     /// The locked file. `flock(2)` releases on close, and [`Drop`] releases it
     /// before that so a long-lived process frees the lock at once.
@@ -285,12 +322,13 @@ struct InstallLock {
 }
 
 impl InstallLock {
-    /// Wait for exclusive use of the install destinations.
+    /// Wait up to [`INSTALL_LOCK_WAIT`] for exclusive use of the install
+    /// destinations.
     ///
     /// Returns `None` when the machine cannot give the lock — a read-only
-    /// temporary directory, say. An install with no lock is worse than an
-    /// install with one, and better than no install at all, so the caller goes
-    /// ahead either way.
+    /// temporary directory, or a holder that did not release inside the
+    /// deadline. An install with no lock is worse than an install with one, and
+    /// better than no install at all, so the caller goes ahead either way.
     fn acquire() -> Option<Self> {
         let path = std::env::temp_dir().join(INSTALL_LOCK_FILE_NAME);
         let file = OpenOptions::new()
@@ -305,16 +343,62 @@ impl InstallLock {
                 );
             })
             .ok()?;
-        file.lock_exclusive()
-            .inspect_err(|error| {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "the tool install lock could not be taken; installing unserialized"
-                );
-            })
-            .ok()?;
-        Some(Self { file })
+        Self::take(file, &path, INSTALL_LOCK_WAIT)
+    }
+
+    /// Take the exclusive lock on `file`, waiting at most `wait` for whoever
+    /// holds it to let go.
+    ///
+    /// The deadline is a parameter rather than a constant read inside, so a
+    /// test can drive the wait in milliseconds while production waits minutes.
+    fn take(file: File, path: &Path, wait: Duration) -> Option<Self> {
+        if try_take_install_lock(&file, path)? {
+            return Some(Self { file });
+        }
+
+        tracing::info!(
+            path = %path.display(),
+            wait_seconds = wait.as_secs(),
+            "another installer holds the tool install lock; waiting for it"
+        );
+        let deadline = Instant::now() + wait;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(INSTALL_LOCK_RETRY.min(remaining));
+            if try_take_install_lock(&file, path)? {
+                return Some(Self { file });
+            }
+        }
+
+        tracing::warn!(
+            path = %path.display(),
+            wait_seconds = wait.as_secs(),
+            "the tool install lock stayed held for the whole wait; installing unserialized"
+        );
+        None
+    }
+}
+
+/// Try the exclusive lock on `file` once.
+///
+/// `Some(true)` took the lock, `Some(false)` means another open file
+/// description holds it, and `None` is a failure no wait can clear — the caller
+/// then installs unserialized.
+fn try_take_install_lock(file: &File, path: &Path) -> Option<bool> {
+    match file.try_lock_exclusive() {
+        Ok(()) => Some(true),
+        Err(error) if error.kind() == fs2::lock_contended_error().kind() => Some(false),
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "the tool install lock could not be taken; installing unserialized"
+            );
+            None
+        }
     }
 }
 
@@ -342,7 +426,16 @@ pub fn install_tool_commands(spec: &ToolSpec) -> ToolInstallOutcome {
     }
 
     let _lock = InstallLock::acquire();
+    run_declared_install_commands(spec)
+}
 
+/// Run the rule's declared install commands, under a lock the caller holds.
+///
+/// Split out of [`install_tool_commands`] so [`ensure_tool_installed`] can hold
+/// ONE lock across both halves of the lifecycle. [`InstallLock`] is not
+/// reentrant — `flock(2)` conflicts between two open file descriptions even
+/// inside one process — so the agent half cannot take a second one.
+fn run_declared_install_commands(spec: &ToolSpec) -> ToolInstallOutcome {
     // Another installer may have finished while this one waited for the lock.
     if matches!(check_presence(spec), ToolPresence::Present) {
         return ToolInstallOutcome::AlreadyPresent;
@@ -389,12 +482,22 @@ fn run_install_command(command: &str) -> InstallAttempt {
 ///
 /// The agent cannot assert success: whatever it answers, the doctor check runs
 /// again and decides.
+///
+/// ONE [`InstallLock`] covers both halves. The agent writes the same
+/// destinations the declared commands write, and it runs commands no rule
+/// declared, so it is the half the lock matters most for.
 pub async fn ensure_tool_installed(
     rule: &str,
     spec: &ToolSpec,
     agent: Option<&dyn ToolInstallAgent>,
 ) -> ToolInstallOutcome {
-    let attempts = match install_tool_commands(spec) {
+    if matches!(check_presence(spec), ToolPresence::Present) {
+        return ToolInstallOutcome::AlreadyPresent;
+    }
+
+    let _lock = InstallLock::acquire();
+
+    let attempts = match run_declared_install_commands(spec) {
         ToolInstallOutcome::Failed { attempts } => attempts,
         installed => return installed,
     };
@@ -668,6 +771,81 @@ mod tests {
         );
     }
 
+    /// How long the contended-lock tests wait before they give up. Short,
+    /// because they prove the wait ends rather than how long it runs.
+    const CONTENDED_LOCK_WAIT: Duration = Duration::from_millis(50);
+
+    /// How long the whole bounded wait may take before the test calls it
+    /// unbounded.
+    const CONTENDED_LOCK_CEILING: Duration = Duration::from_secs(30);
+
+    /// How long the release test holds the lock before it lets the waiter in.
+    const RELEASED_LOCK_HOLD: Duration = Duration::from_millis(200);
+
+    /// How long the release test's waiter waits. Longer than
+    /// [`RELEASED_LOCK_HOLD`], so the waiter is still waiting when the holder
+    /// releases.
+    const RELEASED_LOCK_WAIT: Duration = Duration::from_secs(10);
+
+    /// The lock file with the options [`InstallLock::acquire`] opens it with.
+    fn lock_file(path: &Path) -> File {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open the lock file")
+    }
+
+    /// A second lock on a held file gives up instead of waiting for ever.
+    ///
+    /// `flock(2)` conflicts between two open file descriptions even inside one
+    /// process, so a process that reaches the installer while it already holds
+    /// the lock — directly, or through a child an install command spawned —
+    /// used to block with no deadline and no line in the log. The wait now ends
+    /// and the caller installs unserialized.
+    #[test]
+    fn a_contended_install_lock_gives_up_instead_of_waiting_for_ever() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("install.lock");
+        let held = InstallLock::take(lock_file(&path), &path, CONTENDED_LOCK_WAIT)
+            .expect("the first lock is free");
+
+        let started = Instant::now();
+        let second = InstallLock::take(lock_file(&path), &path, CONTENDED_LOCK_WAIT);
+
+        assert!(
+            second.is_none(),
+            "a contended lock must give up, never report a lock another holder still owns"
+        );
+        assert!(
+            started.elapsed() < CONTENDED_LOCK_CEILING,
+            "the wait must be bounded; it took {:?}",
+            started.elapsed()
+        );
+        drop(held);
+    }
+
+    /// The bounded wait still serializes: a waiter takes the lock the holder
+    /// releases, rather than giving up the moment it finds the lock busy.
+    #[test]
+    fn the_bounded_wait_takes_the_lock_the_holder_releases() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("install.lock");
+        let held = InstallLock::take(lock_file(&path), &path, RELEASED_LOCK_WAIT)
+            .expect("the first lock is free");
+
+        std::thread::scope(|scope| {
+            let waiter =
+                scope.spawn(|| InstallLock::take(lock_file(&path), &path, RELEASED_LOCK_WAIT));
+            std::thread::sleep(RELEASED_LOCK_HOLD);
+            drop(held);
+            assert!(
+                waiter.join().expect("the waiting thread").is_some(),
+                "the waiter must take the lock once the holder releases it"
+            );
+        });
+    }
+
     #[test]
     fn a_present_tool_runs_no_install_command() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -755,6 +933,7 @@ mod tests {
 
     /// An install agent that runs `script` — the shape of a real agent that
     /// actually installs something — and then answers `answer`.
+    #[derive(Debug)]
     struct ScriptedInstallAgent {
         /// The shell script the agent runs, standing in for its tool calls.
         script: String,
