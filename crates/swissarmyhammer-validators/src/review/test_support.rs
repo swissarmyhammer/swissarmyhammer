@@ -26,7 +26,9 @@ use tempfile::TempDir;
 use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
 
-use crate::review::scope::{BatchBudget, BatchBytes, FileCapBytes};
+use crate::review::scope::{
+    BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
+};
 use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
 use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
@@ -43,6 +45,41 @@ pub use crate::review::scope::engine_matched_validator_names;
 /// budget without letting production collapse them.
 pub fn uniform_budget(bytes: usize) -> BatchBudget {
     BatchBudget::new(FileCapBytes(bytes), BatchBytes(bytes))
+}
+
+/// A loader carrying every shipped validator set.
+///
+/// Every tool-rule test plans against the rules AS THEY SHIP, so the loader
+/// they plan with lives here once rather than in a copy per test file.
+pub fn builtin_loader() -> ValidatorLoader {
+    let mut loader = ValidatorLoader::new();
+    crate::load_builtins(&mut loader);
+    loader
+}
+
+/// A one-validator work-list over `files`, naming `rules` for `validator`.
+///
+/// Every tool-rule test builds the same shape: one validator, a rule list
+/// holding the prompt rules the tool rule supersedes and the tool rule itself,
+/// no probes, and one [`FileWork`] for each probe file. `files` carries the
+/// path and the whole content of each, in the order the run must report them.
+pub fn tool_rule_work<'a>(
+    change_purpose: &str,
+    validator: &str,
+    rules: impl IntoIterator<Item = String>,
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> WorkList {
+    WorkList::new(
+        change_purpose,
+        vec![ValidatorWork::new(
+            validator,
+            RuleNames::new(rules),
+            ProbeNames::new([]),
+            files
+                .into_iter()
+                .map(|(path, content)| FileWork::new(path, vec![], vec![], content, vec![])),
+        )],
+    )
 }
 
 /// Write the fixture pair the doctor health check demands for the tool rule

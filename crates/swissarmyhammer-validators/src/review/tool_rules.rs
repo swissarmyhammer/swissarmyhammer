@@ -733,7 +733,7 @@ mod tests {
 
     use crate::doctor::ToolPresence;
     use crate::review::scope::{FileWork, ProbeNames, RuleNames};
-    use crate::review::test_support::write_tool_rule_fixtures;
+    use crate::review::test_support::{builtin_loader, tool_rule_work, write_tool_rule_fixtures};
     use crate::validators::types::{Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch};
 
     /// A shell probe that always succeeds — "the tool is installed".
@@ -1413,30 +1413,17 @@ mod tests {
     /// The library path inside the probe package, as the work-list holds it.
     const UNDOCUMENTED_LIB_PATH: &str = "src/lib.rs";
 
-    /// A loader carrying every shipped validator set.
-    fn builtin_loader() -> ValidatorLoader {
-        let mut loader = ValidatorLoader::new();
-        crate::load_builtins(&mut loader);
-        loader
-    }
-
     /// A one-validator work-list over `files` for the builtin `code-hygiene`
     /// set, naming both the prompt rule and the Rust tool rule.
     fn code_hygiene_work(files: &[&str]) -> WorkList {
-        let file_work = files
-            .iter()
-            .map(|path| FileWork::new(*path, vec![], vec![], UNDOCUMENTED_LIB_RS, vec![]));
-        WorkList::new(
+        tool_rule_work(
             "an undocumented public item",
-            vec![ValidatorWork::new(
-                CODE_HYGIENE_SET,
-                RuleNames::new([
-                    MISSING_DOCS_PROMPT_RULE.to_string(),
-                    RUST_MISSING_DOCS_RULE.to_string(),
-                ]),
-                ProbeNames::new([]),
-                file_work,
-            )],
+            CODE_HYGIENE_SET,
+            [
+                MISSING_DOCS_PROMPT_RULE.to_string(),
+                RUST_MISSING_DOCS_RULE.to_string(),
+            ],
+            files.iter().map(|path| (*path, UNDOCUMENTED_LIB_RS)),
         )
     }
 

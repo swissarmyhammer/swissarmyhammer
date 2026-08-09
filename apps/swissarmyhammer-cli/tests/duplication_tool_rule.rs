@@ -16,14 +16,11 @@ use std::collections::BTreeSet;
 
 use swissarmyhammer_common::test_utils::EnvVarGuard;
 use swissarmyhammer_sem::parser::plugins::code::get_all_code_extensions;
-use swissarmyhammer_validators::load_builtins;
-use swissarmyhammer_validators::review::scope::{
-    FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
-};
+use swissarmyhammer_validators::review::scope::WorkList;
+use swissarmyhammer_validators::review::test_support::{builtin_loader, tool_rule_work};
 use swissarmyhammer_validators::review::{
     execute_tool_runs, plan_tool_rules, prompt_rules_for, ToolFallback, ToolReport,
 };
-use swissarmyhammer_validators::validators::ValidatorLoader;
 
 /// The validator set that carries the rule.
 const DUPLICATION_SET: &str = "duplication";
@@ -151,22 +148,12 @@ fn duplication_work(contents: &'static str) -> WorkList {
         .iter()
         .map(|rule| (*rule).to_string())
         .chain(std::iter::once(TOOL_RULE.to_string()));
-    WorkList::new(
+    tool_rule_work(
         "one block pasted twice in one file",
-        vec![ValidatorWork::new(
-            DUPLICATION_SET,
-            RuleNames::new(rules),
-            ProbeNames::new([]),
-            [FileWork::new(PROBE_PATH, vec![], vec![], contents, vec![])],
-        )],
+        DUPLICATION_SET,
+        rules,
+        [(PROBE_PATH, contents)],
     )
-}
-
-/// A loader carrying every shipped validator set.
-fn builtin_loader() -> ValidatorLoader {
-    let mut loader = ValidatorLoader::new();
-    load_builtins(&mut loader);
-    loader
 }
 
 /// Acceptance: a review whose only defect is a pasted block reports it, and no

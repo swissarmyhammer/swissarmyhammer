@@ -23,7 +23,7 @@ use super::parse_code;
 pub const DUPLICATION_ALLOW_MARKER: &str = "sah:allow duplication";
 
 /// One position in a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenPoint {
     /// The one-based line.
     pub line: usize,
@@ -38,7 +38,7 @@ pub struct TokenPoint {
 /// The token carries where it is and not what it says: the caller already
 /// holds the source the parse was made from, and slices
 /// `source[start.offset..end.offset]` for the text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DuplicationToken {
     /// Where the token starts.
     pub start: TokenPoint,
@@ -47,7 +47,7 @@ pub struct DuplicationToken {
 }
 
 /// One file's contribution to the verbatim duplicate gate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DuplicationSource {
     /// The language id the grammar roster routed the file to.
     pub language: &'static str,
@@ -585,6 +585,8 @@ fn is_definition_kind(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     /// The text `source` holds over `range`.
@@ -610,6 +612,20 @@ mod tests {
     #[test]
     fn a_file_the_roster_does_not_claim_is_not_read() {
         assert!(duplication_source("notes.txt", "fn one() {}\n").is_none());
+    }
+
+    #[test]
+    fn the_read_and_its_parts_key_a_hash_set() {
+        let read = read("src/lib.rs", "fn one() {}\n");
+        let token = read.tokens[0];
+
+        let points: HashSet<TokenPoint> = HashSet::from([token.start, token.end]);
+        let tokens: HashSet<DuplicationToken> = read.tokens.iter().copied().collect();
+        let reads: HashSet<DuplicationSource> = HashSet::from([read.clone(), read]);
+
+        assert_eq!(points.len(), 2);
+        assert_eq!(tokens.len(), 6);
+        assert_eq!(reads.len(), 1, "two equal reads hash to one entry");
     }
 
     #[test]

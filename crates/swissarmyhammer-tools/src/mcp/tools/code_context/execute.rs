@@ -7,6 +7,8 @@
 //! [`check_ts_readiness`](super::support::check_ts_readiness) where a partial
 //! index cannot answer, and renders its result as JSON.
 
+use std::path::Path;
+
 use crate::mcp::op_tool_helpers::json_result;
 use crate::mcp::tool_registry::ToolContext;
 use rmcp::model::{CallToolResult, Content};
@@ -303,28 +305,29 @@ pub(super) fn execute_query_ast(
     json_result(&result)
 }
 
-/// Execute the "find duplication" operation.
+/// Execute a tool-rule file report: run `operation` over the `files` argument
+/// and render its findings as PLAIN TEXT, one `path:line: message` line each.
 ///
-/// Reports every pair of token-identical blocks the named files repeat, as
-/// PLAIN TEXT, one `path:line: message` line per pair. The shape matches
-/// [`execute_find_commented_code`] and for the same reason: the
-/// `duplication-parsed` tool rule runs this op through `sah tool` and the
-/// review engine parses its stdout directly, where a JSON result would arrive
-/// as YAML.
+/// The two tool-rule ops below are this one handler with an argument. Both
+/// take the same `files` array, resolve the same working directory, and print
+/// the same contract, because a tool rule runs its op through `sah tool` and
+/// the review engine parses the stdout directly — a JSON result would reach
+/// that script as YAML, which the contract cannot read.
 ///
-/// No workspace is opened. A clone pair is a fact about the files named, so
+/// No workspace is opened. Each verdict is a fact about the files named, so
 /// the op answers without the code-context index and runs in a scratch
 /// directory that holds no `.code-context` database — which is where the
-/// rule's doctor fixtures live.
-pub(super) fn execute_find_duplication(
+/// rules' doctor fixtures live.
+fn execute_file_report<Finding: std::fmt::Display>(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
+    operation: impl Fn(&Path, &[&str]) -> Vec<Finding>,
 ) -> Result<CallToolResult, McpError> {
     let files: Vec<&str> = extract_required_str_array(args, "files")?;
 
     let working_dir = resolve_working_dir(context);
 
-    let report = find_duplication(&working_dir, &files)
+    let report = operation(&working_dir, &files)
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<String>>()
@@ -332,33 +335,28 @@ pub(super) fn execute_find_duplication(
     Ok(CallToolResult::success(vec![Content::text(report)]))
 }
 
+/// Execute the "find duplication" operation.
+///
+/// Reports every pair of token-identical blocks the named files repeat. The
+/// `duplication-parsed` tool rule reads the report — see
+/// [`execute_file_report`] for the contract it prints.
+pub(super) fn execute_find_duplication(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    execute_file_report(args, context, find_duplication)
+}
+
 /// Execute the "find commented_code" operation.
 ///
 /// Reads each named file and reports the comment blocks that re-parse as code
-/// in that file's own language. The result is PLAIN TEXT, one
-/// `path:line: message` line per block and nothing else, because the
-/// `no-commented-code-parsed` tool rule runs this op through `sah tool` and the
-/// review engine parses its stdout directly. A JSON result would reach that
-/// script as YAML, which the contract cannot read.
-///
-/// No workspace is opened. The verdict is a parse of the files named, so the
-/// op answers without the code-context index and runs in a scratch directory
-/// that holds no `.code-context` database — which is where the rule's doctor
-/// fixtures live.
+/// in that file's own language. The `no-commented-code-parsed` tool rule reads
+/// the report — see [`execute_file_report`] for the contract it prints.
 pub(super) fn execute_find_commented_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let files: Vec<&str> = extract_required_str_array(args, "files")?;
-
-    let working_dir = resolve_working_dir(context);
-
-    let report = find_commented_code(&working_dir, &files)
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<String>>()
-        .join("\n");
-    Ok(CallToolResult::success(vec![Content::text(report)]))
+    execute_file_report(args, context, find_commented_code)
 }
 
 /// Execute the "get callgraph" operation.

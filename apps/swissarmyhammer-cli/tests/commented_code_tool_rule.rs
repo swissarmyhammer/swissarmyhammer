@@ -16,14 +16,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use swissarmyhammer_common::test_utils::EnvVarGuard;
-use swissarmyhammer_validators::load_builtins;
-use swissarmyhammer_validators::review::scope::{
-    FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
-};
+use swissarmyhammer_validators::review::scope::WorkList;
+use swissarmyhammer_validators::review::test_support::{builtin_loader, tool_rule_work};
 use swissarmyhammer_validators::review::{
     execute_tool_runs, plan_tool_rules, prompt_rules_for, ToolFallback, ToolReport,
 };
-use swissarmyhammer_validators::validators::ValidatorLoader;
 
 /// The validator set that carries the rule.
 const CODE_HYGIENE_SET: &str = "code-hygiene";
@@ -117,25 +114,12 @@ fn write_probe_repository(root: &Path) {
 /// A one-validator work-list over every probe file, naming both the prompt
 /// rule and the tool rule.
 fn commented_code_work() -> WorkList {
-    let files = PROBE_FILES
-        .iter()
-        .map(|probe| FileWork::new(probe.path, vec![], vec![], probe.content, vec![]));
-    WorkList::new(
+    tool_rule_work(
         "a commented-out function in three languages",
-        vec![ValidatorWork::new(
-            CODE_HYGIENE_SET,
-            RuleNames::new([PROMPT_RULE.to_string(), TOOL_RULE.to_string()]),
-            ProbeNames::new([]),
-            files,
-        )],
+        CODE_HYGIENE_SET,
+        [PROMPT_RULE.to_string(), TOOL_RULE.to_string()],
+        PROBE_FILES.iter().map(|probe| (probe.path, probe.content)),
     )
-}
-
-/// A loader carrying every shipped validator set.
-fn builtin_loader() -> ValidatorLoader {
-    let mut loader = ValidatorLoader::new();
-    load_builtins(&mut loader);
-    loader
 }
 
 /// Acceptance: the shipped rule reports the commented-out block in Rust,
@@ -304,14 +288,11 @@ fn the_shipped_commented_code_tool_rule_reports_nothing_on_exempt_comments() {
     );
     std::fs::write(repo.path().join("src/lib.rs"), exempt).expect("write the probe file");
 
-    let work = WorkList::new(
+    let work = tool_rule_work(
         "documentation, prose and a short snippet",
-        vec![ValidatorWork::new(
-            CODE_HYGIENE_SET,
-            RuleNames::new([PROMPT_RULE.to_string(), TOOL_RULE.to_string()]),
-            ProbeNames::new([]),
-            [FileWork::new("src/lib.rs", vec![], vec![], exempt, vec![])],
-        )],
+        CODE_HYGIENE_SET,
+        [PROMPT_RULE.to_string(), TOOL_RULE.to_string()],
+        [("src/lib.rs", exempt)],
     );
     let loader = builtin_loader();
 
