@@ -328,6 +328,136 @@ comments:
     - evidence: 17 source files + 1 new module. New: `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs`. Modified: `code-context/src/ops/{find_commented_code,query_ast,mod}.rs`; `code_context/{mod,ops,execute,lsp_ops,support,doctor,indexing,watcher,detect}.rs`; `shell/process.rs`; `swissarmyhammer-common/src/lib.rs`; `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs`; `swissarmyhammer-validators/Cargo.toml`; `Cargo.lock`. All 38 review findings now `- [x]`. `cargo nextest run --workspace` 13917 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. RED verified 4 ways on the path-traversal defect, in two ops.
     - next: `/review`
   timestamp: 2026-08-09T01:26:18.021480+00:00
+- actor: claude-code
+  id: 01kzj3pjn1jw7hg8xhjshtnhd8
+  text: |
+    ### review — findings
+
+    - evidence: 4 findings recorded, from `review sha 385feb8c4..09e219d01` (engine: 17 returned, 17 confirmed, 10 refuted, 27 attempted, 0 failed, **0 skipped**). Locations: `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:23`, `:326`; `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:110`; `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:139`.
+    - next: `/implement` the 4 checklist items, then re-review. Task stays in `review`.
+
+    **The 38 prior findings were flipped in ONE bulk edit, so every cause was re-checked in the tree.** The card records one bulk string replacement rather than a mark per verified item, so the checkboxes carry no evidence on their own. A sample across each distinct cause was read from the working tree at `09e219d01`:
+
+    - **Named constant** — `checks.rs:318` reads `const DETECTION_DEPTH: usize = 3;`, used at `:332` as `Some(DETECTION_DEPTH)`. The sibling constants exist too: `execute.rs:34 DEFAULT_MIN_SIMILARITY`, `indexing.rs:16 INDEXING_PROGRESS_LOG_INTERVAL`, `watcher.rs:30 SHUTDOWN_CHECK_INTERVAL_MILLIS`, `process.rs:17 PROCESS_REAP_TIMEOUT_MILLIS`, each wired to its use site.
+    - **Extracted helper** — `support.rs:165 fn resolve_workspace_root(context: &ToolContext) -> PathBuf`, called from `support.rs:231` and `:347` (the two the finding named) and from `execute.rs:259` and `detect.rs:199` (the two extra copies the implementer reported finding). Four former copies, one function.
+    - **Missing doc** — every module declaration in `swissarmyhammer-common/src/lib.rs` carries a `///` line, `test_utils` included. `code_context/doctor.rs` documents the module, both structs and all seven fields.
+    - **Deleted dependency** — `crates/swissarmyhammer-code-context/Cargo.toml` names none of `swissarmyhammer-project-detection`, `model-embedding`, `once_cell`, `include_dir`. `crates/swissarmyhammer-validators/Cargo.toml` names neither `sha2` nor `chrono`. No `[package.metadata.cargo-machete]` table was added in place of the deletions.
+    - **`Debug` derive** — `mod.rs:78` reads `#[derive(Clone, Debug, Default)]` on `CodeContextTool`; `process.rs:33` reads `#[derive(Debug)]` on `AsyncProcessGuard`, taken as a derive rather than the hand-written fallback the finding offered.
+    - **Repeated literal** — `CODE_CONTEXT_DIR`, `CODE_CONTEXT_DIR_WITH_SLASH` and `CODE_CONTEXT_INIT_NAME` are defined at `mod.rs:65`, `:69`, `:72` and route all eleven former literal sites. `VALID_OPERATIONS_LIST` at `:75` is interpolated at `:332` and `:339` — the two verbatim 600-character copies are one constant. `ops.rs` defines 10 verb and 21 noun constants and no `verb()`/`noun()` body spells a literal.
+    - **Argument extraction** — twelve `extract_*` helpers in `support.rs`, including `extract_u32_param` at `:100` and `extract_file_position` at `:140` with the prescribed signatures. `args.get(` appears **zero** times in `execute.rs` and `lsp_ops.rs`, which is the cause gone rather than the three cited lines.
+    - **The roster macro** — `ops.rs:875 macro_rules! code_context_roster` emits the `Lazy` singleton and the roster entry from one name; the 25 hand-written statics are gone.
+    - **The `format_pretty` extraction** — `common/src/lib.rs:164`, called from `Display::fmt` at `:173` and `Debug::fmt` at `:179`.
+    - **The `detect_project_types` reuse** — `to_lowercase` appears once in `code_context/doctor.rs` (line 49); `run_doctor` at `:91` calls `detect_project_types(root)`.
+
+    **No item was checked but unfixed.** Every cause sampled is closed in the tree.
+
+    **The security fix holds, and it is stronger than the finding asked for.** `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs::resolve_within` canonicalizes the root and the joined path and requires `resolved.starts_with(&root)`. Canonicalizing rather than rejecting `..` textually covers a shape the finding's own text does not name — a symbolic link inside the workspace pointing out of it — and the `#[cfg(unix)]` test at `:105` pins that. An absolute path landing inside the workspace still resolves, so the boundary is where the path lands and not how it was spelled. Both former bare joins are gone: `find_commented_code.rs:62` and `query_ast.rs:96` call it, and `grep` finds no other `fs::read` of a caller-named path in `ops/`.
+
+    **The recorded deviation is accepted and is not a finding.** `checks.rs` uses `const DETECTION_DEPTH: usize` where the finding wrote `u32`. `detect_projects` takes `Option<usize>`, so `u32` does not type-check. The finding's requirement — a module-level named constant used as `Some(DETECTION_DEPTH)` — is met exactly.
+
+    **13 findings dropped under the pre-existing-test exception**, each confirmed present at `385feb8c4` before being dropped: `shell/process.rs:813`, `:856`, `:939`, `:963`, `:1148`, `:1149`, `:1152`, `:1363`, `:1384`, `:1407`, `:1431`, `:1456`, `:1484`. All sit past `#[cfg(test)]` at line 681, and all thirteen exist at `385feb8c4` at the same lines less the twelve-line shift this commit's three new constants introduced (`Duration::from_millis(1200)` 951→963, `OutputBuffer::new(10)` 1140→1152, the five `OutputBuffer::new(1024)` 1350/1372/1395/1419/1444→1363/1384/1407/1431/1456, `OutputBuffer::new(5)` 1472→1484). Nine of these same tests were dropped last pass for the same reason. This commit's whole change to the file is the three constants and the `Debug` derive.
+
+    **The four kept findings, and why none is dropped.**
+
+    `process.rs:139` is production code, not test code — the `#[cfg(unix)] libc::killpg(..., SIGKILL)` block in `force_kill`, a near-verbatim copy of the `SIGTERM` block in `terminate_gracefully`. The exception covers test code only.
+
+    `query_ast.rs:326` is **new** test code, added by this commit alongside the security tests. The exception covers refactoring test code that already existed; `workspace_beside_an_outside_file` did not exist at `385feb8c4`. The security fix went into one shared module, and its test fixture did not — the same consolidation, one level down.
+
+    `query_ast.rs:23` is the one literal the constants sweep missed. `Self { max_results: 50 }` predates this commit and sits in a file this commit edited, in the same package that gained `workspace_path.rs`.
+
+    `indexing.rs:110` is real and confirmed by reading: the doc block ending "...contention without throughput gains." runs contiguously into "Returns whether the named environment variable is set...", so the whole run attaches to `env_flag_enabled`, and `build_default_embedder` carries no doc comment at all.
+
+    **The trend.** 12 findings, then 38, now 4. The 38 were the split's one-time cost — code that nine validators read for the first time. None of the 4 repeats a prior finding.
+  timestamp: 2026-08-09T01:55:18.817663+00:00
+- actor: claude-code
+  id: 01kzj3qzkx0yjnv4873jd9hws0
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 18 files + new `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs`. All 38 findings worked
+    - test: green — cargo nextest run --workspace, 13917 passed, 0 failed, 0 skipped; fmt clean; clippy -D warnings clean. An independent pass re-traced the `lsp_helpers` claim to its source rather than accepting it
+    - commit: 09e219d01 — 20 files
+    - review: findings — 4 open, on `review sha 385feb8c4..09e219d01`. Engine: 17 returned, 17 confirmed, 10 refuted, 27 attempted, 0 failed, 0 skipped; 13 dropped under the pre-existing-test exception
+
+    **The bulk checkbox flip was checked and cleared.** Iteration 3 marked all 38 boxes in a single string replacement, so the marks carried no evidence. The reviewer read each distinct cause out of the tree at `09e219d01` instead: named constant, extracted helper, missing doc, deleted dependency, `Debug` derive, plus the macro roster, the collapsed operations literal, and `format_pretty`. **Every one is genuinely fixed. Nothing was checked but unfixed.**
+
+    The security fix is stronger than the finding asked. Canonicalizing both sides refuses a symlink escape, which the finding's `..`-rejection text never covers, and both bare joins are gone (`find_commented_code.rs:62`, `query_ast.rs:96`). The `resolve_workspace_root` sweep removed four copies where the finding named two.
+
+    The `usize` vs `u32` deviation on `DETECTION_DEPTH` was accepted by the reviewer: `detect_projects` takes `Option<usize>`, so the finding's literal text cannot type-check, and the requirement is otherwise met exactly.
+
+    The 4 open findings:
+    - `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:23` — `max_results: 50`, the one literal the constants sweep missed
+    - `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:326` — `workspace_beside_an_outside_file()` duplicated in three test modules. NEW test code from this commit, so the pre-existing-test exception does not reach it
+    - `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:110` — two doc blocks run contiguously, so both attach to `env_flag_enabled` and `build_default_embedder` ends up with no doc comment
+    - `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:139` — the SIGKILL `killpg` block duplicates the SIGTERM block in `terminate_gracefully`
+
+    Guardrail: NOT hit. Finding counts across the three iterations are 12, 38, 4, with no repeats — each set was closed before the next was raised. The trend is converging.
+  timestamp: 2026-08-09T01:56:04.861023+00:00
+- actor: claude-code
+  id: 01kzj420s5m000s39q1b1jx4ff
+  text: |-
+    Finding 1 of 4 done — `query_ast.rs:23`. `Self { max_results: 50 }` now reads `DEFAULT_MAX_RESULTS`, a documented module-level `const usize = 50`. Checked the whole file for the same cause: `50` was the only unnamed limit in it. Verified with `cargo nextest run -p swissarmyhammer-code-context ops::query_ast` — 10 tests, 10 passed.
+
+    Note on how the checkbox is flipped: the box is edited in `.kanban/tasks/<id>.md` directly, one box per verified fix, because `update task` can only replace the whole description.
+  timestamp: 2026-08-09T02:01:33.733392+00:00
+- actor: claude-code
+  id: 01kzj46spy61faewb06x2etx3m
+  text: |-
+    Finding 2 of 4 done — `query_ast.rs:326`, the duplicated test fixture.
+
+    The scratch layout now lives once, in `crates/swissarmyhammer-code-context/src/test_fixtures.rs` — the crate's existing shared test module, whose own doc says it holds "canonical versions of the helper functions that were previously duplicated across every test module".
+
+    - `workspace_beside_an_outside_file(outside_name, outside_contents)` — the temp dir, the `workspace/` subdirectory, and one file written beside it. The name and the contents are parameters because each op writes the source its own grammar reads: `outside.rs` holding `fn secret() {}` for `query_ast`, `outside.rs` holding the commented-out-function probe for `find_commented_code`.
+    - `workspace_with_an_inside_and_an_outside_file()` — the same layout plus `inside.txt`, which the resolver tests need to prove the reaching half.
+
+    All three definitions are gone: `grep -rn "fn workspace_beside_an_outside_file"` over `crates/` and `apps/` now returns the one definition in `test_fixtures.rs`.
+
+    `rust_language()` is also duplicated (query_ast.rs, ts_callgraph.rs, two integration tests) but that is pre-existing test code the review skill's written exception covers, and it is not the cited cause.
+
+    Verified with `cargo nextest run -p swissarmyhammer-code-context ops::` — 379 tests, 379 passed.
+  timestamp: 2026-08-09T02:04:10.334307+00:00
+- actor: claude-code
+  id: 01kzj4afn6gxr3nkwc8wj8m7ja
+  text: |-
+    Finding 3 of 4 done — `indexing.rs:110`, the doc block on the wrong item.
+
+    Read the lines before touching them, and the report was exact. Two `///` runs sat back to back with no item between them: the embedder-construction block ("Construct the default embedder and load it… contention without throughput gains.") ran straight into the flag block ("Returns whether the named environment variable is set to a truthy value…"). Rust attaches a doc comment to the item that follows it, so the whole run landed on `env_flag_enabled` and `build_default_embedder` carried nothing.
+
+    The embedder block is moved verbatim to sit immediately above `pub(super) async fn build_default_embedder`. `env_flag_enabled` keeps its own block, which was always the correct one for it.
+
+    Swept the rest of the file for the same cause. It has nine items — `INDEXING_PROGRESS_LOG_INTERVAL`, `index_discovered_files_async`, `download_observer_for`, `env_flag_enabled`, `build_default_embedder`, `index_discovered_files_with_embedder`, `PreparedChunk`, `prepare_chunk`, `embed_file_chunks` — and each now carries exactly one doc block that describes it. No other run is contiguous.
+
+    No test can express this one: a doc comment is not observable at run time, and `missing_docs` does not reach a `pub(super)` item. The proof is structural — the block now precedes the function it describes — plus the crate still compiles.
+  timestamp: 2026-08-09T02:06:11.110254+00:00
+- actor: claude-code
+  id: 01kzj4b297144hbww2xchgd9je
+  text: |-
+    Finding 4 of 4 done — `process.rs:139`, the duplicated `killpg` block. Production code.
+
+    The finding cites the SIGKILL block in `force_kill` and points at the SIGTERM block in `terminate_gracefully`. The file held **three** copies, not two: `terminate_gracefully` (SIGTERM), `force_kill` (SIGKILL), and `Drop` (SIGKILL). Removing the cause meant all three.
+
+    One helper now owns it:
+
+    ```rust
+    enum GroupSignal { Terminate, Kill }
+    fn signal_process_group(child: &Child, signal: GroupSignal)
+    ```
+
+    The signal is an enum rather than an `i32` on purpose. Lifting `libc::SIGKILL` to the call sites would break the Windows build — MSVC `libc` defines `SIGTERM` but has no `SIGKILL` — so the two constants stay behind `#[cfg(unix)]` inside the helper and the callers name the intent. Off Unix the helper is a no-op, which is the behaviour the old code already had; `Child::kill` was and remains the only lever there.
+
+    `grep -n killpg` on the file now returns one hit, inside the helper. The three call sites read `signal_process_group(child, GroupSignal::Terminate)` and `signal_process_group(&child, GroupSignal::Kill)` twice.
+
+    Behaviour is unchanged, so no test goes RED for this: the extraction sends the same signal to the same process group at the same three moments. Verified with `cargo nextest run -p swissarmyhammer-tools --lib mcp::tools::shell::process` — 34 tests, 34 passed, including the graceful-termination, force-kill, drop-behaviour and zombie-prevention tests that drive all three paths.
+  timestamp: 2026-08-09T02:06:30.183914+00:00
+- actor: claude-code
+  id: 01kzj4np2pg50wamyz9ch3be7a
+  text: |-
+    ### implement — changed
+    - evidence: 6 source files — `crates/swissarmyhammer-code-context/src/ops/query_ast.rs`, `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs`, `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs`, `crates/swissarmyhammer-code-context/src/test_fixtures.rs`, `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs`, `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs`. All 4 open findings of the 2026-08-08 20:34 section are checked, one at a time as each was verified. Gates: `cargo nextest run --workspace` 13917 tests run, 13917 passed, 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - RED before GREEN: no finding of the four admits it. A named constant, a shared test fixture, a moved doc comment and an extracted signal helper all preserve behaviour exactly, so a test written first would pass first. Each fix instead has a proof of its own kind: finding 1 and 2 by the tests that exercise the changed code (10 then 379 in the code-context ops), finding 3 by the structural fact that the block now precedes the item it names, finding 4 by the 34 shell-process tests over all three converted call sites.
+    - Each finding was widened from the cited line to its whole file: `50` was the only unnamed limit in `query_ast.rs`; all three copies of the fixture were removed, not just the cited one; every item in `indexing.rs` was checked for a mis-attached doc block; `process.rs` held three `killpg` copies and the cited finding named two.
+    - `git status` at the end lists only the 6 source files plus this card's own `.md`/`.jsonl`. `crates/swissarmyhammer-mcp-proxy/.kanban/` exists but is tracked and committed since 5 July — pre-existing, not a stray from this run.
+    - next: `/review`
+  timestamp: 2026-08-09T02:12:18.134932+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -414,3 +544,10 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:177` — Hardcoded timeout 100 ms in Drop implementation should be a named constant for clarity and maintenance. Define as constant: `const PROCESS_REAP_TIMEOUT_MILLIS: u64 = 100;`.
 - [x] `crates/swissarmyhammer-validators/Cargo.toml:17` — unused dependency `sha2`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
 - [x] `crates/swissarmyhammer-validators/Cargo.toml:18` — unused dependency `chrono`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+
+## Review Findings (2026-08-08 20:34)
+
+- [x] `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:23` — The literal `50` is a hardcoded limit on max_results that should be a named constant. Configuration limits like maximum result counts belong in constants so they can be tuned without code changes. Define a constant `const DEFAULT_MAX_RESULTS: usize = 50;` and use it: `Self { max_results: DEFAULT_MAX_RESULTS }`.
+- [x] `crates/swissarmyhammer-code-context/src/ops/query_ast.rs:326` — Test fixture `workspace_beside_an_outside_file()` is duplicated across three test modules instead of defined once and reused. The same function with identical structure appears in workspace_path.rs:49 and find_commented_code.rs:173. Remove this function definition and import `workspace_beside_an_outside_file` from the workspace_path module's tests instead (or create a shared test utility module if cross-crate reuse is needed).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:110` — Public function `build_default_embedder` lacks a doc comment. Although documentation exists at lines 76–93 that describes embedder construction, it is separated from this function by the `env_flag_enabled` function definition (lines 99–108). In Rust, doc comments apply to the immediately following item, so lines 76–93 attach to `env_flag_enabled` instead, leaving `build_default_embedder` undocumented. Move the documentation from lines 76–93 (and remove the mismatched lines 94–98) to immediately precede `build_default_embedder` at line 110, or rewrite the doc comment at that location to document the actual function being defined.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:139` — Near-verbatim duplicate Unix signal-sending block. See line 88 for the shared duplication issue. Replace with call to the extracted helper function from the line 88 duplication fix.

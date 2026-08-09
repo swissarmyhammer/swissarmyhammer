@@ -43,21 +43,11 @@ pub fn resolve_within(working_dir: &Path, file: impl AsRef<Path>) -> Option<Path
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A workspace directory holding `inside.txt`, beside an `outside.txt`
-    /// the workspace must not reach.
-    fn workspace_beside_an_outside_file() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("create a scratch directory");
-        let workspace = dir.path().join("workspace");
-        std::fs::create_dir(&workspace).expect("create the workspace directory");
-        std::fs::write(workspace.join("inside.txt"), "inside").expect("write the inside file");
-        std::fs::write(dir.path().join("outside.txt"), "outside").expect("write the outside file");
-        (dir, workspace)
-    }
+    use crate::test_fixtures::workspace_with_an_inside_and_an_outside_file;
 
     #[test]
     fn a_relative_path_inside_the_workspace_resolves() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         let resolved = resolve_within(&workspace, "inside.txt").expect("the file is inside");
 
@@ -66,21 +56,21 @@ mod tests {
 
     #[test]
     fn an_absolute_path_inside_the_workspace_resolves() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         assert!(resolve_within(&workspace, workspace.join("inside.txt")).is_some());
     }
 
     #[test]
     fn a_relative_path_that_climbs_out_of_the_workspace_is_refused() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         assert_eq!(resolve_within(&workspace, "../outside.txt"), None);
     }
 
     #[test]
     fn an_absolute_path_outside_the_workspace_is_refused() {
-        let (dir, workspace) = workspace_beside_an_outside_file();
+        let (dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         assert_eq!(
             resolve_within(&workspace, dir.path().join("outside.txt")),
@@ -90,7 +80,7 @@ mod tests {
 
     #[test]
     fn a_climb_that_returns_inside_the_workspace_resolves() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         assert!(resolve_within(&workspace, "../workspace/inside.txt").is_some());
     }
@@ -98,7 +88,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symbolic_link_that_points_out_of_the_workspace_is_refused() {
-        let (dir, workspace) = workspace_beside_an_outside_file();
+        let (dir, workspace) = workspace_with_an_inside_and_an_outside_file();
         std::os::unix::fs::symlink(dir.path().join("outside.txt"), workspace.join("link.txt"))
             .expect("link to the outside file");
 
@@ -107,7 +97,7 @@ mod tests {
 
     #[test]
     fn a_path_that_names_no_file_resolves_to_nothing() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_with_an_inside_and_an_outside_file();
 
         assert_eq!(resolve_within(&workspace, "gone.txt"), None);
     }

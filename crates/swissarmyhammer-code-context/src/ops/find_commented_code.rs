@@ -77,6 +77,7 @@ fn findings_in_file(working_dir: &Path, file: &str) -> Option<Vec<CommentedCodeF
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::workspace_beside_an_outside_file;
 
     /// A Rust file whose only defect is a commented-out function.
     const COMMENTED_OUT_FUNCTION_RS: &str = concat!(
@@ -168,27 +169,18 @@ mod tests {
         assert_eq!(findings[0].file, absolute);
     }
 
-    /// A scratch directory holding a workspace and, beside it, a file the
-    /// workspace must not reach.
-    fn workspace_beside_an_outside_file() -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().expect("create a scratch directory");
-        let workspace = dir.path().join("workspace");
-        std::fs::create_dir(&workspace).expect("create the workspace directory");
-        std::fs::write(dir.path().join("outside.rs"), COMMENTED_OUT_FUNCTION_RS)
-            .expect("write the file outside the workspace");
-        (dir, workspace)
-    }
-
     #[test]
     fn a_relative_path_that_climbs_out_of_the_working_directory_is_refused() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) =
+            workspace_beside_an_outside_file("outside.rs", COMMENTED_OUT_FUNCTION_RS);
 
         assert!(find_commented_code(&workspace, &["../outside.rs"]).is_empty());
     }
 
     #[test]
     fn an_absolute_path_outside_the_working_directory_is_refused() {
-        let (dir, workspace) = workspace_beside_an_outside_file();
+        let (dir, workspace) =
+            workspace_beside_an_outside_file("outside.rs", COMMENTED_OUT_FUNCTION_RS);
         let outside = dir.path().join("outside.rs").to_string_lossy().to_string();
 
         assert!(find_commented_code(&workspace, &[outside.as_str()]).is_empty());

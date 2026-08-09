@@ -4,11 +4,59 @@
 //! duplicated across every test module. Import with `use crate::test_fixtures::*;`
 //! from any `#[cfg(test)] mod tests` block.
 
+use std::path::PathBuf;
+
 use rusqlite::Connection;
+use tempfile::TempDir;
 
 use crate::db::{configure_connection, create_schema};
 use crate::layered_context::SharedLspSession;
 use crate::lsp_communication::LspJsonRpcClient;
+
+// ---------------------------------------------------------------------------
+// Workspace-containment test helpers
+//
+// Every op that opens a caller-named path resolves it through
+// `ops::workspace_path::resolve_within`, and every one of those ops proves the
+// same two refusals: a relative path that climbs out, and an absolute path
+// elsewhere on disk. The scratch layout those proofs need is one contract, so
+// it lives here once instead of once per op.
+// ---------------------------------------------------------------------------
+
+/// The name of the workspace directory inside the scratch directory.
+const WORKSPACE_DIR_NAME: &str = "workspace";
+
+/// A scratch directory holding a workspace and, beside it, a file the workspace
+/// must not reach.
+///
+/// `outside_name` and `outside_contents` describe the file written beside the
+/// workspace, so each op writes the source its own grammar reads. Returns the
+/// scratch directory — which the caller keeps alive for the whole test — and
+/// the workspace root inside it. The outside file is at
+/// `scratch.path().join(outside_name)`.
+pub fn workspace_beside_an_outside_file(
+    outside_name: &str,
+    outside_contents: &str,
+) -> (TempDir, PathBuf) {
+    let scratch = tempfile::tempdir().expect("create a scratch directory");
+    let workspace = scratch.path().join(WORKSPACE_DIR_NAME);
+    std::fs::create_dir(&workspace).expect("create the workspace directory");
+    std::fs::write(scratch.path().join(outside_name), outside_contents)
+        .expect("write the file beside the workspace");
+    (scratch, workspace)
+}
+
+/// The same scratch layout as [`workspace_beside_an_outside_file`], with
+/// `inside.txt` written inside the workspace as well.
+///
+/// A resolver test needs both halves: a file it must reach and a file it must
+/// not. The two files hold their own names as contents, so a test that reads
+/// one can say which it got.
+pub fn workspace_with_an_inside_and_an_outside_file() -> (TempDir, PathBuf) {
+    let (scratch, workspace) = workspace_beside_an_outside_file("outside.txt", "outside");
+    std::fs::write(workspace.join("inside.txt"), "inside").expect("write the inside file");
+    (scratch, workspace)
+}
 
 // ---------------------------------------------------------------------------
 // Shared LSP-session test helpers

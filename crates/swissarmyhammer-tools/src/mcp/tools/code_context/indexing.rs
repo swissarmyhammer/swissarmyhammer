@@ -73,6 +73,22 @@ pub(super) fn download_observer_for(
     })
 }
 
+/// Returns whether the named environment variable is set to a truthy value.
+///
+/// Truthy means `1`, `true`, `yes`, or `on` (case-insensitive). Any other
+/// value — including unset, empty, or `0`/`false` — is false. Used for opt-in
+/// boolean toggles like `SAH_DISABLE_EMBEDDING`.
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// Construct the default embedder and load it.
 ///
 /// Returns `None` and logs a warning on construction or load failure. The
@@ -91,22 +107,6 @@ pub(super) fn download_observer_for(
 /// index is minutes-to-tens-of-minutes for large workspaces. We embed
 /// sequentially because the backends serialize internally; adding worker
 /// parallelism here invites contention without throughput gains.
-/// Returns whether the named environment variable is set to a truthy value.
-///
-/// Truthy means `1`, `true`, `yes`, or `on` (case-insensitive). Any other
-/// value — including unset, empty, or `0`/`false` — is false. Used for opt-in
-/// boolean toggles like `SAH_DISABLE_EMBEDDING`.
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 pub(super) async fn build_default_embedder(
     reporter: &std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
 ) -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {

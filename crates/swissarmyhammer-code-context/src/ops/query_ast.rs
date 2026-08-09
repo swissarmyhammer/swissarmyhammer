@@ -11,6 +11,9 @@ use tree_sitter::StreamingIterator;
 use crate::error::CodeContextError;
 use crate::ops::workspace_path::resolve_within;
 
+/// How many matches the operation returns when the caller names no limit.
+const DEFAULT_MAX_RESULTS: usize = 50;
+
 /// Options for the query AST operation.
 #[derive(Debug, Clone)]
 pub struct QueryAstOptions {
@@ -20,7 +23,9 @@ pub struct QueryAstOptions {
 
 impl Default for QueryAstOptions {
     fn default() -> Self {
-        Self { max_results: 50 }
+        Self {
+            max_results: DEFAULT_MAX_RESULTS,
+        }
     }
 }
 
@@ -157,6 +162,7 @@ pub fn query_ast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::workspace_beside_an_outside_file;
     use std::fs;
     use tempfile::TempDir;
 
@@ -321,19 +327,12 @@ mod tests {
         assert_eq!(result.matches.len(), 0);
     }
 
-    /// A scratch directory holding a workspace and, beside it, a Rust file the
-    /// workspace must not reach.
-    fn workspace_beside_an_outside_file() -> (TempDir, std::path::PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let workspace = dir.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
-        fs::write(dir.path().join("outside.rs"), "fn secret() {}\n").unwrap();
-        (dir, workspace)
-    }
+    /// The Rust source written beside the workspace, which no test may reach.
+    const OUTSIDE_RUST_SOURCE: &str = "fn secret() {}\n";
 
     #[test]
     fn a_relative_path_that_climbs_out_of_the_workspace_is_refused() {
-        let (_dir, workspace) = workspace_beside_an_outside_file();
+        let (_dir, workspace) = workspace_beside_an_outside_file("outside.rs", OUTSIDE_RUST_SOURCE);
 
         let result = query_ast(
             &workspace,
@@ -350,7 +349,7 @@ mod tests {
 
     #[test]
     fn an_absolute_path_outside_the_workspace_is_refused() {
-        let (dir, workspace) = workspace_beside_an_outside_file();
+        let (dir, workspace) = workspace_beside_an_outside_file("outside.rs", OUTSIDE_RUST_SOURCE);
         let outside = dir.path().join("outside.rs").to_string_lossy().to_string();
 
         let result = query_ast(

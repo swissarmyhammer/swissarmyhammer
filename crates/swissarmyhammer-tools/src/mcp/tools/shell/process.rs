@@ -23,6 +23,43 @@ const PROCESS_REAP_POLL_MILLIS: u64 = 10;
 /// when a signal terminates the process.
 const SIGNAL_TERMINATED_EXIT_CODE: i32 = -1;
 
+/// How a process group is asked to end.
+#[derive(Debug, Clone, Copy)]
+enum GroupSignal {
+    /// Ask the group to exit, which lets each process run its own cleanup.
+    Terminate,
+    /// End the group at once, with no chance to clean up.
+    Kill,
+}
+
+/// Send `signal` to the whole process group `child` leads, so the shell's own
+/// children die with the shell instead of outliving it.
+///
+/// Off Unix there is no process group to signal and this does nothing —
+/// [`Child::kill`] is the only lever there, and every caller already uses it.
+fn signal_process_group(child: &Child, signal: GroupSignal) {
+    #[cfg(unix)]
+    {
+        let number = match signal {
+            GroupSignal::Terminate => libc::SIGTERM,
+            GroupSignal::Kill => libc::SIGKILL,
+        };
+        if let Some(pid) = child.id() {
+            // SAFETY: `killpg` reads only the two integers it is given and
+            // returns an error code for a group it cannot signal, so the call
+            // touches no memory this process owns.
+            unsafe {
+                libc::killpg(pid as i32, number);
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (child, signal);
+    }
+}
+
 /// Async process guard for automatic cleanup of tokio Child processes
 ///
 /// This guard automatically terminates and cleans up child processes when dropped,
@@ -84,19 +121,12 @@ impl AsyncProcessGuard {
 
             // Try to terminate the process and wait for it to exit
             let termination_result = tokio::time::timeout(timeout_duration, async {
-                // On Unix systems, we can try to send SIGTERM first
-                #[cfg(unix)]
-                {
-                    // Kill the process group to handle child processes
-                    if let Some(pid) = child.id() {
-                        unsafe {
-                            // Send SIGTERM to the process group
-                            libc::killpg(pid as i32, libc::SIGTERM);
-                        }
-                    }
-                }
+                // Ask the whole process group to exit, so the shell's own
+                // children go with it.
+                signal_process_group(child, GroupSignal::Terminate);
 
-                // On Windows or if Unix signal handling fails, use kill()
+                // On Windows there is no process group to ask, so kill() is
+                // the only lever.
                 #[cfg(not(unix))]
                 {
                     let _ = child.kill().await;
@@ -136,16 +166,7 @@ impl AsyncProcessGuard {
         if let Some(mut child) = self.child.take() {
             tracing::debug!("Force killing process for command: {}", self.command);
 
-            #[cfg(unix)]
-            {
-                // Kill the process group to handle child processes
-                if let Some(pid) = child.id() {
-                    unsafe {
-                        // Send SIGKILL to the process group
-                        libc::killpg(pid as i32, libc::SIGKILL);
-                    }
-                }
-            }
+            signal_process_group(&child, GroupSignal::Kill);
 
             child.kill().await?;
             child.wait().await?;
@@ -165,15 +186,7 @@ impl Drop for AsyncProcessGuard {
                 self.command
             );
 
-            #[cfg(unix)]
-            {
-                // Kill the process group on Unix systems
-                if let Some(pid) = child.id() {
-                    unsafe {
-                        libc::killpg(pid as i32, libc::SIGKILL);
-                    }
-                }
-            }
+            signal_process_group(&child, GroupSignal::Kill);
 
             // Kill the process
             let _ = child.start_kill();
