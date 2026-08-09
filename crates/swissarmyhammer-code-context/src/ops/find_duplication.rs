@@ -15,6 +15,13 @@
 //! Two definitions are paired by the length of the longest subsequence their
 //! two normalized streams share. That is exact integer arithmetic on a parse:
 //! no similarity model, no embedding, no judgment.
+//!
+//! That comparison is quadratic in the length of one definition, and the
+//! number of pairs is quadratic in how many definitions share a length. Three
+//! bounds hold both down, and each one is stated where it is declared:
+//! definitions that normalize to the same stream are grouped and answered
+//! without any comparison at all, `MAXIMUM_DEFINITION_TOKENS` caps one
+//! comparison, and `MAXIMUM_COMPARED_SHAPES` caps one length band.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -33,12 +40,33 @@ use crate::ops::workspace_path::resolve_within;
 /// body records the counts it was chosen from.
 const MINIMUM_DEFINITION_TOKENS: usize = 40;
 
+/// The longest definition this op compares.
+///
+/// One comparison fills a table of `left * right` cells, so the cost of a
+/// single pair grows with the square of the definition. An uncapped pair near
+/// 28000 tokens costs 12.7 s on its own, which is more than a whole workspace
+/// of ordinary definitions. The longest definition this workspace declares is
+/// 1744 normalized tokens, so this limit clears every real definition twice
+/// over and still holds one table under 17 million cells. A definition longer
+/// than this is not a candidate, so it is never compared and never reported.
+const MAXIMUM_DEFINITION_TOKENS: usize = 4096;
+
 /// How alike two definitions must be, as a percentage, before the pair is a
 /// finding.
 ///
 /// The number is measured over this workspace; the rule body records the
 /// counts it was chosen from.
 const MINIMUM_SIMILARITY_PERCENT: usize = 90;
+
+/// How many later shapes one shape compares against before its band scan
+/// stops.
+///
+/// Two definitions of equal length never fail [`lengths_can_reach`], so a
+/// length band has no natural end and the pairs inside it grow with the square
+/// of its width. The widest band this workspace holds is 748 shapes, so this
+/// limit clears it with room. A pair past the limit is not compared, so it is
+/// never reported.
+const MAXIMUM_COMPARED_SHAPES: usize = 1024;
 
 /// A whole, as a percentage.
 const PERCENT_SCALE: usize = 100;
@@ -109,6 +137,13 @@ impl fmt::Display for DuplicationFinding {
 ///
 /// Two definitions are paired only when they parse to the same language, so a
 /// `.rs` file and a `.py` file are never compared.
+///
+/// Two bounds keep the work finite, and each one is silent rather than
+/// reporting: a definition outside `MINIMUM_DEFINITION_TOKENS` and
+/// `MAXIMUM_DEFINITION_TOKENS` is not compared, and one length band stops
+/// after `MAXIMUM_COMPARED_SHAPES` distinct shapes. No file of this workspace
+/// reaches either bound, and each constant records the measurement it came
+/// from.
 pub fn find_duplication(working_dir: &Path, files: &[&str]) -> Vec<DuplicationFinding> {
     let sources: Vec<ReadSource> = files
         .iter()
@@ -132,12 +167,12 @@ pub fn find_duplication(working_dir: &Path, files: &[&str]) -> Vec<DuplicationFi
 /// ```
 /// use swissarmyhammer_code_context::ops::find_duplication::similarity_percent;
 ///
-/// let left = ["v1".to_string(), "+".to_string(), "#num".to_string()];
+/// let left = ["v1", "+", "#num"];
 /// let right = ["v1".to_string(), "+".to_string(), "#num".to_string()];
 /// assert_eq!(similarity_percent(&left, &right), 100);
-/// assert_eq!(similarity_percent(&left, &[]), 0);
+/// assert_eq!(similarity_percent(&left, &[] as &[&str]), 0);
 /// ```
-pub fn similarity_percent(left: &[String], right: &[String]) -> usize {
+pub fn similarity_percent(left: &[impl AsRef<str>], right: &[impl AsRef<str>]) -> usize {
     let mut symbols = SymbolTable::default();
     let left = symbols.intern(left);
     let right = symbols.intern(right);
@@ -183,14 +218,20 @@ struct Candidate {
     sorted: Vec<u32>,
 }
 
-/// Every definition of `sources` that clears [`MINIMUM_DEFINITION_TOKENS`], in
-/// the order the caller named the files and the order each file declares them.
+/// Every definition of `sources` that sits between
+/// [`MINIMUM_DEFINITION_TOKENS`] and [`MAXIMUM_DEFINITION_TOKENS`], in the
+/// order the caller named the files and the order each file declares them.
+///
+/// A definition outside that range is not a candidate, so it is never
+/// compared and never reported.
 fn candidates_of(sources: &[ReadSource]) -> Vec<Candidate> {
     let mut symbols = SymbolTable::default();
     let mut candidates = Vec::new();
     for (source, read) in sources.iter().enumerate() {
         for (definition, declared) in read.parsed.definitions.iter().enumerate() {
-            if declared.shape.len() < MINIMUM_DEFINITION_TOKENS {
+            if !(MINIMUM_DEFINITION_TOKENS..=MAXIMUM_DEFINITION_TOKENS)
+                .contains(&declared.shape.len())
+            {
                 continue;
             }
             let interned = symbols.intern(&declared.shape);
@@ -216,27 +257,96 @@ struct Match {
     similarity: usize,
 }
 
+/// The candidates grouped by the exact stream they normalize to.
+///
+/// The group keeps the pair count away from the square of the candidate
+/// count. A stream an earlier candidate already holds needs no comparison at
+/// all: two equal streams are [`PERCENT_SCALE`] alike, which is the highest
+/// answer the ratio gives, so each later candidate of a shape reads its answer
+/// off the earliest one and is compared against nothing.
+struct Shapes {
+    /// The shape each candidate belongs to.
+    of_candidate: Vec<usize>,
+    /// The earliest candidate of each shape. That candidate is the one the
+    /// shape is compared as, and the one every later member repeats.
+    first: Vec<usize>,
+}
+
+impl Shapes {
+    /// Group `candidates` by language and stream. The language is part of the
+    /// key because two languages are never paired, however equal their
+    /// streams read.
+    fn of(candidates: &[Candidate]) -> Self {
+        let mut seen: HashMap<(&'static str, &[u32]), usize> = HashMap::new();
+        let mut shapes = Shapes {
+            of_candidate: Vec::with_capacity(candidates.len()),
+            first: Vec::new(),
+        };
+        for (index, candidate) in candidates.iter().enumerate() {
+            let key = (candidate.language, candidate.symbols.as_slice());
+            let shape = *seen.entry(key).or_insert_with(|| {
+                shapes.first.push(index);
+                shapes.first.len() - 1
+            });
+            shapes.of_candidate.push(shape);
+        }
+        shapes
+    }
+
+    /// The match an earlier candidate of the same shape already answers. The
+    /// two streams are equal, so the pair is a whole and the op makes no
+    /// comparison.
+    fn repeated(&self, candidate: usize) -> Option<Match> {
+        let first = self.first[self.of_candidate[candidate]];
+        (first < candidate).then_some(Match {
+            partner: first,
+            similarity: PERCENT_SCALE,
+        })
+    }
+}
+
 /// The closest earlier definition each candidate repeats, `None` for a
 /// candidate that repeats none.
-///
-/// The scan walks the candidates in order of length, so a candidate too long
-/// to reach the gate against the current one ends the inner loop rather than
-/// being tested.
 fn best_partners(candidates: &[Candidate]) -> Vec<Option<Match>> {
-    let mut best: Vec<Option<Match>> = candidates.iter().map(|_| None).collect();
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
-    order.sort_by_key(|&index| candidates[index].symbols.len());
-    for (position, &left) in order.iter().enumerate() {
-        for &right in &order[position + 1..] {
+    let shapes = Shapes::of(candidates);
+    let mut best: Vec<Option<Match>> = (0..candidates.len())
+        .map(|candidate| shapes.repeated(candidate))
+        .collect();
+    scan_bands(candidates, &shapes, MAXIMUM_COMPARED_SHAPES, &mut best);
+    best
+}
+
+/// Compare each shape against the later shapes of its length band, and keep
+/// the closest partner each comparison finds.
+///
+/// The scan walks the shapes in order of length, so a shape too long to reach
+/// the gate against the current one ends the inner loop rather than being
+/// compared. Equal lengths always reach, so a band has no natural end; the
+/// inner loop therefore stops after `maximum` shapes whatever the lengths say.
+/// `best_partners` passes [`MAXIMUM_COMPARED_SHAPES`].
+///
+/// Only the earliest candidate of a shape needs the scan. Every later member
+/// already holds a partner at [`PERCENT_SCALE`], which no comparison beats.
+fn scan_bands(
+    candidates: &[Candidate],
+    shapes: &Shapes,
+    maximum: usize,
+    best: &mut [Option<Match>],
+) {
+    let mut order: Vec<usize> = (0..shapes.first.len()).collect();
+    order.sort_by_key(|&shape| candidates[shapes.first[shape]].symbols.len());
+    for (position, &shape) in order.iter().enumerate() {
+        let left = shapes.first[shape];
+        for &other in order[position + 1..].iter().take(maximum) {
+            let right = shapes.first[other];
             if !lengths_can_reach(&candidates[left], &candidates[right]) {
                 break;
             }
             if let Some(similarity) = similarity_of(&candidates[left], &candidates[right]) {
-                keep_best(&mut best, left, right, similarity);
+                keep_best(best, left, right, similarity);
             }
         }
     }
-    best
 }
 
 /// Keep the pair on the later of the two definitions, which is the copy, when
@@ -388,8 +498,8 @@ struct SymbolTable {
 
 impl SymbolTable {
     /// The numbers `shape` interns to.
-    fn intern(&mut self, shape: &[String]) -> Vec<u32> {
-        shape.iter().map(|token| self.id(token)).collect()
+    fn intern<T: AsRef<str>>(&mut self, shape: &[T]) -> Vec<u32> {
+        shape.iter().map(|token| self.id(token.as_ref())).collect()
     }
 
     /// The number `token` interns to — the same one every time it repeats.
@@ -470,6 +580,73 @@ mod tests {
     /// A Rust function under [`MINIMUM_DEFINITION_TOKENS`].
     fn short_function(name: &str) -> String {
         format!("pub fn {name}(limit: i32) -> i32 {{\n    limit + 1\n}}\n")
+    }
+
+    /// How many statements [`counting_function`] writes for a definition meant
+    /// to clear [`MAXIMUM_DEFINITION_TOKENS`]. One statement normalizes to
+    /// several tokens, so this clears the gate several times over.
+    const ENORMOUS_STATEMENTS: usize = 1_500;
+
+    /// How many statements [`counting_function`] writes for a definition that
+    /// clears [`MINIMUM_DEFINITION_TOKENS`] and stays well under
+    /// [`MAXIMUM_DEFINITION_TOKENS`].
+    const MODEST_STATEMENTS: usize = 40;
+
+    /// A Rust function of `statements` accumulator statements. Two copies
+    /// under two names normalize to the same stream, so the pair is a finding
+    /// whenever both copies are candidates.
+    fn counting_function(name: &str, statements: usize) -> String {
+        let mut text = format!("pub fn {name}(limit: i32) -> i32 {{\n    let mut band = 0;\n");
+        for step in 0..statements {
+            text.push_str(&format!("    band += {step} * limit;\n"));
+        }
+        text.push_str("    band\n}\n");
+        text
+    }
+
+    /// How many copies of one shape the pair-count test writes. The old scan
+    /// paid a full comparison for each of the 719400 pairs these copies make.
+    const REPEATED_SHAPE_COPIES: usize = 1_200;
+
+    /// The wall time those copies must stay under. The old scan spent about
+    /// 47 s on them; the scan that answers an equal stream without comparing
+    /// spends a fraction of a second, so the budget separates the two by a
+    /// wide margin either way.
+    const REPEATED_SHAPE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// How long each stream [`three_shapes_in_one_band`] builds is. At this
+    /// length one differing token scores 95 percent and two score 90, so the
+    /// three streams sit at three distinct distances above the gate.
+    const BAND_STREAM_TOKENS: u32 = 20;
+
+    /// Three candidates of one length, one language and three distinct
+    /// streams, so all three sit in one length band.
+    ///
+    /// The first is the base stream. The second differs from it by one token
+    /// and is 95 percent alike. The third differs by two tokens and is 90
+    /// percent alike to each of the other two.
+    fn three_shapes_in_one_band() -> Vec<Candidate> {
+        let base: Vec<u32> = (0..BAND_STREAM_TOKENS).collect();
+        let mut near = base.clone();
+        let mut far = base.clone();
+        near[base.len() - 1] = BAND_STREAM_TOKENS;
+        far[base.len() - 2] = BAND_STREAM_TOKENS + 1;
+        far[base.len() - 1] = BAND_STREAM_TOKENS + 2;
+        [base, near, far]
+            .into_iter()
+            .enumerate()
+            .map(|(definition, symbols)| {
+                let mut sorted = symbols.clone();
+                sorted.sort_unstable();
+                Candidate {
+                    source: 0,
+                    definition,
+                    language: "rust",
+                    symbols,
+                    sorted,
+                }
+            })
+            .collect()
     }
 
     /// Write `contents` at `name` under a fresh temporary directory.
@@ -759,6 +936,94 @@ mod tests {
             .to_string();
 
         assert!(find_duplication(&workspace, &[outside.as_str()]).is_empty());
+    }
+
+    #[test]
+    fn a_definition_over_the_maximum_size_is_not_compared() {
+        let source = format!(
+            "{}\n{}",
+            counting_function("first", ENORMOUS_STATEMENTS),
+            counting_function("second", ENORMOUS_STATEMENTS)
+        );
+        let dir = workspace_with("probe.rs", &source);
+
+        let findings = find_duplication(dir.path(), &["probe.rs"]);
+
+        assert!(
+            findings.is_empty(),
+            "a definition over {MAXIMUM_DEFINITION_TOKENS} tokens is not compared: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_definition_under_the_maximum_size_is_compared() {
+        let source = format!(
+            "{}\n{}",
+            counting_function("first", MODEST_STATEMENTS),
+            counting_function("second", MODEST_STATEMENTS)
+        );
+        let dir = workspace_with("probe.rs", &source);
+
+        let findings = find_duplication(dir.path(), &["probe.rs"]);
+
+        assert_eq!(
+            findings.len(),
+            1,
+            "the same generator under the maximum reports the pair: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_shape_repeated_many_times_does_not_cost_a_comparison_for_each_pair() {
+        let mut source = String::new();
+        for copy in 0..REPEATED_SHAPE_COPIES {
+            source.push_str(&long_function(&format!("folded_{copy}"), "band", "0"));
+            source.push('\n');
+        }
+        let dir = workspace_with("probe.rs", &source);
+
+        let started = std::time::Instant::now();
+        let findings = find_duplication(dir.path(), &["probe.rs"]);
+        let spent = started.elapsed();
+
+        assert_eq!(
+            findings.len(),
+            REPEATED_SHAPE_COPIES - 1,
+            "{}",
+            findings.len()
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|found| found.other_name == "folded_0" && found.similarity == PERCENT_SCALE),
+            "every copy repeats the first definition at a whole"
+        );
+        assert!(
+            spent < REPEATED_SHAPE_BUDGET,
+            "{REPEATED_SHAPE_COPIES} copies of one shape took {spent:?}, over the \
+             {REPEATED_SHAPE_BUDGET:?} budget: the pair count is quadratic again"
+        );
+    }
+
+    #[test]
+    fn a_band_stops_after_the_maximum_number_of_shapes() {
+        let candidates = three_shapes_in_one_band();
+        let shapes = Shapes::of(&candidates);
+        let (mut stopped, mut whole) = (vec![None, None, None], vec![None, None, None]);
+
+        scan_bands(&candidates, &shapes, 1, &mut stopped);
+        scan_bands(&candidates, &shapes, 2, &mut whole);
+
+        assert_eq!(
+            stopped[2].as_ref().map(|found| found.partner),
+            Some(1),
+            "a scan that stops after one shape never compares the third against the first"
+        );
+        assert_eq!(
+            whole[2].as_ref().map(|found| found.partner),
+            Some(0),
+            "a scan that reaches two shapes keeps the earlier of the two equal answers"
+        );
     }
 
     #[test]

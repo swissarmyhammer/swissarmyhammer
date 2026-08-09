@@ -135,6 +135,52 @@ filter. A gate of 100 reports 258 of the 416 and drops that pair.
 alone. `ProjectSymbols`, a record of fifteen `String` fields, matches another
 all-`String` record at 85. It is not a copy.
 
+## The bounds on the work, and the measurement they came from
+
+The comparison grows quickly in two directions. One pair fills a table of
+`left * right` cells, so the cost of one pair grows with the square of the
+definition. Two definitions of equal length always stay inside the gate's
+reach, so the number of pairs grows with the square of how many definitions
+share a length. No file of this workspace reaches either limit, but a generated
+file and a table-driven file both have that shape.
+
+**An equal stream is answered, not compared.** The definitions that normalize
+to the same stream make one group. Two equal streams are 100 percent alike,
+which is the highest answer the ratio gives, so each later definition of a
+group reads its answer off the first one and makes no comparison at all. 258 of
+the 416 findings are that case.
+
+The measurement is one file that holds k definitions of one shape, each of 139
+normalized tokens:
+
+| k | before | after |
+|---|---|---|
+| 200 | 7.0 s | 0.1 s |
+| 400 | 27.9 s | 0.2 s |
+| 800 | 110.9 s | 0.5 s |
+| 1600 | 431.9 s | 1.0 s |
+
+Before, each doubling of k made the time four times larger. After, each
+doubling makes it two times larger, which is the parse and nothing more. The
+review that found the defect measured the same shape at 12.2 s, 46.4 s,
+181.0 s and 728.9 s. The absolute numbers move with the size of the definition
+the probe writes; the four-times-per-doubling shape is the same.
+
+**A definition longer than 4096 normalized tokens is not compared.** One
+uncapped pair near 28000 tokens costs 12.7 s alone, which is more than the
+whole 1183-file sweep. The longest definition this workspace declares is 1744
+normalized tokens, so the limit clears every real definition two times over and
+holds one table under 17 million cells. A definition past the limit is silent:
+the rule does not compare it and does not report it.
+
+**A length band stops after 1024 shapes.** The widest band this workspace holds
+is 748 shapes, so the limit clears it with room. A pair past the limit is
+silent for the same reason.
+
+**The report does not move.** The sweep gives the same 416 findings before the
+bounds and after them, and the two reports agree line for line: a comparison of
+the two shows no difference. Only the run time moves, from 10.5 s to 9.8 s.
+
 The finding names both ends:
 
     src/writer.rs:88: fn `write_backup_row` is a near-duplicate of `write_row` at src/backup_writer.rs:41 (96 tokens, 94% alike)
@@ -156,7 +202,7 @@ runs of boilerplate spanning two definitions.
 | tracked `.rs` files | 1155 | 1183 |
 | median finding | 67 tokens, 12 lines | 71 tokens |
 | intra-file | 389 | 159 |
-| run time | 6.7 s | 10.5 s |
+| run time | 6.7 s | 9.8 s |
 
 The 416 are 395 functions, 13 structs and 8 enums or traits. The largest read
 as real copies: `extract_verb_noun` is 347 tokens spelled identically in

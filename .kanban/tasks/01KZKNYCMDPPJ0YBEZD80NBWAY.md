@@ -106,6 +106,111 @@ comments:
     - HEAD: 1ce5b5fd7
     - next: `/review`
   timestamp: 2026-08-09T17:14:22.930147+00:00
+- actor: claude-code
+  id: 01kzkw7qzdbnpshm6d42ekyx7q
+  text: |
+    ### review — findings
+    - evidence: 2 findings — crates/swissarmyhammer-code-context/src/ops/find_duplication.rs:140, crates/swissarmyhammer-code-context/src/ops/find_duplication.rs:225. Scope `1ce5b5fd7..ce8593e17`. Engine counts: findings 1, confirmed 1, refuted 0, attempted 18, failed 0, skipped 0. The second finding comes from a measured check of the pair-count bound.
+    - verified and accepted: the unit is a whole definition (12 samples, both ends on a declaration line); a fragment that spans two definitions is not reported (probe plus control); the gates 40 and 90 match the constants; the sweep reproduces exactly (1183 files, 416 findings, 10.4 s, 395 fn / 13 struct / 8 enum, 159 intra-file, median 71 tokens, 258 at 100 percent); a pair that differs only by a literal scores 100 percent, so the 90 gate does not miss the case the rule is for; the ratio denominator is the sum of both streams, so a contained short definition is not reported; `cpd-core` is gone from the root manifest, the member manifest and the lock, with no orphan code.
+    - next: put a limit on the pair work in `best_partners`, and make `similarity_percent` generic over `AsRef<str>`.
+  timestamp: 2026-08-09T18:23:21.581376+00:00
+- actor: claude-code
+  id: 01kzkw9m99g28zg4g2kg407p6s
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 14 source files plus two new cards. `cpd-core` removed; definitions compared by a longest-common-subsequence ratio
+    - test: green — cargo nextest run --workspace 13986 passed / 0 failed / 0 skipped, doctests 6 passed, fmt clean, clippy -D warnings clean
+    - commit: ce8593e17, parent 1ce5b5fd7 — 18 files, 1885 insertions, 605 deletions
+    - review: findings — 2 open, on `review sha 1ce5b5fd7..ce8593e17`. Engine: 18 attempted, 1 confirmed, 0 refuted, 0 failed, 0 skipped, plus 1 from the directed complexity check
+
+    **It answers the owner's question.** Twelve of the 416 findings were sampled and the source line read at BOTH ends: every one lands on a definition declaration, never a fragment and never a boundary-crossing span. The negative case was built rather than assumed — two files sharing a run that starts inside `alpha` and ends inside `beta` report nothing, and a control that makes the whole definitions match reports 2, which proves the probe reaches the detector.
+
+    **The thresholds are real.** A fresh sweep reproduces the rule body exactly: 416 findings over 1183 files in 10.4 s, 395 fn / 13 struct / 8 enum, 159 intra-file, median 71 tokens, 258 at 100 percent, smallest 40 tokens, lowest similarity 90. The constants match the prose. The "two blocks differing only by a value" case cannot be dropped by the ratio, because a literal normalizes to a kind marker, so the pair normalizes to an identical stream and scores 100 — confirmed by probe.
+
+    **The denominator is right.** It is the sum of both streams, so containment does not read as alike: a 40-token definition fully inside a 400-token one scores `2·40/440 = 18%` and reports nothing.
+
+    **`cpd-core` is fully gone** — root manifest, member manifest, and both the package entry and dependency list in `Cargo.lock`. No source reference, no orphan code. The only mentions left are the deliberate prose explaining the removal.
+
+    ## The one defect, measured
+
+    `find_duplication.rs:140` and `:225`. The pair count is unbounded and the cost is quadratic. `lengths_can_reach` breaks the scan only when the two lengths DIFFER, so equal-length definitions never break out, and `shared_tokens` passes every pair with the same multiset. Same-shaped definitions therefore always pay a full O(n·m) LCS.
+
+    Measured on one file holding k same-shape ~100-token definitions:
+
+    | k | time |
+    |---|---|
+    | 200 | 12.2 s |
+    | 400 | 46.4 s |
+    | 800 | 181.0 s |
+    | 1600 | 728.9 s |
+
+    Four times the time per doubling — textbook quadratic. One file with 200 such definitions costs more than the whole 1183-file workspace run. LCS is also uncapped in definition size: one pair of ~28000-token definitions costs 17.2 s.
+
+    No file in this repository triggers it today — the six largest each cost 0.22 to 0.26 s — so it is latent rather than currently biting. Generated and table-driven files reach that shape, and nothing in the code prevents it.
+
+    **Process, and it held this time.** The reviewer ran every verification itself rather than delegating, so nothing could report back after the verdict. All findings went through the kanban API. Its probe directory was created inside the repository, because the path guard refuses anything outside, and removed afterwards.
+
+    Finding counts by iteration: 2.
+
+    Guardrail: NOT hit — first iteration.
+  timestamp: 2026-08-09T18:24:23.337687+00:00
+- actor: claude-code
+  id: 01kzkysx8q43st5638n0za89n8
+  text: |-
+    ### Both findings are closed. One defect, two faces, and both faces are bounded.
+
+    **The measurement first, because the review's numbers come from a debug build.** A probe under `.dupprobe/` (removed after use; the path guard refuses a file outside the working directory) reproduced the review's sweep exactly in a debug build: 1183 files, 416 findings, 10.5 s against the review's 10.4 s. A release build gives 2.4 s for the same 416, which is why every number below is a debug number — it is the build the review measured.
+
+    **Face one, the pair count.** The candidates are now grouped by the exact stream they normalize to. Two equal streams are 100 percent alike, and 100 is the highest answer `ratio_percent` gives, so every later candidate of a group reads its answer off the earliest candidate of that group and is compared against nothing. Only the earliest candidate of each group scans its band, and the band scans shapes rather than candidates.
+
+    The grouping key holds the LANGUAGE beside the stream. Without that, `.js` and `.ts` definitions that normalize alike would group together and pair at 100 percent, which the `two_languages_are_never_paired` test forbids.
+
+    The band scan also stops after `MAXIMUM_COMPARED_SHAPES` shapes, which is 1024. The widest reachable band this workspace holds is 748 shapes, measured, so the limit clears it with room. `scan_bands` takes the limit as an argument and `best_partners` passes the constant, which is what makes the limit testable.
+
+    **Face two, the pair size.** `MAXIMUM_DEFINITION_TOKENS` is 4096. A definition longer than that is not a candidate, in the same place and the same way a definition shorter than 40 is not a candidate. The longest definition this workspace declares is 1744 normalized tokens, measured, so the limit clears every real definition two times over and holds one comparison table under 17 million cells. One uncapped pair near 28000 tokens cost 12.7 s alone.
+
+    **The k-series, before and after, same probe and same build.** The probe writes k definitions of one shape, each 139 normalized tokens.
+
+    | k | before | after |
+    |---|---|---|
+    | 200 | 7.0 s | 0.1 s |
+    | 400 | 27.9 s | 0.2 s |
+    | 800 | 110.9 s | 0.5 s |
+    | 1600 | 431.9 s | 1.0 s |
+
+    Before: four times per doubling. After: two times per doubling, which is the parse and nothing more. The review measured 12.2 / 46.4 / 181.0 / 728.9 s for the same shape; the absolute numbers move with the size of the definition the probe writes, and the four-times-per-doubling shape is identical.
+
+    The one enormous pair falls from 12.7 s to 0.2 s, and it now reports nothing, because it is over the new maximum.
+
+    **The report does not move, and that is proved rather than counted.** The op was run over the 1183 tracked `.rs` files with the code at HEAD and with the new code, and each run's findings were dumped one per line. 416 lines each, and `diff` shows ZERO lines of difference. The two reports agree line for line, so every number the rule body records — 395 fn / 13 struct / 8 enum, 159 intra-file, median 71 tokens, 258 at 100 percent — holds unchanged. Only the run time moves, from 10.5 s to 9.8 s.
+
+    **Why the answer is provably the same, and not only the same on this tree.** The old scan gives each candidate the partner that maximizes the similarity, and breaks a tie by the earliest position in the length-sorted order. Three facts make the group answer identical to it:
+    - A similarity of 100 needs `2*lcs >= left+right`, and `lcs <= min`, so 100 happens ONLY for two equal streams. A group member can therefore never be beaten by a candidate outside its group.
+    - Inside a group every member has the same length, and the sort is stable, so position order equals index order. The earliest eligible member is the group's own first member.
+    - A non-first member is never anybody's chosen partner either: its group's first member scores the same and sits earlier, so the tie-break always took the first member anyway.
+
+    **Finding at :140.** `similarity_percent` is now `pub fn similarity_percent(left: &[impl AsRef<str>], right: &[impl AsRef<str>]) -> usize` and `SymbolTable::intern` is `fn intern<T: AsRef<str>>(&mut self, shape: &[T]) -> Vec<u32>`, exactly as the finding writes them. The doctest now passes a `&[&str]` on one side and a `&[String]` on the other, which is the reason for the change made visible.
+
+    **Tests, and each one was watched to fail first.**
+    - `a_definition_over_the_maximum_size_is_not_compared` — RED: reported the pair. `a_definition_under_the_maximum_size_is_compared` is its control, the same generator under the limit, and it passed both before and after, so only the size stopped the big pair.
+    - `a_shape_repeated_many_times_does_not_cost_a_comparison_for_each_pair` — 1200 copies of one shape. RED at 32.99 s against a 10 s budget; GREEN at 0.308 s. It also asserts all 1199 findings name the first copy at 100 percent, so the budget cannot pass on a wrong answer.
+    - `a_band_stops_after_the_maximum_number_of_shapes` — three distinct shapes of one length at 95, 90 and 90 percent. With a limit of 1 the third shape names the second; with a limit of 2 it names the first. The test was checked by mutation: with `.take(maximum)` removed it fails with `left: Some(0), right: Some(1)`.
+
+    **A dead end worth recording.** A cap counted in CANDIDATES per band was the first plan and was dropped. The workspace's widest band is 830 candidates but only 748 shapes, and a candidate-level cap would have to sit above 830 to leave 416 alone — while doing nothing at all for the case that actually bites, which is one shape repeated many times. Grouping first and capping shapes bounds the same work at a lower number and leaves the report untouched.
+  timestamp: 2026-08-09T19:08:13.975298+00:00
+- actor: claude-code
+  id: 01kzkyt9vsrm09ek54apy0nkfe
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs`, `builtin/validators/duplication/rules/duplication-parsed.md`
+    - bounded: equal streams grouped and answered with no comparison; `MAXIMUM_DEFINITION_TOKENS` 4096 (workspace longest 1744); `MAXIMUM_COMPARED_SHAPES` 1024 (workspace widest band 748). Past either bound the op is silent: it does not compare and does not report.
+    - k-series, debug, 139-token definitions: 200 → 7.0 s to 0.1 s; 400 → 27.9 s to 0.2 s; 800 → 110.9 s to 0.5 s; 1600 → 431.9 s to 1.0 s. One 27609-token pair → 12.7 s to 0.2 s.
+    - workspace: 1183 files, 416 findings, 10.5 s → 9.8 s. The two dumps agree line for line; `diff` reports 0 lines.
+    - gates: `cargo nextest run --workspace` 13990 passed / 0 failed / 0 skipped (13986 before, plus 4 new tests); `cargo test --doc -p swissarmyhammer-code-context` 3 passed / 0 failed; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo doc -D warnings` holds at the 12 errors that already existed in this crate; the change adds none.
+    - probe: `.dupprobe/` and the throwaway example are removed; `find . -name .dupprobe` returns nothing.
+    - HEAD: ce8593e17
+    - next: `/review`
+  timestamp: 2026-08-09T19:08:26.873807+00:00
 position_column: doing
 position_ordinal: '8480'
 title: duplication compares whole definitions, not token windows — near-duplicate functions, methods and types
@@ -159,3 +264,30 @@ The fail fixture changes. It is now two functions that differ ONLY by a renamed 
 - The workspace count is re-measured and both the old and new numbers are written into the rule body
 
 #tool-validators #objectivity
+
+## Review Findings (2026-08-09 12:17)
+
+Scope: `1ce5b5fd7..ce8593e17`
+
+- [x] `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs:140` — Function accepts concrete type &[String] instead of generic trait bound, forcing callers with &[&str] or other string-like types to allocate unnecessarily. Change the function signature to accept generic string types: `pub fn similarity_percent(left: &[impl AsRef<str>], right: &[impl AsRef<str>]) -> usize`. Update the `intern` method to `fn intern<T: AsRef<str>>(&mut self, shape: &[T]) -> Vec<u32>` with `shape.iter().map(|token| self.id(token.as_ref())).collect()`.
+- [x] `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs:225` — `best_partners` puts no limit on the number of pairs it compares, and the cost is quadratic. `lengths_can_reach` stops the inner scan only when the two lengths are too different, so definitions of equal length never stop it. `shared_tokens` lets through every pair that holds the same token multiset. Two definitions of the same shape therefore always pay a full `longest_common_subsequence`, which is O(n*m). Measured on one file that holds k definitions of one shape, each near 100 tokens: k=200 takes 12.2 s, k=400 takes 46.4 s, k=800 takes 181.0 s, k=1600 takes 728.9 s. Each doubling of k makes the time four times larger. One file with 200 such definitions costs more than the full 1183-file workspace run, which takes 10.4 s. `longest_common_subsequence` is quadratic in the length of one definition also, and no limit applies to that length: one pair of definitions near 28000 tokens takes 17.2 s. Put a limit on this work. Stop the scan for a candidate when that candidate holds a partner at 100 percent, because `keep_best` replaces a match only for a larger value. Put a limit on the number of candidates one length band compares, and a limit on the definition length that `longest_common_subsequence` accepts.
+
+### What this pass verified and accepted
+
+These checks passed. They need no work.
+
+**The unit is a whole definition.** 12 findings sampled across the 416 name a definition declaration line at both ends — for example `apps/kanban-app/src/commands.rs:2308` `pub async fn spatial_navigate(` against `:2234` `pub async fn spatial_focus(`, and `crates/swissarmyhammer-commands/src/ui_state.rs:508` `pub fn inspector_close_all(` against `:486` `pub fn inspector_close(`. No sample named a fragment, and no sample named a span that crosses a definition boundary.
+
+**A fragment that spans two definitions is NOT reported.** Two files hold a token run that starts in `alpha` and ends in `beta` and is the same in both files, while no whole definition matches a whole definition. The op reports nothing. A control that makes the whole definitions the same reports 2 findings, which shows the probe reaches the detector.
+
+**The gates match the code.** `MINIMUM_DEFINITION_TOKENS` is 40 and `MINIMUM_SIMILARITY_PERCENT` is 90, which is what the rule body states.
+
+**The sweep is real.** A new run over the 1183 tracked `.rs` files gives 416 findings in 10.4 s. Every number the rule body records reproduces: 395 functions, 13 structs, 8 enums; 159 intra-file; median 71 tokens; 258 of the 416 at 100 percent; smallest finding 40 tokens; lowest similarity 90 percent.
+
+**90 percent does not miss the case the rule is for.** A literal normalizes to a marker of its kind, so two functions that differ only by a value normalize to the same stream and score 100 percent, which is above the gate. A probe of two such functions reports one finding at 100 percent alike.
+
+**The ratio denominator is the sum of both streams.** A short definition that a long definition fully contains does not read as alike. A probe of a 40-token definition inside a 400-token definition reports nothing, because `ratio_percent` divides by `left + right`.
+
+**`cpd-core` is fully removed.** It is gone from the root `Cargo.toml`, from `crates/swissarmyhammer-code-context/Cargo.toml`, and from `Cargo.lock` — both the package entry and the dependency list. No source file references it. The only text that remains names the removal in `builtin/validators/duplication/VALIDATOR.md` and in the rule body, which is on purpose.
+
+**The known gap is tracked.** The 8 `#[tokio::test(...)]` findings the rule body names sit on card `^xpf86ds`, "duplication test exclusion misses a test attribute that carries arguments".
