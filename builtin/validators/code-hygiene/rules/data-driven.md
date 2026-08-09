@@ -31,6 +31,17 @@ the chain is a table written out longhand.
   code paths — a table does not capture them.
 - A chain over an *open* set, where the reader cannot see every case the code
   must handle, is control flow. A table needs a known set of rows.
+- **A match the compiler already checks for exhaustiveness.** Where the language
+  verifies at compile time that a match over a closed type covers every case —
+  a Swift `switch` over an enum with no `default:`, a Rust `match` over an enum
+  with no `_` arm, an exhaustive Kotlin `when` over a sealed class — the match
+  *is* the table, and the compiler enforces that every row exists. A map keyed
+  by that type is not an improvement: its lookup returns an optional, so adding
+  a case compiles clean and produces a missing row at runtime instead of failing
+  the build. Flagging here trades a compile error for a silent hole. Flag only
+  when the replacement lookup can be made total without one — the type carries a
+  raw value, or the map is built through a constructor the compiler checks
+  covers every case.
 
 ## What This Rule Does Not Own
 
