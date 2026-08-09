@@ -105,6 +105,49 @@ pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
     .expect("write pass fixture");
 }
 
+/// The file a fixture run sees in its working directory and a real run does
+/// not.
+///
+/// The doctor's fixture check copies the whole fixtures directory into a
+/// scratch directory and runs there, so a marker written beside the fixture
+/// pair reaches every fixture run and no other run. That is what lets a run
+/// script count the fixture runs a stored health verdict is meant to save.
+pub const FIXTURE_RUN_MARKER: &str = "fixture-run-marker";
+
+/// How many times a healthy tool rule runs its script to prove itself: one
+/// fail fixture and one pass fixture.
+pub const FIXTURE_RUNS_PER_PROOF: usize = 2;
+
+/// Write the fixture pair for `rule` under `base`, plus the
+/// [`FIXTURE_RUN_MARKER`] every fixture run then sees in its working
+/// directory.
+pub fn write_counted_tool_rule_fixtures(base: &Path, rule: &str) {
+    write_tool_rule_fixtures(base, rule);
+    std::fs::write(base.join("fixtures").join(FIXTURE_RUN_MARKER), "")
+        .expect("write the fixture run marker");
+}
+
+/// A `files`-scope script that reports one `path:line: message` finding per
+/// line holding `TODO`, and appends one line to `counter` first when it is
+/// running against the fixtures.
+pub fn counting_tool_script(counter: &Path) -> String {
+    format!(
+        r#"
+if [ -f {FIXTURE_RUN_MARKER} ]; then echo run >> "{counter}"; fi
+for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" }}' "$f"; done
+"#,
+        counter = counter.display(),
+    )
+}
+
+/// How many fixture runs [`counting_tool_script`] recorded in `counter`. A
+/// file that does not exist means none ran.
+pub fn fixture_runs(counter: &Path) -> usize {
+    std::fs::read_to_string(counter)
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
 

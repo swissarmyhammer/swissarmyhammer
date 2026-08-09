@@ -43,8 +43,9 @@ use crate::review::scope::{
     as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, Scope,
     SkippedFile, WorkList,
 };
+use crate::review::tool_health::ToolHealthCache;
 use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
-use crate::review::tool_rules::{execute_tool_runs, plan_tool_rules, ToolReport};
+use crate::review::tool_rules::{plan_tool_rules, start_tool_runs, ToolReport};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
@@ -557,13 +558,15 @@ fn sentence(text: &str) -> String {
 ///
 /// 1. [`scope_review`] — resolve `scope` into the per-validator [`WorkList`]
 ///    (deterministic, LLM-free).
-/// 2. [`plan_tool_rules`] + [`execute_tool_runs`] — plan every matched tool
-///    rule ONCE for the whole run and execute the healthy ones at the
-///    workspace root, before any batching. Tool findings join the verified
-///    stream as CONFIRMED (deterministic tool output skips the adversarial
-///    verify pass), and the plan's suppression map rides into every batch's
-///    fan-out so a superseded prompt rule is skipped per file; an unhealthy
-///    tool suppresses nothing and is reported as a prompt fallback.
+/// 2. [`plan_tool_rules`] + [`start_tool_runs`] — plan every matched tool
+///    rule ONCE for the whole run, before any batching, and start the healthy
+///    ones at the workspace root. The plan's suppression map rides into every
+///    batch's fan-out so a superseded prompt rule is skipped per file; an
+///    unhealthy tool suppresses nothing and is reported as a prompt fallback.
+///    The scripts then run WHILE stage 4 works, because the fan-out needs only
+///    that map and the tool findings are read at synthesis. Those findings
+///    join the verified stream as CONFIRMED (deterministic tool output skips
+///    the adversarial verify pass).
 /// 3. [`batch_work_list`] — split the work-list into budgeted batches at
 ///    whole-file granularity so no single prompt overflows the agent's prompt
 ///    cap. [`FleetConfig::batch_budget`] supplies both numbers, spent in
@@ -644,11 +647,23 @@ pub async fn run_review(
         "review run: tool-rule install lifecycle finished"
     );
 
-    let tool_plan = plan_tool_rules(&work, loader, &project_types);
-    let tool_outcome = execute_tool_runs(tool_plan.runs(), repo_path, progress);
+    // The fixture half of each health check is proved once per (tool version,
+    // rule content) and stored beside the workspace, so a review that changed
+    // neither the tool nor the rule plans without running a fixture at all.
+    // `sah doctor` never reads that store — it proves the rules and replaces
+    // what is stored — so doctor stays the ground truth.
+    let health = ToolHealthCache::open(repo_path);
+    let tool_plan = plan_tool_rules(&work, loader, &project_types, Some(&health));
+    health.save();
+
     let tool_attempted = tool_plan.runs().len();
-    let (_, tool_fallbacks, suppression) = tool_plan.into_parts();
-    let (tool_findings, tool_errors) = tool_outcome.into_parts();
+    let (tool_runs, tool_fallbacks, suppression) = tool_plan.into_parts();
+
+    // Stage 2b: start the planned scripts and let them run WHILE the fleet
+    // works. The fan-out reads the plan's suppression map, which stage 2 has
+    // already decided; the tool findings are read at synthesis and nowhere
+    // earlier, so the tool runs no longer sit in front of the first fleet task.
+    let tool_runs = start_tool_runs(tool_runs, repo_path, progress);
 
     // Stage 3: split the work-list into budgeted batches (whole-file
     // granularity). Two numbers, both spent in RENDERED bytes — measured by
@@ -722,8 +737,11 @@ pub async fn run_review(
         verified.extend(outcome.verified);
     }
 
-    // Tool findings are already CONFIRMED — deterministic tool output skips
-    // the adversarial verify pass — so they join the verified stream directly.
+    // The fleet has drained, so this is the first moment the tool findings are
+    // needed. Tool findings are already CONFIRMED — deterministic tool output
+    // skips the adversarial verify pass — so they join the verified stream
+    // directly.
+    let (tool_findings, tool_errors) = tool_runs.finish().await.into_parts();
     verified.extend(tool_findings);
 
     // Stage 5: synthesize the merged, deduped, ordered, dated report. The summed

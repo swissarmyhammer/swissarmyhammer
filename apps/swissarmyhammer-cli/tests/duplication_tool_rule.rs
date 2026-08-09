@@ -183,7 +183,7 @@ fn the_shipped_duplication_tool_rule_reports_a_renamed_copy_with_no_llm_call() {
     let loader = builtin_loader();
     let work = duplication_work(RENAMED_COPY_RS);
 
-    let plan = plan_tool_rules(&work, &loader, &["rust"]);
+    let plan = plan_tool_rules(&work, &loader, &["rust"], None);
 
     let run = plan
         .runs()
@@ -288,7 +288,7 @@ fn the_shipped_duplication_tool_rule_reports_nothing_on_a_marked_copy() {
     let loader = builtin_loader();
     let work = duplication_work(MARKED_COPY_RS);
 
-    let plan = plan_tool_rules(&work, &loader, &["rust"]);
+    let plan = plan_tool_rules(&work, &loader, &["rust"], None);
     let run = plan
         .runs()
         .iter()

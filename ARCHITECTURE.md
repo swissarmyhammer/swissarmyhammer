@@ -560,6 +560,8 @@ Two shipped modules use the fact-producer path:
 - `mirdan::status` — `check_all_doctored()` reports the install status of each sah-managed component, for each doctor-enabled agent, in each scope. `statuses_to_checks()` makes the rows; it drops the not-applicable rows and applies the scope-pair policy. `mirdan::doctor::MirdanDoctor` and the `commands::doctor::checks` module of `swissarmyhammer-cli` both consume it; the CLI seam is `check_install_stack_with`. The `mirdan status` command reads the same facts with no doctor.
 - `swissarmyhammer-validators::doctor` — `check_review_engine()` reports the detected project types, the applicability of each validator set, and the tool presence, tool version, and fixture result of each tool rule. `to_checks()` makes the rows, and `check_review_engine_with()` is the test seam. The `commands::doctor::checks` module of `swissarmyhammer-cli` consumes it.
 
+  Proving a tool rule runs its `run` script against the set's fail and pass fixtures, which for a Rust rule is a real `cargo clippy`. `swissarmyhammer-validators::review::tool_health` stores that verdict at `<workspace>/.sah/tmp/review-tool-health.json`, keyed on the tool version and a digest of the rule's `tool` block and its fixture files. The review engine reads the stored verdict; doctor never does — it proves every rule and replaces what is stored, so doctor stays the ground truth and a review that follows reads doctor's own answer.
+
 Use the fact producer when the facts have a consumer other than doctor, or when the owning crate must not depend on the tool registry. Use `Doctorable` in all other cases.
 
 ### Dual-Mode Tauri Apps

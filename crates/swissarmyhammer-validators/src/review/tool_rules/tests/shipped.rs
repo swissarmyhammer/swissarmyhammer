@@ -30,7 +30,7 @@ fn the_shipped_rust_tool_rule_reports_an_undocumented_public_item() {
     require_tool_installed(&loader, &project_types, RUST_MISSING_DOCS_RULE);
     let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
 
-    let plan = plan_tool_rules(&work, &loader, &project_types);
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
     let run = plan
         .runs()
@@ -143,7 +143,7 @@ fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
     require_tool_installed(&loader, &project_types, RUST_COMPLEXITY_RULE);
     let work = complexity_work(COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
 
-    let plan = plan_tool_rules(&work, &loader, &project_types);
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
     let run = plan
         .runs()
@@ -243,7 +243,7 @@ fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
     require_tool_installed(&loader, &project_types, PYTHON_DEAD_CODE_RULE);
     let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
 
-    let plan = plan_tool_rules(&work, &loader, &project_types);
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
     let run = plan
         .runs()
@@ -390,7 +390,7 @@ fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule
         let project_types = [*project_type];
         require_tool_installed(&loader, &project_types, rule_name);
 
-        let status = crate::doctor::check_review_engine_with(&loader, &project_types);
+        let status = crate::doctor::check_review_engine_with(&loader, &project_types, None);
         let row = status
             .tool_rules
             .iter()
@@ -564,7 +564,7 @@ fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
         UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
     );
 
-    let plan = plan_tool_rules(&work, &loader, &project_types);
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
     let run = plan
         .runs()

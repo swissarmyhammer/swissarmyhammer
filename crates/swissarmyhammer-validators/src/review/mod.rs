@@ -20,6 +20,7 @@ pub mod scope;
 pub mod synthesize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod tool_health;
 pub mod tool_install;
 pub mod tool_output;
 pub mod tool_rules;
@@ -47,6 +48,7 @@ pub use scope::{
 pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,
 };
+pub use tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
 pub use tool_install::{
     ensure_tool_installed, install_command_pins_version, install_missing_tools,
     install_project_tool_rules, install_tool_commands, InstallAgentRequest, InstallAttempt,
@@ -54,8 +56,8 @@ pub use tool_install::{
 };
 pub use tool_output::parse_tool_stdout;
 pub use tool_rules::{
-    execute_tool_runs, plan_tool_rules, ToolFallback, ToolOutcome, ToolPlan, ToolReport, ToolRun,
-    ToolRunError, ToolSuppression,
+    execute_tool_runs, plan_tool_rules, start_tool_runs, ToolFallback, ToolOutcome, ToolPlan,
+    ToolReport, ToolRun, ToolRunError, ToolRunsInFlight, ToolSuppression,
 };
 pub use tree_sitter_probes::{
     ParsedRevision, Revision, TreeSitterProbe, TreeSitterProbeContext,

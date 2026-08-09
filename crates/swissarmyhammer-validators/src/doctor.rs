@@ -33,6 +33,7 @@ use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::error::AvpError;
 use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
+use crate::review::tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
 use crate::review::tool_rules::{
     normalize_tool_path, project_tool_rules, run_script_findings, script_args, ScriptFailure,
 };
@@ -123,7 +124,13 @@ pub enum ToolPresence {
 }
 
 /// The result of running a tool rule against its fixtures.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable so the review engine can store the verdict beside the
+/// workspace and read it back — see
+/// [`ToolHealthCache`](crate::review::ToolHealthCache). A stored file written
+/// under a different shape of this enum is rejected and discarded, so a
+/// renamed variant can never be read as a verdict it is not.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FixtureOutcome {
     /// The fail fixture produced findings and the pass fixture none.
     Passed,
@@ -221,10 +228,11 @@ impl ToolRuleStatus {
 pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, AvpError> {
     let loader = crate::load_rules(Some(workspace_root))?;
     let project_types = detected_project_type_keys(workspace_root);
-    Ok(check_review_engine_with(
-        &loader,
-        &as_borrowed_strings(&project_types),
-    ))
+    let health = ToolHealthCache::open(workspace_root);
+    let status =
+        check_review_engine_with(&loader, &as_borrowed_strings(&project_types), Some(&health));
+    health.save();
+    Ok(status)
 }
 
 /// Produce the review-engine facts from an explicit loader and detected
@@ -233,9 +241,15 @@ pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, 
 /// This is the injectable core of [`check_review_engine`]: tests drive it
 /// with a synthetic loader and type list, without depending on the host's
 /// validator directories or workspace.
+///
+/// `health` is the workspace's stored fixture verdicts, when one is open.
+/// Doctor never reads a stored verdict — it proves every rule and REPLACES
+/// what is stored — so a review that follows doctor reads doctor's own
+/// answer. `None` proves every rule and stores nothing.
 pub fn check_review_engine_with(
     loader: &ValidatorLoader,
     project_types: &[&str],
+    health: Option<&ToolHealthCache>,
 ) -> ReviewEngineStatus {
     let sets = loader
         .list_rulesets()
@@ -250,9 +264,20 @@ pub fn check_review_engine_with(
         })
         .collect();
 
+    // Doctor is the ground truth, so it proves every rule for itself and
+    // replaces whatever verdict `health` holds. A review that follows then
+    // reads doctor's own answer rather than an older one.
     let tool_rules = project_tool_rules(loader, project_types)
         .into_iter()
-        .map(|matched| check_tool_rule(matched.ruleset, matched.rule, matched.spec))
+        .map(|matched| {
+            tool_rule_health(
+                health,
+                HealthProof::Fresh,
+                matched.ruleset,
+                matched.rule,
+                matched.spec,
+            )
+        })
         .collect();
 
     ReviewEngineStatus {
@@ -268,9 +293,39 @@ pub fn check_review_engine_with(
 /// ([`crate::review::tool_rules`]) reuses the same health decision doctor
 /// reports — "healthy" can never mean two different things.
 pub(crate) fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> ToolRuleStatus {
+    check_tool_rule_with(ruleset, rule, spec, |ruleset, rule, spec, _version| {
+        check_fixtures(ruleset, rule, spec)
+    })
+}
+
+/// Produce the doctor facts for one tool rule, with `fixture_check` deciding
+/// the fixture half.
+///
+/// Presence and version are read fresh on every call — each is one cheap
+/// command — and the version is handed to `fixture_check` because a stored
+/// fixture verdict is keyed on it (see
+/// [`ToolHealthCache`](crate::review::ToolHealthCache)). `fixture_check` runs
+/// only when the tool is present, so a missing tool still costs one command.
+///
+/// This is the ONE place presence, version, and fixtures become a
+/// [`ToolRuleStatus`], so the review engine's stored verdict and `sah doctor`'s
+/// proved one describe a tool rule the same way.
+pub(crate) fn check_tool_rule_with<F>(
+    ruleset: &RuleSet,
+    rule: &Rule,
+    spec: &ToolSpec,
+    fixture_check: F,
+) -> ToolRuleStatus
+where
+    F: FnOnce(&RuleSet, &Rule, &ToolSpec, Option<&str>) -> FixtureOutcome,
+{
     let presence = check_presence(spec);
     let (version, fixtures) = match &presence {
-        ToolPresence::Present => (check_version(spec), check_fixtures(ruleset, rule, spec)),
+        ToolPresence::Present => {
+            let version = check_version(spec);
+            let fixtures = fixture_check(ruleset, rule, spec, version.as_deref());
+            (version, fixtures)
+        }
         ToolPresence::Missing { .. } => (None, FixtureOutcome::Skipped),
     };
 
@@ -335,7 +390,12 @@ fn check_version(spec: &ToolSpec) -> Option<String> {
 /// The fail fixture must produce at least one finding; the pass fixture must
 /// produce none. Any broken run — nonzero exit, unparseable stdout — is a
 /// failure with its detail.
-fn check_fixtures(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> FixtureOutcome {
+///
+/// This is the expensive half of a health check, and the only half a stored
+/// verdict replaces. Crate-visible so
+/// [`ToolHealthCache`](crate::review::ToolHealthCache) proves a rule by
+/// calling exactly what doctor calls.
+pub(crate) fn check_fixtures(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> FixtureOutcome {
     match verify_fixture_contract(ruleset, rule, spec) {
         Ok(()) => FixtureOutcome::Passed,
         Err(outcome) => outcome,
@@ -956,7 +1016,7 @@ Python only.
 
         let loader = ValidatorLoader::new();
         let detected_keys: Vec<&str> = detected.iter().map(String::as_str).collect();
-        let status = check_review_engine_with(&loader, &detected_keys);
+        let status = check_review_engine_with(&loader, &detected_keys, None);
         assert_eq!(status.project_types, detected);
     }
 
@@ -967,7 +1027,7 @@ Python only.
         write_ruleset(temp.path(), "python-set", PYTHON_ONLY_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let applies: std::collections::BTreeMap<&str, bool> = status
             .sets
@@ -986,7 +1046,7 @@ Python only.
         write_ruleset(temp.path(), "tool-set", TOOL_SET_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let names: Vec<&str> = status.sets.iter().map(|s| s.name.as_str()).collect();
         let mut sorted = names.clone();
@@ -1010,7 +1070,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1039,7 +1099,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1075,7 +1135,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1109,7 +1169,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1142,7 +1202,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1167,7 +1227,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1204,7 +1264,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let names: Vec<&str> = status
             .tool_rules
@@ -1233,7 +1293,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1290,7 +1350,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1335,7 +1395,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1366,7 +1426,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1398,7 +1458,7 @@ Python only.
     #[test]
     fn test_to_checks_no_project_types_row_says_none() {
         let loader = ValidatorLoader::new();
-        let status = check_review_engine_with(&loader, &[]);
+        let status = check_review_engine_with(&loader, &[], None);
 
         let checks = to_checks(&status);
 
@@ -1515,7 +1575,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 

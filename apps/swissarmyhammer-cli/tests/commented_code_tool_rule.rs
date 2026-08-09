@@ -148,7 +148,7 @@ fn the_shipped_commented_code_tool_rule_reports_three_languages_with_no_llm_call
     let loader = builtin_loader();
     let work = commented_code_work();
 
-    let plan = plan_tool_rules(&work, &loader, &["rust", "python", "nodejs"]);
+    let plan = plan_tool_rules(&work, &loader, &["rust", "python", "nodejs"], None);
 
     let run = plan
         .runs()
@@ -296,7 +296,7 @@ fn the_shipped_commented_code_tool_rule_reports_nothing_on_exempt_comments() {
     );
     let loader = builtin_loader();
 
-    let plan = plan_tool_rules(&work, &loader, &["rust"]);
+    let plan = plan_tool_rules(&work, &loader, &["rust"], None);
     let run = plan
         .runs()
         .iter()

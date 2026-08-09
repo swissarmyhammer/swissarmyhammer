@@ -77,6 +77,11 @@ swissarmyhammer-code-context = { workspace = true }
 model-embedding = { workspace = true }
 # The code_context ops take a `&Connection`; the probe runner's public API mirrors
 # that established pattern, so rusqlite is a normal dependency, not just dev.
+# Digests the stored tool-health verdicts are keyed on: the rule content and
+# its fixture files. A persisted key needs a hash that is the same in every
+# process and every toolchain, which `DefaultHasher` is not.
+sha2 = { workspace = true }
+
 rusqlite = { workspace = true }
 
 # Async runtime backing the agent pool's worker tasks

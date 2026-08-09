@@ -108,7 +108,7 @@ fn plan_includes_a_healthy_tool_rule_and_suppresses_the_superseded_rule_per_file
     ));
     let work = docs_work(&["src/lib.rs"]);
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
 
     assert_eq!(plan.runs().len(), 1);
     assert_eq!(plan.runs()[0].validator(), "docs");
@@ -135,7 +135,7 @@ fn plan_suppresses_every_named_prompt_rule_per_file() {
     let files = ["src/lib.rs", "src/main.rs"];
     let work = docs_work(&files);
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
 
     let expected = BTreeSet::from([
         MISSING_DOCS_PROMPT_RULE.to_string(),
@@ -160,7 +160,7 @@ fn plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing() {
     ));
     let work = docs_work(&["src/lib.rs"]);
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
 
     assert!(plan.runs().is_empty());
     assert_eq!(plan.fallbacks().len(), 1);
@@ -180,7 +180,7 @@ fn plan_reports_a_fallback_when_the_fixtures_are_missing() {
     ));
     let work = docs_work(&["src/lib.rs"]);
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
 
     assert!(plan.runs().is_empty());
     assert_eq!(plan.fallbacks().len(), 1);
@@ -205,7 +205,7 @@ fn plan_narrows_a_tool_rule_to_the_files_its_own_match_covers() {
     ));
     let work = docs_work(&["src/covered.rs", "src/other.rs"]);
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
 
     assert_eq!(plan.runs().len(), 1);
     assert_eq!(plan.runs()[0].files(), ["src/covered.rs".to_string()]);
@@ -277,7 +277,7 @@ async fn a_missing_tool_with_a_working_install_command_is_installed_and_then_pla
     let work = docs_work(&["src/lib.rs"]);
 
     // Before the install stage the tool is missing, so the rule falls back.
-    let before = plan_tool_rules(&work, &loader, &[]);
+    let before = plan_tool_rules(&work, &loader, &[], None);
     assert!(before.runs().is_empty());
     assert_eq!(before.fallbacks().len(), 1);
 
@@ -294,7 +294,7 @@ async fn a_missing_tool_with_a_working_install_command_is_installed_and_then_pla
     );
 
     // The planner re-runs the same doctor check, so the rule is now healthy.
-    let after = plan_tool_rules(&work, &loader, &[]);
+    let after = plan_tool_rules(&work, &loader, &[], None);
     assert_eq!(after.runs().len(), 1, "the installed tool must be planned");
     assert_eq!(after.runs()[0].rule(), "docs-tool");
     assert!(after.fallbacks().is_empty());
@@ -334,7 +334,7 @@ async fn a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback() {
         "every install command failed, so the tool stays missing"
     );
 
-    let plan = plan_tool_rules(&work, &loader, &[]);
+    let plan = plan_tool_rules(&work, &loader, &[], None);
     assert!(plan.runs().is_empty());
     assert_eq!(plan.fallbacks().len(), 1);
     assert_eq!(plan.fallbacks()[0].supersedes().names(), ["missing-docs"]);

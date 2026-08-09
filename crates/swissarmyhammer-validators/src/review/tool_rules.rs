@@ -9,10 +9,10 @@
 //! - [`plan_tool_rules`] matches every tool rule against the scoped
 //!   [`WorkList`] through the same `ValidatorMatch` path prompt rules use,
 //!   checks the tool's health with the doctor logic
-//!   ([`check_tool_rule`](crate::doctor)), and produces the [`ToolPlan`]: the
-//!   healthy runs, the fallbacks (unhealthy tool → the superseded prompt rule
-//!   runs as before), and the [`ToolSuppression`] map that tells the fleet
-//!   which superseded prompt rules to skip per file.
+//!   ([`tool_rule_health`](crate::review::tool_health)), and produces the
+//!   [`ToolPlan`]: the healthy runs, the fallbacks (unhealthy tool → the
+//!   superseded prompt rule runs as before), and the [`ToolSuppression`] map
+//!   that tells the fleet which superseded prompt rules to skip per file.
 //! - [`execute_tool_runs`] runs each planned script with bash at the workspace
 //!   root. `scope: files` passes the matched changed files as the script's
 //!   arguments (`"$@"`); `scope: workspace` runs once with no arguments and
@@ -38,9 +38,10 @@ use std::path::Path;
 
 use swissarmyhammer_common::command::command_failure_detail;
 
-use crate::doctor::{check_tool_rule, run_shell};
+use crate::doctor::run_shell;
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
 use crate::review::scope::{ValidatorWork, WorkList};
+use crate::review::tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::validators::types::{
@@ -338,7 +339,8 @@ impl ToolReport {
 /// rule matches the intersection of its set's `match` and its own — evaluated
 /// per file with the workspace's detected `project_types`. A tool rule with no
 /// matched file contributes nothing. For each tool rule with matched files the
-/// doctor health check ([`check_tool_rule`](crate::doctor)) runs ONCE:
+/// health check ([`tool_rule_health`](crate::review::tool_health)) runs ONCE,
+/// reading `health` for the fixture verdict it already proved:
 ///
 /// - Healthy (tool present, fixtures pass) → a [`ToolRun`], plus one
 ///   [`ToolSuppression`] entry per matched file for each prompt rule the
@@ -349,16 +351,17 @@ pub fn plan_tool_rules(
     work: &WorkList,
     loader: &ValidatorLoader,
     project_types: &[&str],
+    health: Option<&ToolHealthCache>,
 ) -> ToolPlan {
     let mut plan = ToolPlan::default();
     for matched in matched_tool_rules(work, loader, project_types) {
         plan_rule_by_health(
             &mut plan,
-            matched.ruleset.name(),
             matched.ruleset,
             matched.rule,
             matched.spec,
             matched.files,
+            health,
         );
     }
     plan
@@ -492,19 +495,24 @@ pub(crate) fn project_tool_rules<'a>(
     matched
 }
 
-/// Run the doctor health check ONCE for a matched tool rule and record the
+/// Run the health check ONCE for a matched tool rule and record the
 /// verdict on the plan: a healthy rule becomes a [`ToolRun`] (plus one
 /// suppression entry per matched file for each prompt rule its `supersedes`
 /// names), an unhealthy one a [`ToolFallback`] that suppresses nothing.
+///
+/// The check reads presence and version fresh and takes the fixture verdict
+/// `health` stored, so a review that changed neither the tool nor the rule
+/// costs no fixture run.
 fn plan_rule_by_health(
     plan: &mut ToolPlan,
-    validator: &str,
     ruleset: &RuleSet,
     rule: &Rule,
     spec: &ToolSpec,
     files: Vec<String>,
+    health: Option<&ToolHealthCache>,
 ) {
-    let status = check_tool_rule(ruleset, rule, spec);
+    let validator = ruleset.name();
+    let status = tool_rule_health(health, HealthProof::Stored, ruleset, rule, spec);
     if !status.usable() {
         let detail = status.degraded_detail();
         tracing::warn!(
@@ -618,6 +626,93 @@ pub fn execute_tool_runs(
         }
     }
     outcome
+}
+
+/// Start every planned tool run and hand back a handle to its outcome.
+///
+/// The fan-out needs only the plan's suppression map, and that is already
+/// decided by the time the runs start; the tool findings are needed at
+/// synthesis and nowhere earlier. Starting the runs here therefore lets a
+/// `cargo clippy` that takes a minute overlap the fleet instead of delaying
+/// its first task.
+///
+/// The `run` scripts are blocking shell processes, so they run on the blocking
+/// pool. A tool script that ran on an async task would hold a runtime worker
+/// thread for its whole run and stall the fleet it is meant to overlap.
+pub fn start_tool_runs(
+    runs: Vec<ToolRun>,
+    repo_root: &Path,
+    progress: Option<&ReviewProgressSender>,
+) -> ToolRunsInFlight {
+    let identities = runs.iter().map(RunIdentity::of).collect();
+    let repo_root = repo_root.to_path_buf();
+    let progress = progress.cloned();
+    let task = tokio::task::spawn_blocking(move || {
+        execute_tool_runs(&runs, &repo_root, progress.as_ref())
+    });
+    ToolRunsInFlight { task, identities }
+}
+
+/// The names one tool run is reported under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunIdentity {
+    /// The owning validator (RuleSet) name.
+    validator: String,
+    /// The tool rule's name.
+    rule: String,
+}
+
+impl RunIdentity {
+    /// The names `run` is reported under.
+    fn of(run: &ToolRun) -> Self {
+        Self {
+            validator: run.validator.clone(),
+            rule: run.rule.clone(),
+        }
+    }
+}
+
+/// The tool runs of one review, running while the fleet works.
+#[derive(Debug)]
+pub struct ToolRunsInFlight {
+    /// The blocking task running the scripts.
+    task: tokio::task::JoinHandle<ToolOutcome>,
+    /// The names of every run the task carries, so a task that did not finish
+    /// is still reported as a broken run for each one rather than as silence.
+    identities: Vec<RunIdentity>,
+}
+
+impl ToolRunsInFlight {
+    /// Wait for the runs to finish and take their outcome.
+    ///
+    /// A task that did not finish reports one [`ToolRunError`] per run it
+    /// carried. The runs are never cancelled, so this can only be a panic in
+    /// the run loop — a bug, and the reader has to see which rules it cost.
+    pub async fn finish(self) -> ToolOutcome {
+        match self.task.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    runs = self.identities.len(),
+                    "the tool runs did not finish; reporting every run as broken"
+                );
+                let detail = format!("the tool run task did not finish: {error}");
+                ToolOutcome {
+                    findings: Vec::new(),
+                    errors: self
+                        .identities
+                        .into_iter()
+                        .map(|identity| ToolRunError {
+                            validator: identity.validator,
+                            rule: identity.rule,
+                            detail: detail.clone(),
+                        })
+                        .collect(),
+                }
+            }
+        }
+    }
 }
 
 /// Why a tool-rule script run produced no findings.
