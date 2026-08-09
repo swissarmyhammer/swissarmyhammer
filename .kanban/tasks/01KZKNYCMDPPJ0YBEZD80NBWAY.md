@@ -211,8 +211,99 @@ comments:
     - HEAD: ce8593e17
     - next: `/review`
   timestamp: 2026-08-09T19:08:26.873807+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzkzr3jzxq70w170r3200j07
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha ce8593e17..bd6dcd60c` — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped. The two findings of the pass of 2026-08-09 12:17 are marked done.
+
+    **A. The two silent bounds do not stop this workspace.** This review measured the bounds again over the 1183 tracked `.rs` files, with the same parse the op uses:
+
+    - The longest definition is 1744 normalized tokens, at `crates/swissarmyhammer-sem/src/model/identity.rs` `match_entities`. This agrees with the number the constant records.
+    - 0 definitions are longer than `MAXIMUM_DEFINITION_TOKENS` (4096).
+    - The widest scan window is 749 later shapes, from a shape of 63 tokens at `apps/swissarmyhammer-cli/src/commands/validate/display.rs` `format_file_display`. A band ends when `lengths_can_reach` fails, which is at 11/9 of the length.
+    - 0 shapes have a scan window wider than `MAXIMUM_COMPARED_SHAPES` (1024).
+
+    The silence is correct here. The bound is written in four places: the module doc, each constant, the doc of `find_duplication`, and the rule body section "The bounds on the work, and the measurement they came from". Each place says that a definition past the bound is not compared and is not reported. The op already keeps the same silence for a file it cannot read and for a file the roster has no grammar for, and the doc names that precedent. The tool prints findings only. It does not tell the reader that a file is clean, so it cannot make a false clean claim.
+
+    **B. The equality argument holds.** The proof sketch leaves out one step. `keep_best` chooses the copy by candidate index, not by position in the scan order, so "the sort is stable, so the earliest eligible member is the group's first" is not sufficient on its own. The missing step is this: the first member `f` and a later member `m` have the same length, so the scan of `f` starts earlier than the scan of `m` and ends at the same length limit. The scan range of `f` therefore holds the scan range of `m`. Every pair `m` could make, `f` makes first with the same value, and `keep_best` replaces a match only for a larger value. So `m` is never the partner of any candidate. With that step added, the argument is sound.
+
+    Two probes confirm it:
+
+    - The new code and the code at `ce8593e17` give the same 416 findings over the same 1183 files, line for line.
+    - Three orderings of one group of two equal streams plus a near neighbour (`x f m`, `f m x`, `f x m`) give the same result in both. In each ordering the partner is the first member of the group. A later member is never a partner.
+
+    **C. The constants carry their measurement, and the tests hold them.** Each constant records the measurement in its doc comment, and the rule body records the table the numbers came from. Each test fails when the thing it holds is changed:
+
+    - `MAXIMUM_DEFINITION_TOKENS` set to 100000 — `a_definition_over_the_maximum_size_is_not_compared` fails.
+    - `MAXIMUM_DEFINITION_TOKENS` set to 100 — `a_definition_under_the_maximum_size_is_compared` fails.
+    - the per-band limit removed — `a_band_stops_after_the_maximum_number_of_shapes` fails.
+    - the equal-stream group removed, so each candidate is its own shape — `a_shape_repeated_many_times_does_not_cost_a_comparison_for_each_pair` fails.
+
+    Note: the doc of `MAXIMUM_COMPARED_SHAPES` says the widest band is 748 shapes. This review measured 749. The difference is one shape, and it comes from a second count of the same quantity. It does not change the result the sentence gives: the widest band is much less than the limit of 1024.
+
+    - next: none. The card moves to `done`.
+  timestamp: 2026-08-09T19:24:43.487133+00:00
+- actor: claude-code
+  id: 01kzkzsqyg65s3erd339rbknw5
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 2 files. Both findings closed; they were one defect with two faces
+    - test: green — cargo nextest run --workspace 13990 passed / 0 failed / 0 skipped, doctests 3 passed, fmt clean, clippy -D warnings clean
+    - commit: bd6dcd60c, parent ce8593e17 — 4 files, 472 insertions, 21 deletions
+    - review: **clean** — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped. Card moved to `done`
+
+    ## What bounded the quadratic work
+
+    Three bounds, and the first is the one that matters:
+    - candidates are grouped by the exact normalized stream, with the language in the key. Two equal streams are 100 percent alike and 100 is the ratio's highest answer, so every later member of a group reads its answer off the group's earliest member and is compared against NOTHING
+    - `MAXIMUM_DEFINITION_TOKENS` = 4096
+    - `MAXIMUM_COMPARED_SHAPES` = 1024 per length band
+
+    Past either numeric bound the op is silent — it does not compare and does not report.
+
+    | k same-shape definitions | before | after |
+    |---|---|---|
+    | 200 | 7.0 s | 0.1 s |
+    | 400 | 27.9 s | 0.2 s |
+    | 800 | 110.9 s | 0.5 s |
+    | 1600 | 431.9 s | 1.0 s |
+
+    Four times per doubling became two times per doubling, which is the parse and nothing more. One 27609-token pair fell from 12.7 s to 0.2 s.
+
+    **The report did not move, and that was proved rather than counted.** The op ran over all 1183 tracked `.rs` files at both commits, dumping findings one per line: 416 lines each, `diff` reports ZERO lines of difference.
+
+    ## The reviewer verified rather than trusted, and found a hole in the proof
+
+    It re-measured with the op's own parser instead of accepting the numbers: longest definition 1744 tokens (`swissarmyhammer-sem/src/model/identity.rs` `match_entities`), 0 definitions over 4096, widest band 749 shapes, 0 bands over 1024. Both bounds are unreached by this workspace.
+
+    **It found a real hole in the equality argument.** `keep_best` picks the copy by candidate INDEX, not by scan position, so "the sort is stable, so the earliest eligible member is the group's first" does not on its own establish the claim. The missing step: `f` and `m` share a length, so `f`'s scan starts earlier and breaks at the same limit — `f`'s scan range strictly contains `m`'s, `f` forms every pair `m` could form first with the same value, and `keep_best` replaces only on a strictly larger value. With that step the argument is sound. It then confirmed it empirically with three adversarial orderings.
+
+    It mutated the code four ways and watched each new test go red itself.
+
+    **On the silence.** Two bounds make the detector quietly stop looking, which is the real risk here. The reviewer judged silent correct: the bound is stated in four places, the op already keeps identical silence for unreadable files and unparsed languages, and — the deciding point — the tool emits findings only and never asserts a file is clean, so it cannot make a false clean claim.
+
+    Noted, and correctly NOT raised as a finding: the doc says the widest band is 748 and the independent count says 749. One shape, no effect on the sentence's purpose, and 749 is far below 1024. Raising it would have been manufacturing a finding.
+
+    Finding counts by iteration: 2, 0. Guardrail never approached.
+
+    ---
+
+    ### The card's subject, delivered
+
+    Duplication now compares whole named definitions — functions, methods and types — instead of sliding a 50-token window. The owner said it three ways and all three are answered: the unit is a whole definition, not a fragment; "nearly" is a measured ratio, not exact equality; and the granularity is a definition, not a few lines.
+
+    - `cpd-core` removed. A Rabin-Karp rolling hash answers "where is a run of N tokens spelled twice" and can never rate two whole definitions. A longest-common-subsequence ratio can
+    - Thresholds measured, not guessed: 40 normalized tokens at 90 percent alike, chosen by reading the boundary cases
+    - 945 fragment findings became 416 definition findings; 389 intra-file became 159
+    - Structural test exclusion by parse survives, and is worth 3490 → 416
+    - Zero LLM calls for the duplication set on matched files, as `^a4ebnw3` proved
+
+    Commits: `ce8593e17`, `bd6dcd60c`. Nothing pushed.
+  timestamp: 2026-08-09T19:25:37.104421+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd280
 title: duplication compares whole definitions, not token windows — near-duplicate functions, methods and types
 ---
 Correction to `^a4ebnw3`. That card built a working deterministic duplication rule, but it compares the wrong unit.
