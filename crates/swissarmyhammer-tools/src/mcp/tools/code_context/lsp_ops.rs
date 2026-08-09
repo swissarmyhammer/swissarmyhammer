@@ -18,8 +18,20 @@ use swissarmyhammer_code_context::{
 
 use super::leader_route;
 use super::support::{
-    any_lsp_session, context_err, lsp_session_for_file, open_workspace, DEFAULT_MAX_RESULTS,
+    any_lsp_session, context_err, extract_bool_param, extract_file_position, extract_optional_str,
+    extract_optional_string_array, extract_optional_usize, extract_required_str,
+    extract_required_u32, extract_u32_param, extract_usize_param, lsp_session_for_file,
+    open_workspace, DEFAULT_MAX_RESULTS,
 };
+
+/// Default call-hierarchy depth for `get inbound_calls`: direct callers only.
+const DEFAULT_INBOUND_CALL_DEPTH: u32 = 1;
+
+/// Default for `include_source`: return the definition's source text.
+const DEFAULT_INCLUDE_SOURCE: bool = true;
+
+/// Default for `include_declaration`: count the declaration as a reference.
+const DEFAULT_INCLUDE_DECLARATION: bool = true;
 
 /// Execute the "get rename_edits" operation.
 ///
@@ -29,36 +41,17 @@ pub(super) async fn execute_get_rename_edits(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let new_name = args
-        .get("new_name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'new_name'", None))?;
+    let (file_path, line, character) = extract_file_position(args)?;
+    let new_name = extract_required_str(args, "new_name")?;
 
     let opts = swissarmyhammer_code_context::GetRenameEditsOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
         new_name: new_name.to_string(),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -77,15 +70,10 @@ pub(super) fn execute_get_diagnostics(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
+    let file_path = extract_required_str(args, "file_path")?;
 
-    let severity_filter = args
-        .get("severity_filter")
-        .and_then(|v| v.as_str())
-        .map(|s| match s.to_lowercase().as_str() {
+    let severity_filter =
+        extract_optional_str(args, "severity_filter").map(|s| match s.to_lowercase().as_str() {
             "error" => DiagnosticSeverity::Error,
             "warning" => DiagnosticSeverity::Warning,
             "info" => DiagnosticSeverity::Info,
@@ -115,33 +103,16 @@ pub(super) async fn execute_get_inbound_calls(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetInboundCallsOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
-        depth,
+        depth: extract_u32_param(args, "depth", DEFAULT_INBOUND_CALL_DEPTH),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -160,20 +131,11 @@ pub(super) async fn execute_workspace_symbol_live(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
-
-    let max_results = args
-        .get("max_results")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(DEFAULT_MAX_RESULTS);
+    let query = extract_required_str(args, "query")?;
 
     let opts = WorkspaceSymbolLiveOptions {
         query: query.to_string(),
-        max_results,
+        max_results: extract_usize_param(args, "max_results", DEFAULT_MAX_RESULTS),
     };
 
     let session = any_lsp_session();
@@ -194,36 +156,16 @@ pub(super) async fn execute_get_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let include_source = args
-        .get("include_source")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetDefinitionOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
-        include_source,
+        include_source: extract_bool_param(args, "include_source", DEFAULT_INCLUDE_SOURCE),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -240,36 +182,16 @@ pub(super) async fn execute_get_type_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let include_source = args
-        .get("include_source")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetTypeDefinitionOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
-        include_source,
+        include_source: extract_bool_param(args, "include_source", DEFAULT_INCLUDE_SOURCE),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -287,30 +209,15 @@ pub(super) async fn execute_get_hover(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetHoverOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     tracing::debug!(file_path = %file_path, client = session.is_some(), "get_hover: session lookup");
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
@@ -333,42 +240,21 @@ pub(super) async fn execute_get_references(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let include_declaration = args
-        .get("include_declaration")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let max_results = args
-        .get("max_results")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetReferencesOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
-        include_declaration,
-        max_results,
+        include_declaration: extract_bool_param(
+            args,
+            "include_declaration",
+            DEFAULT_INCLUDE_DECLARATION,
+        ),
+        max_results: extract_optional_usize(args, "max_results"),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -385,36 +271,16 @@ pub(super) async fn execute_get_implementations(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let line = args
-        .get("line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'line'", None))?
-        as u32;
-
-    let character = args
-        .get("character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'character'", None))?
-        as u32;
-
-    let max_results = args
-        .get("max_results")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
+    let (file_path, line, character) = extract_file_position(args)?;
 
     let opts = GetImplementationsOptions {
-        file_path: file_path.to_string(),
+        file_path: file_path.clone(),
         line,
         character,
-        max_results,
+        max_results: extract_optional_usize(args, "max_results"),
     };
 
-    let session = lsp_session_for_file(file_path);
+    let session = lsp_session_for_file(&file_path);
     let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
@@ -433,52 +299,15 @@ pub(super) async fn execute_get_code_actions(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let start_line = args
-        .get("start_line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'start_line'", None))?
-        as u32;
-
-    let start_character = args
-        .get("start_character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            McpError::invalid_params("missing required parameter 'start_character'", None)
-        })? as u32;
-
-    let end_line = args
-        .get("end_line")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'end_line'", None))?
-        as u32;
-
-    let end_character = args
-        .get("end_character")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            McpError::invalid_params("missing required parameter 'end_character'", None)
-        })? as u32;
-
-    let filter_kind = args.get("filter_kind").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(String::from))
-                .collect()
-        })
-    });
+    let file_path = extract_required_str(args, "file_path")?;
 
     let opts = GetCodeActionsOptions {
         file_path: file_path.to_string(),
-        start_line,
-        start_character,
-        end_line,
-        end_character,
-        filter_kind,
+        start_line: extract_required_u32(args, "start_line")?,
+        start_character: extract_required_u32(args, "start_character")?,
+        end_line: extract_required_u32(args, "end_line")?,
+        end_character: extract_required_u32(args, "end_character")?,
+        filter_kind: extract_optional_string_array(args, "filter_kind"),
     };
 
     let session = lsp_session_for_file(file_path);

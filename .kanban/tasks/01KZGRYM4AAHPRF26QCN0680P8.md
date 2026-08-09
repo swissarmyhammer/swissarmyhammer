@@ -201,6 +201,133 @@ comments:
     - evidence: 21 files — 8 new (`crates/swissarmyhammer-common/src/command.rs`, `code_context/{ops,support,execute,indexing,status,lsp_ops}.rs`, `code_context/tests/` as 6 files), 13 modified. All 12 review findings now `- [x]`. `cargo nextest run --workspace` 13906 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. RED verified 17 ways.
     - next: `/review`
   timestamp: 2026-08-08T23:26:04.961522+00:00
+- actor: claude-code
+  id: 01kzj0anrhf7x9k98rya27eyy8
+  text: |
+    ### review — findings
+
+    - evidence: 38 findings recorded, from `review sha d861843cf..385feb8c4` (engine: 61 findings, 62 confirmed, 73 refuted, 54 attempted, 0 failed, **0 skipped files**). Locations: `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:327`; `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:58`; `crates/swissarmyhammer-common/src/lib.rs:49`, `:128`; `code_context/doctor.rs:14`, `:15`, `:16`, `:17`, `:25`, `:26`, `:27`, `:35`; `code_context/execute.rs:89`, `:258`, `:442`; `code_context/indexing.rs:465`; `code_context/lsp_ops.rs:32`; `code_context/mod.rs:65`, `:182` (x2), `:229`, `:240`, `:313`, `:318`; `code_context/ops.rs:32`, `:66`, `:125`, `:191`, `:220`, `:252`, `:370`, `:807`; `code_context/support.rs:82`; `code_context/watcher.rs:158`; `shell/process.rs:22`, `:177`; `crates/swissarmyhammer-validators/Cargo.toml:17`, `:18`.
+    - next: `/implement` the 38 checklist items, then re-review. Task stays in `review`.
+
+    **The 12 prior findings are genuinely fixed, each verified in the tree — not merely checked off.**
+
+    - Cargo.toml (4): `grep` over `crates/swissarmyhammer-code-context/Cargo.toml` for `project-detection`, `model-embedding`, `once_cell`, `include_dir` returns nothing. All four absent.
+    - `find_commented_code.rs:48`: signature now reads `pub fn find_commented_code(working_dir: &Path, files: &[&str])`.
+    - `mod.rs:1`: the file is 337 lines / 14297 bytes, down from 4890 / 187624. Proof it worked is in this report's own counts — **`skipped_files` is empty and `skipped` is 0**, where the last pass skipped this file and nine validators never read it.
+    - `schema.rs:100`/`:169`: `test_operations()` is now `code_context_operations().to_vec()` — the production roster — and the two assertions derive from `ops.len()` instead of a literal. The second hand-copied roster is gone.
+    - `doctor.rs:423`: `run_fixture` and the engine's `plan_tool_rules` both call `tool_rules::run_script_findings` with `script_args`, and each maps `ScriptFailure::{Start,Exit,Contract}` into its own sentence.
+    - `doctor.rs:521`: exactly one `fn command_failure_detail` exists in the tree, in `swissarmyhammer-common/src/command.rs`. Four callers import it; the two hand-written copies are gone.
+    - `doctor.rs:682`: `is_sah_binary` compares with `eq_ignore_ascii_case`, with the Windows reason written above it.
+    - `doctor.rs:697`: `shell_command(Shell, &str)` in common; `doctor::run_shell` and `shell/process.rs::prepare_shell_command` both build on it.
+
+    **23 findings dropped under the pre-existing-test exception**, each confirmed present at `d861843cf` before being dropped:
+
+    - `code_context/tests/indexer.rs:21`, `:56`, `:108`, `:204`, `:247`, `:251`, `:299`; `tests/support.rs:147`; `tests/tool.rs:35` (x2), `:98` — 11. The `tests/` directory is a **pure move**: 50 `#[test]`/`#[tokio::test]` functions in the old `mod.rs`, 50 in the new `tests/` directory (13+9+2+26). Every flagged literal — `620_000_000`, `MockEmbedder::new(8)`, `let dim = 8`, `VecReporter`, `read_embedded_flag`, `ops.len(), 25` — was located in `mod.rs` at `d861843cf`.
+    - `watcher.rs:411`, `:760` — 2. Both sit past `mod tests` at line 372, and this commit changed only three call paths in that file.
+    - `shell/process.rs:724`, `:754`, `:801`, `:844`, `:927`, `:951`, `:957`, `:1137`, `:1395` — 9. All sit past `#[cfg(test)]` at line 669; this commit touched only `prepare_shell_command`.
+    - `review/tool_install.rs:499` — 1. Past `#[cfg(test)]` at line 456; this commit changed only the import block.
+
+    **Three notes for the next iteration.**
+
+    The split is the whole story of this report. Nine validators read `code_context/*` for the first time and returned 27 findings across `mod.rs`, `ops.rs`, `execute.rs`, `lsp_ops.rs`, `indexing.rs` and `support.rs` — moved code, not new code, that no review had ever been able to see. The implementer predicted one of these exactly: the two verbatim `"Valid operations: ..."` literals kept unchanged on purpose are now raised as `mod.rs:313` and `:318`. That is the split working as designed.
+
+    `find_commented_code.rs:58` is the one finding of substance specific to this change and the only security finding: the op joins a caller-supplied path to `working_dir` with no containment check, so `--files ../../../etc/passwd` reads outside the workspace. This is the file whose signature this iteration changed, and the path is reachable from the MCP op and the `sah tool` CLI.
+
+    `swissarmyhammer-validators/Cargo.toml:17`, `:18` are the same cause as prior findings 1–4, in the next package: the dev-dependency fold put this manifest in the diff, so cargo-machete read it and found `sha2` and `chrono` unused.
+
+    The new shared module `swissarmyhammer-common/src/command.rs` drew **zero** findings, as did the six new sibling modules' own structure. The deliberate `stdin(Stdio::null())` is documented at the function and drew no finding; `shell/process.rs` set stdin null before the change, so the user-facing shell tool keeps its behavior.
+
+    One clarification the engine's text does not make plain: `crates/swissarmyhammer-common/src/lib.rs:49` is `pub mod test_utils;`, not the new `pub mod command;` on line 23. Neither declaration carries a doc comment.
+  timestamp: 2026-08-09T00:56:23.057082+00:00
+- actor: claude-code
+  id: 01kzj0d00waqcgdk9xf67hg4vp
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 21 files; all 12 prior findings worked, code_context/mod.rs split 4890 -> 337 lines, new shared swissarmyhammer-common::command module, unsafe transmute removed. RED verified 17 ways
+    - test: green — cargo nextest run --workspace, 13906 passed, 0 failed, 0 skipped; fmt clean; clippy -D warnings clean; cargo check --all-features clean. The +8 delta from 13898 was reconciled test-by-test and all 50 tests from the old mod.rs confirmed present
+    - commit: 385feb8c4 — 31 files, 5336 insertions, 4758 deletions
+    - review: findings — 38 open, on `review sha d861843cf..385feb8c4`. Engine: 61 returned, 62 confirmed, 73 refuted, 54 attempted, 0 failed, **0 skipped**; 23 dropped under the pre-existing-test exception
+
+    The 12 prior findings were verified in the tree rather than trusted from their checkboxes: the four deps are gone from the manifest, `find_commented_code` reads `&[&str]`, `test_operations()` derives from the production roster, exactly one `fn command_failure_detail` exists workspace-wide, `is_sah_binary` uses `eq_ignore_ascii_case`, and both runners route through `run_script_findings`.
+
+    **The split is why this number jumped.** `skipped` is 0 and `skipped_files` is empty, where the previous pass had nine validators unable to read `code_context/mod.rs` at all. **27 of the 38 findings are in `code_context/*` — relocated code, not new code, that no review had ever seen.** The implementer predicted one of them exactly: the two verbatim `"Valid operations: ..."` literals left unchanged on purpose are now `mod.rs:313` and `:318`.
+
+    **The one finding of substance specific to this change, and the only security finding:** `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:58` joins a caller-supplied path to `working_dir` with no containment check, so `--files ../../../etc/passwd` reads outside the workspace. That path is reachable from both the MCP op and `sah tool`. This is the file whose signature iteration 2 changed.
+
+    `crates/swissarmyhammer-validators/Cargo.toml:17, :18` are the same cause as prior findings 1-4, one package over: the dev-dependency fold put that manifest in the diff, and cargo-machete then found `sha2` and `chrono` unused.
+
+    Two pieces drew zero findings: the new shared `command.rs` module and the `unsafe { std::mem::transmute }` removal.
+
+    Findings by file:
+    - apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:327
+    - crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:58
+    - crates/swissarmyhammer-common/src/lib.rs:49, :128
+    - code_context/doctor.rs:14, :15, :16, :17, :25, :26, :27, :35
+    - code_context/execute.rs:89, :258, :442
+    - code_context/indexing.rs:465
+    - code_context/lsp_ops.rs:32
+    - code_context/mod.rs:65, :182 (x2), :229, :240, :313, :318
+    - code_context/ops.rs:32, :66, :125, :191, :220, :252, :370, :807
+    - code_context/support.rs:82
+    - code_context/watcher.rs:158
+    - crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:22, :177
+    - crates/swissarmyhammer-validators/Cargo.toml:17, :18
+
+    Guardrail: NOT hit. No finding repeats from iteration 1 — these are 38 different findings, and the 12 prior ones are closed.
+  timestamp: 2026-08-09T00:57:39.100021+00:00
+- actor: claude-code
+  id: 01kzj0ssct99fh0mzfnxek2q24
+  text: |
+    ### Iteration 3 — the security finding, and the sibling op that shared its cause
+
+    `find_commented_code.rs:58` was real and it was reachable. `working_dir.join(file)` reads whatever the caller names: a relative `../outside.rs` climbs out of the workspace, and an absolute `/etc/passwd` replaces the base entirely, because `Path::join` discards the base when the argument is absolute. Both paths arrive through the MCP op and through `sah tool code_context commented_code find --files`.
+
+    **The sweep found ONE sibling with the same cause, and it is not the one the grep first suggests.** `crates/swissarmyhammer-code-context/src/ops/query_ast.rs` joins caller-supplied `file_paths` to `workspace_root` with no containment check either. `lsp_helpers.rs::read_source_range` also reads a path off `std::fs`, but that path comes back from the language server's own response rather than from the caller, so it is not this cause and was left alone. Every other op in `ops/` reads through the index, not the filesystem.
+
+    **The fix is one place, not two patches.** New module `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs`, holding `resolve_within(working_dir, file) -> Option<PathBuf>`. It canonicalizes both sides and requires the resolved path to start with the resolved root. Canonicalizing rather than string-matching on `..` is what makes it cover the third shape the finding's own text does not name: a symbolic link inside the workspace that points out of it. An absolute path that lands INSIDE the workspace still resolves, so the boundary is where the path lands and not how the caller spelled it. A refusal is logged at `warn` through `tracing`.
+
+    **RED verified 4 ways before the fix, on the production path.** `a_relative_path_that_climbs_out_of_the_working_directory_is_refused` and `an_absolute_path_outside_the_working_directory_is_refused` in `find_commented_code`, and the matching pair in `query_ast`, all failed against the old code — `query_ast` reported `files_scanned: 1` for a file outside its workspace, which is the read happening. All four are green now, beside 7 new unit tests on `resolve_within` itself (inside relative, inside absolute, relative climb, absolute outside, a climb that returns inside, a symbolic-link escape, and a missing file).
+
+    One existing test changed rather than being deleted: `an_absolute_path_is_read_where_it_lies` pointed a nonexistent `working_dir` at a file elsewhere on disk, which is the defect written as a test. It is now `an_absolute_path_inside_the_working_directory_is_read` and pins the behaviour that survives.
+  timestamp: 2026-08-09T01:04:38.298848+00:00
+- actor: claude-code
+  id: 01kzj215mh13qfjtycr6b52cmv
+  text: |
+    ### Iteration 3 — the other 37, and what each cause turned out to be
+
+    Each finding was worked as a CAUSE over the whole file, never as the cited line. Every claim below was re-verified in the tree after the work, not taken from a report.
+
+    **`code_context/mod.rs` (7 findings).** `CodeContextTool` derives `Debug`. Three constants now own the three different spellings the findings named — `CODE_CONTEXT_DIR` (`.code-context`), `CODE_CONTEXT_DIR_WITH_SLASH` (`.code-context/`) and `CODE_CONTEXT_INIT_NAME` (`code-context`) — and the sweep routed all of them: both `root.join()` sites, the `.gitignore` comparison and the line that appends the entry, and all seven `InitResult` name arguments. A grep for the literal family now matches the three `const` definitions and nothing else. The two verbatim 600-character operation lists are one `VALID_OPERATIONS_LIST` constant interpolated at both error sites — the prediction the last iteration wrote down, now closed.
+
+    **`code_context/ops.rs` (8 findings).** One cause: the operation roster spelled its nouns and verbs inline. 31 constants (10 verbs, 21 nouns) now cover all 50 `verb()`/`noun()` bodies, single-use ones included, so no operation can be spelled two ways. The 25 hand-written `Lazy` statics and the 25-entry vector became one `macro_rules! code_context_roster` invocation that emits the singleton and the roster entry together, so an operation is named exactly once. Roster ORDER was checked positionally against `git show HEAD:...ops.rs` — 25/25, no mismatch — because the order is a public contract.
+
+    **`code_context/execute.rs` + `lsp_ops.rs` + `support.rs` (5 findings).** One cause seen three times: JSON argument extraction written longhand at every call site. Twelve `extract_*` helpers now live in `support.rs`, including `extract_u32_param` and `extract_file_position` with the exact signatures the findings prescribe. **`args.get(` now appears zero times in either file** — that is the measurement that says the cause is gone rather than the three cited sites. Error text is byte-identical, so no caller-visible message changed.
+
+    **`code_context/doctor.rs` (8 findings).** Every public item in the file is documented, not only the seven cited lines, and `run_doctor` now calls `detect_project_types(root)` instead of repeating its `format!`/`to_lowercase` transformation. Proof: `cargo clippy -p swissarmyhammer-tools --lib -- -W missing_docs` reports **0** diagnostics anywhere under `code_context/`.
+
+    **Unnamed configuration literals (5 findings, 4 files).** `DEFAULT_MIN_SIMILARITY`, `INDEXING_PROGRESS_LOG_INTERVAL`, `SHUTDOWN_CHECK_INTERVAL_MILLIS`, `PROCESS_REAP_TIMEOUT_MILLIS`, `DETECTION_DEPTH` — plus every sibling literal the same sweep found: five more defaults in `execute.rs`, and `PROCESS_REAP_POLL_MILLIS` / `SIGNAL_TERMINATED_EXIT_CODE` in `shell/process.rs`.
+
+    **`swissarmyhammer-common/src/lib.rs` (2 findings).** The reviewer's correction was right and was checked before acting: line 49 is `pub mod test_utils;`, not `pub mod command;`. Neither carried a doc comment, and neither did the other 31 module declarations — **all 33 are documented now**. `format_pretty` is extracted and both `Display::fmt` and `Debug::fmt` call it.
+
+    **`shell/process.rs` (2 findings).** `tokio::process::Child` DOES implement `Debug`, so `AsyncProcessGuard` derives it rather than taking the hand-written fallback the finding offered for the case where it does not — the derive reports strictly more state.
+
+    **`swissarmyhammer-validators/Cargo.toml` (2 findings).** Proved before deleting: a case-insensitive grep for `sha2|Sha256|chrono|NaiveDate|DateTime|Utc::|Local::` over the whole package returns 5 hits and every one is the substring "chrono" inside the word "sync**hrono**us" — the same false positive the rule body documents. Both dependencies deleted, together with the now-false comment above them, following the `swissarmyhammer-code-context` precedent from iteration 2; no `[package.metadata.cargo-machete]` table added. `cargo machete crates/swissarmyhammer-validators` now says "didn't find any unused dependencies".
+
+    **One deviation, stated plainly.** `checks.rs:327` asks for `const DETECTION_DEPTH: u32 = 3;`. `swissarmyhammer_project_detection::detect_projects` takes `max_depth: Option<usize>`, so `u32` does not compile. The constant is `usize`. The finding's requirement — the literal is named at module level and used as `Some(DETECTION_DEPTH)` — is met exactly; only the integer type differs, because the rule as literally written cannot type-check.
+
+    **One extra copy closed that no finding cited.** The `support.rs:82` sweep found the working-dir-then-git-root resolution a THIRD time in `execute.rs::execute_query_ast` and a FOURTH time in `code_context/detect.rs::resolve_workspace_path`. Both now call `resolve_workspace_root`, so the cause is gone from the directory rather than from the two lines the finding named.
+
+    **Gates.** `cargo nextest run --workspace` — **13917 passed, 0 failed, 0 skipped** (13906 before this pass; the +11 are the security tests). `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    **RED verified 4 ways**, all on the security defect and all on the production path: the relative climb and the absolute escape, in `find_commented_code` and again in `query_ast`. The other 37 findings are structural — a missing doc comment, a repeated literal, an unused manifest entry — and the compiler, `clippy -W missing_docs`, and `cargo machete` are their gates rather than a failing test.
+  timestamp: 2026-08-09T01:26:08.785568+00:00
+- actor: claude-code
+  id: 01kzj21en5p7zbh6zntpwyqjck
+  text: |-
+    ### implement — changed
+    - evidence: 17 source files + 1 new module. New: `crates/swissarmyhammer-code-context/src/ops/workspace_path.rs`. Modified: `code-context/src/ops/{find_commented_code,query_ast,mod}.rs`; `code_context/{mod,ops,execute,lsp_ops,support,doctor,indexing,watcher,detect}.rs`; `shell/process.rs`; `swissarmyhammer-common/src/lib.rs`; `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs`; `swissarmyhammer-validators/Cargo.toml`; `Cargo.lock`. All 38 review findings now `- [x]`. `cargo nextest run --workspace` 13917 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. RED verified 4 ways on the path-traversal defect, in two ops.
+    - next: `/review`
+  timestamp: 2026-08-09T01:26:18.021480+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -246,3 +373,44 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 - [x] `crates/swissarmyhammer-validators/src/doctor.rs:521` — Existing `command_failure_detail()` function duplicates command error extraction logic; similar implementations already exist elsewhere. Extract command failure formatting into a shared utility in swissarmyhammer-common so both production and test code reuse the same error reporting logic.
 - [x] `crates/swissarmyhammer-validators/src/doctor.rs:682` — The new comparison `exe.file_stem() == Some(OsStr::new(SAH_BINARY_NAME))` is case-sensitive, but executable file names on Windows are case-insensitive — if the binary is installed as `SAH.exe` or `Sah.exe`, the comparison fails even though the filesystem treats them identically. The added tests do not verify that non-canonical case variations are handled or rejected consistently across platforms. Add one regression test that mocks or verifies the behavior when `current_exe()` returns an uppercase-stemmed path (e.g., by setting `SAH_BIN` to `SAH` in the environment and confirming the fallback is used), or document that the executable name is guaranteed lowercase by the build process with a comment and a test asserting that contract.
 - [x] `crates/swissarmyhammer-validators/src/doctor.rs:697` — Existing `run_shell()` function duplicates shell command execution logic that exists elsewhere as `prepare_shell_command`; should reuse or extend existing implementation instead of maintaining a parallel copy. Investigate whether `run_shell()` can be replaced with `prepare_shell_command` or refactored to reuse it. Keeping one canonical shell runner implementation ensures consistent behavior and maintenance burden across production and test code paths.
+
+## Review Findings (2026-08-08 18:37)
+
+- [x] `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:327` — Hardcoded depth limit of 3 for project detection should be a named constant to enable easy reconfiguration and improve maintainability. Extract as `const DETECTION_DEPTH: u32 = 3;` at the module level and use `Some(DETECTION_DEPTH)` in the call.
+- [x] `crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs:58` — Path traversal vulnerability: file path parameter is joined directly to working_dir without validation, allowing callers to read arbitrary files by passing paths like '../../../etc/passwd' or '/etc/passwd'. Validate each file path to ensure it does not contain '..' components and is not absolute. Use `std::path::Path::canonicalize()` on the joined path and verify it is within `working_dir` before reading, or use `dunce::canonicalize()` for cross-platform compatibility. Example: `let canonical = working_dir.join(file).canonicalize()?; ensure!(canonical.starts_with(working_dir.canonicalize()?), "path traversal attempt");`.
+- [x] `crates/swissarmyhammer-common/src/lib.rs:49` — missing documentation for a module.
+- [x] `crates/swissarmyhammer-common/src/lib.rs:128` — Display and Debug implementations for Pretty<T> have identical bodies (lines 128-135 and 137-144). The same formatting logic repeats in both trait impls and could drift out of sync. Extract the formatting logic into a shared helper function `fn format_pretty<T: Serialize + Debug>(obj: &T, f: &mut Formatter) -> fmt::Result` and call it from both Display::fmt and Debug::fmt impls.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:14` — missing documentation for a struct.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:15` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:16` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:17` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:25` — missing documentation for a struct.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:26` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:27` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/doctor.rs:35` — Project type transformation logic repeats at lines 35-37 (detect_project_types) and lines 79-82 (run_doctor). Both apply identical transformation: map(|pt| format!("{:?}", pt).to_lowercase()) over the result of detect_project_type_enums. In run_doctor, replace lines 79-82 with: `let project_types: Vec<String> = detect_project_types(root);` This eliminates code duplication and keeps the transformation in one place.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs:89` — File_path parameter extraction repeats identically at lines 89-92 (execute_list_symbols) and 249-252 (execute_find_duplicates). Same four-line block structure and error message. Use the same helper function proposed above or create a specialized one for string parameters. This pattern also duplicates the file_path extractions already identified in lsp_ops.rs.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs:258` — Hardcoded default value of 0.85 for min_similarity threshold in duplicate detection should be a named constant to make the similarity threshold configurable. Extract as `const DEFAULT_MIN_SIMILARITY: f32 = 0.85;` and use it in the `unwrap_or()` call.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs:442` — Numeric parameter extraction pattern repeats near-identically at lines 442-446 (max_depth in execute_get_callgraph) and 480-484 (max_hops in execute_get_blastradius). Both use: args.get(param).and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(default). Differ only by parameter name and default value. Extract into a helper function: `fn extract_u32_param(args: &Map<String, Value>, param: &str, default: u32) -> u32` and call from both functions instead of repeating the identical transformation.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:465` — Hardcoded interval of 100 for progress logging checkpoints should be a named constant to make the logging frequency configurable. Extract as `const INDEXING_PROGRESS_LOG_INTERVAL: u64 = 100;` and use it in the `is_multiple_of()` call.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/lsp_ops.rs:32` — Parameter extraction for file_path, line, and character repeats identically across seven functions (execute_get_rename_edits, execute_get_inbound_calls, execute_get_definition, execute_get_type_definition, execute_get_hover, execute_get_references, execute_get_implementations). The three-line block for file_path extraction at lines 32-35 repeats at lines 118-121, 197-200, 243-246, 290-293, 336-339, 388-391 with zero variation. Extract parameter extraction into a helper function: `fn extract_file_position(args: &Map<String, Value>) -> Result<(String, u32, u32), McpError>` and call it from all seven functions instead of repeating the three-parameter extraction block.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:65` — Public struct CodeContextTool is missing Debug implementation, which is required for all public types to enable logging, debugging contexts, and allow downstream crates to add their own Debug-dependent traits without orphan rule issues. Change line 65 from `#[derive(Clone, Default)]` to `#[derive(Clone, Debug, Default)]`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:182` — The string literal ".code-context" appears in a condition check and is repeated elsewhere; should use a named constant. Replace with a named constant to ensure consistent maintenance.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:182` — The string literal ".code-context/" appears in this line's string comparison and is repeated elsewhere; part of the ".code-context/" repeated literal family. Define a const: `const CODE_CONTEXT_DIR_WITH_SLASH: &str = ".code-context/";` and use in all comparisons and output.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:229` — The string literal "code-context" appears six times as a status ID and should be a named constant. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:240` — The string literal "code-context" appears six times and should be extracted to a named constant. Replace with a module-level named constant to ensure consistent maintenance.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:313` — Operation list string is duplicated verbatim on line 318. If the list of valid operations changes, it must be updated in both places or they drift out of sync. Extract the operations list to a module-level constant, e.g., `const VALID_OPERATIONS_LIST: &str = "'get symbol', 'search symbol', ...";` and use it in both error messages to maintain a single source of truth.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs:318` — Operation list string is duplicated verbatim on line 313. If the list of valid operations changes, it must be updated in both places or they drift out of sync. Extract the operations list to a module-level constant, e.g., `const VALID_OPERATIONS_LIST: &str = "'get symbol', 'search symbol', ...";` and use it in both error messages to maintain a single source of truth.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:32` — The string literal "symbol" appears multiple times as a noun in Operation implementations and should be a named constant. Define a const: `const NOUN_SYMBOL: &str = "symbol";` and use in both GetSymbol and SearchSymbol implementations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:66` — The string literal "symbol" is repeated; should use a named constant for single-point maintenance. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:125` — The string literal "code" appears twice as a noun in Operation implementations and should be a named constant. Define a const: `const NOUN_CODE: &str = "code";` and use in both GrepCode and SearchCode implementations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:191` — The string literal "get" appears 13 times across Operation implementations and should use a named constant. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:220` — The string literal "search" is repeated three times and should use a named constant. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:252` — The string literal "get" is repeated 13 times and should use a named constant. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:370` — The string literal "code" is repeated twice and should use a named constant. Replace with a module-level named constant.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/ops.rs:807` — All 25 static Lazy operation instances (lines 807–832) follow an identical pattern: `static NAME_OP: Lazy<Type> = Lazy::new(Type::default);` differing only in the operation name and type. This duplication compounds when the new vector on line 835 must list all 25 operations separately. Use a macro to generate both the static Lazy instances (lines 807–832) and the CODE_CONTEXT_OPERATIONS vector entries (lines 835–861). For example, a `declare_operation!` macro could generate the Lazy instance and the vector entry from a single invocation per operation, eliminating both duplication sources and the risk of drift when an operation is added or removed.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/support.rs:82` — Lines 82–88 in `open_workspace` are verbatim duplicated at lines 204–208 in `maybe_append_lsp_notice`. Both blocks resolve the working directory from the context and find the git repository root using identical code. Extract a helper function `fn resolve_workspace_root(context: &ToolContext) -> PathBuf` to eliminate the duplication. Extract a helper function `fn resolve_workspace_root(context: &ToolContext) -> PathBuf { let working_dir = context.working_dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into())); find_git_repository_root_from(&working_dir).unwrap_or(working_dir) }`, then call it from both `open_workspace` and `maybe_append_lsp_notice`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/watcher.rs:158` — Hardcoded timeout value 500 ms for shutdown check interval should be a named constant to clarify intent and enable easy tuning. Extract to a module-level constant: `const SHUTDOWN_CHECK_INTERVAL_MILLIS: u64 = 500;` and use `Duration::from_millis(SHUTDOWN_CHECK_INTERVAL_MILLIS)`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:22` — Public struct AsyncProcessGuard does not implement Debug trait. All public types with non-empty representation must implement Debug for runtime introspection and debugging support. Implement Debug for AsyncProcessGuard. If Child does not implement Debug, write a custom impl that debugs the command field and process state: impl fmt::Debug for AsyncProcessGuard { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { f.debug_struct("AsyncProcessGuard").field("command", &self.command).finish() } }.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/process.rs:177` — Hardcoded timeout 100 ms in Drop implementation should be a named constant for clarity and maintenance. Define as constant: `const PROCESS_REAP_TIMEOUT_MILLIS: u64 = 100;`.
+- [x] `crates/swissarmyhammer-validators/Cargo.toml:17` — unused dependency `sha2`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `crates/swissarmyhammer-validators/Cargo.toml:18` — unused dependency `chrono`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.

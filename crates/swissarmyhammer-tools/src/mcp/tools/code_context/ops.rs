@@ -10,6 +10,70 @@
 use once_cell::sync::Lazy;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+/// Verb of every operation that reads something out of the index.
+const VERB_GET: &str = "get";
+/// Verb of every operation that matches a query against the index.
+const VERB_SEARCH: &str = "search";
+/// Verb of the operation that enumerates a file's contents.
+const VERB_LIST: &str = "list";
+/// Verb of the operation that matches a regular expression.
+const VERB_GREP: &str = "grep";
+/// Verb of the operation that resets the index.
+const VERB_REBUILD: &str = "rebuild";
+/// Verb of the operation that wipes the index.
+const VERB_CLEAR: &str = "clear";
+/// Verb of the operation that reports language server health.
+const VERB_LSP: &str = "lsp";
+/// Verb of every operation that reports what it detects in the source.
+const VERB_FIND: &str = "find";
+/// Verb of the operation that runs a tree-sitter query.
+const VERB_QUERY: &str = "query";
+/// Verb of the operation that identifies project types.
+const VERB_DETECT: &str = "detect";
+
+/// Noun of the operations that act on a single symbol.
+const NOUN_SYMBOL: &str = "symbol";
+/// Noun of the operation that acts on all symbols of a file.
+const NOUN_SYMBOLS: &str = "symbols";
+/// Noun of the operations that act on stored code chunks.
+const NOUN_CODE: &str = "code";
+/// Noun of the call graph traversal operation.
+const NOUN_CALLGRAPH: &str = "callgraph";
+/// Noun of the callers-of-a-position operation.
+const NOUN_INBOUND_CALLS: &str = "inbound_calls";
+/// Noun of the workspace-wide symbol search operation.
+const NOUN_WORKSPACE_SYMBOL: &str = "workspace_symbol";
+/// Noun of the change-impact operation.
+const NOUN_BLASTRADIUS: &str = "blastradius";
+/// Noun of every operation that reports or resets index health.
+const NOUN_STATUS: &str = "status";
+/// Noun of the re-indexing operation.
+const NOUN_INDEX: &str = "index";
+/// Noun of the duplicated-code operation.
+const NOUN_DUPLICATES: &str = "duplicates";
+/// Noun of the tree-sitter query operation.
+const NOUN_AST: &str = "ast";
+/// Noun of the commented-out-code operation.
+const NOUN_COMMENTED_CODE: &str = "commented_code";
+/// Noun of the project-type detection operation.
+const NOUN_PROJECTS: &str = "projects";
+/// Noun of the rename-preview operation.
+const NOUN_RENAME_EDITS: &str = "rename_edits";
+/// Noun of the errors-and-warnings operation.
+const NOUN_DIAGNOSTICS: &str = "diagnostics";
+/// Noun of the go-to-definition operation.
+const NOUN_DEFINITION: &str = "definition";
+/// Noun of the go-to-type-definition operation.
+const NOUN_TYPE_DEFINITION: &str = "type_definition";
+/// Noun of the hover information operation.
+const NOUN_HOVER: &str = "hover";
+/// Noun of the find-all-references operation.
+const NOUN_REFERENCES: &str = "references";
+/// Noun of the find-implementations operation.
+const NOUN_IMPLEMENTATIONS: &str = "implementations";
+/// Noun of the quickfix-and-refactor operation.
+const NOUN_CODE_ACTIONS: &str = "code_actions";
+
 /// Operation metadata for getting symbol source text with fuzzy matching.
 #[derive(Debug, Default)]
 pub struct GetSymbol;
@@ -26,10 +90,10 @@ static GET_SYMBOL_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetSymbol {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "symbol"
+        NOUN_SYMBOL
     }
     fn description(&self) -> &'static str {
         "Get symbol locations and source text from both LSP and tree-sitter indices with multi-tier fuzzy matching"
@@ -60,10 +124,10 @@ static SEARCH_SYMBOL_PARAMS: &[ParamMeta] = &[
 
 impl Operation for SearchSymbol {
     fn verb(&self) -> &'static str {
-        "search"
+        VERB_SEARCH
     }
     fn noun(&self) -> &'static str {
-        "symbol"
+        NOUN_SYMBOL
     }
     fn description(&self) -> &'static str {
         "Fuzzy search across all indexed symbols with optional kind filter"
@@ -84,10 +148,10 @@ static LIST_SYMBOLS_PARAMS: &[ParamMeta] = &[ParamMeta::new("file_path")
 
 impl Operation for ListSymbols {
     fn verb(&self) -> &'static str {
-        "list"
+        VERB_LIST
     }
     fn noun(&self) -> &'static str {
-        "symbols"
+        NOUN_SYMBOLS
     }
     fn description(&self) -> &'static str {
         "List all symbols in a specific file, sorted by start line"
@@ -119,10 +183,10 @@ static GREP_CODE_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GrepCode {
     fn verb(&self) -> &'static str {
-        "grep"
+        VERB_GREP
     }
     fn noun(&self) -> &'static str {
-        "code"
+        NOUN_CODE
     }
     fn description(&self) -> &'static str {
         "Regex search across stored code chunks"
@@ -151,10 +215,10 @@ static GET_CALLGRAPH_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetCallgraph {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "callgraph"
+        NOUN_CALLGRAPH
     }
     fn description(&self) -> &'static str {
         "Traverse call graph from a starting symbol"
@@ -188,10 +252,10 @@ static GET_INBOUND_CALLS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetInboundCalls {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "inbound_calls"
+        NOUN_INBOUND_CALLS
     }
     fn description(&self) -> &'static str {
         "Find all callers of a function at a given position (who calls this?)"
@@ -217,10 +281,10 @@ static WORKSPACE_SYMBOL_LIVE_PARAMS: &[ParamMeta] = &[
 
 impl Operation for WorkspaceSymbolLive {
     fn verb(&self) -> &'static str {
-        "search"
+        VERB_SEARCH
     }
     fn noun(&self) -> &'static str {
-        "workspace_symbol"
+        NOUN_WORKSPACE_SYMBOL
     }
     fn description(&self) -> &'static str {
         "Live workspace symbol search with layered resolution (live LSP, then LSP index, then tree-sitter)"
@@ -249,10 +313,10 @@ static GET_BLASTRADIUS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetBlastradius {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "blastradius"
+        NOUN_BLASTRADIUS
     }
     fn description(&self) -> &'static str {
         "Analyze blast radius of changes to a file or symbol"
@@ -268,10 +332,10 @@ pub struct GetCodeStatus;
 
 impl Operation for GetCodeStatus {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "status"
+        NOUN_STATUS
     }
     fn description(&self) -> &'static str {
         "Health report with file counts, indexing progress, chunk/edge counts"
@@ -291,10 +355,10 @@ static REBUILD_INDEX_PARAMS: &[ParamMeta] = &[ParamMeta::new("layer")
 
 impl Operation for RebuildIndex {
     fn verb(&self) -> &'static str {
-        "rebuild"
+        VERB_REBUILD
     }
     fn noun(&self) -> &'static str {
-        "index"
+        NOUN_INDEX
     }
     fn description(&self) -> &'static str {
         "Mark files for re-indexing by resetting indexed flags"
@@ -310,10 +374,10 @@ pub struct ClearStatus;
 
 impl Operation for ClearStatus {
     fn verb(&self) -> &'static str {
-        "clear"
+        VERB_CLEAR
     }
     fn noun(&self) -> &'static str {
-        "status"
+        NOUN_STATUS
     }
     fn description(&self) -> &'static str {
         "Wipe all index data and return stats"
@@ -329,10 +393,10 @@ pub struct LspStatus;
 
 impl Operation for LspStatus {
     fn verb(&self) -> &'static str {
-        "lsp"
+        VERB_LSP
     }
     fn noun(&self) -> &'static str {
-        "status"
+        NOUN_STATUS
     }
     fn description(&self) -> &'static str {
         "Show which languages are detected in the index, their LSP servers, and install status"
@@ -364,10 +428,10 @@ static SEARCH_CODE_PARAMS: &[ParamMeta] = &[
 
 impl Operation for SearchCode {
     fn verb(&self) -> &'static str {
-        "search"
+        VERB_SEARCH
     }
     fn noun(&self) -> &'static str {
-        "code"
+        NOUN_CODE
     }
     fn description(&self) -> &'static str {
         "Semantic similarity search across code chunks using embeddings"
@@ -399,10 +463,10 @@ static FIND_DUPLICATES_PARAMS: &[ParamMeta] = &[
 
 impl Operation for FindDuplicates {
     fn verb(&self) -> &'static str {
-        "find"
+        VERB_FIND
     }
     fn noun(&self) -> &'static str {
-        "duplicates"
+        NOUN_DUPLICATES
     }
     fn description(&self) -> &'static str {
         "Find code in a file that is duplicated elsewhere in the codebase"
@@ -435,10 +499,10 @@ static QUERY_AST_PARAMS: &[ParamMeta] = &[
 
 impl Operation for QueryAst {
     fn verb(&self) -> &'static str {
-        "query"
+        VERB_QUERY
     }
     fn noun(&self) -> &'static str {
-        "ast"
+        NOUN_AST
     }
     fn description(&self) -> &'static str {
         "Execute tree-sitter S-expression queries against parsed ASTs for structural code search"
@@ -458,10 +522,10 @@ static FIND_COMMENTED_CODE_PARAMS: &[ParamMeta] = &[ParamMeta::new("files")
 
 impl Operation for FindCommentedCode {
     fn verb(&self) -> &'static str {
-        "find"
+        VERB_FIND
     }
     fn noun(&self) -> &'static str {
-        "commented_code"
+        NOUN_COMMENTED_CODE
     }
     fn description(&self) -> &'static str {
         "Report each comment block that re-parses as code in the file's own language, one `path:line: message` line per block"
@@ -489,10 +553,10 @@ static DETECT_PROJECTS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for DetectProjects {
     fn verb(&self) -> &'static str {
-        "detect"
+        VERB_DETECT
     }
     fn noun(&self) -> &'static str {
-        "projects"
+        NOUN_PROJECTS
     }
     fn description(&self) -> &'static str {
         "Detect project types in the workspace and return language-specific guidelines"
@@ -527,10 +591,10 @@ static GET_RENAME_EDITS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetRenameEdits {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "rename_edits"
+        NOUN_RENAME_EDITS
     }
     fn description(&self) -> &'static str {
         "Preview rename edits without applying them (live LSP only). Returns can_rename: false when no LSP is available."
@@ -558,10 +622,10 @@ static GET_DIAGNOSTICS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetDiagnostics {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "diagnostics"
+        NOUN_DIAGNOSTICS
     }
     fn description(&self) -> &'static str {
         "Get errors and warnings for a file (live LSP only). Returns empty when no LSP is available."
@@ -595,10 +659,10 @@ static GET_DEFINITION_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetDefinition {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "definition"
+        NOUN_DEFINITION
     }
     fn description(&self) -> &'static str {
         "Go to definition with layered resolution (live LSP, LSP index, tree-sitter)"
@@ -632,10 +696,10 @@ static GET_TYPE_DEFINITION_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetTypeDefinition {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "type_definition"
+        NOUN_TYPE_DEFINITION
     }
     fn description(&self) -> &'static str {
         "Go to type definition (live LSP only). Returns empty when no LSP is available."
@@ -666,10 +730,10 @@ static GET_HOVER_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetHover {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "hover"
+        NOUN_HOVER
     }
     fn description(&self) -> &'static str {
         "Get hover information (type signature, docs) with layered resolution (live LSP, LSP index, tree-sitter)"
@@ -706,10 +770,10 @@ static GET_REFERENCES_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetReferences {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "references"
+        NOUN_REFERENCES
     }
     fn description(&self) -> &'static str {
         "Find all references to a symbol with layered resolution (live LSP, LSP index, tree-sitter)"
@@ -743,10 +807,10 @@ static GET_IMPLEMENTATIONS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetImplementations {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "implementations"
+        NOUN_IMPLEMENTATIONS
     }
     fn description(&self) -> &'static str {
         "Find implementations of a trait/interface with layered resolution (live LSP, tree-sitter heuristic)"
@@ -790,10 +854,10 @@ static GET_CODE_ACTIONS_PARAMS: &[ParamMeta] = &[
 
 impl Operation for GetCodeActions {
     fn verb(&self) -> &'static str {
-        "get"
+        VERB_GET
     }
     fn noun(&self) -> &'static str {
-        "code_actions"
+        NOUN_CODE_ACTIONS
     }
     fn description(&self) -> &'static str {
         "Get code actions (quickfixes, refactors) for a range (live LSP only). Returns empty when no LSP is available."
@@ -803,63 +867,50 @@ impl Operation for GetCodeActions {
     }
 }
 
-// Static operation instances for schema generation
-static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
-static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
-static LIST_SYMBOLS_OP: Lazy<ListSymbols> = Lazy::new(ListSymbols::default);
-static GREP_CODE_OP: Lazy<GrepCode> = Lazy::new(GrepCode::default);
-static GET_CALLGRAPH_OP: Lazy<GetCallgraph> = Lazy::new(GetCallgraph::default);
-static GET_BLASTRADIUS_OP: Lazy<GetBlastradius> = Lazy::new(GetBlastradius::default);
-static GET_CODE_STATUS_OP: Lazy<GetCodeStatus> = Lazy::new(GetCodeStatus::default);
-static REBUILD_INDEX_OP: Lazy<RebuildIndex> = Lazy::new(RebuildIndex::default);
-static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
-static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
-static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
-static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
-static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
-static FIND_COMMENTED_CODE_OP: Lazy<FindCommentedCode> = Lazy::new(FindCommentedCode::default);
-static DETECT_PROJECTS_OP: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
-static GET_RENAME_EDITS_OP: Lazy<GetRenameEdits> = Lazy::new(GetRenameEdits::default);
-static GET_DIAGNOSTICS_OP: Lazy<GetDiagnostics> = Lazy::new(GetDiagnostics::default);
-static GET_INBOUND_CALLS_OP: Lazy<GetInboundCalls> = Lazy::new(GetInboundCalls::default);
-static WORKSPACE_SYMBOL_LIVE_OP: Lazy<WorkspaceSymbolLive> =
-    Lazy::new(WorkspaceSymbolLive::default);
-static GET_DEFINITION_OP: Lazy<GetDefinition> = Lazy::new(GetDefinition::default);
-static GET_TYPE_DEFINITION_OP: Lazy<GetTypeDefinition> = Lazy::new(GetTypeDefinition::default);
-static GET_HOVER_OP: Lazy<GetHover> = Lazy::new(GetHover::default);
-static GET_REFERENCES_OP: Lazy<GetReferences> = Lazy::new(GetReferences::default);
-static GET_IMPLEMENTATIONS_OP: Lazy<GetImplementations> = Lazy::new(GetImplementations::default);
-static GET_CODE_ACTIONS_OP: Lazy<GetCodeActions> = Lazy::new(GetCodeActions::default);
+/// Declares the roster of `code_context` operations.
+///
+/// One invocation names each operation type once. The macro builds that type's
+/// process-wide singleton and its entry in `CODE_CONTEXT_OPERATIONS`, in the
+/// order given, so the singletons and the roster cannot drift apart.
+macro_rules! code_context_roster {
+    ($($op:ty),+ $(,)?) => {
+        /// Every operation instance the tool dispatches, in schema order.
+        static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
+            vec![$({
+                static OP: Lazy<$op> = Lazy::new(<$op as Default>::default);
+                &*OP as &dyn Operation
+            }),+]
+        });
+    };
+}
 
-static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
-    vec![
-        &*GET_SYMBOL_OP as &dyn Operation,
-        &*SEARCH_SYMBOL_OP as &dyn Operation,
-        &*LIST_SYMBOLS_OP as &dyn Operation,
-        &*GREP_CODE_OP as &dyn Operation,
-        &*SEARCH_CODE_OP as &dyn Operation,
-        &*FIND_DUPLICATES_OP as &dyn Operation,
-        &*QUERY_AST_OP as &dyn Operation,
-        &*FIND_COMMENTED_CODE_OP as &dyn Operation,
-        &*GET_CALLGRAPH_OP as &dyn Operation,
-        &*GET_BLASTRADIUS_OP as &dyn Operation,
-        &*GET_CODE_STATUS_OP as &dyn Operation,
-        &*REBUILD_INDEX_OP as &dyn Operation,
-        &*CLEAR_STATUS_OP as &dyn Operation,
-        &*LSP_STATUS_OP as &dyn Operation,
-        &*DETECT_PROJECTS_OP as &dyn Operation,
-        &*GET_RENAME_EDITS_OP as &dyn Operation,
-        &*GET_DIAGNOSTICS_OP as &dyn Operation,
-        &*GET_INBOUND_CALLS_OP as &dyn Operation,
-        &*WORKSPACE_SYMBOL_LIVE_OP as &dyn Operation,
-        &*GET_DEFINITION_OP as &dyn Operation,
-        &*GET_TYPE_DEFINITION_OP as &dyn Operation,
-        &*GET_HOVER_OP as &dyn Operation,
-        &*GET_REFERENCES_OP as &dyn Operation,
-        &*GET_IMPLEMENTATIONS_OP as &dyn Operation,
-        &*GET_CODE_ACTIONS_OP as &dyn Operation,
-    ]
-});
+code_context_roster![
+    GetSymbol,
+    SearchSymbol,
+    ListSymbols,
+    GrepCode,
+    SearchCode,
+    FindDuplicates,
+    QueryAst,
+    FindCommentedCode,
+    GetCallgraph,
+    GetBlastradius,
+    GetCodeStatus,
+    RebuildIndex,
+    ClearStatus,
+    LspStatus,
+    DetectProjects,
+    GetRenameEdits,
+    GetDiagnostics,
+    GetInboundCalls,
+    WorkspaceSymbolLive,
+    GetDefinition,
+    GetTypeDefinition,
+    GetHover,
+    GetReferences,
+    GetImplementations,
+    GetCodeActions,
+];
 
 /// The operations the `code_context` tool dispatches, in the order the schema
 /// lists them.

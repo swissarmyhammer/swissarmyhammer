@@ -61,8 +61,21 @@ use swissarmyhammer_operations::Operation;
 
 use support::maybe_append_lsp_notice;
 
+/// Directory that holds the code context index inside a repository.
+const CODE_CONTEXT_DIR: &str = ".code-context";
+
+/// The same directory with the trailing slash that marks it as a directory in
+/// `.gitignore` and in the messages this tool reports.
+const CODE_CONTEXT_DIR_WITH_SLASH: &str = ".code-context/";
+
+/// Name this tool reports on every lifecycle init and deinit result.
+const CODE_CONTEXT_INIT_NAME: &str = "code-context";
+
+/// Every operation this tool answers, as the dispatch error messages list them.
+const VALID_OPERATIONS_LIST: &str = "'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'";
+
 /// Unified code context tool providing symbol lookup, search, and graph operations.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CodeContextTool;
 
 impl CodeContextTool {
@@ -160,26 +173,26 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
 
-        // Create .code-context/ directory if in a git repo
+        // Create the index directory if in a git repo
         let root = swissarmyhammer_common::utils::find_git_repository_root();
         match root {
             Some(root) => {
-                let cc_dir = root.join(".code-context");
+                let cc_dir = root.join(CODE_CONTEXT_DIR);
                 if !cc_dir.exists() {
                     if let Err(e) = std::fs::create_dir_all(&cc_dir) {
                         return vec![InitResult::error(
-                            "code-context",
-                            format!("failed to create .code-context/: {}", e),
+                            CODE_CONTEXT_INIT_NAME,
+                            format!("failed to create {}: {}", CODE_CONTEXT_DIR_WITH_SLASH, e),
                         )];
                     }
                 }
-                // Ensure .code-context/ is in .gitignore
+                // Ensure the index directory is in .gitignore
                 let gitignore = root.join(".gitignore");
                 let needs_entry = if gitignore.exists() {
                     match std::fs::read_to_string(&gitignore) {
-                        Ok(content) => !content
-                            .lines()
-                            .any(|l| l.trim() == ".code-context" || l.trim() == ".code-context/"),
+                        Ok(content) => !content.lines().any(|l| {
+                            l.trim() == CODE_CONTEXT_DIR || l.trim() == CODE_CONTEXT_DIR_WITH_SLASH
+                        }),
                         Err(_) => true,
                     }
                 } else {
@@ -192,16 +205,16 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
                         .append(true)
                         .open(&gitignore)
                     {
-                        let _ = writeln!(f, ".code-context/");
+                        let _ = writeln!(f, "{}", CODE_CONTEXT_DIR_WITH_SLASH);
                     }
                 }
                 vec![InitResult::ok(
-                    "code-context",
-                    "Created .code-context/ directory",
+                    CODE_CONTEXT_INIT_NAME,
+                    format!("Created {} directory", CODE_CONTEXT_DIR_WITH_SLASH),
                 )]
             }
             None => vec![InitResult::skipped(
-                "code-context",
+                CODE_CONTEXT_INIT_NAME,
                 "No git repository found",
             )],
         }
@@ -217,27 +230,27 @@ impl swissarmyhammer_common::lifecycle::Initializable for CodeContextTool {
         let root = swissarmyhammer_common::utils::find_git_repository_root();
         match root {
             Some(root) => {
-                let cc_dir = root.join(".code-context");
+                let cc_dir = root.join(CODE_CONTEXT_DIR);
                 if cc_dir.exists() {
                     if let Err(e) = std::fs::remove_dir_all(&cc_dir) {
                         return vec![InitResult::error(
-                            "code-context",
-                            format!("failed to remove .code-context/: {}", e),
+                            CODE_CONTEXT_INIT_NAME,
+                            format!("failed to remove {}: {}", CODE_CONTEXT_DIR_WITH_SLASH, e),
                         )];
                     }
                     vec![InitResult::ok(
-                        "code-context",
-                        "Removed .code-context/ directory",
+                        CODE_CONTEXT_INIT_NAME,
+                        format!("Removed {} directory", CODE_CONTEXT_DIR_WITH_SLASH),
                     )]
                 } else {
                     vec![InitResult::skipped(
-                        "code-context",
-                        ".code-context/ not found",
+                        CODE_CONTEXT_INIT_NAME,
+                        format!("{} not found", CODE_CONTEXT_DIR_WITH_SLASH),
                     )]
                 }
             }
             None => vec![InitResult::skipped(
-                "code-context",
+                CODE_CONTEXT_INIT_NAME,
                 "No git repository found",
             )],
         }
@@ -304,19 +317,26 @@ impl McpTool for CodeContextTool {
                 lsp_ops::execute_workspace_symbol_live(&arguments, context).await
             }
             "get definition" => lsp_ops::execute_get_definition(&arguments, context).await,
-            "get type_definition" => lsp_ops::execute_get_type_definition(&arguments, context).await,
+            "get type_definition" => {
+                lsp_ops::execute_get_type_definition(&arguments, context).await
+            }
             "get hover" => lsp_ops::execute_get_hover(&arguments, context).await,
             "get references" => lsp_ops::execute_get_references(&arguments, context).await,
-            "get implementations" => lsp_ops::execute_get_implementations(&arguments, context).await,
+            "get implementations" => {
+                lsp_ops::execute_get_implementations(&arguments, context).await
+            }
             "get code_actions" => lsp_ops::execute_get_code_actions(&arguments, context).await,
             "" => Err(McpError::invalid_params(
-                "missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
+                format!(
+                    "missing 'op' field. Valid operations: {}",
+                    VALID_OPERATIONS_LIST
+                ),
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'find commented_code', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
-                    other
+                    "unknown operation '{}'. Valid operations: {}",
+                    other, VALID_OPERATIONS_LIST
                 ),
                 None,
             )),

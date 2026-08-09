@@ -22,6 +22,13 @@ use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
 /// editor save) is collapsed into one re-index pass.
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// How often the watcher loop wakes with no filesystem event pending.
+///
+/// A shutdown flag set by a leader step-down is only observed at the top of the
+/// loop, so this tick bounds how long the watcher keeps writing after the
+/// step-down.
+const SHUTDOWN_CHECK_INTERVAL_MILLIS: u64 = 500;
+
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift",
@@ -152,10 +159,11 @@ async fn run_watcher(
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
 
-    // Wake at least every 500ms even with no filesystem events so a step-down
-    // (which sets the shutdown flag) is observed promptly and the watcher stops
-    // writing before the new leader takes over.
-    let mut shutdown_tick = tokio::time::interval(Duration::from_millis(500));
+    // Wake on the SHUTDOWN_CHECK_INTERVAL_MILLIS tick even with no filesystem
+    // events so a step-down (which sets the shutdown flag) is observed promptly
+    // and the watcher stops writing before the new leader takes over.
+    let mut shutdown_tick =
+        tokio::time::interval(Duration::from_millis(SHUTDOWN_CHECK_INTERVAL_MILLIS));
 
     loop {
         if shutdown.load(std::sync::atomic::Ordering::Relaxed) {

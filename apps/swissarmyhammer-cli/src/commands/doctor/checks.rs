@@ -312,6 +312,11 @@ pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
     Ok(())
 }
 
+/// How many directory levels below the workspace root the doctor scans for
+/// project markers. Deep enough to find the members of a normal monorepo,
+/// shallow enough to keep the scan fast.
+const DETECTION_DEPTH: usize = 3;
+
 /// Check LSP server availability for all detected project types
 ///
 /// Uses project detection to find all project types in the workspace
@@ -324,7 +329,7 @@ pub fn check_lsp_servers(checks: &mut impl Extend<Check>) -> Result<()> {
     use swissarmyhammer_project_detection::detect_projects;
 
     let workspace_root = doctor_workspace_root();
-    let projects = detect_projects(&workspace_root, Some(3)).unwrap_or_default();
+    let projects = detect_projects(&workspace_root, Some(DETECTION_DEPTH)).unwrap_or_default();
 
     let mut seen_commands = HashSet::new();
     let mut specs = Vec::new();

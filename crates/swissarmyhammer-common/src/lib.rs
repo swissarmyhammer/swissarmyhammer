@@ -19,38 +19,71 @@
 //! - Serialization support for all public types
 //! - Documentation-driven development with clear API contracts
 
+/// Build-time provenance — the git SHA baked into the binary.
 pub mod build_info;
+/// Shell command construction and failed-command reporting.
 pub mod command;
+/// Constants shared across the SwissArmyHammer ecosystem.
 pub mod constants;
+/// The SwissArmyHammer directory structure and its root resolution.
 pub mod directory;
+/// Open a file in the user's preferred editor.
 pub mod editor;
+/// Read environment variables with type conversion and defaults.
 pub mod env_loader;
+/// Error types shared across the SwissArmyHammer ecosystem.
 pub mod error;
+/// Helpers that attach context to errors.
 pub mod error_context;
+/// Virtual file system that loads files from a directory hierarchy.
 pub mod file_loader;
+/// File extension checks and file type detection.
 pub mod file_types;
+/// Split YAML frontmatter from a markdown body.
 pub mod frontmatter;
+/// File system abstraction with structured errors and test seams.
 pub mod fs_utils;
+/// Glob pattern expansion with gitignore support.
 pub mod glob_utils;
+/// The `Doctorable` health check framework.
 pub mod health;
+/// The `define_id!` macro that builds ULID newtypes.
 pub mod id_types;
+/// Interactive prompts that collect parameter values.
 pub mod interactive_prompts;
+/// Lenient JSONC reading for user-written configuration files.
 pub mod json;
+/// The `Initializable` lifecycle framework for components.
 pub mod lifecycle;
+/// Logging utilities shared by the SwissArmyHammer CLI crates.
 pub mod logging;
+/// Conversion of MCP failures into `SwissArmyHammerError`.
 pub mod mcp_errors;
+/// Conditions that make a parameter required or visible.
 pub mod parameter_conditions;
+/// The parameter system shared by prompts and workflows.
 pub mod parameters;
+/// Rules that decide which prompts become slash commands.
 pub mod prompt_visibility;
+/// Token bucket rate limiting for MCP operations.
 pub mod rate_limiter;
+/// Progress reporting for init and deinit lifecycle events.
 pub mod reporter;
+/// Canonical URL-safe slug generation.
 pub mod slug;
+/// Patterns that organize and group tests.
 pub mod test_organization;
+/// Test utilities — isolated temporary environments and process guards.
 pub mod test_utils;
+/// Trait definitions shared across the ecosystem.
 pub mod traits;
+/// Core type definitions and newtypes for domain safety.
 pub mod types;
+/// Thread-safe monotonic ULID generator.
 pub mod ulid_generator;
+/// Utility functions shared across the ecosystem.
 pub mod utils;
+/// The validation framework for content and workflow integrity.
 pub mod validation;
 
 // Re-export commonly used constants for convenience
@@ -119,27 +152,31 @@ pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};
 
 // Pretty wrapper for formatting types as YAML in logs
 use serde::Serialize;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Formatter};
 
 /// Wrapper for pretty-printing types in logs as YAML
 /// Use in tracing statements: info!("Config: {}", Pretty(&config));
 pub struct Pretty<T>(pub T);
 
-impl<T: Serialize + Debug> std::fmt::Display for Pretty<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_yaml_ng::to_string(&self.0) {
-            Ok(yaml) => write!(f, "\n{}", yaml),
-            Err(_) => write!(f, "\n{:#?}", self.0),
-        }
+/// Render a value as YAML, and fall back to pretty `Debug` when the value
+/// cannot serialize. Both [`Pretty`] format impls call this, so the two
+/// renderings cannot drift apart.
+fn format_pretty<T: Serialize + Debug>(obj: &T, f: &mut Formatter<'_>) -> fmt::Result {
+    match serde_yaml_ng::to_string(obj) {
+        Ok(yaml) => write!(f, "\n{}", yaml),
+        Err(_) => write!(f, "\n{:#?}", obj),
     }
 }
 
-impl<T: Serialize + Debug> std::fmt::Debug for Pretty<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_yaml_ng::to_string(&self.0) {
-            Ok(yaml) => write!(f, "\n{}", yaml),
-            Err(_) => write!(f, "\n{:#?}", self.0),
-        }
+impl<T: Serialize + Debug> fmt::Display for Pretty<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        format_pretty(&self.0, f)
+    }
+}
+
+impl<T: Serialize + Debug> fmt::Debug for Pretty<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        format_pretty(&self.0, f)
     }
 }
 

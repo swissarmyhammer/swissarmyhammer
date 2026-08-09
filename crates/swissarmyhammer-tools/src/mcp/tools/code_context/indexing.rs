@@ -9,6 +9,12 @@
 
 use std::path::Path;
 
+/// How many files the indexer completes between progress log lines.
+///
+/// A long pass over thousands of dirty files logs one checkpoint per this many
+/// files, so the log shows progress without one line per file.
+const INDEXING_PROGRESS_LOG_INTERVAL: u64 = 100;
+
 /// Trigger incremental tree-sitter indexing on dirty files.
 ///
 /// Constructs the default embedding model (qwen-embedding) once for the run
@@ -462,7 +468,7 @@ pub(crate) async fn index_discovered_files_with_embedder(
 
         indexed += 1;
 
-        if indexed.is_multiple_of(100) {
+        if indexed.is_multiple_of(INDEXING_PROGRESS_LOG_INTERVAL) {
             tracing::info!(
                 "code-context: indexed {}/{} files ({} chunks so far)",
                 indexed,

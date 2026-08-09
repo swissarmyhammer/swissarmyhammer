@@ -10,10 +10,16 @@ use std::process::Command;
 use swissarmyhammer_common::command::command_failure_detail;
 use swissarmyhammer_project_detection::{detect_projects, ProjectType};
 
+/// Availability of one language server the workspace needs.
+///
+/// One entry per distinct LSP command name, produced by [`run_doctor`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LspAvailability {
+    /// The language server's command name, as it must appear on PATH
     pub name: String,
+    /// Whether the command was found on PATH and ran successfully
     pub installed: bool,
+    /// Where the command was found on PATH, when it was found at all
     pub path: Option<String>,
     /// Why the binary failed to run (even if found on PATH)
     pub error: Option<String>,
@@ -21,9 +27,15 @@ pub struct LspAvailability {
     pub install_hint: Option<String>,
 }
 
+/// The result of a workspace doctor check.
+///
+/// Names the project types detected at the workspace root and the language
+/// servers those types need, with the availability of each.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DoctorReport {
+    /// Lowercase names of every project type detected at the workspace root
     pub project_types: Vec<String>,
+    /// Availability of every language server the detected project types need
     pub lsp_servers: Vec<LspAvailability>,
 }
 
@@ -76,10 +88,7 @@ fn is_command_available(cmd: &str) -> (bool, Option<String>, Option<String>) {
 /// (e.g. two project types needing the same LSP) don't produce duplicate entries.
 pub fn run_doctor(root: &Path) -> DoctorReport {
     let project_type_enums = detect_project_type_enums(root);
-    let project_types: Vec<String> = project_type_enums
-        .iter()
-        .map(|pt| format!("{:?}", pt).to_lowercase())
-        .collect();
+    let project_types: Vec<String> = detect_project_types(root);
 
     let mut lsp_servers = Vec::new();
     let mut seen_cmds = std::collections::HashSet::new();

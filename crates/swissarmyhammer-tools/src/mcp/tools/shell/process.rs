@@ -12,6 +12,17 @@ use tokio::process::{Child, Command};
 
 use super::infrastructure::{OutputBuffer, OutputLimits, ShellError, ShellExecutionResult};
 
+/// How long `Drop` polls a killed child before it gives up on reaping it.
+/// `Drop` cannot await, so this bounds the blocking wait.
+const PROCESS_REAP_TIMEOUT_MILLIS: u64 = 100;
+
+/// How long `Drop` sleeps between two reap attempts on a killed child.
+const PROCESS_REAP_POLL_MILLIS: u64 = 10;
+
+/// The exit code reported when the operating system gives none, which happens
+/// when a signal terminates the process.
+const SIGNAL_TERMINATED_EXIT_CODE: i32 = -1;
+
 /// Async process guard for automatic cleanup of tokio Child processes
 ///
 /// This guard automatically terminates and cleans up child processes when dropped,
@@ -19,6 +30,7 @@ use super::infrastructure::{OutputBuffer, OutputLimits, ShellError, ShellExecuti
 ///
 /// Unlike the sync ProcessGuard in test_utils.rs, this version works with tokio::process::Child
 /// and provides async methods for graceful termination with timeouts.
+#[derive(Debug)]
 pub struct AsyncProcessGuard {
     pub(super) child: Option<Child>,
     pub(super) command: String,
@@ -173,8 +185,8 @@ impl Drop for AsyncProcessGuard {
             // We use try_wait() in a loop with a timeout rather than blocking wait()
             // to avoid hanging Drop. The tokio Child doesn't have a blocking wait(),
             // but try_wait() will eventually succeed after start_kill().
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_millis(100);
+            let start = Instant::now();
+            let timeout = Duration::from_millis(PROCESS_REAP_TIMEOUT_MILLIS);
 
             while start.elapsed() < timeout {
                 match child.try_wait() {
@@ -185,7 +197,7 @@ impl Drop for AsyncProcessGuard {
                     }
                     Ok(None) => {
                         // Process still running, wait a bit and try again
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(Duration::from_millis(PROCESS_REAP_POLL_MILLIS));
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -578,7 +590,7 @@ pub(super) fn format_execution_result(
     execution_time_ms: u64,
     output_limits: &OutputLimits,
 ) -> ShellExecutionResult {
-    let exit_code = exit_status.code().unwrap_or(-1);
+    let exit_code = exit_status.code().unwrap_or(SIGNAL_TERMINATED_EXIT_CODE);
     let truncation_info = if output_buffer.is_truncated() {
         format!(
             " (output truncated at {} bytes)",

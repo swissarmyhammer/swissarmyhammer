@@ -22,4 +22,5 @@ pub mod query_ast;
 pub mod search_code;
 pub mod search_symbol;
 pub mod status;
+pub mod workspace_path;
 pub mod workspace_symbol_live;

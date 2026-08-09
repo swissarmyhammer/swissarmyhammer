@@ -11,6 +11,8 @@ use std::path::Path;
 
 use swissarmyhammer_sem::parser::plugins::code::commented_code_blocks;
 
+use crate::ops::workspace_path::resolve_within;
+
 /// One block of commented-out code, ready to print.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentedCodeFinding {
@@ -38,13 +40,15 @@ impl fmt::Display for CommentedCodeFinding {
 
 /// Every block of commented-out code in `files`.
 ///
-/// `files` are paths as the caller spelled them; a relative one resolves
-/// against `working_dir`. A file the roster has no grammar for, a file with no
-/// comment-block verdict for its language, and a file that cannot be read are
-/// each skipped without a finding — the same silence
-/// [`query_ast`](crate::ops::query_ast) keeps, and the reason the tool rule
-/// narrows its `match` to the extensions the verdict covers rather than
-/// relying on this op to say "not measured".
+/// `files` are paths as the caller spelled them, and every one of them is
+/// resolved inside `working_dir` by
+/// [`resolve_within`](crate::ops::workspace_path::resolve_within): a path that
+/// climbs out of the workspace names no file this op will read. A file the
+/// roster has no grammar for, a file with no comment-block verdict for its
+/// language, and a file that cannot be read are each skipped without a
+/// finding — the same silence [`query_ast`](crate::ops::query_ast) keeps, and
+/// the reason the tool rule narrows its `match` to the extensions the verdict
+/// covers rather than relying on this op to say "not measured".
 pub fn find_commented_code(working_dir: &Path, files: &[&str]) -> Vec<CommentedCodeFinding> {
     files
         .iter()
@@ -55,7 +59,7 @@ pub fn find_commented_code(working_dir: &Path, files: &[&str]) -> Vec<CommentedC
 
 /// The findings in one file, `None` when the file yields no verdict at all.
 fn findings_in_file(working_dir: &Path, file: &str) -> Option<Vec<CommentedCodeFinding>> {
-    let source = std::fs::read_to_string(working_dir.join(file)).ok()?;
+    let source = std::fs::read_to_string(resolve_within(working_dir, file)?).ok()?;
     let blocks = commented_code_blocks(file, &source)?;
     Some(
         blocks
@@ -154,13 +158,39 @@ mod tests {
     }
 
     #[test]
-    fn an_absolute_path_is_read_where_it_lies() {
+    fn an_absolute_path_inside_the_working_directory_is_read() {
         let dir = workspace_with("probe.rs", COMMENTED_OUT_FUNCTION_RS);
         let absolute = dir.path().join("probe.rs").to_string_lossy().to_string();
 
-        let findings = find_commented_code(Path::new("/nonexistent"), &[absolute.as_str()]);
+        let findings = find_commented_code(dir.path(), &[absolute.as_str()]);
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].file, absolute);
+    }
+
+    /// A scratch directory holding a workspace and, beside it, a file the
+    /// workspace must not reach.
+    fn workspace_beside_an_outside_file() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("create a scratch directory");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("create the workspace directory");
+        std::fs::write(dir.path().join("outside.rs"), COMMENTED_OUT_FUNCTION_RS)
+            .expect("write the file outside the workspace");
+        (dir, workspace)
+    }
+
+    #[test]
+    fn a_relative_path_that_climbs_out_of_the_working_directory_is_refused() {
+        let (_dir, workspace) = workspace_beside_an_outside_file();
+
+        assert!(find_commented_code(&workspace, &["../outside.rs"]).is_empty());
+    }
+
+    #[test]
+    fn an_absolute_path_outside_the_working_directory_is_refused() {
+        let (dir, workspace) = workspace_beside_an_outside_file();
+        let outside = dir.path().join("outside.rs").to_string_lossy().to_string();
+
+        assert!(find_commented_code(&workspace, &[outside.as_str()]).is_empty());
     }
 }

@@ -8,6 +8,8 @@
 use crate::mcp::tool_registry::ToolContext;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use serde_json::{Map, Value};
+use std::path::PathBuf;
 use swissarmyhammer_code_context::{BlockingStatus, CodeContextWorkspace, IndexLayer};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 
@@ -17,6 +19,153 @@ use super::doctor;
 /// (`query ast`, `search workspace_symbol`) when the caller omits it. Surfaced
 /// in those ops' `max_results` parameter descriptions ("default: 50").
 pub(super) const DEFAULT_MAX_RESULTS: usize = 50;
+
+/// Read a required string parameter.
+///
+/// Fails with the caller-facing `missing required parameter '<name>'` message
+/// when the key is absent or does not hold a JSON string.
+pub(super) fn extract_required_str<'a>(
+    args: &'a Map<String, Value>,
+    param: &str,
+) -> Result<&'a str, McpError> {
+    args.get(param).and_then(|v| v.as_str()).ok_or_else(|| {
+        McpError::invalid_params(format!("missing required parameter '{}'", param), None)
+    })
+}
+
+/// Read an optional string parameter, borrowed from the argument object.
+///
+/// Returns `None` when the key is absent or does not hold a JSON string.
+pub(super) fn extract_optional_str<'a>(
+    args: &'a Map<String, Value>,
+    param: &str,
+) -> Option<&'a str> {
+    args.get(param).and_then(|v| v.as_str())
+}
+
+/// Read an optional string parameter as an owned `String`.
+///
+/// Returns `None` when the key is absent or does not hold a JSON string.
+pub(super) fn extract_optional_string(args: &Map<String, Value>, param: &str) -> Option<String> {
+    extract_optional_str(args, param).map(String::from)
+}
+
+/// Read a required array-of-strings parameter, borrowed from the argument object.
+///
+/// Items that are not JSON strings are skipped. Fails with the caller-facing
+/// `missing required parameter '<name>'` message when the key is absent or
+/// does not hold a JSON array.
+pub(super) fn extract_required_str_array<'a>(
+    args: &'a Map<String, Value>,
+    param: &str,
+) -> Result<Vec<&'a str>, McpError> {
+    let array = args.get(param).and_then(|v| v.as_array()).ok_or_else(|| {
+        McpError::invalid_params(format!("missing required parameter '{}'", param), None)
+    })?;
+    Ok(array.iter().filter_map(|item| item.as_str()).collect())
+}
+
+/// Read an optional array-of-strings parameter as owned `String`s.
+///
+/// Returns `None` when the key is absent or does not hold a JSON array. Items
+/// that are not JSON strings are skipped.
+pub(super) fn extract_optional_string_array(
+    args: &Map<String, Value>,
+    param: &str,
+) -> Option<Vec<String>> {
+    args.get(param).and_then(|v| {
+        v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect()
+        })
+    })
+}
+
+/// Read a required unsigned-integer parameter as a `u32`.
+///
+/// Fails with the caller-facing `missing required parameter '<name>'` message
+/// when the key is absent or does not hold a JSON unsigned integer.
+pub(super) fn extract_required_u32(
+    args: &Map<String, Value>,
+    param: &str,
+) -> Result<u32, McpError> {
+    let value = args.get(param).and_then(|v| v.as_u64()).ok_or_else(|| {
+        McpError::invalid_params(format!("missing required parameter '{}'", param), None)
+    })?;
+    Ok(value as u32)
+}
+
+/// Read an optional unsigned-integer parameter as a `u32`, or `default`.
+pub(super) fn extract_u32_param(args: &Map<String, Value>, param: &str, default: u32) -> u32 {
+    args.get(param)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32)
+        .unwrap_or(default)
+}
+
+/// Read an optional unsigned-integer parameter as a `usize`, or `default`.
+pub(super) fn extract_usize_param(args: &Map<String, Value>, param: &str, default: usize) -> usize {
+    args.get(param)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(default)
+}
+
+/// Read an optional unsigned-integer parameter as a `usize`.
+///
+/// Returns `None` when the key is absent, so the callee keeps its own default.
+pub(super) fn extract_optional_usize(args: &Map<String, Value>, param: &str) -> Option<usize> {
+    args.get(param).and_then(|v| v.as_u64()).map(|n| n as usize)
+}
+
+/// Read an optional boolean parameter, or `default`.
+pub(super) fn extract_bool_param(args: &Map<String, Value>, param: &str, default: bool) -> bool {
+    args.get(param).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+/// Read an optional floating-point parameter as an `f32`, or `default`.
+pub(super) fn extract_f32_param(args: &Map<String, Value>, param: &str, default: f32) -> f32 {
+    args.get(param)
+        .and_then(|v| v.as_f64())
+        .map(|n| n as f32)
+        .unwrap_or(default)
+}
+
+/// Read the `file_path`, `line`, and `character` parameters that every
+/// position-based LSP op requires.
+///
+/// Fails with the same caller-facing `missing required parameter '<name>'`
+/// message each op raised when it read the three parameters itself.
+pub(super) fn extract_file_position(
+    args: &Map<String, Value>,
+) -> Result<(String, u32, u32), McpError> {
+    let file_path = extract_required_str(args, "file_path")?.to_string();
+    let line = extract_required_u32(args, "line")?;
+    let character = extract_required_u32(args, "character")?;
+    Ok((file_path, line, character))
+}
+
+/// Resolve the working directory for a tool call.
+///
+/// Uses the tool context's working directory, falling back to the process
+/// current directory and then to `.` when neither is available.
+pub(super) fn resolve_working_dir(context: &ToolContext) -> PathBuf {
+    context
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()))
+}
+
+/// Resolve the workspace root for a tool call.
+///
+/// Takes the working directory from [`resolve_working_dir`] and walks up to the
+/// enclosing git repository root, keeping the working directory itself when the
+/// call happens outside a repository.
+pub(super) fn resolve_workspace_root(context: &ToolContext) -> PathBuf {
+    let working_dir = resolve_working_dir(context);
+    find_git_repository_root_from(&working_dir).unwrap_or(working_dir)
+}
 
 /// Global LSP supervisor handle, initialized once at MCP startup.
 /// Used by `get status` to report LSP server state and by `server.rs` for init.
@@ -79,13 +228,7 @@ pub(crate) fn any_lsp_session() -> Option<swissarmyhammer_code_context::SharedLs
 ///
 /// Falls back to the current directory if no working_dir is set.
 pub(crate) fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpError> {
-    let working_dir = context
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-
-    // Find the git repository root from the working directory
-    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+    let workspace_root = resolve_workspace_root(context);
 
     CodeContextWorkspace::open(&workspace_root).map_err(|e| {
         McpError::internal_error(
@@ -201,11 +344,7 @@ pub(super) fn maybe_append_lsp_notice(
     mut result: CallToolResult,
     context: &ToolContext,
 ) -> CallToolResult {
-    let working_dir = context
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+    let workspace_root = resolve_workspace_root(context);
 
     if let Some(notice) = lsp_degradation_notice(&workspace_root) {
         result.content.push(Content::text(notice));

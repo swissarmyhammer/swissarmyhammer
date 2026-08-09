@@ -11,12 +11,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
-# Per-reviewed-file context-hash tracking: SHA-256 over path+content+rules so an
-# unchanged file is subtracted from the next `review working` pass, and an RFC3339
-# `reviewed_at` timestamp on each tracking entry.
-sha2 = { workspace = true }
-chrono = { workspace = true }
-
 # Error handling
 thiserror = { workspace = true }
 

@@ -11,7 +11,6 @@ use crate::mcp::op_tool_helpers::json_result;
 use crate::mcp::tool_registry::ToolContext;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use swissarmyhammer_common::utils::find_git_repository_root_from;
 
 use swissarmyhammer_code_context::{
     find_commented_code, BlastRadiusOptions, CallGraphDirection, CallGraphOptions,
@@ -19,7 +18,34 @@ use swissarmyhammer_code_context::{
     SearchSymbolOptions,
 };
 
-use super::support::{check_ts_readiness, context_err, open_workspace, DEFAULT_MAX_RESULTS};
+use super::support::{
+    check_ts_readiness, context_err, extract_f32_param, extract_optional_str,
+    extract_optional_string, extract_optional_string_array, extract_optional_usize,
+    extract_required_str, extract_required_str_array, extract_u32_param, extract_usize_param,
+    open_workspace, resolve_working_dir, resolve_workspace_root, DEFAULT_MAX_RESULTS,
+};
+
+/// Default hit count for `search code` when the caller omits `top_k`.
+const DEFAULT_TOP_K: usize = 10;
+
+/// Default cosine-similarity floor for `find duplicates`.
+///
+/// A pair of chunks below this score is not reported as a duplicate.
+const DEFAULT_MIN_SIMILARITY: f32 = 0.85;
+
+/// Default smallest chunk, in bytes, that `find duplicates` compares.
+///
+/// Chunks under this size are too short to make a meaningful duplicate.
+const DEFAULT_MIN_CHUNK_BYTES: usize = 100;
+
+/// Default cap on how many matches `find duplicates` reports for one chunk.
+const DEFAULT_MAX_PER_CHUNK: usize = 5;
+
+/// Default traversal depth for `get callgraph`.
+const DEFAULT_CALLGRAPH_MAX_DEPTH: u32 = 2;
+
+/// Default traversal depth for `get blastradius`.
+const DEFAULT_BLAST_RADIUS_MAX_HOPS: u32 = 3;
 
 /// Execute the "get symbol" operation.
 ///
@@ -29,16 +55,10 @@ pub(super) fn execute_get_symbol(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
+    let query = extract_required_str(args, "query")?;
 
     let options = GetSymbolOptions {
-        max_results: args
-            .get("max_results")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize),
+        max_results: extract_optional_usize(args, "max_results"),
     };
 
     let ws = open_workspace(context)?;
@@ -57,17 +77,11 @@ pub(super) fn execute_search_symbol(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
+    let query = extract_required_str(args, "query")?;
 
     let options = SearchSymbolOptions {
-        kind: args.get("kind").and_then(|v| v.as_str()).map(String::from),
-        max_results: args
-            .get("max_results")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize),
+        kind: extract_optional_string(args, "kind"),
+        max_results: extract_optional_usize(args, "max_results"),
     };
 
     let ws = open_workspace(context)?;
@@ -86,10 +100,7 @@ pub(super) fn execute_list_symbols(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
+    let file_path = extract_required_str(args, "file_path")?;
 
     let ws = open_workspace(context)?;
     if let Some(progress) = check_ts_readiness(&ws)? {
@@ -107,34 +118,12 @@ pub(super) fn execute_grep_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let pattern = args
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'pattern'", None))?;
-
-    let language = args.get("language").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(String::from))
-                .collect()
-        })
-    });
-
-    let files = args.get("files").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(String::from))
-                .collect()
-        })
-    });
+    let pattern = extract_required_str(args, "pattern")?;
 
     let options = GrepOptions {
-        language,
-        files,
-        max_results: args
-            .get("max_results")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize),
+        language: extract_optional_string_array(args, "language"),
+        files: extract_optional_string_array(args, "files"),
+        max_results: extract_optional_usize(args, "max_results"),
     };
 
     let ws = open_workspace(context)?;
@@ -163,10 +152,7 @@ pub(super) async fn execute_search_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
+    let query = extract_required_str(args, "query")?;
 
     // Embed the query text
     use swissarmyhammer_embedding::{Embedder, TextEmbedder};
@@ -201,32 +187,15 @@ pub(super) fn search_code_with_query_embedding(
     query_text: &str,
     query_embedding: &[f32],
 ) -> Result<CallToolResult, McpError> {
-    let top_k = args
-        .get("top_k")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(10);
-
-    let language = args.get("language").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(String::from))
-                .collect()
-        })
-    });
-
-    let file_pattern = args
-        .get("file_pattern")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let top_k = extract_usize_param(args, "top_k", DEFAULT_TOP_K);
 
     // Hybrid fusion uses the internal default signal weights and no fused-score
     // floor; the MCP surface exposes only `query`, `top_k`, `language`, and
     // `file_pattern` (the `min_similarity` knob is gone for `search code`).
     let options = SearchCodeOptions {
         top_k,
-        language,
-        file_pattern,
+        language: extract_optional_string_array(args, "language"),
+        file_pattern: extract_optional_string(args, "file_pattern"),
         ..Default::default()
     };
 
@@ -246,33 +215,12 @@ pub(super) fn execute_find_duplicates(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let min_similarity = args
-        .get("min_similarity")
-        .and_then(|v| v.as_f64())
-        .map(|n| n as f32)
-        .unwrap_or(0.85);
-
-    let min_chunk_bytes = args
-        .get("min_chunk_bytes")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(100);
-
-    let max_per_chunk = args
-        .get("max_per_chunk")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(5);
+    let file_path = extract_required_str(args, "file_path")?;
 
     let options = FindDuplicatesOptions {
-        min_similarity,
-        min_chunk_bytes,
-        max_per_chunk,
+        min_similarity: extract_f32_param(args, "min_similarity", DEFAULT_MIN_SIMILARITY),
+        min_chunk_bytes: extract_usize_param(args, "min_chunk_bytes", DEFAULT_MIN_CHUNK_BYTES),
+        max_per_chunk: extract_usize_param(args, "max_per_chunk", DEFAULT_MAX_PER_CHUNK),
     };
 
     let ws = open_workspace(context)?;
@@ -292,15 +240,8 @@ pub(super) fn execute_query_ast(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let query_str = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'query'", None))?;
-
-    let language_name = args
-        .get("language")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'language'", None))?;
+    let query_str = extract_required_str(args, "query")?;
+    let language_name = extract_required_str(args, "language")?;
 
     // Resolve language via LanguageRegistry
     use swissarmyhammer_treesitter::LanguageRegistry;
@@ -315,20 +256,12 @@ pub(super) fn execute_query_ast(
         })?;
     let ts_language = lang_config.language();
 
-    // Resolve workspace root
-    let working_dir = context
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-    let workspace_root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+    let workspace_root = resolve_workspace_root(context);
 
     // Get file paths: either from explicit list or by scanning DB for files with matching extensions
-    let file_paths: Vec<String> = if let Some(files) = args.get("files").and_then(|v| v.as_array())
+    let file_paths: Vec<String> = if let Some(files) = extract_optional_string_array(args, "files")
     {
         files
-            .iter()
-            .filter_map(|item| item.as_str().map(String::from))
-            .collect()
     } else {
         // Query indexed files with matching extensions from DB
         let ws = open_workspace(context)?;
@@ -355,13 +288,9 @@ pub(super) fn execute_query_ast(
         paths
     };
 
-    let max_results = args
-        .get("max_results")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(DEFAULT_MAX_RESULTS);
-
-    let options = QueryAstOptions { max_results };
+    let options = QueryAstOptions {
+        max_results: extract_usize_param(args, "max_results", DEFAULT_MAX_RESULTS),
+    };
 
     let result = swissarmyhammer_code_context::query_ast(
         &workspace_root,
@@ -391,18 +320,9 @@ pub(super) fn execute_find_commented_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let files: Vec<&str> = args
-        .get("files")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'files'", None))?
-        .iter()
-        .filter_map(|item| item.as_str())
-        .collect();
+    let files: Vec<&str> = extract_required_str_array(args, "files")?;
 
-    let working_dir = context
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let working_dir = resolve_working_dir(context);
 
     let report = find_commented_code(&working_dir, &files)
         .iter()
@@ -419,12 +339,9 @@ pub(super) fn execute_get_callgraph(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let symbol = args
-        .get("symbol")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'symbol'", None))?;
+    let symbol = extract_required_str(args, "symbol")?;
 
-    let direction = match args.get("direction").and_then(|v| v.as_str()) {
+    let direction = match extract_optional_str(args, "direction") {
         Some("inbound") => CallGraphDirection::Inbound,
         Some("outbound") | None => CallGraphDirection::Outbound,
         Some("both") => CallGraphDirection::Both,
@@ -439,16 +356,10 @@ pub(super) fn execute_get_callgraph(
         }
     };
 
-    let max_depth = args
-        .get("max_depth")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
-        .unwrap_or(2);
-
     let options = CallGraphOptions {
         symbol: symbol.to_string(),
         direction,
-        max_depth,
+        max_depth: extract_u32_param(args, "max_depth", DEFAULT_CALLGRAPH_MAX_DEPTH),
     };
 
     let ws = open_workspace(context)?;
@@ -468,25 +379,12 @@ pub(super) fn execute_get_blastradius(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    let file_path = args
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_params("missing required parameter 'file_path'", None))?;
-
-    let symbol = args
-        .get("symbol")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let max_hops = args
-        .get("max_hops")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
-        .unwrap_or(3);
+    let file_path = extract_required_str(args, "file_path")?;
 
     let options = BlastRadiusOptions {
         file_path: file_path.to_string(),
-        symbol,
-        max_hops,
+        symbol: extract_optional_string(args, "symbol"),
+        max_hops: extract_u32_param(args, "max_hops", DEFAULT_BLAST_RADIUS_MAX_HOPS),
     };
 
     let ws = open_workspace(context)?;
