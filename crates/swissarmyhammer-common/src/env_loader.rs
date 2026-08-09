@@ -277,7 +277,7 @@ mod tests {
     #[test]
     #[serial_test::serial(env_loader_bool)]
     fn every_truthy_spelling_reads_as_true() {
-        for value in ["1", "true", "yes", "on"] {
+        for value in TRUTHY_ENV_VALUES {
             let _guard = EnvVarGuard::set(BOOL_KEY, value);
 
             assert!(load_env_bool(BOOL_KEY, false), "{value} must read as true");

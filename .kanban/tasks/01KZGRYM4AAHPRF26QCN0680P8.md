@@ -520,6 +520,110 @@ comments:
     - evidence: 6 source files — crates/swissarmyhammer-code-context/src/test_fixtures.rs, crates/swissarmyhammer-code-context/src/ops/workspace_path.rs, crates/swissarmyhammer-code-context/src/ops/find_commented_code.rs, crates/swissarmyhammer-code-context/src/ops/query_ast.rs, crates/swissarmyhammer-common/src/env_loader.rs, crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs. 10 of 10 findings checked (0 open). `cargo nextest run --workspace`: 13922 passed, 0 failed, 0 skipped. `cargo test --doc -p swissarmyhammer-common`: 25 passed. `cargo fmt --all --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
     - next: /review
   timestamp: 2026-08-09T02:48:26.974566+00:00
+- actor: claude-code
+  id: 01kzj7bx2eg136fejj5dse83fs
+  text: |
+    ### review — findings
+
+    - scope: `review sha 7945ff326..8d9f1861e` (iteration 5 checkpoint only)
+    - counts: 1 finding, 1 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped
+    - evidence: crates/swissarmyhammer-common/src/env_loader.rs:280
+    - prior sections: all 64 items of the four earlier sections are checked
+
+    #### Directed check 1 — the behaviour-preserving claim for `parse_dirty_file`
+
+    Verified against the diff. The claim holds. All four old give-up blocks
+    (`detect_language` None, `read_to_string` Err, `set_language` Err, `parse`
+    None) were byte-identical: lock the db with `unwrap_or_else(|p| p.into_inner())`,
+    `execute` the same SQL with `params![relative_path]`, discard the result,
+    `indexed += 1`, `continue`. The new site does the same four things in the same
+    order through `mark_file_ts_indexed`. `parse_dirty_file` runs the four steps in
+    the original order, so a file that failed at step 2 before still fails at step 2
+    now and never reaches step 3. No progress event fired on the old give-up path
+    and none fires now. `content_hash` and `ParsedFile` construction stay after the
+    parse. `detect_language` already returns `Option<&'static LanguageConfig>`
+    (swissarmyhammer-treesitter/src/language.rs:339), so the `&'static` in the new
+    signature is the registry's own lifetime, not a widening.
+
+    One difference, and it is strictly narrower: the connection guard now drops at
+    the end of `mark_file_ts_indexed` instead of at the `continue`, so the db lock
+    is held across less code. No observable change.
+
+    #### Directed check 2 — `env_flag_enabled` to `load_env_bool`
+
+    Verified. `load_env_bool` is new in this commit. The accepted set is identical:
+    both trim, both ASCII-lowercase, both accept exactly `1`, `true`, `yes`, `on`.
+    `env_flag_enabled` has no remnants anywhere in the tree. Its single caller,
+    `build_default_embedder`, passes `default = false`, which reproduces the old
+    `unwrap_or(false)` for an unset variable. No caller changed meaning.
+
+    The `markdowndown` tier argument holds. `parse_env_bool` lives in
+    `crates/markdowndown/tests/integration/config.rs`, and `crates/markdowndown/Cargo.toml`
+    declares no dependency on `swissarmyhammer-common` in either `[dependencies]` or
+    `[dev-dependencies]`, so it cannot call `load_env_bool` without a new crate
+    edge. It is also pre-existing test code, which the review skill exempts.
+
+    - next: fix env_loader.rs:280, then re-review the next checkpoint range
+  timestamp: 2026-08-09T02:59:23.342097+00:00
+- actor: claude-code
+  id: 01kzj7ec10zhr17ba1dy1pvr7p
+  text: |-
+    ### finish iteration 5 — findings
+    - implement: changed — 6 source files, 10/10 findings checked, 0 open. Three causes removed: fixture filenames named as constants, `env_flag_enabled` replaced by the canonical `load_env_bool`, and the five SQL copies plus four mark-and-continue copies collapsed to one site
+    - test: green — the implementer ran the full gates: cargo nextest run --workspace 13922 passed / 0 failed / 0 skipped, doctests 25 passed, fmt clean, clippy -D warnings clean. Taken as the test step rather than repeating the same suite
+    - commit: 8d9f1861e — 8 files, 341 insertions, 118 deletions
+    - review: findings — 1 open, on `review sha 7945ff326..8d9f1861e`. Engine: 1 confirmed, 0 refuted, 9 validators attempted, 0 failed, **0 files over the prompt cap — the first pass in this card's history with no exclusions**
+
+    The finding: `crates/swissarmyhammer-common/src/env_loader.rs:280` hardcodes `["1", "true", "yes", "on"]` in a test loop while `TRUTHY_ENV_VALUES` at line 18 already names exactly those values.
+
+    **RED was real this iteration, not staged.** The implementer removed `.to_ascii_lowercase()` from `load_env_bool` and both new tests failed; reverted, both green. The SQL and helper extraction is behaviour-preserving, and it said so plainly instead of staging a fake RED.
+
+    **Both directed judgments were confirmed by reading, not asserted.**
+    1. The four-into-one collapse preserves behaviour. The four old give-up blocks were byte-identical: lock with `unwrap_or_else(|p| p.into_inner())`, execute the same SQL with `params![relative_path]`, discard the result, `indexed += 1`, continue. `parse_dirty_file` runs detect, read, set_language, parse in the original order, so a file that gave up at step 2 still gives up at step 2. `detect_language` already returned `Option<&'static LanguageConfig>`, so the lifetime in the new signature is the registry's own, not a widening invented to make the extraction compile. The db guard now drops at the end of the helper — that holds the lock across strictly less code.
+    2. The `load_env_bool` swap is faithful. Both parsers trim, both ASCII-lowercase, both accept exactly `1`/`true`/`yes`/`on`. The one caller passes `default = false`, reproducing the old `unwrap_or(false)`. No remnant of `env_flag_enabled` is left in the tree. The markdowndown exemption rests on a structural fact: that crate declares no dependency on `swissarmyhammer-common` in either dependency table, so it cannot call `load_env_bool` without a new crate edge.
+
+    Noted, not a finding: `load_env_bool` returns `default` for a set-but-non-UTF-8 value, because `env::var` reports that as `Err`. Today the only caller passes `default = false`, so this agrees with the doc comment. It would diverge for a future caller that passes `default = true`.
+
+    Finding counts by iteration: 12, 38, 4, 10, 1. Converging. No finding has ever repeated.
+
+    Guardrail: NOT hit.
+  timestamp: 2026-08-09T03:00:44.192545+00:00
+- actor: claude-code
+  id: 01kzj7tt5ftt9hjtketbhc6y67
+  text: |-
+    Fixed the one open finding in `## Review Findings (2026-08-08 21:50)`.
+
+    `crates/swissarmyhammer-common/src/env_loader.rs` — `every_truthy_spelling_reads_as_true` now iterates the constant:
+
+        -        for value in ["1", "true", "yes", "on"] {
+        +        for value in TRUTHY_ENV_VALUES {
+
+    `TRUTHY_ENV_VALUES` is `[&str; 4]`, so the array iterates by value and yields `&str`. `EnvVarGuard::set` and the assertion message both take it unchanged.
+
+    **Whole-file sweep for the same cause.** The finding names one line; I checked every other site in the file that could respell a named constant. The module holds two named constants: `TRUTHY_ENV_VALUES` and the test-scoped `BOOL_KEY`.
+
+    - A workspace grep for the literal set `"1", "true", "yes", "on"` now returns exactly one hit — the constant declaration itself. No other site respells it.
+    - A workspace grep for `SWISSARMYHAMMER_TEST_BOOL` returns exactly one hit — the `BOOL_KEY` declaration. Every use goes through the constant.
+
+    Two other test arrays hold string literals and are correct as literals, because their contents are NOT the contents of the constant:
+
+    - `a_truthy_spelling_is_matched_without_regard_to_case_or_padding` uses `["TRUE", "Yes", " On "]`. These are deliberately non-canonical spellings. The test proves the trim and ASCII-lowercase normalization runs before the lookup. Deriving them from `TRUTHY_ENV_VALUES` would make the values canonical again and erase what the test proves.
+    - `a_set_variable_that_is_not_truthy_reads_as_false` uses `["0", "false", "off", "", "banana"]`. These are values that must be absent from the constant. Reading them from it would invert the test.
+
+    The prefix literal `"SWISSARMYHAMMER_TEST"` in the older `test_env_loader` / `test_env_loader_validated` tests is repeated, but it names no constant in this module and is pre-existing test code outside the finding's cause. Left alone — no unrelated refactors.
+
+    Gates all green at HEAD 8d9f1861e:
+    - `cargo nextest run --workspace` — 13922 tests run, 13922 passed, 0 failed, 0 skipped (156.3s)
+    - `cargo fmt --all --check` — exit 0, no diff
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings
+  timestamp: 2026-08-09T03:07:31.887581+00:00
+- actor: claude-code
+  id: 01kzj7v166v9615zdaj4x84bvz
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-common/src/env_loader.rs (1 insertion, 1 deletion). 1 finding checked, 0 open of 65 across five sections. Gates: `cargo nextest run --workspace` 13922 passed / 0 failed / 0 skipped; `cargo fmt --all --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings. HEAD 8d9f1861e, unmoved.
+    - next: ready for `/review`
+  timestamp: 2026-08-09T03:07:39.078016+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'
@@ -626,3 +730,7 @@ Correction: the first version of this card made the tree-sitter reparse a probe 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:338` — SQL string is repeated 5 times and should be extracted to a named constant. Extract to const MARK_FILE_TS_INDEXED_SQL: &str and reuse across all five locations.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:348` — Verbatim duplicate of block at line 310; see that finding for the fix. See line 310 finding — extract shared helper.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/indexing.rs:462` — SQL string is repeated 5 times and should be extracted to a named constant. Extract to const MARK_FILE_TS_INDEXED_SQL: &str and reuse across all five locations.
+
+## Review Findings (2026-08-08 21:50)
+
+- [x] `crates/swissarmyhammer-common/src/env_loader.rs:280` — String literals "1", "true", "yes", "on" are hardcoded in the test loop, but these exact values are already named in the TRUTHY_ENV_VALUES constant at line 18. Repeating the literals creates maintenance drift — if TRUTHY_ENV_VALUES is updated, the test array must be separately updated to stay in sync. Replace the hardcoded array with the named constant: `for value in TRUTHY_ENV_VALUES {`.
