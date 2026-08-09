@@ -8605,6 +8605,7 @@ dependencies = [
  "agent-client-protocol-extras",
  "claude-agent",
  "dirs",
+ "fs2",
  "futures",
  "git2",
  "glob",

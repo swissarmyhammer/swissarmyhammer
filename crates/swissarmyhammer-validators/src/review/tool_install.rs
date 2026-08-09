@@ -29,7 +29,15 @@
 //! `doctor.fix_hint` is text a person reads, and it is a
 //! [`FixHint`](crate::validators::types::FixHint) rather than a command string,
 //! so no step of the lifecycle can run it.
+//!
+//! Installs are serialized machine-wide by [`InstallLock`]. An install command
+//! writes to a directory the whole machine shares, and only `cargo install`
+//! holds a lock of its own, so two installers that ran together could write one
+//! destination at the same time.
 
+use std::fs::{File, OpenOptions};
+
+use fs2::FileExt;
 use futures::future::BoxFuture;
 use regex::Regex;
 
@@ -44,6 +52,14 @@ use crate::validators::{AgentPool, ValidatorLoader};
 
 /// What an install command that exited 0 reported, for the attempt log.
 const INSTALL_COMMAND_SUCCEEDED: &str = "the command exited 0";
+
+/// The file whose lock serializes tool installs across processes.
+///
+/// One file for the whole machine, because a rule's install commands name no
+/// destination: `uv` and `pipx` write `~/.local/bin`, `cargo install` writes
+/// `~/.cargo/bin`, `npm install -g` and `go install` write their own bin
+/// directories. A lock over all of them is the only one this module can name.
+const INSTALL_LOCK_FILE_NAME: &str = "swissarmyhammer-tool-install.lock";
 
 /// The version-pin shapes [`install_command_pins_version`] accepts.
 ///
@@ -256,6 +272,60 @@ impl ToolInstallAgent for PoolInstallAgent<'_> {
     }
 }
 
+/// An exclusive lock over every tool install destination, held while install
+/// commands run and released when the guard drops.
+///
+/// `fs2` locks the open file description, so the lock holds between processes
+/// as well as between threads. That is what `cargo nextest` needs: each test is
+/// its own process, and several of them can reach one destination at once.
+struct InstallLock {
+    /// The locked file. `flock(2)` releases on close, and [`Drop`] releases it
+    /// before that so a long-lived process frees the lock at once.
+    file: File,
+}
+
+impl InstallLock {
+    /// Wait for exclusive use of the install destinations.
+    ///
+    /// Returns `None` when the machine cannot give the lock — a read-only
+    /// temporary directory, say. An install with no lock is worse than an
+    /// install with one, and better than no install at all, so the caller goes
+    /// ahead either way.
+    fn acquire() -> Option<Self> {
+        let path = std::env::temp_dir().join(INSTALL_LOCK_FILE_NAME);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "the tool install lock file could not be opened; installing unserialized"
+                );
+            })
+            .ok()?;
+        file.lock_exclusive()
+            .inspect_err(|error| {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "the tool install lock could not be taken; installing unserialized"
+                );
+            })
+            .ok()?;
+        Some(Self { file })
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        if let Err(error) = FileExt::unlock(&self.file) {
+            tracing::warn!(error = %error, "the tool install lock could not be released");
+        }
+    }
+}
+
 /// Run the deterministic half of the install lifecycle for one tool.
 ///
 /// Returns [`ToolInstallOutcome::AlreadyPresent`] without running anything when
@@ -267,6 +337,13 @@ impl ToolInstallAgent for PoolInstallAgent<'_> {
 /// No LLM and no agent: `sah init` pre-installs runner tools through this exact
 /// function.
 pub fn install_tool_commands(spec: &ToolSpec) -> ToolInstallOutcome {
+    if matches!(check_presence(spec), ToolPresence::Present) {
+        return ToolInstallOutcome::AlreadyPresent;
+    }
+
+    let _lock = InstallLock::acquire();
+
+    // Another installer may have finished while this one waited for the lock.
     if matches!(check_presence(spec), ToolPresence::Present) {
         return ToolInstallOutcome::AlreadyPresent;
     }
@@ -507,6 +584,89 @@ mod tests {
 
     /// A command that always fails, so the doctor check stays failing.
     const FAILING_COMMAND: &str = "echo 'no such package' >&2; exit 1";
+
+    /// How many installers [`installs_never_overlap`] drives at once.
+    const INSTALL_RACE_INSTALLERS: usize = 4;
+
+    /// How long each install command in [`installs_never_overlap`] stays inside
+    /// its critical section, in seconds. Long enough that two unserialized
+    /// installers overlap, short enough to keep the test quick.
+    const INSTALL_RACE_HOLD_SECONDS: &str = "0.2";
+
+    /// What an install command in [`installs_never_overlap`] writes when it
+    /// enters its critical section.
+    const INSTALL_RACE_ENTERED: &str = "entered";
+
+    /// What an install command in [`installs_never_overlap`] writes when it
+    /// leaves its critical section.
+    const INSTALL_RACE_LEFT: &str = "left";
+
+    /// An install command that records when it enters and leaves its critical
+    /// section, waits inside it, and then creates `marker` so the doctor check
+    /// passes.
+    fn racing_install_command(log: &Path, marker: &Path) -> String {
+        format!(
+            "printf '{INSTALL_RACE_ENTERED}\\n' >> {log}; sleep {INSTALL_RACE_HOLD_SECONDS}; \
+             printf '{INSTALL_RACE_LEFT}\\n' >> {log}; touch {marker}",
+            log = shell_quote(log),
+            marker = shell_quote(marker)
+        )
+    }
+
+    /// Two installers never write their destination at the same time.
+    ///
+    /// Every install command a shipped rule declares writes to a directory the
+    /// whole machine shares — `~/.local/bin` for `uv` and `pipx`, `~/.cargo/bin`
+    /// for `cargo install`, the npm and go bin directories for the rest — and
+    /// only `cargo` holds a lock of its own. Under `cargo nextest` each test is
+    /// its own process, so several installers can reach one destination at once.
+    ///
+    /// `fs2` locks the open file description, so two threads that each open the
+    /// lock file contend through the same `flock(2)` call two processes use.
+    /// The log therefore has to read `entered`, `left`, `entered`, `left` — an
+    /// unserialized run writes two `entered` lines in a row.
+    #[test]
+    fn installs_never_overlap() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let log = temp.path().join("install-log");
+        let specs: Vec<ToolSpec> = (0..INSTALL_RACE_INSTALLERS)
+            .map(|installer| {
+                let marker = marker_in(temp.path(), &format!("tool-{installer}"));
+                let command = racing_install_command(&log, &marker);
+                marker_spec(&marker, &[command])
+            })
+            .collect();
+
+        std::thread::scope(|scope| {
+            for spec in &specs {
+                scope.spawn(move || {
+                    assert!(
+                        install_tool_commands(spec).tool_present(),
+                        "every racing install command creates its own marker"
+                    );
+                });
+            }
+        });
+
+        let entered: Vec<String> = std::fs::read_to_string(&log)
+            .expect("the install commands wrote the log")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let serialized: Vec<String> = std::iter::repeat_n(
+            [
+                INSTALL_RACE_ENTERED.to_string(),
+                INSTALL_RACE_LEFT.to_string(),
+            ],
+            INSTALL_RACE_INSTALLERS,
+        )
+        .flatten()
+        .collect();
+        assert_eq!(
+            entered, serialized,
+            "an install must hold the destination alone; this log shows two installers inside it"
+        );
+    }
 
     #[test]
     fn a_present_tool_runs_no_install_command() {

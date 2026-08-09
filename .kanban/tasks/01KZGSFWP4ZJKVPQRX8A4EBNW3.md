@@ -445,6 +445,78 @@ comments:
     - evidence: 1 file — `.github/workflows/ci.yml` (+30). 4 of 7 findings closed, 3 open and named above. `cargo nextest run --workspace` 13961 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` exit 0. Workflow YAML parses; workflow behaviour on the runner unverified until it runs. HEAD `62a73bae5`.
     - next: a person decides finding 3's direction, then findings 1 and 2 follow from it.
   timestamp: 2026-08-09T14:31:59.753556+00:00
+- actor: claude-code
+  id: 01kzkf4s6rxpwqzs0m1hmg293w
+  text: |-
+    ### finish iteration 5 — stuck
+    - implement: **stuck** — 4 of 7 findings closed. One file, `.github/workflows/ci.yml`, +30 lines, all in the `test` job before `Run tests`. No test code changed, so iteration 4's decision stands
+    - test: green — cargo nextest run --workspace 13961 passed / 0 failed / 0 skipped, fmt clean, clippy -D warnings clean
+    - commit: 68c12d51c, parent 62a73bae5 — 3 files, 129 insertions, 1 deletion
+
+    **What CI now provisions:** `components: clippy` on the toolchain action (the idiom the Clippy and Rustfmt jobs already use), a guarded `brew install jq`, a guarded `brew install uv` then `uv tool install vulture==2.14` then `uv tool dir --bin >> "$GITHUB_PATH"`, and `cargo install cargo-machete@0.9.2 --locked`.
+
+    Both install strings are verbatim what the rule frontmatter declares — checked by parsing the frontmatter with `yaml.safe_load` and asserting containment against the workflow `run` bodies. Every binary each `doctor.check_command` names is accounted for. The workflow parses, `bash -n` is clean on all six `run` bodies, and both installs are idempotent (measured: exit 0 when already present). The runner is `runs-on: self-hosted`, a Mac, which is why the vulture step installs `uv` first when `command -v uv` fails — it depends only on `brew`, which the pre-existing Chromium step already assumes.
+
+    **Not verified, and stated as such:** the workflow's behaviour until it actually runs. GitHub Actions cannot be executed from here.
+
+    ## STUCK — three findings need a human decision
+
+    The review block was rewritten mid-run. It held 3 findings when the implementer read it and 7 when it finished. The reviewer withdrew two of its own earlier "clear" judgments and turned them into three findings in `crates/swissarmyhammer-validators/src/review/tool_rules.rs`:
+
+    - `:1521` — the panic prints the remedy for the rule's headline tool, but `check_presence` is all-or-nothing over the whole `doctor.check_command` (`doctor.rs:310`–`:317`). Both clippy rules check `which cargo-clippy jq`, so a machine with clippy and no `jq` is told `rustup component add clippy` — already satisfied, and unable to fix the failure it prints for.
+    - `:1479` — `remedy_label` joins `install.commands` with `doctor.fix_hint` and both call sites present the result as a command. `fix_hint` is not always a command: `dead-code-swift.md:39` carries a comma clause that fails if pasted, and two rules state prose (`put the running sah binary on PATH`).
+    - `:1848` — the roster tolerance contradicts the single-rule preconditions. `SHIPPED_UNUSED_DEPENDENCY_RULES` is a single row, so `exercised > 0` there is exactly "cargo-machete is present" said differently, while the file claims two contracts for that rule. The remedy asks that `require_tool_installed` be called per row.
+
+    **Why this stopped rather than being settled inside an implement pass.** Finding `:1848` decides what every machine must provision, and decides it differently from the CI work just landed. Requiring every roster row makes `periphery`, `swiftlint`, `golangci-lint`, `eslint` and the Dart tools hard preconditions of `cargo nextest run --workspace` — on CI and on every developer laptop. Findings `:1521` and `:1479` change the text a failure prints, so their wording depends on which way `:1848` goes. That is a change to the developer contract, beyond this card's subject, and it is a person's call.
+
+    Finding counts by iteration: 16, 2, 4, 3→7. No finding has repeated, so the mechanical guardrail is NOT hit. The card is stuck on a decision, not on a fix that will not take.
+
+    ## A card-file incident to record
+
+    The iteration-4 reviewer wrote findings by appending to `.kanban/tasks/01KZGSFWP4ZJKVPQRX8A4EBNW3.md` directly and then truncating the file to replace its own section. The truncation clobbered the front matter and reverted the card to `doing`. It restored a backup, re-appended, and moved the card back. It reports the description, all four findings sections, the 22 checked and 7 unchecked items, the 20 comments, tags and dependencies as intact, and the event log as grown from 36 to 43 with nothing lost. One artifact remains: `get task` reports `created` as today, and `started`/`updated` as null. The pre-change file is in git if those values are wanted back.
+
+    Findings must be written through the kanban API, never by editing the card file.
+  timestamp: 2026-08-09T14:34:33.048402+00:00
+- actor: claude-code
+  id: 01kzkgm6hceqpn34efd7g15p12
+  text: |
+    ### Iteration 5 — the install path is restored, and every roster row is required
+
+    The owner reversed iteration 4. Installing is the intended design, so a tool-rule test now gets its tool from the rule's own `tool.install.commands`, never from commands written in test code.
+
+    **`tool_install.rs` — the install is serialized machine-wide.** `InstallLock` takes an exclusive `flock(2)` on one file in the temp directory, held for as long as the install commands run. `install_tool_commands` checks presence, takes the lock, then checks presence again, because another installer can finish while this one waits. `serial_test` was not enough: it holds only inside one process, and `cargo nextest` gives each test its own process. `fs2` locks the open file description, so two threads that each open the lock file contend through the same call two processes use — which is what makes the RED honest.
+
+    RED: `installs_never_overlap` wrote `entered, entered, entered, entered, left, left, left, left` — four installers inside one destination together. GREEN: `entered, left, entered, left, ...`.
+
+    **`:1848` — the roster/single-rule contradiction is gone.** `verify_shipped_tool_rules_pass_fixtures` calls `require_tool_installed` for each row and then asserts `row.usable()` with no condition. The `exercised`/`absent` accounting and `absent_rule_label` are deleted. The degradation contract keeps its own two tool-free tests, so nothing lost coverage.
+
+    RED: the change made three rows fail that the tolerance had hidden — `unused-code-go` (staticcheck), `magic-numbers-go` (golangci-lint) and `complexity-go` (gocognit).
+
+    **`:1521` — the message names the binary that actually failed.** `checked_binaries` reads the names back out of `doctor.check_command`, and `missing_label` probes each one. `which cargo-clippy jq` failing on `jq` now says `jq`. A check that fails on something that is not a binary — `dead-code-swift` asks `test -f Package.swift` — is named by its command.
+
+    **`:1479` — runnable and advisory are separate lines.** `remedy_label` is deleted. `precondition_report` puts `install.commands` after `run:` and `doctor.fix_hint` after `advice for a person, not a command to run:`. Three new tests hold that shape, including the case of a rule with no install command, which offers no `run:` line at all.
+
+    ### Two defects the roster requirement uncovered
+
+    1. **A bare `go install` does not satisfy its own doctor check.** It writes `$(go env GOPATH)/bin`, which a default PATH does not hold, so `which gocognit` still failed after the command exited 0. The five Go rules now state `mkdir -p "$HOME/.local/bin" && GOBIN="$HOME/.local/bin" go install ...`, which lands the binary in the same directory `uv tool install` and `pipx install` use. The version pin is unchanged. `builtin/validators/README.md` states the rule: an install command must put the binary where `check_command` can find it.
+
+    2. **`dead-code-swift` states a working-directory precondition, not only a tool.** Its check is `which periphery swift jq && test -f Package.swift`, because periphery scans a built SPM package. No install command can satisfy that half. The roster helper therefore runs from a Swift package root of its own, built from the shipped `Package.swift.tmpl` fixture and pinned with `CurrentDirGuard`. The fixture runs are unaffected: doctor materializes each pair into its own scratch directory.
+
+    ### CI
+
+    The provisioning from `68c12d51c` stays. Four steps were added for the rows the roster now requires: `$HOME/.local/bin` on PATH, Node for the `npm install -g` rules, the Go and Swift toolchains, and Homebrew installs for `swiftlint`, `periphery` and `dart` — the three tools that declare no install command and so cannot install themselves.
+  timestamp: 2026-08-09T15:00:26.796471+00:00
+- actor: claude-code
+  id: 01kzkgmh32j6q1btgnzrje73zt
+  text: |
+    ### implement — changed
+    - evidence: 10 files — crates/swissarmyhammer-validators/src/review/tool_install.rs, crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/doctor.rs, crates/swissarmyhammer-validators/Cargo.toml, Cargo.lock, .github/workflows/ci.yml, builtin/validators/README.md, builtin/validators/code-hygiene/rules/{complexity-go,function-length-go,magic-numbers-go,missing-docs-go,unused-code-go}.md
+    - findings addressed: tool_rules.rs :1521, :1479, :1848 — the review step verifies and checks them
+    - RED: `installs_never_overlap` logged `entered, entered, entered, entered, left, left, left, left` before the lock; the roster change failed `unused-code-go`, `magic-numbers-go` and `complexity-go`, three rows the deleted tolerance had hidden
+    - gates: `cargo nextest run --workspace --no-fail-fast` 13966 passed, 0 failed, 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean
+    - HEAD: 68c12d51c
+    - next: /review
+  timestamp: 2026-08-09T15:00:37.602112+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
 position_column: doing

@@ -115,7 +115,13 @@ The `tool` block keys:
   tool version in each command. An unpinned tool can change its rules and
   break the gate. A tool that ships with the language toolchain has no package
   to pin (clippy is a `rustup` component), so its rule declares no install
-  commands at all.
+  commands at all. An install command must also put the binary where
+  `check_command` can find it, because `check_command` alone decides whether the
+  install worked. `uv`, `pipx` and `npm install -g` write a directory a user
+  PATH usually holds; a bare `go install` writes `$(go env GOPATH)/bin`, which
+  a default PATH does not hold, so the Go rules state
+  `GOBIN="$HOME/.local/bin"` and land the binary in the same directory `uv` and
+  `pipx` use.
 - `doctor.fix_hint` — the command a person runs when there is nothing to
   install. A toolchain component has no package version to pin, so its rule
   states `fix_hint: "rustup component add clippy"` and doctor reports that as

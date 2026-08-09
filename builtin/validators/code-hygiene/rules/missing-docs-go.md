@@ -20,7 +20,7 @@ tool:
     check_version_command: "revive -version"
   install:
     commands:
-      - "go install github.com/mgechev/revive@v1.15.0"
+      - 'mkdir -p "$HOME/.local/bin" && GOBIN="$HOME/.local/bin" go install github.com/mgechev/revive@v1.15.0'
 ---
 
 # Missing Documentation — Go

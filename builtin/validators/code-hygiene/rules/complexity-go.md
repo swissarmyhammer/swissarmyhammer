@@ -19,7 +19,7 @@ tool:
     check_version_command: "go version -m \"$(command -v gocognit)\" | awk '$1 == \"mod\" { print $2, $3 }'"
   install:
     commands:
-      - "go install github.com/uudashr/gocognit/cmd/gocognit@v1.2.1"
+      - 'mkdir -p "$HOME/.local/bin" && GOBIN="$HOME/.local/bin" go install github.com/uudashr/gocognit/cmd/gocognit@v1.2.1'
 ---
 
 # Complexity — Go

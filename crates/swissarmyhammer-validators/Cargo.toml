@@ -97,6 +97,12 @@ git2 = { workspace = true }
 # `#[cfg(test)]` runs use the same crate.
 tempfile = { workspace = true }
 
+# The tool install lifecycle serializes install commands machine-wide with an
+# `flock(2)` file lock, the same crate the leader election uses. Install
+# destinations are shared per-user directories, and only `cargo install` locks
+# one of its own.
+fs2 = { workspace = true }
+
 [features]
 # Export the review `test_support` fixtures (the shared scripted ACP agent
 # harness, the throwaway git repo, and the seeded in-memory code_context index)

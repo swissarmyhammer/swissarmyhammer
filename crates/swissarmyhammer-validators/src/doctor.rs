@@ -49,7 +49,7 @@ pub const PROJECT_TYPES_CHECK_NAME: &str = "Validator Project Types";
 const PROJECT_TYPES_ROWS: usize = 1;
 
 /// The directory inside a validator set that carries tool-rule fixtures.
-const FIXTURES_DIR_NAME: &str = "fixtures";
+pub(crate) const FIXTURES_DIR_NAME: &str = "fixtures";
 
 /// The suffix that marks a fixture file as a template rather than source.
 ///
@@ -59,7 +59,7 @@ const FIXTURES_DIR_NAME: &str = "fixtures";
 /// make it fire. The stored name therefore ends in `.tmpl`, which no language
 /// owns and no file group matches. [`materialize_fixtures`] drops the suffix
 /// when it copies the file, so the tool still sees the extension it needs.
-const FIXTURE_TEMPLATE_SUFFIX: &str = ".tmpl";
+pub(crate) const FIXTURE_TEMPLATE_SUFFIX: &str = ".tmpl";
 
 /// The fixture that must make the tool report at least one finding.
 const FAIL_FIXTURE_KIND: &str = "fail";

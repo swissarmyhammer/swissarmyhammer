@@ -18,7 +18,7 @@ tool:
     check_version_command: "staticcheck --version"
   install:
     commands:
-      - "go install honnef.co/go/tools/cmd/staticcheck@2025.1.1"
+      - 'mkdir -p "$HOME/.local/bin" && GOBIN="$HOME/.local/bin" go install honnef.co/go/tools/cmd/staticcheck@2025.1.1'
 ---
 
 # Dead Code — Go

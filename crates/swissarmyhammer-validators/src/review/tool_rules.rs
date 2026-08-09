@@ -731,9 +731,12 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use crate::doctor::{check_presence, ToolPresence, ToolRuleStatus};
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    use crate::doctor::{check_presence, ToolPresence, FIXTURES_DIR_NAME, FIXTURE_TEMPLATE_SUFFIX};
     use crate::review::scope::{FileWork, ProbeNames, RuleNames};
     use crate::review::test_support::{builtin_loader, tool_rule_work, write_tool_rule_fixtures};
+    use crate::review::tool_install::install_tool_commands;
     use crate::validators::types::{
         FixHint, Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch,
     };
@@ -1473,30 +1476,128 @@ mod tests {
         );
     }
 
-    /// The remedies a rule states for a missing tool, as one line: the install
-    /// commands in order of preference, then the `doctor.fix_hint` a tool with
-    /// no installable package carries.
-    fn remedy_label(install_commands: &[String], fix_hint: Option<&FixHint>) -> String {
-        let mut remedies: Vec<String> = install_commands.to_vec();
-        remedies.extend(fix_hint.map(ToString::to_string));
-        match remedies.is_empty() {
-            true => "the rule states no install command".to_string(),
-            false => remedies.join("  OR  "),
+    /// The command every shipped doctor check asks presence with.
+    const WHICH_COMMAND: &str = "which";
+
+    /// The shell words that end a `which` argument list inside a doctor check
+    /// command.
+    const SHELL_SEPARATORS: &[&str] = &["&&", "||", ";", "|"];
+
+    /// What separates the install commands a failure message offers, in order
+    /// of preference.
+    const REMEDY_SEPARATOR: &str = "  OR  ";
+
+    /// What introduces the one line of a precondition failure a reader can
+    /// paste into a shell.
+    const RUNNABLE_PREFIX: &str = "run: ";
+
+    /// What introduces the `doctor.fix_hint` line, which a reader cannot paste
+    /// into a shell.
+    const ADVICE_PREFIX: &str = "advice for a person, not a command to run: ";
+
+    /// The binaries a doctor check command asks `which` for.
+    ///
+    /// [`check_presence`] is all-or-nothing over the whole
+    /// `doctor.check_command`: one nonzero status reports the tool missing,
+    /// whichever word of `which cargo-clippy jq` failed. Reading the names back
+    /// out of the command is what lets a failure message state the binary that
+    /// actually failed rather than the rule's headline tool.
+    fn checked_binaries(check_command: &str) -> Vec<&str> {
+        let mut binaries = Vec::new();
+        let mut reading = false;
+        for word in check_command.split_whitespace() {
+            match word {
+                WHICH_COMMAND => reading = true,
+                _ if SHELL_SEPARATORS.contains(&word) => reading = false,
+                _ if reading => binaries.push(word),
+                _ => {}
+            }
+        }
+        binaries
+    }
+
+    /// Whether one binary is on this machine's `PATH`.
+    fn binary_present(binary: &str) -> bool {
+        crate::doctor::run_shell(&format!("{WHICH_COMMAND} {binary}"), None, &[])
+            .is_ok_and(|output| output.status.success())
+    }
+
+    /// What a precondition failure names as missing: the binaries the check
+    /// command asks for and this machine does not have.
+    ///
+    /// A check command can also fail on something that is not a binary —
+    /// `dead-code-swift` asks `test -f Package.swift` beside its `which` — so a
+    /// check whose binaries are all present is named by the command itself.
+    fn missing_label(check_command: &str) -> String {
+        let absent: Vec<&str> = checked_binaries(check_command)
+            .into_iter()
+            .filter(|binary| !binary_present(binary))
+            .collect();
+        match absent.is_empty() {
+            true => format!("what `{check_command}` checks for"),
+            false => absent.join(", "),
         }
     }
 
-    /// Holds a tool-rule acceptance test to the tool it needs: the test fails
-    /// naming the rule, what the doctor check reported, and the command that
-    /// installs the tool.
+    /// The failure a tool-rule test reports when the rule's declared install
+    /// commands could not provide the tool.
     ///
-    /// A test states this precondition; it never installs the tool itself.
-    /// [`install_project_tool_rules`](crate::review::tool_install::install_project_tool_rules)
-    /// takes no path, so the rule's install commands run with no working
-    /// directory and land in the developer's HOME — `~/.local/bin` for `uv` and
-    /// `pipx`, `~/.cargo/bin` for `cargo install` — which is outside the test's
-    /// temporary directory. Under `cargo nextest` each test is its own process
-    /// and nothing locks that destination, so two tests would drive the same
-    /// installer at the same path at the same time.
+    /// The runnable install commands and the advisory `doctor.fix_hint` are
+    /// separate lines. A hint is prose a person reads — `dead-code-swift`
+    /// states `brew install peripheryapp/periphery/periphery, and run the
+    /// review from the directory holding Package.swift` — so a reader who
+    /// pastes what follows `run:` into a shell must never get a hint.
+    fn precondition_report(rule_name: &str, spec: &ToolSpec, detail: &str) -> String {
+        let check_command = spec
+            .doctor
+            .as_ref()
+            .map(|doctor| doctor.check_command.as_str())
+            .unwrap_or_default();
+        let mut report = vec![
+            format!(
+                "`{rule_name}` needs {missing}, and the rule's install commands did not \
+                 provide it, so this test cannot run.",
+                missing = missing_label(check_command)
+            ),
+            format!("the doctor check `{check_command}` reported: {detail}"),
+        ];
+        let install_commands = spec
+            .install
+            .as_ref()
+            .map(|install| install.commands.as_slice())
+            .unwrap_or_default();
+        if !install_commands.is_empty() {
+            report.push(format!(
+                "{RUNNABLE_PREFIX}{}",
+                install_commands.join(REMEDY_SEPARATOR)
+            ));
+        }
+        if let Some(hint) = spec
+            .doctor
+            .as_ref()
+            .and_then(|doctor| doctor.fix_hint.as_ref())
+        {
+            report.push(format!("{ADVICE_PREFIX}{hint}"));
+        }
+        report.join("\n")
+    }
+
+    /// Gives a tool-rule acceptance test the tool it needs, through the rule's
+    /// own declared install commands.
+    ///
+    /// The commands are the rule's, never the test's:
+    /// [`install_tool_commands`] reads `tool.install.commands` from the rule's
+    /// frontmatter, returns at once when the doctor check already passes, and
+    /// holds a machine-wide lock while it runs, so two test processes never
+    /// write one destination together.
+    ///
+    /// A tool the commands cannot provide fails the test, naming the binary
+    /// that actually failed the check. `check_presence` is all-or-nothing over
+    /// the whole `doctor.check_command`, so the rule's headline tool is the
+    /// wrong thing to print: `which cargo-clippy jq` failing on `jq` must not
+    /// ask for `rustup component add clippy`. The runnable install commands and
+    /// the advisory `doctor.fix_hint` are printed apart, because a hint is
+    /// prose a person reads and pasting it into a shell fails.
     fn require_tool_installed(loader: &ValidatorLoader, project_types: &[&str], rule_name: &str) {
         let matched = project_tool_rules(loader, project_types)
             .into_iter()
@@ -1504,24 +1605,102 @@ mod tests {
             .unwrap_or_else(|| {
                 panic!("`{rule_name}` must be a shipped tool rule for {project_types:?}")
             });
+        if install_tool_commands(matched.spec).tool_present() {
+            return;
+        }
         let ToolPresence::Missing { detail } = check_presence(matched.spec) else {
             return;
         };
-        let install_commands = matched
-            .spec
-            .install
-            .as_ref()
-            .map(|install| install.commands.as_slice())
-            .unwrap_or_default();
-        let fix_hint = matched
-            .spec
-            .doctor
-            .as_ref()
-            .and_then(|doctor| doctor.fix_hint.as_ref());
-        panic!(
-            "`{rule_name}` needs a tool this machine does not have, so this test cannot run. \
-             The doctor check reported: {detail}. Install the tool and run the test again: {}",
-            remedy_label(install_commands, fix_hint)
+        panic!("{}", precondition_report(rule_name, matched.spec, &detail));
+    }
+
+    /// A binary name no machine carries, for the presence tests below.
+    const ABSENT_BINARY: &str = "no-such-tool-a4ebnw3";
+
+    /// The precondition failure names the binary that actually failed, not
+    /// every binary the check command lists.
+    ///
+    /// `check_presence` reports one status for the whole `doctor.check_command`,
+    /// so a check that names two binaries and fails on the second would
+    /// otherwise be reported against the first.
+    #[test]
+    fn the_precondition_failure_names_the_binary_that_actually_failed() {
+        let check_command = format!("{WHICH_COMMAND} sh {ABSENT_BINARY}");
+
+        let missing = missing_label(&check_command);
+
+        assert_eq!(missing, ABSENT_BINARY);
+    }
+
+    /// A check command whose binaries are all present failed on something else,
+    /// so the message names the command rather than a binary.
+    #[test]
+    fn a_check_that_fails_on_no_binary_is_named_by_its_command() {
+        let check_command = format!("{WHICH_COMMAND} sh && test -f no-such-file-a4ebnw3");
+
+        let missing = missing_label(&check_command);
+
+        assert!(
+            missing.contains(&check_command),
+            "every binary is present, so the command itself is the failure; got '{missing}'"
+        );
+    }
+
+    /// The `run:` line carries only install commands, and the advisory hint
+    /// stands apart.
+    ///
+    /// Both are remedies for a missing tool, and only one of them is runnable:
+    /// a `doctor.fix_hint` is prose a person reads. A reader who pastes what
+    /// follows `run:` into a shell must get a command.
+    #[test]
+    fn the_precondition_failure_keeps_the_hint_out_of_the_runnable_line() {
+        let hint = "brew install it, and run the review from the package directory";
+        let spec = ToolSpec {
+            scope: ToolScope::Files,
+            run: "true".to_string(),
+            doctor: Some(ToolDoctor {
+                check_command: format!("{WHICH_COMMAND} {ABSENT_BINARY}"),
+                check_version_command: None,
+                fix_hint: Some(FixHint::from(hint.to_string())),
+            }),
+            install: Some(ToolInstall {
+                commands: vec!["brew install it@1.2.3".to_string()],
+            }),
+        };
+
+        let report = precondition_report("probe-rule", &spec, "exited with exit status: 1");
+
+        let run_line = report
+            .lines()
+            .find(|line| line.starts_with(RUNNABLE_PREFIX))
+            .expect("the report offers a runnable remedy");
+        assert_eq!(run_line, format!("{RUNNABLE_PREFIX}brew install it@1.2.3"));
+        assert!(
+            report.contains(hint),
+            "the advisory hint must still be reported; got '{report}'"
+        );
+    }
+
+    /// A rule with no install command offers no `run:` line at all, so the
+    /// report never presents prose as a command.
+    #[test]
+    fn a_rule_with_no_install_command_offers_no_runnable_line() {
+        let spec = ToolSpec {
+            scope: ToolScope::Files,
+            run: "true".to_string(),
+            doctor: Some(ToolDoctor {
+                check_command: format!("{WHICH_COMMAND} {ABSENT_BINARY}"),
+                check_version_command: None,
+                fix_hint: Some(FixHint::from("brew install it".to_string())),
+            }),
+            install: None,
+        };
+
+        let report = precondition_report("probe-rule", &spec, "exited with exit status: 1");
+
+        assert!(
+            !report.lines().any(|line| line.starts_with(RUNNABLE_PREFIX)),
+            "a rule with no install command has nothing runnable to offer; got '{report}'"
         );
     }
 
@@ -1798,8 +1977,44 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
         }
     }
 
-    /// Drives every rule in `rules` through the real pre-install and doctor
-    /// path, and holds each one to the fixture contract.
+    /// The name of the SwiftPM manifest, and of the fixture template that
+    /// carries one.
+    const SWIFT_MANIFEST: &str = "Package.swift";
+
+    /// A Swift package root as the process working directory, held until the
+    /// returned guards drop.
+    ///
+    /// `dead-code-swift` checks `which periphery swift jq && test -f
+    /// Package.swift`, because periphery scans a built SPM package and reports
+    /// itself missing outside one. That half of the check is a working-directory
+    /// precondition rather than a tool, so no install command can satisfy it and
+    /// a roster test that requires every row has to supply it. The manifest is
+    /// the shipped fixture template, so the test states no manifest of its own.
+    ///
+    /// The fixture runs are unaffected: doctor materializes each pair into its
+    /// own scratch directory, `Package.swift.tmpl` included, and runs the script
+    /// there.
+    fn swift_package_root(loader: &ValidatorLoader) -> (tempfile::TempDir, CurrentDirGuard) {
+        let manifest = loader
+            .list_rulesets()
+            .iter()
+            .map(|ruleset| {
+                ruleset
+                    .base_path
+                    .join(FIXTURES_DIR_NAME)
+                    .join(format!("{SWIFT_MANIFEST}{FIXTURE_TEMPLATE_SUFFIX}"))
+            })
+            .find(|path| path.exists())
+            .expect("a builtin validator set ships a Package.swift fixture template");
+        let root = tempfile::tempdir().expect("temp dir");
+        std::fs::copy(&manifest, root.path().join(SWIFT_MANIFEST))
+            .expect("copy the shipped Package.swift template");
+        let guard = CurrentDirGuard::new(root.path()).expect("cwd guard");
+        (root, guard)
+    }
+
+    /// Drives every rule in `rules` through the real install, doctor and
+    /// fixture path, and holds each one to the fixture contract.
     ///
     /// Each row names a project type, the tool rule that serves it, and the
     /// prompt rules that rule must supersede — empty for a rule that must leave
@@ -1808,28 +2023,29 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
     /// than to the call because one roster — the complexity rules — mixes rules
     /// that replace one prompt rule with a rule that replaces two.
     ///
-    /// The helper never installs a tool. It reads the machine as it is, the way
-    /// [`require_tool_installed`] does, and a roster whose tools are all absent
-    /// fails naming each missing rule and the command that installs its tool.
+    /// Every row keeps one contract, the same one the single-rule acceptance
+    /// tests keep: [`require_tool_installed`] gets the tool through the rule's
+    /// own declared install commands, and the fixture assertion then runs for
+    /// every row rather than for the rows this machine happens to carry. A row
+    /// whose tool cannot be obtained fails the test, naming the binary and the
+    /// command that installs it.
     ///
-    /// A rule whose tool the machine does not have is reported as degraded,
-    /// which is the documented behavior: a missing tool falls the rule back to
-    /// its prompt rule and never blocks a review. That state cannot run the
-    /// fixtures, so the fixture assertion applies to the rules whose tool doctor
-    /// found. These rosters span six languages, so one machine rarely carries
-    /// every tool; the exercised count guards against every rule taking that
-    /// branch and the caller asserting nothing.
+    /// The degradation contract — a missing tool falls the rule back to its
+    /// prompt rule and never blocks a review — is held by
+    /// [`plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing`]
+    /// and [`a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback`],
+    /// which state it over built specs and need no tool at all.
     ///
     /// `rule_kind` names the group in the failure messages — the prompt rule the
     /// group is named for, whether the group replaces that rule or runs beside
-    /// it — so a failing run says which roster came up empty.
+    /// it — so a failing run says which roster broke.
     fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule_kind: &str) {
         let loader = builtin_loader();
-        let mut exercised = 0;
-        let mut absent = Vec::new();
+        let _package_root = swift_package_root(&loader);
 
         for (project_type, rule_name, expected_supersedes) in rules {
             let project_types = [*project_type];
+            require_tool_installed(&loader, &project_types, rule_name);
 
             let status = crate::doctor::check_review_engine_with(&loader, &project_types);
             let row = status
@@ -1845,36 +2061,12 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
                 "{rule_name} must supersede {}, the contract every {rule_kind} tool rule keeps",
                 supersedes_label(expected_supersedes)
             );
-            if row.presence == ToolPresence::Present {
-                assert!(
-                    row.usable(),
-                    "{rule_name}'s tool is installed, so its fixtures must pass; \
-                     doctor says: {}",
-                    row.degraded_detail()
-                );
-                exercised += 1;
-            } else {
-                absent.push(absent_rule_label(row));
-            }
+            assert!(
+                row.usable(),
+                "{rule_name}'s tool is installed, so its fixtures must pass; doctor says: {}",
+                row.degraded_detail()
+            );
         }
-
-        assert!(
-            exercised > 0,
-            "no shipped {rule_kind} tool rule's tool is installed, so the fixture \
-             pairs were never run and this test asserts nothing; install one of these \
-             tools and run it again: {}",
-            absent.join("; ")
-        );
-    }
-
-    /// One missing rule as the roster failure message names it: the rule, then
-    /// the commands that install its tool.
-    fn absent_rule_label(row: &ToolRuleStatus) -> String {
-        format!(
-            "`{}` — {}",
-            row.rule_name,
-            remedy_label(&row.install_commands, row.fix_hint.as_ref())
-        )
     }
 
     /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
