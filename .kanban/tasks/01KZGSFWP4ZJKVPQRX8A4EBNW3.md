@@ -377,6 +377,74 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules.rs. All 4 open findings checked (tool_rules.rs:1481, :1595, :1701 x2). RED proved by making the precondition false: 2 tests failed naming the missing tool and its install command, with PATH stripped of ~/.local/bin. Gates: nextest workspace 13961 passed / 0 failed / 0 skipped; fmt clean; clippy -D warnings clean. HEAD 4ac042a8b.
     - next: /review
   timestamp: 2026-08-09T14:11:08.195080+00:00
+- actor: claude-code
+  id: 01kzkekbqk4wsghvq8bjbsqtbv
+  text: |-
+    ### review — findings
+    - scope: `review sha 4ac042a8b..62a73bae5` (the checkpoint commit `62a73bae5` only)
+    - evidence: 7 findings. The engine fleet was clean — 0 findings, 0 confirmed, 0 refuted, 9 attempted, 0 failed, 0 skipped. All 7 come from the directed judgment on the cost of the decision: `.github/workflows/ci.yml:40` (vulture, against `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1759`), `.github/workflows/ci.yml:40` (cargo-machete, against `tool_rules.rs:2034`), `.github/workflows/ci.yml:27` (clippy component, against `tool_rules.rs:1546` and `:1659`), `.github/workflows/ci.yml:40` (jq, same two tests), `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1521` (the printed remedy names the headline tool, not the binary that failed the check), `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1479` (`remedy_label` prints prose and macOS-only hints as commands), `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1848` (the roster tolerance contradicts the per-rule preconditions).
+    - prior findings: all four items of the 2026-08-09 08:50 section are checked and closed. The decision is applied whole — no `install_project_tool_rules` call remains in `tool_rules.rs`.
+    - correction: a first judgment this pass reported `remedy_label` and the roster split as clear. Both were wrong and are withdrawn in the dated section. A verifier found the `jq` case, which the per-rule reading hid, and the single-row `SHIPPED_UNUSED_DEPENDENCY_RULES` roster, which makes the tolerance dead where it most looks needed.
+    - next: give the CI Test job the four tools the asserting tests now require; make the printed remedy name the binary that actually failed the check and keep prose out of the command position; apply `require_tool_installed` per row in `verify_shipped_tool_rules_pass_fixtures`. Card stays in `review`.
+  timestamp: 2026-08-09T14:25:02.195602+00:00
+- actor: claude-code
+  id: 01kzkezdany4g24djm6tmrcz7h
+  text: |
+    ### CI provisioning landed — the four `.github/workflows/ci.yml` findings are closed
+
+    One file changed: `.github/workflows/ci.yml`, +30 lines, all inside the `test` job, all before `Run tests`. The fix stays in CI provisioning. No test code changed, so iteration 4's decision — a test states its tool as a precondition and never installs one — stands.
+
+    **What the Test job now provisions**
+
+    - `components: clippy` on `dtolnay/rust-toolchain@stable`, the same idiom the Clippy job (`components: clippy`) and the Rustfmt job (`components: rustfmt`) use. This gives `cargo-clippy` to `missing-docs-rust` and `complexity-rust`.
+    - `Ensure jq is available` — guarded `command -v` then `brew install jq`. The second binary of the `which cargo-clippy jq` check.
+    - `Install vulture` — guarded `command -v uv` then `brew install uv`, then `uv tool install vulture==2.14`, then `uv tool dir --bin >> "$GITHUB_PATH"`.
+    - `Install cargo-machete` — `cargo install cargo-machete@0.9.2 --locked`.
+
+    **Verified by reading and by running**
+
+    - The two install commands are the exact strings the rules declare. Parsed both rule frontmatters with `yaml.safe_load` and asserted string containment against the workflow's `run` bodies: `uv tool install vulture==2.14` is `dead-code-python` install command 1 of 2 (`pipx` is its fallback, not needed once `uv` succeeds); `cargo install cargo-machete@0.9.2 --locked` is `unused-dependencies-rust`'s only install command.
+    - Every binary each `doctor.check_command` names is now accounted for. `vulture sed`; `cargo cargo-machete find grep awk mktemp head cut sort tr`; `cargo-clippy jq`. `sed find grep awk mktemp head cut sort tr` are macOS base utilities and `cargo` comes from the toolchain action.
+    - The four `require_tool_installed` call sites map to exactly those four rules: `:1546` `missing-docs-rust`, `:1659` `complexity-rust`, `:1759` `dead-code-python`, `:2034` `unused-dependencies-rust`.
+    - The whole workflow parses under `yaml.safe_load`. The `test` job is the job that runs `cargo nextest run --no-fail-fast`, and the new steps are indices 6, 7 and 8 of 10, before `Run tests` at index 9.
+    - `bash -n` on every `run` body of the `test` job: 6 of 6 exit 0.
+    - Both installs are idempotent, measured on this machine: `cargo install cargo-machete@0.9.2 --locked` prints `Ignored package ... is already installed` and exits 0; `uv tool install vulture==2.14` prints `` `vulture==2.14` is already installed `` and exits 0.
+
+    **The self-hosted runner**
+
+    The Test job declares `runs-on: self-hosted`, a Mac. Neither `uv` nor `pipx` is guaranteed there, which is why the vulture step installs `uv` first when `command -v uv` fails. That step depends only on `brew`, which the job already depends on — the pre-existing `Ensure Chromium is available` step calls `brew install --cask chromium` on the same runner. The `jq` step depends on `brew` for the same reason. `uv tool install` links executables into `uv tool dir --bin` (`~/.local/bin` by default), which is not on the runner PATH, so the step states it in `$GITHUB_PATH`. Tool rules run through `run_shell` → `shell_command(Shell::Bash, ...)`, a non-login bash that inherits the step process env, so a `$GITHUB_PATH` entry reaches the doctor's `which`.
+
+    **Not verified**
+
+    The workflow itself is unverified until it runs. GitHub Actions cannot be executed from here, and the self-hosted runner's contents cannot be read from here. What is asserted about the runner is only what the workflow declares plus what its existing steps already assume.
+
+    **Gates, all on this machine, which has all four tools**
+
+    - `cargo nextest run --workspace` — 13961 tests run, 13961 passed, 0 skipped, 0 failed. All four asserting tool-rule tests PASS.
+    - `cargo fmt --all --check` — clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+  timestamp: 2026-08-09T14:31:37.045816+00:00
+- actor: claude-code
+  id: 01kzkf03g9v0py4fn519mcz7n0
+  text: |
+    ### Blocker — the card grew three findings mid-run that this pass did not implement
+
+    The 09:13 review block was rewritten while this pass was in flight. When the work started, `get task` returned that block with three findings, all in `.github/workflows/ci.yml`. When the work finished, the same block held seven: the three CI ones with shifted line anchors, a fourth CI one for `jq`, and three new ones in `crates/swissarmyhammer-validators/src/review/tool_rules.rs`. The block's own text records the change — it now carries a section titled "Correction to this pass's own earlier judgment" that withdraws the two judgments the earlier version had recorded as clear.
+
+    All four CI findings are implemented and checked. The three below are open and are NOT in this pass's diff:
+
+    1. `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1521` — the panic prints the rule's headline remedy, but `check_presence` fails all-or-nothing over the whole `doctor.check_command`, so a machine with clippy and without `jq` is told `rustup component add clippy`. Name the binary that actually failed, or state a `jq` remedy on the rules that need it.
+    2. `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1479` — `remedy_label` joins `install.commands` with `doctor.fix_hint`, and both call sites present the result as a command to run, but several `fix_hint` values are prose. Separate the runnable commands from the advisory hint.
+    3. `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1848` — `verify_shipped_tool_rules_pass_fixtures` keeps a tolerance that contradicts the required preconditions at `:1759` and `:2034`. Call `require_tool_installed` per row and delete the `exercised`/`absent` accounting.
+
+    **Why this pass stopped instead of continuing.** Finding 3 decides what CI must provision, and it decides it differently from the CI work this pass just landed. Requiring every roster row turns `dead-code-swift` (periphery), `complexity-swift`, `missing-docs-swift`, `magic-numbers-swift` (swiftlint), and the Go, Dart and TypeScript rows into hard preconditions of `cargo nextest run` on every machine, developer laptops included. The Test job would then have to provision all of them, and the finding text itself names the Mac-only fleet as the reason. Findings 1 and 2 change the text that failure prints, so their correct wording depends on which way finding 3 goes. Choosing that direction is a decision for a person, not something to settle inside an implement pass. Reporting `stuck` with the gap named rather than `changed` presented as complete.
+
+    **State of the tree at the stop.** HEAD `62a73bae5`, unchanged from the start of the pass. Working tree carries one source change, `.github/workflows/ci.yml`. `.kanban/tasks/01KZGVEFEJTBJXV3P93GSM2FQ8.*` and the untracked `.kanban/` entries belong to a parallel session and were not touched.
+
+    ### implement — stuck
+    - evidence: 1 file — `.github/workflows/ci.yml` (+30). 4 of 7 findings closed, 3 open and named above. `cargo nextest run --workspace` 13961 passed / 0 failed / 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` exit 0. Workflow YAML parses; workflow behaviour on the runner unverified until it runs. HEAD `62a73bae5`.
+    - next: a person decides finding 3's direction, then findings 1 and 2 follow from it.
+  timestamp: 2026-08-09T14:31:59.753556+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
 position_column: doing
@@ -461,3 +529,23 @@ Findings 1 and 2 ask for `install_project_tool_rules` at two more sites; finding
 ### Directed judgment this pass — idempotence is clear
 
 `install_project_tool_rules` is idempotent. `install_tool_commands` short-circuits at `crates/swissarmyhammer-validators/src/review/tool_install.rs:271` with `return ToolInstallOutcome::AlreadyPresent;` when `check_presence` reports `Present`, and `check_presence` (`doctor.rs:305`) runs the rule's `doctor.check_command`, which for these rules is a bare `which` (`builtin/validators/manifests/rules/unused-dependencies-rust.md:44`, `builtin/validators/code-hygiene/rules/dead-code-python.md:21`). The cost when the tool is present is one `bash -c which ...` per rule and nothing else, and `tool_install.rs:512` (`a_present_tool_runs_no_install_command`) holds that behaviour. It also re-checks after each command (`tool_install.rs:283`) and stops at the first command that satisfies the check, so the `pipx` fallback never runs once `uv` succeeded. No process-wide env or PATH mutation: there is no `set_var` on this path, and `doctor.rs:705` sets `SAH_BINARY_ENV` on the child `Command` only.
+
+## Review Findings (2026-08-09 09:13)
+
+Scope: `4ac042a8b..62a73bae5` — the checkpoint commit `62a73bae5` only. The engine fleet reported zero findings (9 pairs attempted, 0 failed, 0 skipped). Every finding below comes from the directed judgment on the cost of the decision. The decision itself is applied whole: no `install_project_tool_rules` call remains in `crates/swissarmyhammer-validators/src/review/tool_rules.rs`, and all four affected tests are plain `#[test]`, not `#[ignore]`, so `cargo nextest run` runs them.
+
+- [x] `.github/workflows/ci.yml:40` — The Test job runs `cargo nextest run --no-fail-fast` and installs no Python tooling, so `vulture` is not on the runner unless something outside CI put it there. `the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code` now calls `require_tool_installed` at `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1759`, and that helper panics when `check_presence` reports `Missing`. The rule checks `which vulture sed` (`builtin/validators/code-hygiene/rules/dead-code-python.md:21`) and installs with `uv tool install vulture==2.14` or `pipx install vulture==2.14` (`:25`, `:26`); CI runs neither, and it installs neither `uv` nor `pipx` either. Before this commit the test installed the tool itself, so the run was self-healing; the commit removed the only mechanism that put `vulture` on the machine and added nothing in its place. The Test job steps are `actions/checkout`, `dtolnay/rust-toolchain@stable`, `rustup component add rust-analyzer`, `Swatinem/rust-cache`, `taiki-e/install-action@nextest`, and a Chromium check (`.github/workflows/ci.yml:20`–`:40`). No step in `.github/`, `scripts/`, `justfile` or `Makefile` installs it, and `.config/nextest.toml` declares no setup script. Add the install to the Test job.
+- [x] `.github/workflows/ci.yml:40` — Same cause for `cargo-machete`. `the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency` calls `require_tool_installed` at `crates/swissarmyhammer-validators/src/review/tool_rules.rs:2034`. The rule checks `which cargo cargo-machete find grep awk mktemp head cut sort tr` (`builtin/validators/manifests/rules/unused-dependencies-rust.md:44`) and installs with `cargo install cargo-machete@0.9.2 --locked` (`:47`). CI installs `tauri-cli` in the `apps` job (`.github/workflows/ci.yml:95`) and `cargo-machete` nowhere. Add the install to the Test job.
+- [x] `.github/workflows/ci.yml:27` — Same cause for the `clippy` component. `missing-docs-rust` and `complexity-rust` are both required preconditions now — `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1546` and `:1659` — and both check `which cargo-clippy jq` (`builtin/validators/code-hygiene/rules/missing-docs-rust.md:20`, `builtin/validators/code-hygiene/rules/complexity-rust.md:32`). The Test job asks `dtolnay/rust-toolchain@stable` for no components and adds only `rust-analyzer` (`.github/workflows/ci.yml:27`, `:29`). The repo treats clippy as a component a job must request: the Clippy job states `components: clippy` (`.github/workflows/ci.yml:136`) and the Rustfmt job states `components: rustfmt` (`.github/workflows/ci.yml:122`). Neither of those jobs can seed the Test job in any case — both declare `needs: test`, so they run after it. State the component in the job that needs it.
+- [x] `.github/workflows/ci.yml:40` — Same cause for `jq`. Both clippy rules check `which cargo-clippy jq`, so `jq` is a hard precondition of the tests at `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1546` and `:1659`. No shipped rule installs `jq` and no CI step installs it — every `jq` occurrence in `.github/workflows/` is a use of the binary, never an install. Add the install, or state it as a documented runner prerequisite.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1521` — The panic prints the remedy for the rule's headline tool, but the precondition it reports came from `check_presence` over the whole `doctor.check_command`, which is all-or-nothing on the shell line (`crates/swissarmyhammer-validators/src/doctor.rs:310`–`:317`: a non-zero status is `ToolPresence::Missing`). For `missing-docs-rust` and `complexity-rust` the check is `which cargo-clippy jq`, so on a machine that has clippy and lacks `jq` the message reads "Install the tool and run the test again: rustup component add clippy" (`builtin/validators/code-hygiene/rules/missing-docs-rust.md:22`, `builtin/validators/code-hygiene/rules/complexity-rust.md:34`) — a command that is already satisfied and that cannot fix the failure it is printed for. Name the binary that actually failed the check in the message, or state a `jq` remedy on the rules that need it.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1479` — `remedy_label` joins `install.commands` and `doctor.fix_hint` into one string, and both call sites present that string as a command to run: the panic at `:1521` says "Install the tool and run the test again: {}", and `absent_rule_label` at `:1872` builds the roster failure list from it. `fix_hint` is not always a command. `builtin/validators/code-hygiene/rules/dead-code-swift.md:39` states `brew install peripheryapp/periphery/periphery, and run the review from the directory holding Package.swift`, which fails if pasted into a shell. `builtin/validators/code-hygiene/rules/no-commented-code-parsed.md:36` and `builtin/validators/duplication/rules/duplication-parsed.md:50` state `put the running sah binary on PATH, or set SAH_BIN to its path`, which is prose. Three more state a macOS-only remedy with no alternative, because they carry no `install` commands at all: `builtin/validators/code-hygiene/rules/complexity-swift.md:26`, `missing-docs-swift.md:21` and `magic-numbers-swift.md:22` all state `brew install swiftlint`, and `swiftlint` has no Linux formula. Separate the runnable commands from the advisory hint in the printed message so the text after "run the test again:" is always runnable.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules.rs:1848` — The split between this helper and the four single-rule tests is incoherent, and this tolerance is the wrong half. The file now states two contradictory contracts for the same rules: `dead-code-python` is tolerated here and required at `:1759`, and `unused-dependencies-rust` is tolerated here and required at `:2034`. The tolerance is dead for one roster outright — `SHIPPED_UNUSED_DEPENDENCY_RULES` is a single row (`crates/swissarmyhammer-validators/src/review/tool_rules.rs:1396`–`:1397`), so `exercised > 0` at `:1861` is exactly "cargo-machete is present", the same requirement the single-rule test states, expressed differently. The degradation contract the doc comment cites at `:1815`–`:1821` is already held by two tests that need no tool at all: `plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing` (`:891`) and `a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback` (`:1047`). What the tolerance buys instead is machine-dependent assertion strength that a green run never reports: `exercised` may be 1 of 6, and `absent` is read only in the failure message at `:1866`, so a broken Go, Swift, Dart or TypeScript rule stays green on a Mac-only CI fleet. Apply the decision this card took to every row — call `require_tool_installed` per row and delete the `exercised`/`absent` accounting at `:1828`, `:1829`, `:1855`, `:1857` and `:1861`–`:1867`.
+
+### Correction to this pass's own earlier judgment
+
+An earlier comment this pass recorded `remedy_label` and the roster split as clear. Both judgments were wrong and are withdrawn. `remedy_label` was judged on the four rules an asserting test names, which hid the `jq` case, because the remedy is read per rule while `check_presence` fails per binary. The split was judged coherent on the strength of the `exercised > 0` floor alone, without checking that one roster holds a single row, that the degradation contract has its own tool-free tests, or that this card's own decision is stated universally.
+
+### Verified — the decision is applied whole
+
+No `install_project_tool_rules` call remains in `crates/swissarmyhammer-validators/src/review/tool_rules.rs`. The four surviving mentions are doc-comment links at lines 461 and 1493 and the helper references at 1742 and 1812. The pre-existing site the five roster tests reached is gone with the rest.

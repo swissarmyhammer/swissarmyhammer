@@ -25,6 +25,12 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The `missing-docs-rust` and `complexity-rust` tool rules check
+          # `which cargo-clippy jq`, and their tests state that tool as a
+          # precondition rather than installing it. A job states the components
+          # it needs, the same way the Clippy and Rustfmt jobs do.
+          components: clippy
       - name: Install rust-analyzer
         run: rustup component add rust-analyzer
       - uses: Swatinem/rust-cache@v2
@@ -36,6 +42,30 @@ jobs:
           if ! command -v chromium &>/dev/null && ! [ -d "/Applications/Chromium.app" ] && ! [ -d "/Applications/Google Chrome.app" ]; then
             brew install --cask chromium --no-quarantine
           fi
+      - name: Ensure jq is available
+        # The second half of the `which cargo-clippy jq` doctor check above.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
+      - name: Install vulture
+        # The tool `dead-code-python` requires, at the version that rule pins.
+        # `uv` is not part of this runner's contract, so install it the way the
+        # step above installs Chromium. `uv tool install` links executables into
+        # a bin directory that is not on the runner PATH by default, so state it
+        # for the steps that follow. Both commands are no-ops when the pinned
+        # version is already there.
+        run: |
+          if ! command -v uv &>/dev/null; then
+            brew install uv
+          fi
+          uv tool install vulture==2.14
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: Install cargo-machete
+        # The tool `unused-dependencies-rust` requires, installed by the command
+        # that rule declares. Cargo skips the build when the pinned version is
+        # already installed.
+        run: cargo install cargo-machete@0.9.2 --locked
       - name: Run tests
         run: cargo nextest run --no-fail-fast
 
