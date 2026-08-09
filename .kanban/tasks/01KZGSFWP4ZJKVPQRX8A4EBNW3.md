@@ -618,10 +618,84 @@ comments:
     - evidence: 8 files — `crates/swissarmyhammer-validators/src/review/tool_rules.rs`, `crates/swissarmyhammer-validators/src/review/tool_install.rs`, and six new files `crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs` plus `tool_rules/tests/{plan,execute,preconditions,shipped}.rs`. All 11 open findings checked (8 of the 2026-08-09 10:02 pass, and the 3 the same pass verified in the 09:13 section). RED proved for both run-time defects: `left: None` from `current_dir()` on the drop-order test, SIGTERM at 56 s on the double-`acquire()` probe. Gates: `cargo nextest run --workspace` 13969 run, 13969 passed, 0 failed, 0 skipped; `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. Largest file of the split family: `tool_rules.rs`, 42951 gutter-rendered bytes against the 262144-byte cap. HEAD 615593ecb.
     - next: `/review`
   timestamp: 2026-08-09T15:52:24.704694+00:00
+- actor: claude-code
+  id: 01kzknjcaws3qxyne9trx6c3sm
+  text: |-
+    ### review — findings
+
+    - evidence: 4 findings on scope `615593ecb..087d052b4` — `crates/swissarmyhammer-validators/src/review/tool_rules/tests/preconditions.rs:49`, `crates/swissarmyhammer-validators/src/review/tool_install.rs:77`, `tool_install.rs:354`, `tool_install.rs:315`. Engine fleet: 18 pairs attempted, 0 failed, 0 skipped. The engine reported 6; five were dropped under the skill's exception on refactoring test code that already existed at `615593ecb`.
+    - directed judgment A — the split: CLEAN. Zero prompt-cap skips, 0 per file across all six files of the family. `tool_rules.rs` went 2271 lines / 91180 raw bytes (262265 rendered, the file that was skipped) to 740 lines / 26671 bytes; no file of the family is within a factor of six of the 262144-byte cap. The one deletion hunk `@@ -726,1546 +737,4 @@` begins on the `mod tests {` line, so the split moved tests only; the other changes to the file are the previous pass's own fixes (`Debug` derives, `ScriptFailure` on `thiserror`). Tests 30 before, 31 after — zero lost, one gained (`the_swift_package_root_restores_the_directory_before_it_removes_it`). Function names 83 before, 83 after, same membership.
+    - directed judgment B — the lock deadline: TWO FINDINGS. The 300 s bound is justified against declared install commands only, while the same lock is held across the agent turn (`PROMPT_TURN_CEILING` 2700 s, `PROMPT_IDLE_TIMEOUT` 300 s), so a waiter times out while a healthy holder still runs. The timeout branch then installs unserialized on the one evidence a holder is live, and the prompt fallback that failing would degrade onto is already held by two tests.
+    - directed judgment C — the Homebrew claim: VERIFIED TRUE. `FormulaInstaller#install` → `lock` → `Formula#lock` → `FormulaLock < LockFile` → `flock(LOCK_EX | LOCK_NB)`, lock files under `/opt/homebrew/var/homebrew/locks`. But one destination falls outside both locks: under a Homebrew node `npm install -g` writes the shared `/opt/homebrew` prefix and takes no brew lock — recorded as a finding.
+    - next: the four items stay open; the card stays in `review`.
+  timestamp: 2026-08-09T16:26:50.076145+00:00
+- actor: claude-code
+  id: 01kzknm1n0ed9sh1w7dng5v8k0
+  text: |-
+    ### finish iteration 7 — findings
+    - implement: changed — 11 findings closed. Drop-order bug fixed, file split, lock bounded, `Debug` and error chain swept
+    - test: green — cargo nextest run --workspace 13969 passed / 0 failed / 0 skipped, fmt clean, clippy -D warnings clean
+    - commit: 087d052b4, parent 615593ecb — 9 files, 2007 insertions, 1577 deletions
+    - review: findings — 4 open, on `review sha 615593ecb..087d052b4`. Engine: 18 pairs attempted, **0 failed, 0 skipped**, 6 reported, 5 released by the pre-existing-test exception
+
+    **Both real bugs were proved RED.** The drop-order test failed with `current_dir()` returning `None`, because `getcwd` gives ENOENT once the directory the process stands in is removed. The deadlock probe — `acquire()` twice in one process — was killed by SIGTERM at 56 s with no output.
+
+    **The split worked, and the reviewer proved it rather than assuming it.** Prompt-cap skips are now ZERO on every file of the family, against one skipped file last pass. The mass was not merely moved: `tool_rules.rs` was 2271 lines / 91180 raw bytes / 262265 rendered, and is now 740 lines / 26671 bytes. It carries exactly one deletion hunk, `@@ -726,1546 +737,4 @@`, starting on the `mod tests {` line; every other change to it is a previous finding's fix. Tests 30 before, 31 after — zero removed, one added (`the_swift_package_root_restores_the_directory_before_it_removes_it`). Function names 83 before, 83 after, same membership.
+
+    **The four open findings are all about install concurrency, not duplication.**
+    - `tool_install.rs:77`, `:354`, `:315` — the 300 s deadline is justified by the slowest DECLARED install, but the lock is also held across `agent.install(...).await`. The pool's `PROMPT_TURN_CEILING` is 2700 s and `PROMPT_IDLE_TIMEOUT` is 300 s, so a waiter burns its whole deadline while the holder sits in a turn the pool still calls healthy — the timeout becomes the ordinary outcome, not the exceptional one. Separately, `acquire` returns `None` both when no holder exists (harmless) and when a holder held throughout (a live race), and the caller cannot tell them apart. Failing on the deadline branch is safer, and is not a new degradation: `plan.rs:154` and `plan.rs:310` already hold the prompt fallback
+    - `tests/preconditions.rs:49` — a binary name is interpolated into a shell string
+
+    **The Homebrew claim was verified in Homebrew's own source, not accepted.** `FormulaInstaller#install` calls `lock` (`formula_installer.rb:550`); `Formula#lock` builds a `FormulaLock` (`formula.rb:1897`); `FormulaLock < LockFile` takes `flock(File::LOCK_EX | File::LOCK_NB)` (`lock_file.rb:44`) under the machine-shared `/opt/homebrew/var/homebrew/locks`. So the doc's exception holds. **But one destination falls outside BOTH locks:** `/opt/homebrew/lib/node_modules/npm/npmrc` sets `prefix = /opt/homebrew`, so under a Homebrew node `npm install -g` writes the shared prefix and takes no brew lock, because it is not a brew operation. Four shipped rules declare `npm install -g`.
+
+    This reviewer ran no background sub-agents and wrote every finding through the kanban API. The card file keeps its front matter, all six findings sections and 37 checked marks.
+
+    Finding counts by iteration: 16, 2, 4, 3→7, 8, 4. No finding has repeated.
+
+    Guardrail: NOT hit.
+
+    ---
+
+    **Scope observation for a human.** The card's own subject — duplication as a deterministic tool rule with zero LLM calls — has been finished and clean since iteration 1. Every iteration since has followed the blast radius of its own fixes into the tool-rule test harness and now into install-lock concurrency. The four open findings name `tool_install.rs` and a test helper; none of them is about duplication. This is the review engine working correctly, and the work is real — it has already found five Go rules that could never satisfy their own doctor check, a deleted-CWD bug, and a silent deadlock — but it now belongs to a different subject.
+  timestamp: 2026-08-09T16:27:44.672670+00:00
+- actor: claude-code
+  id: 01kzknrnxdv8f3z4epyehxvy9t
+  text: |-
+    ### The four open findings moved to `^t0dgame`
+
+    The owner decided this card is done on its own subject, and that the remaining findings belong to a different one.
+
+    Moved to `^t0dgame` — "tool install lock: bound the agent turn, tell a timeout from an idle lock, cover the npm shared prefix":
+    - `tool_install.rs:77` — the 300 s deadline against an agent turn whose pool ceiling is 2700 s
+    - `tool_install.rs:354` — the timeout branch installs unserialized, which is the race the lock prevents
+    - `tool_install.rs:315` — `acquire` returns `None` for both an idle lock and a live race
+    - `tests/preconditions.rs:49` — a binary name interpolated into a shell string
+
+    The new card also carries the npm finding this pass turned up: `npm install -g` under a Homebrew node writes the shared `/opt/homebrew` prefix and takes no brew lock, so it falls outside both the `$TMPDIR` lock and Homebrew's own. Four shipped rules declare it.
+
+    The four boxes above stay unchecked on this card on purpose. They were not fixed here, and checking them would say they were.
+
+    ## What this card delivered
+
+    Duplication is a deterministic tool rule. `cpd-core` 0.1.7 (jscpd's Rust engine, MIT) supplies the Rabin-Karp detector; the token stream comes from this workspace's own tree-sitter roster, so the same parse that finds a clone decides what is test code. `supersedes: [duplication, rust, swift]` names every rule in the four-rule set, and `prompt_rules_for` returns an empty reading list for a matched file — **zero LLM calls for the set**, held by test, with `attempted() == 1` and no fallbacks. One new package, zero new transitive crates.
+
+    Structural test exclusion is decided by the parse and never by a path: it removes 4132 of 5077 raw findings, 81.4%, and a path glob reaches none of them.
+
+    Seven iterations. Finding counts 16, 2, 4, 3→7, 8, 4 — no finding ever repeated, so the guardrail never fired. The card stopped because its subject was finished, not because it was stuck.
+
+    **Defects found along the way that had nothing to do with duplication, and would not have surfaced without it:**
+    - Five Go rules could never satisfy their own doctor check — a bare `go install` writes `$(go env GOPATH)/bin`, off a default PATH. Found only when the roster tolerance was removed
+    - `swift_package_root` deleted a temp directory while the process still stood in it. RED: `current_dir()` returned `None`
+    - `acquire()` twice in one process deadlocked silently. RED: killed by SIGTERM at 56 s
+    - CI installed none of the tools the asserting tests required — found by reading the workflow
+    - `tool_rules.rs` had grown past the review prompt cap, hiding it from a validator. Split; prompt-cap skips are now zero across the whole family
+
+    Commits: `68092a2ff`, `bc83a4dd5`, `4ac042a8b`, `62a73bae5`, `68c12d51c`, `615593ecb`, `087d052b4`. Nothing pushed.
+  timestamp: 2026-08-09T16:30:16.493790+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd180
 title: 'duplication goes objective: sah duplicates tool rule supersedes the prompt rule'
 ---
 ## STANDING ORDER
@@ -783,3 +857,31 @@ Recorded as evidence for whoever flips the marks; the marks are not this pass's 
 - Error chain. `ScriptFailure` is `#[derive(Debug, thiserror::Error)]` with `#[from]` on `Start`, so `source()` reaches the `std::io::Error`. It is the only error type in either file that broke the chain: `ToolRunError` already carried `thiserror` over a `String`, and `ToolFallback` is a report fact with `Display` alone, which its doc states.
 - Install lock. `ensure_tool_installed` takes ONE `InstallLock` and holds it across the declared commands and the agent turn; `run_declared_install_commands` is the half that runs under a lock the caller holds. `InstallLock::take` waits with a deadline, logs the lock path when it finds the lock contended, and installs unserialized when the deadline passes. The doc states the scope the code has — every process that resolves the same temporary directory — and names Homebrew as the destination that scope does not cover.
 - Drop order. `swift_package_root` returns `(CurrentDirGuard, tempfile::TempDir)`, so the guard restores the working directory before the directory is removed.
+
+## Review Findings (2026-08-09 10:55)
+
+Scope: `615593ecb..087d052b4`. Engine fleet: 18 pairs attempted, 0 failed, **0 files skipped**.
+
+The engine reported 6 findings. Five are dropped under the skill's blanket exception on refactoring test code that already existed: each asks to deduplicate a helper or a constant that is present in `tool_rules.rs` at `615593ecb` and that this commit only relocated — `precondition_report`, `COMPLEX_PACKAGE_MANIFEST`, `complexity_work`, `UNUSED_DEPENDENCY_LIB_PATH` and `manifests_work` all occur at that sha. Finding 1 is the engine's and is kept: its subject is a defect, not a restyle. Findings 2–4 come from the directed judgment on the install lock and the reach the doc states.
+
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/preconditions.rs:49` — Command injection: the `binary` parameter is interpolated directly into a shell command string without sanitization. If a binary name extracted from a check command contains shell metacharacters (e.g., `$(command)`, `;`, `&`), they will be executed when the command is passed to `run_shell`. Use a shell-safe escaping function (e.g., `shell_escape` or similar) to escape the `binary` parameter before interpolating it into the command string. Alternatively, refactor `run_shell` to accept arguments as a separate list parameter (like `subprocess.run` with `shell=False`) rather than embedding them in the command string.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_install.rs:77` — The 300 s bound is justified against a smaller critical section than the one the lock holds. The doc at `:77`–`:79` states `The bound is longer than the slowest install a shipped rule declares: cargo install cargo-machete@0.9.2 --locked builds the tool from source`, and `INSTALL_LOCK_WAIT` is `Duration::from_secs(300)` at `:80`. But `ensure_tool_installed` takes one lock at `:498` and holds it across both halves — `run_declared_install_commands`, and `agent.install(&request).await` at `:510` — so the holder's critical section is the declared commands PLUS a full agent turn, and the agent turn runs commands no rule declares. The pool bounds that turn at `PROMPT_TURN_CEILING`, `Duration::from_secs(45 * 60)` (`crates/swissarmyhammer-validators/src/validators/pool.rs:88`) — 2700 s, nine times the whole wait — and abandons a turn that makes no streaming progress only after `PROMPT_IDLE_TIMEOUT`, `Duration::from_secs(300)` (`pool.rs:68`), which alone equals the waiter's entire deadline. A waiter therefore reaches its deadline while the holder is still inside a turn the pool considers healthy, which makes the timeout the ordinary outcome rather than the exceptional one whenever the agent half is reached. Bound the wait against the critical section it must outlast, or state the bound the code has.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_install.rs:354` — `InstallLock::take` collapses two different situations into one `None`, and the caller cannot tell them apart. `acquire` returns `None` when the lock file cannot be opened (`:342`), where no holder exists and installing unserialized costs nothing; `take` returns `None` when the deadline passed with a holder throughout (`:379`), where a holder is demonstrably still installing and installing unserialized is the concurrent write the lock exists to prevent. The doc at `:328`–`:331` gives one rationale for both — `An install with no lock is worse than an install with one, and better than no install at all, so the caller goes ahead either way`. The presence re-check at the top of `run_declared_install_commands` covers only the holder that FINISHED, and its own comment says so — `Another installer may have finished while this one waited for the lock` — not the holder a timeout evidences, which is one still running. Reporting failure is available and is already held by tests rather than being a new degradation: `plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing` (`crates/swissarmyhammer-validators/src/review/tool_rules/tests/plan.rs:154`) and `a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback` (`plan.rs:310`) hold the prompt fallback, so a deadline that reports failure degrades onto a documented, tested path instead of racing the destination. Separate the two branches: install unserialized when no holder exists, and report failure when the deadline passed on a live holder.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_install.rs:315` — The doc states a destination belongs to one user that does not. `:313`–`:316` states `That reach fits the destinations a rule's install commands actually write. ~/.local/bin, ~/.cargo/bin and the npm and go bin directories all belong to one user. Homebrew is the exception`, and `:65`–`:66` repeats the assumption as `npm install -g and go install write their own bin directories`. Under a Homebrew node the npm global prefix IS the Homebrew prefix: `/opt/homebrew/lib/node_modules/npm/npmrc` states `prefix = /opt/homebrew`, `/opt/homebrew/bin/npm` links to `/opt/homebrew/Cellar/node/26.5.0/bin/npm`, and `/opt/homebrew/bin/npm config get prefix` reports `/opt/homebrew` — a prefix every user of the machine shares. Homebrew's own lock does not cover it either: `FormulaLock` is keyed on a Cellar rack name and is taken by `FormulaInstaller` (`Library/Homebrew/formula_installer.rb:550`), and `npm install -g` is not a brew operation, so it takes no brew lock. Four shipped rules declare `npm install -g` — `builtin/validators/code-hygiene/rules/complexity-typescript.md:51`, `dead-code-typescript.md:33`, `magic-numbers-typescript.md:51` and `missing-docs-typescript.md:58` — so their destination falls outside the per-`$TMPDIR` lock across users and outside Homebrew's lock as well. Name npm beside Homebrew as a destination the lock's reach does not cover, or put the lock on a path every installing process shares.
+
+### Directed judgment A — the split: clean, and it solved what it was for
+
+- **Zero prompt-cap skips.** The engine reports `skipped: 0` and `skipped_files: []` over 18 attempted pairs, 0 failed. The previous pass over the same code reported 1 skipped file. Per file of the family, the skip count is: `tool_rules.rs` 0, `tool_rules/tests.rs` 0, `tool_rules/tests/plan.rs` 0, `tool_rules/tests/execute.rs` 0, `tool_rules/tests/preconditions.rs` 0, `tool_rules/tests/shipped.rs` 0.
+- **The mass is not merely moved.** `tool_rules.rs` was 2271 lines / 91180 raw bytes at `615593ecb`, which rendered to the 262265 bytes that broke the 262144-byte cap. It is now 740 lines / 26671 raw bytes. The rest of the family: `tests.rs` 270 lines / 10890 bytes, `tests/shipped.rs` 605 / 24868, `tests/plan.rs` 345 / 12209, `tests/preconditions.rs` 237 / 9069, `tests/execute.rs` 154 / 5372. The largest file of the family is now under a third of the raw size of the file that was skipped, and no file is within a factor of six of the cap.
+- **Tests only, and no production behaviour changed by the split.** `tool_rules.rs` has exactly one deletion hunk, `@@ -726,1546 +737,4 @@`, and it begins on the `mod tests {` line — the whole 1546-line deletion is the test module and nothing above it. Every other change to that file is a fix for a finding of the previous pass: `#[derive(Debug)]` on `MatchedToolRule` and on `ProjectToolRule`, and `ScriptFailure` becoming `#[derive(Debug, thiserror::Error)]` with `#[from]` on `Start` plus the matching arm in `run_tool_script`. No other production line changed.
+- **The 1577 deletions all reappear.** 1549 of them are the test module leaving `tool_rules.rs`, 5 are this card's own kanban file and 23 are `tool_install.rs`; the five new files add 1611 lines. Tests before: 30 `#[test]`/`#[tokio::test]` at `615593ecb`. Tests after: 31 across the family (`tests/shipped.rs` 11, `tests/plan.rs` 8, `tests/execute.rs` 8, `tests/preconditions.rs` 4, `tool_rules.rs` 0, `tests.rs` 0). Diffing the two sorted name lists shows zero removed and exactly one added — `the_swift_package_root_restores_the_directory_before_it_removes_it`, the regression test for the drop-order fix. Function names across the family: 83 before, 83 after, same membership; the one apparent miss, `require_tool_installed`, is a `pub(super) fn` at `tool_rules/tests/preconditions.rs:129` with seven call sites.
+
+### Directed judgment C — the Homebrew claim: verified true
+
+The doc's exception is correct, checked in Homebrew's own source rather than accepted. `FormulaInstaller#install` calls `lock` at `Library/Homebrew/formula_installer.rb:550` and `unlock` at `:1077`. `FormulaInstaller#lock` (`:1913`–`:1924`) locks the formula and every dependency through `self.class.locked.each(&:lock)`. `Formula#lock` (`Library/Homebrew/formula.rb:1897`–`:1898`) builds a `FormulaLock` and locks it. `FormulaLock < LockFile` is keyed on the Cellar rack name (`Library/Homebrew/lock_file/formula_lock.rb:6`–`:10`). `LockFile#lock` is `flock(File::LOCK_EX | File::LOCK_NB)` (`Library/Homebrew/lock_file.rb:44`), released with `LOCK_UN` at `:79`, and the lock files live in `/opt/homebrew/var/homebrew/locks`, a path every user of the machine shares. So Homebrew does serialize two concurrent installs of one formula machine-wide, and naming it as the exception the per-`$TMPDIR` lock need not cover is right.
+
+The other half of the check — that no destination a shipped rule writes falls outside both locks — does not hold. npm is the destination that falls outside both, recorded as a finding above. The remaining declared destinations are per-user and are covered: `uv tool install` and `pipx install` write `~/.local/bin` (`uv tool dir --bin` reports `/Users/wballard/.local/bin`), `cargo install cargo-machete@0.9.2 --locked` writes `~/.cargo/bin`, and all five `go install` commands set `GOBIN="$HOME/.local/bin"` explicitly rather than taking the `GOPATH` default. `brew install` appears in no rule's `install.commands` at all — it appears only as a `doctor.fix_hint` on the Swift and Dart rules, which is prose the agent half may act on.
+
+### The deadline test coverage this pass confirmed
+
+`InstallLock::take` takes its deadline as a parameter, and two tests drive it: `a_contended_install_lock_gives_up_instead_of_waiting_for_ever` (`crates/swissarmyhammer-validators/src/review/tool_install.rs:807`) holds the lock and asserts the second take gives up, and `the_bounded_wait_takes_the_lock_the_holder_releases` (`:831`) asserts a waiter takes the lock a holder releases inside the wait. The bounded-wait mechanism itself is held by tests; the two findings above are about the size of the bound and about what the code does when the bound passes.
