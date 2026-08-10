@@ -943,9 +943,25 @@ fn push_attribute_texts<'a>(node: Node<'_>, source: &'a str, out: &mut Vec<&'a s
 /// reduce to the name the table lists. A path-qualified attribute also
 /// matches on its last segment, so `#[tokio::test]` names `test` and
 /// `@pytest.fixture` names `fixture`.
+///
+/// An attribute that carries arguments names what its bare form names, so
+/// `#[tokio::test(flavor = "multi_thread")]` names `test` and
+/// `@pytest.fixture(scope="module")` names `fixture`.
 fn attribute_names(attribute: &str, marker: &str) -> bool {
     let stripped = attribute.trim_matches(|c| ATTRIBUTE_PUNCTUATION.contains(&c));
-    stripped == marker || last_path_segment(stripped) == marker
+    names_marker(stripped, marker) || names_marker(last_path_segment(stripped), marker)
+}
+
+/// Whether `text` names `marker` — it IS the marker, or it is the marker
+/// followed by the argument list the attribute carries.
+///
+/// The argument list must open right after the marker, so `#[test_case(1)]`
+/// does not name `test`.
+fn names_marker(text: &str, marker: &str) -> bool {
+    text == marker
+        || text
+            .strip_prefix(marker)
+            .is_some_and(|rest| rest.starts_with('('))
 }
 
 /// The name of the function `node` calls, when `node` is a call at all.
@@ -1236,6 +1252,31 @@ mod tests {
         let source = concat!(
             "pub fn live(limit: i32) -> i32 {\n    limit + 1\n}\n",
             "#[test]\nfn reads_a_row() {\n    assert_eq!(live(1), 2);\n}\n",
+        );
+
+        let read = read("src/lib.rs", source);
+
+        assert_eq!(declared(&read), [("fn", "live")]);
+    }
+
+    #[test]
+    fn a_rust_test_attribute_that_carries_arguments_contributes_no_definition() {
+        let source = concat!(
+            "pub fn live(limit: i32) -> i32 {\n    limit + 1\n}\n",
+            "#[tokio::test(flavor = \"multi_thread\")]\n",
+            "async fn reads_a_row() {\n    assert_eq!(live(1), 2);\n}\n",
+        );
+
+        let read = read("src/lib.rs", source);
+
+        assert_eq!(declared(&read), [("fn", "live")]);
+    }
+
+    #[test]
+    fn a_rust_cfg_test_function_contributes_no_definition() {
+        let source = concat!(
+            "pub fn live(limit: i32) -> i32 {\n    limit + 1\n}\n",
+            "#[cfg(test)]\nfn helper(limit: i32) -> i32 {\n    limit\n}\n",
         );
 
         let read = read("src/lib.rs", source);

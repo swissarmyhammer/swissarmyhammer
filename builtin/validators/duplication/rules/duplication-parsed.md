@@ -211,11 +211,16 @@ as real copies: `extract_verb_noun` is 347 tokens spelled identically in
 at 92 percent; `build_clap_arg` in `swissarmyhammer-operations/src/cli_gen.rs`
 is 98 percent of `new` in `apps/swissarmyhammer-cli/src/dynamic_cli.rs`.
 
-Eight of the 416 are wrong, and they are worth naming. A test attribute that
-carries arguments — `#[tokio::test(flavor = "multi_thread")]` — is not read as
-a test marker, so the eight `#[tokio::test(...)]` functions in
-`swissarmyhammer-tools/src/mcp/tools/review/tests.rs` are reported. Reading the
-argument form drops the count to 408. That gap is tracked on its own card.
+A test attribute that carries arguments — `#[tokio::test(flavor =
+"multi_thread")]` — was once read as naming nothing, so the
+`#[tokio::test(...)]` functions of `swissarmyhammer-tools` were reported as
+copies of each other. The rule reads the argument form now: an attribute names
+a marker when its text IS the marker, or when the marker opens the argument
+list. Measured over the 1189 tracked `.rs` files the workspace holds today, the
+rule reports **406**, against the **414** the equality-only read reports on the
+same tree. The eight findings between the two are the whole difference — seven
+in `src/mcp/tools/review/tests.rs` and one in
+`tests/integration/review_e2e.rs` — and no finding is added.
 
 Those numbers are a whole-tree figure. The rule runs on the changed set, so a
 review sees the copies the change carries and nothing else.
@@ -264,12 +269,12 @@ definition to read, and a whole-file rule would have to read the path.
 
 ### What the exclusion is worth, measured
 
-Over all 1183 tracked `.rs` files of this workspace: **416** findings. With the
-Rust test markers taken out of the table and nothing else changed: **3490**.
-The structural exclusion removes 3074 findings, 88.1% of the raw total.
+Over all 1189 tracked `.rs` files of this workspace: **406** findings. With the
+Rust test markers taken out of the table and nothing else changed: **3216**.
+The structural exclusion removes 2810 findings, 87.4% of the raw total.
 
 That gap is the whole argument for parsing rather than globbing. A path glob
-reaches none of those 3074, because they sit inside files that also hold
+reaches none of those 2810, because they sit inside files that also hold
 production code.
 
 A duplicated test *helper* is still a finding, and on purpose: a helper is not
