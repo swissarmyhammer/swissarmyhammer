@@ -278,23 +278,50 @@ fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
     );
 }
 
-/// The path of the shipped fixture template a validator set carries for
-/// `name`, where `name` is the file name the template materializes to.
+/// A kind of file a builtin validator set ships beside its manifest.
+///
+/// Each kind names the one directory that holds the file and the one suffix
+/// the set adds to the asked-for name, so one lookup serves every kind.
+struct ShippedAssetKind {
+    /// The directory under the set's base path that holds the file.
+    dir: &'static str,
+    /// What the set adds to the asked-for name on disk.
+    suffix: &'static str,
+    /// What to call the file in the failure message.
+    label: &'static str,
+}
+
+/// The fixture template a set carries for a materialized file name.
 ///
 /// A set stores `<name>.tmpl`, so a test that wants the shipped bytes asks
 /// for `<name>` and gets the template beside it.
-fn shipped_fixture_template(loader: &ValidatorLoader, name: &str) -> PathBuf {
+const FIXTURE_TEMPLATE_ASSET: ShippedAssetKind = ShippedAssetKind {
+    dir: FIXTURES_DIR_NAME,
+    suffix: FIXTURE_TEMPLATE_SUFFIX,
+    label: "fixture template",
+};
+
+/// The rule source a set carries for a rule name, beside its `fixtures/`.
+const RULE_SOURCE_ASSET: ShippedAssetKind = ShippedAssetKind {
+    dir: "rules",
+    suffix: ".md",
+    label: "rule source",
+};
+
+/// The path of the `kind` file named `name`, inside whichever builtin
+/// validator set carries it.
+fn shipped_asset(loader: &ValidatorLoader, kind: &ShippedAssetKind, name: &str) -> PathBuf {
     loader
         .list_rulesets()
         .iter()
         .map(|ruleset| {
             ruleset
                 .base_path
-                .join(FIXTURES_DIR_NAME)
-                .join(format!("{name}{FIXTURE_TEMPLATE_SUFFIX}"))
+                .join(kind.dir)
+                .join(format!("{name}{}", kind.suffix))
         })
         .find(|path| path.exists())
-        .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} fixture template"))
+        .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} {}", kind.label))
 }
 
 /// The materialized name of the `complexity-typescript` fail fixture.
@@ -345,7 +372,11 @@ fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard
     let loader = builtin_loader();
     let project_types = ["nodejs"];
     require_tool_installed(&loader, &project_types, TYPESCRIPT_COMPLEXITY_RULE);
-    let fixture = shipped_fixture_template(&loader, TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE);
+    let fixture = shipped_asset(
+        &loader,
+        &FIXTURE_TEMPLATE_ASSET,
+        TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE,
+    );
     let content = std::fs::read_to_string(&fixture).expect("read the shipped fail fixture");
     let repo = tempfile::tempdir().unwrap();
     let file = repo.path().join(TYPESCRIPT_COMPLEXITY_FIXTURE_PATH);
@@ -411,28 +442,6 @@ fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard
         TYPESCRIPT_COMPLEXITY_FAIL_GUARDS.len(),
         "the fail fixture holds one finding for each guard and no other; got {reported:?}"
     );
-}
-
-/// Where a validator set keeps its rule sources, beside its `fixtures/`.
-const RULES_DIR_NAME: &str = "rules";
-
-/// The suffix every rule source carries.
-const RULE_SOURCE_SUFFIX: &str = ".md";
-
-/// The path of the shipped rule source named `name`, inside whichever
-/// builtin set carries it.
-fn shipped_rule_source(loader: &ValidatorLoader, name: &str) -> PathBuf {
-    loader
-        .list_rulesets()
-        .iter()
-        .map(|ruleset| {
-            ruleset
-                .base_path
-                .join(RULES_DIR_NAME)
-                .join(format!("{name}{RULE_SOURCE_SUFFIX}"))
-        })
-        .find(|path| path.exists())
-        .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} rule source"))
 }
 
 /// The line of a `tool.run` script that resolves the node module tree.
@@ -554,8 +563,12 @@ fn the_shipped_typescript_complexity_config_reads_its_framework_names() {
     let loader = builtin_loader();
     let project_types = ["nodejs"];
     require_tool_installed(&loader, &project_types, TYPESCRIPT_COMPLEXITY_RULE);
-    let source = std::fs::read_to_string(shipped_rule_source(&loader, TYPESCRIPT_COMPLEXITY_RULE))
-        .expect("read the shipped TypeScript complexity rule");
+    let source = std::fs::read_to_string(shipped_asset(
+        &loader,
+        &RULE_SOURCE_ASSET,
+        TYPESCRIPT_COMPLEXITY_RULE,
+    ))
+    .expect("read the shipped TypeScript complexity rule");
     let (resolve, config) = shipped_eslint_config(&source);
     let probe = tempfile::tempdir().unwrap();
     let script = probe.path().join("read-framework-names.cjs");
@@ -660,7 +673,7 @@ const SWIFT_MANIFEST: &str = "Package.swift";
 /// own scratch directory, `Package.swift.tmpl` included, and runs the script
 /// there.
 fn swift_package_root(loader: &ValidatorLoader) -> (CurrentDirGuard, tempfile::TempDir) {
-    let manifest = shipped_fixture_template(loader, SWIFT_MANIFEST);
+    let manifest = shipped_asset(loader, &FIXTURE_TEMPLATE_ASSET, SWIFT_MANIFEST);
     let root = tempfile::tempdir().expect("temp dir");
     std::fs::copy(&manifest, root.path().join(SWIFT_MANIFEST))
         .expect("copy the shipped Package.swift template");
