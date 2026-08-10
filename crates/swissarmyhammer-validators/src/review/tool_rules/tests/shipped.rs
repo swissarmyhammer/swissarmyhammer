@@ -10,6 +10,25 @@ use crate::review::scope::{FileWork, ProbeNames, RuleNames};
 use crate::review::test_support::builtin_loader;
 use crate::validators::types::FIXTURES_DIR_NAME;
 
+/// The run `rule` planned, or a panic naming what the plan fell back to.
+///
+/// Every shipped-rule acceptance test REQUIRES its run. A rule that planned
+/// none leaves a [`ToolFallback`] carrying the doctor's reason — the missing
+/// tool, or the fixture pair that failed — so the panic names that reason
+/// rather than reporting a bare absence. Returning early instead would leave
+/// the test asserting nothing, and a test that cannot fail is not a gate.
+fn required_run<'a>(plan: &'a ToolPlan, rule: &str) -> &'a ToolRun {
+    plan.runs()
+        .iter()
+        .find(|run| run.rule() == rule)
+        .unwrap_or_else(|| {
+            panic!(
+                "the shipped tool rule `{rule}` must plan a run; fallbacks: {:?}",
+                plan.fallbacks()
+            )
+        })
+}
+
 /// Acceptance: the shipped Rust tool rule reports an undocumented public
 /// item on a real cargo workspace, through the real clippy pipeline.
 ///
@@ -33,16 +52,7 @@ fn the_shipped_rust_tool_rule_reports_an_undocumented_public_item() {
 
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == RUST_MISSING_DOCS_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped Rust tool rule must plan a run; fallbacks: {:?}",
-                plan.fallbacks()
-            )
-        });
+    let run = required_run(&plan, RUST_MISSING_DOCS_RULE);
     assert_eq!(run.files(), [UNDOCUMENTED_LIB_PATH.to_string()]);
     assert!(
         plan.suppression()
@@ -150,16 +160,7 @@ fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
 
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == RUST_COMPLEXITY_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped Rust complexity tool rule must plan a run; fallbacks: {:?}",
-                plan.fallbacks()
-            )
-        });
+    let run = required_run(&plan, RUST_COMPLEXITY_RULE);
     assert_eq!(run.files(), [COMPLEX_LIB_PATH.to_string()]);
     let suppressed = plan
         .suppression()
@@ -250,16 +251,7 @@ fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
 
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == PYTHON_DEAD_CODE_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped Python dead-code tool rule must plan a run; fallbacks: {:?}",
-                plan.fallbacks()
-            )
-        });
+    let run = required_run(&plan, PYTHON_DEAD_CODE_RULE);
     assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
     assert!(
         plan.suppression()
@@ -325,6 +317,110 @@ fn shipped_asset(loader: &ValidatorLoader, kind: &ShippedAssetKind, name: &str) 
         .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} {}", kind.label))
 }
 
+/// A shipped fail fixture, and what the real pipeline of one tool rule must
+/// report over it.
+///
+/// The doctor fixture contract asks a fail fixture for ONE finding, so a rule
+/// that reported one position and stayed silent on every other would still
+/// pass it. A probe names each position, so each one is load-bearing on its
+/// own, and the count then states what the tool does NOT read as a measured
+/// fact rather than leaving it to be discovered.
+struct ShippedFailFixture {
+    /// The project types the rule is planned for.
+    project_types: &'static [&'static str],
+
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// The materialized name of the fail fixture the set ships.
+    fixture: &'static str,
+
+    /// Where the fixture stands inside the probe repository, as the work-list
+    /// holds it.
+    path: &'static str,
+
+    /// One entry for each finding the run must report in the fixture, and no
+    /// other.
+    expected: &'static [&'static str],
+
+    /// What one entry of `expected` is, for the failure messages.
+    noun: &'static str,
+}
+
+/// Drives the shipped fail fixture of `probe` through the real tool pipeline,
+/// and holds the run to exactly the entries the probe names.
+///
+/// The fixture is read where the set ships it and copied into a temporary
+/// repository, so the run measures the SHIPPED bytes. A test that wrote its own
+/// copy would answer for the copy.
+///
+/// Three callbacks carry what one language does not share with another.
+/// `build_work` states the work-list, because the rule list a language names is
+/// its own. `extract` reads the text one finding is held to, and takes the
+/// fixture's source lines as well, because one language holds a finding to its
+/// claim and another holds it to the source line it stands on. `matches` states
+/// how an entry meets that text.
+fn verify_shipped_fail_fixture_reports_each<W, E, M>(
+    probe: &ShippedFailFixture,
+    build_work: W,
+    extract: E,
+    matches: M,
+) where
+    W: FnOnce(&str) -> WorkList,
+    E: Fn(&VerifiedFinding, &[&str]) -> String,
+    M: Fn(&str, &str) -> bool,
+{
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.project_types, probe.rule);
+    let shipped = shipped_asset(&loader, &FIXTURE_TEMPLATE_ASSET, probe.fixture);
+    let content = std::fs::read_to_string(&shipped).expect("read the shipped fail fixture");
+    let repo = tempfile::tempdir().unwrap();
+    let file = repo.path().join(probe.path);
+    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
+    std::fs::write(&file, &content).unwrap();
+    // A tool prints the resolved path of each file it reads, and on macOS a
+    // temporary directory stands behind a symbolic link. The engine strips the
+    // repository root off each reported path, so the root it is given has to be
+    // the resolved form or no path matches and every finding keeps an absolute
+    // path.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = build_work(&content);
+
+    let plan = plan_tool_rules(&work, &loader, probe.project_types, None);
+
+    let run = required_run(&plan, probe.rule);
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+    assert!(
+        outcome.errors().is_empty(),
+        "the shipped pipeline must not break; errors: {:?}",
+        outcome.errors()
+    );
+
+    let source: Vec<&str> = content.lines().collect();
+    let reported: Vec<String> = outcome
+        .findings()
+        .iter()
+        .filter(|verified| verified.finding.file == probe.path)
+        .map(|verified| extract(verified, &source))
+        .collect();
+    for entry in probe.expected {
+        assert!(
+            reported.iter().any(|text| matches(text, entry)),
+            "the fail fixture must report the {} `{entry}`; the run reported {reported:?}",
+            probe.noun
+        );
+    }
+    assert_eq!(
+        reported.len(),
+        probe.expected.len(),
+        "the fail fixture holds one finding for each {} and no other; got {reported:?}",
+        probe.noun
+    );
+}
+
 /// The materialized name of the `complexity-typescript` fail fixture.
 const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
 
@@ -349,12 +445,23 @@ const TYPESCRIPT_COMPLEXITY_FAIL_GUARDS: &[&str] = &[
     "step(\"build the grid\", (",
 ];
 
+/// The `complexity-typescript` fail fixture, and every guard the real eslint
+/// pipeline must measure inside it.
+const TYPESCRIPT_COMPLEXITY_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["nodejs"],
+    rule: TYPESCRIPT_COMPLEXITY_RULE,
+    fixture: TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE,
+    path: TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+    expected: TYPESCRIPT_COMPLEXITY_FAIL_GUARDS,
+    noun: "guard",
+};
+
 /// Acceptance: the shipped TypeScript complexity tool rule measures every
 /// guard its fail fixture holds, through the real eslint pipeline.
 ///
-/// The doctor fixture contract asks the fail fixture for one finding, so a
-/// carve-out that exempted seven of the eight guards would still pass it.
-/// This test names all eight, so each guard is load-bearing on its own.
+/// A guard is held to the SOURCE LINE its finding stands on, because both
+/// gates report at the head of the function they measure, and that head is a
+/// member's name for a method and for an accessor.
 ///
 /// Six of the eight are the shapes a carve-out too broad in one direction
 /// loses in silence, and all six stand inside a `describe` block. A class
@@ -370,78 +477,24 @@ const TYPESCRIPT_COMPLEXITY_FAIL_GUARDS: &[&str] = &[
 /// with no root exempts a build step, a wizard step and a saga step.
 #[test]
 fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard() {
-    let loader = builtin_loader();
-    let project_types = ["nodejs"];
-    require_tool_installed(&loader, &project_types, TYPESCRIPT_COMPLEXITY_RULE);
-    let fixture = shipped_asset(
-        &loader,
-        &FIXTURE_TEMPLATE_ASSET,
-        TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE,
-    );
-    let content = std::fs::read_to_string(&fixture).expect("read the shipped fail fixture");
-    let repo = tempfile::tempdir().unwrap();
-    let file = repo.path().join(TYPESCRIPT_COMPLEXITY_FIXTURE_PATH);
-    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
-    std::fs::write(&file, &content).unwrap();
-    // eslint prints the resolved path of each file it reads, and on macOS a
-    // temporary directory stands behind a symbolic link. The engine strips
-    // the repository root off each reported path, so the root it is given has
-    // to be the resolved form or no path matches and every finding keeps an
-    // absolute path.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
-    let work = complexity_work(
-        TYPESCRIPT_COMPLEXITY_RULE,
-        TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
-        &content,
-    );
-
-    let plan = plan_tool_rules(&work, &loader, &project_types, None);
-
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == TYPESCRIPT_COMPLEXITY_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped TypeScript complexity tool rule must plan a run; fallbacks: {:?}",
-                plan.fallbacks()
+    verify_shipped_fail_fixture_reports_each(
+        &TYPESCRIPT_COMPLEXITY_FAIL_PROBE,
+        |content| {
+            complexity_work(
+                TYPESCRIPT_COMPLEXITY_RULE,
+                TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+                content,
             )
-        });
-    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
-    assert!(
-        outcome.errors().is_empty(),
-        "the shipped pipeline must not break; errors: {:?}",
-        outcome.errors()
-    );
-
-    let source: Vec<&str> = content.lines().collect();
-    let reported: Vec<&str> = outcome
-        .findings()
-        .iter()
-        .filter(|verified| verified.finding.file == TYPESCRIPT_COMPLEXITY_FIXTURE_PATH)
-        .map(|verified| {
+        },
+        |verified, source| {
             let line = verified.finding.line;
             source
                 .get(line as usize - 1)
-                .copied()
                 .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
                 .trim()
-        })
-        .collect();
-    for guard in TYPESCRIPT_COMPLEXITY_FAIL_GUARDS {
-        assert!(
-            reported.iter().any(|line| line.starts_with(guard)),
-            "the carve-out must leave the fail fixture guard `{guard}` measured inside its \
-             `describe` block; the run reported {reported:?}"
-        );
-    }
-    assert_eq!(
-        reported.len(),
-        TYPESCRIPT_COMPLEXITY_FAIL_GUARDS.len(),
-        "the fail fixture holds one finding for each guard and no other; got {reported:?}"
+                .to_string()
+        },
+        |reported, guard| reported.starts_with(guard),
     );
 }
 
@@ -827,87 +880,43 @@ const PYTHON_MAGIC_NUMBERS_FIXTURE_PATH: &str = "src/magic_numbers_python_fail.p
 /// and this entry holds `ruff` to the statement.
 const PYTHON_MAGIC_NUMBERS_FAIL_VALUES: &[&str] = &["404", "4096", "10", "90", "100"];
 
+/// The `magic-numbers-python` fail fixture, and every unnamed literal the real
+/// ruff pipeline must report inside it.
+const PYTHON_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["python"],
+    rule: PYTHON_MAGIC_NUMBERS_RULE,
+    fixture: PYTHON_MAGIC_NUMBERS_FAIL_FIXTURE,
+    path: PYTHON_MAGIC_NUMBERS_FIXTURE_PATH,
+    expected: PYTHON_MAGIC_NUMBERS_FAIL_VALUES,
+    noun: "unnamed literal",
+};
+
 /// Acceptance: the shipped Python magic-numbers tool rule reports every
 /// unnamed literal its fail fixture holds, through the real ruff pipeline.
 ///
-/// The doctor fixture contract asks the fail fixture for one finding, so a
-/// tool that reported the equality comparison alone would still pass it. This
-/// test names all five literals, so each one is load-bearing on its own.
+/// A literal is held to the CLAIM its finding carries, because `PLR2004`
+/// spells the value inside the message it reports.
 ///
-/// The count assertion is the other half. `PLR2004` reads a comparison and
-/// nothing else, so a repeated literal in a call argument, an operation, or a
-/// return is never reported. Holding the run to exactly these five states that
-/// silence as a measured fact rather than leaving it to be discovered.
+/// The count is the other half. `PLR2004` reads a comparison and nothing else,
+/// so a repeated literal in a call argument, an operation, or a return is never
+/// reported. Holding the run to exactly these five states that silence.
 #[test]
 fn the_shipped_python_magic_numbers_tool_rule_reports_every_fail_fixture_value() {
-    let loader = builtin_loader();
-    let project_types = ["python"];
-    require_tool_installed(&loader, &project_types, PYTHON_MAGIC_NUMBERS_RULE);
-    let fixture = shipped_asset(
-        &loader,
-        &FIXTURE_TEMPLATE_ASSET,
-        PYTHON_MAGIC_NUMBERS_FAIL_FIXTURE,
-    );
-    let content = std::fs::read_to_string(&fixture).expect("read the shipped fail fixture");
-    let repo = tempfile::tempdir().unwrap();
-    let file = repo.path().join(PYTHON_MAGIC_NUMBERS_FIXTURE_PATH);
-    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
-    std::fs::write(&file, &content).unwrap();
-    // On macOS a temporary directory stands behind a symbolic link. The engine
-    // strips the repository root off each reported path, so the root it is
-    // given has to be the resolved form or no path matches.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
-    let work = tool_rule_work(
-        "a comparison against an unnamed literal",
-        CODE_HYGIENE_SET,
-        [
-            MAGIC_NUMBERS_PROMPT_RULE.to_string(),
-            PYTHON_MAGIC_NUMBERS_RULE.to_string(),
-        ],
-        [(PYTHON_MAGIC_NUMBERS_FIXTURE_PATH, content.as_str())],
-    );
-
-    let plan = plan_tool_rules(&work, &loader, &project_types, None);
-
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == PYTHON_MAGIC_NUMBERS_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped Python magic-numbers tool rule must plan a run; fallbacks: {:?}",
-                plan.fallbacks()
+    verify_shipped_fail_fixture_reports_each(
+        &PYTHON_MAGIC_NUMBERS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "a comparison against an unnamed literal",
+                CODE_HYGIENE_SET,
+                [
+                    MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+                    PYTHON_MAGIC_NUMBERS_RULE.to_string(),
+                ],
+                [(PYTHON_MAGIC_NUMBERS_FIXTURE_PATH, content)],
             )
-        });
-    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
-    assert!(
-        outcome.errors().is_empty(),
-        "the shipped pipeline must not break; errors: {:?}",
-        outcome.errors()
-    );
-
-    let reported: Vec<&str> = outcome
-        .findings()
-        .iter()
-        .filter(|verified| verified.finding.file == PYTHON_MAGIC_NUMBERS_FIXTURE_PATH)
-        .map(|verified| verified.finding.claim.as_str())
-        .collect();
-    for value in PYTHON_MAGIC_NUMBERS_FAIL_VALUES {
-        let quoted = format!("`{value}`");
-        assert!(
-            reported.iter().any(|claim| claim.contains(&quoted)),
-            "the fail fixture must report the unnamed literal {quoted}; the run reported \
-             {reported:?}"
-        );
-    }
-    assert_eq!(
-        reported.len(),
-        PYTHON_MAGIC_NUMBERS_FAIL_VALUES.len(),
-        "the fail fixture holds one finding for each unnamed literal and no other; got \
-         {reported:?}"
+        },
+        |verified, _source| verified.finding.claim.clone(),
+        |reported, value| reported.contains(&format!("`{value}`")),
     );
 }
 
@@ -1026,17 +1035,7 @@ fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
 
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
-    let run = plan
-        .runs()
-        .iter()
-        .find(|run| run.rule() == RUST_UNUSED_DEPENDENCIES_RULE)
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped Rust unused-dependency tool rule must plan a run; \
-                 fallbacks: {:?}",
-                plan.fallbacks()
-            )
-        });
+    let run = required_run(&plan, RUST_UNUSED_DEPENDENCIES_RULE);
     assert_eq!(
         run.files(),
         [UNUSED_DEPENDENCY_MANIFEST_PATH.to_string()],
