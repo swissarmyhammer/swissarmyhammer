@@ -1,14 +1,17 @@
 // The failing fixture of the `complexity-typescript` tool rule.
 //
-// It holds one function for each gate the rule decides, and both stand inside
-// a `describe(...)` block.
+// Every guard below stands inside a `describe(...)` block, and the tool must
+// report all five. A tool upgrade that stops reporting one of them makes the
+// doctor mark the rule unusable.
 //
 // - `foldGrid` nests six control-flow blocks and scores 21 against the
 //   cognitive complexity gate of 15.
 // - `mixState` runs 264 counted lines against the line gate of 250.
-//
-// The tool must report both. A tool upgrade that stops reporting one of the
-// two makes the doctor mark the rule unusable.
+// - `GridFolder.foldRows` holds the same shape as `foldGrid` as a class
+//   METHOD.
+// - `readings.band` holds the same shape as an ACCESSOR.
+// - `context.run(...)` holds the same shape in the callback of a call whose
+//   root identifier is a test-framework name but which is not a test call.
 //
 // The `describe` block holds the second half of the carve-out contract. The
 // two prompt rules this rule supersedes exempt a function marked as a test,
@@ -16,6 +19,15 @@
 // defined inside a test block is still measured. A carve-out broad enough to
 // exempt everything inside a test block makes this fixture report nothing,
 // and the doctor marks the rule unusable.
+//
+// The three shapes after the two functions hold the narrow direction of the
+// same contract. Both gates report at the HEAD of the function they measure,
+// and for a method and for an accessor that head starts at the NAME, which
+// stands outside the function node the tool measures. A carve-out that reads
+// the report position against the function ranges alone therefore climbs to
+// the `describe` callback and exempts the method in silence. `context.run` is
+// the other narrow direction: a mark that reads the root identifier alone,
+// and not the properties after it, exempts a callback that is not a test.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -324,4 +336,112 @@ describe("the complexity and length gates", () => {
     state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
     return state;
   }
+
+  /** Holds the grid folder as a class METHOD. */
+  class GridFolder {
+    /**
+     * Folds a grid of readings into one band, one nested block for each test.
+     *
+     * The same shape as `foldGrid`, so it scores 21 against the gate of 15.
+     * The gates report this method at its NAME, which stands outside the
+     * function node they measure, so a carve-out that reads the function
+     * ranges alone climbs to the `describe` callback and exempts it.
+     *
+     * @param grid - Rows of readings to fold.
+     * @param limit - The reading the middle band stops at.
+     * @returns The folded band.
+     */
+    foldRows(grid: number[][], limit: number): number {
+      let band = 0;
+      for (const row of grid) {
+        for (const cell of row) {
+          if (cell > 0) {
+            if (cell < limit) {
+              while (band < cell) {
+                if (band % 2 === 0) {
+                  band += 2;
+                }
+                band += 1;
+              }
+            }
+          }
+        }
+      }
+      return band;
+    }
+  }
+
+  /** Holds the grid folder as an ACCESSOR. */
+  const readings = {
+    /**
+     * The band the stored grid folds to.
+     *
+     * The same shape as `foldGrid`, so it scores 21 against the gate of 15.
+     * An accessor takes the same head as a method, so it stands here for the
+     * same reason.
+     */
+    get band(): number {
+      const grid: number[][] = [];
+      const limit = 3;
+      let band = 0;
+      for (const row of grid) {
+        for (const cell of row) {
+          if (cell > 0) {
+            if (cell < limit) {
+              while (band < cell) {
+                if (band % 2 === 0) {
+                  band += 2;
+                }
+                band += 1;
+              }
+            }
+          }
+        }
+      }
+      return band;
+    },
+  };
+
+  /**
+   * A request-scoped store, named as React, `AsyncLocalStorage` and many web
+   * frameworks name one.
+   *
+   * `context` is also a test-framework name, so this binding stands for the
+   * second narrow direction: `context.run` is NOT a test-framework call, and
+   * a mark that reads the root identifier alone exempts its callback.
+   */
+  const context = {
+    /**
+     * Runs `fold` inside the store.
+     *
+     * @param fold - The work to run.
+     * @returns What `fold` returns.
+     */
+    run(fold: () => number): number {
+      return fold();
+    },
+  };
+
+  context.run(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  return [foldGrid, mixState, GridFolder, readings];
 });

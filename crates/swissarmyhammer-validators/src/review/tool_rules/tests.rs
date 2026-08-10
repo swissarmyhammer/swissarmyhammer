@@ -129,6 +129,11 @@ const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
 /// acceptance test drives end to end.
 const RUST_COMPLEXITY_RULE: &str = "complexity-rust";
 
+/// The shipped complexity tool rule for TypeScript and JavaScript. It carries
+/// the test carve-out both prompt rules state, so a second acceptance test
+/// drives its fail fixture end to end and names every guard the fixture holds.
+const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
+
 /// Every shipped complexity tool rule, with the project type it serves and
 /// the prompt rules it supersedes.
 ///
@@ -155,7 +160,7 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "nodejs",
-        "complexity-typescript",
+        TYPESCRIPT_COMPLEXITY_RULE,
         SUPERSEDES_BOTH_COMPLEXITY_GATES,
     ),
     (

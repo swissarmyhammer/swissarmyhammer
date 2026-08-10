@@ -29,8 +29,16 @@ tool:
       "FunctionExpression",
       "ArrowFunctionExpression",
     ]);
+    const NAMED_MEMBER_TYPES = new Set([
+      "MethodDefinition",
+      "Property",
+      "PropertyDefinition",
+      "AccessorProperty",
+    ]);
     const TEST_CALL =
       /^(describe|it|test|suite|context|beforeAll|beforeEach|afterAll|afterEach)$/;
+    const TEST_MODIFIER =
+      /^(only|skip|todo|failing|fails|concurrent|sequential|shuffle|each|for|runIf|skipIf)$/;
 
     function walk(node, visit) {
       if (!node || typeof node.type !== "string") return;
@@ -43,34 +51,49 @@ tool:
       }
     }
 
-    function rootCalleeName(call) {
+    function isTestCall(call) {
       let callee = call.callee;
-      while (callee.type === "CallExpression" || callee.type === "MemberExpression") {
-        callee = callee.type === "CallExpression" ? callee.callee : callee.object;
+      for (;;) {
+        if (callee.type === "CallExpression") callee = callee.callee;
+        else if (callee.type === "TaggedTemplateExpression") callee = callee.tag;
+        else if (callee.type === "MemberExpression") {
+          if (callee.computed || callee.property.type !== "Identifier") return false;
+          if (!TEST_MODIFIER.test(callee.property.name)) return false;
+          callee = callee.object;
+        } else return callee.type === "Identifier" && TEST_CALL.test(callee.name);
       }
-      return callee.type === "Identifier" ? callee.name : "";
     }
 
     function readFunctions(ast) {
       const all = [];
       const exempt = new Set();
+      const head = new Map();
       walk(ast, (node) => {
         if (FUNCTION_TYPES.has(node.type)) all.push(node);
+        if (NAMED_MEMBER_TYPES.has(node.type) && node.value &&
+            FUNCTION_TYPES.has(node.value.type)) {
+          head.set(node.value, node.range[0]);
+        }
         if (node.type !== "CallExpression") return;
-        if (!TEST_CALL.test(rootCalleeName(node))) return;
+        if (!isTestCall(node)) return;
         for (const argument of node.arguments) {
           if (FUNCTION_TYPES.has(argument.type)) exempt.add(argument);
         }
       });
-      return { all, exempt };
+      return { all, exempt, head };
     }
 
-    function innermostAt(all, offset) {
+    function measuredAt(all, head, offset) {
       let found = null;
+      let width = 0;
       for (const node of all) {
-        if (offset < node.range[0] || offset >= node.range[1]) continue;
-        const span = node.range[1] - node.range[0];
-        if (!found || span < found.range[1] - found.range[0]) found = node;
+        const from = head.has(node) ? head.get(node) : node.range[0];
+        if (offset < from || offset >= node.range[1]) continue;
+        const span = node.range[1] - from;
+        if (!found || span < width) {
+          found = node;
+          width = span;
+        }
       }
       return found;
     }
@@ -80,13 +103,14 @@ tool:
         ...rule,
         create(context) {
           const sourceCode = context.sourceCode;
-          const { all, exempt } = readFunctions(sourceCode.ast);
+          const { all, exempt, head } = readFunctions(sourceCode.ast);
           const proxy = Object.create(context, {
             report: {
               value(descriptor) {
                 const loc = descriptor.loc || (descriptor.node && descriptor.node.loc);
                 const start = loc && (loc.start || loc);
-                const at = start && innermostAt(all, sourceCode.getIndexFromLoc(start));
+                const at =
+                  start && measuredAt(all, head, sourceCode.getIndexFromLoc(start));
                 if (exempt.has(at)) return;
                 context.report(descriptor);
               },
@@ -189,11 +213,32 @@ is still listed."
 
 A `supersedes` claim the tool does not honour is a false claim, so this rule
 states the carve-out itself, in the config it already owns. The config wraps
-each of the two eslint rules and drops a report whose function is the argument
-of a test-framework call: `describe`, `it`, `test`, `suite`, `context`,
-`beforeAll`, `beforeEach`, `afterAll` or `afterEach`. It reads the call through
-a member and through a chained call, so `it.each(rows)("...", fn)` and
-`describe.only("...", fn)` carry the mark as well.
+each of the two eslint rules and drops a report whose measured function is an
+argument of a test-framework call.
+
+### What counts as a test-framework call
+
+Two conditions must both hold. The first names the framework function, and the
+second keeps the mark on that function:
+
+1. The identifier at the root of the callee is `describe`, `it`, `test`,
+   `suite`, `context`, `beforeAll`, `beforeEach`, `afterAll` or `afterEach`.
+2. Each property between that identifier and the call is a test modifier:
+   `only`, `skip`, `todo`, `failing`, `fails`, `concurrent`, `sequential`,
+   `shuffle`, `each`, `for`, `runIf` or `skipIf`. A computed property, such as
+   `it[key]`, is not a modifier.
+
+The wrapper reads the callee through a member, through a chained call, and
+through a tagged template, so `describe.only("...", fn)`, `it.each(rows)(...)`
+and ``it.each`table`(...)`` all carry the mark.
+
+The second condition is what makes the mark read "this is a test-framework
+call" and not "the root identifier has a test name". `context` is a usual name
+for a React context, a request context and an `AsyncLocalStorage`, so
+`context.run(fn)` must stay measured. Measured with the shipped config on a
+probe whose every callback scores 21 against the gate of 15: `describe.only`,
+`it.each(rows)`, ``it.each`table` `` and `describe.each(rows)` each give no
+finding, and `context.run(() => { ... })` gives one.
 
 ### Why the mark and not the file name
 
@@ -236,6 +281,14 @@ and 4 `it(...)` callbacks over the complexity gate. It adds none, and it drops
 nothing outside a test-framework callback. The 19 named helpers in test files
 that score over the complexity gate all stay.
 
+The head offset and the modifier list hold that count where it was. Each of the
+40 drops is a `describe` or an `it` callback written as a plain arrow, and no
+file under `apps/` holds a complex method inside a test callback or a
+`context.run` call. A key-by-key comparison of the run before the two
+corrections against the run after them shows no finding gained and no finding
+lost. Both defects were real and both were silent here, which is why the
+fixture, and not this workspace, is what proves them.
+
 ## Why the core length rule and not the sonarjs one
 
 `eslint-plugin-sonarjs` also ships `sonarjs/max-lines-per-function`. It agrees
@@ -277,14 +330,35 @@ and the doctor marks the rule unusable and falls it back to the prompt rules.
 The scope is `files` because eslint reads the files it is given.
 
 The config wraps the two rules instead of reading their reports afterward. A
-wrapper reads `context.sourceCode.ast` one time, collects every function and
-every function a test-framework call holds as an argument, and hands the rule a
-context whose `report` drops a report the innermost function around it is one
-of those arguments. Both rules report at the head of the function they measure
-— the `function` keyword, or the `=>` token of an arrow — so the innermost
-function around that point is the function under measurement. eslint has no
-option that states this, and reading the reports afterward cannot state it
-either: a line number alone does not say which function the tool measured.
+wrapper reads `context.sourceCode.ast` one time and collects three things:
+every function, every function a test-framework call holds as an argument, and
+the offset each function's head starts at. It then hands the rule a context
+whose `report` drops a report whose measured function is one of those
+arguments. eslint has no option that states this, and reading the reports
+afterward cannot state it either: a line number alone does not say which
+function the tool measured.
+
+### Why the head offset, and not the function's own start
+
+Both rules report at the head of the function they measure, but that head is
+not always inside the function's own range. `getFunctionHeadLoc` starts the
+head at the parent's start for a `Property`, a `MethodDefinition` and a
+`PropertyDefinition` — that is, at the member's NAME, which stands before the
+`FunctionExpression` the rule measures. A lookup that reads only the function
+ranges therefore misses the method and climbs to the function around it. Inside
+a `describe` block that function is the test callback, so the method comes back
+exempt.
+
+The wrapper closes that hole. It stores the member node's own start offset for
+each function a member holds, and it measures each candidate's span from that
+offset. The method's span is then the smallest one that holds the report, so
+the method wins over the function around it.
+
+Measured with the shipped config, each body scoring 21 against the gate of 15:
+an object shorthand method, a class method and a getter, each inside a
+`describe` block, give a finding. A 266-line class method and a 266-line getter
+inside a `describe` block give the length finding. Before this offset was
+stored, all five were silent while the same shapes at the top level reported.
 
 The wrapper reads the core rule through
 `require("eslint/use-at-your-own-risk")`, eslint's own access to its built-in

@@ -6,11 +6,15 @@
 //   moved to `stepBand`.
 // - `mixState` holds the same shape at 204 counted lines.
 //
-// It also holds a `describe(...)` block that stands over both gates and that
-// the test carve-out exempts. The comment above that block states its numbers.
+// It also holds three blocks that stand over a gate and that the test
+// carve-out exempts: a `describe(...)` block, a `describe.only(...)` block and
+// an `it.each(rows)(...)` block. The comment above each one states its
+// numbers.
 //
 // The tool must report nothing. A threshold that stopped applying would
-// report one of the two, and the pair would fail.
+// report one of the two functions, and a carve-out that stopped reading a test
+// modifier would report one of the last two blocks. Either way the pair
+// fails.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -549,3 +553,54 @@ describe("the test carve-out", () => {
   state = (state * 31 + 120) % MODULUS;
   state = ((state << 58) | (state >>> (32 - 58))) % MODULUS;
 });
+
+// The two blocks below carry the mark through a test MODIFIER. Each callback
+// holds the failing fixture's `foldGrid` shape, which scores 21 against the
+// cognitive complexity gate of 15, so a modifier list that stopped accepting
+// `only` or `each` reports both and the pair fails.
+//
+// `describe.only(...)` reads the mark through one member. `it.each(rows)(...)`
+// reads it through a member and then through the call that member returns.
+
+describe.only("the mark through a modifier", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+it.each([[[[1, 2], [3, 4]], 3]])(
+  "the mark through a chained call",
+  (grid: number[][], limit: number) => {
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(band).toBe(limit);
+  },
+);

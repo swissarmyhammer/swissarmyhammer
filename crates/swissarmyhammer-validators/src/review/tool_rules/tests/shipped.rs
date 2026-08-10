@@ -102,16 +102,20 @@ pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
 const COMPLEX_LIB_PATH: &str = "src/lib.rs";
 
 /// A one-validator work-list over `path` for the builtin `code-hygiene`
-/// set, naming both complexity prompt rules and the Rust tool rule.
-fn complexity_work(path: &str, content: &str) -> WorkList {
+/// set, naming both complexity prompt rules and the tool rule `rule`.
+///
+/// `rule` is a parameter because two languages drive this shape end to end:
+/// `complexity-rust` for the nesting gate, and `complexity-typescript` for
+/// the test carve-out.
+fn complexity_work(rule: &str, path: &str, content: &str) -> WorkList {
     WorkList::new(
-        "a function over the nesting gate",
+        "a function over a complexity gate",
         vec![ValidatorWork::new(
             CODE_HYGIENE_SET,
             RuleNames::new([
                 COGNITIVE_COMPLEXITY_PROMPT_RULE.to_string(),
                 FUNCTION_LENGTH_PROMPT_RULE.to_string(),
-                RUST_COMPLEXITY_RULE.to_string(),
+                rule.to_string(),
             ]),
             ProbeNames::new([]),
             [FileWork::new(path, vec![], vec![], content, vec![])],
@@ -141,7 +145,7 @@ fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
     let loader = builtin_loader();
     let project_types = ["rust"];
     require_tool_installed(&loader, &project_types, RUST_COMPLEXITY_RULE);
-    let work = complexity_work(COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
+    let work = complexity_work(RUST_COMPLEXITY_RULE, COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
 
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
 
@@ -274,6 +278,134 @@ fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
     );
 }
 
+/// The path of the shipped fixture template a validator set carries for
+/// `name`, where `name` is the file name the template materializes to.
+///
+/// A set stores `<name>.tmpl`, so a test that wants the shipped bytes asks
+/// for `<name>` and gets the template beside it.
+fn shipped_fixture_template(loader: &ValidatorLoader, name: &str) -> PathBuf {
+    loader
+        .list_rulesets()
+        .iter()
+        .map(|ruleset| {
+            ruleset
+                .base_path
+                .join(FIXTURES_DIR_NAME)
+                .join(format!("{name}{FIXTURE_TEMPLATE_SUFFIX}"))
+        })
+        .find(|path| path.exists())
+        .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} fixture template"))
+}
+
+/// The materialized name of the `complexity-typescript` fail fixture.
+const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
+
+/// Where the fail fixture stands inside the probe repository, as the
+/// work-list holds it.
+const TYPESCRIPT_COMPLEXITY_FIXTURE_PATH: &str = "src/complexity-typescript-fail.ts";
+
+/// The start of the source line each guard in the `complexity-typescript`
+/// fail fixture is reported at.
+///
+/// Both gates report at the head of the function they measure, and for a
+/// method and for an accessor that head is the member's NAME. Each entry is
+/// therefore the text the gate points at, not the name alone.
+const TYPESCRIPT_COMPLEXITY_FAIL_GUARDS: &[&str] = &[
+    "function foldGrid(",
+    "function mixState(",
+    "foldRows(",
+    "get band(",
+    "context.run(",
+];
+
+/// Acceptance: the shipped TypeScript complexity tool rule measures every
+/// guard its fail fixture holds, through the real eslint pipeline.
+///
+/// The doctor fixture contract asks the fail fixture for one finding, so a
+/// carve-out that exempted four of the five guards would still pass it. This
+/// test names all five, so each guard is load-bearing on its own.
+///
+/// Three of the five are the shapes a carve-out anchored on the report
+/// position alone loses in silence, and all three stand inside a `describe`
+/// block. A class method and an accessor report at their NAME, which stands
+/// outside the function node the gates measure, so a lookup over the function
+/// ranges alone climbs to the test callback and exempts them.
+/// `context.run(...)` is a call whose root identifier is a test-framework
+/// name but which is not a test-framework call, so a mark that reads the root
+/// identifier alone exempts its callback.
+#[test]
+fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard() {
+    let loader = builtin_loader();
+    let project_types = ["nodejs"];
+    require_tool_installed(&loader, &project_types, TYPESCRIPT_COMPLEXITY_RULE);
+    let fixture = shipped_fixture_template(&loader, TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE);
+    let content = std::fs::read_to_string(&fixture).expect("read the shipped fail fixture");
+    let repo = tempfile::tempdir().unwrap();
+    let file = repo.path().join(TYPESCRIPT_COMPLEXITY_FIXTURE_PATH);
+    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
+    std::fs::write(&file, &content).unwrap();
+    // eslint prints the resolved path of each file it reads, and on macOS a
+    // temporary directory stands behind a symbolic link. The engine strips
+    // the repository root off each reported path, so the root it is given has
+    // to be the resolved form or no path matches and every finding keeps an
+    // absolute path.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = complexity_work(
+        TYPESCRIPT_COMPLEXITY_RULE,
+        TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+        &content,
+    );
+
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
+
+    let run = plan
+        .runs()
+        .iter()
+        .find(|run| run.rule() == TYPESCRIPT_COMPLEXITY_RULE)
+        .unwrap_or_else(|| {
+            panic!(
+                "the shipped TypeScript complexity tool rule must plan a run; fallbacks: {:?}",
+                plan.fallbacks()
+            )
+        });
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+    assert!(
+        outcome.errors().is_empty(),
+        "the shipped pipeline must not break; errors: {:?}",
+        outcome.errors()
+    );
+
+    let source: Vec<&str> = content.lines().collect();
+    let reported: Vec<&str> = outcome
+        .findings()
+        .iter()
+        .filter(|verified| verified.finding.file == TYPESCRIPT_COMPLEXITY_FIXTURE_PATH)
+        .map(|verified| {
+            let line = verified.finding.line;
+            source
+                .get(line as usize - 1)
+                .copied()
+                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
+                .trim()
+        })
+        .collect();
+    for guard in TYPESCRIPT_COMPLEXITY_FAIL_GUARDS {
+        assert!(
+            reported.iter().any(|line| line.starts_with(guard)),
+            "the carve-out must leave the fail fixture guard `{guard}` measured inside its \
+             `describe` block; the run reported {reported:?}"
+        );
+    }
+    assert_eq!(
+        reported.len(),
+        TYPESCRIPT_COMPLEXITY_FAIL_GUARDS.len(),
+        "the fail fixture holds one finding for each guard and no other; got {reported:?}"
+    );
+}
+
 /// Names the prompt rules a roster row expects, for a failure message.
 fn supersedes_label(expected: &[&str]) -> String {
     match expected.is_empty() {
@@ -306,17 +438,7 @@ const SWIFT_MANIFEST: &str = "Package.swift";
 /// own scratch directory, `Package.swift.tmpl` included, and runs the script
 /// there.
 fn swift_package_root(loader: &ValidatorLoader) -> (CurrentDirGuard, tempfile::TempDir) {
-    let manifest = loader
-        .list_rulesets()
-        .iter()
-        .map(|ruleset| {
-            ruleset
-                .base_path
-                .join(FIXTURES_DIR_NAME)
-                .join(format!("{SWIFT_MANIFEST}{FIXTURE_TEMPLATE_SUFFIX}"))
-        })
-        .find(|path| path.exists())
-        .expect("a builtin validator set ships a Package.swift fixture template");
+    let manifest = shipped_fixture_template(loader, SWIFT_MANIFEST);
     let root = tempfile::tempdir().expect("temp dir");
     std::fs::copy(&manifest, root.path().join(SWIFT_MANIFEST))
         .expect("copy the shipped Package.swift template");
