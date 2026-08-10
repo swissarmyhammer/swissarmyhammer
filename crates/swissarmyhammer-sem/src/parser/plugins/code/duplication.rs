@@ -390,6 +390,16 @@ fn definition_body(node: Node<'_>) -> Node<'_> {
 }
 
 /// Write the normalized tokens under `node` into `out`.
+///
+/// A comment and an attribute are both left out. An attribute is a
+/// declaration to the compiler rather than code a reader can make dry:
+/// `#[derive(Debug, Clone)]`, `@Override`, `@dataclass` and `[Fact]` repeat
+/// because the language makes them repeat. Counting their tokens would report
+/// two types as one shape when only their annotations coincide.
+///
+/// Leaving the tokens out does not stop an attribute being read as a MARKER.
+/// [`marked_by_attribute`] still reads it to tell test code from other code,
+/// and [`definition_range`] still reads it to start the range at `#[test]`.
 fn write_shape(
     node: Node<'_>,
     normalization: Normalization,
@@ -402,7 +412,10 @@ fn write_shape(
         .flatten();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if is_comment_kind(child.kind()) || child.start_byte() >= child.end_byte() {
+        if is_comment_kind(child.kind())
+            || is_attribute_kind(child.kind())
+            || child.start_byte() >= child.end_byte()
+        {
             continue;
         }
         if declared.is_some_and(|name| name.id() == child.id()) {
@@ -1490,6 +1503,21 @@ mod tests {
     }
 
     #[test]
+    fn a_java_annotation_contributes_no_token_to_the_shape() {
+        let source = concat!(
+            "@Entity\n",
+            "@Table(name = \"rows\", schema = \"band\")\n",
+            "class Row {\n    int width;\n}\n",
+        );
+
+        let shape = shape_named(&read("Band.java", source), "Row");
+
+        assert!(!shape.contains(&"@".to_string()), "{shape:?}");
+        assert!(!shape.contains(&"#str".to_string()), "{shape:?}");
+        assert!(shape.contains(&"int".to_string()), "{shape:?}");
+    }
+
+    #[test]
     fn a_csharp_method_is_read_and_the_fact_is_not() {
         let source = concat!(
             "class Band {\n",
@@ -1501,6 +1529,21 @@ mod tests {
         let read = read("Band.cs", source);
 
         assert_eq!(declared(&read), [("class", "Band"), ("method", "Live")]);
+    }
+
+    #[test]
+    fn a_csharp_attribute_list_contributes_no_token_to_the_shape() {
+        let source = concat!(
+            "[Serializable]\n",
+            "[Table(\"rows\", Schema = \"band\")]\n",
+            "class Row {\n    int width;\n}\n",
+        );
+
+        let shape = shape_named(&read("Band.cs", source), "Row");
+
+        assert!(!shape.contains(&"[".to_string()), "{shape:?}");
+        assert!(!shape.contains(&"#str".to_string()), "{shape:?}");
+        assert!(shape.contains(&"int".to_string()), "{shape:?}");
     }
 
     #[test]

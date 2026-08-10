@@ -577,6 +577,35 @@ mod tests {
         "}\n",
     );
 
+    /// The annotation block two Java probe classes carry. The framework
+    /// spells each one, so every entity of the same table repeats them and no
+    /// author can write them any other way.
+    const ENTITY_ANNOTATIONS: &str = concat!(
+        "@Entity\n",
+        "@Table(name = \"rows\", schema = \"band\", catalog = \"main\")\n",
+        "@JsonIgnoreProperties(ignoreUnknown = true, allowGetters = true)\n",
+        "@NamedQuery(name = \"all\", query = \"select r from Row r\")\n",
+        "@Cacheable(true)\n",
+        "@Access(AccessType.FIELD)\n",
+    );
+
+    /// How many fields [`record_fields`] writes. A Java field normalizes to
+    /// two tokens — its type and its semicolon — so this many fields carry a
+    /// class over [`MINIMUM_DEFINITION_TOKENS`] on its members alone.
+    const RECORD_CLASS_FIELDS: usize = 20;
+
+    /// A Java class named `name`, under `annotations`, holding `fields`.
+    fn java_class(name: &str, annotations: &str, fields: &str) -> String {
+        format!("{annotations}class {name} {{\n{fields}}}\n")
+    }
+
+    /// [`RECORD_CLASS_FIELDS`] Java field declarations of type `field_type`.
+    fn record_fields(field_type: &str) -> String {
+        (0..RECORD_CLASS_FIELDS)
+            .map(|index| format!("    {field_type} field{index};\n"))
+            .collect()
+    }
+
     /// A Rust function under [`MINIMUM_DEFINITION_TOKENS`].
     fn short_function(name: &str) -> String {
         format!("pub fn {name}(limit: i32) -> i32 {{\n    limit + 1\n}}\n")
@@ -719,6 +748,43 @@ mod tests {
         assert_eq!(findings[0].kind, "struct");
         assert_eq!(findings[0].name, "Band");
         assert_eq!(findings[0].other_name, "Row");
+    }
+
+    #[test]
+    fn two_classes_that_share_only_their_annotations_are_not_reported() {
+        let source = format!(
+            "package band;\n\n{}\n{}",
+            java_class("Row", ENTITY_ANNOTATIONS, "    int width;\n"),
+            java_class("Band", ENTITY_ANNOTATIONS, "    boolean active;\n")
+        );
+        let dir = workspace_with("Probe.java", &source);
+
+        let findings = find_duplication(dir.path(), &["Probe.java"]);
+
+        assert!(
+            findings.is_empty(),
+            "the annotations were the whole of the match, and the members left \
+             over do not reach the minimum: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn two_classes_that_repeat_their_members_are_reported_though_one_is_annotated() {
+        let source = format!(
+            "package band;\n\n{}\n{}",
+            java_class("Row", "@Entity\n", &record_fields("int")),
+            java_class("Band", "", &record_fields("int"))
+        );
+        let dir = workspace_with("Probe.java", &source);
+
+        let findings = find_duplication(dir.path(), &["Probe.java"]);
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].similarity, PERCENT_SCALE,
+            "an annotation one class carries and the other does not must not \
+             hold the two shapes apart"
+        );
     }
 
     #[test]
