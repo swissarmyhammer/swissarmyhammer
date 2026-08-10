@@ -10,9 +10,11 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
+use swissarmyhammer_common::test_utils::shell_escape_path;
+
 use crate::doctor::check_review_engine_with;
 use crate::review::test_support::{
-    counting_tool_script, fixture_runs, ruleset, shell_quote, write_counted_tool_rule_fixtures,
+    counting_tool_script, fixture_runs, ruleset, write_counted_tool_rule_fixtures,
     FIXTURE_RUNS_PER_PROOF,
 };
 use crate::validators::types::{ToolDoctor, ToolScope};
@@ -123,7 +125,7 @@ impl ProbeDirs {
     /// `extra_script` is appended to the run script, so a test states a rule
     /// edit as the text it added.
     fn ruleset(&self, extra_script: &str) -> RuleSet {
-        let version_command = format!("cat {}", shell_quote(&self.version_file()));
+        let version_command = format!("cat {}", shell_escape_path(&self.version_file()));
         self.ruleset_with_version(extra_script, Some(version_command))
     }
 
@@ -143,7 +145,7 @@ impl ProbeDirs {
         let mut script = counting_tool_script(&self.counter());
         script.push_str(&format!(
             "if [ -f {} ]; then echo 'the tool broke' >&2; exit 3; fi\n",
-            shell_quote(&self.break_file())
+            shell_escape_path(&self.break_file())
         ));
         script.push_str(extra_script);
 
@@ -427,6 +429,51 @@ fn doctor_proves_the_rule_again_and_drops_the_stored_verdict() {
     assert!(
         dirs.fixture_runs() > runs_after_doctor,
         "with no verdict standing, the engine must prove the rule for itself"
+    );
+}
+
+/// A verdict doctor drops must not survive on the disk.
+///
+/// `sah doctor` runs in a process of its own, so its drop reaches the next
+/// review only through the stored file. This test crosses that boundary:
+/// each of the three steps opens its own cache and saves it, exactly as the
+/// three processes do. A workspace that holds ONE verdict empties its map on
+/// the drop, which is the case a save that returns early on an empty map
+/// leaves untouched.
+#[test]
+fn a_saved_verdict_that_doctor_drops_does_not_survive_a_reopened_cache() {
+    let dirs = ProbeDirs::new();
+    let ruleset = dirs.ruleset("");
+    let mut loader = ValidatorLoader::new();
+    loader.add_builtin_ruleset(ruleset.clone());
+
+    // The review proves the rule, stores the pass, and saves it.
+    let review = ToolHealthCache::open(&dirs.workspace());
+    assert!(probe_health(&review, HealthProof::Stored, &ruleset).usable());
+    review.save();
+
+    // The tool breaks. Doctor reads the saved verdicts, proves the rule for
+    // itself, drops the pass its own run did not earn, and saves.
+    std::fs::write(dirs.break_file(), "").expect("break the tool");
+    let doctor = ToolHealthCache::open(&dirs.workspace());
+    let status = check_review_engine_with(&loader, &[], Some(&doctor));
+    assert_eq!(status.tool_rules.len(), 1);
+    assert!(
+        !status.tool_rules[0].usable(),
+        "sah doctor must run the fixtures whatever is stored"
+    );
+    doctor.save();
+
+    // The next review reads the saved verdicts anew.
+    let runs_before = dirs.fixture_runs();
+    let next = ToolHealthCache::open(&dirs.workspace());
+    assert!(
+        !probe_health(&next, HealthProof::Stored, &ruleset).usable(),
+        "a review that follows doctor must not replay the pass doctor dropped"
+    );
+    assert!(
+        dirs.fixture_runs() > runs_before,
+        "with no verdict on the disk, the review must prove the rule for itself"
     );
 }
 

@@ -1985,6 +1985,7 @@ impl HookConfig {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use swissarmyhammer_common::test_utils::shell_escape_path;
 
     // -- Mock evaluator (for prompt/agent handler config tests) --
 
@@ -2314,17 +2315,6 @@ hooks:
         let regs = config.build_registrations(Some(evaluator)).unwrap();
         assert_eq!(regs.len(), 1);
         assert_eq!(regs[0].events, vec![HookEventKind::Stop]);
-    }
-
-    /// Shell-escape a path for safe interpolation into an `sh -c` command
-    /// string built by a test.
-    ///
-    /// Wraps the path in single quotes, escaping any embedded single quote
-    /// as `'\''` (close quote, escaped literal quote, reopen quote) so a
-    /// path containing shell metacharacters — `$()`, backticks, spaces,
-    /// quotes — cannot break out of the intended command.
-    fn shell_escape_path(path: &std::path::Path) -> String {
-        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
     }
 
     /// A command hook built via `build_registrations_with_context` receives the

@@ -794,7 +794,9 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
-    use crate::review::test_support::{shell_quote, with_pool, ScriptedAgent, ScriptedReply};
+    use swissarmyhammer_common::test_utils::shell_escape_path;
+
+    use crate::review::test_support::{with_pool, ScriptedAgent, ScriptedReply};
     use crate::validators::types::{FixHint, ToolDoctor, ToolInstall, ToolScope};
     use crate::validators::PoolConfig;
 
@@ -814,7 +816,7 @@ mod tests {
             scope: ToolScope::Files,
             run: "true".to_string(),
             doctor: Some(ToolDoctor {
-                check_command: format!("test -f {}", shell_quote(marker)),
+                check_command: format!("test -f {}", shell_escape_path(marker)),
                 check_version_command: None,
                 fix_hint: None,
             }),
@@ -826,7 +828,7 @@ mod tests {
 
     /// A shell command that creates `marker` — a stand-in for a real install.
     fn create_marker(marker: &Path) -> String {
-        format!("touch {}", shell_quote(marker))
+        format!("touch {}", shell_escape_path(marker))
     }
 
     /// A marker path under `dir` that no test has created yet.
@@ -860,8 +862,8 @@ mod tests {
         format!(
             "printf '{INSTALL_RACE_ENTERED}\\n' >> {log}; sleep {INSTALL_RACE_HOLD_SECONDS}; \
              printf '{INSTALL_RACE_LEFT}\\n' >> {log}; touch {marker}",
-            log = shell_quote(log),
-            marker = shell_quote(marker)
+            log = shell_escape_path(log),
+            marker = shell_escape_path(marker)
         )
     }
 

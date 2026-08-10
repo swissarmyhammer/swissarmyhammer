@@ -25,6 +25,7 @@ use tempfile::TempDir;
 
 use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
+use swissarmyhammer_common::test_utils::shell_escape_path;
 
 use crate::review::scope::{
     BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
@@ -127,22 +128,6 @@ pub fn write_counted_tool_rule_fixtures(base: &Path, rule: &str) {
         .expect("write the fixture run marker");
 }
 
-/// Quote `path` so a shell reads it as one literal word.
-///
-/// A test path comes from a temporary directory, so its text is not under the
-/// test's control. Double quotes are not enough: they still let a backtick, a
-/// `$(...)`, or an embedded quote in the path run as code. Single quotes stop
-/// every one of them, and the only character a single-quoted word cannot hold
-/// is the single quote itself, which `'\''` writes.
-///
-/// A script that takes its value as a positional parameter needs no quoting at
-/// all, and is the better shape where it fits. It does not fit the tool-rule
-/// scripts here: the review engine already passes the changed files as the
-/// script's positional parameters.
-pub fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
-}
-
 /// A `files`-scope script that reports one `path:line: message` finding per
 /// line holding `TODO`, and appends one line to `counter` first when it is
 /// running against the fixtures.
@@ -152,7 +137,7 @@ pub fn counting_tool_script(counter: &Path) -> String {
 if [ -f {FIXTURE_RUN_MARKER} ]; then echo run >> {counter}; fi
 for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" }}' "$f"; done
 "#,
-        counter = shell_quote(counter),
+        counter = shell_escape_path(counter),
     )
 }
 
@@ -1692,39 +1677,6 @@ mod tests {
         assert!(
             base.path().join(&marker).join("VALIDATOR.md").exists(),
             "the climb should be dropped, landing the ruleset under the base dir"
-        );
-    }
-
-    /// `shell_quote` must make a path data rather than code: a path holding a
-    /// command substitution and a single quote reaches the shell as its own
-    /// text, and the substitution never runs.
-    #[test]
-    fn shell_quote_keeps_a_command_substitution_in_a_path_from_running() {
-        let dir = TempDir::new().unwrap();
-        let hostile = dir.path().join(r#"$(touch pwned)'x"#);
-        let echoed = dir.path().join("echoed");
-
-        let script = format!(
-            "printf '%s' {hostile} > {echoed}",
-            hostile = shell_quote(&hostile),
-            echoed = shell_quote(&echoed),
-        );
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&script)
-            .current_dir(dir.path())
-            .status()
-            .expect("run the quoted script");
-
-        assert!(status.success(), "the quoted script must run: {script}");
-        assert_eq!(
-            std::fs::read_to_string(&echoed).expect("read what the shell wrote"),
-            hostile.display().to_string(),
-            "the shell must read the path as one literal word"
-        );
-        assert!(
-            !dir.path().join("pwned").exists(),
-            "the command substitution in the path must never run"
         );
     }
 

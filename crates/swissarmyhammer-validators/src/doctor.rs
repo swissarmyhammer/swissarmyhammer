@@ -242,9 +242,11 @@ pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, 
 /// validator directories or workspace.
 ///
 /// `health` is the workspace's stored fixture verdicts, when one is open.
-/// Doctor never reads a stored verdict — it proves every rule and REPLACES
-/// what is stored — so a review that follows doctor reads doctor's own
-/// answer. `None` proves every rule and stores nothing.
+/// Doctor never reads a stored verdict — it proves every rule, stores the
+/// pass, and drops what a rule no longer earns — so a review that follows
+/// doctor reads doctor's own answer. The caller saves the cache afterwards,
+/// which is what carries the drop to the next process. `None` proves every
+/// rule and stores nothing.
 pub fn check_review_engine_with(
     loader: &ValidatorLoader,
     project_types: &[&str],

@@ -40,6 +40,11 @@
 //! a pass replaces the stored verdict, and anything else drops it. Doctor
 //! therefore stays the ground truth, and a review that follows it never
 //! replays a pass the tool no longer earns.
+//!
+//! The drop reaches the DISK, because doctor and the review are two processes
+//! and the file is all they share. A drop that empties the map deletes the
+//! stored file, so a workspace whose only rule broke does not keep its last
+//! pass ([`ToolHealthCache::save`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -121,10 +126,18 @@ impl ToolHealthCache {
 
     /// Write the verdicts back to the workspace.
     ///
-    /// A review that stored no verdict writes nothing and creates nothing, so
-    /// it leaves the tree it reviewed exactly as it found it. That matters
-    /// beyond tidiness: `Scope::Working` reads untracked files, so a review
-    /// that created a state directory would write its own next scope.
+    /// An empty map DELETES the stored file rather than leaving it alone. The
+    /// map empties when [`ToolHealthCache::prove`] drops the last verdict, and
+    /// `sah doctor` runs in a process of its own, so the drop reaches the next
+    /// review only through the file. Leaving the file would replay a pass the
+    /// tool no longer earns, which is the one thing doctor being the ground
+    /// truth forbids.
+    ///
+    /// A workspace with no stored file writes nothing and creates nothing, so
+    /// a review that stored no verdict leaves the tree it reviewed exactly as
+    /// it found it. That matters beyond tidiness: `Scope::Working` reads
+    /// untracked files, so a review that created a state directory would write
+    /// its own next scope.
     ///
     /// A write that fails is reported and dropped — the next run proves the
     /// rules again, which is what it did before anything was stored.
@@ -134,6 +147,7 @@ impl ToolHealthCache {
         // holds the lock, whatever either one calls.
         let verdicts = self.verdicts().clone();
         if verdicts.is_empty() {
+            self.remove_stored_verdicts();
             return;
         }
 
@@ -157,6 +171,31 @@ impl ToolHealthCache {
                 error = %error,
                 "the tool health verdicts could not be written; the next review proves the rules again"
             );
+        }
+    }
+
+    /// Delete the stored verdict file, because no verdict stands any more.
+    ///
+    /// This is how a drop becomes durable. Deleting is taken over writing an
+    /// empty map because it creates nothing: a workspace that never stored a
+    /// verdict has no file to delete, so the tree under review is left as it
+    /// was found.
+    ///
+    /// A file that cannot be deleted is reported and dropped. The stored pass
+    /// then stands one more review, and the next doctor run drops it again.
+    fn remove_stored_verdicts(&self) {
+        let path = cache_path(&self.workspace_root);
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::debug!(
+                path = %path.display(),
+                "no tool health verdict stands any more; the stored file was deleted"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "the stored tool health verdicts could not be deleted; a dropped verdict may be replayed"
+            ),
         }
     }
 
@@ -390,8 +429,9 @@ fn update_framed(hasher: &mut Sha256, bytes: &[u8]) {
 /// The file the workspace at `workspace_root` stores its verdicts in.
 ///
 /// The path is derived and nothing is created, so reading a workspace never
-/// writes to it. [`ToolHealthCache::save`] creates the directory, and only
-/// when it has a verdict to keep.
+/// writes to it. [`ToolHealthCache::save`] is the one writer: it creates the
+/// directory when it has a verdict to keep, and deletes this file when none
+/// stands.
 fn cache_path(workspace_root: &Path) -> PathBuf {
     workspace_root
         .join(ManagedDirectory::<SwissarmyhammerConfig>::dir_name())
