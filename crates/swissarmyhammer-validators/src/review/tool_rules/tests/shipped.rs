@@ -920,6 +920,75 @@ fn the_shipped_python_magic_numbers_tool_rule_reports_every_fail_fixture_value()
     );
 }
 
+/// The materialized name of the `magic-numbers-typescript` fail fixture.
+const TYPESCRIPT_MAGIC_NUMBERS_FAIL_FIXTURE: &str = "magic-numbers-typescript.fail.ts";
+
+/// Where the `magic-numbers-typescript` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const TYPESCRIPT_MAGIC_NUMBERS_FIXTURE_PATH: &str = "src/magic-numbers-typescript-fail.ts";
+
+/// Every literal the `magic-numbers-typescript` fail fixture leaves unnamed, as
+/// `no-magic-numbers` spells it inside the message it reports.
+///
+/// `8` is the load-bearing entry. The `magic-numbers` prompt rule carves out
+/// "conventional values (a `<< 8`, `100` for percent)", and the rule restores
+/// the percent half through `ignore`. The shift half has no such lever:
+/// `ignore` selects a VALUE and never a position, so `8` in `ignore` would
+/// silence `x === 8` beside `x << 8`, and eslint names no option for a shift
+/// operand. The rule body therefore states that a shift operand reports, and
+/// this entry holds eslint to the statement.
+const TYPESCRIPT_MAGIC_NUMBERS_FAIL_VALUES: &[&str] = &["404", "4096", "250", "8"];
+
+/// The `magic-numbers-typescript` fail fixture, and every unnamed literal the
+/// real eslint pipeline must report inside it.
+const TYPESCRIPT_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["nodejs"],
+    rule: TYPESCRIPT_MAGIC_NUMBERS_RULE,
+    fixture: TYPESCRIPT_MAGIC_NUMBERS_FAIL_FIXTURE,
+    path: TYPESCRIPT_MAGIC_NUMBERS_FIXTURE_PATH,
+    expected: TYPESCRIPT_MAGIC_NUMBERS_FAIL_VALUES,
+    noun: "unnamed literal",
+};
+
+/// What `no-magic-numbers` puts before the value in the message it reports.
+/// The whole message reads `No magic number: 4096.`, so the value stands
+/// after this separator and before the closing full stop.
+const TYPESCRIPT_MAGIC_NUMBERS_CLAIM_SEPARATOR: &str = ": ";
+
+/// Acceptance: the shipped TypeScript magic-numbers tool rule reports every
+/// unnamed literal its fail fixture holds, through the real eslint pipeline.
+///
+/// A literal is held to the CLAIM its finding carries, because
+/// `no-magic-numbers` spells the value at the end of the message it reports.
+///
+/// The count is the other half. The pass fixture holds `100` for percent and
+/// every declaration position the configuration allows, so a run that reported
+/// one of them would fail the pair; holding this run to exactly these four
+/// states the same silence from the other side.
+#[test]
+fn the_shipped_typescript_magic_numbers_tool_rule_reports_every_fail_fixture_value() {
+    verify_shipped_fail_fixture_reports_each(
+        &TYPESCRIPT_MAGIC_NUMBERS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an unnamed literal in a comparison, an operation, and a call argument",
+                CODE_HYGIENE_SET,
+                [
+                    MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+                    TYPESCRIPT_MAGIC_NUMBERS_RULE.to_string(),
+                ],
+                [(TYPESCRIPT_MAGIC_NUMBERS_FIXTURE_PATH, content)],
+            )
+        },
+        |verified, _source| verified.finding.claim.clone(),
+        |reported, value| {
+            reported.ends_with(&format!(
+                "{TYPESCRIPT_MAGIC_NUMBERS_CLAIM_SEPARATOR}{value}."
+            ))
+        },
+    );
+}
+
 /// Acceptance: every shipped complexity tool rule passes its fixture pair
 /// in doctor, and supersedes exactly the gates its own tool decides.
 ///

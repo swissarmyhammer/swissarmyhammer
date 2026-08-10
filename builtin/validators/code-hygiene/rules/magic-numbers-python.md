@@ -81,15 +81,21 @@ in the pipe, and it would drop a genuine `status == 100` along with the percent
 one, because the pipe reads the value and never the meaning. The `# noqa` reads
 the meaning, because the author writes it at the one site that has one.
 
-## The sibling rules report `100` too
+## This is the one rule of the four that cannot allow `100`
 
-`magic-numbers-go` and `magic-numbers-typescript` each CAN state a value
-allow-list, and neither puts `100` in it: `mnd` runs with
-`ignored-numbers: ["0", "1", "-1"]` and `@typescript-eslint/no-magic-numbers`
-with `ignore: [0, 1, -1]`. Both therefore report `x == 100` exactly as `ruff`
-does. Python agreeing with them is deliberate, not an accident of what `ruff`
-exposes. `magic-numbers-swift` is the one rule of the four that allows `100`,
-and that divergence belongs to the Swift rule rather than to this one.
+The other three tools each take a value allow-list, and the allow-list is where
+the percent carve-out goes:
+
+- `magic-numbers-swift` states `allowed_numbers: [0, 1, -1, 100]`.
+- `magic-numbers-typescript` states `ignore: [0, 1, -1, 100]`.
+- `magic-numbers-go` states `ignored-numbers` and does not name `100` yet. The
+  key accepts any set, so the Go rule can state the same list; the card
+  `^s2ftjys` adds it there.
+
+`ruff` is the one tool of the four that offers no value allow-list at all, so
+`x == 100` reports here and the divergence belongs to `ruff`. The
+`# noqa: PLR2004` above is the recourse: a percent comparison carries the marker
+and the reason, and the review then stays silent on it.
 
 ## Where this rule is NARROWER than the rule it supersedes
 

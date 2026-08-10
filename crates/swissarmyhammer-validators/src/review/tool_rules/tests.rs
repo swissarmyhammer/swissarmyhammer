@@ -114,6 +114,12 @@ const MAGIC_NUMBERS_PROMPT_RULE: &str = "magic-numbers";
 /// and names every literal the fixture holds unnamed.
 const PYTHON_MAGIC_NUMBERS_RULE: &str = "magic-numbers-python";
 
+/// The shipped magic-numbers tool rule for TypeScript and JavaScript. Its
+/// value allow-list carries `100` and cannot carry a shift operand, so a
+/// second acceptance test drives its fail fixture end to end and names every
+/// literal the fixture holds unnamed.
+const TYPESCRIPT_MAGIC_NUMBERS_RULE: &str = "magic-numbers-typescript";
+
 /// Every shipped magic-numbers tool rule, with the project type it serves.
 ///
 /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
@@ -127,7 +133,7 @@ const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "nodejs",
-        "magic-numbers-typescript",
+        TYPESCRIPT_MAGIC_NUMBERS_RULE,
         SUPERSEDES_MAGIC_NUMBERS,
     ),
     ("go", "magic-numbers-go", SUPERSEDES_MAGIC_NUMBERS),
