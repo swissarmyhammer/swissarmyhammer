@@ -58,7 +58,7 @@ pub struct PathValidator {
 }
 
 /// Errors that can occur during path validation
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum PathValidationError {
     /// ACP requires an absolute path, and the caller gave a relative one. The
     /// payload carries the path.

@@ -14,22 +14,40 @@
 //! - 10MB moderate: Handles images and small files comfortably
 //! - 100MB permissive: Supports larger files in trusted contexts
 
+/// How much longer a permissive length bound is than the default one.
+///
+/// The path bound and the URI bound widen together, so one factor names both.
+/// Written once here, a change to it moves the whole permissive tier as a set
+/// instead of leaving one length behind.
+pub const PERMISSIVE_LIMIT_MULTIPLIER: usize = 2;
+
 /// File system limits
 pub mod fs {
+    use super::PERMISSIVE_LIMIT_MULTIPLIER;
+
     /// Maximum path length (4KB)
     pub const MAX_PATH_LENGTH: usize = 4096;
 
     /// Strict path length limit for sensitive operations (1KB)
     pub const MAX_PATH_LENGTH_STRICT: usize = 1024;
+
+    /// Permissive path length limit for trusted operations (8KB)
+    pub const MAX_PATH_LENGTH_PERMISSIVE: usize = MAX_PATH_LENGTH * PERMISSIVE_LIMIT_MULTIPLIER;
 }
 
 /// URI and URL limits
 pub mod uri {
+    use super::PERMISSIVE_LIMIT_MULTIPLIER;
+
     /// Standard maximum URI length (4KB)
     pub const MAX_URI_LENGTH: usize = 4096;
 
-    /// Extended URI length for permissive mode (8KB)
+    /// Extended URI length, which the default limits use (8KB)
     pub const MAX_URI_LENGTH_EXTENDED: usize = 8192;
+
+    /// Permissive URI length limit for trusted operations (16KB)
+    pub const MAX_URI_LENGTH_PERMISSIVE: usize =
+        MAX_URI_LENGTH_EXTENDED * PERMISSIVE_LIMIT_MULTIPLIER;
 }
 
 /// Content size limits by security level
@@ -60,6 +78,26 @@ pub mod content {
 
     /// Maximum metadata object size (100KB)
     pub const MAX_META_SIZE: usize = 100_000;
+
+    /// How much smaller the strict metadata bound is than the default one.
+    ///
+    /// The other strict bounds each have a constant of their own. The metadata
+    /// bound has none, so the strict tier divides the default by this factor
+    /// and the relation stays visible.
+    pub const STRICT_META_SIZE_DIVISOR: usize = 10;
+
+    /// Strict mode metadata object size (10KB)
+    pub const MAX_META_SIZE_STRICT: usize = MAX_META_SIZE / STRICT_META_SIZE_DIVISOR;
+
+    /// How much larger the permissive metadata bound is than the default one.
+    ///
+    /// The metadata bound widens by a factor of its own, not by
+    /// [`super::PERMISSIVE_LIMIT_MULTIPLIER`], because a `_meta` object grows
+    /// with the number of keys a client sends rather than with a path length.
+    pub const PERMISSIVE_META_MULTIPLIER: usize = 10;
+
+    /// Permissive mode metadata object size (1,000,000 bytes)
+    pub const MAX_META_SIZE_PERMISSIVE: usize = MAX_META_SIZE * PERMISSIVE_META_MULTIPLIER;
 }
 
 /// Buffer and channel sizes

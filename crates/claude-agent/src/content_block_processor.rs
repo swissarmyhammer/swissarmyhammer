@@ -24,6 +24,7 @@
 
 use crate::base64_processor::{Base64Processor, Base64ProcessorError};
 use crate::content_security_validator::{ContentSecurityError, ContentSecurityValidator};
+use crate::embedded_resource::UnsupportedResourceKind;
 use crate::error::ToJsonRpcError;
 use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use crate::size_validator::{SizeLimits, SizeValidationError, SizeValidator};
@@ -199,6 +200,14 @@ pub enum ContentBlockProcessorError {
     /// The [`ContentSecurityValidator`] refused the content.
     #[error("content security validation failed: {0}")]
     ContentSecurityValidationFailed(#[from] ContentSecurityError),
+}
+
+impl From<UnsupportedResourceKind> for ContentBlockProcessorError {
+    fn from(_kind: UnsupportedResourceKind) -> Self {
+        Self::InvalidContentStructure {
+            details: "Unsupported resource type".to_string(),
+        }
+    }
 }
 
 impl ToJsonRpcError for ContentBlockProcessorError {
@@ -461,7 +470,7 @@ impl ContentAccumulator {
 /// representation and, for binary kinds, the decoded bytes. A batch either
 /// fails on the first bad block or recovers from it, depending on
 /// `enable_batch_recovery`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContentBlockProcessor {
     base64_processor: Base64Processor,
     enable_uri_validation: bool,
@@ -847,22 +856,11 @@ impl ContentBlockProcessor {
         &self,
         resource_content: &agent_client_protocol::schema::EmbeddedResource,
     ) -> Result<ProcessedContent, ContentBlockProcessorError> {
-        use agent_client_protocol::schema::EmbeddedResourceResource;
-
-        match &resource_content.resource {
-            EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                self.process_text_resource(text_resource)
-            }
-            EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                self.process_blob_resource(blob_resource)
-            }
-            _ => {
-                // Unknown or unsupported resource type
-                Err(ContentBlockProcessorError::InvalidContentStructure {
-                    details: "Unsupported resource type".to_string(),
-                })
-            }
-        }
+        crate::embedded_resource::dispatch(
+            resource_content,
+            |text_resource| self.process_text_resource(text_resource),
+            |blob_resource| self.process_blob_resource(blob_resource),
+        )
     }
 
     /// Validate an inline resource's URI, then record its URI and MIME type in
@@ -1320,7 +1318,7 @@ impl ContentBlockProcessor {
 }
 
 /// Summary of processing multiple content blocks
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContentProcessingSummary {
     /// Every block of the batch, in order, including failure placeholders.
     pub processed_contents: Vec<ProcessedContent>,

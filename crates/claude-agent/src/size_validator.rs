@@ -22,59 +22,77 @@ use crate::constants::sizes;
 use thiserror::Error;
 
 /// Unified error type for size validation failures
-#[derive(Debug, Error, Clone, PartialEq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SizeValidationError {
+    /// A caller-supplied value is larger than the bound set for its field.
     #[error("size exceeds limit for {field}: {actual} bytes > {limit} bytes")]
     SizeExceeded {
+        /// Name of the bounded field, such as `path` or `base64_data`.
         field: String,
+        /// Size the caller supplied, in bytes.
         actual: usize,
+        /// Bound the size crossed, in bytes.
         limit: usize,
     },
 }
 
 /// Configurable size limits for various validation contexts
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizeLimits {
+    /// Longest file system path accepted, in bytes.
     pub max_path_length: usize,
+    /// Longest URI accepted, in bytes.
     pub max_uri_length: usize,
+    /// Largest base64 payload accepted, measured decoded, in bytes.
     pub max_base64_size: usize,
+    /// Largest resource content accepted, in bytes.
     pub max_content_size: usize,
+    /// Largest `_meta` object accepted, in bytes.
     pub max_meta_size: usize,
 }
 
 impl Default for SizeLimits {
     fn default() -> Self {
-        Self {
-            max_path_length: sizes::fs::MAX_PATH_LENGTH,
-            max_uri_length: sizes::uri::MAX_URI_LENGTH_EXTENDED,
-            max_base64_size: sizes::content::MAX_CONTENT_MODERATE,
-            max_content_size: sizes::content::MAX_RESOURCE_MODERATE,
-            max_meta_size: sizes::content::MAX_META_SIZE,
-        }
+        Self::MODERATE
     }
 }
 
 impl SizeLimits {
+    /// The bound set for high-security contexts.
+    const STRICT: Self = Self {
+        max_path_length: sizes::fs::MAX_PATH_LENGTH_STRICT,
+        max_uri_length: sizes::uri::MAX_URI_LENGTH,
+        max_base64_size: sizes::content::MAX_CONTENT_STRICT,
+        max_content_size: sizes::content::MAX_RESOURCE_STRICT,
+        max_meta_size: sizes::content::MAX_META_SIZE_STRICT,
+    };
+
+    /// The balanced bound set, which [`SizeLimits::default`] returns.
+    const MODERATE: Self = Self {
+        max_path_length: sizes::fs::MAX_PATH_LENGTH,
+        max_uri_length: sizes::uri::MAX_URI_LENGTH_EXTENDED,
+        max_base64_size: sizes::content::MAX_CONTENT_MODERATE,
+        max_content_size: sizes::content::MAX_RESOURCE_MODERATE,
+        max_meta_size: sizes::content::MAX_META_SIZE,
+    };
+
+    /// The bound set for low-security contexts.
+    const PERMISSIVE: Self = Self {
+        max_path_length: sizes::fs::MAX_PATH_LENGTH_PERMISSIVE,
+        max_uri_length: sizes::uri::MAX_URI_LENGTH_PERMISSIVE,
+        max_base64_size: sizes::content::MAX_CONTENT_PERMISSIVE,
+        max_content_size: sizes::content::MAX_RESOURCE_PERMISSIVE,
+        max_meta_size: sizes::content::MAX_META_SIZE_PERMISSIVE,
+    };
+
     /// Create strict size limits for high-security contexts
     pub fn strict() -> Self {
-        Self {
-            max_path_length: sizes::fs::MAX_PATH_LENGTH_STRICT,
-            max_uri_length: sizes::uri::MAX_URI_LENGTH,
-            max_base64_size: sizes::content::MAX_CONTENT_STRICT,
-            max_content_size: sizes::content::MAX_RESOURCE_STRICT,
-            max_meta_size: sizes::content::MAX_META_SIZE / 10,
-        }
+        Self::STRICT
     }
 
     /// Create permissive size limits for low-security contexts
     pub fn permissive() -> Self {
-        Self {
-            max_path_length: sizes::fs::MAX_PATH_LENGTH * 2,
-            max_uri_length: sizes::uri::MAX_URI_LENGTH_EXTENDED * 2,
-            max_base64_size: sizes::content::MAX_CONTENT_PERMISSIVE,
-            max_content_size: sizes::content::MAX_RESOURCE_PERMISSIVE,
-            max_meta_size: sizes::content::MAX_META_SIZE * 10,
-        }
+        Self::PERMISSIVE
     }
 }
 

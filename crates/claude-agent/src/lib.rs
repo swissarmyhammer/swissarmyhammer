@@ -36,6 +36,7 @@ pub mod content_security_validator;
 pub mod conversation_manager;
 pub mod editor_state;
 pub mod elicitation_bridge;
+pub mod embedded_resource;
 pub mod json_rpc_codes;
 pub mod mime_type_validator;
 

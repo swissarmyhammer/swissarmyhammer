@@ -193,6 +193,87 @@ comments:
     - evidence: 8 files, 143 insertions, 0 deletions, all in `crates/claude-agent/src/` — acp_error_conversion.rs, base64_processor.rs, content_block_processor.rs, content_security_integration_tests.rs, content_security_validator.rs, mime_type_validator.rs, path_validator.rs, size_validator.rs. All 7 findings are now checked. The gap set was measured with the tool that made the finding (`cargo clippy -W missing_docs`), which found 7 module rows in this crate before and 0 after; a text search found one more module with no `//!` at all, `content_security_integration_tests`, which clippy skips because it is private and `#[cfg(test)]` gated, and it got a header too. Commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings, `cargo doc -p claude-agent --no-deps` builds with 0 warnings against the new headers, `cargo nextest run --workspace` 14027 run / 14023 passed / 0 skipped with only the 4 known ^bh5ncd0 failures, and `a_lagged_collector_is_an_error_not_a_reply_with_holes` PASS.
     - next: /review
   timestamp: 2026-08-10T17:07:10.155217+00:00
+- actor: claude-code
+  id: 01kzpb78dkbwz53wc9mq3fdb65
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (commit adf367235). 43 findings, 43 confirmed, 19 refuted, 16 tasks started, 2 tasks failed. The review skill removed 19 findings that ask you to change test code that is already in the repository. 24 findings stay open: content_block_processor.rs:1324, content_security_validator.rs:875, path_validator.rs:61, size_validator.rs:25, 28, 29, 30, 31, 36, 38 (2), 39 (2), 40 (2), 41 (2), 42 (2), 59, 65, 70, 72, 76.
+    - prior pass: the seven module-header findings are correct. `cargo clippy -p claude-agent --lib -- -W missing_docs` gives no `missing documentation for a module` warning for crates/claude-agent/src/lib.rs. All eight modules have a header that tells why the module is there.
+    - next: put doc comments on the SizeLimits fields and the SizeValidationError variant, add `Eq` to the three derives, add `Clone` to ContentProcessingSummary, name the strict and permissive scale factors, and remove the duplication between `strict`, `permissive` and `default`.
+  timestamp: 2026-08-10T17:23:43.155039+00:00
+- actor: claude-code
+  id: 01kzpb8gz1ebq0wh7fpcer16ac
+  text: |
+    ### finish iteration 2 — findings
+    - implement: changed — 8 files, 143 insertions, 0 deletions, additions only. Each of the 7 named modules got a real `//!` header that says why the module exists. The gap was found again with the same tool that made the finding (`cargo clippy -p claude-agent -W missing_docs`), not with a text search: 7 module rows before, 0 after. A text scan found one more module with the same gap, `content_security_integration_tests`, which clippy skips because it is private and `#[cfg(test)]` gated; it got a header too.
+    - two claims were corrected against the source before they were written: batch recovery in `content_block_processor` is optional and returns the first error when every block fails, and canonicalization in `path_validator` runs only under `strict_canonicalization`.
+    - test: `cargo nextest run --workspace` 14027 run, 14023 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set. `a_lagged_collector_is_an_error_not_a_reply_with_holes` is GREEN.
+    - commit: adf367235
+    - review: findings — 43 findings, 19 dropped under the written exception for tests that already existed, 24 recorded. The 7 prior findings are confirmed closed by the tool.
+    - blast radius: this is the same pattern as ^pz50qbn and ^h7garpc. Adding a header to 8 files pulled those 8 files into the review scope and surfaced their standing debt — 9 more missing-docs rows in `size_validator.rs`, a missing `Clone`, three `PartialEq` without `Eq`, and unnamed scale factors.
+    - CAUTION for the next pass: the engine reports 2 of 16 tasks failed, so the list of 24 may not be complete.
+  timestamp: 2026-08-10T17:24:24.673359+00:00
+- actor: claude-code
+  id: 01kzpchaxrvf3z51ff2sdg63e6
+  text: |
+    All 24 open findings are closed. 7 files changed, 1 file added. No test code was changed.
+
+    ## The measurement came first, and it came from the tools that made the findings
+
+    The card warned that 2 of 16 review tasks failed, so the list of 24 could be short. Each rule was therefore run again by hand over the named files, before and after.
+
+    | Tool | Before | After |
+    |---|---|---|
+    | `cargo clippy -p claude-agent --all-targets -- -W missing_docs`, rows in the 4 named files | 9 | 0 |
+    | `sah tool code_context duplication find` over the 7 touched files | 1 pair | 0 |
+    | `sah tool code_context commented_code find` over the 7 touched files | 0 | 0 |
+
+    The 9 missing-docs rows were exactly the 9 the card names, so that cause is now gone from the whole crate as well as the whole file: the crate total fell from 187 to 178 and no row names a touched file.
+
+    ## The cause was removed from the whole file, not from the named line
+
+    - **`PartialEq` with no `Eq`**: the card names 3 types. A scan of the derives in all 4 named files found a 4th with the same cause — `SecurityLevel` in `content_security_validator.rs`. All 4 now derive `Eq`.
+    - **Missing `Clone`**: the card names `ContentProcessingSummary`. `ContentBlockProcessor` in the same file has the same cause and all its fields are cloneable (`ContentSecurityValidator` carries a hand-written `Clone`). Both now derive `Clone`.
+
+    ## The two duplicate pairs
+
+    **`strict` against `default`, and `permissive` against `default`.** The three constructors each wrote the same five field names. The five bound sets are now three private associated constants — `SizeLimits::STRICT`, `MODERATE` and `PERMISSIVE` — and each constructor returns one of them. A positional `SizeLimits::new(usize, usize, usize, usize, usize)` was rejected: the Rust type-safety rule forbids several parameters of one primitive type with different meanings, and the field types cannot become newtypes because the tests read them as `usize`.
+
+    **`validate_resource_content` against `process_embedded_resource`, across two modules.** A new module `crates/claude-agent/src/embedded_resource.rs` holds one generic `dispatch`. Each caller gives what it does with text contents and what it does with blob contents.
+
+    The FIRST attempt at this passed the refusal in as a third closure. It did not work: the tool still reported the pair at **47 tokens, 92% alike**, because the two error literals kept the two bodies the same shape and above the 40-token gate. That failure is worth recording — a shared helper alone does not close a duplication finding; the token count has to fall under the gate.
+
+    The second attempt names the refusal as a type, `UnsupportedResourceKind`, and each error type accepts it through `From`. That takes the error literal out of both call sites. The tool now reports nothing.
+
+    ## The scale factors are named where their siblings live
+
+    The card asks for `STRICT_META_SIZE_DIVISOR`, `PERMISSIVE_LIMIT_MULTIPLIER` and `PERMISSIVE_META_MULTIPLIER`. All three are in `constants/sizes.rs`, beside the numbers they scale, and each one now produces a named limit — `MAX_PATH_LENGTH_PERMISSIVE`, `MAX_URI_LENGTH_PERMISSIVE`, `MAX_META_SIZE_STRICT`, `MAX_META_SIZE_PERMISSIVE`. `size_validator.rs` holds no arithmetic at all now: every bound is one named constant.
+
+    One doc line was corrected while there. `MAX_URI_LENGTH_EXTENDED` said "Extended URI length for permissive mode". The default limits use it, and permissive is now twice it, so the line said the opposite of the code.
+
+    ## Checks
+
+    | Command | Result |
+    |---|---|
+    | `cargo fmt --all -- --check` | clean |
+    | `cargo clippy --workspace --all-targets -- -D warnings` | clean, 0 warnings |
+    | `cargo doc -p claude-agent --no-deps` | 26 warnings, none naming a touched file |
+    | `cargo nextest run --workspace` | 14027 run, 14023 passed, 0 skipped |
+    | `a_lagged_collector_is_an_error_not_a_reply_with_holes` | PASS |
+
+    The 4 failures are the known set on ^bh5ncd0: three `review_e2e` tests and `review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`. `the_swift_package_root_restores_the_directory_before_it_removes_it` passed.
+
+    ## For the next pass
+
+    `crates/claude-agent/src/embedded_resource.rs` is a new module. It is new to the review scope, so expect it to be read whole.
+  timestamp: 2026-08-10T17:46:41.976646+00:00
+- actor: claude-code
+  id: 01kzpchk53zy4e57fm4401hyjv
+  text: |
+    ### implement — changed
+    - evidence: 8 files — crates/claude-agent/src/embedded_resource.rs (new), constants/sizes.rs, content_block_processor.rs, content_security_validator.rs, path_validator.rs, size_validator.rs, lib.rs. All 24 findings are now checked. Re-run counts: `cargo clippy -p claude-agent --all-targets -- -W missing_docs` 9 rows in the named files before, 0 after (crate 187 to 178); `sah tool code_context duplication find` 1 pair before, 0 after; `sah tool code_context commented_code find` 0. Commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings, `cargo doc -p claude-agent --no-deps` no warning names a touched file, `cargo nextest run --workspace` 14027 run / 14023 passed / 0 skipped with only the 4 known ^bh5ncd0 failures, `a_lagged_collector_is_an_error_not_a_reply_with_holes` PASS.
+    - next: /review
+  timestamp: 2026-08-10T17:46:50.403496+00:00
 position_column: doing
 position_ordinal: '8480'
 title: claude-agent lagged-collector test races the scheduler under full-workspace parallelism
@@ -246,3 +327,38 @@ Capture the red output. Run the full `--workspace` suite with the failure output
 - [x] `crates/claude-agent/src/lib.rs:40` — missing documentation for a module.
 - [x] `crates/claude-agent/src/lib.rs:47` — missing documentation for a module.
 - [x] `crates/claude-agent/src/lib.rs:60` — missing documentation for a module.
+
+## Review Findings (2026-08-10 12:08)
+
+Scope: `HEAD~1..HEAD`, commit adf367235.
+
+The seven findings of the pass before this one are correct. `cargo clippy -p claude-agent --lib -- -W missing_docs` gives no `missing documentation for a module` warning for `crates/claude-agent/src/lib.rs`. Each of the eight modules has a header that tells why the module is there.
+
+The engine started 16 tasks. Two tasks failed. The result set is thus not complete.
+
+The review skill removes findings that ask you to change test code that is already in the repository. This removed 19 findings: 8 findings in `content_security_integration_tests.rs`, and 11 findings in the `mod tests` block of `size_validator.rs`.
+
+- [x] `crates/claude-agent/src/content_block_processor.rs:1324` — Public type ContentProcessingSummary should implement Clone but does not. All its fields (Vec, String, bool, usize, HashMap) are Clone-able, and the type is returned from public APIs where callers would reasonably expect to clone the result. Add Clone to the derive macro: `#[derive(Debug, Clone)]` on line 1324.
+- [x] `crates/claude-agent/src/content_security_validator.rs:875` — fn `validate_resource_content` is a near-duplicate of `process_embedded_resource` at crates/claude-agent/src/content_block_processor.rs:846 (73 tokens, 92% alike).
+- [x] `crates/claude-agent/src/path_validator.rs:61` — `PathValidationError` derives `PartialEq` but omits `Eq`. Since all fields (`String`, `usize`, `usize`) implement `Eq`, the error type should too for trait completeness. Add `Eq` to the derive list: `#[derive(Debug, Error, PartialEq, Eq)]`.
+- [x] `crates/claude-agent/src/size_validator.rs:25` — `SizeValidationError` derives `PartialEq` but omits `Eq`. Since all fields (`String`, `usize`, `usize`) implement `Eq`, the error type should too for consistency and downstream use. Add `Eq` to the derive list: `#[derive(Debug, Error, Clone, PartialEq, Eq)]`.
+- [x] `crates/claude-agent/src/size_validator.rs:28` — missing documentation for a variant.
+- [x] `crates/claude-agent/src/size_validator.rs:29` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:30` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:31` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:36` — `SizeLimits` derives `PartialEq` but omits `Eq`. Since all fields are numeric types implementing `Eq`, the struct should implement it too for forward compatibility and trait completeness. Add `Eq` to the derive list: `#[derive(Debug, Clone, PartialEq, Eq)]`.
+- [x] `crates/claude-agent/src/size_validator.rs:38` — Public struct field `max_path_length` lacks doc comment. All public items require documentation. Add doc comment above the field: `/// Maximum allowed path length.`.
+- [x] `crates/claude-agent/src/size_validator.rs:38` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:39` — Public struct field `max_uri_length` lacks doc comment. All public items require documentation. Add doc comment above the field: `/// Maximum allowed URI length.`.
+- [x] `crates/claude-agent/src/size_validator.rs:39` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:40` — Public struct field `max_base64_size` lacks doc comment. All public items require documentation. Add doc comment above the field: `/// Maximum allowed base64-encoded data size.`.
+- [x] `crates/claude-agent/src/size_validator.rs:40` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:41` — Public struct field `max_content_size` lacks doc comment. All public items require documentation. Add doc comment above the field: `/// Maximum allowed content size.`.
+- [x] `crates/claude-agent/src/size_validator.rs:41` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:42` — Public struct field `max_meta_size` lacks doc comment. All public items require documentation. Add doc comment above the field: `/// Maximum allowed metadata size.`.
+- [x] `crates/claude-agent/src/size_validator.rs:42` — missing documentation for a struct field.
+- [x] `crates/claude-agent/src/size_validator.rs:59` — fn `strict` is a near-duplicate of `default` at crates/claude-agent/src/size_validator.rs:46 (47 tokens, 97% alike).
+- [x] `crates/claude-agent/src/size_validator.rs:65` — Divisor 10 in strict limit calculation is unexplained. The relationship between default and strict metadata size limits should be expressed as a named constant to make the severity tier relationship explicit. Define a named constant like `const STRICT_META_SIZE_DIVISOR: usize = 10;` and use it in the calculation, or add a clarifying comment.
+- [x] `crates/claude-agent/src/size_validator.rs:70` — fn `permissive` is a near-duplicate of `default` at crates/claude-agent/src/size_validator.rs:46 (51 tokens, 93% alike).
+- [x] `crates/claude-agent/src/size_validator.rs:72` — Multiplier 2 in permissive limit is unexplained. The scaling factor between default and permissive path lengths should be a named constant. Define a named constant like `const PERMISSIVE_LIMIT_MULTIPLIER: usize = 2;` and use it here and on line 73.
+- [x] `crates/claude-agent/src/size_validator.rs:76` — Multiplier 10 in permissive metadata limit is unexplained. The scaling factor from default to permissive should be a named constant. Define a named constant like `const PERMISSIVE_META_MULTIPLIER: usize = 10;` and use it here.

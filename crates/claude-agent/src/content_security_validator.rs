@@ -18,6 +18,7 @@
 
 use crate::base64_validation;
 use crate::constants::sizes;
+use crate::embedded_resource::UnsupportedResourceKind;
 use crate::error::ToJsonRpcError;
 use crate::json_rpc_codes::{INVALID_PARAMS, SERVER_ERROR};
 use crate::size_validator::{SizeValidationError, SizeValidator};
@@ -225,6 +226,15 @@ pub enum ContentSecurityError {
     },
 }
 
+impl From<UnsupportedResourceKind> for ContentSecurityError {
+    fn from(_kind: UnsupportedResourceKind) -> Self {
+        Self::SecurityValidationFailed {
+            reason: "Unsupported resource type".to_string(),
+            policy_violated: "resource_type_allowlist".to_string(),
+        }
+    }
+}
+
 impl ToJsonRpcError for ContentSecurityError {
     fn to_json_rpc_code(&self) -> i32 {
         match self {
@@ -352,7 +362,7 @@ impl From<SizeValidationError> for ContentSecurityError {
 ///
 /// The level selects the whole preset — size limits, URI rules, heuristics and
 /// rate limits — rather than one setting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecurityLevel {
     /// Smallest limits, HTTPS only, every heuristic on. Use for untrusted
     /// input.
@@ -876,21 +886,11 @@ impl ContentSecurityValidator {
         &self,
         resource_content: &agent_client_protocol::schema::EmbeddedResource,
     ) -> Result<(), ContentSecurityError> {
-        use agent_client_protocol::schema::EmbeddedResourceResource;
-
-        match &resource_content.resource {
-            EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                self.validate_text_resource(text_resource)
-            }
-            EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                self.validate_blob_resource(blob_resource)
-            }
-            // Unknown or unsupported resource type - reject for security
-            _ => Err(ContentSecurityError::SecurityValidationFailed {
-                reason: "Unsupported resource type".to_string(),
-                policy_violated: "resource_type_allowlist".to_string(),
-            }),
-        }
+        crate::embedded_resource::dispatch(
+            resource_content,
+            |text_resource| self.validate_text_resource(text_resource),
+            |blob_resource| self.validate_blob_resource(blob_resource),
+        )
     }
 
     /// Validate the URI and the text of a text resource.
