@@ -20,6 +20,7 @@ tool:
     modules="$(cd "$(dirname "$(readlink -f "$(command -v eslint)")")/../.." && pwd -P)"
     config="$(mktemp -d)/eslint.config.cjs"
     cat > "$config" <<'ESLINT_CONFIG'
+    const path = require("path");
     const tseslint = require("typescript-eslint");
     const sonarjs = require("eslint-plugin-sonarjs");
     const { builtinRules } = require("eslint/use-at-your-own-risk");
@@ -35,25 +36,87 @@ tool:
       "PropertyDefinition",
       "AccessorProperty",
     ]);
-    const NO_MODIFIER = new Set();
     const MOCHA_MODIFIER = new Set(["only", "skip"]);
     const MODERN_MODIFIER = new Set([
       "only", "skip", "todo", "failing", "fails", "fail", "fixme", "slow",
       "concurrent", "sequential", "serial", "parallel", "shuffle",
       "each", "for", "runIf", "skipIf",
     ]);
-    const FRAMEWORK_CALL = new Map([
-      ["describe", MODERN_MODIFIER],
-      ["it", MODERN_MODIFIER],
-      ["test", MODERN_MODIFIER],
-      ["suite", MODERN_MODIFIER],
-      ["context", MOCHA_MODIFIER],
-      ["step", MOCHA_MODIFIER],
-      ["beforeAll", NO_MODIFIER],
-      ["beforeEach", NO_MODIFIER],
-      ["afterAll", NO_MODIFIER],
-      ["afterEach", NO_MODIFIER],
-    ]);
+    // The framework function names are READ out of the tree eslint resolves.
+    // Two files in that tree hold them. `eslint-plugin-sonarjs` exports the
+    // set it calls the functions "whose callbacks define test structure rather
+    // than business logic". `globals`, a declared dependency of that plugin,
+    // holds every name Mocha and Jest define.
+    const SONARJS_STRUCTURE = "eslint-plugin-sonarjs/cjs/helpers/test-frameworks.js";
+    // `globals` lists a framework's whole surface, so three of its own facts
+    // take the names that open no test. A name that is itself a `globals`
+    // environment is the framework namespace object, `mocha` and `jest`. A
+    // name in `globals.chai` is an assertion entry, `expect`. `run` is Mocha's
+    // delayed-start runner, which takes no callback at all, and it is the one
+    // name no other file in the tree separates.
+    const NOT_AN_OPENER = new Set(["run"]);
+    // What the read gives on `globals` 17 and `eslint-plugin-sonarjs` 4.2. It
+    // stands in only when the read throws, and the test
+    // `the_shipped_typescript_complexity_config_reads_its_framework_names`
+    // runs the shipped read and holds these two lists equal to its answer.
+    const MIRROR_FRAMEWORK_FUNCTION = [
+      "after", "afterAll", "afterEach", "before", "beforeAll", "beforeEach",
+      "context", "describe", "fcontext", "fdescribe", "fit", "ftest", "it",
+      "setup", "specify", "suite", "suiteSetup", "suiteTeardown", "teardown",
+      "test", "xcontext", "xdescribe", "xit", "xspecify", "xtest",
+    ];
+    const MIRROR_MODERN_FUNCTION = [
+      "afterAll", "afterEach", "beforeAll", "beforeEach", "describe", "fit",
+      "it", "suite", "test", "xdescribe", "xit", "xtest",
+    ];
+
+    function readFrameworkFunctions() {
+      try {
+        const sonarjsDir = path.dirname(require.resolve("eslint-plugin-sonarjs"));
+        const structure = require(SONARJS_STRUCTURE).TEST_FRAMEWORK_STRUCTURE_FUNCTIONS;
+        const globals = require(require.resolve("globals", { paths: [sonarjsDir] }));
+        const environment = new Set(Object.keys(globals));
+        const assertion = new Set(Object.keys(globals.chai));
+        const declared = [...Object.keys(globals.mocha), ...Object.keys(globals.jest)];
+        const opener = declared.filter(
+          (name) =>
+            !environment.has(name) && !assertion.has(name) && !NOT_AN_OPENER.has(name),
+        );
+        const modern = new Set([
+          ...Object.keys(globals.jest),
+          ...Object.keys(globals.vitest),
+        ]);
+        const functions = [...new Set([...structure, ...opener])];
+        return { functions, modern: functions.filter((name) => modern.has(name)) };
+      } catch (error) {
+        console.error(
+          "complexity-typescript: the framework function names did not resolve (" +
+            error.message + "); the mirror in the rule stands in",
+        );
+        return {
+          functions: MIRROR_FRAMEWORK_FUNCTION,
+          modern: MIRROR_MODERN_FUNCTION,
+        };
+      }
+    }
+
+    const FRAMEWORK_NAMES = readFrameworkFunctions();
+    const MODERN_FUNCTION = new Set(FRAMEWORK_NAMES.modern);
+    const FRAMEWORK_CALL = new Map(
+      FRAMEWORK_NAMES.functions.map((name) => [
+        name,
+        {
+          modifiers: MODERN_FUNCTION.has(name) ? MODERN_MODIFIER : MOCHA_MODIFIER,
+          rooted: false,
+        },
+      ]),
+    );
+    // `globals` ships no Playwright environment, so Playwright's one opener
+    // that no other framework spells is written. It is ROOTED: Playwright
+    // writes it `test.step` and never bare, so a bare `step(...)` is measured.
+    for (const name of ["step"]) {
+      FRAMEWORK_CALL.set(name, { modifiers: MOCHA_MODIFIER, rooted: true });
+    }
     const FRAMEWORK_ROOT = new Set(["test"]);
 
     function walk(node, visit) {
@@ -88,11 +151,13 @@ tool:
       const names = calleeNames(call);
       if (!names) return false;
       for (let at = names.length - 1; at >= 0; at -= 1) {
-        const modifiers = FRAMEWORK_CALL.get(names[at]);
-        if (!modifiers) continue;
+        const shape = FRAMEWORK_CALL.get(names[at]);
+        if (!shape) continue;
+        const roots = names.slice(0, at);
+        if (shape.rooted && roots.length === 0) return false;
         return (
-          names.slice(0, at).every((name) => FRAMEWORK_ROOT.has(name)) &&
-          names.slice(at + 1).every((name) => modifiers.has(name))
+          roots.every((name) => FRAMEWORK_ROOT.has(name)) &&
+          names.slice(at + 1).every((name) => shape.modifiers.has(name))
         );
       }
       return false;
@@ -258,22 +323,66 @@ through a chained call and through a tagged template, so `describe.only(...)`,
 each give a chain. A computed property, such as `it[key]`, stops the read and
 gives no chain.
 
-One name in the chain must be a FRAMEWORK FUNCTION. Each framework function
-accepts only the modifiers its own framework gives it:
-
-| Framework function | Modifier it accepts |
-| --- | --- |
-| `describe`, `it`, `test`, `suite` | `only`, `skip`, `todo`, `failing`, `fails`, `fail`, `fixme`, `slow`, `concurrent`, `sequential`, `serial`, `parallel`, `shuffle`, `each`, `for`, `runIf`, `skipIf` |
-| `context` | `only`, `skip` |
-| `step` | `only`, `skip` |
-| `beforeAll`, `beforeEach`, `afterAll`, `afterEach` | none |
-
-Each name BEFORE the framework function must be a FRAMEWORK ROOT. `test` is
-the one framework root. Each name AFTER the framework function must be a
+One name in the chain must be a FRAMEWORK FUNCTION. Each name BEFORE the
+framework function must be a FRAMEWORK ROOT, and each name AFTER it must be a
 modifier that framework function accepts. The wrapper reads the chain from the
 last name to the first, so `test.describe` takes `describe` as the framework
 function and `test` as the root, and `test.each(rows)` takes `test` as the
-framework function and `each` as a modifier.
+framework function and `each` as a modifier. `test` is the one framework root.
+
+### The framework function names are read, not written
+
+Three review rounds each found a hand-written list of framework spellings
+wrong in one direction or the other. The list is therefore READ, out of the
+same `node_modules` tree the config already resolves through. Two files carry
+it:
+
+- `eslint-plugin-sonarjs/cjs/helpers/test-frameworks.js` exports
+  `TEST_FRAMEWORK_STRUCTURE_FUNCTIONS`, which the plugin describes as the
+  functions "whose callbacks define test structure rather than business
+  logic": `describe`, `context`, `suite`, `it`, `test`, `specify`, `before`,
+  `after`, `beforeEach`, `afterEach`, `beforeAll`, `afterAll`, `xdescribe`,
+  `xcontext`, `xit`, `xtest`, `fdescribe`, `fcontext`, `fit` and `ftest`.
+- `globals`, which `eslint-plugin-sonarjs` declares as a dependency, holds
+  `globals.mocha` and `globals.jest`, every name each framework defines.
+  Mocha's TDD interface stands only there: `setup`, `teardown`, `suiteSetup`,
+  `suiteTeardown` and `xspecify`.
+
+Neither is a new dependency. The rule already loads
+`eslint-plugin-sonarjs`, and `globals` arrives with it under the rule's own
+install command, so both resolve wherever eslint resolves.
+
+`globals` lists a framework's whole surface, openers, hooks, namespace objects
+and assertion entries alike, so three facts inside the same package take the
+names that open no test. A name that is itself a `globals` environment is the
+framework namespace object: `mocha` and `jest`. A name in `globals.chai` is an
+assertion entry: `expect`. `run` is Mocha's delayed-start runner, which takes
+no callback at all; it is the one name no other file in the tree separates, so
+the config names it and this sentence states why. The two reads together give
+25 framework functions.
+
+Each framework function accepts the modifiers its own framework gives it, and
+which framework that is comes from the same read. A name `globals.jest` or
+`globals.vitest` declares accepts the full Jest, Vitest and Playwright set:
+`only`, `skip`, `todo`, `failing`, `fails`, `fail`, `fixme`, `slow`,
+`concurrent`, `sequential`, `serial`, `parallel`, `shuffle`, `each`, `for`,
+`runIf` and `skipIf`. A name only `globals.mocha` declares accepts the two
+Mocha spells, `only` and `skip`. `context` therefore accepts `only` and `skip`
+and nothing else, which is what keeps `context.each(rows)(fn)` measured.
+
+`globals` ships no Playwright environment, so Playwright's one opener that no
+other framework spells — `step` — is written. It is ROOTED: a rooted framework
+function needs a framework root before it, and Playwright writes `test.step`
+and never a bare `step`. A bare `step(...)` and a `step.skip(...)` are
+therefore measured, which is right, because `step` is a usual name for a build
+step, a wizard step and a saga step.
+
+A `globals` release that adds an opener, or a sonarjs release that moves the
+helper, is caught rather than silent. The config carries a written mirror of
+what the read answers, and the acceptance test
+`the_shipped_typescript_complexity_config_reads_its_framework_names` runs the
+SHIPPED config under node, holds the mirror equal to the read, and fails when
+the config falls back to that mirror instead of reading.
 
 The root is what holds the Playwright spelling. Playwright puts its whole
 surface on the `test` root: `test.describe`, `test.beforeEach`,
@@ -311,12 +420,30 @@ Mocha forms — `describe`, `it`, `test`, `suite`, `context`, the four hooks,
 `harness.describe`, `runner.test`, a plain call and a named helper inside a
 `describe` block.
 
-`context` was measured against its own removal. Over the 444 `.ts` and `.tsx`
-files under `apps/`, a config that drops `context` from the framework
-functions reports the same 30 findings, key for key. It buys nothing here, and
-it costs the Mocha suite carve-out: `context`, `context.only` and
-`context.skip` each give a finding without it. `context` therefore stays, with
-the two modifiers Mocha gives it.
+A second probe of 15 spellings holds the read itself, on the same body. The 13
+Mocha and Jest globals a written list had left out — `before`, `after`,
+`setup`, `teardown`, `suiteSetup`, `suiteTeardown`, `specify`, `xdescribe`,
+`xcontext`, `xit`, `xspecify`, `fit` and `xtest` — give no finding, and the
+bare `step(...)` and `step.skip(...)` give one each. The config from before
+the read gave the opposite answer on all 15.
+
+A third probe of 40 adversarial spellings holds the rest. The 26 test
+spellings it holds give no finding, the Playwright surface that opens no test
+gives one each — `test.use`, `test.extend`, `test.describe.configure`,
+`test.info` and `test.setTimeout` — and so do `describe.describe`,
+`describe.test`, `step.test`, `pipeline.step`, `harness.it`, `it[key]` and
+`describe[key].only`. Four spellings stay exempt that no framework writes:
+`test.test`, `test.context`, `test.suite` and `test.it`. Each is rooted at
+`test`, which is itself the mark, so no finding is dropped on code a person
+writes.
+
+`context` was measured against its own removal before the read decided it.
+Over the 444 `.ts` and `.tsx` files under `apps/`, a config that drops
+`context` from the framework functions reports the same 30 findings, key for
+key. It buys nothing here, and it costs the Mocha suite carve-out: `context`,
+`context.only` and `context.skip` each give a finding without it. Both reads
+name `context`, so it stays whatever this workspace measures, with the two
+modifiers Mocha gives it.
 
 ### Why the mark and not the file name
 
@@ -336,8 +463,10 @@ the exemption once for each test file, and a person must write it again for
 every new one.
 
 The mark at the definition is one fact, stated one time, in the file that owns
-the whole eslint invocation. It drops exactly the findings the two prompt rules
-exempt.
+the whole eslint invocation. It drops the findings the two prompt rules exempt,
+and it drops no other: three probes of 44, 15 and 40 spellings each hold the
+answer for every spelling, and the framework function names come from the
+`node_modules` tree rather than from a written list.
 
 ### What the carve-out costs
 
@@ -359,15 +488,15 @@ and 4 `it(...)` callbacks over the complexity gate. It adds none, and it drops
 nothing outside a test-framework callback. The 19 named helpers in test files
 that score over the complexity gate all stay.
 
-The head offset and the segment grammar hold that count where it was. Each of
-the 40 drops is a `describe` or an `it` callback written as a plain arrow. No
-file under `apps/` holds a complex method inside a test callback, a
-`context.run` call, a `context.each` call or a Playwright spelling. A
-key-by-key comparison against the run before the head offset, and against the
-run before the segment grammar, shows no finding gained and no finding lost in
-either direction. Every defect the three corrections closed was real, and
-every one was silent here, which is why the fixture pair, and not this
-workspace, is what proves them.
+The head offset, the segment grammar and the read hold that count where it
+was. Each of the 40 drops is a `describe` or an `it` callback written as a
+plain arrow. No file under `apps/` holds a complex method inside a test
+callback, a `context.run` call, a `context.each` call, a Playwright spelling,
+a bare `step` call, or any of the 13 Mocha and Jest globals the read added. A
+key-by-key comparison against the run before each of the three shows no
+finding gained and no finding lost in either direction. Every defect the
+corrections closed was real, and every one was silent here, which is why the
+fixture pair and the probes, and not this workspace, are what prove them.
 
 ## Why the core length rule and not the sonarjs one
 

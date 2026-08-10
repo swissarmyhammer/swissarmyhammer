@@ -6,19 +6,22 @@
 //   moved to `stepBand`.
 // - `mixState` holds the same shape at 204 counted lines.
 //
-// It also holds seven blocks that stand over a gate and that the test
+// It also holds twenty blocks that stand over a gate and that the test
 // carve-out exempts. Three carry the Vitest, Jest and Mocha spelling: a
 // `describe(...)` block, a `describe.only(...)` block and an
 // `it.each(rows)(...)` block. Four carry the Playwright spelling, which puts
 // the framework function on the `test` root: `test.describe(...)`,
 // `test.describe.serial(...)`, `test.step(...)` and `test.beforeEach(...)`.
-// The comment above each group states its numbers.
+// Thirteen carry a Mocha or a Jest global that no other block names. The
+// comment above each group states its numbers.
 //
 // The tool must report nothing. A threshold that stopped applying would
 // report one of the two functions, a carve-out that stopped reading a test
-// modifier would report one of the two Vitest modifier blocks, and a
-// carve-out that reads only a modifier after the root would report all four
-// Playwright blocks. Any of the three makes the pair fail.
+// modifier would report one of the two Vitest modifier blocks, a carve-out
+// that reads only a modifier after the root would report all four Playwright
+// blocks, and a framework list that stopped reading `globals.mocha` and
+// `globals.jest` would report the thirteen. Any of the four makes the pair
+// fail.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -685,6 +688,292 @@ test.step("the mark on a playwright step", () => {
 });
 
 test.beforeEach(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+// The thirteen blocks below carry the mark on a Mocha or a Jest global the
+// four blocks above do not name. `globals.mocha` names `before`, `after`,
+// `setup`, `teardown`, `suiteSetup`, `suiteTeardown`, `specify`, `xdescribe`,
+// `xcontext`, `xit` and `xspecify`; `globals.jest` adds `fit` and `xtest`.
+// Mocha's own suite hooks are `before` and `after`, and not the `beforeAll`
+// and `afterAll` Jest and Vitest spell.
+//
+// The rule reads that list out of the `globals` package inside the
+// `eslint-plugin-sonarjs` tree, so a hand-written list can no longer miss one.
+// Each callback holds the failing fixture's `foldGrid` shape, which scores 21
+// against the cognitive complexity gate of 15, so a read that stops giving one
+// of the thirteen reports it and the pair fails.
+
+before(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+after(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+setup(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+teardown(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+suiteSetup(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+suiteTeardown(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+specify("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+xdescribe("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+xcontext("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+xit("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+xspecify("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+fit("the mark on a framework global", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+xtest("the mark on a framework global", () => {
   const grid = [[1, 2], [3, 4]];
   const limit = 3;
   let band = 0;

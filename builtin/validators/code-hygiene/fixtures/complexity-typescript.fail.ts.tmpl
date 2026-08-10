@@ -1,7 +1,7 @@
 // The failing fixture of the `complexity-typescript` tool rule.
 //
 // Every guard below stands inside a `describe(...)` block, and the tool must
-// report all seven. A tool upgrade that stops reporting one of them makes the
+// report all eight. A tool upgrade that stops reporting one of them makes the
 // doctor mark the rule unusable.
 //
 // - `foldGrid` nests six control-flow blocks and scores 21 against the
@@ -13,6 +13,8 @@
 // - `context.run(...)`, `context.each(rows)(...)` and `context.for(rows)(...)`
 //   each hold the same shape in the callback of a call whose root identifier
 //   is a test-framework name but which is not a test-framework call.
+// - `step(...)` holds the same shape in the callback of a BARE call to a name
+//   only Playwright spells, and Playwright spells it `test.step` alone.
 //
 // The `describe` block holds the second half of the carve-out contract. The
 // two prompt rules this rule supersedes exempt a function marked as a test,
@@ -36,6 +38,11 @@
 // also usual collection method names. The mark must read the segment that
 // names the framework function, and then accept only the modifiers that
 // framework gives that function.
+//
+// The bare `step(...)` call holds the third narrow direction. `globals.mocha`
+// and `globals.jest` name no `step`, and Playwright puts it on the `test`
+// root. A mark that takes `step` with no root therefore exempts a build step,
+// a wizard step and a saga step, which the two prompt rules both measure.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -500,6 +507,42 @@ describe("the complexity and length gates", () => {
   });
 
   context.run(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  /**
+   * Runs one named build step.
+   *
+   * `step` is a usual name for a build step, a wizard step and a saga step.
+   * No framework in scope spells it bare: Playwright writes `test.step` and
+   * nothing else, and `globals.mocha` and `globals.jest` name neither. A mark
+   * that takes a bare `step` therefore exempts ordinary code.
+   *
+   * @param name - What the step builds.
+   * @param build - The work of the step.
+   * @returns What `build` returns.
+   */
+  const step = (name: string, build: () => number): number =>
+    name.length + build();
+
+  step("build the grid", () => {
     const grid: number[][] = [];
     const limit = 3;
     let band = 0;
