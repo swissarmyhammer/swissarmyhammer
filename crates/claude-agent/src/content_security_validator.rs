@@ -1,3 +1,21 @@
+//! The policy layer that refuses content which is well formed but hostile.
+//!
+//! The rest of the content pipeline asks whether a block has the right shape.
+//! This module asks a different question: whether a block of the right shape
+//! should be accepted at all. A URI on a scheme the deployment does not allow, a
+//! URI aimed at the loopback address or a private network range, text carrying a
+//! script-injection pattern, bytes whose sniffed type disagrees with the type
+//! they declare — each is valid ACP and each is refused here.
+//!
+//! The answer is data rather than control flow. A [`SecurityPolicy`] holds the
+//! allowed schemes, the blocked URI patterns, the blocked address ranges, the
+//! array bounds and the request-rate budget, and turns each heuristic on or off
+//! by a named field. [`SecurityPolicy::strict`], [`SecurityPolicy::moderate`]
+//! and [`SecurityPolicy::permissive`] are the three presets a deployment chooses
+//! between. Tightening the agent is therefore a change to a policy value, not a
+//! new branch in a validator, and two deployments can differ without the code
+//! differing.
+
 use crate::base64_validation;
 use crate::constants::sizes;
 use crate::error::ToJsonRpcError;

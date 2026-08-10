@@ -1,3 +1,21 @@
+//! Whether a filesystem path an ACP client sent may be used, and for what.
+//!
+//! ACP requires an absolute path on every file operation, which makes the path
+//! itself the security boundary for `fs/read_text_file`, `fs/write_text_file`
+//! and the terminal tools. The order of the checks is what makes the boundary
+//! hold: a path is refused first for being empty, over-long, null-byte-bearing
+//! or relative, then it is canonicalized — which resolves `..` and follows
+//! symbolic links — and only the canonical path is matched against the blocked
+//! prefixes and the allowed roots. Matching before normalization would let
+//! `/allowed/../etc/passwd`, or a symbolic link pointing out of an allowed root,
+//! walk straight through. The raw-string traversal check that runs earlier is a
+//! cheap early rejection, never the authoritative one.
+//!
+//! [`PathValidator::validate_permissions`] answers the second question, whether
+//! this process may read, write or execute the file the path resolved to. A
+//! caller therefore learns that an operation will fail, and why, before it opens
+//! anything.
+
 use crate::size_validator::{SizeValidationError, SizeValidator};
 use std::path::{Path, PathBuf};
 use thiserror::Error;

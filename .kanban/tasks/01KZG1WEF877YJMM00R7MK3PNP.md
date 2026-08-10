@@ -93,6 +93,106 @@ comments:
     - evidence: 1 file — crates/claude-agent/src/lib.rs. Red output captured: `a lagged collector cannot prove the reply is whole: "one two three four "` at lib.rs:844, 5 failures in 200 runs under 48 CPU hogs. After the fix: 300/300 under the same load and 200/200 with no load, 500 runs at 100 percent. Commands: `cargo nextest run -p claude-agent --lib a_lagged_collector_is_an_error_not_a_reply_with_holes` (x500), `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace` (14027 tests, 14023 passed, 4 known failures on ^bh5ncd0).
     - next: /review
   timestamp: 2026-08-10T16:45:47.180806+00:00
+- actor: claude-code
+  id: 01kzp9acyb81akgf5z2ctc6c1q
+  text: |
+    ### review — findings
+    - scope: `review sha HEAD~1..HEAD` (commit ff5cb68db)
+    - evidence: 7 findings, 7 confirmed, 0 refuted — crates/claude-agent/src/lib.rs:11, :25, :33, :35, :40, :47, :60
+    - detail: each finding is a module declaration with no module documentation. The modules are `acp_error_conversion`, `base64_processor`, `content_block_processor`, `content_security_validator`, `mime_type_validator`, `path_validator`, `size_validator`. Each of these source files starts with a `use` statement and has no `//!` header. The other modules in the same list do have one.
+    - no finding asks to refactor a test that already existed, so the review exception for existing tests does not apply.
+    - next: add a `//!` module document to each of the seven modules, then review again.
+  timestamp: 2026-08-10T16:50:28.939284+00:00
+- actor: claude-code
+  id: 01kzp9b4jrr0jt20ydc5fsp001
+  text: |
+    ### finish iteration 1 — findings
+    - red captured first, as the card asks: 5 failures in 200 runs under 48 CPU hogs on an 18-core machine. The two earlier attempts on the card used about 200 hogs, which starves the process evenly; 48 hogs starve the two worker threads unequally, and that is what lets the collector run between two sends. The panic text: `a lagged collector cannot prove the reply is whole: "one two three four "` — the whole reply, no hole, so the drain was correct to return Ok.
+    - implement: changed — 1 file. The lag is now forced by the ORDER of the two steps: the receiver subscribes before the first send, and the collector task starts only after the last one. The option was chosen over the other two: driving the broadcast directly tests tokio, not `collect_response_content`, and a paused clock orders nothing because the race is between two threads and no send waits on the clock. No retry.
+    - the `Lagged` path is proven still live: with `if skipped > 0` temporarily changed to `if false && skipped > 0`, the test fails and the reply it would return is `"four "` — three chunks gone. The production line was put back at once.
+    - one assertion tightened: `contains("dropped")` also matched the `Backstop` message, so the test could pass through the wrong failure path. It now reads `contains("the notification broadcast dropped")`.
+    - test: 500 repeat runs at 100 percent — 300/300 under the same 48-hog load, 200/200 with no load. `cargo nextest run --workspace` 14027 run, 14023 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set.
+    - commit: ff5cb68db
+    - review: findings — 7 modules of `crates/claude-agent/src/lib.rs` have no module documentation: lines 11, 25, 33, 35, 40, 47, 60
+  timestamp: 2026-08-10T16:50:53.144722+00:00
+- actor: claude-code
+  id: 01kzp9na27r681c0rmh59jf2zm
+  text: |
+    Card picked up again for the 7 open findings. Research done before any edit.
+
+    ## The gap was measured, not guessed
+
+    The finding comes from `missing-docs-rust`, which runs `cargo clippy -W missing_docs`. That same command was run against this crate to get the full list, instead of a text search:
+
+    ```
+    cargo clippy -p claude-agent --all-targets --message-format json -- -W missing_docs
+    ```
+
+    For `claude-agent` it reports exactly 7 rows that read "missing documentation for a module", and they are the 7 lines on the card. So no other module of this crate has the same gap by the rule that made the finding.
+
+    ## One more module has the same gap, below the rule
+
+    A text search for files with no `//!` line at all found 8 files, not 7. The eighth is `content_security_integration_tests.rs`. Clippy is quiet about it because the module is private and `#[cfg(test)]` gated, and the `missing-docs` rule exempts a module gated that way. It is still the same gap, so it gets a header too.
+
+    ## Four files looked like a gap and are not
+
+    `tool_classification.rs`, `tool_types.rs`, `tools.rs` and `url_validation.rs` do not start with `//!` on line 1, but each has a full `//!` header behind a leading `//` TODO comment. A plain comment before an inner doc comment is legal, so these modules are documented and clippy is quiet about them. They are left alone.
+
+    ## Facts read from the source, to keep the headers true
+
+    - `path_validator` puts the checks in this order: empty, length, null bytes, absolute, quick string traversal, canonicalize (only when `strict_canonicalization` is on), component traversal, blocked prefixes, allowed roots. The authoritative traversal check runs after normalization.
+    - `content_block_processor` batch recovery is optional (`enable_batch_recovery`). With recovery on, a failed block is retried up to `MAX_RETRIES` with backoff, a placeholder replaces it, and the batch returns a summary — but if every block fails, the first error is returned instead.
+    - `size_validator.validate_base64_size` measures the string while it is still encoded, so an oversized payload is never decoded.
+    - `content_security_validator` refuses a URI by scheme list, by blocked pattern, and by SSRF check; it refuses text on six script-injection patterns; each switch is a field of `SecurityPolicy`.
+    - `base64_processor` matches decoded bytes against a table of DOS, ELF and Mach-O magic signatures.
+  timestamp: 2026-08-10T16:56:26.439014+00:00
+- actor: claude-code
+  id: 01kzpa8ek2np42mkn5w3jy07vz
+  text: |
+    All 7 findings are closed. 8 files changed, no production code changed.
+
+    ## What was written
+
+    A `//!` header on each of the 7 modules the findings name, and on `content_security_integration_tests` as well. Each header says what the module is for and why it is separate, in the voice of the headers that already pass. None of them repeats the module name:
+
+    - `size_validator` — why one limit set, and why a base64 payload is measured while still encoded so an oversized string never allocates.
+    - `mime_type_validator` — a declared MIME type is a claim, not a fact, so the module answers both halves: is the type on the list, and do the magic bytes agree with it.
+    - `base64_processor` — decoding is where a caller's string first becomes bytes, so the decode step is the gate, and the order of size, decode, MIME and magic-signature checks is the point.
+    - `content_block_processor` — every block kind must reduce to text a model can read, and this module owns the ORDER the checks below it run in. Batch recovery is written as optional, because it is.
+    - `content_security_validator` — the shape checks live elsewhere; this one refuses content that is well formed and still hostile, and it answers with data (`SecurityPolicy`) rather than branches.
+    - `path_validator` — the path IS the security boundary, and matching before canonicalization would let `/allowed/../etc/passwd` walk through.
+    - `acp_error_conversion` — one exit for four unrelated error types, which is what makes a correlation identifier possible at all.
+    - `content_security_integration_tests` — why it exists beside the per-module unit tests: it proves the checks compose.
+
+    ## The claims in the headers were read from the source, not assumed
+
+    Each factual statement was checked against the code first. Two of them changed what was written:
+
+    - Batch recovery is behind `enable_batch_recovery`, and if EVERY block fails the first error is returned instead of a summary. The header says both.
+    - Canonicalization runs only when `strict_canonicalization` is on, and the raw-string traversal check is an early rejection and not the authoritative one. The source says so in as many words, so the header says so too.
+
+    ## Checks
+
+    | Command | Result |
+    |---|---|
+    | `cargo fmt --all -- --check` | clean |
+    | `cargo clippy --workspace --all-targets -- -D warnings` | clean, 0 warnings |
+    | `cargo doc -p claude-agent --no-deps` | builds; 0 warnings name any of the 8 files |
+    | `cargo clippy -p claude-agent -- -W missing_docs`, module rows | 0, down from 7 |
+    | `cargo nextest run --workspace` | 14027 run, 14023 passed, 0 skipped |
+    | `a_lagged_collector_is_an_error_not_a_reply_with_holes` | PASS |
+
+    The 4 failures are the known set on ^bh5ncd0: three `review_e2e` tests and `review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`. `the_swift_package_root_restores_the_directory_before_it_removes_it` passed.
+
+    One `cargo doc` warning does name `mime_type_validator.rs`, at the line that says `is_mime_type_secure` links to the private `Self::is_mime_type_blocked`. It is not new. The same doc comment is at line 621 of the file in `HEAD`; the new header pushed it to 638.
+  timestamp: 2026-08-10T17:06:53.666832+00:00
+- actor: claude-code
+  id: 01kzpa8ypb3eh9zdrmrfq6ntpd
+  text: |
+    ### implement — changed
+    - evidence: 8 files, 143 insertions, 0 deletions, all in `crates/claude-agent/src/` — acp_error_conversion.rs, base64_processor.rs, content_block_processor.rs, content_security_integration_tests.rs, content_security_validator.rs, mime_type_validator.rs, path_validator.rs, size_validator.rs. All 7 findings are now checked. The gap set was measured with the tool that made the finding (`cargo clippy -W missing_docs`), which found 7 module rows in this crate before and 0 after; a text search found one more module with no `//!` at all, `content_security_integration_tests`, which clippy skips because it is private and `#[cfg(test)]` gated, and it got a header too. Commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings, `cargo doc -p claude-agent --no-deps` builds with 0 warnings against the new headers, `cargo nextest run --workspace` 14027 run / 14023 passed / 0 skipped with only the 4 known ^bh5ncd0 failures, and `a_lagged_collector_is_an_error_not_a_reply_with_holes` PASS.
+    - next: /review
+  timestamp: 2026-08-10T17:07:10.155217+00:00
 position_column: doing
 position_ordinal: '8480'
 title: claude-agent lagged-collector test races the scheduler under full-workspace parallelism
@@ -136,3 +236,13 @@ Do not answer with a retry. A retry hides the race the test exists to describe.
 
 Capture the red output. Run the full `--workspace` suite with the failure output retained, or run the test in a loop with an artificially slowed collector, and record the assertion text word for word before changing the test.
 #tool-validators
+
+## Review Findings (2026-08-10 11:47)
+
+- [x] `crates/claude-agent/src/lib.rs:11` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:25` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:33` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:35` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:40` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:47` — missing documentation for a module.
+- [x] `crates/claude-agent/src/lib.rs:60` — missing documentation for a module.

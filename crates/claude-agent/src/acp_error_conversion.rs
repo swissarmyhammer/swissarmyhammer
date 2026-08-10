@@ -1,3 +1,19 @@
+//! The one exit every content-pipeline error takes on its way to the client.
+//!
+//! Four unrelated error types can reject a piece of content:
+//! [`crate::base64_processor`], [`crate::mime_type_validator`],
+//! [`crate::content_security_validator`] and [`crate::content_block_processor`]
+//! each own one. All four leave through [`convert_error_to_acp`], so the client
+//! reads the same JSON-RPC code, message and `data` shape whichever stage did
+//! the rejecting, and a new error type inherits that shape by implementing
+//! [`crate::error::ToJsonRpcError`] rather than by writing a payload.
+//!
+//! The single exit is what makes [`ErrorContext`] possible. It stamps a
+//! correlation identifier, the pipeline stage and the content type onto the
+//! structured data, so one failure can be matched between the client's error and
+//! the agent's log. Per-type conversion could not hold that promise, because
+//! each type would stamp its own fields and drift from the others.
+
 use crate::error::{JsonRpcError, ToJsonRpcError};
 use crate::json_rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use serde_json::{json, Value};

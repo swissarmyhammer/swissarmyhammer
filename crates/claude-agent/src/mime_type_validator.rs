@@ -1,3 +1,19 @@
+//! Whether a declared MIME type is accepted, and whether the bytes agree with
+//! it.
+//!
+//! The MIME type on a content block is caller-supplied, so it is a claim and not
+//! a fact. This module answers both halves of that claim: whether the type is on
+//! the accepted list for its category, and whether the leading magic bytes of
+//! the payload are the ones that type promises. A PNG signature sent under an
+//! `image/jpeg` label passes the first half and fails the second, which is the
+//! case a list check alone would let through.
+//!
+//! [`MimeTypePolicy`] holds the accepted and blocked types for each category and
+//! how hard each half is enforced, with [`MimeTypePolicy::strict`],
+//! [`MimeTypePolicy::moderate`] and [`MimeTypePolicy::permissive`] as the
+//! presets. Accepting a new format is a new row in the tables here, so no call
+//! site ever learns a type name.
+
 use crate::error::ToJsonRpcError;
 use crate::json_rpc_codes::INVALID_PARAMS;
 use serde_json::{json, Value};

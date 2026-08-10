@@ -1,3 +1,23 @@
+//! One answer to "is this too big", for every caller-supplied input in the
+//! crate.
+//!
+//! Path length, URI length, base64 payload, decoded resource and `_meta` object
+//! each need a bound, and the content path and the file path need the *same*
+//! bound for the same field. Held separately those numbers drift apart, and no
+//! deployment can move them as a set. [`SizeLimits`] is that set in one value,
+//! with [`SizeLimits::strict`] and [`SizeLimits::permissive`] either side of the
+//! default.
+//!
+//! The bound is checked before the work rather than after it. A base64 payload
+//! is measured while it is still encoded, so an oversized string is refused
+//! without ever being decoded into memory — which is the reason this module sits
+//! under [`crate::base64_processor`] and [`crate::path_validator`] rather than
+//! beside them.
+//!
+//! Every refusal is one [`SizeValidationError::SizeExceeded`] naming the field,
+//! the actual size and the limit, so a client is told which bound it crossed and
+//! by how much.
+
 use crate::constants::sizes;
 use thiserror::Error;
 
