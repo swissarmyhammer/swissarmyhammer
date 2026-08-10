@@ -803,6 +803,7 @@ fn report_with_tally(attempted: TasksAttempted, failed: TasksFailed) -> ReviewRe
         vec![],
         &FleetTally::new(attempted, failed),
         &[],
+        &[],
         &swissarmyhammer_validators::review::ToolReport::default(),
         "now",
     )

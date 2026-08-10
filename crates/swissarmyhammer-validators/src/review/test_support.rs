@@ -30,7 +30,9 @@ use swissarmyhammer_common::test_utils::shell_escape_path;
 use crate::review::scope::{
     BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
 };
-use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
+use crate::validators::types::{
+    RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch, FIXTURES_DIR_NAME,
+};
 use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
 /// The engine's own validator↔file pairing, re-exported through the shared seam
@@ -92,7 +94,7 @@ pub fn tool_rule_work<'a>(
 /// the name would otherwise write the fixture pair outside the directory the
 /// doctor check reads.
 pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
-    let fixtures = base.join("fixtures");
+    let fixtures = base.join(FIXTURES_DIR_NAME);
     std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
     std::fs::write(
         join_confined(&fixtures, &format!("{rule}.fail.rs")),
@@ -124,7 +126,7 @@ pub const FIXTURE_RUNS_PER_PROOF: usize = 2;
 /// directory.
 pub fn write_counted_tool_rule_fixtures(base: &Path, rule: &str) {
     write_tool_rule_fixtures(base, rule);
-    std::fs::write(base.join("fixtures").join(FIXTURE_RUN_MARKER), "")
+    std::fs::write(base.join(FIXTURES_DIR_NAME).join(FIXTURE_RUN_MARKER), "")
         .expect("write the fixture run marker");
 }
 

@@ -140,6 +140,50 @@ pub fn plant_diff(repo: &TestRepo) {
     );
 }
 
+/// The project validator set [`plant_project_validator_set`] writes.
+pub const PROJECT_VALIDATOR_SET: &str = "probe-hygiene";
+
+/// The fail fixture that set ships, as the review scope holds its path.
+///
+/// It is stored under a real source extension on purpose: a project set is free
+/// to name its fixtures that way, and the exclusion must come from the store's
+/// own structure rather than from the file's name.
+pub const FILE_PROJECT_FIXTURE: &str = ".validators/probe-hygiene/fixtures/undocumented.fail.rs";
+
+/// Plant a PROJECT validator set at `<repo>/.validators/<set>/`: a manifest
+/// matching every Rust file, and one rule.
+///
+/// Call this BEFORE [`plant_diff`], so the set is part of the committed
+/// baseline rather than part of the change under review — a validator set is
+/// standing configuration, and the change a review reads is the FIXTURE
+/// ([`plant_validator_fixture`]).
+pub fn plant_project_validator_set(repo: &TestRepo) {
+    repo.write(
+        &format!(".validators/{PROJECT_VALIDATOR_SET}/VALIDATOR.md"),
+        &format!(
+            "---\nname: {PROJECT_VALIDATOR_SET}\ndescription: A project set with its own fixtures.\n\
+             match:\n  files:\n    - \"**/*.rs\"\n---\n\n# {PROJECT_VALIDATOR_SET}\n"
+        ),
+    );
+    repo.write(
+        &format!(".validators/{PROJECT_VALIDATOR_SET}/rules/undocumented.md"),
+        "---\nname: undocumented\ndescription: Public items carry documentation\n---\n\n\
+         Report every public item with no documentation.\n",
+    );
+}
+
+/// Write the fail fixture of the set [`plant_project_validator_set`] planted.
+///
+/// It carries an undocumented public item — the very defect a missing-docs rule
+/// reports — so a review that read it as ordinary source would fire on the file
+/// built to make it fire.
+pub fn plant_validator_fixture(repo: &TestRepo) {
+    repo.write(
+        FILE_PROJECT_FIXTURE,
+        "pub fn undocumented_on_purpose(value: f64) -> f64 {\n    value * value\n}\n",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // On-disk code_context index (production schema, deterministic rows).
 //

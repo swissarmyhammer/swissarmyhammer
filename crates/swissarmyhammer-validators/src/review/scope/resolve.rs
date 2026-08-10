@@ -79,25 +79,36 @@ pub(super) fn resolve_scope_files(
 /// consistent with the other scopes, never an error. Each excluded path is logged
 /// at DEBUG with its FULL path and the excluding pattern's source, never truncated.
 pub(super) fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> ResolvedScope {
-    let ResolvedScope {
-        files,
-        file_changes,
-        after_content,
-        change_purpose,
-        blame_at,
-    } = resolved;
-
-    let mut kept: Vec<String> = Vec::with_capacity(files.len());
-    for path in files {
-        match review_ignore_reason(matcher, &path) {
+    let mut kept: Vec<String> = Vec::with_capacity(resolved.files.len());
+    for path in &resolved.files {
+        match review_ignore_reason(matcher, path) {
             Some(pattern) => tracing::debug!(
                 path = %path,
                 pattern = %pattern,
                 "review scope: excluded ignored path"
             ),
-            None => kept.push(path),
+            None => kept.push(path.clone()),
         }
     }
+
+    retain_scope_files(resolved, kept)
+}
+
+/// Narrow `resolved` to the `kept` paths, keeping its three views of the scope
+/// (paths, sem-diff inputs, after-content) mutually consistent.
+///
+/// The single place a scope-stage filter narrows a [`ResolvedScope`], shared by
+/// the `.reviewignore` filter above and the validator-fixture split in
+/// [`super::fixtures`], so the two cannot drop a path from one view and leave it
+/// in another.
+pub(super) fn retain_scope_files(resolved: ResolvedScope, kept: Vec<String>) -> ResolvedScope {
+    let ResolvedScope {
+        files: _,
+        file_changes,
+        after_content,
+        change_purpose,
+        blame_at,
+    } = resolved;
 
     let keep: BTreeSet<&str> = kept.iter().map(String::as_str).collect();
     let file_changes = file_changes

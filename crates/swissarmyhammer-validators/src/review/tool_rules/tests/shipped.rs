@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-use crate::doctor::{FIXTURES_DIR_NAME, FIXTURE_TEMPLATE_SUFFIX};
+use crate::doctor::FIXTURE_TEMPLATE_SUFFIX;
 use crate::review::scope::{FileWork, ProbeNames, RuleNames};
 use crate::review::test_support::builtin_loader;
+use crate::validators::types::FIXTURES_DIR_NAME;
 
 /// Acceptance: the shipped Rust tool rule reports an undocumented public
 /// item on a real cargo workspace, through the real clippy pipeline.

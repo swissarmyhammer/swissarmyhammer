@@ -1039,6 +1039,15 @@ pub struct RuleLoadFailure {
     pub error: String,
 }
 
+/// The directory inside a validator set that carries its tool-rule fixtures.
+///
+/// Part of a set's on-disk shape, beside `VALIDATOR.md` and `rules/`, and the
+/// single source of truth for where fixture data lives. Two consumers read it:
+/// the doctor runs each tool rule against `fixtures/<rule>.fail.*` and
+/// `fixtures/<rule>.pass.*`, and the review scope drops a changed file under it
+/// from the work-list, because a fail fixture exists to make its rule fire.
+pub const FIXTURES_DIR_NAME: &str = "fixtures";
+
 /// A RuleSet package containing a manifest and multiple rules.
 ///
 /// - VALIDATOR.md contains the manifest with shared configuration
@@ -1083,6 +1092,14 @@ impl RuleSet {
     /// Get the VALIDATOR.md prose body (validator-wide guidance), trimmed.
     pub fn manifest_body(&self) -> &str {
         &self.manifest_body
+    }
+
+    /// The set's fixtures directory, `<base_path>/fixtures`.
+    ///
+    /// Derived from the set's own base path, so it names the fixtures of THIS
+    /// set whichever layer loaded it — builtin, user, or project.
+    pub fn fixtures_dir(&self) -> PathBuf {
+        self.base_path.join(FIXTURES_DIR_NAME)
     }
 
     /// Check if this RuleSet matches the given context.

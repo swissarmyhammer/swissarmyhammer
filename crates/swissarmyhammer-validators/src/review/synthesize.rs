@@ -40,8 +40,8 @@ use crate::review::fleet::{
     ReviewProgressSender,
 };
 use crate::review::scope::{
-    as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, Scope,
-    SkippedFile, WorkList,
+    as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, ExcludedFile,
+    Scope, SkippedFile, WorkList,
 };
 use crate::review::tool_health::ToolHealthCache;
 use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
@@ -133,8 +133,11 @@ pub struct ReviewCounts {
     /// means the review cannot be clean: each skipped path also becomes a
     /// CONFIRMED finding, and the markdown names each skipped file.
     skipped: usize,
-    /// The skipped file paths — distinct, sorted. The structured twin of
-    /// `skipped`: orchestrators gate on this list without parsing markdown.
+    /// Every file path the run did not review — distinct, sorted: the
+    /// `skipped` over-cap paths plus the paths the scope stage excluded
+    /// deliberately (a validator set's own fixture data). Orchestrators gate on
+    /// this list without parsing markdown; the markdown names each path's
+    /// reason.
     skipped_files: Vec<String>,
     /// How many tool-rule runs broke (nonzero exit or a stdout-contract
     /// violation). A non-zero value means those rules judged nothing: the
@@ -179,9 +182,11 @@ impl ReviewCounts {
         self.skipped
     }
 
-    /// The skipped file paths — distinct, sorted. The structured twin of
-    /// [`ReviewCounts::skipped`]: orchestrators gate on this list without
-    /// parsing markdown.
+    /// Every file path the run did not review — distinct, sorted: the
+    /// [`ReviewCounts::skipped`] over-cap paths plus the paths the scope stage
+    /// excluded deliberately (a validator set's own fixture data).
+    /// Orchestrators gate on this list without parsing markdown; the markdown
+    /// names each path's reason.
     pub fn skipped_files(&self) -> &[String] {
         &self.skipped_files
     }
@@ -249,6 +254,15 @@ impl ReviewReport {
 /// skipped path also enters the finding stream as one CONFIRMED finding, so a
 /// review that contains an over-cap file can never end clean.
 ///
+/// `excluded` names every [`ExcludedFile`] the scope stage dropped before any
+/// validator paired with it — a validator set's own fixture data. Each is
+/// rendered as a named note with its reason and each path joins
+/// [`ReviewCounts::skipped_files`], so the exclusion is reported rather than
+/// silent. It is deliberately NOT a finding and NOT counted by
+/// [`ReviewCounts::skipped`]: a fixture is data the store declares, `sah doctor`
+/// is its gate, and reviewing it would fire every rule the fail fixture exists
+/// to make fire.
+///
 /// `tools` carries the run's tool-rule facts: each broken tool run is
 /// rendered as a tool error (its raw stderr, never findings and never a clean
 /// result) and counted in [`ReviewCounts::tool_errors`]; each tool rule on its
@@ -261,6 +275,7 @@ pub fn synthesize(
     verified: impl IntoIterator<Item = VerifiedFinding>,
     tally: &FleetTally,
     skipped: &[SkippedFile],
+    excluded: &[ExcludedFile],
     tools: &ToolReport,
     now: &str,
 ) -> ReviewReport {
@@ -292,7 +307,7 @@ pub fn synthesize(
         // no validator could carry is one gap however many validators matched
         // it.
         skipped: by_path.len(),
-        skipped_files: by_path.keys().map(|path| (*path).to_string()).collect(),
+        skipped_files: not_reviewed_paths(&by_path, excluded),
         tool_errors: tools.errors().len(),
         ..ReviewCounts::default()
     };
@@ -330,13 +345,19 @@ pub fn synthesize(
         }
     }
 
+    render_excluded_files(&mut markdown, excluded);
     render_tool_errors(&mut markdown, tools);
     render_tool_fallbacks(&mut markdown, tools);
 
     // Say so explicitly when the resolved scope was empty (zero fan-out tasks,
-    // zero tool activity, nothing skipped either): a bare findings header
-    // would read identically to a genuinely clean review.
-    if tally.attempted == 0 && kept.is_empty() && skipped.is_empty() && tools.is_inert() {
+    // zero tool activity, nothing skipped and nothing excluded either): a bare
+    // findings header would read identically to a genuinely clean review.
+    if tally.attempted == 0
+        && kept.is_empty()
+        && skipped.is_empty()
+        && excluded.is_empty()
+        && tools.is_inert()
+    {
         let _ = writeln!(markdown, "\nNothing in scope to review.");
     }
 
@@ -363,10 +384,50 @@ pub fn synthesize(
         tasks_attempted = counts.tasks_attempted,
         tasks_failed = counts.tasks_failed,
         tool_errors = counts.tool_errors,
+        skipped = counts.skipped,
+        excluded = excluded.len(),
         "review synthesis complete"
     );
 
     ReviewReport { markdown, counts }
+}
+
+/// Every path the run did not review, distinct and sorted: the over-cap paths
+/// the packer skipped plus the paths the scope stage excluded.
+///
+/// One list rather than two, because a consumer that gates on coverage asks one
+/// question — which files did this run not read? The reason each path is on the
+/// list is in the markdown, and [`ReviewCounts::skipped`] still counts the
+/// over-cap half alone.
+fn not_reviewed_paths(
+    by_path: &BTreeMap<&str, SkipGroup<'_>>,
+    excluded: &[ExcludedFile],
+) -> Vec<String> {
+    let paths: BTreeSet<&str> = by_path
+        .keys()
+        .copied()
+        .chain(excluded.iter().map(ExcludedFile::path))
+        .collect();
+    paths.into_iter().map(str::to_string).collect()
+}
+
+/// Render one note per file the scope stage excluded, naming the file and the
+/// reason it was dropped.
+///
+/// A note rather than a warning, and never a finding: the exclusion is
+/// deliberate, so the reader needs to know it happened and why, not to fix it.
+fn render_excluded_files(markdown: &mut String, excluded: &[ExcludedFile]) {
+    if excluded.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        markdown,
+        "\n> {} file(s) not reviewed — excluded from the review scope:",
+        excluded.len()
+    );
+    for file in excluded {
+        let _ = writeln!(markdown, "> - `{}` — {}", file.path(), file.reason());
+    }
 }
 
 /// Render each broken tool run as a tool error block: never findings and
@@ -753,6 +814,7 @@ pub async fn run_review(
         verified,
         &FleetTally::new(TasksAttempted(attempted), TasksFailed(failed)),
         &skipped,
+        work.excluded(),
         &ToolReport::new(tool_attempted, tool_errors, tool_fallbacks),
         now,
     );
@@ -900,6 +962,7 @@ mod tests {
                 TasksFailed(ATTEMPTED_TASKS),
             ),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -928,6 +991,7 @@ mod tests {
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -942,6 +1006,7 @@ mod tests {
         let report = synthesize(
             vec![],
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -963,6 +1028,7 @@ mod tests {
         let report = synthesize(
             vec![],
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -998,6 +1064,7 @@ mod tests {
             vec![],
             &FleetTally::default(),
             &skipped,
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1027,6 +1094,101 @@ mod tests {
         assert_eq!(report.counts.skipped, 1);
     }
 
+    /// The path of the excluded validator fixture the tests below report on.
+    const TEST_EXCLUDED_FIXTURE: &str =
+        "builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs.tmpl";
+
+    #[test]
+    fn an_excluded_file_is_reported_with_its_reason_and_is_never_a_finding() {
+        // A run whose scope carried a validator set's own fixture data. The
+        // exclusion is deliberate — `sah doctor` is the fixture's gate — so it
+        // must be REPORTED with its reason and listed among the files the run
+        // did not review, and it must raise no finding at all.
+        let excluded = vec![ExcludedFile::validator_fixture(TEST_EXCLUDED_FIXTURE)];
+
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &[],
+            &excluded,
+            &ToolReport::default(),
+            NOW,
+        );
+
+        assert!(
+            report.markdown.contains(TEST_EXCLUDED_FIXTURE),
+            "the excluded file must be named: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("validator fixture"),
+            "the reason must be named: {}",
+            report.markdown
+        );
+        assert_eq!(
+            report.counts.skipped_files,
+            [TEST_EXCLUDED_FIXTURE],
+            "the excluded path rides in the structured list too"
+        );
+        assert_eq!(
+            report.counts.findings, 0,
+            "an exclusion is never a finding: {}",
+            report.markdown
+        );
+        assert_eq!(
+            report.counts.confirmed, 0,
+            "an exclusion never enters the finding stream: {}",
+            report.markdown
+        );
+        assert_eq!(
+            report.counts.skipped, 0,
+            "an exclusion is not an over-cap coverage failure"
+        );
+        assert!(
+            !report.markdown.contains("Nothing in scope to review"),
+            "a scope carrying only excluded files is not an empty scope: {}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn an_excluded_file_and_a_skipped_file_share_one_not_reviewed_list() {
+        // The two reasons a run does not read a file are different — one is a
+        // coverage failure, one is deliberate — but a consumer gating on
+        // coverage asks one question, so both paths ride in one sorted list.
+        let skipped = vec![SkippedFile::for_test(
+            "src/huge.rs",
+            "duplication",
+            TEST_OVERSIZE_RENDERED_BYTES,
+            TEST_FILE_CAP_BYTES,
+        )];
+        let excluded = vec![ExcludedFile::validator_fixture(TEST_EXCLUDED_FIXTURE)];
+
+        let report = synthesize(
+            vec![],
+            &FleetTally::default(),
+            &skipped,
+            &excluded,
+            &ToolReport::default(),
+            NOW,
+        );
+
+        assert_eq!(
+            report.counts.skipped_files,
+            [TEST_EXCLUDED_FIXTURE, "src/huge.rs"],
+            "both paths ride in one distinct, sorted list"
+        );
+        assert_eq!(
+            report.counts.skipped, 1,
+            "only the over-cap path is an over-cap skip"
+        );
+        assert_eq!(
+            report.counts.findings, 1,
+            "only the over-cap path becomes a finding: {}",
+            report.markdown
+        );
+    }
+
     #[test]
     fn a_skipped_file_becomes_a_confirmed_checklist_finding() {
         // A file no validator could read must not let the review end clean:
@@ -1050,6 +1212,7 @@ mod tests {
             vec![],
             &FleetTally::default(),
             &skipped,
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1104,6 +1267,7 @@ mod tests {
             vec![],
             &FleetTally::default(),
             &skipped,
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1132,6 +1296,7 @@ mod tests {
             vec![],
             &FleetTally::default(),
             &skipped,
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1164,6 +1329,7 @@ mod tests {
             verified,
             &FleetTally::new(TasksAttempted(1), TasksFailed(0)),
             &skipped,
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1197,6 +1363,7 @@ mod tests {
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1226,6 +1393,7 @@ mod tests {
             verified,
             &FleetTally::default(),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1254,6 +1422,7 @@ mod tests {
         let report = synthesize(
             verified,
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -1292,6 +1461,7 @@ mod tests {
         let report = synthesize(
             vec![one.clone(), one],
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -1332,6 +1502,7 @@ mod tests {
         let report = synthesize(
             vec![dup, dead],
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -1386,6 +1557,7 @@ mod tests {
             verified,
             &FleetTally::default(),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1421,6 +1593,7 @@ mod tests {
         let report = synthesize(
             verified,
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -1474,6 +1647,7 @@ mod tests {
             verified,
             &FleetTally::default(),
             &[],
+            &[],
             &ToolReport::default(),
             NOW,
         );
@@ -1499,6 +1673,7 @@ mod tests {
         let report = synthesize(
             verified,
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,
@@ -1631,7 +1806,7 @@ mod tests {
             vec![],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert_eq!(report.counts().tool_errors(), 1);
         assert!(
@@ -1671,7 +1846,7 @@ mod tests {
             )],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert!(
             report
@@ -1704,7 +1879,7 @@ mod tests {
             )],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &tools, NOW);
+        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert!(
             report
@@ -1720,6 +1895,7 @@ mod tests {
         let report = synthesize(
             vec![],
             &FleetTally::default(),
+            &[],
             &[],
             &ToolReport::default(),
             NOW,

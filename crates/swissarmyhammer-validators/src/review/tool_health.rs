@@ -56,10 +56,8 @@ use sha2::{Digest, Sha256};
 use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
 
 use crate::doctor::ToolRuleStatus;
-use crate::doctor::{
-    check_fixtures, check_tool_rule, check_tool_rule_with, FixtureOutcome, FIXTURES_DIR_NAME,
-};
-use crate::validators::types::{Rule, RuleSet, ToolSpec};
+use crate::doctor::{check_fixtures, check_tool_rule, check_tool_rule_with, FixtureOutcome};
+use crate::validators::types::{Rule, RuleSet, ToolSpec, FIXTURES_DIR_NAME};
 
 /// The subdirectory of the workspace `.sah` directory that holds rebuildable
 /// engine artifacts. The managed directory creates it, and git-ignores it, at

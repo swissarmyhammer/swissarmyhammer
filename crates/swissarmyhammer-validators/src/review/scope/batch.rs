@@ -288,5 +288,10 @@ fn project_onto_files(
     WorkList {
         change_purpose: work.change_purpose.clone(),
         validators,
+        // Empty by design: the scope stage's exclusions are a RUN-level fact
+        // that rides on the work-list these batches are projected from, and
+        // `run_review` reads them from there. Copying them onto every batch
+        // would report the same excluded file once for each batch.
+        excluded: Vec::new(),
     }
 }

@@ -51,9 +51,12 @@ use crate::review::probes::{
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
 mod batch;
+mod fixtures;
 mod resolve;
 
 pub use batch::{batch_work_list, BatchBudget, BatchBytes, FileCapBytes, SkippedFile};
+use fixtures::split_validator_fixtures;
+pub use fixtures::ExcludedFile;
 use resolve::*;
 
 /// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
@@ -146,11 +149,14 @@ pub struct WorkList {
     change_purpose: String,
     /// One entry per validator that matched at least one changed file.
     validators: Vec<ValidatorWork>,
+    /// The changed files the scope stage dropped before any validator paired
+    /// with them, each with its reason.
+    excluded: Vec<ExcludedFile>,
 }
 
 impl WorkList {
     /// Assemble a work-list from the review-level intent and the per-validator
-    /// work entries.
+    /// work entries, with nothing excluded.
     pub fn new(
         change_purpose: impl Into<String>,
         validators: impl IntoIterator<Item = ValidatorWork>,
@@ -158,12 +164,34 @@ impl WorkList {
         Self {
             change_purpose: change_purpose.into(),
             validators: validators.into_iter().collect(),
+            excluded: Vec::new(),
         }
+    }
+
+    /// Attach the files the scope stage dropped before any validator paired
+    /// with them.
+    ///
+    /// Attached after [`new`](Self::new), the way
+    /// [`FileWork::with_line_annotations`] attaches its own once-per-run data,
+    /// so every hand-built work-list keeps the plain constructor.
+    pub fn with_excluded(mut self, excluded: impl IntoIterator<Item = ExcludedFile>) -> Self {
+        self.excluded = excluded.into_iter().collect();
+        self
     }
 
     /// The review-level intent.
     pub fn change_purpose(&self) -> &str {
         &self.change_purpose
+    }
+
+    /// The changed files the scope stage dropped before any validator paired
+    /// with them, each with its reason.
+    ///
+    /// This is a RUN-level fact, so it rides on the work-list
+    /// [`scope_review`] produced and not on the per-batch work-lists
+    /// [`batch_work_list`] projects out of it.
+    pub fn excluded(&self) -> &[ExcludedFile] {
+        &self.excluded
     }
 
     /// One entry per validator that matched at least one changed file.
@@ -533,6 +561,14 @@ pub async fn scope_review(
 ) -> Result<WorkList, AvpError> {
     let resolved = resolve_scope_files(&scope, repo_path)?;
 
+    // A validator set's own fixture data is not source: a fail fixture holds
+    // the very defect its rule reports, so reviewing it makes every matching
+    // rule fire on the file built to make it fire. The exclusion comes from the
+    // STORE — every loaded set's `fixtures/` directory — so it leaves the
+    // work-list here, before any progress event, any validator pairing, and any
+    // tool-rule argument list.
+    let (resolved, excluded) = split_validator_fixtures(resolved, repo_path, loader);
+
     // The base-revision content per file, keyed for the line-mark diff below.
     // Built from the same `file_changes` the sem differ reads (a borrow, not a
     // move), so this never drifts from what the semantic diff itself saw.
@@ -615,10 +651,7 @@ pub async fn scope_review(
 
     log_scope_selection(&validator_work);
 
-    Ok(WorkList {
-        change_purpose: resolved.change_purpose,
-        validators: validator_work,
-    })
+    Ok(WorkList::new(resolved.change_purpose, validator_work).with_excluded(excluded))
 }
 
 /// The semantic diff's entities, grouped by file, plus the flattened probe

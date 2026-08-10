@@ -39,6 +39,7 @@ use crate::review::tool_rules::{
 };
 use crate::validators::types::{
     FixHint, Rule, RuleSet, Supersedes, ToolSpec, ValidatorMatch, ValidatorSource,
+    FIXTURES_DIR_NAME,
 };
 use crate::validators::ValidatorLoader;
 
@@ -48,9 +49,6 @@ pub const PROJECT_TYPES_CHECK_NAME: &str = "Validator Project Types";
 /// The number of always-included rows [`to_checks`] emits — the one detected
 /// project-types row.
 const PROJECT_TYPES_ROWS: usize = 1;
-
-/// The directory inside a validator set that carries tool-rule fixtures.
-pub(crate) const FIXTURES_DIR_NAME: &str = "fixtures";
 
 /// The suffix that marks a fixture file as a template rather than source.
 ///
@@ -410,7 +408,7 @@ fn verify_fixture_contract(
     rule: &Rule,
     spec: &ToolSpec,
 ) -> Result<(), FixtureOutcome> {
-    let fixtures_dir = ruleset.base_path.join(FIXTURES_DIR_NAME);
+    let fixtures_dir = ruleset.fixtures_dir();
     let fail_fixture = find_fixture(&fixtures_dir, &rule.name, FAIL_FIXTURE_KIND);
     let pass_fixture = find_fixture(&fixtures_dir, &rule.name, PASS_FIXTURE_KIND);
 
