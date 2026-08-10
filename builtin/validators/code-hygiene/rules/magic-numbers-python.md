@@ -27,11 +27,86 @@ tool:
 one rule that names that check, and its own name — `magic-value-comparison` —
 states the narrow scope: a literal in a comparison, and nothing else.
 
-That scope is why this rule needs no threshold of its own. The rule already
-matches the `magic-numbers` prompt carve-outs: it ignores `0`, `1`, `""`, and
-`"__main__"`, and it never reads a literal a declaration names, a default
-parameter, an index, or a call argument. Measured against a probe module holding
-one literal of each of those kinds, it reported the comparison alone.
+That scope is why this rule needs no threshold of its own. `PLR2004` has no
+threshold to set: it carries a fixed value list of its own, and `ruff` gives no
+option that adds a value to it.
+
+## Which carve-outs the tool reproduces, and which it does not
+
+Measured against a probe module on `ruff` 0.14.5:
+
+- **The value list is `0`, `1` and `-1`.** `x == 0`, `x == 1`, `x == -1`,
+  `x == 0.0` and `x == 1.0` are all silent. That is the first half of the
+  `magic-numbers` prompt carve-out, word for word.
+- **The declaration carve-out is reproduced.** `PLR2004` reads a comparison and
+  nothing else, so it never reads a literal a declaration names, a default
+  parameter, or an index.
+- **`100` REPORTS.** The prompt rule carves out "conventional values (a `<< 8`,
+  `100` for percent)", and `x == 100` reports:
+
+      PLR2004 Magic value used in comparison, consider replacing `100` with a
+      constant variable
+
+  `x == 3600`, `x == -2` and `x > 100.0` report the same way.
+- **`a << 8` is silent, and not for the prompt rule's reason.** It is silent
+  because a shift is an operation and not a comparison. `x == 8` reports. So the
+  shift form of the conventional carve-out survives by accident, and the percent
+  form does not survive at all.
+
+`ruff` cannot restore the `100` carve-out. `lint.pylint.allow-magic-value-types`
+selects TYPES, never values — it takes `str`, `bytes`, `int`, `float` and
+`complex`, and naming `int` there silences EVERY integer, which turns the rule
+off rather than carving one value out. There is no `allow-magic-values` key;
+`ruff` answers a config that names one with `unknown field
+'allow-magic-values'`.
+
+## The exemption is a `# noqa` on the comparison
+
+A conventional value the review must not report carries `# noqa: PLR2004` on the
+line the tool reports, which is the line the comparison stands on. Write the
+reason after the code:
+
+    if usage == 100:  # noqa: PLR2004 — a whole ratio, in percent
+
+Measured on the same probe: that line is silent, `# noqa: PLR2004` with no
+reason is silent, and a bare `# noqa` is silent. The reason is not decoration.
+It says which conventional value the number is, which is the one thing `ruff`
+cannot read.
+
+That is the exemption, and it is the only one. `builtin/validators/README.md`
+states the contract this rule keeps: "Selection in the pipe is attribution, not
+exemption ... To exempt one code item, use an inline suppression in the code —
+never the pipe." A `jq` step that dropped the `100` findings would be exemption
+in the pipe, and it would drop a genuine `status == 100` along with the percent
+one, because the pipe reads the value and never the meaning. The `# noqa` reads
+the meaning, because the author writes it at the one site that has one.
+
+## The sibling rules report `100` too
+
+`magic-numbers-go` and `magic-numbers-typescript` each CAN state a value
+allow-list, and neither puts `100` in it: `mnd` runs with
+`ignored-numbers: ["0", "1", "-1"]` and `@typescript-eslint/no-magic-numbers`
+with `ignore: [0, 1, -1]`. Both therefore report `x == 100` exactly as `ruff`
+does. Python agreeing with them is deliberate, not an accident of what `ruff`
+exposes. `magic-numbers-swift` is the one rule of the four that allows `100`,
+and that divergence belongs to the Swift rule rather than to this one.
+
+## Where this rule is NARROWER than the rule it supersedes
+
+`supersedes: magic-numbers` is a claim, so state its limit. `PLR2004` reads a
+comparison and nothing else. A repeated literal in a call argument, in an
+operation, or in a `return` is never reported — measured: `a * 100`,
+`a + 3600`, `g(3600)` and `return 3600` are all silent. Repetition is the prompt
+rule's primary target, so for Python this tool answers the position question and
+leaves the repetition question unanswered.
+
+That gap is real and it is the price of the trade. `mnd` reads six positions and
+`no-magic-numbers` reads three; `PLR2004` reads one, which makes this the
+narrowest of the four `magic-numbers-*` rules. A Python reviewer gets one
+comparison verdict every reviewer gets the same, in place of a repetition count
+an agent makes by eye.
+
+## How the run is shaped
 
 `--isolated` makes ruff ignore every configuration file, so the rule owns its
 whole invocation and never reads the project's own lint configuration.
@@ -39,5 +114,8 @@ whole invocation and never reads the project's own lint configuration.
 
 The scope is `files` because ruff reads the files it is given.
 
-Selection in the pipe is attribution, not exemption: to exempt one comparison,
-write `# noqa: PLR2004` on it in the code.
+The fixture pair holds every statement above that a run can check. The failing
+fixture carries `404`, `4096`, `10`, `90` and `100`, and the acceptance test
+`the_shipped_python_magic_numbers_tool_rule_reports_every_fail_fixture_value`
+holds the run to exactly those five: `100` proves the carve-out is absent, and
+the count proves no other position reports.

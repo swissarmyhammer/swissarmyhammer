@@ -1,9 +1,10 @@
 """The failing fixture of the `magic-numbers-python` tool rule.
 
 This file holds one unnamed literal in every comparison kind the passing fixture
-names — equality, ordering, and a chained comparison. The tool must report each
-one. A tool upgrade that stops reporting a kind makes the doctor mark the rule
-unusable.
+names — equality, ordering, and a chained comparison. It also holds `100`, which
+the `magic-numbers` prompt rule carves out and this tool reports. The tool must
+report each one. A tool upgrade that stops reporting a kind, or that starts to
+allow `100`, makes the doctor mark the rule unusable.
 """
 
 
@@ -20,3 +21,8 @@ def ordering(size: int) -> bool:
 def chained(ratio: int) -> bool:
     """Compare against an unnamed literal on each side of a chain."""
     return 10 <= ratio <= 90
+
+
+def conventional(ratio: int) -> bool:
+    """Compare against 100, the prompt carve-out `ruff` cannot express."""
+    return ratio == 100

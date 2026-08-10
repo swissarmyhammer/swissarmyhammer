@@ -109,13 +109,22 @@ const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
 /// The prompt rule every shipped magic-numbers tool rule supersedes.
 const MAGIC_NUMBERS_PROMPT_RULE: &str = "magic-numbers";
 
+/// The shipped magic-numbers tool rule for Python. `ruff` exposes no value
+/// allow-list, so a second acceptance test drives its fail fixture end to end
+/// and names every literal the fixture holds unnamed.
+const PYTHON_MAGIC_NUMBERS_RULE: &str = "magic-numbers-python";
+
 /// Every shipped magic-numbers tool rule, with the project type it serves.
 ///
 /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
 /// unnamed literal, and the Dart check needs a `custom_lint` package, so
 /// both languages keep the `magic-numbers` prompt rule.
 const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
-    ("python", "magic-numbers-python", SUPERSEDES_MAGIC_NUMBERS),
+    (
+        "python",
+        PYTHON_MAGIC_NUMBERS_RULE,
+        SUPERSEDES_MAGIC_NUMBERS,
+    ),
     (
         "nodejs",
         "magic-numbers-typescript",

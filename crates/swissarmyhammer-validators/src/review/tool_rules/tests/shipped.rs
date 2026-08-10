@@ -809,6 +809,108 @@ fn every_shipped_magic_numbers_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(SHIPPED_MAGIC_NUMBERS_RULES, MAGIC_NUMBERS_PROMPT_RULE);
 }
 
+/// The materialized name of the `magic-numbers-python` fail fixture.
+const PYTHON_MAGIC_NUMBERS_FAIL_FIXTURE: &str = "magic-numbers-python.fail.py";
+
+/// Where the `magic-numbers-python` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const PYTHON_MAGIC_NUMBERS_FIXTURE_PATH: &str = "src/magic_numbers_python_fail.py";
+
+/// Every literal the `magic-numbers-python` fail fixture leaves unnamed, as
+/// `PLR2004` spells it inside the message it reports.
+///
+/// `100` is the load-bearing entry. The `magic-numbers` prompt rule carves out
+/// "conventional values (a `<< 8`, `100` for percent)", and `ruff` exposes no
+/// value allow-list that could restore that carve-out:
+/// `lint.pylint.allow-magic-value-types` selects TYPES, and naming `int` there
+/// silences every integer. The rule body therefore states that `100` reports,
+/// and this entry holds `ruff` to the statement.
+const PYTHON_MAGIC_NUMBERS_FAIL_VALUES: &[&str] = &["404", "4096", "10", "90", "100"];
+
+/// Acceptance: the shipped Python magic-numbers tool rule reports every
+/// unnamed literal its fail fixture holds, through the real ruff pipeline.
+///
+/// The doctor fixture contract asks the fail fixture for one finding, so a
+/// tool that reported the equality comparison alone would still pass it. This
+/// test names all five literals, so each one is load-bearing on its own.
+///
+/// The count assertion is the other half. `PLR2004` reads a comparison and
+/// nothing else, so a repeated literal in a call argument, an operation, or a
+/// return is never reported. Holding the run to exactly these five states that
+/// silence as a measured fact rather than leaving it to be discovered.
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_reports_every_fail_fixture_value() {
+    let loader = builtin_loader();
+    let project_types = ["python"];
+    require_tool_installed(&loader, &project_types, PYTHON_MAGIC_NUMBERS_RULE);
+    let fixture = shipped_asset(
+        &loader,
+        &FIXTURE_TEMPLATE_ASSET,
+        PYTHON_MAGIC_NUMBERS_FAIL_FIXTURE,
+    );
+    let content = std::fs::read_to_string(&fixture).expect("read the shipped fail fixture");
+    let repo = tempfile::tempdir().unwrap();
+    let file = repo.path().join(PYTHON_MAGIC_NUMBERS_FIXTURE_PATH);
+    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
+    std::fs::write(&file, &content).unwrap();
+    // On macOS a temporary directory stands behind a symbolic link. The engine
+    // strips the repository root off each reported path, so the root it is
+    // given has to be the resolved form or no path matches.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = tool_rule_work(
+        "a comparison against an unnamed literal",
+        CODE_HYGIENE_SET,
+        [
+            MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+            PYTHON_MAGIC_NUMBERS_RULE.to_string(),
+        ],
+        [(PYTHON_MAGIC_NUMBERS_FIXTURE_PATH, content.as_str())],
+    );
+
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
+
+    let run = plan
+        .runs()
+        .iter()
+        .find(|run| run.rule() == PYTHON_MAGIC_NUMBERS_RULE)
+        .unwrap_or_else(|| {
+            panic!(
+                "the shipped Python magic-numbers tool rule must plan a run; fallbacks: {:?}",
+                plan.fallbacks()
+            )
+        });
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+    assert!(
+        outcome.errors().is_empty(),
+        "the shipped pipeline must not break; errors: {:?}",
+        outcome.errors()
+    );
+
+    let reported: Vec<&str> = outcome
+        .findings()
+        .iter()
+        .filter(|verified| verified.finding.file == PYTHON_MAGIC_NUMBERS_FIXTURE_PATH)
+        .map(|verified| verified.finding.claim.as_str())
+        .collect();
+    for value in PYTHON_MAGIC_NUMBERS_FAIL_VALUES {
+        let quoted = format!("`{value}`");
+        assert!(
+            reported.iter().any(|claim| claim.contains(&quoted)),
+            "the fail fixture must report the unnamed literal {quoted}; the run reported \
+             {reported:?}"
+        );
+    }
+    assert_eq!(
+        reported.len(),
+        PYTHON_MAGIC_NUMBERS_FAIL_VALUES.len(),
+        "the fail fixture holds one finding for each unnamed literal and no other; got \
+         {reported:?}"
+    );
+}
+
 /// Acceptance: every shipped complexity tool rule passes its fixture pair
 /// in doctor, and supersedes exactly the gates its own tool decides.
 ///
