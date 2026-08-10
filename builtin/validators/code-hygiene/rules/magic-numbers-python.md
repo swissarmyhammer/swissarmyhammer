@@ -88,9 +88,8 @@ the percent carve-out goes:
 
 - `magic-numbers-swift` states `allowed_numbers: [0, 1, -1, 100]`.
 - `magic-numbers-typescript` states `ignore: [0, 1, -1, 100]`.
-- `magic-numbers-go` states `ignored-numbers` and does not name `100` yet. The
-  key accepts any set, so the Go rule can state the same list; the card
-  `^s2ftjys` adds it there.
+- `magic-numbers-go` states `ignored-numbers: ["0", "1", "-1", "100"]`. The
+  `mnd` key takes strings, and the values are the same four.
 
 `ruff` is the one tool of the four that offers no value allow-list at all, so
 `x == 100` reports here and the divergence belongs to `ruff`. The

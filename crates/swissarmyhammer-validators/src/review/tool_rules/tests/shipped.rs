@@ -339,6 +339,15 @@ struct ShippedFailFixture {
     /// holds it.
     path: &'static str,
 
+    /// Every other shipped fixture the probe repository needs beside the fail
+    /// fixture, each with the name the set ships it under and the path it
+    /// takes in the repository.
+    ///
+    /// A `files`-scope rule reads the files it is given and needs none. A
+    /// `workspace`-scope rule loads a project rather than a file list, so the
+    /// project manifest the set ships stands here.
+    support: &'static [(&'static str, &'static str)],
+
     /// One entry for each finding the run must report in the fixture, and no
     /// other.
     expected: &'static [&'static str],
@@ -347,12 +356,34 @@ struct ShippedFailFixture {
     noun: &'static str,
 }
 
+/// What a `files`-scope probe names for `support`: nothing. The tool reads the
+/// files it is given, so the fail fixture alone is the whole repository.
+const NO_SUPPORT_FIXTURES: &[(&str, &str)] = &[];
+
+/// Copies the shipped fixture template named `fixture` into `repo` at `path`,
+/// and answers the bytes it wrote.
+///
+/// The fixture is read where the set ships it, so a run over the copy measures
+/// the SHIPPED bytes. A test that wrote its own copy would answer for the copy.
+fn copy_shipped_fixture(
+    loader: &ValidatorLoader,
+    repo: &Path,
+    fixture: &str,
+    path: &str,
+) -> String {
+    let shipped = shipped_asset(loader, &FIXTURE_TEMPLATE_ASSET, fixture);
+    let content = std::fs::read_to_string(&shipped).expect("read the shipped fixture template");
+    let file = repo.join(path);
+    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
+    std::fs::write(&file, &content).unwrap();
+    content
+}
+
 /// Drives the shipped fail fixture of `probe` through the real tool pipeline,
 /// and holds the run to exactly the entries the probe names.
 ///
-/// The fixture is read where the set ships it and copied into a temporary
-/// repository, so the run measures the SHIPPED bytes. A test that wrote its own
-/// copy would answer for the copy.
+/// The fixture, and every support fixture the probe names beside it, is copied
+/// into a temporary repository by [`copy_shipped_fixture`].
 ///
 /// Three callbacks carry what one language does not share with another.
 /// `build_work` states the work-list, because the rule list a language names is
@@ -372,12 +403,11 @@ fn verify_shipped_fail_fixture_reports_each<W, E, M>(
 {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.project_types, probe.rule);
-    let shipped = shipped_asset(&loader, &FIXTURE_TEMPLATE_ASSET, probe.fixture);
-    let content = std::fs::read_to_string(&shipped).expect("read the shipped fail fixture");
     let repo = tempfile::tempdir().unwrap();
-    let file = repo.path().join(probe.path);
-    std::fs::create_dir_all(file.parent().expect("the fixture path has a parent")).unwrap();
-    std::fs::write(&file, &content).unwrap();
+    let content = copy_shipped_fixture(&loader, repo.path(), probe.fixture, probe.path);
+    for (fixture, path) in probe.support {
+        copy_shipped_fixture(&loader, repo.path(), fixture, path);
+    }
     // A tool prints the resolved path of each file it reads, and on macOS a
     // temporary directory stands behind a symbolic link. The engine strips the
     // repository root off each reported path, so the root it is given has to be
@@ -452,6 +482,7 @@ const TYPESCRIPT_COMPLEXITY_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture 
     rule: TYPESCRIPT_COMPLEXITY_RULE,
     fixture: TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE,
     path: TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
     expected: TYPESCRIPT_COMPLEXITY_FAIL_GUARDS,
     noun: "guard",
 };
@@ -887,6 +918,7 @@ const PYTHON_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
     rule: PYTHON_MAGIC_NUMBERS_RULE,
     fixture: PYTHON_MAGIC_NUMBERS_FAIL_FIXTURE,
     path: PYTHON_MAGIC_NUMBERS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
     expected: PYTHON_MAGIC_NUMBERS_FAIL_VALUES,
     noun: "unnamed literal",
 };
@@ -946,6 +978,7 @@ const TYPESCRIPT_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixtu
     rule: TYPESCRIPT_MAGIC_NUMBERS_RULE,
     fixture: TYPESCRIPT_MAGIC_NUMBERS_FAIL_FIXTURE,
     path: TYPESCRIPT_MAGIC_NUMBERS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
     expected: TYPESCRIPT_MAGIC_NUMBERS_FAIL_VALUES,
     noun: "unnamed literal",
 };
@@ -984,6 +1017,89 @@ fn the_shipped_typescript_magic_numbers_tool_rule_reports_every_fail_fixture_val
         |reported, value| {
             reported.ends_with(&format!(
                 "{TYPESCRIPT_MAGIC_NUMBERS_CLAIM_SEPARATOR}{value}."
+            ))
+        },
+    );
+}
+
+/// The materialized name of the `magic-numbers-go` fail fixture.
+const GO_MAGIC_NUMBERS_FAIL_FIXTURE: &str = "magic-numbers-go.fail.go";
+
+/// Where the `magic-numbers-go` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const GO_MAGIC_NUMBERS_FIXTURE_PATH: &str = "src/magic_numbers_go_fail.go";
+
+/// The support fixture the Go probe repository needs beside the fail fixture.
+///
+/// `magic-numbers-go` runs at `workspace` scope over `./...`, because `mnd`
+/// needs a loaded package to read. A directory holding one Go file and no
+/// module manifest loads nothing, so the probe repository takes the manifest
+/// the set already ships for its own Go fixtures.
+const GO_MAGIC_NUMBERS_SUPPORT: &[(&str, &str)] = &[("go.mod", "go.mod")];
+
+/// Every literal the `magic-numbers-go` fail fixture leaves unnamed, as `mnd`
+/// spells it inside the message it reports.
+///
+/// `8` is the load-bearing entry. The `magic-numbers` prompt rule carves out
+/// "conventional values (a `<< 8`, `100` for percent)", and the rule restores
+/// the percent half through `ignored-numbers`. The shift half has no such
+/// lever: `ignored-numbers` selects a VALUE and never a position, so `8` in the
+/// list would silence `status == 8` beside `word << 8`, and no other `mnd`
+/// setting names a shift operand. The rule body therefore states that a shift
+/// operand reports, and this entry holds `mnd` to the statement.
+const GO_MAGIC_NUMBERS_FAIL_VALUES: &[&str] = &["404", "20", "4096", "512", "250", "8"];
+
+/// The `magic-numbers-go` fail fixture, and every unnamed literal the real
+/// golangci-lint pipeline must report inside it.
+const GO_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["go"],
+    rule: GO_MAGIC_NUMBERS_RULE,
+    fixture: GO_MAGIC_NUMBERS_FAIL_FIXTURE,
+    path: GO_MAGIC_NUMBERS_FIXTURE_PATH,
+    support: GO_MAGIC_NUMBERS_SUPPORT,
+    expected: GO_MAGIC_NUMBERS_FAIL_VALUES,
+    noun: "unnamed literal",
+};
+
+/// What `mnd` puts before the value in the message it reports. The whole
+/// message reads `Magic number: 4096, in <operation> detected`, so the value
+/// stands after this text.
+const GO_MAGIC_NUMBERS_CLAIM_PREFIX: &str = "Magic number: ";
+
+/// What `mnd` puts after the value in the message it reports. Holding the
+/// value to both sides keeps `8` from matching the `4096` finding.
+const GO_MAGIC_NUMBERS_CLAIM_SUFFIX: &str = ",";
+
+/// Acceptance: the shipped Go magic-numbers tool rule reports every unnamed
+/// literal its fail fixture holds, through the real golangci-lint pipeline.
+///
+/// A literal is held to the CLAIM its finding carries, because `mnd` spells the
+/// value inside the message it reports.
+///
+/// The count is the other half. The pass fixture holds `100` for percent and
+/// every declaration position the configuration allows, so a run that reported
+/// one of them would fail the pair; holding this run to exactly these six
+/// states the same silence from the other side.
+#[test]
+fn the_shipped_go_magic_numbers_tool_rule_reports_every_fail_fixture_value() {
+    verify_shipped_fail_fixture_reports_each(
+        &GO_MAGIC_NUMBERS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an unnamed literal in a condition, a switch case, an operation, \
+                 a return, and a call argument",
+                CODE_HYGIENE_SET,
+                [
+                    MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+                    GO_MAGIC_NUMBERS_RULE.to_string(),
+                ],
+                [(GO_MAGIC_NUMBERS_FIXTURE_PATH, content)],
+            )
+        },
+        |verified, _source| verified.finding.claim.clone(),
+        |reported, value| {
+            reported.contains(&format!(
+                "{GO_MAGIC_NUMBERS_CLAIM_PREFIX}{value}{GO_MAGIC_NUMBERS_CLAIM_SUFFIX}"
             ))
         },
     );

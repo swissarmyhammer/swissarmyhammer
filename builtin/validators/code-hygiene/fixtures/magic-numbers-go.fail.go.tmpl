@@ -2,8 +2,9 @@
 //
 // This file holds one unnamed literal in every position the passing fixture
 // names — a condition, a switch case, an operation, a return, and a call
-// argument. The tool must report each one. A tool upgrade that stops reporting a
-// position makes the doctor mark the rule unusable.
+// argument — and the shift operand the rule cannot carve out. The tool must
+// report each one. A tool upgrade that stops reporting a position makes the
+// doctor mark the rule unusable.
 package fixtures
 
 // MagicSchedule takes a delay so the call-argument position below has a callee.
@@ -39,3 +40,12 @@ func MagicReturn() int { return 512 }
 
 // MagicArgument passes an unnamed literal as a call argument.
 func MagicArgument() int { return MagicSchedule(250) }
+
+// MagicShift shifts by an unnamed literal. The `magic-numbers` prompt rule
+// carves this form out, and the rule cannot: `ignored-numbers` selects a value
+// and never a position, so the shift operand reports. The shifted word is bound
+// to a name first, so the finding stands at the `operation` check.
+func MagicShift(word int) int {
+	packed := word << 8
+	return packed
+}
