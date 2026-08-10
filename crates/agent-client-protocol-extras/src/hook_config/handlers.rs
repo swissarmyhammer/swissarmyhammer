@@ -7,12 +7,14 @@
 //!
 //! Both handlers give the answer to [`interpret_output`] or
 //! [`interpret_prompt_response`] in [`super::output`], so the rules that make a
-//! [`HookDecision`] live in one place.
+//! [`HookDecision`] live in one place. A command hook that exits with code 2
+//! refuses, and [`decide_by_event_kind`] answers that refusal with the same
+//! rules a refused prompt hook gets.
 
 use super::decision::{HookDecision, HookEvaluator, HookHandler};
 use super::event::{HookCommandContext, HookEvent, HookEventKind};
 use super::output::{
-    feeds_stderr_to_agent, interpret_output, interpret_prompt_response, is_blockable, HookOutput,
+    decide_by_event_kind, interpret_output, interpret_prompt_response, HookOutput,
     PromptHookResponse,
 };
 use std::sync::Arc;
@@ -185,20 +187,17 @@ fn interpret_exit_2_stderr(
     } else {
         stderr.trim().to_string()
     };
-    if is_blockable(event_kind) {
-        HookDecision::Block { reason }
-    } else if event_kind == HookEventKind::Stop {
-        HookDecision::ShouldContinue { reason }
-    } else if feeds_stderr_to_agent(event_kind) {
-        HookDecision::AllowWithContext { context: reason }
-    } else {
+    let decision = decide_by_event_kind(event_kind, reason);
+    // `Allow` is the only decision that drops the message of the hook, so it
+    // is the only one that needs a log.
+    if matches!(decision, HookDecision::Allow) {
         tracing::warn!(
             command = %command,
             "Exit 2 on non-blockable event {:?}, treating as Allow",
             event_kind,
         );
-        HookDecision::Allow
     }
+    decision
 }
 
 /// Prompt/agent handler: calls a [`HookEvaluator`] for LLM-backed evaluation.

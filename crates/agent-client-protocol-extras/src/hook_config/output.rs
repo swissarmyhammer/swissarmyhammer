@@ -8,7 +8,12 @@
 //! [`interpret_output`] and [`interpret_prompt_response`] turn one of those
 //! answers, plus the kind of the event, into a [`HookDecision`]. The rules
 //! depend on the event kind, because only some kinds can block, and the
-//! `EVENT_PROPERTIES` table holds that fact once for both rules.
+//! `EVENT_PROPERTIES` table holds that fact once for every rule that reads
+//! it.
+//!
+//! A hook can also refuse: a command hook exits with code 2, and a prompt
+//! hook answers `ok: false`. [`decide_by_event_kind`] turns either refusal
+//! into a decision, so both refusals obey one set of rules.
 
 use super::decision::HookDecision;
 use super::event::HookEventKind;
@@ -240,45 +245,121 @@ pub struct PromptHookResponse {
     pub reason: Option<String>,
 }
 
-/// Per-event-kind exit-2 handling properties: `(kind, is_blockable,
-/// feeds_stderr_to_agent)`.
+/// How one event kind handles a hook that exits with code 2.
+///
+/// The two properties travel together because they come from one row of
+/// [`EVENT_PROPERTIES`], so one lookup reads both.
+#[derive(Clone, Copy)]
+struct EventProperties {
+    /// Whether the event kind can block the action.
+    blockable: bool,
+    /// Whether the stderr of the hook goes to the agent as context.
+    feeds_stderr_to_agent: bool,
+}
+
+impl EventProperties {
+    /// The properties of an event kind that [`EVENT_PROPERTIES`] does not
+    /// list: an informational event that can neither block nor give its
+    /// stderr to the agent.
+    const NONE: Self = Self {
+        blockable: false,
+        feeds_stderr_to_agent: false,
+    };
+}
+
+/// Per-event-kind exit-2 handling properties.
 ///
 /// Centralizes both properties in one table instead of two parallel match
 /// statements over `HookEventKind`, so [`is_blockable`] and
 /// [`feeds_stderr_to_agent`] cannot drift out of sync as event kinds are
-/// added. A kind absent from this table defaults to `(false, false)` —
-/// informational events that can neither block nor feed stderr back to the
-/// agent.
-const EVENT_PROPERTIES: &[(HookEventKind, bool, bool)] = &[
-    (HookEventKind::PreToolUse, true, false),
-    (HookEventKind::UserPromptSubmit, true, false),
-    (HookEventKind::PostToolUse, false, true),
-    (HookEventKind::PostToolUseFailure, false, true),
+/// added. A kind absent from this table gets [`EventProperties::NONE`].
+const EVENT_PROPERTIES: &[(HookEventKind, EventProperties)] = &[
+    (
+        HookEventKind::PreToolUse,
+        EventProperties {
+            blockable: true,
+            feeds_stderr_to_agent: false,
+        },
+    ),
+    (
+        HookEventKind::UserPromptSubmit,
+        EventProperties {
+            blockable: true,
+            feeds_stderr_to_agent: false,
+        },
+    ),
+    (
+        HookEventKind::PostToolUse,
+        EventProperties {
+            blockable: false,
+            feeds_stderr_to_agent: true,
+        },
+    ),
+    (
+        HookEventKind::PostToolUseFailure,
+        EventProperties {
+            blockable: false,
+            feeds_stderr_to_agent: true,
+        },
+    ),
 ];
+
+/// Read the exit-2 handling properties of one event kind.
+///
+/// This is the one lookup of [`EVENT_PROPERTIES`]. Each property has its own
+/// reader below, and both readers come through here, so the table is searched
+/// one way only.
+fn event_properties(kind: HookEventKind) -> EventProperties {
+    EVENT_PROPERTIES
+        .iter()
+        .find(|(table_kind, _)| *table_kind == kind)
+        .map(|(_, properties)| *properties)
+        .unwrap_or(EventProperties::NONE)
+}
 
 /// Whether an event kind supports blocking via exit-2.
 ///
 /// Only PreToolUse and UserPromptSubmit can block because the action
 /// hasn't happened yet. All other events (PostToolUse, PostToolUseFailure,
 /// Notification, SessionStart) cannot block.
-pub(super) fn is_blockable(kind: HookEventKind) -> bool {
-    EVENT_PROPERTIES
-        .iter()
-        .find(|(k, _, _)| *k == kind)
-        .map(|(_, blockable, _)| *blockable)
-        .unwrap_or(false)
+fn is_blockable(kind: HookEventKind) -> bool {
+    event_properties(kind).blockable
 }
 
 /// Whether exit-2 stderr should be fed back as agent context.
 ///
 /// PostToolUse and PostToolUseFailure can't block (action already happened)
 /// but Claude Code feeds the stderr back to the agent as context.
-pub(super) fn feeds_stderr_to_agent(kind: HookEventKind) -> bool {
-    EVENT_PROPERTIES
-        .iter()
-        .find(|(k, _, _)| *k == kind)
-        .map(|(_, _, feeds)| *feeds)
-        .unwrap_or(false)
+fn feeds_stderr_to_agent(kind: HookEventKind) -> bool {
+    event_properties(kind).feeds_stderr_to_agent
+}
+
+/// Turn the refusal of a hook into a decision, by the kind of the event.
+///
+/// A command hook refuses with exit code 2 and the text on its stderr, and a
+/// prompt hook refuses with `ok: false` and its reason. Both refusals say the
+/// same thing, so both come here and get the same four rules:
+///
+/// - an event kind that can still block gives [`HookDecision::Block`];
+/// - a `Stop` event gives [`HookDecision::ShouldContinue`], because a refusal
+///   to stop is an instruction to go on;
+/// - an event kind that gives its stderr to the agent gives
+///   [`HookDecision::AllowWithContext`];
+/// - every other event kind gives [`HookDecision::Allow`], because the action
+///   already happened and the agent never reads the reason.
+///
+/// The last rule loses the message of the hook. The caller logs that, because
+/// only the caller knows what to name in the log.
+pub(super) fn decide_by_event_kind(event_kind: HookEventKind, reason: String) -> HookDecision {
+    if is_blockable(event_kind) {
+        HookDecision::Block { reason }
+    } else if event_kind == HookEventKind::Stop {
+        HookDecision::ShouldContinue { reason }
+    } else if feeds_stderr_to_agent(event_kind) {
+        HookDecision::AllowWithContext { context: reason }
+    } else {
+        HookDecision::Allow
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +503,9 @@ fn extract_specific_context(specific: &Option<HookSpecificOutput>) -> Option<Str
 }
 
 /// Interpret prompt/agent evaluator response based on event type.
+///
+/// `ok: true` allows. `ok: false` is a refusal, so
+/// [`decide_by_event_kind`] gives the decision.
 pub(super) fn interpret_prompt_response(
     response: &PromptHookResponse,
     event_kind: HookEventKind,
@@ -433,15 +517,7 @@ pub(super) fn interpret_prompt_response(
             .reason
             .clone()
             .unwrap_or_else(|| "Blocked by prompt hook".to_string());
-        if is_blockable(event_kind) {
-            HookDecision::Block { reason }
-        } else if event_kind == HookEventKind::Stop {
-            HookDecision::ShouldContinue { reason }
-        } else if feeds_stderr_to_agent(event_kind) {
-            HookDecision::AllowWithContext { context: reason }
-        } else {
-            HookDecision::Allow
-        }
+        decide_by_event_kind(event_kind, reason)
     }
 }
 

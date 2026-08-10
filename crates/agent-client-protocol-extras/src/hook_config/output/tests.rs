@@ -190,6 +190,18 @@ fn test_prompt_response_ok_false_post_tool_feeds_context() {
     ));
 }
 
+/// An event kind that can neither block nor give its reason to the agent
+/// loses the answer of the hook, so the refusal becomes a plain `Allow`.
+#[test]
+fn test_prompt_response_ok_false_on_a_silent_event_allows() {
+    let response = PromptHookResponse {
+        ok: false,
+        reason: Some("Nobody reads this".into()),
+    };
+    let decision = interpret_prompt_response(&response, HookEventKind::Notification);
+    assert!(matches!(decision, HookDecision::Allow));
+}
+
 #[test]
 fn test_prompt_response_ok_false_post_tool_failure_feeds_context() {
     let response = PromptHookResponse {
