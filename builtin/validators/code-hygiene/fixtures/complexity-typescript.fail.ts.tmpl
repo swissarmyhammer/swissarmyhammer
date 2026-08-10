@@ -1,7 +1,7 @@
 // The failing fixture of the `complexity-typescript` tool rule.
 //
 // Every guard below stands inside a `describe(...)` block, and the tool must
-// report all five. A tool upgrade that stops reporting one of them makes the
+// report all seven. A tool upgrade that stops reporting one of them makes the
 // doctor mark the rule unusable.
 //
 // - `foldGrid` nests six control-flow blocks and scores 21 against the
@@ -10,8 +10,9 @@
 // - `GridFolder.foldRows` holds the same shape as `foldGrid` as a class
 //   METHOD.
 // - `readings.band` holds the same shape as an ACCESSOR.
-// - `context.run(...)` holds the same shape in the callback of a call whose
-//   root identifier is a test-framework name but which is not a test call.
+// - `context.run(...)`, `context.each(rows)(...)` and `context.for(rows)(...)`
+//   each hold the same shape in the callback of a call whose root identifier
+//   is a test-framework name but which is not a test-framework call.
 //
 // The `describe` block holds the second half of the carve-out contract. The
 // two prompt rules this rule supersedes exempt a function marked as a test,
@@ -20,14 +21,21 @@
 // exempt everything inside a test block makes this fixture report nothing,
 // and the doctor marks the rule unusable.
 //
-// The three shapes after the two functions hold the narrow direction of the
+// The five shapes after the two functions hold the narrow direction of the
 // same contract. Both gates report at the HEAD of the function they measure,
 // and for a method and for an accessor that head starts at the NAME, which
 // stands outside the function node the tool measures. A carve-out that reads
 // the report position against the function ranges alone therefore climbs to
-// the `describe` callback and exempts the method in silence. `context.run` is
-// the other narrow direction: a mark that reads the root identifier alone,
-// and not the properties after it, exempts a callback that is not a test.
+// the `describe` callback and exempts the method in silence.
+//
+// The three `context` calls hold the other narrow direction. `context` is a
+// test-framework name only in Mocha, and Mocha gives it `only` and `skip` and
+// no other modifier. A mark that reads the root identifier alone exempts
+// `context.run`. A mark that reads any pair of a test name and a modifier
+// name exempts `context.each` and `context.for`, because `each` and `for` are
+// also usual collection method names. The mark must read the segment that
+// names the framework function, and then accept only the modifiers that
+// framework gives that function.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -402,13 +410,17 @@ describe("the complexity and length gates", () => {
     },
   };
 
+  /** The rows the two collection members below fold. */
+  const rows: number[][] = [];
+
   /**
    * A request-scoped store, named as React, `AsyncLocalStorage` and many web
    * frameworks name one.
    *
    * `context` is also a test-framework name, so this binding stands for the
-   * second narrow direction: `context.run` is NOT a test-framework call, and
-   * a mark that reads the root identifier alone exempts its callback.
+   * second narrow direction: none of the three calls below is a
+   * test-framework call, and each one carries the mark under a mark that is
+   * too broad.
    */
   const context = {
     /**
@@ -420,7 +432,72 @@ describe("the complexity and length gates", () => {
     run(fold: () => number): number {
       return fold();
     },
+
+    /**
+     * Folds each row of `source` through `fold`.
+     *
+     * `each` is also a test modifier, so this member gives the shape a mark
+     * that reads a pair of a test name and a modifier name accepts.
+     *
+     * @param source - The rows to fold.
+     * @returns A function that runs `fold` over the rows.
+     */
+    each(source: number[][]): (fold: () => number) => number {
+      return (fold) => source.length + fold();
+    },
+
+    /**
+     * The same as `each`, under the other usual collection name.
+     *
+     * @param source - The rows to fold.
+     * @returns A function that runs `fold` over the rows.
+     */
+    for(source: number[][]): (fold: () => number) => number {
+      return (fold) => source.length + fold();
+    },
   };
+
+  context.each(rows)(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  context.for(rows)(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
 
   context.run(() => {
     const grid: number[][] = [];

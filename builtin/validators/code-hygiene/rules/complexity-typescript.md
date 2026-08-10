@@ -35,10 +35,26 @@ tool:
       "PropertyDefinition",
       "AccessorProperty",
     ]);
-    const TEST_CALL =
-      /^(describe|it|test|suite|context|beforeAll|beforeEach|afterAll|afterEach)$/;
-    const TEST_MODIFIER =
-      /^(only|skip|todo|failing|fails|concurrent|sequential|shuffle|each|for|runIf|skipIf)$/;
+    const NO_MODIFIER = new Set();
+    const MOCHA_MODIFIER = new Set(["only", "skip"]);
+    const MODERN_MODIFIER = new Set([
+      "only", "skip", "todo", "failing", "fails", "fail", "fixme", "slow",
+      "concurrent", "sequential", "serial", "parallel", "shuffle",
+      "each", "for", "runIf", "skipIf",
+    ]);
+    const FRAMEWORK_CALL = new Map([
+      ["describe", MODERN_MODIFIER],
+      ["it", MODERN_MODIFIER],
+      ["test", MODERN_MODIFIER],
+      ["suite", MODERN_MODIFIER],
+      ["context", MOCHA_MODIFIER],
+      ["step", MOCHA_MODIFIER],
+      ["beforeAll", NO_MODIFIER],
+      ["beforeEach", NO_MODIFIER],
+      ["afterAll", NO_MODIFIER],
+      ["afterEach", NO_MODIFIER],
+    ]);
+    const FRAMEWORK_ROOT = new Set(["test"]);
 
     function walk(node, visit) {
       if (!node || typeof node.type !== "string") return;
@@ -51,17 +67,35 @@ tool:
       }
     }
 
-    function isTestCall(call) {
+    function calleeNames(call) {
+      const names = [];
       let callee = call.callee;
       for (;;) {
         if (callee.type === "CallExpression") callee = callee.callee;
         else if (callee.type === "TaggedTemplateExpression") callee = callee.tag;
         else if (callee.type === "MemberExpression") {
-          if (callee.computed || callee.property.type !== "Identifier") return false;
-          if (!TEST_MODIFIER.test(callee.property.name)) return false;
+          if (callee.computed || callee.property.type !== "Identifier") return null;
+          names.unshift(callee.property.name);
           callee = callee.object;
-        } else return callee.type === "Identifier" && TEST_CALL.test(callee.name);
+        } else if (callee.type === "Identifier") {
+          names.unshift(callee.name);
+          return names;
+        } else return null;
       }
+    }
+
+    function isTestCall(call) {
+      const names = calleeNames(call);
+      if (!names) return false;
+      for (let at = names.length - 1; at >= 0; at -= 1) {
+        const modifiers = FRAMEWORK_CALL.get(names[at]);
+        if (!modifiers) continue;
+        return (
+          names.slice(0, at).every((name) => FRAMEWORK_ROOT.has(name)) &&
+          names.slice(at + 1).every((name) => modifiers.has(name))
+        );
+      }
+      return false;
     }
 
     function readFunctions(ast) {
@@ -218,27 +252,71 @@ argument of a test-framework call.
 
 ### What counts as a test-framework call
 
-Two conditions must both hold. The first names the framework function, and the
-second keeps the mark on that function:
+The wrapper reads the callee as a chain of names. It reads through a member,
+through a chained call and through a tagged template, so `describe.only(...)`,
+`it.each(rows)(...)`, ``it.each`table`(...)`` and `test.describe.serial(...)`
+each give a chain. A computed property, such as `it[key]`, stops the read and
+gives no chain.
 
-1. The identifier at the root of the callee is `describe`, `it`, `test`,
-   `suite`, `context`, `beforeAll`, `beforeEach`, `afterAll` or `afterEach`.
-2. Each property between that identifier and the call is a test modifier:
-   `only`, `skip`, `todo`, `failing`, `fails`, `concurrent`, `sequential`,
-   `shuffle`, `each`, `for`, `runIf` or `skipIf`. A computed property, such as
-   `it[key]`, is not a modifier.
+One name in the chain must be a FRAMEWORK FUNCTION. Each framework function
+accepts only the modifiers its own framework gives it:
 
-The wrapper reads the callee through a member, through a chained call, and
-through a tagged template, so `describe.only("...", fn)`, `it.each(rows)(...)`
-and ``it.each`table`(...)`` all carry the mark.
+| Framework function | Modifier it accepts |
+| --- | --- |
+| `describe`, `it`, `test`, `suite` | `only`, `skip`, `todo`, `failing`, `fails`, `fail`, `fixme`, `slow`, `concurrent`, `sequential`, `serial`, `parallel`, `shuffle`, `each`, `for`, `runIf`, `skipIf` |
+| `context` | `only`, `skip` |
+| `step` | `only`, `skip` |
+| `beforeAll`, `beforeEach`, `afterAll`, `afterEach` | none |
 
-The second condition is what makes the mark read "this is a test-framework
-call" and not "the root identifier has a test name". `context` is a usual name
-for a React context, a request context and an `AsyncLocalStorage`, so
-`context.run(fn)` must stay measured. Measured with the shipped config on a
-probe whose every callback scores 21 against the gate of 15: `describe.only`,
-`it.each(rows)`, ``it.each`table` `` and `describe.each(rows)` each give no
-finding, and `context.run(() => { ... })` gives one.
+Each name BEFORE the framework function must be a FRAMEWORK ROOT. `test` is
+the one framework root. Each name AFTER the framework function must be a
+modifier that framework function accepts. The wrapper reads the chain from the
+last name to the first, so `test.describe` takes `describe` as the framework
+function and `test` as the root, and `test.each(rows)` takes `test` as the
+framework function and `each` as a modifier.
+
+The root is what holds the Playwright spelling. Playwright puts its whole
+surface on the `test` root: `test.describe`, `test.beforeEach`,
+`test.afterEach`, `test.step`, `test.describe.serial`,
+`test.describe.parallel`, `test.fixme` and `test.slow`. The segment after the
+root is therefore a framework function, and not a modifier. A mark that
+accepts only a modifier after the root refuses all eight, and each one carries
+the mark `function-length` exempts, so the refusal MAKES findings the
+superseded rule would never make.
+
+The per-function modifier is what holds the other direction. `context` is a
+test-framework name only in Mocha, and Mocha gives it `only` and `skip` and no
+other modifier. `context` is also a usual name for a React context, a request
+context and an `AsyncLocalStorage`, and `each`, `for` and `run` are usual
+method names on such an object. A mark that accepts any pair of a test name
+and a modifier name therefore exempts `context.each(rows)(fn)` and
+`context.for(rows)(fn)`, which are not test-framework calls.
+
+The two rules together make the mark read "this is a test-framework call". The
+mark does not read "the root identifier has a test name", and it does not read
+"a test name stands beside a modifier name".
+
+Measured with the shipped config on a probe of 44 spellings, each callback
+scoring 21 against the gate of 15: all 34 test spellings give no finding, and
+all 10 other spellings give one finding each. The 34 hold the Vitest, Jest and
+Mocha forms — `describe`, `it`, `test`, `suite`, `context`, the four hooks,
+`describe.only`, `describe.skip`, `describe.each(rows)`, `it.each(rows)`,
+``it.each`table` ``, `it.concurrent.each(rows)`, `test.runIf(true)`,
+`context.only` and `context.skip` — and the Playwright forms —
+`test.describe`, `test.describe` with no title, the four `test` hooks,
+`test.step`, `test.step.skip`, `test.describe.serial`,
+`test.describe.parallel`, `test.describe.serial.only`, `test.fixme`,
+`test.slow`, `test.fail`, `test.only` and `test.skip`. The 10 hold
+`context.run`, `context.each(rows)`, `context.for(rows)`, `context.map`,
+`harness.describe`, `runner.test`, a plain call and a named helper inside a
+`describe` block.
+
+`context` was measured against its own removal. Over the 444 `.ts` and `.tsx`
+files under `apps/`, a config that drops `context` from the framework
+functions reports the same 30 findings, key for key. It buys nothing here, and
+it costs the Mocha suite carve-out: `context`, `context.only` and
+`context.skip` each give a finding without it. `context` therefore stays, with
+the two modifiers Mocha gives it.
 
 ### Why the mark and not the file name
 
@@ -281,13 +359,15 @@ and 4 `it(...)` callbacks over the complexity gate. It adds none, and it drops
 nothing outside a test-framework callback. The 19 named helpers in test files
 that score over the complexity gate all stay.
 
-The head offset and the modifier list hold that count where it was. Each of the
-40 drops is a `describe` or an `it` callback written as a plain arrow, and no
-file under `apps/` holds a complex method inside a test callback or a
-`context.run` call. A key-by-key comparison of the run before the two
-corrections against the run after them shows no finding gained and no finding
-lost. Both defects were real and both were silent here, which is why the
-fixture, and not this workspace, is what proves them.
+The head offset and the segment grammar hold that count where it was. Each of
+the 40 drops is a `describe` or an `it` callback written as a plain arrow. No
+file under `apps/` holds a complex method inside a test callback, a
+`context.run` call, a `context.each` call or a Playwright spelling. A
+key-by-key comparison against the run before the head offset, and against the
+run before the segment grammar, shows no finding gained and no finding lost in
+either direction. Every defect the three corrections closed was real, and
+every one was silent here, which is why the fixture pair, and not this
+workspace, is what proves them.
 
 ## Why the core length rule and not the sonarjs one
 

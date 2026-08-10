@@ -316,23 +316,27 @@ const TYPESCRIPT_COMPLEXITY_FAIL_GUARDS: &[&str] = &[
     "foldRows(",
     "get band(",
     "context.run(",
+    "context.each(rows)(",
+    "context.for(rows)(",
 ];
 
 /// Acceptance: the shipped TypeScript complexity tool rule measures every
 /// guard its fail fixture holds, through the real eslint pipeline.
 ///
 /// The doctor fixture contract asks the fail fixture for one finding, so a
-/// carve-out that exempted four of the five guards would still pass it. This
-/// test names all five, so each guard is load-bearing on its own.
+/// carve-out that exempted six of the seven guards would still pass it. This
+/// test names all seven, so each guard is load-bearing on its own.
 ///
-/// Three of the five are the shapes a carve-out anchored on the report
-/// position alone loses in silence, and all three stand inside a `describe`
-/// block. A class method and an accessor report at their NAME, which stands
-/// outside the function node the gates measure, so a lookup over the function
-/// ranges alone climbs to the test callback and exempts them.
-/// `context.run(...)` is a call whose root identifier is a test-framework
-/// name but which is not a test-framework call, so a mark that reads the root
-/// identifier alone exempts its callback.
+/// Five of the seven are the shapes a carve-out too broad in one direction
+/// loses in silence, and all five stand inside a `describe` block. A class
+/// method and an accessor report at their NAME, which stands outside the
+/// function node the gates measure, so a lookup over the function ranges
+/// alone climbs to the test callback and exempts them. `context.run(...)`,
+/// `context.each(rows)(...)` and `context.for(rows)(...)` are calls whose
+/// root identifier is a test-framework name and which are not test-framework
+/// calls: a mark that reads the root identifier alone exempts the first, and
+/// a mark that reads any pair of a test name and a modifier name exempts the
+/// other two.
 #[test]
 fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard() {
     let loader = builtin_loader();

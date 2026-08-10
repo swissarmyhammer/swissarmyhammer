@@ -6,15 +6,19 @@
 //   moved to `stepBand`.
 // - `mixState` holds the same shape at 204 counted lines.
 //
-// It also holds three blocks that stand over a gate and that the test
-// carve-out exempts: a `describe(...)` block, a `describe.only(...)` block and
-// an `it.each(rows)(...)` block. The comment above each one states its
-// numbers.
+// It also holds seven blocks that stand over a gate and that the test
+// carve-out exempts. Three carry the Vitest, Jest and Mocha spelling: a
+// `describe(...)` block, a `describe.only(...)` block and an
+// `it.each(rows)(...)` block. Four carry the Playwright spelling, which puts
+// the framework function on the `test` root: `test.describe(...)`,
+// `test.describe.serial(...)`, `test.step(...)` and `test.beforeEach(...)`.
+// The comment above each group states its numbers.
 //
 // The tool must report nothing. A threshold that stopped applying would
-// report one of the two functions, and a carve-out that stopped reading a test
-// modifier would report one of the last two blocks. Either way the pair
-// fails.
+// report one of the two functions, a carve-out that stopped reading a test
+// modifier would report one of the two Vitest modifier blocks, and a
+// carve-out that reads only a modifier after the root would report all four
+// Playwright blocks. Any of the three makes the pair fail.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
@@ -604,3 +608,99 @@ it.each([[[[1, 2], [3, 4]], 3]])(
     expect(band).toBe(limit);
   },
 );
+
+// The four blocks below carry the mark through the PLAYWRIGHT spelling.
+// Playwright puts its whole surface on the `test` root, so the segment after
+// that root is a framework function and not a modifier. `describe`, `step`
+// and `beforeEach` each stand here in that place. A mark that accepts only a
+// modifier after the root refuses all four blocks, and each callback holds
+// the failing fixture's `foldGrid` shape, which scores 21 against the
+// cognitive complexity gate of 15. Any of the four then reports, and the pair
+// fails.
+//
+// `test.describe.serial(...)` adds a modifier after the framework function,
+// so it holds the root, the framework function and the modifier in one call.
+
+test.describe("the mark on the playwright root", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+test.describe.serial("the mark on the root, then a modifier", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+test.step("the mark on a playwright step", () => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
+
+test.beforeEach(() => {
+  const grid = [[1, 2], [3, 4]];
+  const limit = 3;
+  let band = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell > 0) {
+        if (cell < limit) {
+          while (band < cell) {
+            if (band % 2 === 0) {
+              band += 2;
+            }
+            band += 1;
+          }
+        }
+      }
+    }
+  }
+  expect(band).toBe(limit);
+});
