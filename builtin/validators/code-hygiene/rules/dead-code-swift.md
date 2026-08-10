@@ -115,6 +115,40 @@ internal computed properties nothing reads; and the three
 class Inner: Subscription` are redundant, because `Subscription` requires no
 `Failure`.
 
+## `assignOnlyProperty` and the reads periphery cannot see
+
+Periphery hints `assignOnlyProperty` on a property it sees written and never
+read. The index is right about what it can see, and it cannot see the `==` and
+`hash(into:)` the compiler *synthesizes* for an `Equatable` or `Hashable` type
+that writes neither. Those bodies read every stored property, so a type that
+declares the conformance and compares whole values has readers for all of them —
+and periphery reports them all as assign-only.
+
+Measured on `FoundationModelsRouter` at `fe0a645`, periphery 3.8.0: eight
+findings, all `var.instance … is assignOnlyProperty`, across a six-property
+`Equatable` struct and a two-property `Hashable` struct. The only reads are the
+synthesized ones, exercised by three lines that compare whole values.
+
+**Do not delete such a property.** It does not compile — the memberwise
+initializer and every literal still supply it — and deleting all of them makes
+`a == b` true for any two values, so a test that compares them silently asserts
+nothing while still passing.
+
+Write `// periphery:ignore` above the property, with the reason on its own line
+above the marker, exactly as the staging contract requires:
+
+```swift
+/// Read by the synthesized `Equatable` conformance; periphery sees no caller.
+// periphery:ignore
+let deliveredToolOutputs: [String]
+```
+
+The blanket `--retain-assign-only-properties` flag is deliberately **not** set.
+It would also retain a property nothing reads at all — the `deadCount` case this
+rule's own failing fixture exists to catch — and that is real dead code worth
+reporting. The distinction is whether a reader exists; the marker is how a human
+states that one does.
+
 ## Why `var.parameter` is dropped
 
 Periphery reports an unused function *parameter*. That is not dead code: the
