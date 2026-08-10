@@ -141,20 +141,11 @@ mod tests {
 
     use swissarmyhammer_sem::git_types::{FileChange as SemFileChange, FileStatus};
 
-    use crate::review::test_support::{builtin_loader, loader_with};
+    use crate::review::test_support::{builtin_loader, loader_with, repo_root};
 
     /// The change purpose the fixtures below carry. The split never reads it;
     /// it is carried through unchanged.
     const TEST_CHANGE_PURPOSE: &str = "a change touching a validator fixture";
-
-    /// The repository root, from this crate's manifest directory.
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("repository root above crates/<crate>")
-            .to_path_buf()
-    }
 
     /// A resolved scope over `files`, with each file's after-content and
     /// sem-diff entry present so the split's three-view consistency is

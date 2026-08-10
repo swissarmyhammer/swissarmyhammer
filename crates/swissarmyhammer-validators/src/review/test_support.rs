@@ -50,6 +50,21 @@ pub fn uniform_budget(bytes: usize) -> BatchBudget {
     BatchBudget::new(FileCapBytes(bytes), BatchBytes(bytes))
 }
 
+/// The repository root, from this crate's manifest directory.
+///
+/// `CARGO_MANIFEST_DIR` expands when THIS crate compiles, so it always names
+/// `<repo>/crates/swissarmyhammer-validators` and the root stands two
+/// directories above it. This is the ONE definition of the walk: a test that
+/// must reach the real repository — the shipped validator sets, their fixture
+/// files — reads the root from here instead of carrying its own copy.
+pub fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repository root above crates/<crate>")
+        .to_path_buf()
+}
+
 /// A loader carrying every shipped validator set.
 ///
 /// Every tool-rule test plans against the rules AS THEY SHIP, so the loader

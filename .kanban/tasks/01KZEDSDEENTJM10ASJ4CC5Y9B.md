@@ -33,6 +33,49 @@ comments:
     - commands: `cargo nextest run --workspace --no-fail-fast` → 14033 run, 14029 passed, 4 failed, 0 skipped. The 4 are the known pre-existing failures (^bh5ncd0): three `review_e2e` tests on `report_has_claim(markdown, CLAIM_DUP)` ("item 1 duplication", "duplication via sha", "a confirmed finding must land on the task") and the `review_progress_stdio` timeout. The failure text is the same as before this change. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` zero warnings.
     - next: ready for /review.
   timestamp: 2026-08-10T18:39:47.263207+00:00
+- actor: claude-code
+  id: 01kzphtm4hf5zdqhqyw2kang1r
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (2cb8eab66). 25 findings, 25 confirmed, 33 refuted, 56 attempted, 0 failed, 0 skipped. 22 dropped by the written exception for tests that already existed. 3 open: crates/swissarmyhammer-validators/src/review/scope/fixtures.rs:151, crates/swissarmyhammer-validators/src/validators/loader.rs:510, crates/swissarmyhammer-validators/src/validators/loader.rs:613.
+    - scope check: the change did not narrow this review. `skipped_files` is empty and `skipped` is 0. The commit touches 20 files; `.reviewignore` removed the 2 `.kanban/` files before this commit existed; all 18 source files stayed in the work-list. A `review file` run on the new `review/scope/fixtures.rs` attempted 8 pairs and skipped 0, so the module did not exclude itself.
+    - next: correct the 3 open findings, then review again.
+  timestamp: 2026-08-10T19:19:09.201877+00:00
+- actor: claude-code
+  id: 01kzphvzke53e1yekb7f550hk7
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 18 source files, one of them new (`review/scope/fixtures.rs`). The exclusion comes from `ValidatorLoader::fixture_dirs()`, which names each loaded set's `fixtures/` directory across all three layers. `scope_review` splits those files out before any progress event, any validator pairing and any tool-rule argument list.
+    - all three acceptance items proved, not asserted:
+      1. a unit test with the REAL builtin loader over the REAL repository root, on the exact `builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs.tmpl` path, plus a `review sha` e2e that asserts `counts.skipped_files`. RED proved for both by short-circuiting the split.
+      2. doctor was RUN, healthy then broken: `missing-docs-rust usable=true`, then with the rule's `run` script broken, `usable=false fallback=true detail="fixtures failed: the fail fixture missing-docs-rust.fail.rs.tmpl produced no findings; at least one is required"`. The gate moved; it did not vanish.
+      3. `review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_source` drives the registered production tool over a real temp git repo with a real project validator set. HOME is isolated, so no test reads `~/.validators`.
+    - a fixture exclusion raises no finding and does not increment `counts.skipped`, which stays the over-cap coverage-failure count. A fixture is deliberate data, not a coverage gap.
+    - test: `cargo nextest run --workspace --no-fail-fast` 14033 run, 14029 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set and the text is the same as before the change.
+    - commit: 2cb8eab66
+    - the review did NOT narrow its own scope. 18 of 18 source files reviewed, `skipped_files` empty, 56 tasks attempted, 0 failed. The reviewer proved the new `fixtures.rs` module does not exclude itself by running `review file` on it directly: 8 pairs attempted, 1 finding returned.
+    - review: findings — 25 findings, 22 dropped under the written exception for tests that already existed (each checked against the commit's hunk ranges), 3 open: `review/scope/fixtures.rs:151` (caused by this commit), `validators/loader.rs:510` and `:613` (pre-existing, in scope because the commit touched the file)
+  timestamp: 2026-08-10T19:19:53.710088+00:00
+- actor: claude-code
+  id: 01kzpjhjm8qve2v2h7gqqrpwyc
+  text: |
+    All three open findings are corrected. Each cause was removed from the whole file, not only from the named line.
+
+    1. `fixtures.rs:151` — duplicate `repo_root()`. There is now ONE definition: `review::test_support::repo_root()`, beside `builtin_loader()` in the crate's shared test module. Both copies are deleted — the one in `review/scope/fixtures.rs` and the one in `lib.rs` — and both modules import the shared function. `test_support` is `#[cfg(any(test, feature = "test-support"))]`, so a `#[cfg(test)]` module at the crate root reaches it. `CARGO_MANIFEST_DIR` expands when THIS crate compiles, so the walk gives the same repository root for every consumer.
+    2. `loader.rs:510` — `retain_rulesets` now takes `&[&str]`. The comparison is `names.iter().any(|n| *n == name)`. `retain_rulesets` was the ONE `&[String]` parameter in the file; a survey of every `pub fn` signature found no other. The one production caller, `swissarmyhammer-tools/src/mcp/tools/review/review_op.rs`, borrows the request's owned names into a `Vec<&str>` first. The two test call sites drop their `.to_string()`.
+    3. `loader.rs:613` — `ValidatorDiagnostics` derives `PartialEq`/`Eq`. `DirectoryInfo`, which it holds, derives them too. The same cause held for the third public struct in the file: `LoadFailure` carried the same `#[derive(Debug, Clone)]`, so it derives them too. `ValidatorSource`, the field type `LoadFailure` holds, already derived `PartialEq`/`Eq`, so no further change was needed.
+
+    Test code was not touched beyond what the findings require: the deleted `repo_root()` copies and the two `retain_rulesets` call sites.
+  timestamp: 2026-08-10T19:31:41.320152+00:00
+- actor: claude-code
+  id: 01kzpjhx433mbwjgfc89kyh2xb
+  text: |
+    ### implement — changed
+    - evidence: 5 files — `crates/swissarmyhammer-validators/src/review/test_support.rs` (the one `repo_root()`), `crates/swissarmyhammer-validators/src/review/scope/fixtures.rs`, `crates/swissarmyhammer-validators/src/lib.rs`, `crates/swissarmyhammer-validators/src/validators/loader.rs`, `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op.rs`. All three findings of the 2026-08-10 14:14 section are now checked.
+    - commands: `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` zero warnings; `cargo nextest run --workspace --no-fail-fast` 14034 run, 14030 passed, 0 skipped, 4 failed — the SAME known ^bh5ncd0 set as before this change (three `review_e2e` on `report_has_claim(markdown, CLAIM_DUP)` plus `review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`).
+    - the card's own tests stay GREEN, run again by name: `a_changed_builtin_fixture_leaves_the_scope_and_source_stays`, `a_scope_with_no_fixture_under_any_set_keeps_every_file`, `review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_source`. The two tests the edits touch elsewhere also pass: `no_rule_matches_a_shipped_fixture_template` and `retain_rulesets_keeps_only_the_named_subset`.
+    - next: ready for /review.
+  timestamp: 2026-08-10T19:31:52.067014+00:00
 position_column: doing
 position_ordinal: '8480'
 title: 'review scope: exclude validator-set fixture files from review pairs and tool runs'
@@ -50,3 +93,26 @@ Acceptance:
 - A production-path test covers the scenario: a changed fail fixture plus a changed source file; the source file is reviewed, the fixture is skipped with the reason.
 
 #tool-validators
+
+## Review Findings (2026-08-10 14:14)
+
+Scope: `review sha HEAD~1..HEAD`, commit 2cb8eab66. Engine counts: 25 findings, 25 confirmed, 33 refuted, 56 tasks attempted, 0 failed, 0 skipped.
+
+Scope check — the change did NOT narrow this review. The engine excluded no file: `skipped_files` is empty, and `skipped` is 0. The commit touches 20 files. Two are `.kanban/` bookkeeping files that `.reviewignore` removed before this commit existed. All 18 source files stayed in the work-list. The new module `review/scope/fixtures.rs` was reviewed, not excluded by its own code: a `review file` run on it attempted 8 pairs, skipped 0, and returned 1 finding.
+
+- [x] `crates/swissarmyhammer-validators/src/review/scope/fixtures.rs:151` — The `repo_root()` test helper reinvents a nearly identical function already present in the same crate. Both test functions compute the repository root from `CARGO_MANIFEST_DIR` using the same logic, differing only in naming context. Maintaining duplicate implementations of the same test utility across the crate defeats the purpose of a shared foundation. Extract `repo_root()` to a shared test module (e.g., `crates/swissarmyhammer-validators/tests/common/mod.rs` or similar), then import and reuse it here and in `lib.rs`. Both call sites within this file (lines 193, 232) and the identical function in lib.rs should share one implementation.
+- [x] `crates/swissarmyhammer-validators/src/validators/loader.rs:510` — Method `retain_rulesets` should accept `&[&str]` instead of `&[String]` to follow the principle 'accept &str not &String' — string literals and borrowed strings are more natural for callers than forcing owned String values. Change the signature to `pub fn retain_rulesets(&mut self, names: &[&str])` and update the comparison at line 515 to `names.iter().any(|&n| n == name)` to dereference the `&&str` from iteration.
+- [x] `crates/swissarmyhammer-validators/src/validators/loader.rs:613` — Public struct `ValidatorDiagnostics` should derive `PartialEq` and `Eq` for comparing diagnostic results; orphan rules prevent downstream crates from adding these later. Change `#[derive(Debug, Clone)]` to `#[derive(Debug, Clone, PartialEq, Eq)]` on line 613 (also add these derives to `DirectoryInfo` first).
+
+Cause of each open finding:
+- `fixtures.rs:151` — this commit causes it. The new test helper copies `repo_root()` in `lib.rs`, which was there before the commit.
+- `loader.rs:510` — debt that was there before. `retain_rulesets` had the same `&[String]` signature at HEAD~1. It came into scope because the commit added `fixture_dirs` to the same file.
+- `loader.rs:613` — debt that was there before. `ValidatorDiagnostics` was at HEAD~1 with the same derives. It came into scope because the commit touched the file.
+
+Dropped by the written exception in the review skill (do not refactor tests that already existed): 22 of the 25 findings. Each one asks to restyle or deduplicate test code the commit did not write:
+- `review_op/tests.rs` — 12 findings, lines 277 to 892, all asking to name magic numbers. The commit adds one line to this file, at line 806.
+- `review_fixture.rs` — 6 findings, lines 214 to 406, all asking to name magic numbers. The commit adds lines 143 to 186 only.
+- `review_e2e.rs:258` — asks to deduplicate `review_e2e_file_glob_confirms_scoped_defects`, which was at HEAD~1, against `review_e2e_sha_range_confirms_the_same_defects`, also at HEAD~1.
+- `scope/tests.rs:1018` — asks to deduplicate `validator_sized` against `validator_over`. Both were there before.
+- `scope/tests.rs:1091` and `scope/tests.rs:1161` — ask to name the literal 25 across test functions that were there before.
+- `tool_rules/tests/shipped.rs:206` — asks to deduplicate `dead_code_work` against `complexity_work`. The commit changes only the import lines, 8 and 11.

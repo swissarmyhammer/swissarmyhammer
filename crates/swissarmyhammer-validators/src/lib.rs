@@ -165,16 +165,8 @@ pub async fn execute_agents(
 mod fixture_template_tests {
     use super::*;
 
+    use crate::review::test_support::repo_root;
     use crate::validators::types::FIXTURES_DIR_NAME;
-
-    /// The repository root, from this crate's manifest directory.
-    fn repo_root() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("repository root above crates/<crate>")
-            .to_path_buf()
-    }
 
     /// Every `fixtures/` directory under `builtin/validators/`, one per set that
     /// ships a tool rule.

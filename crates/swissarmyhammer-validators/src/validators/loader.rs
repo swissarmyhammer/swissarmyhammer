@@ -102,7 +102,7 @@ pub struct ValidatorLoader {
 /// The loader keeps loading the rest of the stack when one validator is broken
 /// (a broken validator never aborts the run); each failure is recorded here so
 /// the lint surface can name the offending path and its parse problem.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadFailure {
     /// The RuleSet directory that failed to parse.
     pub path: PathBuf,
@@ -507,12 +507,12 @@ impl ValidatorLoader {
     /// scoping the fan-out to just the chosen validators. A name in `names` that
     /// isn't loaded is simply ignored. An empty `names` is a no-op (callers that
     /// want "all" should not call this).
-    pub fn retain_rulesets(&mut self, names: &[String]) {
+    pub fn retain_rulesets(&mut self, names: &[&str]) {
         if names.is_empty() {
             return;
         }
         self.rulesets
-            .retain(|name, _| names.iter().any(|n| n == name));
+            .retain(|name, _| names.iter().any(|n| *n == name));
     }
 
     /// The RuleSet directories that failed to parse during loading.
@@ -598,7 +598,7 @@ impl ValidatorLoader {
 }
 
 /// Information about a validator directory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryInfo {
     /// Path to the directory (if resolvable).
     pub path: Option<std::path::PathBuf>,
@@ -609,7 +609,7 @@ pub struct DirectoryInfo {
 }
 
 /// Diagnostic information about validator loading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatorDiagnostics {
     /// Information about the user validators directory (~/.validators).
     pub user_directory: DirectoryInfo,
@@ -935,7 +935,7 @@ mod tests {
         assert_eq!(loader.ruleset_count(), 3);
 
         // Subset the loader the way the `review` tool's `validators` modifier does.
-        loader.retain_rulesets(&["dead-code".to_string()]);
+        loader.retain_rulesets(&["dead-code"]);
 
         assert_eq!(loader.ruleset_count(), 1);
         assert!(loader.get_ruleset("dead-code").is_some());
