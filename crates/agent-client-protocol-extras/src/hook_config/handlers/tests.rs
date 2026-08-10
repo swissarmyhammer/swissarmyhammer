@@ -3,19 +3,45 @@
 use super::*;
 
 use super::super::output::HookDecisionValue;
+use swissarmyhammer_common::command::{shell_command, Shell};
 
 // =====================================================================
 // Event-aware exit-2 tests (interpret_exit_2_stderr is in this crate)
 // =====================================================================
 
+/// A hook message that holds shell syntax: a command substitution in each of
+/// the two spellings, and a single quote. Every one of them runs as code if
+/// the message goes into the command string instead of into an argument.
+const HOSTILE_MESSAGE: &str = r#"don't run $(echo INJECTED) or `echo INJECTED`"#;
+
+/// The `$0` a shell reads before its positional parameters begin. `sh -c`
+/// takes the script, then `$0`, then `$1` and the rest, so a value must come
+/// after this name to arrive as `"$1"`.
+const SHELL_ARGV0: &str = "sh";
+
 /// Run a hook command that writes `message` on stderr and exits with the
 /// block code, which is how a command hook refuses.
+///
+/// The message rides in as the script's one positional parameter, never inside
+/// the command string. A message can hold any character a shell reads
+/// specially, and a script that reads `"$1"` cannot be broken by the value.
 fn refusing_hook_output(message: &str) -> std::process::Output {
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("echo '{message}' >&2; exit {EXIT_CODE_BLOCK}"))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+    shell_output(
+        &format!(r#"echo "$1" >&2; exit {EXIT_CODE_BLOCK}"#),
+        message,
+    )
+}
+
+/// Run `script` through the platform shell with `value` as its one positional
+/// parameter, and give back the finished process.
+///
+/// [`shell_command`] is the one place in this workspace that decides which
+/// interpreter runs a command string and how the child's streams are wired,
+/// so this module does not spell those decisions again.
+fn shell_output(script: &str, value: &str) -> std::process::Output {
+    shell_command(Shell::Platform, script)
+        .arg(SHELL_ARGV0)
+        .arg(value)
         .output()
         .expect("the shell must run the hook command")
 }
@@ -120,6 +146,28 @@ fn exit_2_on_a_blockable_event_logs_no_fall_back() {
     );
 }
 
+/// The message of a hook comes from the hook, not from this test, so it can
+/// hold any character a shell reads specially. The message must reach stderr
+/// as data. A message the shell reads as code changes the exit code, the
+/// stderr, or both, so the reason the handler reports is no longer the
+/// message.
+#[test]
+fn a_hostile_message_reaches_stderr_as_data() {
+    let output = refusing_hook_output(HOSTILE_MESSAGE);
+
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_CODE_BLOCK),
+        "a hostile message must not change the exit code of the hook"
+    );
+
+    let decision = interpret_exit_2_stderr(&output, "test-cmd", HookEventKind::PreToolUse);
+    match decision {
+        HookDecision::Block { reason } => assert_eq!(reason, HOSTILE_MESSAGE),
+        other => panic!("Expected Block for a refusal, got {:?}", other),
+    }
+}
+
 /// End to end: a hook command that exits 0 with a genuinely malformed
 /// `hookSpecificOutput` falls back to `Allow`, but only after an
 /// explicit, visible `warn`-level log — never a silent permit.
@@ -127,13 +175,7 @@ fn exit_2_on_a_blockable_event_logs_no_fall_back() {
 #[tracing_test::traced_test]
 fn malformed_hook_specific_output_allows_with_an_explicit_asserted_log() {
     let stdout = r#"{"hookSpecificOutput": {"hookEventName": "NotARealEvent"}}"#;
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("echo '{stdout}'"))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .unwrap();
+    let output = shell_output(r#"echo "$1""#, stdout);
 
     let decision = interpret_exit_0_stdout(&output, "test-cmd", HookEventKind::PreToolUse);
 
