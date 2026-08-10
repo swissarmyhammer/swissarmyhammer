@@ -15,6 +15,50 @@ fn run_of(script: &str, scope: ToolScope, files: &[&str]) -> ToolRun {
     }
 }
 
+/// A run reported under `validator` and `rule`, for the tests that read only
+/// the names a run is reported under.
+fn run_named(validator: &str, rule: &str) -> ToolRun {
+    ToolRun {
+        validator: validator.to_string(),
+        rule: rule.to_string(),
+        ..run_of("true", ToolScope::Files, &[])
+    }
+}
+
+/// A tool-run task that does not finish reports one error for every run it
+/// carried, each under that run's own names.
+///
+/// The runs overlap the fleet on a blocking task, so a panic in the run loop
+/// is the one way the task can end without an outcome. Every rule the task
+/// carried has to reach the report: a lost rule reads as a clean run.
+#[tokio::test]
+async fn a_tool_run_task_that_panics_reports_every_run_it_carried() {
+    let runs = [
+        run_named("docs", "docs-tool"),
+        run_named("todo", "todo-tool"),
+    ];
+    let in_flight = ToolRunsInFlight {
+        identities: runs.iter().map(RunIdentity::of).collect(),
+        task: tokio::task::spawn_blocking(|| panic!("the run loop broke")),
+    };
+
+    let (findings, errors) = in_flight.finish().await.into_parts();
+
+    assert!(
+        findings.is_empty(),
+        "a task that did not finish reports no findings: {findings:?}"
+    );
+    let reported: Vec<(&str, &str)> = errors
+        .iter()
+        .map(|error| (error.validator(), error.rule()))
+        .collect();
+    assert_eq!(
+        reported,
+        [("docs", "docs-tool"), ("todo", "todo-tool")],
+        "every run the task carried must be reported under its own names"
+    );
+}
+
 #[test]
 fn execute_passes_the_changed_files_as_arguments_and_tags_the_findings() {
     let repo = tempfile::tempdir().unwrap();

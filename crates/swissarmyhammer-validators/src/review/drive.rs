@@ -1998,7 +1998,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" 
     /// The run script blocks until the test releases it, and the test releases
     /// it only after a fleet pair has finished. A run that waited for the tool
     /// before it started the fleet therefore never reaches the release.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_tool_run_overlaps_the_fleet_instead_of_delaying_it() {
         let (repo, conn) = todo_repo();
         let base = tempfile::tempdir().expect("tool rule base dir");

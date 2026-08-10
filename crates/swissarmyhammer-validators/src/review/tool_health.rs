@@ -6,14 +6,18 @@
 //! a real `cargo clippy`, so one rule costs tens of seconds and a review paid
 //! it again for every rule, every run, before the fan-out could start.
 //!
-//! The verdict cannot change while the tool and the rule stay the same, so
-//! this module stores it under the workspace and reads it back. A stored
+//! A PASS cannot change while the tool and the rule stay the same, so this
+//! module stores the pass under the workspace and reads it back. A stored
 //! verdict stands only while BOTH of its keys still hold:
 //!
 //! - the tool version `doctor.check_version_command` reports, and
-//! - a digest of everything a fixture run reads: the rule name the fixture
-//!   files are named for, the rule's whole `tool` block, and every file in the
-//!   set's `fixtures/` directory.
+//! - a digest of everything a fixture run reads: the rule's whole `tool`
+//!   block, and every file in the set's `fixtures/` directory.
+//!
+//! The rule NAME is not part of that digest. It is part of the storage key
+//! (`<set>/<rule>`), which is a different mechanism: two rules of one set that
+//! carry identical `tool` blocks share a digest and still hold their own
+//! verdicts, because they do not share a key.
 //!
 //! A tool upgrade, an edited `run` script, an edited fixture, or a rule this
 //! workspace never proved therefore runs the fixtures again. A rule that
@@ -21,13 +25,21 @@
 //! would be undetectable, and a verdict nothing can invalidate is worse than
 //! no verdict.
 //!
+//! Only a PASS is stored. A fixture run breaks for reasons that say nothing
+//! about the tool or the rule: a `cargo clippy` that lost the build lock, a
+//! full disk, a network failure. A stored failure would put the rule on its
+//! prompt fallback on every later review until the tool version or the rule
+//! content changed, so a rule that does not pass is proved again every run and
+//! any verdict standing under its key is dropped.
+//!
 //! Presence and version are themselves never stored — each is one cheap
 //! command, and reading them fresh is what makes the stored verdict safe.
 //!
 //! `sah doctor` never reads a stored verdict. It asks for
-//! [`HealthProof::Fresh`], which runs the fixtures and replaces the stored
-//! verdict with what they did, so doctor stays the ground truth and a review
-//! that follows it reads doctor's own answer.
+//! [`HealthProof::Fresh`], which runs the fixtures and writes what they did:
+//! a pass replaces the stored verdict, and anything else drops it. Doctor
+//! therefore stays the ground truth, and a review that follows it never
+//! replays a pass the tool no longer earns.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,8 +57,8 @@ use crate::doctor::{
 use crate::validators::types::{Rule, RuleSet, ToolSpec};
 
 /// The subdirectory of the workspace `.sah` directory that holds rebuildable
-/// engine artifacts. It is created and git-ignored by the managed directory
-/// itself, so a stored verdict never reaches a commit.
+/// engine artifacts. The managed directory creates it, and git-ignores it, at
+/// the moment a verdict is saved, so a stored verdict never reaches a commit.
 const CACHE_SUBDIR: &str = "tmp";
 
 /// The file that holds the stored verdicts.
@@ -65,28 +77,28 @@ pub enum HealthProof {
     Fresh,
 }
 
-/// One stored fixture verdict, with the two keys that keep it usable.
+/// One stored PASS, with the two keys that keep it usable.
+///
+/// The entry carries no outcome, because only a pass is ever stored: an entry
+/// standing under a key IS the statement that the rule passed its fixtures
+/// under those keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredVerdict {
     /// The tool version `doctor.check_version_command` reported when the
-    /// fixtures ran.
+    /// fixtures passed.
     version: String,
 
     /// The digest of the rule content and the fixture files the run read.
     content: String,
-
-    /// What the fixtures did.
-    fixtures: FixtureOutcome,
 }
 
 /// The stored tool-rule fixture verdicts for one workspace.
 #[derive(Debug)]
 pub struct ToolHealthCache {
-    /// Where the verdicts are stored, or `None` when the workspace has no
-    /// writable state directory. A cache with no file still answers within one
-    /// run and simply starts empty on the next one.
-    path: Option<PathBuf>,
+    /// The workspace the verdicts belong to. [`ToolHealthCache::save`] derives
+    /// the state directory from it, and nothing else does.
+    workspace_root: PathBuf,
 
     /// The verdict for each `<set>/<rule>` key.
     verdicts: Mutex<BTreeMap<String, StoredVerdict>>,
@@ -95,42 +107,80 @@ pub struct ToolHealthCache {
 impl ToolHealthCache {
     /// Open the verdicts stored for the workspace at `workspace_root`.
     ///
-    /// A workspace with no readable stored file opens empty, and a workspace
-    /// with no writable state directory opens with nowhere to save. Neither is
-    /// an error: a cache that cannot answer costs the fixture runs it was
-    /// meant to save and nothing else.
+    /// Opening reads and creates nothing. A workspace with no stored file, or
+    /// one this version cannot read, opens empty, which is not an error: a
+    /// cache that cannot answer costs the fixture runs it was meant to save
+    /// and nothing else.
     pub fn open(workspace_root: &Path) -> Self {
-        let path = cache_path(workspace_root);
-        let verdicts = path.as_deref().and_then(read_verdicts).unwrap_or_default();
+        let verdicts = read_verdicts(&cache_path(workspace_root)).unwrap_or_default();
         Self {
-            path,
+            workspace_root: workspace_root.to_path_buf(),
             verdicts: Mutex::new(verdicts),
         }
     }
 
     /// Write the verdicts back to the workspace.
     ///
+    /// A review that stored no verdict writes nothing and creates nothing, so
+    /// it leaves the tree it reviewed exactly as it found it. That matters
+    /// beyond tidiness: `Scope::Working` reads untracked files, so a review
+    /// that created a state directory would write its own next scope.
+    ///
     /// A write that fails is reported and dropped — the next run proves the
     /// rules again, which is what it did before anything was stored.
     pub fn save(&self) {
-        let Some(path) = &self.path else {
+        // The snapshot is a statement of its own, so the guard drops at its
+        // semicolon. Neither the encoding below nor the blocking write then
+        // holds the lock, whatever either one calls.
+        let verdicts = self.verdicts().clone();
+        if verdicts.is_empty() {
+            return;
+        }
+
+        let bytes = match serde_json::to_vec_pretty(&verdicts) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "the tool health verdicts could not be encoded; nothing was written"
+                );
+                return;
+            }
+        };
+
+        let Some(path) = self.writable_cache_path() else {
             return;
         };
-        let verdicts = self.verdicts();
-        match serde_json::to_vec_pretty(&*verdicts) {
-            Ok(bytes) => {
-                if let Err(error) = std::fs::write(path, bytes) {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %error,
-                        "the tool health verdicts could not be written; the next review proves the rules again"
-                    );
-                }
-            }
-            Err(error) => tracing::warn!(
+        if let Err(error) = std::fs::write(&path, bytes) {
+            tracing::warn!(
+                path = %path.display(),
                 error = %error,
-                "the tool health verdicts could not be encoded; nothing was written"
-            ),
+                "the tool health verdicts could not be written; the next review proves the rules again"
+            );
+        }
+    }
+
+    /// The verdict file, with the state directory that holds it created.
+    ///
+    /// This is the ONE place the engine writes into the tree it is reviewing,
+    /// and it runs only when there is a verdict to keep. The managed directory
+    /// writes the `.gitignore` that covers [`CACHE_SUBDIR`], so the verdict
+    /// file never reaches a commit.
+    fn writable_cache_path(&self) -> Option<PathBuf> {
+        let managed = ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(
+            self.workspace_root.clone(),
+        )
+        .and_then(|dir| dir.ensure_subdir(CACHE_SUBDIR));
+        match managed {
+            Ok(dir) => Some(dir.join(CACHE_FILE_NAME)),
+            Err(error) => {
+                tracing::warn!(
+                    workspace = %self.workspace_root.display(),
+                    error = %error,
+                    "the workspace has no writable state directory; tool health is proved every run"
+                );
+                None
+            }
         }
     }
 
@@ -142,16 +192,20 @@ impl ToolHealthCache {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The verdict stored under `key`, when one is stored AND both of its keys
-    /// still hold.
-    fn stored(&self, key: &str, keys: &VerdictKeys) -> Option<FixtureOutcome> {
-        let verdicts = self.verdicts();
-        let stored = verdicts.get(key)?;
-        let matches = stored.version == keys.version && stored.content == keys.content;
-        matches.then(|| stored.fixtures.clone())
+    /// Whether a stored verdict says the rule under `key` passed its fixtures,
+    /// and said so under keys that still hold.
+    fn passed(&self, key: &str, keys: &VerdictKeys) -> bool {
+        self.verdicts()
+            .get(key)
+            .is_some_and(|stored| stored.version == keys.version && stored.content == keys.content)
     }
 
-    /// Run the fixtures and store what they did under `key`.
+    /// Run the fixtures and store the verdict under `key` when they passed.
+    ///
+    /// A run that did not pass stores nothing AND drops whatever stood under
+    /// the key. Both halves matter: a break that the environment caused must
+    /// not become this rule's verdict, and a pass the tool no longer earns
+    /// must not stand once a run has shown it broken.
     fn prove(
         &self,
         key: String,
@@ -161,14 +215,17 @@ impl ToolHealthCache {
         spec: &ToolSpec,
     ) -> FixtureOutcome {
         let fixtures = check_fixtures(ruleset, rule, spec);
-        self.verdicts().insert(
-            key,
-            StoredVerdict {
-                version: keys.version.clone(),
-                content: keys.content.clone(),
-                fixtures: fixtures.clone(),
-            },
-        );
+        if fixtures == FixtureOutcome::Passed {
+            self.verdicts().insert(
+                key,
+                StoredVerdict {
+                    version: keys.version.clone(),
+                    content: keys.content.clone(),
+                },
+            );
+        } else {
+            self.verdicts().remove(&key);
+        }
         fixtures
     }
 }
@@ -222,16 +279,14 @@ pub fn tool_rule_health(
         };
 
         let key = verdict_key(ruleset, rule);
-        if proof == HealthProof::Stored {
-            if let Some(stored) = cache.stored(&key, &keys) {
-                tracing::debug!(
-                    validator = %ruleset.name(),
-                    rule = %rule.name,
-                    version = %keys.version,
-                    "the stored fixture verdict still applies; the fixtures do not run"
-                );
-                return stored;
-            }
+        if proof == HealthProof::Stored && cache.passed(&key, &keys) {
+            tracing::debug!(
+                validator = %ruleset.name(),
+                rule = %rule.name,
+                version = %keys.version,
+                "the stored fixture verdict still applies; the fixtures do not run"
+            );
+            return FixtureOutcome::Passed;
         }
         cache.prove(key, &keys, ruleset, rule, spec)
     })
@@ -263,6 +318,13 @@ fn content_digest(spec: &ToolSpec, fixtures: &str) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+/// The tag that marks a fixture the digest read.
+const FIXTURE_READ: u8 = 0;
+
+/// The tag that marks a fixture the digest could not read. It keeps an
+/// unreadable fixture from digesting as an empty one.
+const FIXTURE_UNREADABLE: u8 = 1;
+
 /// The digest of every file in `fixtures_dir`, by name and by content.
 ///
 /// A fixture is half of what a health check proves, so an edited fixture must
@@ -270,6 +332,15 @@ fn content_digest(spec: &ToolSpec, fixtures: &str) -> Option<String> {
 /// because the doctor's fixture check copies all of it into the scratch
 /// directory the run script works in — a `workspace`-scope tool reads the
 /// fixture's neighbours as well as the fixture.
+///
+/// Every name and every content blob goes in behind its own length, so two
+/// different fixture sets cannot lay down one byte stream. Without the
+/// framing, `<rule>.pass.rs` holding `XY` and `<rule>.pass.rsX` holding `Y`
+/// digest the same, and both are live fixtures because the doctor finds a
+/// fixture by the `<rule>.<kind>.` prefix.
+///
+/// A file the digest cannot read is marked as unreadable rather than skipped,
+/// so it does not digest as an empty file.
 ///
 /// The files are read on every check rather than remembered. A validator set
 /// ships a handful of small fixtures, so re-reading them costs far less than
@@ -290,31 +361,42 @@ fn fixture_digest(fixtures_dir: &Path) -> String {
 
     let mut hasher = Sha256::new();
     for path in names {
-        hasher.update(path.to_string_lossy().as_bytes());
-        if let Ok(bytes) = std::fs::read(&path) {
-            hasher.update(bytes);
+        update_framed(&mut hasher, path.to_string_lossy().as_bytes());
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                hasher.update([FIXTURE_READ]);
+                update_framed(&mut hasher, &bytes);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "a fixture file could not be read; it digests as unreadable rather than as empty"
+                );
+                hasher.update([FIXTURE_UNREADABLE]);
+            }
         }
     }
     format!("{:x}", hasher.finalize())
 }
 
-/// The file the workspace at `workspace_root` stores its verdicts in, or
-/// `None` when the workspace has no writable state directory.
-fn cache_path(workspace_root: &Path) -> Option<PathBuf> {
-    let managed =
-        ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(workspace_root.to_path_buf())
-            .and_then(|dir| dir.ensure_subdir(CACHE_SUBDIR));
-    match managed {
-        Ok(dir) => Some(dir.join(CACHE_FILE_NAME)),
-        Err(error) => {
-            tracing::warn!(
-                workspace = %workspace_root.display(),
-                error = %error,
-                "the workspace has no writable state directory; tool health is proved every run"
-            );
-            None
-        }
-    }
+/// Feed `bytes` to `hasher` behind its own length, so one entry cannot run
+/// into the next and let two different fixture sets share a byte stream.
+fn update_framed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// The file the workspace at `workspace_root` stores its verdicts in.
+///
+/// The path is derived and nothing is created, so reading a workspace never
+/// writes to it. [`ToolHealthCache::save`] creates the directory, and only
+/// when it has a verdict to keep.
+fn cache_path(workspace_root: &Path) -> PathBuf {
+    workspace_root
+        .join(ManagedDirectory::<SwissarmyhammerConfig>::dir_name())
+        .join(CACHE_SUBDIR)
+        .join(CACHE_FILE_NAME)
 }
 
 /// The verdicts stored in `path`, or `None` when the file is absent or does

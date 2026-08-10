@@ -794,7 +794,7 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
-    use crate::review::test_support::{with_pool, ScriptedAgent, ScriptedReply};
+    use crate::review::test_support::{shell_quote, with_pool, ScriptedAgent, ScriptedReply};
     use crate::validators::types::{FixHint, ToolDoctor, ToolInstall, ToolScope};
     use crate::validators::PoolConfig;
 
@@ -827,12 +827,6 @@ mod tests {
     /// A shell command that creates `marker` — a stand-in for a real install.
     fn create_marker(marker: &Path) -> String {
         format!("touch {}", shell_quote(marker))
-    }
-
-    /// Single-quote a path for bash so a temp dir with a space cannot break the
-    /// scripts these tests build.
-    fn shell_quote(path: &Path) -> String {
-        format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
     }
 
     /// A marker path under `dir` that no test has created yet.

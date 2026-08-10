@@ -125,12 +125,11 @@ pub enum ToolPresence {
 
 /// The result of running a tool rule against its fixtures.
 ///
-/// Serializable so the review engine can store the verdict beside the
-/// workspace and read it back — see
-/// [`ToolHealthCache`](crate::review::ToolHealthCache). A stored file written
-/// under a different shape of this enum is rejected and discarded, so a
-/// renamed variant can never be read as a verdict it is not.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// The outcome is never stored. [`ToolHealthCache`](crate::review::ToolHealthCache)
+/// keeps a PASS and nothing else, so an entry standing under a rule's key is
+/// itself the statement that the rule passed, and every other outcome is
+/// proved again on the next run.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixtureOutcome {
     /// The fail fixture produced findings and the pass fixture none.
     Passed,
