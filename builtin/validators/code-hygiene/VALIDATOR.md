@@ -53,7 +53,8 @@ prompt rules:
   at `7`, and `type_complexity` at `250`.
 - `complexity-typescript` — one `eslint` run over
   `sonarjs/cognitive-complexity` at `15` and `max-lines-per-function` at `250`
-  with blank lines and comments skipped.
+  with blank lines and comments skipped. The config wraps both rules to keep
+  the test carve-out that the two prompt rules state.
 - `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
   with `ignores_case_statements` on, and `function_body_length` at `250`.
 
