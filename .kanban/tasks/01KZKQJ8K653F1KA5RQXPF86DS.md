@@ -68,6 +68,75 @@ comments:
     scripted agent response in `review_fixture.rs`, and it is planted on production
     code (`pub fn sum_amounts`), so no test-marker read can reach it.
   timestamp: 2026-08-10T15:46:05.064276+00:00
+- actor: claude-code
+  id: 01kzp5zvagjg3kfpzpj4ten6sk
+  text: |-
+    ### review — findings
+    - evidence: 2 findings, 2 confirmed, 0 refuted, 8 attempted — review sha HEAD~1..HEAD (6cfa33fac); crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:318, crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:714
+    - next: Make `definition_spec` and `test_spec` data tables. Keep the fallback specs. The card stays in review.
+  timestamp: 2026-08-10T15:52:17.488162+00:00
+- actor: claude-code
+  id: 01kzp60mzkgm436ansqh8h18e3
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 2 files; `attribute_names` now goes through a new `names_marker` helper that accepts the bare marker or the marker followed by `(`; 2 regression tests, both RED before and GREEN after
+    - measured: the card's 416 baseline was stale. The tree holds 1189 tracked `.rs` files, not 1183. The real baseline is 414 and the result is 406. The delta of 8 is the same. Seven of the eight are in `src/mcp/tools/review/tests.rs` and one is in `tests/integration/review_e2e.rs`; the card said all eight were in one file.
+    - test: `cargo nextest run --workspace` 14026 tests, 14022 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set, and the text is identical with the two changed files put back to their HEAD content
+    - commit: 6cfa33fac
+    - review: findings — crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:318, crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:714
+  timestamp: 2026-08-10T15:52:43.763756+00:00
+- actor: claude-code
+  id: 01kzp76adbb9q67r5w0034wtx7
+  text: |
+    Both findings of the 2026-08-10 10:47 section are done. The two lookups are now
+    data.
+
+    The file holds ONE roster, and not two tables. A `LanguageSpec` row carries the
+    language id, its `DefinitionSpec` and its `TestSpec`, and `LANGUAGE_SPECS` holds
+    16 rows — one for each language. A new language is one row, so the two halves
+    cannot drift apart. This is the shape `public_surface.rs` in the same directory
+    already uses: a `SurfaceSpec` roster with a `language` field and a
+    `spec_for_language` lookup.
+
+    `definition_spec` and `test_spec` are now one line each. Each reads the roster
+    through `language_spec` and keeps its fallback:
+
+        fn definition_spec(language: &str) -> &'static DefinitionSpec {
+            language_spec(language).map_or(&NO_DEFINITION_SPEC, |spec| spec.definitions)
+        }
+
+    Bash and Fortran hold `NO_TEST_SPEC` as a written row, so the reason they get no
+    test marker is data and no longer a comment on a fallback arm.
+
+    The rest of the file was read for the same cause. Two `match` statements stay,
+    and neither is a table: `match normalization` is over the `Normalization` enum,
+    which the compiler checks for exhaustiveness (the `data-driven` rule carves this
+    out word for word), and `match annotated_sibling(marker)` is over an `Option`.
+
+    `is_identifier_kind` held the same cause in a different spelling — four `kind ==`
+    comparisons and three `kind.ends_with` comparisons joined by `||`. It is now
+    `IDENTIFIER_KINDS` plus `IDENTIFIER_KIND_ENDINGS`, read the way
+    `is_definition_kind` two functions below already reads `DEFINITION_KINDS` plus
+    `DEFINITION_KIND_ENDINGS`. A finding names one example of a cause, so the cause
+    comes out of the whole file.
+
+    New test: `each_language_of_the_roster_is_named_one_time`. It holds every row id
+    of the roster to one entry of a set. RED was proved, not assumed: with a second
+    `"rust"` row put in, the test fails with "`rust` holds more than one row, and the
+    lookup reads only the first"; with the row taken out, it passes. The guard
+    matters because the lookup reads the first row it finds, so a second row for one
+    language is silent.
+  timestamp: 2026-08-10T16:13:18.123048+00:00
+- actor: claude-code
+  id: 01kzp76nj8g3p56y8cemxkbnh0
+  text: |
+    ### implement — changed
+    - evidence: 1 file — `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs`. Both findings of the 2026-08-10 10:47 section are now `- [x]`. `definition_spec` and `test_spec` read the new `LANGUAGE_SPECS` roster (16 rows) through `language_spec`, and each keeps its fallback spec. `is_identifier_kind` holds the same cause and is now `IDENTIFIER_KINDS` plus `IDENTIFIER_KIND_ENDINGS`. One new test, `each_language_of_the_roster_is_named_one_time`, proved RED with a second `"rust"` row and GREEN without it.
+    - counts: `cargo nextest run --workspace` 14027 tests, 14023 passed, 0 skipped, 4 failed. The 4 are the known ^bh5ncd0 set — three `review_e2e` tests and `review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`. `the_swift_package_root_restores_the_directory_before_it_removes_it` passed. The two regression tests of the last pass, `a_rust_test_attribute_that_carries_arguments_contributes_no_definition` and `a_rust_cfg_test_function_contributes_no_definition`, both pass.
+    - duplication: 406, measured with a release `sah` over all 1189 tracked `.rs` files in ONE process. The report is identical line for line before and after the `is_identifier_kind` change, so the count did not move.
+    - commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo nextest run --workspace`.
+    - next: `/review`. The card stays in `doing`.
+  timestamp: 2026-08-10T16:13:29.544373+00:00
 position_column: doing
 position_ordinal: '8480'
 title: duplication test exclusion misses a test attribute that carries arguments
@@ -105,3 +174,8 @@ Apply it to the stripped text and to its last path segment, as `attribute_names`
 - The rule body's measured count is updated to the new number
 
 #tool-validators
+
+## Review Findings (2026-08-10 10:47)
+
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:318` — The `definition_spec` function uses a match statement over a known set of language strings, with each arm returning a different static reference. This is a lookup table written as control flow and should be expressed as data to avoid drift when languages are added. Replace the match statement with a table (e.g., `&[(&str, &DefinitionSpec)]` or a lazy_static HashMap) that maps language IDs to their corresponding DefinitionSpec. Preserve the fallback to NO_DEFINITION_SPEC as the default for unrecognized languages.
+- [x] `crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs:714` — The `test_spec` function uses a match statement over a known set of language strings, with each arm returning a different static reference. This is a lookup table written as control flow and should be expressed as data to avoid drift when languages are added. Replace the match statement with a table (e.g., `&[(&str, &TestSpec)]` or a lazy_static HashMap) that maps language IDs to their corresponding TestSpec. Preserve the fallback to NO_TEST_SPEC as the default for unrecognized languages.

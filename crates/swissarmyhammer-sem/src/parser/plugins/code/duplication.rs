@@ -314,25 +314,10 @@ static ELIXIR_DEFINITION_SPEC: DefinitionSpec = DefinitionSpec {
     ],
 };
 
-/// The definitions `language` declares.
+/// The definitions `language` declares, read off [`LANGUAGE_SPECS`]. A language
+/// the roster does not name answers [`NO_DEFINITION_SPEC`].
 fn definition_spec(language: &str) -> &'static DefinitionSpec {
-    match language {
-        "rust" => &RUST_DEFINITION_SPEC,
-        "typescript" | "tsx" | "javascript" => &TYPESCRIPT_DEFINITION_SPEC,
-        "python" => &PYTHON_DEFINITION_SPEC,
-        "go" => &GO_DEFINITION_SPEC,
-        "swift" => &SWIFT_DEFINITION_SPEC,
-        "java" => &JAVA_DEFINITION_SPEC,
-        "csharp" => &CSHARP_DEFINITION_SPEC,
-        "c" => &C_DEFINITION_SPEC,
-        "cpp" => &CPP_DEFINITION_SPEC,
-        "ruby" => &RUBY_DEFINITION_SPEC,
-        "php" => &PHP_DEFINITION_SPEC,
-        "fortran" => &FORTRAN_DEFINITION_SPEC,
-        "bash" => &BASH_DEFINITION_SPEC,
-        "elixir" => &ELIXIR_DEFINITION_SPEC,
-        _ => &NO_DEFINITION_SPEC,
-    }
+    language_spec(language).map_or(&NO_DEFINITION_SPEC, |spec| spec.definitions)
 }
 
 /// The definition `node` is, `None` when it declares none, when it declares
@@ -525,15 +510,19 @@ fn literal_marker(kind: &str) -> Option<&'static str> {
         .map_or(Some(OTHER_LITERAL_MARKER), |(_, marker)| Some(marker))
 }
 
+/// The node-kind endings that name a leaf which spells an identifier.
+const IDENTIFIER_KIND_ENDINGS: &[&str] = &["_identifier", "_name", "_variable"];
+
+/// The leaf kinds that spell an identifier and end in none of
+/// [`IDENTIFIER_KIND_ENDINGS`].
+const IDENTIFIER_KINDS: &[&str] = &["identifier", "alias", "constant", "name"];
+
 /// Whether `kind` names a leaf that spells an identifier.
 fn is_identifier_kind(kind: &str) -> bool {
-    kind == "identifier"
-        || kind == "alias"
-        || kind == "constant"
-        || kind == "name"
-        || kind.ends_with("_identifier")
-        || kind.ends_with("_name")
-        || kind.ends_with("_variable")
+    IDENTIFIER_KINDS.contains(&kind)
+        || IDENTIFIER_KIND_ENDINGS
+            .iter()
+            .any(|ending| kind.ends_with(ending))
 }
 
 /// The leaf kinds that spell the name a member declares, for the grammars
@@ -704,27 +693,76 @@ static ELIXIR_TEST_SPEC: TestSpec = TestSpec {
     bases: &[],
 };
 
-/// The test markers of `language`.
+/// One language's row of the roster this module reads: what the language
+/// declares, and how it marks a definition as test code.
 ///
-/// Bash and Fortran answer [`NO_TEST_SPEC`]: neither writes its tests beside
-/// the code they exercise, so neither has a marker at a definition to read.
-/// Their test files are whole files of their own — `bats` and pFUnit — and a
-/// whole-file rule would have to read the path, which this module never does.
-fn test_spec(language: &str) -> &'static TestSpec {
-    match language {
-        "rust" => &RUST_TEST_SPEC,
-        "python" => &PYTHON_TEST_SPEC,
-        "go" => &GO_TEST_SPEC,
-        "typescript" | "tsx" | "javascript" => &JAVASCRIPT_TEST_SPEC,
-        "java" => &JAVA_TEST_SPEC,
-        "csharp" => &CSHARP_TEST_SPEC,
-        "c" | "cpp" => &C_FAMILY_TEST_SPEC,
-        "swift" => &SWIFT_TEST_SPEC,
-        "ruby" => &RUBY_TEST_SPEC,
-        "php" => &PHP_TEST_SPEC,
-        "elixir" => &ELIXIR_TEST_SPEC,
-        _ => &NO_TEST_SPEC,
+/// One row holds both halves, so a language added to one half cannot be
+/// forgotten in the other.
+struct LanguageSpec {
+    /// The language id the grammar roster reports.
+    language: &'static str,
+    /// The definitions the language declares.
+    definitions: &'static DefinitionSpec,
+    /// The markers that make one of those definitions test code.
+    tests: &'static TestSpec,
+}
+
+/// One row of [`LANGUAGE_SPECS`].
+const fn language_row(
+    language: &'static str,
+    definitions: &'static DefinitionSpec,
+    tests: &'static TestSpec,
+) -> LanguageSpec {
+    LanguageSpec {
+        language,
+        definitions,
+        tests,
     }
+}
+
+/// Every language this module reads, one row for each. A language the roster
+/// does not name declares no definition and marks no test code.
+///
+/// Bash and Fortran hold [`NO_TEST_SPEC`]: neither writes its tests beside the
+/// code they exercise, so neither has a marker at a definition to read. Their
+/// test files are whole files of their own — `bats` and pFUnit — and a
+/// whole-file rule would have to read the path, which this module never does.
+static LANGUAGE_SPECS: &[LanguageSpec] = &[
+    language_row("rust", &RUST_DEFINITION_SPEC, &RUST_TEST_SPEC),
+    language_row(
+        "typescript",
+        &TYPESCRIPT_DEFINITION_SPEC,
+        &JAVASCRIPT_TEST_SPEC,
+    ),
+    language_row("tsx", &TYPESCRIPT_DEFINITION_SPEC, &JAVASCRIPT_TEST_SPEC),
+    language_row(
+        "javascript",
+        &TYPESCRIPT_DEFINITION_SPEC,
+        &JAVASCRIPT_TEST_SPEC,
+    ),
+    language_row("python", &PYTHON_DEFINITION_SPEC, &PYTHON_TEST_SPEC),
+    language_row("go", &GO_DEFINITION_SPEC, &GO_TEST_SPEC),
+    language_row("swift", &SWIFT_DEFINITION_SPEC, &SWIFT_TEST_SPEC),
+    language_row("java", &JAVA_DEFINITION_SPEC, &JAVA_TEST_SPEC),
+    language_row("csharp", &CSHARP_DEFINITION_SPEC, &CSHARP_TEST_SPEC),
+    language_row("c", &C_DEFINITION_SPEC, &C_FAMILY_TEST_SPEC),
+    language_row("cpp", &CPP_DEFINITION_SPEC, &C_FAMILY_TEST_SPEC),
+    language_row("ruby", &RUBY_DEFINITION_SPEC, &RUBY_TEST_SPEC),
+    language_row("php", &PHP_DEFINITION_SPEC, &PHP_TEST_SPEC),
+    language_row("fortran", &FORTRAN_DEFINITION_SPEC, &NO_TEST_SPEC),
+    language_row("bash", &BASH_DEFINITION_SPEC, &NO_TEST_SPEC),
+    language_row("elixir", &ELIXIR_DEFINITION_SPEC, &ELIXIR_TEST_SPEC),
+];
+
+/// The roster row of `language`, `None` when the roster names none.
+fn language_spec(language: &str) -> Option<&'static LanguageSpec> {
+    LANGUAGE_SPECS.iter().find(|spec| spec.language == language)
+}
+
+/// The test markers of `language`, read off [`LANGUAGE_SPECS`]. A language the
+/// roster does not name answers [`NO_TEST_SPEC`].
+fn test_spec(language: &str) -> &'static TestSpec {
+    language_spec(language).map_or(&NO_TEST_SPEC, |spec| spec.tests)
 }
 
 /// The node kinds that carry an attribute, an annotation or a decorator,
@@ -1085,6 +1123,19 @@ mod tests {
     #[test]
     fn a_file_the_roster_does_not_claim_is_not_read() {
         assert!(duplication_source("notes.txt", "fn one() {}\n").is_none());
+    }
+
+    #[test]
+    fn each_language_of_the_roster_is_named_one_time() {
+        let mut named: HashSet<&str> = HashSet::new();
+
+        for spec in LANGUAGE_SPECS {
+            assert!(
+                named.insert(spec.language),
+                "`{}` holds more than one row, and the lookup reads only the first",
+                spec.language
+            );
+        }
     }
 
     #[test]
