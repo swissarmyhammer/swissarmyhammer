@@ -55,26 +55,37 @@ The two carve-outs were measured against each of the six shipped language rules
 
 - "Simple getters/setters with self-explanatory names": five of the six report
   an undocumented public getter. Dart, Go, Python, Rust and TypeScript report
-  it. Swift reports it only when the type declares no protocol conformance.
-  Measured with swiftlint 0.65.0, with the shipped `missing-docs-swift` run
-  script. The first probe file holds an undocumented
-  `public struct Wide: Equatable` at row 1, an undocumented `public var name` at
-  row 2, an undocumented `public func compute()` at row 3, an undocumented
-  nested `public struct Inner` at row 4 and an undocumented `public var v` at
-  row 5. The run reports 0 findings and exits 0. The second probe file holds the
-  same five rows in an undocumented `public struct Plain`, which declares no
-  conformance. The run reports rows 1, 2, 3, 4 and 5. The swiftlint
-  `missing_docs` default `excludes_inherited_types: true` is the cause. With
-  `excludes_inherited_types: false`, the run reports rows 1, 2, 3, 4 and 5 in
-  the first probe file. The default makes the tool pass over the type
-  declaration, over each member, over a nested type and over each member of the
-  nested type. Swift stays silent for every getter in a type that declares a
-  conformance.
+  it. Swift reports it only when the type declares no inherited type. Measured
+  with swiftlint 0.65.0, with the shipped `missing-docs-swift` run script. Three
+  probe files each declare one inherited type. The first probe file holds an
+  undocumented `public struct Wide: Equatable` at row 1, an undocumented
+  `public var name` at row 2, an undocumented `public func compute()` at row 3,
+  an undocumented nested `public struct Inner` at row 4 and an undocumented
+  `public var v` at row 5. The run reports 0 findings and exits 0. With
+  `excludes_inherited_types: false` the run reports rows 1, 2, 3, 4 and 5. The
+  second probe file holds a documented `open class Base`, an undocumented
+  `public class Sub: Base` at row 6, an undocumented `public var name` at row 7
+  and an undocumented `public func compute()` at row 8. The run reports 0
+  findings and exits 0. With `excludes_inherited_types: false` the run reports
+  rows 6, 7 and 8. The third probe file holds an undocumented
+  `public enum Raw: String` at row 1, a case at row 2, an undocumented
+  `public var name` at row 3 and an undocumented `public func compute()` at
+  row 4. The run reports 0 findings and exits 0. With
+  `excludes_inherited_types: false` the run reports rows 1, 2, 3 and 4. The
+  fourth probe file holds the five rows of the first probe file in an
+  undocumented `public struct Plain`, which declares no inherited type. The run
+  reports rows 1, 2, 3, 4 and 5. The swiftlint `missing_docs` default
+  `excludes_inherited_types: true` is the cause. The default makes the tool pass
+  over the type declaration, over each member, over a nested type and over each
+  member of the nested type. The three inherited types measured are a protocol
+  conformance, a superclass and a raw-value type. No other inherited type was
+  measured. Swift stays silent for every getter in a type that declares an
+  inherited type.
 - "Obvious implementations (Display, Debug, ToString, etc.)": four of the six
   stay silent on it. Dart, Go, Python and Rust stay silent. TypeScript reports
   an undocumented `toString()` and an undocumented `valueOf()`. Swift stays
-  silent inside a conforming type, for the reason above. Never carry this
-  carve-out over from another language.
+  silent inside a type that declares an inherited type, for the reason above.
+  Never carry this carve-out over from another language.
 
 Run the language rule over the item to check either carve-out. What it reports
 is the whole answer.
