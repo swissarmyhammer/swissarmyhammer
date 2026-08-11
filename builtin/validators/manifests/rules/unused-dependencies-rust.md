@@ -9,8 +9,8 @@ match:
 tool:
   scope: workspace
   run: |
-    scratch="$(mktemp -d)"
-    trap 'rm -rf "$scratch"' EXIT
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     find . -name target -prune -o -name .git -prune -o -name node_modules -prune -o -name '*.toml' -print |
       sort |
       while IFS= read -r manifest; do
@@ -20,15 +20,15 @@ tool:
         [ "$dir" = "$manifest" ] && dir="."
         scan="$dir/${manifest##*/}"
         if [ "${manifest##*/}" != "Cargo.toml" ]; then
-          work="$scratch/$(printf '%s' "$manifest" | tr -c 'A-Za-z0-9' '_')"
-          mkdir -p "$work"
+          copy="$work/$(printf '%s' "$manifest" | tr -c 'A-Za-z0-9' '_')"
+          mkdir -p "$copy"
           (cd "$dir" && find . -name target -prune -o -name '*.rs' -print) |
             while IFS= read -r source; do
-              mkdir -p "$work/${source%/*}"
-              cp "$dir/$source" "$work/$source"
+              mkdir -p "$copy/${source%/*}"
+              cp "$dir/$source" "$copy/$source"
             done
-          cp "$manifest" "$work/Cargo.toml"
-          scan="$work/Cargo.toml"
+          cp "$manifest" "$copy/Cargo.toml"
+          scan="$copy/Cargo.toml"
         fi
         cargo machete "$scan" |
           awk '/^cargo-machete found/ {listing = 1; next}

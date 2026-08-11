@@ -440,9 +440,10 @@ carries no file. That answer exits 0, so it reads as a measured result.
 The script counts its arguments first. A count of zero exits 0 with no finding.
 Measured over a probe tree of `Top.swift` and `deep/nested/Other.swift`, with no
 argument: without the guard the script reported 4 findings over those two files
-and exited 0; with the guard it reports none and exits 0. The acceptance test
+and exited 0; with the guard it reports none and exits 0. The same script over
+the two files reports 4. The acceptance test
 `the_shipped_swift_missing_docs_tool_rule_reads_only_the_files_it_is_given`
-holds that behaviour.
+holds both halves: the run with no argument, and the run over the two files.
 
 ## The rule declares no install commands
 

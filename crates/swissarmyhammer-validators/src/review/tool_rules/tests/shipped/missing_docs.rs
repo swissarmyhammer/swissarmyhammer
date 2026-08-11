@@ -839,6 +839,7 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_UNREAD_FILES,
+    with_files: 5,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -854,7 +855,8 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// script was given, and an exit status of 0.
 ///
 /// The script therefore answers an empty argument list at once, with no
-/// finding and an exit status of 0.
+/// finding and an exit status of 0. The same script over the two staged files
+/// reports 5.
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_EMPTY_RUN_PROBE);
@@ -1038,6 +1040,7 @@ fn the_shipped_rust_missing_docs_tool_rule_names_no_generated_file() {
         RUST_MISSING_DOCS_RULE,
         ToolScope::Workspace,
         RUST_GENERATED_PROBE_FILES,
+        &[],
     )
     .expect("the shipped script must judge the probe crate and exit 0");
 
@@ -1531,6 +1534,7 @@ const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_UNREAD_FILES,
+    with_files: 4,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1544,7 +1548,8 @@ const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// answer reads as a measured result rather than a mistake.
 ///
 /// The script therefore answers an empty argument list at once, with no
-/// finding and an exit status of 0.
+/// finding and an exit status of 0. The same script over the two staged files
+/// reports 4.
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&SWIFT_EMPTY_RUN_PROBE);
@@ -1576,6 +1581,7 @@ const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun
         expected: NO_FINDINGS,
     },
     staged: TYPESCRIPT_MISSING_DOCS_UNREAD_FILES,
+    with_files: 2,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1619,6 +1625,7 @@ const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: GO_MISSING_DOCS_UNREAD_FILES,
+    with_files: 2,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1661,6 +1668,7 @@ const DART_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DART_MISSING_DOCS_UNREAD_FILES,
+    with_files: 4,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

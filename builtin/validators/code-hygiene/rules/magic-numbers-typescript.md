@@ -49,7 +49,7 @@ tool:
              | select(.ruleId == "@typescript-eslint/no-magic-numbers")
              | {file: $file, line: .line, message: .message}'
   doctor:
-    check_command: "which eslint jq"
+    check_command: "which eslint jq mktemp"
     check_version_command: "eslint --version"
   install:
     commands:
@@ -154,8 +154,8 @@ literal and returning another:
 | no argument, after the guard | 0 |
 | the two files | 4 |
 
-The acceptance test in `shipped/magic_numbers.rs` holds the first two
-rows.
+The acceptance test in `shipped/magic_numbers.rs` holds both halves: the run
+with no argument, and the run over the two files.
 
 ## The temporary directory the configuration stands in
 

@@ -199,4 +199,5 @@ block of 6 lines, with no argument: the script exited 2 before the guard,
 and it reports no finding and exits 0 after it. The same script over the
 two files reports 2. The acceptance test
 `the_shipped_commented_code_tool_rule_reads_only_the_files_it_is_given`
-holds the pair.
+holds both halves: the run with no argument, and the run over the two
+files.

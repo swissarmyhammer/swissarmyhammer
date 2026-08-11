@@ -128,7 +128,9 @@ The `tool` block keys:
   - A script that makes a temporary directory removes it. Write
     `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` under it. The
     trap covers a clean run, a run with findings and a broken run alike, and
-    it leaves the exit status of the script alone.
+    it leaves the exit status of the script alone. Write the same variable
+    name in every rule, and name `mktemp` in `doctor.check_command`, because
+    the script runs it.
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and

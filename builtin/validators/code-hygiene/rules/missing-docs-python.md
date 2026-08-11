@@ -62,7 +62,7 @@ tool:
         printf "%s:%s: %s %s\n", $1, $2, $3, $4
       }' "$work/reported.tsv"
   doctor:
-    check_command: "which ruff jq awk"
+    check_command: "which ruff jq awk mktemp"
     check_version_command: "ruff --version"
   install:
     commands:
@@ -251,9 +251,10 @@ carries no file. That answer exits 0, so it reads as a measured result.
 The script counts its arguments first. A count of zero exits 0 with no finding.
 Measured over a probe tree of `top.py` and `deep/nested/other.py`, with no
 argument: before the guard the script reported 5 findings over those two files
-and exited 0; after the guard it reports none and exits 0. The acceptance test
+and exited 0; after the guard it reports none and exits 0. The same script over
+the two files reports 5. The acceptance test
 `the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given`
-holds that behaviour.
+holds both halves: the run with no argument, and the run over the two files.
 
 `mktemp -d` makes the working directory the script writes each report into, and
 `trap 'rm -rf "$work"' EXIT` removes it. The trap covers every way the script

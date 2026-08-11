@@ -12,10 +12,10 @@ supersedes:
 tool:
   scope: workspace
   run: |
-    conf="$(mktemp -d)"
-    trap 'rm -rf "$conf"' EXIT
-    printf 'excessive-nesting-threshold = 6\ntoo-many-lines-threshold = 250\ntoo-many-arguments-threshold = 7\ntype-complexity-threshold = 250\n' > "$conf/clippy.toml"
-    CLIPPY_CONF_DIR="$conf" cargo clippy --workspace --all-targets --message-format=json --quiet -- \
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    printf 'excessive-nesting-threshold = 6\ntoo-many-lines-threshold = 250\ntoo-many-arguments-threshold = 7\ntype-complexity-threshold = 250\n' > "$work/clippy.toml"
+    CLIPPY_CONF_DIR="$work" cargo clippy --workspace --all-targets --message-format=json --quiet -- \
       -W clippy::excessive_nesting -W clippy::too_many_lines \
       -W clippy::too_many_arguments -W clippy::type_complexity |
       jq -c 'select(.reason == "compiler-message")
@@ -29,7 +29,7 @@ tool:
              | select(.file | startswith("/") | not)' |
       sort -u
   doctor:
-    check_command: "which cargo-clippy jq"
+    check_command: "which cargo-clippy jq mktemp"
     check_version_command: "cargo clippy --version"
     fix_hint: "rustup component add clippy"
 ---
@@ -101,12 +101,12 @@ The script writes a `clippy.toml` into a temporary directory and points
 - `type-complexity-threshold = 250` — clippy's own default, for the same
   reason.
 
-`CLIPPY_CONF_DIR` was measured before the rule relied on it. A conf directory
-holding a raised threshold silences the lint on a probe crate that trips it at
-the gate, so clippy reads the file. A package carrying its own `clippy.toml`
-still reports when `CLIPPY_CONF_DIR` names the gate, so the variable wins and
-the project's own file is never read. A cached second run re-emits the
-warnings, so a repeated review still reports.
+`CLIPPY_CONF_DIR` was measured before the rule relied on it. A configuration
+directory holding a raised threshold silences the lint on a probe crate that
+trips it at the gate, so clippy reads the file. A package carrying its own
+`clippy.toml` still reports when `CLIPPY_CONF_DIR` names the gate, so the
+variable wins and the project's own file is never read. A cached second run
+re-emits the warnings, so a repeated review still reports.
 
 `excessive-nesting-threshold` defaults to `0`, which turns the lint off, so a
 run that reports at all proves the temporary file reached clippy.

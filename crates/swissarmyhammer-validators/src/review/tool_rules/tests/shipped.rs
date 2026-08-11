@@ -3,12 +3,15 @@
 //! A shipped-rule test drives the SHIPPED script over a probe repository and
 //! reads what the real tool reports. This module carries the shapes those
 //! tests are written in — a planned run, a fail fixture, a staged position
-//! set, one path the work-list names, and a run that must read nothing — and
-//! the helpers that drive each shape.
+//! set, one path the work-list names, and a run measured with no file beside
+//! the same run measured with the files — and the helpers that drive each
+//! shape.
 //!
 //! The tests themselves stand one module per rule family, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
-//! whole.
+//! whole. `temp_directory` is the one module that is not a rule family: it
+//! reads the shipped script of EVERY rule, because the contract it holds is
+//! about the set and not about one language.
 
 mod commented_code;
 mod complexity;
@@ -16,6 +19,7 @@ mod dead_code;
 mod duplication;
 mod magic_numbers;
 mod missing_docs;
+mod temp_directory;
 mod unused_dependencies;
 
 use super::preconditions::require_tool_installed;
@@ -550,6 +554,15 @@ struct ShippedEmptyRun {
     /// its own finds every one.
     staged: &'static [(&'static str, &'static str)],
 
+    /// How many findings the SAME script reports when it takes every staged
+    /// file as its arguments.
+    ///
+    /// The zero-argument half alone cannot tell a guard that answers nothing
+    /// from a script that answers nothing whatever it is given. Each staged
+    /// file trips the rule, so this count states what the guard must leave
+    /// standing, and a guard that swallowed the real run breaks it.
+    with_files: usize,
+
     /// Why the staged files stay silent.
     reason: &'static str,
 }
@@ -570,14 +583,14 @@ fn shipped_run_script(loader: &ValidatorLoader, rule: &str) -> String {
         .clone()
 }
 
-/// Stages `files` in a temporary repository, drives the shipped script of
-/// `rule` there with the argument list a run of `scope` carries, and answers
-/// each finding it reported as `path:line`.
+/// Stages `staged` in a temporary repository, drives the shipped script of
+/// `rule` there with the argument list a run of `scope` over `files` carries,
+/// and answers each finding it reported as `path:line`.
 ///
 /// The arguments come from [`script_args`], the one function the engine builds
 /// them with, so a `files`-scope rule reads the argument list it would really
-/// receive with no matched file, and a `workspace`-scope rule reads the empty
-/// list it always receives.
+/// receive for `files`, and a `workspace`-scope rule reads the empty list it
+/// always receives.
 ///
 /// The findings are the SCRIPT's own, before the engine keeps only the ones in
 /// the changed files. A script that names a file the author cannot edit is
@@ -587,13 +600,13 @@ fn shipped_script_findings(
     rule: &str,
     scope: ToolScope,
     staged: &[(&str, &str)],
+    files: &[&str],
 ) -> Result<Vec<String>, ScriptFailure> {
     let repo = tempfile::tempdir().unwrap();
     stage_probe_files(repo.path(), staged.iter().copied());
     let repo_root = probe_repository_root(&repo);
     let script = shipped_run_script(loader, rule);
-    let no_files: [&str; 0] = [];
-    let args = script_args(scope, &no_files);
+    let args = script_args(scope, files);
 
     let findings = run_script_findings(&script, &repo_root, &args)?;
 
@@ -615,21 +628,47 @@ fn expected_script_findings(expected: &[&str]) -> Vec<String> {
     expected.iter().map(|entry| (*entry).to_string()).collect()
 }
 
-/// Drives the shipped script of `probe` with no file argument at all, over a
-/// probe repository the script was never given, and holds it to reporting
-/// exactly the entries the probe names.
+/// Drives the shipped script of `probe` two times over the same probe
+/// repository, and holds each run to what the probe names for it.
+///
+/// The first run takes NO file argument, and it must report exactly the
+/// entries the probe names, which is none.
+///
+/// The second run takes every staged file, and it must report the count the
+/// probe names. The first run alone cannot tell a guard that stops a run with
+/// nothing to judge from a guard that stops every run: a script that reported
+/// nothing whatever it was given would pass the first assertion. The second
+/// assertion is what makes the guard, and not the whole script, the thing the
+/// first one measures.
 fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let staged_files: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
 
-    let reported = shipped_script_findings(&loader, probe.run.rule, ToolScope::Files, probe.staged)
-        .expect("a script given no file must judge nothing and exit 0");
+    let unread =
+        shipped_script_findings(&loader, probe.run.rule, ToolScope::Files, probe.staged, &[])
+            .expect("a script given no file must judge nothing and exit 0");
+    let read = shipped_script_findings(
+        &loader,
+        probe.run.rule,
+        ToolScope::Files,
+        probe.staged,
+        &staged_files,
+    )
+    .expect("a script given its own files must judge them and exit 0");
 
     assert_eq!(
-        reported,
+        unread,
         expected_script_findings(probe.run.expected),
         "{}",
         probe.reason
+    );
+    assert_eq!(
+        read.len(),
+        probe.with_files,
+        "the same script must report {} findings over the staged files, or the guard \
+         swallows the run it is meant to leave standing; it reported {read:?}",
+        probe.with_files
     );
 }
 

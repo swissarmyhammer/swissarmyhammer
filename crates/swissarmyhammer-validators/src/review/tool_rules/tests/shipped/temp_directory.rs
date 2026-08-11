@@ -1,0 +1,187 @@
+//! Coverage guard: each shipped script that makes a temporary directory
+//! names it `work`, removes it, and names `mktemp` for the doctor.
+//!
+//! The `run` key of `builtin/validators/README.md` states the shape word for
+//! word: write `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` under
+//! it. A rule that makes a directory and arms no trap leaves one directory
+//! behind for each run, and the acceptance test of that one rule cannot see
+//! it, because the test reads the findings and not the temporary tree. A rule
+//! added later carries the same defect, and every test of every other rule
+//! stays green.
+//!
+//! This module reads the SHIPPED script of each rule instead, so the contract
+//! is held for the rules that ship today and for the rules that ship next.
+
+use super::*;
+
+/// The one line the contract states a script makes its temporary directory
+/// with.
+const TEMP_DIRECTORY_ASSIGNMENT: &str = r#"work="$(mktemp -d)""#;
+
+/// The line the contract states stands directly under the assignment.
+const TEMP_DIRECTORY_TRAP: &str = r#"trap 'rm -rf "$work"' EXIT"#;
+
+/// What a script writes to make a temporary directory.
+const TEMP_DIRECTORY_COMMAND: &str = "mktemp -d";
+
+/// The tool a script that makes a temporary directory needs, as
+/// `doctor.check_command` names it.
+const TEMP_DIRECTORY_TOOL: &str = "mktemp";
+
+/// One shipped rule that makes a temporary directory.
+struct TempDirectoryRule {
+    /// The name of the rule, for the failure messages.
+    name: String,
+
+    /// The `run` script the set ships for the rule.
+    script: String,
+
+    /// The `doctor.check_command` the set ships for the rule, or `None` when
+    /// the rule carries no `doctor` block at all. A rule that names no check
+    /// names no `mktemp` either.
+    check_command: Option<String>,
+}
+
+/// Every shipped rule whose `run` script makes a temporary directory.
+///
+/// The script is read where the set ships it, so the guard holds the SHIPPED
+/// bytes rather than a copy a test wrote.
+fn shipped_temp_directory_rules(loader: &ValidatorLoader) -> Vec<TempDirectoryRule> {
+    loader
+        .list_rulesets()
+        .iter()
+        .flat_map(|ruleset| ruleset.rules.iter())
+        .filter_map(|rule| rule.tool.as_ref().map(|tool| (&rule.name, tool)))
+        .filter(|(_, tool)| tool.run.contains(TEMP_DIRECTORY_COMMAND))
+        .map(|(name, tool)| TempDirectoryRule {
+            name: name.clone(),
+            script: tool.run.clone(),
+            check_command: tool
+                .doctor
+                .as_ref()
+                .map(|doctor| doctor.check_command.clone()),
+        })
+        .collect()
+}
+
+/// The rules of `rules` that `holds` answers false for, by name.
+fn temp_directory_rules_that_deviate(
+    rules: &[TempDirectoryRule],
+    holds: impl Fn(&TempDirectoryRule) -> bool,
+) -> Vec<&str> {
+    rules
+        .iter()
+        .filter(|rule| !holds(rule))
+        .map(|rule| rule.name.as_str())
+        .collect()
+}
+
+/// Every shipped rule that makes a temporary directory, or a panic when there
+/// is none.
+///
+/// A guard over an empty list holds nothing and reports green, so the list
+/// itself is an assertion.
+fn required_temp_directory_rules(loader: &ValidatorLoader) -> Vec<TempDirectoryRule> {
+    let rules = shipped_temp_directory_rules(loader);
+    assert!(
+        !rules.is_empty(),
+        "a shipped rule must make a temporary directory, or this guard holds nothing"
+    );
+    rules
+}
+
+/// Whether each `mktemp -d` of `script` stands in the assignment the contract
+/// states.
+fn names_the_directory_work(script: &str) -> bool {
+    script
+        .lines()
+        .filter(|line| line.contains(TEMP_DIRECTORY_COMMAND))
+        .all(|line| line.trim() == TEMP_DIRECTORY_ASSIGNMENT)
+}
+
+/// Whether the line directly under each temporary-directory assignment of
+/// `script` is the trap that removes the directory.
+fn removes_the_directory_on_exit(script: &str) -> bool {
+    let lines: Vec<&str> = script.lines().map(str::trim).collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| **line == TEMP_DIRECTORY_ASSIGNMENT)
+        .all(|(at, _)| lines.get(at + 1) == Some(&TEMP_DIRECTORY_TRAP))
+}
+
+/// Whether `check_command` names the `mktemp` tool as a word of its own.
+fn checks_for_mktemp(check_command: Option<&String>) -> bool {
+    check_command.is_some_and(|command| {
+        command
+            .split_whitespace()
+            .any(|word| word == TEMP_DIRECTORY_TOOL)
+    })
+}
+
+/// Coverage: each shipped script that makes a temporary directory holds it in
+/// `work`.
+///
+/// The README names the variable, so a script that names another one states a
+/// second shape of the same contract, and a reader of two rules learns two
+/// shapes. One name also lets the trap assertion below read the line under the
+/// assignment rather than parse a name out of it.
+#[test]
+fn each_shipped_script_that_makes_a_temporary_directory_names_it_work() {
+    let loader = builtin_loader();
+    let rules = required_temp_directory_rules(&loader);
+
+    let deviating =
+        temp_directory_rules_that_deviate(&rules, |rule| names_the_directory_work(&rule.script));
+
+    assert!(
+        deviating.is_empty(),
+        "each `mktemp -d` must stand in `{TEMP_DIRECTORY_ASSIGNMENT}`, the line the \
+         `run` key contract states; these rules write another line: {deviating:?}"
+    );
+}
+
+/// Coverage: each shipped script that makes a temporary directory removes it.
+///
+/// The trap stands on the line directly under the assignment, so no statement
+/// between the two can exit and leave the directory. The trap covers a clean
+/// run, a run with findings and a broken run alike.
+#[test]
+fn each_shipped_script_that_makes_a_temporary_directory_removes_it() {
+    let loader = builtin_loader();
+    let rules = required_temp_directory_rules(&loader);
+
+    let deviating = temp_directory_rules_that_deviate(&rules, |rule| {
+        removes_the_directory_on_exit(&rule.script)
+    });
+
+    assert!(
+        deviating.is_empty(),
+        "`{TEMP_DIRECTORY_TRAP}` must stand directly under each \
+         `{TEMP_DIRECTORY_ASSIGNMENT}`; these rules leave the directory behind for \
+         each run: {deviating:?}"
+    );
+}
+
+/// Coverage: each shipped script that makes a temporary directory names
+/// `mktemp` for the doctor.
+///
+/// `check_command` alone decides whether a rule is usable, and it names every
+/// tool the script runs. A script that makes a temporary directory runs
+/// `mktemp`, so a machine without `mktemp` breaks the run while the doctor
+/// reports the rule ready.
+#[test]
+fn each_shipped_script_that_makes_a_temporary_directory_checks_for_mktemp() {
+    let loader = builtin_loader();
+    let rules = required_temp_directory_rules(&loader);
+
+    let deviating = temp_directory_rules_that_deviate(&rules, |rule| {
+        checks_for_mktemp(rule.check_command.as_ref())
+    });
+
+    assert!(
+        deviating.is_empty(),
+        "`doctor.check_command` must name `{TEMP_DIRECTORY_TOOL}`, the tool the script \
+         runs to make its directory; these rules leave it unnamed: {deviating:?}"
+    );
+}

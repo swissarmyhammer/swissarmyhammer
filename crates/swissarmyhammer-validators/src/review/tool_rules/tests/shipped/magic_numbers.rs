@@ -705,6 +705,7 @@ const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_MAGIC_NUMBERS_UNREAD_FILES,
+    with_files: 2,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -714,7 +715,8 @@ const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// `swiftlint lint` with no path argument walks the whole tree under the
 /// working directory, and it exits 0, so the answer reads as a measured result
 /// rather than a mistake. The script answers an empty argument list at once,
-/// with no finding and an exit status of 0.
+/// with no finding and an exit status of 0. The same script over the two
+/// staged files reports 2.
 #[test]
 fn the_shipped_swift_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
@@ -744,6 +746,7 @@ const PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_MAGIC_NUMBERS_UNREAD_FILES,
+    with_files: 2,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -788,6 +791,7 @@ const TYPESCRIPT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRu
         expected: NO_FINDINGS,
     },
     staged: TYPESCRIPT_MAGIC_NUMBERS_UNREAD_FILES,
+    with_files: 4,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -831,6 +835,7 @@ const DART_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DART_MAGIC_NUMBERS_UNREAD_FILES,
+    with_files: 4,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

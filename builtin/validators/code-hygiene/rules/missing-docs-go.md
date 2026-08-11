@@ -26,7 +26,7 @@ tool:
     jq -c '(. // [])[] | select(.RuleName == "exported")
            | {file: .Position.Start.Filename, line: .Position.Start.Line, message: .Failure}' "$work/revive.json"
   doctor:
-    check_command: "which revive jq"
+    check_command: "which revive jq mktemp"
     check_version_command: "revive -version"
   install:
     commands:
@@ -260,7 +260,8 @@ at the root and one three directories down, with no argument: 1 finding
 before the guard, on the file at the root, and 0 after it. The same script
 over the two files reports 2. The acceptance test
 `the_shipped_go_missing_docs_tool_rule_reads_only_the_files_it_is_given`
-holds the pair.
+holds both halves: the run with no argument, and the run over the two
+files.
 
 ## The temporary directory the configuration stands in
 

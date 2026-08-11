@@ -55,6 +55,7 @@ const DUPLICATION_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DUPLICATION_UNREAD_FILES,
+    with_files: 3,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

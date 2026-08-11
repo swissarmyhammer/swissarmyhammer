@@ -39,6 +39,7 @@ const COMMENTED_CODE_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: COMMENTED_CODE_UNREAD_FILES,
+    with_files: 2,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

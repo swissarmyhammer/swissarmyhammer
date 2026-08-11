@@ -258,7 +258,7 @@ tool:
                       or .ruleId == "code-hygiene/max-lines-per-function")
              | {file: $file, line: .line, message: .message}'
   doctor:
-    check_command: "which eslint jq"
+    check_command: "which eslint jq mktemp"
     check_version_command: "eslint --version"
   install:
     commands:
@@ -534,12 +534,14 @@ TypeScript syntax, so a `.ts` file without it is a parse error instead of a
 finding. The install command pins `typescript` to 5.9.3 because
 `typescript-eslint` accepts `typescript` below 6.1.0.
 
-`check_command` names the two commands the pipe runs. `typescript-eslint` and
-`eslint-plugin-sonarjs` are node modules rather than commands, so `which` cannot
-name them; the fixture pair is what proves both resolved. Measured with
-`NODE_PATH` pointed at an empty directory: eslint exits 2, writes its error to
-stderr, and writes nothing to stdout, so the fail fixture produces no findings
-and the doctor marks the rule unusable and falls it back to the prompt rules.
+`check_command` names each command the script runs: `eslint`, `jq`, and the
+`mktemp` that makes the directory the configuration stands in.
+`typescript-eslint` and `eslint-plugin-sonarjs` are node modules rather than
+commands, so `which` cannot name them; the fixture pair is what proves both
+resolved. Measured with `NODE_PATH` pointed at an empty directory: eslint
+exits 2, writes its error to stderr, and writes nothing to stdout, so the fail
+fixture produces no findings and the doctor marks the rule unusable and falls
+it back to the prompt rules.
 
 The scope is `files` because eslint reads the files it is given.
 
@@ -614,7 +616,8 @@ complexity 21:
 
 The acceptance test
 `the_shipped_typescript_complexity_tool_rule_reads_only_the_files_it_is_given`
-holds the first two rows.
+holds both halves: the run with no argument, and the run over the two
+files.
 
 ## The temporary directory the configuration stands in
 

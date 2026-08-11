@@ -36,7 +36,7 @@ tool:
            line: .location.range.start.line,
            message: .problemMessage}'
   doctor:
-    check_command: "which dart jq"
+    check_command: "which dart jq mktemp"
     check_version_command: "dart --version"
     fix_hint: "brew install dart-sdk"
 ---
@@ -223,7 +223,8 @@ comparing against one unnamed literal and returning another, with no
 argument: 0 findings and exit 0 before the guard, and the same after it.
 The same script over the two files reports 4. The acceptance test
 `the_shipped_dart_magic_numbers_tool_rule_reads_only_the_files_it_is_given`
-holds the answer of 0.
+holds both halves: the run with no argument, and the run over the two
+files.
 
 ## The temporary directory the package stands in
 

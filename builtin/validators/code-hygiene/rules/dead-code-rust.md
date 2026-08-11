@@ -18,8 +18,8 @@ tool:
              | {file: .spans[0].file_name, line: .spans[0].line_start, message: .message}
              | select(.file | startswith("/") | not)' |
       sort -u
-    index="$(mktemp -d)"
-    trap 'rm -rf "$index"' EXIT
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     find . -name target -prune -o -name .git -prune -o -name '*.rs' -print |
       while IFS= read -r file; do
         base="${file##*/}"
@@ -33,13 +33,13 @@ tool:
         done
         case "${dir#"$crate"/}" in tests | tests/* | benches | benches/* | examples | examples/* | src/bin | src/bin/*) continue ;; esac
         key="$(printf '%s' "$crate" | tr -c 'A-Za-z0-9' '_')"
-        if [ ! -f "$index/$key" ]; then
+        if [ ! -f "$work/$key" ]; then
           {
             grep -rhoE '\bmod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$crate" --include='*.rs' --exclude-dir=target 2>/dev/null | awk '{print $2}'
             grep -rhoE '#\[path[[:space:]]*=[[:space:]]*"[^"]*"' "$crate" --include='*.rs' --exclude-dir=target 2>/dev/null | sed -e 's/.*"\(.*\)"/\1/' -e 's#.*/##' -e 's/\.rs$//'
-          } | sort -u >"$index/$key"
+          } | sort -u >"$work/$key"
         fi
-        grep -qxF "${base%.rs}" "$index/$key" && continue
+        grep -qxF "${base%.rs}" "$work/$key" && continue
         printf '%s:1: orphan module: no `mod %s;` declaration in this crate names this file, so nothing compiles it\n' "${file#./}" "${base%.rs}"
       done
   doctor:
@@ -104,8 +104,9 @@ file is its own target root. Everything else must be named by a
 own crate. The crate is the nearest ancestor directory holding a `Cargo.toml`,
 so a `mod` declaration in a sibling crate does not excuse a file.
 
-The index is built one time for each crate rather than one time for each file,
-which is what keeps the scan at **6.7 s** over this whole workspace.
+The index of module names is built one time for each crate rather than one
+time for each file, and it stands in the temporary directory the script makes.
+That is what keeps the scan at **6.7 s** over this whole workspace.
 
 Measured on this workspace: **5** orphan files, every one hand-checked and every
 one real — `crates/swissarmyhammer/src/security.rs` (15 KB of code nothing

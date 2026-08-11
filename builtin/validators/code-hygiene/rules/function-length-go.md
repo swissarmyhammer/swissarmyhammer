@@ -33,7 +33,7 @@ tool:
       jq -c '(.Issues // [])[] | select(.FromLinter == "funlen")
              | {file: .Pos.Filename, line: .Pos.Line, message: .Text}'
   doctor:
-    check_command: "which golangci-lint go jq"
+    check_command: "which golangci-lint go jq mktemp"
     check_version_command: "golangci-lint --version"
   install:
     commands:

@@ -406,9 +406,10 @@ carries no file. That answer exits 0, so it reads as a measured result.
 The script counts its arguments first. A count of zero exits 0 with no finding.
 Measured over a probe tree of two files that each hold `return status == 404`,
 with no argument: without the guard the script reported 2 findings and exited 0;
-with the guard it reports none and exits 0. The acceptance test
+with the guard it reports none and exits 0. The same script over the two files
+reports 2. The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_reads_only_the_files_it_is_given`
-holds that behaviour.
+holds both halves: the run with no argument, and the run over the two files.
 
 ## The rule declares no install commands
 

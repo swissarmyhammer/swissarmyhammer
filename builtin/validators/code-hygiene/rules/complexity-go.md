@@ -86,4 +86,5 @@ and the same after it. The same script over the two files reports 2. So
 the guard makes the 0 an answer of the script's own, and it keeps the
 usage text off stderr. The acceptance test
 `the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given`
-holds that behaviour.
+holds both halves: the run with no argument, and the run over the two
+files.
