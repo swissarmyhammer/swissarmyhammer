@@ -55,12 +55,21 @@ The two carve-outs were measured against each of the six shipped language rules
 
 - "Simple getters/setters with self-explanatory names": five of the six report
   an undocumented public getter. Dart, Go, Python, Rust and TypeScript report
-  it. Swift reports it only when the type declares no protocol conformance. The
-  swiftlint `missing_docs` default `excludes_inherited_types: true` makes the
-  tool pass over EVERY member of a type that declares a conformance, not the
-  conformance member alone. A conformance such as `Equatable`, `Codable`,
-  `Sendable` or `Identifiable` is a usual Swift shape, so Swift stays silent for
-  most getters.
+  it. Swift reports it only when the type declares no protocol conformance.
+  Measured with swiftlint 0.65.0, with the shipped `missing-docs-swift` run
+  script. The first probe file holds an undocumented
+  `public struct Wide: Equatable` at row 1, an undocumented `public var name` at
+  row 2, an undocumented `public func compute()` at row 3, an undocumented
+  nested `public struct Inner` at row 4 and an undocumented `public var v` at
+  row 5. The run reports 0 findings and exits 0. The second probe file holds the
+  same five rows in an undocumented `public struct Plain`, which declares no
+  conformance. The run reports rows 1, 2, 3, 4 and 5. The swiftlint
+  `missing_docs` default `excludes_inherited_types: true` is the cause. With
+  `excludes_inherited_types: false`, the run reports rows 1, 2, 3, 4 and 5 in
+  the first probe file. The default makes the tool pass over the type
+  declaration, over each member, over a nested type and over each member of the
+  nested type. Swift stays silent for every getter in a type that declares a
+  conformance.
 - "Obvious implementations (Display, Debug, ToString, etc.)": four of the six
   stay silent on it. Dart, Go, Python and Rust stay silent. TypeScript reports
   an undocumented `toString()` and an undocumented `valueOf()`. Swift stays
