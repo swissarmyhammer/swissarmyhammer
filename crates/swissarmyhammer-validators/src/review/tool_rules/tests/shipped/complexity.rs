@@ -896,9 +896,9 @@ const GO_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 ///
 /// gocognit holds no default target of its own. Measured with gocognit
 /// v1.2.1, given no path: 52 lines of usage text on stderr, nothing on stdout,
-/// and exit 2. The pipe ends in `jq`, so a run that reached the tool with no
-/// path would exit 0 with no finding, and that refusal would read as a clean
-/// tree.
+/// and exit 2. A script that gave the tool that empty argument list would
+/// answer a refusal, and the engine would read the refusal as a tree with no
+/// finding in it.
 ///
 /// The shipped script reaches no such run. It hands gocognit one file at a
 /// time, inside the loop that drops a generated file, so the tool takes no
@@ -1056,6 +1056,98 @@ const GO_COMPLEXITY_TEST_PROBE: ShippedStagedPositions = ShippedStagedPositions 
 #[test]
 fn the_shipped_go_complexity_tool_rule_reports_a_test_file() {
     verify_shipped_staged_positions_report(&GO_COMPLEXITY_TEST_PROBE);
+}
+
+/// What the one error of a Go file gocognit could not read must name.
+///
+/// The script writes this text for a path that holds no file and for a file
+/// the parser refuses alike, because the engine reads one broken run either
+/// way and the agent needs the path.
+const GO_COMPLEXITY_UNREADABLE_ERROR_PREFIX: &str = "complexity-go: gocognit could not read";
+
+/// Where the Go file that is never written stands inside the probe repository.
+const GO_COMPLEXITY_ABSENT_PATH: &str = "absent.go";
+
+/// What the one error of an absent Go file must name.
+const GO_COMPLEXITY_ABSENT_ERROR: &[&str] = &[
+    GO_COMPLEXITY_UNREADABLE_ERROR_PREFIX,
+    GO_COMPLEXITY_ABSENT_PATH,
+];
+
+/// The `complexity-go` probe over a path that holds no file.
+const GO_COMPLEXITY_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: GO_PROJECT_TYPES,
+        rule: GO_COMPLEXITY_RULE,
+        expected: GO_COMPLEXITY_ABSENT_ERROR,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a Go file that is not there",
+    path: GO_COMPLEXITY_ABSENT_PATH,
+    source: None,
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Go complexity tool rule BREAKS on a file it cannot
+/// read, through the real gocognit pipeline.
+///
+/// Measured with gocognit v1.2.1 over a path that holds no file: the tool
+/// wrote nothing to stdout, wrote `gocognit: open ...: no such file or
+/// directory` to stderr, and exited 1 — the same status it writes for a
+/// finding. An earlier shape of the script ended in a pipe, so it exited 0 and
+/// reported nothing, and the engine read a file the tool never judged as a
+/// clean file. The `[ ! -r "$file" ]` test now names the path and exits 1
+/// before gocognit runs.
+#[test]
+fn the_shipped_go_complexity_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&GO_COMPLEXITY_ABSENT_PROBE);
+}
+
+/// A Go file that does not parse: the body of `Broken` never closes.
+const GO_COMPLEXITY_UNPARSABLE_SOURCE: &str = concat!(
+    "package staged\n",
+    "\n",
+    "func Broken(value int) int {\n",
+    "\tif value > 0 {\n",
+    "\t\treturn 1\n",
+);
+
+/// Where the unparsable file stands inside the probe repository.
+const GO_COMPLEXITY_UNPARSABLE_PATH: &str = "unparsable.go";
+
+/// What the one error of an unparsable Go file must name.
+const GO_COMPLEXITY_UNPARSABLE_ERROR: &[&str] = &[
+    GO_COMPLEXITY_UNREADABLE_ERROR_PREFIX,
+    GO_COMPLEXITY_UNPARSABLE_PATH,
+];
+
+/// The `complexity-go` probe over a Go file gocognit cannot parse.
+const GO_COMPLEXITY_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: GO_PROJECT_TYPES,
+        rule: GO_COMPLEXITY_RULE,
+        expected: GO_COMPLEXITY_UNPARSABLE_ERROR,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a Go file the parser cannot read",
+    path: GO_COMPLEXITY_UNPARSABLE_PATH,
+    source: Some(GO_COMPLEXITY_UNPARSABLE_SOURCE),
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Go complexity tool rule BREAKS on a Go file it
+/// cannot parse, through the real gocognit pipeline.
+///
+/// The file is readable, so the readability test admits it and gocognit reads
+/// it. Measured with gocognit v1.2.1: the tool wrote nothing to stdout, wrote
+/// `gocognit: ...: expected '}', found 'EOF'` to stderr, and exited 1 — the
+/// same status it writes for a finding, so the status alone cannot tell the
+/// two apart. The script accepts status 1 only beside a report that is a JSON
+/// array of one entry or more, and this run wrote 0 bytes, so the script names
+/// the file and exits 1.
+#[test]
+fn the_shipped_go_complexity_tool_rule_breaks_on_a_file_it_cannot_parse() {
+    verify_shipped_run_breaks(&GO_COMPLEXITY_UNPARSABLE_PROBE);
 }
 
 /// A TypeScript function whose innermost block stands 6 levels deep. The
