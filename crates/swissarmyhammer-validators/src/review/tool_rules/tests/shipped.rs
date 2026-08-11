@@ -451,6 +451,21 @@ fn verify_shipped_fail_fixture_reports_each<W, E, M>(
     );
 }
 
+/// The trimmed source line the finding stands on, as the `extract` callback
+/// of [`verify_shipped_fail_fixture_reports_each`].
+///
+/// Three of the tools this file drives write one message for every finding and
+/// never spell what they read, so the position is the only text that tells one
+/// finding from another.
+fn fail_fixture_source_line(verified: &VerifiedFinding, source: &[&str]) -> String {
+    let line = verified.finding.line;
+    source
+        .get(line as usize - 1)
+        .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
+        .trim()
+        .to_string()
+}
+
 /// The materialized name of the `complexity-typescript` fail fixture.
 const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
 
@@ -517,14 +532,7 @@ fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard
                 content,
             )
         },
-        |verified, source| {
-            let line = verified.finding.line;
-            source
-                .get(line as usize - 1)
-                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
-                .trim()
-                .to_string()
-        },
+        fail_fixture_source_line,
         |reported, guard| reported.starts_with(guard),
     );
 }
@@ -864,6 +872,186 @@ fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(SHIPPED_MISSING_DOCS_RULES, MISSING_DOCS_PROMPT_RULE);
 }
 
+/// The materialized name of the `missing-docs-dart` fail fixture.
+const DART_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-dart.fail.dart";
+
+/// Where the `missing-docs-dart` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+///
+/// It stands under `lib/`, because that is the one position
+/// `public_member_api_docs` reads.
+const DART_MISSING_DOCS_FIXTURE_PATH: &str = "lib/missing_docs_dart_fail.dart";
+
+/// Every member the `missing-docs-dart` fail fixture leaves undocumented,
+/// trimmed as the fixture writes it.
+///
+/// A line, and not a claim, because `public_member_api_docs` writes one
+/// message — `Missing documentation for a public member.` — for every member,
+/// so the claim never spells which one it read.
+///
+/// The getter and the setter are load-bearing. The `missing-docs` prompt rule
+/// carves out "Simple getters/setters with self-explanatory names", and this
+/// rule restores nothing, because the lint takes no option at all. The rule
+/// body states that, and these two entries hold the tool to the statement.
+const DART_MISSING_DOCS_FAIL_LINES: &[&str] = &[
+    "class UndocumentedClass {",
+    "void undocumentedMethod() {}",
+    "int get undocumentedProperty => _value;",
+    "set undocumentedProperty(int next) => _value = next;",
+    "void undocumentedFunction() {}",
+];
+
+/// The `missing-docs-dart` fail fixture, and every undocumented public member
+/// the real `dart analyze` pipeline must report inside it.
+const DART_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["flutter"],
+    rule: DART_MISSING_DOCS_RULE,
+    fixture: DART_MISSING_DOCS_FAIL_FIXTURE,
+    path: DART_MISSING_DOCS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    expected: DART_MISSING_DOCS_FAIL_LINES,
+    noun: "line holding an undocumented public member",
+};
+
+/// Acceptance: the shipped Dart missing-docs tool rule reports every
+/// undocumented public member its fail fixture holds, through the real
+/// `dart analyze` pipeline.
+///
+/// A member is held to the SOURCE LINE its finding stands on, because
+/// `public_member_api_docs` writes one message for every member and never
+/// spells the member it read.
+///
+/// The count is the other half, and it is what a silent run cannot fake. The
+/// script builds a probe package and runs `dart pub get` inside it, and a run
+/// that reached neither the lint nor the package would report zero findings
+/// and exit `0`. Holding this run to exactly these five lines states that the
+/// analyzer recognized the package, read the configuration the script wrote,
+/// and read each kind of member.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reports_every_fail_fixture_line() {
+    verify_shipped_fail_fixture_reports_each(
+        &DART_MISSING_DOCS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an undocumented class, method, getter, setter and function",
+                CODE_HYGIENE_SET,
+                [
+                    MISSING_DOCS_PROMPT_RULE.to_string(),
+                    DART_MISSING_DOCS_RULE.to_string(),
+                ],
+                [(DART_MISSING_DOCS_FIXTURE_PATH, content)],
+            )
+        },
+        fail_fixture_source_line,
+        |reported, expected| reported == expected,
+    );
+}
+
+/// One undocumented public class, and one undocumented method inside it.
+///
+/// Every staged position holds these same bytes, so the POSITION is the only
+/// thing that can tell one file of the run from another.
+const DART_STAGED_LIBRARY: &str =
+    concat!("class StagedClass {\n", "  void stagedMethod() {}\n", "}\n");
+
+/// The library position: a file under a package `lib/`.
+///
+/// This is the one position `public_member_api_docs` reads in the project
+/// itself, so this is the one file of the three the run may report.
+const DART_STAGED_LIBRARY_PATH: &str = "lib/staged.dart";
+
+/// The test position. A Dart test lives under `test/`, never under `lib/`, so
+/// the project's own analyzer never reads it. The probe stages every changed
+/// file under a `lib/` of its own, so only the exclude list keeps this file
+/// silent.
+const DART_STAGED_TEST_PATH: &str = "test/staged_test.dart";
+
+/// The generator position. `.g.dart` is the fixed output name of
+/// `build_runner`, and the `missing-docs` prompt rule this tool rule replaces
+/// carves generated code out, so only the exclude list keeps this file silent.
+const DART_STAGED_GENERATED_PATH: &str = "lib/staged.g.dart";
+
+/// Each position the staged class is written to, in the order the work-list
+/// holds them.
+const DART_STAGED_PATHS: &[&str] = &[
+    DART_STAGED_LIBRARY_PATH,
+    DART_STAGED_TEST_PATH,
+    DART_STAGED_GENERATED_PATH,
+];
+
+/// Acceptance: the shipped Dart missing-docs tool rule reports the file under
+/// `lib/` and stays silent on the test file and the generated file, through
+/// the real `dart analyze` pipeline.
+///
+/// This is the half the fixture pair cannot reach. The doctor materializes one
+/// fixture as a loose file with no directory, so no fixture can carry a
+/// position, and the probe's `analyzer: exclude:` list decides by position
+/// alone.
+///
+/// The three files hold the same bytes on purpose. `public_member_api_docs`
+/// reports a member only inside a package's `lib/`, and the probe stages every
+/// changed file under a `lib/` of its own, so without the exclude list all
+/// three would report the same two members. The difference between one file
+/// reporting and three reporting is therefore the list and nothing else.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reads_only_the_package_library() {
+    let loader = builtin_loader();
+    let project_types = ["flutter"];
+    require_tool_installed(&loader, &project_types, DART_MISSING_DOCS_RULE);
+    let repo = tempfile::tempdir().unwrap();
+    for path in DART_STAGED_PATHS {
+        let file = repo.path().join(path);
+        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
+        std::fs::write(&file, DART_STAGED_LIBRARY).unwrap();
+    }
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = tool_rule_work(
+        "one undocumented public class, staged in three positions",
+        CODE_HYGIENE_SET,
+        [
+            MISSING_DOCS_PROMPT_RULE.to_string(),
+            DART_MISSING_DOCS_RULE.to_string(),
+        ],
+        DART_STAGED_PATHS
+            .iter()
+            .map(|path| (*path, DART_STAGED_LIBRARY)),
+    );
+
+    let plan = plan_tool_rules(&work, &loader, &project_types, None);
+
+    let run = required_run(&plan, DART_MISSING_DOCS_RULE);
+    assert_eq!(
+        run.files(),
+        DART_STAGED_PATHS
+            .iter()
+            .map(|path| path.to_string())
+            .collect::<Vec<String>>(),
+        "the run must carry every staged position, so the exclude list is what decides"
+    );
+
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+
+    assert!(
+        outcome.errors().is_empty(),
+        "the shipped pipeline must not break; errors: {:?}",
+        outcome.errors()
+    );
+    let reported: Vec<&str> = outcome
+        .findings()
+        .iter()
+        .map(|verified| verified.finding.file.as_str())
+        .collect();
+    assert_eq!(
+        reported,
+        [DART_STAGED_LIBRARY_PATH, DART_STAGED_LIBRARY_PATH],
+        "the file under `lib/` reports its class and its method, and the test \
+         file and the generated file report nothing"
+    );
+}
+
 /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
 /// doctor, and supersedes the `dead-code` prompt rule.
 ///
@@ -1173,14 +1361,7 @@ fn the_shipped_swift_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
                 [(SWIFT_MAGIC_NUMBERS_FIXTURE_PATH, content)],
             )
         },
-        |verified, source| {
-            let line = verified.finding.line;
-            source
-                .get(line as usize - 1)
-                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
-                .trim()
-                .to_string()
-        },
+        fail_fixture_source_line,
         |reported, expected| reported == expected,
     );
 }
@@ -1254,14 +1435,7 @@ fn the_shipped_dart_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
                 [(DART_MAGIC_NUMBERS_FIXTURE_PATH, content)],
             )
         },
-        |verified, source| {
-            let line = verified.finding.line;
-            source
-                .get(line as usize - 1)
-                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
-                .trim()
-                .to_string()
-        },
+        fail_fixture_source_line,
         |reported, expected| reported == expected,
     );
 }

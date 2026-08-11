@@ -1,14 +1,38 @@
 // The passing fixture of the `missing-docs-dart` tool rule.
 //
-// Every public member here has documentation. The tool must report nothing. A
-// tool upgrade that reports one anyway makes the doctor mark the rule
-// unusable.
+// Every public member here has documentation, and every member without it
+// stands behind a carve-out the tool makes for itself: Dart `_` privacy, an
+// override of a member the analyzer resolves, and the inline suppression the
+// rule names as the recourse. The tool must report nothing. A tool upgrade
+// that reports one anyway makes the doctor mark the rule unusable.
 
 /// A documented public class.
 class DocumentedClass {
   /// A documented public method.
   void documentedMethod() {}
+
+  int _privateField = 0;
+
+  void _privateMethod() {}
+
+  @override
+  String toString() => 'DocumentedClass($_privateField)';
+
+  @override
+  bool operator ==(Object other) => other is DocumentedClass;
+
+  @override
+  int get hashCode => _privateField.hashCode;
+
+  // ignore: public_member_api_docs
+  void suppressedMember() {}
 }
 
 /// A documented public function.
 void documentedFunction() {}
+
+void _privateFunction() {}
+
+class _PrivateClass {
+  void anyMember() {}
+}

@@ -71,6 +71,14 @@ const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
 /// acceptance test drives end to end.
 const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
 
+/// The shipped missing-docs tool rule for Dart. `public_member_api_docs` reads
+/// only a package's `lib/` directory, so the rule stages each changed file
+/// under a probe `lib/` of its own. Two more acceptance tests drive it end to
+/// end: one names every member its fail fixture leaves undocumented, and one
+/// holds the probe's exclude list to the positions the project's own analyzer
+/// reads.
+const DART_MISSING_DOCS_RULE: &str = "missing-docs-dart";
+
 /// Every shipped missing-docs tool rule, with the project type it serves
 /// and the prompt rules it supersedes.
 const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
@@ -79,7 +87,7 @@ const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
     ("go", "missing-docs-go", SUPERSEDES_MISSING_DOCS),
     ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),
-    ("flutter", "missing-docs-dart", SUPERSEDES_MISSING_DOCS),
+    ("flutter", DART_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
 ];
 
 /// The prompt rule every shipped dead-code tool rule supersedes.
