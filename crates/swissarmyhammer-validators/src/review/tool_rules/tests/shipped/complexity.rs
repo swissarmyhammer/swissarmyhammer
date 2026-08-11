@@ -592,7 +592,7 @@ fn the_shipped_swift_complexity_tool_rule_keeps_its_own_gates() {
 
 /// The `complexity-swift` probe beside a project that names a swiftlint
 /// version that is not installed.
-const SWIFT_COMPLEXITY_VERSION_MISMATCH_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const SWIFT_COMPLEXITY_VERSION_MISMATCH_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_COMPLEXITY_RULE,
@@ -631,7 +631,7 @@ const SWIFT_COMPLEXITY_ABSENT_ERROR: &[&str] =
     &["complexity-swift cannot read", SWIFT_COMPLEXITY_ABSENT_PATH];
 
 /// The `complexity-swift` probe over a path that holds no file.
-const SWIFT_COMPLEXITY_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const SWIFT_COMPLEXITY_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_COMPLEXITY_RULE,
@@ -656,31 +656,21 @@ fn the_shipped_swift_complexity_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&SWIFT_COMPLEXITY_ABSENT_PROBE);
 }
 
-/// Where the directory that holds no Swift file stands inside the probe
-/// repository.
-///
-/// The name ends in `.swift` because the rule matches a path by that suffix,
-/// and a path the pattern refuses reaches no run at all.
-const SWIFT_COMPLEXITY_HOLLOW_PATH: &str = "Sources/Hollow.swift";
-
-/// The one file inside that directory. Its name ends in `.txt`, so swiftlint
-/// finds no Swift file under the directory it is given.
-const SWIFT_COMPLEXITY_HOLLOW_FILES: &[(&str, &str)] =
-    &[("Sources/Hollow.swift/Notes.txt", "notes\n")];
-
 /// The `complexity-swift` probe over a directory that holds no Swift file.
-const SWIFT_COMPLEXITY_HOLLOW_PROBE: ShippedHollowDirectory = ShippedHollowDirectory {
+///
+/// The probe writes no file at the path, and the one staged file under that
+/// path makes the directory.
+const SWIFT_COMPLEXITY_HOLLOW_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_COMPLEXITY_RULE,
         expected: NO_FINDINGS,
     },
     prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
-    change_purpose: "a directory that holds no Swift file",
-    directory: SWIFT_COMPLEXITY_HOLLOW_PATH,
-    staged: SWIFT_COMPLEXITY_HOLLOW_FILES,
-    reason: "the guard admits the directory, swiftlint finds no Swift file under it, and the \
-             script reads swiftlint's own message and answers clean",
+    change_purpose: SWIFT_HOLLOW_PURPOSE,
+    path: SWIFT_HOLLOW_PATH,
+    source: None,
+    support: SWIFT_HOLLOW_FILES,
 };
 
 /// Acceptance: the shipped Swift complexity tool rule answers CLEAN over a

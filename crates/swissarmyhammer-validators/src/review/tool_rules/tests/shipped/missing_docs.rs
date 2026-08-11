@@ -519,7 +519,7 @@ const GO_INVALID_FILE_PREFIX: &str = "invalid file";
 const GO_UNPARSABLE_ERROR: &[&str] = &[GO_INVALID_FILE_PREFIX, GO_UNPARSABLE_PATH];
 
 /// The `missing-docs-go` probe over a Go file revive cannot parse.
-const GO_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: &["go"],
         rule: GO_MISSING_DOCS_RULE,
@@ -755,7 +755,7 @@ const PYTHON_INVALID_SYNTAX_CODE: &str = "invalid-syntax";
 const PYTHON_UNPARSABLE_ERROR: &[&str] = &[PYTHON_INVALID_SYNTAX_CODE, PYTHON_UNPARSABLE_PATH];
 
 /// The `missing-docs-python` probe over a Python file ruff cannot parse.
-const PYTHON_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const PYTHON_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: &["python"],
         rule: PYTHON_MISSING_DOCS_RULE,
@@ -791,7 +791,7 @@ const PYTHON_CANNOT_READ_MESSAGE: &str = "missing-docs-python cannot read";
 const PYTHON_ABSENT_ERROR: &[&str] = &[PYTHON_CANNOT_READ_MESSAGE, PYTHON_ABSENT_PATH];
 
 /// The `missing-docs-python` probe over a path that holds no file.
-const PYTHON_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const PYTHON_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: &["python"],
         rule: PYTHON_MISSING_DOCS_RULE,
@@ -1079,7 +1079,7 @@ const RUST_CANNOT_COMPILE_MESSAGE: &str = "could not compile";
 const RUST_UNCOMPILABLE_ERROR: &[&str] = &[RUST_CANNOT_COMPILE_MESSAGE, "uncompilable-probe"];
 
 /// The `missing-docs-rust` probe over a crate cargo cannot compile.
-const RUST_UNCOMPILABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const RUST_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: &["rust"],
         rule: RUST_MISSING_DOCS_RULE,
@@ -1333,7 +1333,7 @@ fn the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_warning_th
 
 /// The `missing-docs-swift` probe beside a project that names a swiftlint
 /// version that is not installed.
-const SWIFT_VERSION_MISMATCH_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const SWIFT_VERSION_MISMATCH_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_MISSING_DOCS_RULE,
@@ -1450,7 +1450,7 @@ const SWIFT_CANNOT_READ_MESSAGE: &str = "missing-docs-swift cannot read";
 const SWIFT_ABSENT_ERROR: &[&str] = &[SWIFT_CANNOT_READ_MESSAGE, SWIFT_ABSENT_PATH];
 
 /// The `missing-docs-swift` probe over a path that holds no file.
-const SWIFT_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+const SWIFT_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_MISSING_DOCS_RULE,
@@ -1477,30 +1477,21 @@ fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
 }
 
-/// Where the directory that holds no Swift file stands inside the probe
-/// repository.
-///
-/// The name ends in `.swift` because the rule matches a path by that suffix,
-/// and a path the pattern refuses reaches no run at all.
-const SWIFT_HOLLOW_PATH: &str = "Sources/Hollow.swift";
-
-/// The one file inside that directory. Its name ends in `.txt`, so swiftlint
-/// finds no Swift file under the directory it is given.
-const SWIFT_HOLLOW_FILES: &[(&str, &str)] = &[("Sources/Hollow.swift/Notes.txt", "notes\n")];
-
 /// The `missing-docs-swift` probe over a directory that holds no Swift file.
-const SWIFT_HOLLOW_PROBE: ShippedHollowDirectory = ShippedHollowDirectory {
+///
+/// The probe writes no file at the path, and the one staged file under that
+/// path makes the directory.
+const SWIFT_HOLLOW_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_MISSING_DOCS_RULE,
         expected: NO_FINDINGS,
     },
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a directory that holds no Swift file",
-    directory: SWIFT_HOLLOW_PATH,
-    staged: SWIFT_HOLLOW_FILES,
-    reason: "the guard admits the directory, swiftlint finds no Swift file under it, and the \
-             script reads swiftlint's own message and answers clean",
+    change_purpose: SWIFT_HOLLOW_PURPOSE,
+    path: SWIFT_HOLLOW_PATH,
+    source: None,
+    support: SWIFT_HOLLOW_FILES,
 };
 
 /// Acceptance: the shipped Swift missing-docs tool rule answers CLEAN over a
