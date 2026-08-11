@@ -60,13 +60,15 @@ fn names_the_directory_work(script: &str) -> bool {
 
 /// Whether the line directly under each temporary-directory assignment of
 /// `script` is the trap that removes the directory.
+///
+/// `all` over no assignment gives true, which is the answer a script that
+/// makes no temporary directory must give. The zero-argument guard reads
+/// `any` over the same helpers for the opposite reason.
 fn removes_the_directory_on_exit(script: &str) -> bool {
-    let lines: Vec<&str> = script.lines().map(str::trim).collect();
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| **line == TEMP_DIRECTORY_ASSIGNMENT)
-        .all(|(at, _)| lines.get(at + 1) == Some(&TEMP_DIRECTORY_TRAP))
+    let lines = trimmed_script_lines(script);
+    script_lines_that_read(&lines, TEMP_DIRECTORY_ASSIGNMENT)
+        .into_iter()
+        .all(|at| script_lines_under(&lines, at, &[TEMP_DIRECTORY_TRAP]))
 }
 
 /// Whether `check_command` names the `mktemp` tool as a word of its own.

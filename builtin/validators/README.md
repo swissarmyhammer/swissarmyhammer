@@ -124,7 +124,21 @@ The `tool` block keys:
     Test each file the script is given before the tool starts.
   - A `files`-scope script given NO file must report nothing and exit 0. The
     loop over `"$@"` is a no-op, so a tool handed no path falls back to a
-    default target of its own and answers for the whole tree.
+    default target of its own and answers for the whole tree. Write these
+    three lines:
+
+        if [ "$#" -eq 0 ]; then
+          exit 0
+        fi
+
+    Write them above every line that runs. Only a comment, a blank line and
+    a `set` line stand over them. A guard under the first `mktemp -d` leaves
+    a directory behind; a guard under the first tool call answers after the
+    tool read the tree; and a guard in a subshell, in the body of a function
+    or in a heredoc never runs. This text and this place ARE the contract:
+    a coverage guard reads the shipped script of each `files`-scope rule and
+    holds it to both. Another shape with the same behaviour, such as
+    `[ "$#" -eq 0 ] && exit 0`, does not meet the contract.
   - A script that makes a temporary directory removes it. Write
     `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` under it. The
     trap covers a clean run, a run with findings and a broken run alike, and

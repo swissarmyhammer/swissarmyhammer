@@ -631,6 +631,38 @@ fn tool_rules_that_deviate(
         .collect()
 }
 
+/// The lines of `script`, each one with its leading and trailing space
+/// removed.
+///
+/// A guard reads a script line by line, and a script indents a line that
+/// stands inside a block. The trim is what lets a guard compare a line
+/// against the one text the contract states, wherever the script writes it.
+fn trimmed_script_lines(script: &str) -> Vec<&str> {
+    script.lines().map(str::trim).collect()
+}
+
+/// The index of each line of `lines` that reads `head`.
+fn script_lines_that_read(lines: &[&str], head: &str) -> Vec<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| **line == head)
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// Whether the lines of `lines` directly under `at` read `under`, in order.
+///
+/// The lines stand together, so no statement between them can run before the
+/// block ends, and the block cannot open something a later line closes. A
+/// block that runs past the last line of the script answers false.
+fn script_lines_under(lines: &[&str], at: usize, under: &[&str]) -> bool {
+    under
+        .iter()
+        .enumerate()
+        .all(|(step, text)| lines.get(at + 1 + step) == Some(text))
+}
+
 /// The shipped rules `keeps` answers true for, or a panic when the set ships
 /// another number of them.
 ///
@@ -737,9 +769,25 @@ fn sorted_names(names: &[String]) -> Vec<String> {
 /// script that reported nothing whatever it was given would pass the first
 /// assertion. The second assertion is what makes the guard, and not the whole
 /// script, the thing the first one measures.
+///
+/// The rule of the probe must state `scope: files`, because that scope is what
+/// makes the two runs different. A `workspace`-scope script takes an empty
+/// argument list for both runs, so the two halves would measure one run two
+/// times.
 fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let shipped = required_shipped_tool_rule(&loader, probe.run.rule);
+
+    assert_eq!(
+        shipped.scope,
+        ToolScope::Files,
+        "the probe for `{}` must name a rule that states `scope: files`, or \
+         the two runs below take the same empty argument list and the pair \
+         measures one run two times",
+        probe.run.rule
+    );
+
     let staged_files: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
 
     let unread = shipped_script_findings(&loader, probe.run.rule, probe.staged, &[])
