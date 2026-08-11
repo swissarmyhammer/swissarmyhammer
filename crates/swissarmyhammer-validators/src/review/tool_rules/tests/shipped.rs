@@ -9,9 +9,9 @@
 //!
 //! The tests themselves stand one module per rule family, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
-//! whole. `temp_directory` is the one module that is not a rule family: it
-//! reads the shipped script of EVERY rule, because the contract it holds is
-//! about the set and not about one language.
+//! whole. `temp_directory` and `zero_argument` are the two modules that are
+//! not a rule family: each reads the shipped script of EVERY rule, because
+//! the contract it holds is about the set and not about one language.
 
 mod commented_code;
 mod complexity;
@@ -21,6 +21,7 @@ mod magic_numbers;
 mod missing_docs;
 mod temp_directory;
 mod unused_dependencies;
+mod zero_argument;
 
 use super::preconditions::require_tool_installed;
 use super::*;
@@ -554,43 +555,133 @@ struct ShippedEmptyRun {
     /// its own finds every one.
     staged: &'static [(&'static str, &'static str)],
 
-    /// How many findings the SAME script reports when it takes every staged
-    /// file as its arguments.
+    /// Each finding the SAME script reports when it takes every staged file
+    /// as its arguments, one `path:line` entry for each.
     ///
     /// The zero-argument half alone cannot tell a guard that answers nothing
     /// from a script that answers nothing whatever it is given. Each staged
-    /// file trips the rule, so this count states what the guard must leave
+    /// file trips the rule, so this list states what the guard must leave
     /// standing, and a guard that swallowed the real run breaks it.
-    with_files: usize,
+    ///
+    /// The list is the whole answer rather than a count, because a tool that
+    /// moved its findings to other lines, or to other files, keeps the count.
+    ///
+    /// The ORDER of the entries is free. A tool that reads more than one file
+    /// at one time answers in the order its own work finished. Measured on
+    /// `missing-docs-swift`: two runs over the same two files gave the two
+    /// files in opposite order.
+    with_files: &'static [&'static str],
 
     /// Why the staged files stay silent.
     reason: &'static str,
 }
 
-/// The `run` script the shipped tool rule `rule` carries.
+/// One shipped rule that carries a `tool` block.
 ///
-/// The script is read where the set ships it, so the run measures the SHIPPED
-/// bytes rather than a copy a test wrote.
-fn shipped_run_script(loader: &ValidatorLoader, rule: &str) -> String {
+/// A guard over the whole set reads these four fields and no other, so one
+/// shape serves every guard and one walk of the set answers them all.
+struct ShippedToolRule {
+    /// The name of the rule, for the failure messages.
+    name: String,
+
+    /// Which inputs the `run` script receives.
+    scope: ToolScope,
+
+    /// The `run` script the set ships for the rule.
+    script: String,
+
+    /// The `doctor.check_command` the set ships for the rule, or `None` when
+    /// the rule carries no `doctor` block at all. A rule that names no check
+    /// names no tool either.
+    check_command: Option<String>,
+}
+
+/// Every shipped rule that carries a `tool` block.
+///
+/// The block is read where the set ships it, so a guard over the answer holds
+/// the SHIPPED bytes rather than a copy a test wrote, and a rule added later
+/// stands in the answer with no test edit.
+fn shipped_tool_rules(loader: &ValidatorLoader) -> Vec<ShippedToolRule> {
     loader
         .list_rulesets()
         .iter()
         .flat_map(|ruleset| ruleset.rules.iter())
+        .filter_map(|rule| rule.tool.as_ref().map(|tool| (&rule.name, tool)))
+        .map(|(name, tool)| ShippedToolRule {
+            name: name.clone(),
+            scope: tool.scope,
+            script: tool.run.clone(),
+            check_command: tool
+                .doctor
+                .as_ref()
+                .map(|doctor| doctor.check_command.clone()),
+        })
+        .collect()
+}
+
+/// The rules of `rules` that `holds` answers false for, by name.
+fn tool_rules_that_deviate(
+    rules: &[ShippedToolRule],
+    holds: impl Fn(&ShippedToolRule) -> bool,
+) -> Vec<&str> {
+    rules
+        .iter()
+        .filter(|rule| !holds(rule))
+        .map(|rule| rule.name.as_str())
+        .collect()
+}
+
+/// The shipped rules `keeps` answers true for, or a panic when the set ships
+/// another number of them.
+///
+/// A guard over an empty list holds nothing and reports green, and a guard
+/// over a list that shrank holds less than it held before. The size is
+/// therefore an assertion of its own: a rule dropped from the set, a rule
+/// whose `run` no longer meets `keeps`, and a rule added with no thought for
+/// the contract each break it. `roster` names what the rules of the list have
+/// in common, for the failure message.
+fn required_tool_rules(
+    loader: &ValidatorLoader,
+    roster: &str,
+    count: usize,
+    keeps: impl Fn(&ShippedToolRule) -> bool,
+) -> Vec<ShippedToolRule> {
+    let rules: Vec<ShippedToolRule> = shipped_tool_rules(loader)
+        .into_iter()
+        .filter(|rule| keeps(rule))
+        .collect();
+    let names: Vec<&str> = rules.iter().map(|rule| rule.name.as_str()).collect();
+
+    assert_eq!(
+        rules.len(),
+        count,
+        "the set must ship {count} rules that {roster}, or this guard holds another \
+         roster than the one it was measured against; it ships {names:?}"
+    );
+
+    rules
+}
+
+/// The `tool` block the shipped rule `rule` carries, or a panic naming it.
+///
+/// The block is read where the set ships it, so a run measures the SHIPPED
+/// bytes rather than a copy a test wrote.
+fn required_shipped_tool_rule(loader: &ValidatorLoader, rule: &str) -> ShippedToolRule {
+    shipped_tool_rules(loader)
+        .into_iter()
         .find(|candidate| candidate.name == rule)
-        .and_then(|candidate| candidate.tool.as_ref())
         .unwrap_or_else(|| panic!("the shipped tool rule `{rule}` must carry a tool block"))
-        .run
-        .clone()
 }
 
 /// Stages `staged` in a temporary repository, drives the shipped script of
-/// `rule` there with the argument list a run of `scope` over `files` carries,
-/// and answers each finding it reported as `path:line`.
+/// `rule` there with the argument list a run over `files` carries, and answers
+/// each finding it reported as `path:line`.
 ///
 /// The arguments come from [`script_args`], the one function the engine builds
-/// them with, so a `files`-scope rule reads the argument list it would really
-/// receive for `files`, and a `workspace`-scope rule reads the empty list it
-/// always receives.
+/// them with, and the scope comes from the SHIPPED rule rather than from the
+/// caller. So a `files`-scope rule reads the argument list it would really
+/// receive for `files`, a `workspace`-scope rule reads the empty list it always
+/// receives, and a probe cannot state a shape the rule does not carry.
 ///
 /// The findings are the SCRIPT's own, before the engine keeps only the ones in
 /// the changed files. A script that names a file the author cannot edit is
@@ -598,17 +689,16 @@ fn shipped_run_script(loader: &ValidatorLoader, rule: &str) -> String {
 fn shipped_script_findings(
     loader: &ValidatorLoader,
     rule: &str,
-    scope: ToolScope,
     staged: &[(&str, &str)],
     files: &[&str],
 ) -> Result<Vec<String>, ScriptFailure> {
+    let shipped = required_shipped_tool_rule(loader, rule);
     let repo = tempfile::tempdir().unwrap();
     stage_probe_files(repo.path(), staged.iter().copied());
     let repo_root = probe_repository_root(&repo);
-    let script = shipped_run_script(loader, rule);
-    let args = script_args(scope, files);
+    let args = script_args(shipped.scope, files);
 
-    let findings = run_script_findings(&script, &repo_root, &args)?;
+    let findings = run_script_findings(&shipped.script, &repo_root, &args)?;
 
     Ok(findings
         .iter()
@@ -628,47 +718,46 @@ fn expected_script_findings(expected: &[&str]) -> Vec<String> {
     expected.iter().map(|entry| (*entry).to_string()).collect()
 }
 
+/// Sorted names, for a set comparison that does not depend on read order.
+fn sorted_names(names: &[String]) -> Vec<String> {
+    let mut sorted = names.to_vec();
+    sorted.sort();
+    sorted
+}
+
 /// Drives the shipped script of `probe` two times over the same probe
 /// repository, and holds each run to what the probe names for it.
 ///
 /// The first run takes NO file argument, and it must report exactly the
 /// entries the probe names, which is none.
 ///
-/// The second run takes every staged file, and it must report the count the
-/// probe names. The first run alone cannot tell a guard that stops a run with
-/// nothing to judge from a guard that stops every run: a script that reported
-/// nothing whatever it was given would pass the first assertion. The second
-/// assertion is what makes the guard, and not the whole script, the thing the
-/// first one measures.
+/// The second run takes every staged file, and it must report exactly the
+/// entries the probe names for it. The first run alone cannot tell a guard
+/// that stops a run with nothing to judge from a guard that stops every run: a
+/// script that reported nothing whatever it was given would pass the first
+/// assertion. The second assertion is what makes the guard, and not the whole
+/// script, the thing the first one measures.
 fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let staged_files: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
 
-    let unread =
-        shipped_script_findings(&loader, probe.run.rule, ToolScope::Files, probe.staged, &[])
-            .expect("a script given no file must judge nothing and exit 0");
-    let read = shipped_script_findings(
-        &loader,
-        probe.run.rule,
-        ToolScope::Files,
-        probe.staged,
-        &staged_files,
-    )
-    .expect("a script given its own files must judge them and exit 0");
+    let unread = shipped_script_findings(&loader, probe.run.rule, probe.staged, &[])
+        .expect("a script given no file must judge nothing and exit 0");
+    let read = shipped_script_findings(&loader, probe.run.rule, probe.staged, &staged_files)
+        .expect("a script given its own files must judge them and exit 0");
 
     assert_eq!(
-        unread,
-        expected_script_findings(probe.run.expected),
+        sorted_names(&unread),
+        sorted_names(&expected_script_findings(probe.run.expected)),
         "{}",
         probe.reason
     );
     assert_eq!(
-        read.len(),
-        probe.with_files,
-        "the same script must report {} findings over the staged files, or the guard \
-         swallows the run it is meant to leave standing; it reported {read:?}",
-        probe.with_files
+        sorted_names(&read),
+        sorted_names(&expected_script_findings(probe.with_files)),
+        "the same script must report exactly these findings over the staged files, or \
+         the guard swallows the run it is meant to leave standing"
     );
 }
 

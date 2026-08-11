@@ -47,6 +47,14 @@ const DUPLICATION_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.rs", DUPLICATION_UNREAD_SOURCE),
 ];
 
+/// Each finding the duplication script reports over the two files it is
+/// given, as `path:line`.
+const DUPLICATION_READ_FINDINGS: &[&str] = &[
+    "top.rs:15",
+    "deep/nested/other.rs:1",
+    "deep/nested/other.rs:15",
+];
+
 /// The `duplication-parsed` probe over a run that is given no file.
 const DUPLICATION_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -55,7 +63,7 @@ const DUPLICATION_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DUPLICATION_UNREAD_FILES,
-    with_files: 3,
+    with_files: DUPLICATION_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

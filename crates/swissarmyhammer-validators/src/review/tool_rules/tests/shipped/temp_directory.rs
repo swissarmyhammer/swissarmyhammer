@@ -28,66 +28,25 @@ const TEMP_DIRECTORY_COMMAND: &str = "mktemp -d";
 /// `doctor.check_command` names it.
 const TEMP_DIRECTORY_TOOL: &str = "mktemp";
 
-/// One shipped rule that makes a temporary directory.
-struct TempDirectoryRule {
-    /// The name of the rule, for the failure messages.
-    name: String,
-
-    /// The `run` script the set ships for the rule.
-    script: String,
-
-    /// The `doctor.check_command` the set ships for the rule, or `None` when
-    /// the rule carries no `doctor` block at all. A rule that names no check
-    /// names no `mktemp` either.
-    check_command: Option<String>,
-}
-
-/// Every shipped rule whose `run` script makes a temporary directory.
+/// How many shipped rules make a temporary directory.
 ///
-/// The script is read where the set ships it, so the guard holds the SHIPPED
-/// bytes rather than a copy a test wrote.
-fn shipped_temp_directory_rules(loader: &ValidatorLoader) -> Vec<TempDirectoryRule> {
-    loader
-        .list_rulesets()
-        .iter()
-        .flat_map(|ruleset| ruleset.rules.iter())
-        .filter_map(|rule| rule.tool.as_ref().map(|tool| (&rule.name, tool)))
-        .filter(|(_, tool)| tool.run.contains(TEMP_DIRECTORY_COMMAND))
-        .map(|(name, tool)| TempDirectoryRule {
-            name: name.clone(),
-            script: tool.run.clone(),
-            check_command: tool
-                .doctor
-                .as_ref()
-                .map(|doctor| doctor.check_command.clone()),
-        })
-        .collect()
-}
+/// The count is the assertion that a rule added later reaches this guard. A
+/// seventeenth such rule breaks it, and the author then reads the contract
+/// before the rule ships.
+const TEMP_DIRECTORY_RULE_COUNT: usize = 16;
 
-/// The rules of `rules` that `holds` answers false for, by name.
-fn temp_directory_rules_that_deviate(
-    rules: &[TempDirectoryRule],
-    holds: impl Fn(&TempDirectoryRule) -> bool,
-) -> Vec<&str> {
-    rules
-        .iter()
-        .filter(|rule| !holds(rule))
-        .map(|rule| rule.name.as_str())
-        .collect()
-}
+/// What the rules of this roster have in common, for the failure message.
+const TEMP_DIRECTORY_ROSTER: &str = "make a temporary directory";
 
-/// Every shipped rule that makes a temporary directory, or a panic when there
-/// is none.
-///
-/// A guard over an empty list holds nothing and reports green, so the list
-/// itself is an assertion.
-fn required_temp_directory_rules(loader: &ValidatorLoader) -> Vec<TempDirectoryRule> {
-    let rules = shipped_temp_directory_rules(loader);
-    assert!(
-        !rules.is_empty(),
-        "a shipped rule must make a temporary directory, or this guard holds nothing"
-    );
-    rules
+/// Every shipped rule that makes a temporary directory, or a panic when the
+/// set ships another number of them.
+fn required_temp_directory_rules(loader: &ValidatorLoader) -> Vec<ShippedToolRule> {
+    required_tool_rules(
+        loader,
+        TEMP_DIRECTORY_ROSTER,
+        TEMP_DIRECTORY_RULE_COUNT,
+        |rule| rule.script.contains(TEMP_DIRECTORY_COMMAND),
+    )
 }
 
 /// Whether each `mktemp -d` of `script` stands in the assignment the contract
@@ -111,7 +70,7 @@ fn removes_the_directory_on_exit(script: &str) -> bool {
 }
 
 /// Whether `check_command` names the `mktemp` tool as a word of its own.
-fn checks_for_mktemp(check_command: Option<&String>) -> bool {
+fn checks_for_mktemp(check_command: Option<&str>) -> bool {
     check_command.is_some_and(|command| {
         command
             .split_whitespace()
@@ -131,8 +90,7 @@ fn each_shipped_script_that_makes_a_temporary_directory_names_it_work() {
     let loader = builtin_loader();
     let rules = required_temp_directory_rules(&loader);
 
-    let deviating =
-        temp_directory_rules_that_deviate(&rules, |rule| names_the_directory_work(&rule.script));
+    let deviating = tool_rules_that_deviate(&rules, |rule| names_the_directory_work(&rule.script));
 
     assert!(
         deviating.is_empty(),
@@ -151,9 +109,8 @@ fn each_shipped_script_that_makes_a_temporary_directory_removes_it() {
     let loader = builtin_loader();
     let rules = required_temp_directory_rules(&loader);
 
-    let deviating = temp_directory_rules_that_deviate(&rules, |rule| {
-        removes_the_directory_on_exit(&rule.script)
-    });
+    let deviating =
+        tool_rules_that_deviate(&rules, |rule| removes_the_directory_on_exit(&rule.script));
 
     assert!(
         deviating.is_empty(),
@@ -175,8 +132,8 @@ fn each_shipped_script_that_makes_a_temporary_directory_checks_for_mktemp() {
     let loader = builtin_loader();
     let rules = required_temp_directory_rules(&loader);
 
-    let deviating = temp_directory_rules_that_deviate(&rules, |rule| {
-        checks_for_mktemp(rule.check_command.as_ref())
+    let deviating = tool_rules_that_deviate(&rules, |rule| {
+        checks_for_mktemp(rule.check_command.as_deref())
     });
 
     assert!(

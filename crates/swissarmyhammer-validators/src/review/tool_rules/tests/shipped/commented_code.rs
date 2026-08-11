@@ -31,6 +31,10 @@ const COMMENTED_CODE_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.rs", COMMENTED_CODE_UNREAD_SOURCE),
 ];
 
+/// Each finding the commented-code script reports over the two files it is
+/// given, as `path:line`.
+const COMMENTED_CODE_READ_FINDINGS: &[&str] = &["top.rs:5", "deep/nested/other.rs:5"];
+
 /// The `no-commented-code-parsed` probe over a run that is given no file.
 const COMMENTED_CODE_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -39,7 +43,7 @@ const COMMENTED_CODE_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: COMMENTED_CODE_UNREAD_FILES,
-    with_files: 2,
+    with_files: COMMENTED_CODE_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

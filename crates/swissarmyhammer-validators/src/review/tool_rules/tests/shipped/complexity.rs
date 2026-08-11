@@ -297,13 +297,6 @@ const TYPESCRIPT_NOT_AN_OPENER: &[&str] = &["mocha", "jest", "expect", "run", "s
 /// The one framework function that needs a framework root before it.
 const TYPESCRIPT_ROOTED_CALL: &[&str] = &["step"];
 
-/// Sorted names, for a set comparison that does not depend on read order.
-fn sorted_names(names: &[String]) -> Vec<String> {
-    let mut sorted = names.to_vec();
-    sorted.sort();
-    sorted
-}
-
 /// Acceptance: the shipped `complexity-typescript` config READS its framework
 /// function names out of the resolved node module tree, and the written
 /// mirror it falls back to says the same thing.
@@ -695,6 +688,10 @@ const SWIFT_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/Other.swift", SWIFT_COMPLEXITY_STAGED),
 ];
 
+/// Each finding the Swift complexity script reports over the two files it is
+/// given, as `path:line`.
+const SWIFT_COMPLEXITY_READ_FINDINGS: &[&str] = &["Top.swift:1", "deep/nested/Other.swift:1"];
+
 /// The `complexity-swift` probe over a run that is given no file.
 const SWIFT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -703,7 +700,7 @@ const SWIFT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_COMPLEXITY_UNREAD_FILES,
-    with_files: 2,
+    with_files: SWIFT_COMPLEXITY_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -753,6 +750,10 @@ const PYTHON_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.py", PYTHON_COMPLEXITY_UNREAD_SOURCE),
 ];
 
+/// Each finding the Python complexity script reports over the two files it is
+/// given, as `path:line`.
+const PYTHON_COMPLEXITY_READ_FINDINGS: &[&str] = &["deep/nested/other.py:1", "top.py:1"];
+
 /// The `complexity-python` probe over a run that is given no file.
 const PYTHON_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -761,7 +762,7 @@ const PYTHON_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_COMPLEXITY_UNREAD_FILES,
-    with_files: 2,
+    with_files: PYTHON_COMPLEXITY_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -814,6 +815,10 @@ const PYTHON_LENGTH_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.py", PYTHON_LENGTH_UNREAD_SOURCE),
 ];
 
+/// Each finding the Python function-length script reports over the two files
+/// it is given, as `path:line`.
+const PYTHON_LENGTH_READ_FINDINGS: &[&str] = &["deep/nested/other.py:1", "top.py:1"];
+
 /// The `function-length-python` probe over a run that is given no file.
 const PYTHON_LENGTH_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -822,7 +827,7 @@ const PYTHON_LENGTH_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_LENGTH_UNREAD_FILES,
-    with_files: 2,
+    with_files: PYTHON_LENGTH_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -870,6 +875,10 @@ const GO_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.go", GO_COMPLEXITY_UNREAD_SOURCE),
 ];
 
+/// Each finding the Go complexity script reports over the two files it is
+/// given, as `path:line`.
+const GO_COMPLEXITY_READ_FINDINGS: &[&str] = &["deep/nested/other.go:4", "top.go:4"];
+
 /// The `complexity-go` probe over a run that is given no file.
 const GO_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -878,7 +887,7 @@ const GO_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: GO_COMPLEXITY_UNREAD_FILES,
-    with_files: 2,
+    with_files: GO_COMPLEXITY_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -926,6 +935,10 @@ const TYPESCRIPT_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.ts", TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE),
 ];
 
+/// Each finding the TypeScript complexity script reports over the two files
+/// it is given, as `path:line`.
+const TYPESCRIPT_COMPLEXITY_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
+
 /// The `complexity-typescript` probe over a run that is given no file.
 const TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -934,7 +947,7 @@ const TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: TYPESCRIPT_COMPLEXITY_UNREAD_FILES,
-    with_files: 2,
+    with_files: TYPESCRIPT_COMPLEXITY_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

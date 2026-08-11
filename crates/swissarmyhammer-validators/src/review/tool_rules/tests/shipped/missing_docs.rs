@@ -831,6 +831,16 @@ const PYTHON_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.py", PYTHON_UNREAD_NESTED_SOURCE),
 ];
 
+/// Each finding the Python missing-docs script reports over the two files it
+/// is given, as `path:line`.
+const PYTHON_READ_FINDINGS: &[&str] = &[
+    "deep/nested/other.py:1",
+    "deep/nested/other.py:1",
+    "deep/nested/other.py:2",
+    "top.py:1",
+    "top.py:1",
+];
+
 /// The `missing-docs-python` probe over a run that is given no file.
 const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -839,7 +849,7 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_UNREAD_FILES,
-    with_files: 5,
+    with_files: PYTHON_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1038,7 +1048,6 @@ fn the_shipped_rust_missing_docs_tool_rule_names_no_generated_file() {
     let reported = shipped_script_findings(
         &loader,
         RUST_MISSING_DOCS_RULE,
-        ToolScope::Workspace,
         RUST_GENERATED_PROBE_FILES,
         &[],
     )
@@ -1526,6 +1535,15 @@ const SWIFT_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/Other.swift", SWIFT_UNREAD_NESTED_SOURCE),
 ];
 
+/// Each finding the Swift missing-docs script reports over the two files it
+/// is given, as `path:line`.
+const SWIFT_READ_FINDINGS: &[&str] = &[
+    "deep/nested/Other.swift:1",
+    "deep/nested/Other.swift:2",
+    "Top.swift:1",
+    "Top.swift:2",
+];
+
 /// The `missing-docs-swift` probe over a run that is given no file.
 const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -1534,7 +1552,7 @@ const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_UNREAD_FILES,
-    with_files: 4,
+    with_files: SWIFT_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1573,6 +1591,10 @@ const TYPESCRIPT_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Each finding the TypeScript missing-docs script reports over the two files
+/// it is given, as `path:line`.
+const TYPESCRIPT_MISSING_DOCS_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
+
 /// The `missing-docs-typescript` probe over a run that is given no file.
 const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -1581,7 +1603,7 @@ const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun
         expected: NO_FINDINGS,
     },
     staged: TYPESCRIPT_MISSING_DOCS_UNREAD_FILES,
-    with_files: 2,
+    with_files: TYPESCRIPT_MISSING_DOCS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1617,6 +1639,10 @@ const GO_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.go", GO_MISSING_DOCS_UNREAD_SOURCE),
 ];
 
+/// Each finding the Go missing-docs script reports over the two files it is
+/// given, as `path:line`.
+const GO_MISSING_DOCS_READ_FINDINGS: &[&str] = &["top.go:3", "deep/nested/other.go:3"];
+
 /// The `missing-docs-go` probe over a run that is given no file.
 const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -1625,7 +1651,7 @@ const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: GO_MISSING_DOCS_UNREAD_FILES,
-    with_files: 2,
+    with_files: GO_MISSING_DOCS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -1660,6 +1686,15 @@ const DART_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.dart", DART_MISSING_DOCS_UNREAD_SOURCE),
 ];
 
+/// Each finding the Dart missing-docs script reports over the two files it is
+/// given, as `path:line`.
+const DART_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
+    "deep/nested/other.dart:1",
+    "deep/nested/other.dart:2",
+    "top.dart:1",
+    "top.dart:2",
+];
+
 /// The `missing-docs-dart` probe over a run that is given no file.
 const DART_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -1668,7 +1703,7 @@ const DART_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DART_MISSING_DOCS_UNREAD_FILES,
-    with_files: 4,
+    with_files: DART_MISSING_DOCS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 

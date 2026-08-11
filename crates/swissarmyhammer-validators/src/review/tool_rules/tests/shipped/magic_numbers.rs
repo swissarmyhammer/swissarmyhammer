@@ -697,6 +697,10 @@ const SWIFT_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/Other.swift", SWIFT_MAGIC_NUMBERS_STAGED),
 ];
 
+/// Each finding the Swift magic-numbers script reports over the two files it
+/// is given, as `path:line`.
+const SWIFT_MAGIC_NUMBERS_READ_FINDINGS: &[&str] = &["Top.swift:2", "deep/nested/Other.swift:2"];
+
 /// The `magic-numbers-swift` probe over a run that is given no file.
 const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -705,7 +709,7 @@ const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_MAGIC_NUMBERS_UNREAD_FILES,
-    with_files: 2,
+    with_files: SWIFT_MAGIC_NUMBERS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -738,6 +742,10 @@ const PYTHON_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.py", PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE),
 ];
 
+/// Each finding the Python magic-numbers script reports over the two files it
+/// is given, as `path:line`.
+const PYTHON_MAGIC_NUMBERS_READ_FINDINGS: &[&str] = &["deep/nested/other.py:2", "top.py:2"];
+
 /// The `magic-numbers-python` probe over a run that is given no file.
 const PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -746,7 +754,7 @@ const PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_MAGIC_NUMBERS_UNREAD_FILES,
-    with_files: 2,
+    with_files: PYTHON_MAGIC_NUMBERS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -783,6 +791,15 @@ const TYPESCRIPT_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Each finding the TypeScript magic-numbers script reports over the two
+/// files it is given, as `path:line`.
+const TYPESCRIPT_MAGIC_NUMBERS_READ_FINDINGS: &[&str] = &[
+    "deep/nested/other.ts:2",
+    "deep/nested/other.ts:3",
+    "top.ts:2",
+    "top.ts:3",
+];
+
 /// The `magic-numbers-typescript` probe over a run that is given no file.
 const TYPESCRIPT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -791,7 +808,7 @@ const TYPESCRIPT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRu
         expected: NO_FINDINGS,
     },
     staged: TYPESCRIPT_MAGIC_NUMBERS_UNREAD_FILES,
-    with_files: 4,
+    with_files: TYPESCRIPT_MAGIC_NUMBERS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
@@ -827,6 +844,15 @@ const DART_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
     ("deep/nested/other.dart", DART_MAGIC_NUMBERS_UNREAD_SOURCE),
 ];
 
+/// Each finding the Dart magic-numbers script reports over the two files it
+/// is given, as `path:line`.
+const DART_MAGIC_NUMBERS_READ_FINDINGS: &[&str] = &[
+    "deep/nested/other.dart:3",
+    "deep/nested/other.dart:4",
+    "top.dart:3",
+    "top.dart:4",
+];
+
 /// The `magic-numbers-dart` probe over a run that is given no file.
 const DART_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
@@ -835,7 +861,7 @@ const DART_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: DART_MAGIC_NUMBERS_UNREAD_FILES,
-    with_files: 4,
+    with_files: DART_MAGIC_NUMBERS_READ_FINDINGS,
     reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
