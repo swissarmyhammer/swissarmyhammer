@@ -235,4 +235,6 @@ Call edges come from LSP. If LSP is missing or warming up, `lsp_call_edges` is e
 {"op": "rebuild index", "layer": "treesitter"}
 ```
 
-For one-off live searches, fall back to Grep/ripgrep.
+For one-off live searches, use the `files` op `grep files`. It reads the
+filesystem, honors `.gitignore`, and skips binary files. Do not shell out to
+`grep -r`.

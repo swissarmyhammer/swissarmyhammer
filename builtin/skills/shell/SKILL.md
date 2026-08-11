@@ -34,6 +34,24 @@ command again.
 | `cargo build 2>&1 \| tail -60` | `cargo build` | `get lines` on the last lines |
 | `cargo test 2>&1 \| grep error` | `cargo test` | `grep history` for `error` |
 
+## Do not search files with this shell
+
+To find text in files, use the `files` tool op `grep files`. It honors
+`.gitignore` and skips binary files.
+
+If you must run a shell search, use `rg`, never `grep -r`. `grep -r` does not
+read `.gitignore`, so it scans build directories such as `target/` and every
+binary artifact in them. `--include=*` cancels every exclusion. A trailing
+`| grep -v ./target/` filters the output only after the scan has already paid to
+read it. One such command held a core for 22 minutes where `rg` answered in
+0.044 seconds.
+
+| Instead of | Use |
+|------------|-----|
+| `grep -rn PATTERN .` | `files` op `grep files` |
+| `grep -rn PATTERN --include=* . \| grep -v ./target/` | `files` op `grep files` |
+| a shell search you cannot avoid | `rg -n PATTERN` |
+
 ## Operations
 
 ### execute command

@@ -871,6 +871,8 @@ mod tests {
             "get lines",
             "grep history",
             "no output is stored",
+            "grep files",
+            "never `grep -r`",
         ] {
             assert!(
                 description.contains(marker),
