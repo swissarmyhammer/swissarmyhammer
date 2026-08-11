@@ -508,6 +508,39 @@ fn the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_child_con
     verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_CHILD_CONFIG_PROBE);
 }
 
+/// The `magic-numbers-swift` probe beside a project that states a warning
+/// threshold of one finding.
+const SWIFT_MAGIC_NUMBERS_WARNING_THRESHOLD_PROBE: ShippedStagedPositions =
+    ShippedStagedPositions {
+        run: ShippedRun {
+            project_types: SWIFT_PROJECT_TYPES,
+            rule: SWIFT_MAGIC_NUMBERS_RULE,
+            expected: SWIFT_MAGIC_NUMBERS_STAGED_REPORTED,
+        },
+        prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+        change_purpose: "one unnamed literal beside a project warning threshold",
+        declarations: SWIFT_MAGIC_NUMBERS_STAGED,
+        staged: SWIFT_ORDINARY_POSITION_ONLY,
+        support: SWIFT_WARNING_THRESHOLD_SUPPORT_FILES,
+        reason: "the threshold makes swiftlint exit 2 with the whole report on stdout, and the \
+             script reads that status as a measured run, so the staged literal reports",
+    };
+
+/// Acceptance: the shipped Swift magic-numbers tool rule measures beside a
+/// project that states `warning_threshold:`, through the real swiftlint
+/// pipeline.
+///
+/// Measured with swiftlint 0.65.0 over the staged literal, with
+/// `warning_threshold: 1` in the project configuration: swiftlint writes 2
+/// entries to stdout — the `no_magic_numbers` finding and one
+/// `warning_threshold` entry of error severity — and exits 2. The script read
+/// each nonzero status as a broken tool and reported 0 findings, so one line
+/// in the project file switched the gate off.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_warning_threshold() {
+    verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_WARNING_THRESHOLD_PROBE);
+}
+
 /// A project `.swiftlint.yml` that switches the rule off and states another
 /// allow-list for it.
 ///

@@ -629,6 +629,24 @@ const SWIFT_CHILD_CONFIG_SUPPORT_FILES: &[(&str, &str)] = &[
     (SWIFT_OTHER_CONFIG_PATH, SWIFT_OTHER_CONFIG),
 ];
 
+/// A project `.swiftlint.yml` that states a warning threshold of one finding.
+///
+/// swiftlint counts the warnings of the whole run against this number. At the
+/// number, and over it, swiftlint adds one `warning_threshold` entry of error
+/// severity to the report and exits 2. Every finding of the run stands on
+/// stdout beside that entry. A script that reads each nonzero status as a
+/// broken tool answers no finding, so one line in the project file switches
+/// the gate off. Each of the three shipped swiftlint rules reads status 2 as a
+/// measured run.
+const SWIFT_WARNING_THRESHOLD_PROJECT_CONFIG: &str = "warning_threshold: 1\n";
+
+/// The warning-threshold project configuration staged beside a Swift probe's
+/// positions, which the work-list does NOT name.
+const SWIFT_WARNING_THRESHOLD_SUPPORT_FILES: &[(&str, &str)] = &[(
+    SWIFT_PROJECT_CONFIG_PATH,
+    SWIFT_WARNING_THRESHOLD_PROJECT_CONFIG,
+)];
+
 /// The head a Swift staged file carries: none. The project's `excluded:` list
 /// decides on the path alone, so every position holds the same bytes.
 const SWIFT_NO_HEAD: &[&str] = &[];

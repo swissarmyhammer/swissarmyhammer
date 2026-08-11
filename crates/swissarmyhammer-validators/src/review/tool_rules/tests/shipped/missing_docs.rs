@@ -1299,6 +1299,38 @@ fn the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_child_conf
     verify_shipped_staged_positions_report(&SWIFT_CHILD_CONFIG_PROBE);
 }
 
+/// The `missing-docs-swift` probe beside a project that states a warning
+/// threshold of one finding.
+const SWIFT_WARNING_THRESHOLD_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_STAGED_REPORTED,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "one undocumented public structure beside a project warning threshold",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_ORDINARY_POSITION_ONLY,
+    support: SWIFT_WARNING_THRESHOLD_SUPPORT_FILES,
+    reason: "the threshold makes swiftlint exit 2 with the whole report on stdout, and the \
+             script reads that status as a measured run, so the staged declarations report",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule measures beside a
+/// project that states `warning_threshold:`, through the real swiftlint
+/// pipeline.
+///
+/// Measured with swiftlint 0.65.0 over the staged declarations, with
+/// `warning_threshold: 1` in the project configuration: swiftlint writes 3
+/// entries to stdout — the 2 `missing_docs` findings and one
+/// `warning_threshold` entry of error severity — and exits 2. The script read
+/// each nonzero status as a broken tool and reported 0 findings, so one line
+/// in the project file switched the gate off.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_warning_threshold() {
+    verify_shipped_staged_positions_report(&SWIFT_WARNING_THRESHOLD_PROBE);
+}
+
 /// One undocumented type that declares an inherited type, and one that
 /// declares none, each holding one undocumented stored property.
 ///

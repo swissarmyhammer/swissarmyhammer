@@ -52,7 +52,7 @@ tool:
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
-    if [ "$status" -ne 0 ]; then
+    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
         exit 0
       fi
@@ -189,6 +189,63 @@ configurations and exits 0.
 The acceptance test
 `the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_child_config`
 holds that behaviour.
+
+## A project warning threshold, and why the script reads status 2
+
+swiftlint counts the warnings of a run against the `warning_threshold:` key of
+the project configuration. At that number, and over it, swiftlint adds one
+entry of `rule_id: warning_threshold` and error severity to the report, and it
+exits 2. Every finding of the run stands on stdout beside that entry.
+
+Measured over one file that holds an undocumented `public struct` and one
+undocumented stored property:
+
+| the project `.swiftlint.yml` | swiftlint | the script |
+|---|---|---|
+| no file | exit 0, 2 entries | 2 findings, exit 0 |
+| `warning_threshold: 5` | exit 0, 2 entries | 2 findings, exit 0 |
+| `warning_threshold: 1` | exit 2, 3 entries | 2 findings, exit 0 |
+
+The script tested `[ "$status" -ne 0 ]`, so it read status 2 as a broken tool.
+It then reported 0 findings and exited 1 for the third row, and the engine read
+that exit as a broken tool. One line in the project file switched the gate off.
+The script now tests `[ "$status" -ne 0 ] && [ "$status" -ne 2 ]`, and the
+third row keeps the 2 findings of the first row.
+
+The `jq` filter selects `rule_id == "missing_docs"`, so the `warning_threshold`
+entry never becomes a finding.
+
+Status 2 states a measured run, and no broken run states it. Each status
+swiftlint 0.65.0 answers with was measured against the child configuration this
+script writes:
+
+| what the run is | status | stdout |
+|---|---|---|
+| a file whose every public item carries a doc comment | 0 | 0 entries |
+| one file that holds 2 undocumented public items | 0 | 2 entries |
+| the same file beside `warning_threshold: 1` | 2 | 3 entries |
+| one file whose only line is `public func oops( {` | 0 | 1 entry |
+| a path that holds no file | 1 | empty |
+| a `--config` path that holds no file | 134 | empty |
+| a project configuration that holds `child_config:` | 134 | empty |
+| a command-line option that does not exist | 64 | empty |
+
+The one run of status 2 wrote 3 entries. Each run that broke wrote an empty
+stdout, and its status was 1, 134 or 64. So the script measures at status 0 and
+at status 2, and it breaks at every other status.
+
+A finding of error severity is the other shape that makes swiftlint exit 2, and
+a project cannot reach it. The child states `warning: [open, public]` and no
+`error:` list, and a child block replaces the parent block whole. Measured with
+a project configuration that states `missing_docs:` with
+`error: [open, public]`, over the same file: swiftlint exits 0 and writes 2
+entries of warning severity. Measured with a child that states the same
+`error:` list instead: swiftlint exits 2 and writes 2 entries of error
+severity.
+
+The acceptance test
+`the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_warning_threshold`
+holds the run to the 2 findings of the third row of the first table.
 
 ## The rule owns its own options
 
