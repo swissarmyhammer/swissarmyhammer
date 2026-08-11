@@ -196,3 +196,16 @@ fn execute_streams_planned_pair_and_findings_events() {
     );
     assert_eq!(events.len(), 4);
 }
+
+/// An empty plan runs nothing, so it reports the default outcome and
+/// raises no event at all.
+#[test]
+fn execute_emits_no_planned_event_when_there_are_no_runs() {
+    let repo = tempfile::tempdir().unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let outcome = execute_tool_runs(&[], repo.path(), Some(&tx));
+
+    assert_eq!(outcome, ToolOutcome::default());
+    assert!(rx.try_recv().is_err(), "no events for an empty plan");
+}
