@@ -29,10 +29,17 @@ tool:
 
 # Missing Documentation — Rust
 
-`cargo clippy` reports every public item without documentation. `missing_docs`
-is a rustc lint, and it is off by default. The `-W missing_docs` flag turns it
-on, so the rule owns its own lint level and never reads the crate's own lint
-attributes for this check.
+`cargo clippy` reports a public item with no documentation. It stays silent
+about a private item, about an item inside a private `mod`, about a
+`#[cfg(test)]` item, about a trait `impl` item and about a `#[doc(hidden)]`
+item. Measured on one probe crate that holds each shape: the run reports 2
+findings, the undocumented `pub fn value` and the undocumented
+`pub fn set_value`. The section "What rustc carves out for itself" below states
+each measurement.
+
+`missing_docs` is a rustc lint, and it is off by default. The `-W missing_docs`
+flag turns it on, so the rule owns its own lint level and never reads the
+crate's own lint attributes for this check.
 
 The scope is `workspace` because cargo lints a package, never a loose file.
 The engine keeps only the findings in the changed files.
@@ -65,10 +72,11 @@ command stays silent about that file, and the same command with
 
 ## `sort -u` collapses a repeated finding
 
-Cargo compiles a package one time for each way the workspace uses it, and
+Cargo compiles a package one time for each way the workspace names it, and
 clippy writes the diagnostics of each compilation. Measured on the probe
-workspace above: `shared` is a dependency and a build-dependency of the root
-package, so `shared/src/lib.rs:3` arrives two times. `sort -u` leaves one.
+workspace above, where the root package names `shared` as a dependency and as a
+build-dependency: cargo compiles `shared` two times, and `shared/src/lib.rs:3`
+arrives two times. `sort -u` leaves one.
 
 Measured on this workspace: the run reports 1262 lines, and `sort -u` leaves
 1179. The 83 lines it removes repeat 77 findings, which stand in 18 files.
@@ -146,10 +154,11 @@ findings of that run.
 So a public getter and a public setter each need a doc comment. The recourse is
 the inline suppression at the end of this file.
 
-The lint also asks each compiled target for its own crate documentation.
-Measured: a `build.rs` with no `//!` comment reports `missing documentation for
-the crate` at line 1. A build script is a file the author writes, so that
-finding stands.
+The lint also asks a compiled target for its own crate documentation. Measured
+on a probe crate whose `src/lib.rs` and whose `build.rs` each hold no `//!`
+comment: the run reports 2 findings, `missing documentation for the crate` at
+line 1 of each file. A build script is a file the author writes, so that finding
+stands.
 
 ## How to exempt one item
 
@@ -161,8 +170,11 @@ finding of the run.
 
 ## The rule declares no install commands
 
-Clippy is a component of the Rust toolchain, not a package with its own
-version, so no install command can pin it. The `doctor.fix_hint` states
+Clippy ships as a `rustup` component of the Rust toolchain, and no package holds
+it. An install command pins a package version, so no install command can pin
+clippy. Clippy has a version of its own: `cargo clippy --version` reports
+`clippy 0.1.97 (8bab26f4f6 2026-07-14)`, and the `check_version_command` in the
+frontmatter reads it. The `doctor.fix_hint` states
 `rustup component add clippy` instead, which installs it for the toolchain the
 project already uses. `sah doctor` shows that hint as the fix; the install
 lifecycle never runs it.
