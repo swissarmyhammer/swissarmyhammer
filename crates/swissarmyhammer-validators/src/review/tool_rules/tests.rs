@@ -79,13 +79,20 @@ const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
 /// reads.
 const DART_MISSING_DOCS_RULE: &str = "missing-docs-dart";
 
+/// The shipped missing-docs tool rule for Go. revive carves out a generated
+/// file, a `_test.go` file and a `package main` file for itself, so three more
+/// acceptance tests drive it end to end: one names every item its fail fixture
+/// leaves undocumented, one holds those three carve-outs to the positions
+/// revive reads, and one holds the run to breaking on a file it cannot parse.
+const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
+
 /// Every shipped missing-docs tool rule, with the project type it serves
 /// and the prompt rules it supersedes.
 const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("rust", RUST_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("python", "missing-docs-python", SUPERSEDES_MISSING_DOCS),
     ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
-    ("go", "missing-docs-go", SUPERSEDES_MISSING_DOCS),
+    ("go", GO_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),
     ("flutter", DART_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
 ];

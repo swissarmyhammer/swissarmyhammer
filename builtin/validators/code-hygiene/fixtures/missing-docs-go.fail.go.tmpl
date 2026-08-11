@@ -1,8 +1,8 @@
 // Package fixtures holds the Go fixtures of the `missing-docs-go` tool rule.
 //
-// This file holds one undocumented exported item of every kind the passing
-// fixture documents. The tool must report each one. A tool upgrade that stops
-// reporting a kind makes the doctor mark the rule unusable.
+// This file holds one undocumented exported item of every kind revive reports.
+// The tool must report each one. A tool upgrade that stops reporting a kind
+// makes the doctor mark the rule unusable.
 package fixtures
 
 // DocumentedNeighbor is a documented exported function, so only the items
@@ -14,3 +14,23 @@ type UndocumentedType struct{}
 func (t UndocumentedType) UndocumentedMethod() {}
 
 func UndocumentedFunction() {}
+
+const UndocumentedConst = "kept"
+
+var UndocumentedVar = "kept"
+
+// a documented function whose comment does not open with its own name
+func WrongCommentForm() {}
+
+// Accessors holds one getter and one setter. The `missing-docs` prompt rule
+// carves both out as "Simple getters/setters with self-explanatory names".
+// revive has no setting that restores that carve-out, so both report.
+type Accessors struct{ value int }
+
+func (a Accessors) Value() int { return a.value }
+
+func (a *Accessors) SetValue(next int) { a.value = next }
+
+// Deprecated: OnlyDeprecated carries a deprecation note and no doc comment, so
+// revive reads it as undocumented.
+func OnlyDeprecated() {}

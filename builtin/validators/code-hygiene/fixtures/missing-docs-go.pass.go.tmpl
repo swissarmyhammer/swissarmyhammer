@@ -1,8 +1,8 @@
 // Package fixtures holds the Go fixtures of the `missing-docs-go` tool rule.
 //
-// Every exported item in this file has documentation. The tool must report
-// nothing. A tool upgrade that reports one anyway makes the doctor mark the
-// rule unusable.
+// The tool must report nothing here. Each exported item carries a doc comment,
+// or it stands behind a carve-out revive makes for itself. A tool upgrade that
+// reports one of them makes the doctor mark the rule unusable.
 package fixtures
 
 // DocumentedType is a documented exported type.
@@ -13,3 +13,48 @@ func (t DocumentedType) DocumentedMethod() {}
 
 // DocumentedFunction is a documented exported function.
 func DocumentedFunction() {}
+
+// DocumentedConst is a documented exported constant.
+const DocumentedConst = "kept"
+
+// DocumentedVar is a documented exported variable.
+var DocumentedVar = "kept"
+
+// CommonMethods carries the six method names revive carves out. revive reads
+// the name and the receiver, and it reads neither the signature nor the body,
+// so every method below stays undocumented on purpose. A revive release that
+// drops one of the six names fails this fixture.
+type CommonMethods struct{}
+
+func (c CommonMethods) Error() string { return "" }
+
+func (c CommonMethods) String() string { return "" }
+
+func (c CommonMethods) Read(buffer []byte) (int, error) { return 0, nil }
+
+func (c CommonMethods) Write(buffer []byte) (int, error) { return 0, nil }
+
+func (c CommonMethods) Unwrap() error { return nil }
+
+func (c CommonMethods) ServeHTTP(response any, request any) {}
+
+// DeprecatedWithDoc is documented, and it is deprecated as well.
+//
+// Deprecated: a deprecation note under a doc comment leaves the item
+// documented. A deprecation note ON ITS OWN does not, which is the shape the
+// failing fixture holds.
+func DeprecatedWithDoc() {}
+
+// The block below holds the inline suppression the rule body names. It is the
+// one way to exempt an exported item. A blank line stands under this prose, so
+// the prose is not the doc comment of the function, and the function is
+// therefore undocumented. Only the suppression keeps revive silent about it.
+
+//revive:disable-next-line:exported
+func SuppressedFunction() {}
+
+// Go carves out an unexported item by capitalization, so revive never reads
+// the two below.
+type unexportedType struct{}
+
+func unexportedFunction() unexportedType { return unexportedType{} }

@@ -466,6 +466,105 @@ fn fail_fixture_source_line(verified: &VerifiedFinding, source: &[&str]) -> Stri
         .to_string()
 }
 
+/// The same declarations staged at several positions, and which of those
+/// positions one missing-docs tool rule's real pipeline must report.
+///
+/// The doctor materializes one fixture as a loose file with no directory, so
+/// no fixture can carry a position and no fixture pair can prove a carve-out
+/// the tool decides by path or by header. A probe of several positions can:
+/// every file holds the same declarations, so the position is the only thing
+/// that tells one file of the run from another.
+struct ShippedStagedPositions {
+    /// The project types the rule is planned for.
+    project_types: &'static [&'static str],
+
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// What the work-list states the change is for.
+    change_purpose: &'static str,
+
+    /// The declarations every staged file holds, each one undocumented.
+    declarations: &'static str,
+
+    /// Each staged position: the path it takes in the probe repository, and
+    /// the fragments that stand before the shared declarations in that file,
+    /// in the order they are written.
+    ///
+    /// A rule that decides on the path alone takes no fragment at any
+    /// position. A rule that reads the head of the file carries that head
+    /// here, one fragment for each thing the head states, so two positions
+    /// that share a fragment share it by reference and cannot drift apart.
+    staged: &'static [(&'static str, &'static [&'static str])],
+
+    /// The file of each finding the run must report, in the order the run
+    /// reports them.
+    expected: &'static [&'static str],
+
+    /// Why those files report and the others stay silent.
+    reason: &'static str,
+}
+
+/// Drives every staged position of `probe` through the real tool pipeline, and
+/// holds the run to reporting exactly the files the probe names.
+fn verify_shipped_staged_positions_report(probe: &ShippedStagedPositions) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.project_types, probe.rule);
+    let repo = tempfile::tempdir().unwrap();
+    let staged: Vec<(&str, String)> = probe
+        .staged
+        .iter()
+        .map(|(path, head)| (*path, format!("{}{}", head.concat(), probe.declarations)))
+        .collect();
+    for (path, content) in &staged {
+        let file = repo.path().join(path);
+        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
+        std::fs::write(&file, content).unwrap();
+    }
+    // A tool prints the resolved path of each file it reads, and on macOS a
+    // temporary directory stands behind a symbolic link. The engine strips the
+    // repository root off each reported path, so the root it is given has to be
+    // the resolved form or no path matches.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = tool_rule_work(
+        probe.change_purpose,
+        CODE_HYGIENE_SET,
+        [MISSING_DOCS_PROMPT_RULE.to_string(), probe.rule.to_string()],
+        staged
+            .iter()
+            .map(|(path, content)| (*path, content.as_str())),
+    );
+
+    let plan = plan_tool_rules(&work, &loader, probe.project_types, None);
+
+    let run = required_run(&plan, probe.rule);
+    assert_eq!(
+        run.files(),
+        staged
+            .iter()
+            .map(|(path, _)| (*path).to_string())
+            .collect::<Vec<String>>(),
+        "the run must carry every staged position, so what the tool reads is what decides"
+    );
+
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+
+    assert!(
+        outcome.errors().is_empty(),
+        "the shipped pipeline must not break; errors: {:?}",
+        outcome.errors()
+    );
+    let reported: Vec<&str> = outcome
+        .findings()
+        .iter()
+        .map(|verified| verified.finding.file.as_str())
+        .collect();
+    assert_eq!(reported, probe.expected, "{}", probe.reason);
+}
+
 /// The materialized name of the `complexity-typescript` fail fixture.
 const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
 
@@ -971,13 +1070,34 @@ const DART_STAGED_TEST_PATH: &str = "test/staged_test.dart";
 /// carves generated code out, so only the exclude list keeps this file silent.
 const DART_STAGED_GENERATED_PATH: &str = "lib/staged.g.dart";
 
+/// The head a Dart staged file carries: none. `dart analyze` decides on the
+/// path alone, so all three files hold the same bytes.
+const DART_NO_HEAD: &[&str] = &[];
+
 /// Each position the staged class is written to, in the order the work-list
 /// holds them.
-const DART_STAGED_PATHS: &[&str] = &[
-    DART_STAGED_LIBRARY_PATH,
-    DART_STAGED_TEST_PATH,
-    DART_STAGED_GENERATED_PATH,
+const DART_STAGED_POSITIONS: &[(&str, &[&str])] = &[
+    (DART_STAGED_LIBRARY_PATH, DART_NO_HEAD),
+    (DART_STAGED_TEST_PATH, DART_NO_HEAD),
+    (DART_STAGED_GENERATED_PATH, DART_NO_HEAD),
 ];
+
+/// The file of each finding the Dart run must report: the library file, once
+/// for its class and once for its method.
+const DART_STAGED_REPORTED: &[&str] = &[DART_STAGED_LIBRARY_PATH, DART_STAGED_LIBRARY_PATH];
+
+/// The staged Dart positions, and the one of them the real `dart analyze`
+/// pipeline must report.
+const DART_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    project_types: &["flutter"],
+    rule: DART_MISSING_DOCS_RULE,
+    change_purpose: "one undocumented public class, staged in three positions",
+    declarations: DART_STAGED_LIBRARY,
+    staged: DART_STAGED_POSITIONS,
+    expected: DART_STAGED_REPORTED,
+    reason: "the file under `lib/` reports its class and its method, and the test \
+             file and the generated file report nothing",
+};
 
 /// Acceptance: the shipped Dart missing-docs tool rule reports the file under
 /// `lib/` and stays silent on the test file and the generated file, through
@@ -995,60 +1115,256 @@ const DART_STAGED_PATHS: &[&str] = &[
 /// reporting and three reporting is therefore the list and nothing else.
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_reads_only_the_package_library() {
+    verify_shipped_staged_positions_report(&DART_MISSING_DOCS_POSITIONS_PROBE);
+}
+
+/// The materialized name of the `missing-docs-go` fail fixture.
+const GO_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-go.fail.go";
+
+/// Where the `missing-docs-go` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const GO_MISSING_DOCS_FIXTURE_PATH: &str = "src/missing_docs_go_fail.go";
+
+/// Every item the `missing-docs-go` fail fixture leaves undocumented, as
+/// revive's `exported` rule spells it inside the message it reports.
+///
+/// Each entry carries the KIND word beside the name, because the message
+/// carries it, so an entry states which declaration revive read and not only
+/// what it is called.
+///
+/// The first five hold the five kinds the rule body claims — a type, a method,
+/// a function, a constant and a variable.
+///
+/// `WrongCommentForm` and `OnlyDeprecated` hold the two shapes revive reads as
+/// undocumented although a comment stands above them: a doc comment that does
+/// not open with the item's own name, and a `Deprecated:` note standing alone.
+///
+/// The getter and the setter are the load-bearing pair. The `missing-docs`
+/// prompt rule carves out "Simple getters/setters with self-explanatory
+/// names", and revive takes no option that restores the carve-out:
+/// `disableChecksOnMethods` turns off EVERY method check, which is far wider.
+/// The rule body states that a getter and a setter each report, and these two
+/// entries hold revive to the statement.
+const GO_MISSING_DOCS_FAIL_ITEMS: &[&str] = &[
+    "type UndocumentedType",
+    "method UndocumentedType.UndocumentedMethod",
+    "function UndocumentedFunction",
+    "const UndocumentedConst",
+    "var UndocumentedVar",
+    "function WrongCommentForm",
+    "method Accessors.Value",
+    "method Accessors.SetValue",
+    "function OnlyDeprecated",
+];
+
+/// The `missing-docs-go` fail fixture, and every undocumented exported item
+/// the real revive pipeline must report inside it.
+const GO_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["go"],
+    rule: GO_MISSING_DOCS_RULE,
+    fixture: GO_MISSING_DOCS_FAIL_FIXTURE,
+    path: GO_MISSING_DOCS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    expected: GO_MISSING_DOCS_FAIL_ITEMS,
+    noun: "undocumented exported item",
+};
+
+/// Acceptance: the shipped Go missing-docs tool rule reports every
+/// undocumented exported item its fail fixture holds, through the real revive
+/// pipeline.
+///
+/// An item is held to the CLAIM its finding carries, because revive spells the
+/// kind and the name inside the message it reports.
+///
+/// The count is the other half, and it is what a silent run cannot fake. The
+/// pass fixture holds six undocumented methods revive carves out by name, so a
+/// run that reported one of them would fail the pair; holding this run to
+/// exactly these nine states the same silence from the other side.
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_reports_every_fail_fixture_item() {
+    verify_shipped_fail_fixture_reports_each(
+        &GO_MISSING_DOCS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an undocumented type, method, function, constant, variable, getter and setter",
+                CODE_HYGIENE_SET,
+                [
+                    MISSING_DOCS_PROMPT_RULE.to_string(),
+                    GO_MISSING_DOCS_RULE.to_string(),
+                ],
+                [(GO_MISSING_DOCS_FIXTURE_PATH, content)],
+            )
+        },
+        |verified, _source| verified.finding.claim.clone(),
+        |reported, item| reported.contains(item),
+    );
+}
+
+/// One undocumented exported type, and one undocumented method on it.
+const GO_STAGED_DECLARATIONS: &str = concat!(
+    "type StagedType struct{}\n",
+    "\n",
+    "func (s StagedType) StagedMethod() {}\n"
+);
+
+/// The package clause a library file carries.
+const GO_STAGED_PACKAGE_CLAUSE: &str = "package staged\n\n";
+
+/// The package clause a command file carries. revive's `exported` rule reads
+/// no file of `package main`, because a command exports nothing to a caller
+/// outside itself.
+const GO_MAIN_PACKAGE_CLAUSE: &str = "package main\n\n";
+
+/// The generated-code header the Go convention defines, with the blank line
+/// that separates it from what follows.
+///
+/// This one line is the whole of what revive reads to know a file is
+/// generated. The name of the file says nothing.
+const GO_GENERATED_HEADER: &str = "// Code generated by the sah probe. DO NOT EDIT.\n\n";
+
+/// The ordinary position: a library file with no generated header, and a name
+/// that is not a test name. This is the one file of the four that must report.
+const GO_STAGED_ORDINARY_PATH: &str = "staged.go";
+
+/// The test position. revive's `exported` rule skips a file whose name ends in
+/// `_test.go`, and it skips the whole file rather than the test functions in
+/// it, so this file must stay silent.
+const GO_STAGED_TEST_PATH: &str = "staged_test.go";
+
+/// The generator position. The name carries the protobuf compiler's suffix and
+/// the file carries the generated header, so this file must stay silent.
+const GO_STAGED_GENERATED_PATH: &str = "staged.pb.go";
+
+/// The command position. It stands in a directory of its own, which is where
+/// a Go command stands, so one directory never holds two package names.
+const GO_STAGED_MAIN_PATH: &str = "cmd/probe/main.go";
+
+/// The head of the ordinary file and of the test file: the library package
+/// clause and nothing else.
+const GO_LIBRARY_HEAD: &[&str] = &[GO_STAGED_PACKAGE_CLAUSE];
+
+/// The head of the generated file: the generated header, then the SAME library
+/// package clause the two files above carry.
+const GO_GENERATED_HEAD: &[&str] = &[GO_GENERATED_HEADER, GO_STAGED_PACKAGE_CLAUSE];
+
+/// The head of the command file: the `main` package clause alone.
+const GO_MAIN_HEAD: &[&str] = &[GO_MAIN_PACKAGE_CLAUSE];
+
+/// Each position the staged type is written to, with the head that file
+/// carries above the shared declarations.
+///
+/// The ordinary file and the test file hold the same bytes, so their NAMES are
+/// the only difference. The generated file adds the header line and nothing
+/// else, so that LINE is its only difference. The command file changes the
+/// package clause and nothing else, so that CLAUSE is its only difference.
+const GO_STAGED_POSITIONS: &[(&str, &[&str])] = &[
+    (GO_STAGED_ORDINARY_PATH, GO_LIBRARY_HEAD),
+    (GO_STAGED_TEST_PATH, GO_LIBRARY_HEAD),
+    (GO_STAGED_GENERATED_PATH, GO_GENERATED_HEAD),
+    (GO_STAGED_MAIN_PATH, GO_MAIN_HEAD),
+];
+
+/// The file of each finding the Go run must report: the ordinary file, once
+/// for its type and once for its method.
+const GO_STAGED_REPORTED: &[&str] = &[GO_STAGED_ORDINARY_PATH, GO_STAGED_ORDINARY_PATH];
+
+/// The staged Go positions, and the one of them the real revive pipeline must
+/// report.
+const GO_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    project_types: &["go"],
+    rule: GO_MISSING_DOCS_RULE,
+    change_purpose: "one undocumented exported type, staged in four positions",
+    declarations: GO_STAGED_DECLARATIONS,
+    staged: GO_STAGED_POSITIONS,
+    expected: GO_STAGED_REPORTED,
+    reason: "the ordinary library file reports its type and its method, and the \
+             test file, the generated file and the command file report nothing",
+};
+
+/// Acceptance: the shipped Go missing-docs tool rule reports the ordinary
+/// library file and stays silent on the test file, the generated file and the
+/// command file, through the real revive pipeline.
+///
+/// This is the half the fixture pair cannot reach. The doctor materializes one
+/// fixture as a loose file under a name of its own, in a package of its own, so
+/// no fixture can carry a test name, a generated header, or a `main` package
+/// clause.
+///
+/// Each of the three carve-outs is a DEFAULT of revive, and a default is what a
+/// later edit can take away. `ignoreGeneratedHeader = true` makes revive ignore
+/// the header rather than honour it, so a config that states it reports every
+/// exported item of every generated file. This test fails the moment the config
+/// states it.
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_reads_neither_a_generated_a_test_nor_a_command_file() {
+    verify_shipped_staged_positions_report(&GO_MISSING_DOCS_POSITIONS_PROBE);
+}
+
+/// A Go file that does not parse: the parameter list of `Broken` never closes.
+const GO_UNPARSABLE_SOURCE: &str = concat!("package staged\n", "\n", "func Broken( {\n");
+
+/// Where the unparsable file stands inside the probe repository.
+const GO_UNPARSABLE_PATH: &str = "broken.go";
+
+/// What revive puts at the front of the failure it writes for a file it could
+/// not parse. The run's error detail must carry it, so the agent reading the
+/// error learns which file broke.
+const GO_INVALID_FILE_PREFIX: &str = "invalid file";
+
+/// Acceptance: the shipped Go missing-docs tool rule BREAKS on a Go file it
+/// cannot parse, through the real revive pipeline.
+///
+/// revive exits 0 for such a file and reports the failure with an empty
+/// `RuleName`, under the `validity` category rather than under `exported`. A
+/// pipe that selected the `exported` findings alone therefore dropped it, and
+/// the file read as clean — a run answering zero for a reason other than a
+/// clean file. The script counts the failures that belong to no rule, writes
+/// each one to stderr, and exits nonzero.
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
     let loader = builtin_loader();
-    let project_types = ["flutter"];
-    require_tool_installed(&loader, &project_types, DART_MISSING_DOCS_RULE);
+    let project_types = ["go"];
+    require_tool_installed(&loader, &project_types, GO_MISSING_DOCS_RULE);
     let repo = tempfile::tempdir().unwrap();
-    for path in DART_STAGED_PATHS {
-        let file = repo.path().join(path);
-        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
-        std::fs::write(&file, DART_STAGED_LIBRARY).unwrap();
-    }
+    std::fs::write(repo.path().join(GO_UNPARSABLE_PATH), GO_UNPARSABLE_SOURCE).unwrap();
     let repo_root = repo
         .path()
         .canonicalize()
         .expect("resolve the probe repository path");
     let work = tool_rule_work(
-        "one undocumented public class, staged in three positions",
+        "a Go file the parser cannot read",
         CODE_HYGIENE_SET,
         [
             MISSING_DOCS_PROMPT_RULE.to_string(),
-            DART_MISSING_DOCS_RULE.to_string(),
+            GO_MISSING_DOCS_RULE.to_string(),
         ],
-        DART_STAGED_PATHS
-            .iter()
-            .map(|path| (*path, DART_STAGED_LIBRARY)),
+        [(GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE)],
     );
-
     let plan = plan_tool_rules(&work, &loader, &project_types, None);
-
-    let run = required_run(&plan, DART_MISSING_DOCS_RULE);
-    assert_eq!(
-        run.files(),
-        DART_STAGED_PATHS
-            .iter()
-            .map(|path| path.to_string())
-            .collect::<Vec<String>>(),
-        "the run must carry every staged position, so the exclude list is what decides"
-    );
+    let run = required_run(&plan, GO_MISSING_DOCS_RULE);
 
     let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
 
     assert!(
-        outcome.errors().is_empty(),
-        "the shipped pipeline must not break; errors: {:?}",
-        outcome.errors()
+        outcome.findings().is_empty(),
+        "a file revive could not read judges nothing, so the run must report no \
+         finding; got {:?}",
+        outcome.findings()
     );
-    let reported: Vec<&str> = outcome
-        .findings()
+    let details: Vec<&str> = outcome
+        .errors()
         .iter()
-        .map(|verified| verified.finding.file.as_str())
+        .map(|error| error.detail())
         .collect();
     assert_eq!(
-        reported,
-        [DART_STAGED_LIBRARY_PATH, DART_STAGED_LIBRARY_PATH],
-        "the file under `lib/` reports its class and its method, and the test \
-         file and the generated file report nothing"
+        details.len(),
+        1,
+        "the run must report exactly one tool error; got {details:?}"
+    );
+    assert!(
+        details[0].contains(GO_INVALID_FILE_PREFIX) && details[0].contains(GO_UNPARSABLE_PATH),
+        "the error must name the file revive could not read; got '{}'",
+        details[0]
     );
 }
 
