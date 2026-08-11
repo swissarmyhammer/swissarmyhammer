@@ -126,6 +126,13 @@ const TYPESCRIPT_MAGIC_NUMBERS_RULE: &str = "magic-numbers-typescript";
 /// unnamed.
 const GO_MAGIC_NUMBERS_RULE: &str = "magic-numbers-go";
 
+/// The shipped magic-numbers tool rule for Swift. Its value allow-list carries
+/// `100`, and `swiftlint` reads the shift OPERATOR, so this is the one rule of
+/// the four that expresses the shift carve-out. A second acceptance test drives
+/// its fail fixture end to end and names every line the fixture holds unnamed,
+/// the edge of that carve-out included.
+const SWIFT_MAGIC_NUMBERS_RULE: &str = "magic-numbers-swift";
+
 /// Every shipped magic-numbers tool rule, with the project type it serves.
 ///
 /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
@@ -143,7 +150,7 @@ const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
         SUPERSEDES_MAGIC_NUMBERS,
     ),
     ("go", GO_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
-    ("swift", "magic-numbers-swift", SUPERSEDES_MAGIC_NUMBERS),
+    ("swift", SWIFT_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
 ];
 
 /// The shipped complexity tool rule for Rust, the one the pipeline

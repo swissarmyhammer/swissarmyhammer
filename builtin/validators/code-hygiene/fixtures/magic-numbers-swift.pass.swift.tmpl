@@ -3,9 +3,9 @@
 // Every position the failing fixture leaves unnamed — a condition, a switch
 // case, an operation, and a call argument — reads a named constant here, and the
 // rest of the file holds each context the rule allows: the carve-out values, a
-// stored property, a type property, an enumeration raw value, and a default
-// parameter. The tool must report nothing. A tool upgrade that reports one
-// anyway makes the doctor mark the rule unusable.
+// stored property, a type property, an enumeration raw value, a default
+// parameter, and a shift. The tool must report nothing. A tool upgrade that
+// reports one anyway makes the doctor mark the rule unusable.
 
 /// The status code the condition below reads.
 let notFoundStatus = 404
@@ -77,4 +77,15 @@ public enum Tier: Int {
     case basic = 10
     /// The second tier.
     case premium = 20
+}
+
+/// Shift left by a conventional byte width, the `<< 8` the prompt rule carves
+/// out. swiftlint reads the shift operator, so neither operand reports.
+public func packed(word: Int) -> Int {
+    return word << 8
+}
+
+/// Shift right by the same width, the other half of the same carve-out.
+public func unpacked(word: Int) -> Int {
+    return word >> 8
 }

@@ -1105,6 +1105,86 @@ fn the_shipped_go_magic_numbers_tool_rule_reports_every_fail_fixture_value() {
     );
 }
 
+/// The materialized name of the `magic-numbers-swift` fail fixture.
+const SWIFT_MAGIC_NUMBERS_FAIL_FIXTURE: &str = "magic-numbers-swift.fail.swift";
+
+/// Where the `magic-numbers-swift` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const SWIFT_MAGIC_NUMBERS_FIXTURE_PATH: &str = "Sources/MagicNumbersSwiftFail.swift";
+
+/// Every line the `magic-numbers-swift` fail fixture leaves unnamed, trimmed as
+/// the fixture writes it.
+///
+/// A line, and not a value, because `no_magic_numbers` reports one message —
+/// `Magic numbers should be replaced by named constants` — for every literal,
+/// so the claim never spells which one it read.
+///
+/// `return word << 8 | 1` is the load-bearing entry. The `magic-numbers` prompt
+/// rule carves out "conventional values (a `<< 8`, `100` for percent)", and this
+/// is the one rule of the four that restores BOTH halves: `allowed_numbers`
+/// carries `100`, and `swiftlint` reads the shift OPERATOR, so `word << 8` is
+/// silent while `status == 8` still reports. The carve-out reaches a whole
+/// shift and not a link of a longer unparenthesised chain, so this line is the
+/// edge of it, and this entry holds `swiftlint` to the rule body's statement.
+const SWIFT_MAGIC_NUMBERS_FAIL_LINES: &[&str] = &[
+    "if status == 404 {",
+    "case 20:",
+    "return size * 4096",
+    "return schedule(delayMillis: 250)",
+    "return word << 8 | 1",
+];
+
+/// The `magic-numbers-swift` fail fixture, and every unnamed literal the real
+/// swiftlint pipeline must report inside it.
+const SWIFT_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["swift"],
+    rule: SWIFT_MAGIC_NUMBERS_RULE,
+    fixture: SWIFT_MAGIC_NUMBERS_FAIL_FIXTURE,
+    path: SWIFT_MAGIC_NUMBERS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    expected: SWIFT_MAGIC_NUMBERS_FAIL_LINES,
+    noun: "line holding an unnamed literal",
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule reports every unnamed
+/// literal its fail fixture holds, through the real swiftlint pipeline.
+///
+/// A literal is held to the SOURCE LINE its finding stands on, because
+/// `no_magic_numbers` writes one message for every literal and never spells the
+/// value it read.
+///
+/// The count is the other half. The pass fixture holds `100` for percent, every
+/// declaration position the configuration allows, and `word << 8` beside
+/// `word >> 8`, so a run that reported one of them would fail the pair; holding
+/// this run to exactly these five states the same silence from the other side.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
+    verify_shipped_fail_fixture_reports_each(
+        &SWIFT_MAGIC_NUMBERS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an unnamed literal in a condition, a switch case, an operation, \
+                 a call argument, and a shift inside a longer chain",
+                CODE_HYGIENE_SET,
+                [
+                    MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+                    SWIFT_MAGIC_NUMBERS_RULE.to_string(),
+                ],
+                [(SWIFT_MAGIC_NUMBERS_FIXTURE_PATH, content)],
+            )
+        },
+        |verified, source| {
+            let line = verified.finding.line;
+            source
+                .get(line as usize - 1)
+                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
+                .trim()
+                .to_string()
+        },
+        |reported, expected| reported == expected,
+    );
+}
+
 /// Acceptance: every shipped complexity tool rule passes its fixture pair
 /// in doctor, and supersedes exactly the gates its own tool decides.
 ///
