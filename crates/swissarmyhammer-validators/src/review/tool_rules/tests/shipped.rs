@@ -9,9 +9,11 @@
 //!
 //! The tests themselves stand one module per rule family, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
-//! whole. `temp_directory` and `zero_argument` are the two modules that are
-//! not a rule family: each reads the shipped script of EVERY rule, because
-//! the contract it holds is about the set and not about one language.
+//! whole. `scope_roster`, `temp_directory` and `zero_argument` are the three
+//! modules that are not a rule family: each reads the shipped script of EVERY
+//! rule, because the contract it holds is about the set and not about one
+//! language. `scope_roster` states which of those set-wide guards reads which
+//! rule, and it holds the two scope rosters to the whole set.
 
 mod commented_code;
 mod complexity;
@@ -19,6 +21,7 @@ mod dead_code;
 mod duplication;
 mod magic_numbers;
 mod missing_docs;
+mod scope_roster;
 mod temp_directory;
 mod unused_dependencies;
 mod zero_argument;

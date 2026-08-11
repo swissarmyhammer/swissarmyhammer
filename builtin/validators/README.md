@@ -164,7 +164,14 @@ The `tool` block keys:
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and
-  the engine keeps only the findings in changed files.
+  the engine keeps only the findings in changed files. A `workspace` script
+  therefore writes no `"$@"` and no zero-argument guard: it reads `$#` as 0
+  on each run, so the guard would exit it before the tool starts and the rule
+  would report nothing for any code. That is the whole reason a `workspace`
+  rule stands outside the zero-argument guard. A coverage guard holds each
+  `workspace`-scope rule to both statements, and a third guard holds the two
+  scope rosters to the whole set of rules that carry a `run` script, so a
+  rule cannot ship with a scope that no guard reads.
 - `doctor` — the commands that show the script's tools are installed and show
   the main tool's version. Name everything the script needs (`which ruff jq`).
 - `install.commands` — the install commands, in order of preference. Pin the

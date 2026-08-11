@@ -35,13 +35,13 @@
 use super::*;
 
 /// The line that opens the guard the contract states.
-const ZERO_ARGUMENT_TEST: &str = r#"if [ "$#" -eq 0 ]; then"#;
+pub(super) const ZERO_ARGUMENT_TEST: &str = r#"if [ "$#" -eq 0 ]; then"#;
 
 /// The line the contract states stands under the test.
-const ZERO_ARGUMENT_EXIT: &str = "exit 0";
+pub(super) const ZERO_ARGUMENT_EXIT: &str = "exit 0";
 
 /// The line the contract states closes the guard.
-const ZERO_ARGUMENT_END: &str = "fi";
+pub(super) const ZERO_ARGUMENT_END: &str = "fi";
 
 /// What a shell comment opens with.
 const SHELL_COMMENT: &str = "#";
@@ -114,14 +114,14 @@ const SHELL_COMMAND_MARKS: [char; 8] = [';', '&', '|', '$', '`', '>', '<', '\\']
 /// The count is the assertion that a rule added later reaches this guard. A
 /// seventeenth `files`-scope rule breaks it, and the author then reads the
 /// contract before the rule ships.
-const FILES_SCOPE_RULE_COUNT: usize = 16;
+pub(super) const FILES_SCOPE_RULE_COUNT: usize = 16;
 
 /// What the rules of this roster have in common, for the failure message.
 const FILES_SCOPE_ROSTER: &str = "state `scope: files`";
 
 /// Every shipped `files`-scope rule, or a panic when the set ships another
 /// number of them.
-fn required_files_scope_rules(loader: &ValidatorLoader) -> Vec<ShippedToolRule> {
+pub(super) fn required_files_scope_rules(loader: &ValidatorLoader) -> Vec<ShippedToolRule> {
     required_tool_rules(loader, FILES_SCOPE_ROSTER, FILES_SCOPE_RULE_COUNT, |rule| {
         rule.scope == ToolScope::Files
     })
@@ -499,7 +499,7 @@ fn the_guard_reads_where_the_three_lines_stand() {
 }
 
 /// Whether `script` writes the three lines of the guard, wherever they stand.
-fn script_holds_the_three_lines(script: &str) -> bool {
+pub(super) fn script_holds_the_three_lines(script: &str) -> bool {
     let lines = trimmed_script_lines(script);
     [ZERO_ARGUMENT_TEST, ZERO_ARGUMENT_EXIT, ZERO_ARGUMENT_END]
         .iter()
