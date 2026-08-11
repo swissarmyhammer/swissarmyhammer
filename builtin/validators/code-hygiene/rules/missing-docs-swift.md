@@ -280,6 +280,10 @@ runs before swiftlint, and it reports 0 findings and exits 1 with
 file. That guard makes that one distinction, and no test separates the other
 3 shapes.
 
+The acceptance test
+`the_shipped_swift_missing_docs_tool_rule_stays_clean_over_a_hollow_directory`
+holds the run over that directory to no finding and no tool error.
+
 Measured over one file that holds an undocumented `public struct` and one
 undocumented stored property, beside a project `.swiftlint.yml` that states
 `swiftlint_version:`: at `0.65.0` the script reports 2 findings and exits 0; at

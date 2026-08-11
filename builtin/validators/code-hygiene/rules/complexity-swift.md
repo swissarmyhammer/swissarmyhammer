@@ -181,9 +181,9 @@ At status 2 the REPORT tells the two apart: the probe run writes a JSON array,
 and the version-mismatch run writes 0 bytes. The report makes that one
 distinction. At status 1 the report is 0 bytes for the clean run beside a
 project `excluded:` list, and 0 bytes for the run over the directory
-`hollow`, which holds no Swift file. Measured against the child configuration
-this script writes, over one file holding one function of cyclomatic
-complexity 16:
+`hollow`, which holds no Swift file. The probe file holds one function of
+cyclomatic complexity 16. Each status swiftlint 0.65.0 answers with was
+measured against the child configuration this script writes:
 
 | what the run is | status | stdout |
 |---|---|---|
@@ -217,6 +217,10 @@ guard runs before swiftlint, and it reports 0 findings and exits 1 with
 `complexity-swift cannot read src/Absent.swift` for the path that holds no
 file. That guard makes that one distinction, and no test separates the other
 3 shapes.
+
+The acceptance test
+`the_shipped_swift_complexity_tool_rule_stays_clean_over_a_hollow_directory`
+holds the run over that directory to no finding and no tool error.
 
 Measured over the same file, beside a project `.swiftlint.yml` that states
 `swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at

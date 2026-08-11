@@ -3,8 +3,9 @@
 //! A shipped-rule test drives the SHIPPED script over a probe repository and
 //! reads what the real tool reports. This module carries the shapes those
 //! tests are written in — a planned run, a fail fixture, a staged position
-//! set, a run that must break, and a run that must read nothing — and the
-//! helpers that drive each shape.
+//! set, a run that must break, a directory that holds no file the tool
+//! reads, and a run that must read nothing — and the helpers that drive each
+//! shape.
 //!
 //! The tests themselves stand one module per rule family, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
@@ -469,6 +470,76 @@ fn verify_shipped_run_breaks(probe: &ShippedBrokenRun) {
             details[0]
         );
     }
+}
+
+/// A DIRECTORY the work-list names, and the answer the run over it must give.
+///
+/// A script that tests each path with `[ ! -r "$path" ]` admits a directory,
+/// because a directory is readable. The tool then reads the directory. A
+/// directory that holds no file of the tool's own language leaves the tool
+/// nothing to judge, and the tool states that rather than reporting. This
+/// shape holds the run to answering CLEAN: no finding, and no error.
+struct ShippedHollowDirectory {
+    /// The run the directory must produce. Its `expected` names each finding
+    /// the run must report, and a directory the tool finds no file in gives
+    /// none.
+    run: ShippedRun,
+
+    /// The prompt rule the work-list names beside the tool rule, which is the
+    /// rule the tool rule supersedes.
+    prompt_rule: &'static str,
+
+    /// What the work-list states the change is for.
+    change_purpose: &'static str,
+
+    /// The directory the work-list names, as the work-list holds it. The name
+    /// meets the rule's own file pattern, because a path that pattern refuses
+    /// reaches no run at all.
+    directory: &'static str,
+
+    /// Each file staged INSIDE that directory, with the bytes it holds. These
+    /// files make the directory, and the tool reads no one of them.
+    staged: &'static [(&'static str, &'static str)],
+
+    /// Why the run answers clean.
+    reason: &'static str,
+}
+
+/// Drives the directory of `probe` through the real tool pipeline, and holds
+/// the run to reporting no error and exactly the findings the probe names.
+fn verify_shipped_hollow_directory_answers_clean(probe: &ShippedHollowDirectory) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let repo = tempfile::tempdir().unwrap();
+    stage_probe_files(repo.path(), probe.staged.iter().copied());
+    let repo_root = probe_repository_root(&repo);
+    assert!(
+        repo_root.join(probe.directory).is_dir(),
+        "the probe must stage {} as a directory, or the run measures a file",
+        probe.directory
+    );
+    let work = tool_rule_work(
+        probe.change_purpose,
+        CODE_HYGIENE_SET,
+        [probe.prompt_rule.to_string(), probe.run.rule.to_string()],
+        [(probe.directory, "")],
+    );
+    let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
+    let run = required_run(&plan, probe.run.rule);
+
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+
+    assert!(
+        outcome.errors().is_empty(),
+        "a directory the tool reads must break no run; errors: {:?}",
+        outcome.errors()
+    );
+    let reported: Vec<&str> = outcome
+        .findings()
+        .iter()
+        .map(|verified| verified.finding.file.as_str())
+        .collect();
+    assert_eq!(reported, probe.run.expected, "{}", probe.reason);
 }
 
 /// A tool rule's script driven with NO file, and the tree it must not read.

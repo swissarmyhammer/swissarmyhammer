@@ -658,6 +658,48 @@ fn the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_ABSENT_PROBE);
 }
 
+/// Where the directory that holds no Swift file stands inside the probe
+/// repository.
+///
+/// The name ends in `.swift` because the rule matches a path by that suffix,
+/// and a path the pattern refuses reaches no run at all.
+const SWIFT_MAGIC_NUMBERS_HOLLOW_PATH: &str = "Sources/Hollow.swift";
+
+/// The one file inside that directory. Its name ends in `.txt`, so swiftlint
+/// finds no Swift file under the directory it is given.
+const SWIFT_MAGIC_NUMBERS_HOLLOW_FILES: &[(&str, &str)] =
+    &[("Sources/Hollow.swift/Notes.txt", "notes\n")];
+
+/// The `magic-numbers-swift` probe over a directory that holds no Swift file.
+const SWIFT_MAGIC_NUMBERS_HOLLOW_PROBE: ShippedHollowDirectory = ShippedHollowDirectory {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: NO_FINDINGS,
+    },
+    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+    change_purpose: "a directory that holds no Swift file",
+    directory: SWIFT_MAGIC_NUMBERS_HOLLOW_PATH,
+    staged: SWIFT_MAGIC_NUMBERS_HOLLOW_FILES,
+    reason: "the guard admits the directory, swiftlint finds no Swift file under it, and the \
+             script reads swiftlint's own message and answers clean",
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule answers CLEAN over a
+/// directory that holds no Swift file, through the real swiftlint pipeline.
+///
+/// The `[ ! -r "$file" ]` guard tests each path for reading, and a directory
+/// is readable, so the guard admits it and swiftlint reads it. Measured with
+/// swiftlint 0.65.0 over such a directory: swiftlint writes 0 bytes to stdout,
+/// writes `Error: No lintable files found at paths: ...` to stderr, and
+/// exits 1. The script reads that stderr, reports no finding, and exits 0. A
+/// guard that tested for a FILE would stop the directory instead, and the run
+/// would answer one tool error over a path swiftlint reads without trouble.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_stays_clean_over_a_hollow_directory() {
+    verify_shipped_hollow_directory_answers_clean(&SWIFT_MAGIC_NUMBERS_HOLLOW_PROBE);
+}
+
 /// Every Swift file staged in the probe repository the magic-numbers script is
 /// given none of.
 const SWIFT_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[

@@ -323,6 +323,10 @@ runs before swiftlint, and it reports 0 findings and exits 1 with
 file. That guard makes that one distinction, and no test separates the other
 3 shapes.
 
+The acceptance test
+`the_shipped_swift_magic_numbers_tool_rule_stays_clean_over_a_hollow_directory`
+holds the run over that directory to no finding and no tool error.
+
 Measured over one file that holds `return status == 404`, beside a project
 `.swiftlint.yml` that states `swiftlint_version:`: at `0.65.0` the script
 reports 1 finding and exits 0; at `0.64.0`, at `99.0.0` and at `0.1.0` the
