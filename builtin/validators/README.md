@@ -132,19 +132,28 @@ The `tool` block keys:
         fi
 
     Write them above every line that runs. Only a comment, a blank line and
-    a `set` line stand over them. A guard under the first `mktemp -d` leaves
-    a directory behind; a guard under the first tool call answers after the
-    tool read the tree; and a guard in a subshell, in the body of a function
-    or in a heredoc never runs. This text and this place ARE the contract:
+    a shell option line stand over them. A shell option line opens with
+    `set` and it names one option or more, such as `set -e`, `set +e` or
+    `set -euo pipefail`. Each word under `set` opens with `-` or `+`, or it
+    is the name a long option takes. Three other `set` lines do not stand
+    over the guard: `set` alone writes every shell variable, `set -o` alone
+    writes every shell option, and a `set --` line writes the positional
+    parameters that `$#` counts. A `set` line that holds `;`, `&`, `|`, `$`
+    or a backtick runs a second command, so it does not stand over the
+    guard either. A guard under the first `mktemp -d` leaves a directory
+    behind; a guard under the first tool call answers after the tool read
+    the tree; and a guard in a subshell, in the body of a function or in a
+    heredoc never runs. This text and this place ARE the contract:
     a coverage guard reads the shipped script of each `files`-scope rule and
     holds it to both. Another shape with the same behaviour, such as
     `[ "$#" -eq 0 ] && exit 0`, does not meet the contract.
   - A script that makes a temporary directory removes it. Write
-    `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` under it. The
-    trap covers a clean run, a run with findings and a broken run alike, and
-    it leaves the exit status of the script alone. Write the same variable
-    name in every rule, and name `mktemp` in `doctor.check_command`, because
-    the script runs it.
+    `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` on the line
+    directly under it. No line stands between the two, so no statement
+    between them can exit and leave the directory. The trap covers a clean
+    run, a run with findings and a broken run alike, and it leaves the exit
+    status of the script alone. Write the same variable name in every rule,
+    and name `mktemp` in `doctor.check_command`, because the script runs it.
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and
