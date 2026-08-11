@@ -276,6 +276,7 @@ configuration this script writes:
 | one file that holds `return status == 404` | 0 | 1 entry, 385 bytes |
 | the same file beside `warning_threshold: 1` | 2 | 2 entries, 608 bytes |
 | the same file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
+| the same file beside a project `excluded:` that covers it | 1 | 0 bytes |
 | one file whose only line is `public func oops( {` | 0 | an empty array, 5 bytes |
 | a path that holds no file | 1 | 0 bytes |
 | a `--config` path that holds no file | 134 | 0 bytes |
@@ -291,12 +292,21 @@ status 1, 134, 64 or 2. Each run that measured wrote a JSON array, at status 0
 or 2.
 
 So the script accepts status 0, and it accepts status 2 only when the report
-holds a JSON array of one entry or more. It breaks at every other status, and
-it breaks at status 2 with a report of 0 bytes. Measured over one file that
-holds `return status == 404`, beside a project `.swiftlint.yml` that states
-`swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at
-`0.64.0`, at `99.0.0` and at `0.1.0` the script reports 0 findings and exits 1,
-which the engine reads as a broken tool. A script that accepted every status 2
+holds a JSON array of one entry or more. At each other status, and at status 2
+with a report of 0 bytes, the script makes one more test, on stderr. Stderr
+that holds `No lintable files found` exits 0 with no finding, and each other
+shape exits 1. That branch is how the project's `excluded:` list reaches a
+clean answer, and the section "A run whose every file the project excludes"
+above states it. Measured with a project `.swiftlint.yml` that states
+`excluded: [src]`, over one file under `src/` that holds
+`return status == 404`: swiftlint writes `Error: No lintable files found at
+paths: 'src/Magic.swift'` to stderr, writes 0 bytes to stdout, and exits 1; the
+script reports no finding and exits 0.
+
+Measured over one file that holds `return status == 404`, beside a project
+`.swiftlint.yml` that states `swiftlint_version:`: at `0.65.0` the script
+reports 1 finding and exits 0; at `0.64.0`, at `99.0.0` and at `0.1.0` the
+script reports 0 findings and exits 1, which the engine reads as a broken tool. A script that accepted every status 2
 reported 0 findings and exited 0 for each of those three values, and the engine
 read a dirty file as clean.
 

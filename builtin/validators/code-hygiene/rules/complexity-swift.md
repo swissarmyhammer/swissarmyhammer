@@ -185,10 +185,19 @@ script writes, over one file holding one function of cyclomatic complexity 16:
 | a file that holds no function over a gate | 0 | an empty array, 5 bytes |
 | the probe file | 2 | 1 entry, 413 bytes |
 | the probe file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
+| the probe file beside a project `excluded:` that covers it | 1 | 0 bytes |
 
 So the script accepts status 0, and it accepts status 2 only when the report
-holds a JSON array of one entry or more. It breaks at every other status, and
-it breaks at status 2 with a report of 0 bytes.
+holds a JSON array of one entry or more. At each other status, and at status 2
+with a report of 0 bytes, the script makes one more test, on stderr. Stderr
+that holds `No lintable files found` exits 0 with no finding, and each other
+shape exits 1. That branch is how the project's `excluded:` list reaches a
+clean answer, and the section "A run whose every file the project excludes"
+below states it. Measured with a project `.swiftlint.yml` that states
+`excluded: [src]`, over one file under `src/` that holds one function of
+cyclomatic complexity 16: swiftlint writes `Error: No lintable files found at
+paths: 'src/Complex.swift'` to stderr, writes 0 bytes to stdout, and exits 1;
+the script reports no finding and exits 0.
 
 Measured over the same file, beside a project `.swiftlint.yml` that states
 `swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at
