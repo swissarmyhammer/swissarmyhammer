@@ -53,11 +53,19 @@ for Python.
 The two carve-outs were measured against each of the six shipped language rules
 — Dart, Go, Python, Rust, Swift and TypeScript.
 
-- "Simple getters/setters with self-explanatory names" holds for none of them.
-  Each of the six reports an undocumented public getter.
-- "Obvious implementations (Display, Debug, ToString, etc.)" is not uniform.
-  Most of the six stay silent on it, and at least one reports an undocumented
-  `toString()`. Never carry this carve-out over from another language.
+- "Simple getters/setters with self-explanatory names": five of the six report
+  an undocumented public getter. Dart, Go, Python, Rust and TypeScript report
+  it. Swift reports it only when the type declares no protocol conformance. The
+  swiftlint `missing_docs` default `excludes_inherited_types: true` makes the
+  tool pass over EVERY member of a type that declares a conformance, not the
+  conformance member alone. A conformance such as `Equatable`, `Codable`,
+  `Sendable` or `Identifiable` is a usual Swift shape, so Swift stays silent for
+  most getters.
+- "Obvious implementations (Display, Debug, ToString, etc.)": four of the six
+  stay silent on it. Dart, Go, Python and Rust stay silent. TypeScript reports
+  an undocumented `toString()` and an undocumented `valueOf()`. Swift stays
+  silent inside a conforming type, for the reason above. Never carry this
+  carve-out over from another language.
 
 Run the language rule over the item to check either carve-out. What it reports
 is the whole answer.
