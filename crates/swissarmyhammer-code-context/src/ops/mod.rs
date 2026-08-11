@@ -2,7 +2,9 @@
 
 pub mod lsp_helpers;
 
+pub mod find_commented_code;
 pub mod find_duplicates;
+pub mod find_duplication;
 pub mod get_blastradius;
 pub mod get_callgraph;
 pub mod get_code_actions;
@@ -21,4 +23,5 @@ pub mod query_ast;
 pub mod search_code;
 pub mod search_symbol;
 pub mod status;
+pub mod workspace_path;
 pub mod workspace_symbol_live;

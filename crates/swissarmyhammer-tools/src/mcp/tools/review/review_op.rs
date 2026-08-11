@@ -280,7 +280,8 @@ async fn run_review_request_inner(
     let mut loader = load_rules(Some(&repo_path)).map_err(ReviewError::ValidatorLoad)?;
     // Honor the `validators` subset modifier: when the caller named a subset,
     // scope the fan-out to just those validators. Empty means "all matching".
-    loader.retain_rulesets(&request.validators);
+    let validator_subset: Vec<&str> = request.validators.iter().map(String::as_str).collect();
+    loader.retain_rulesets(&validator_subset);
     let conn = open_index_connection(&repo_path)?;
 
     // Wire a download observer so a FIRST-run review's pre-scope model download

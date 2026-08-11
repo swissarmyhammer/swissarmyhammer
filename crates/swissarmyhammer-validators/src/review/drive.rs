@@ -437,12 +437,13 @@ mod tests {
     use futures::future::BoxFuture;
     use tokio::sync::Notify;
 
-    use crate::review::fleet::FleetConfig;
+    use crate::review::fleet::{FleetConfig, ReviewProgressEvent};
     use crate::review::scope::Scope;
     use crate::review::test_support::{
-        findings_json as shared_findings_json, loader_with, malformed_findings_json, prompt_text,
-        ruleset, seeded_dup_repo, seeded_two_file_dup_repo, verdict_json, ScriptedAdapter,
-        ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        counting_tool_script, findings_json as shared_findings_json, fixture_runs, loader_with,
+        malformed_findings_json, prompt_text, ruleset, seeded_dup_repo, seeded_two_file_dup_repo,
+        verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        FIXTURE_RUNS_PER_PROOF,
     };
 
     /// How long a wedged pipeline may run before a test fails instead of
@@ -1610,13 +1611,15 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         (repo, crate::review::test_support::index_conn())
     }
 
-    /// Drive `review file src/lib.rs` over `agent` with `loader`.
+    /// Drive `review file src/lib.rs` over `agent` with `loader`, emitting
+    /// progress on `progress` when the caller wants to watch the run.
     async fn drive_file_review(
         agent: Arc<ScriptedAgent>,
         notification_rx: broadcast::Receiver<SessionNotification>,
         repo: &crate::review::test_support::TestRepo,
         conn: &Connection,
         loader: &crate::validators::ValidatorLoader,
+        progress: Option<ReviewProgressSender>,
     ) -> crate::review::synthesize::ReviewReport {
         let embedder = model_embedding::mock::MockEmbedder::new(crate::review::test_support::DIM);
         tokio::time::timeout(
@@ -1631,7 +1634,7 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
                 &embedder,
                 PoolConfig::remote(TEST_POOL_WORKERS),
                 FleetConfig::default(),
-                None,
+                progress,
                 TEST_NOW,
             ),
         )
@@ -1653,8 +1656,15 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = broadcast_agent(vec![], notify_tx, true);
 
-        let report =
-            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+        let report = drive_file_review(
+            Arc::clone(&agent),
+            notification_rx,
+            &repo,
+            &conn,
+            &loader,
+            None,
+        )
+        .await;
 
         assert!(
             report.markdown().contains("- [ ] `src/lib.rs:2`"),
@@ -1705,8 +1715,15 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = broadcast_agent(script, notify_tx, true);
 
-        let report =
-            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+        let report = drive_file_review(
+            Arc::clone(&agent),
+            notification_rx,
+            &repo,
+            &conn,
+            &loader,
+            None,
+        )
+        .await;
 
         assert!(
             report.markdown().contains("- [ ] `src/lib.rs:1`"),
@@ -1752,8 +1769,15 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = broadcast_agent(vec![], notify_tx, true);
 
-        let report =
-            drive_file_review(Arc::clone(&agent), notification_rx, &repo, &conn, &loader).await;
+        let report = drive_file_review(
+            Arc::clone(&agent),
+            notification_rx,
+            &repo,
+            &conn,
+            &loader,
+            None,
+        )
+        .await;
 
         assert_eq!(
             report.counts().tool_errors(),
@@ -1783,6 +1807,302 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
             !report.markdown().contains("Nothing in scope to review."),
             "a broken tool run must never read as an empty scope: {}",
             report.markdown()
+        );
+    }
+
+    // ---- tool rules: the health proof is kept, and the runs overlap the fleet
+
+    /// How many reviews the stored-verdict acceptance test drives: the first
+    /// proves the rule, the second must read the proof back.
+    const REVIEWS_IN_THE_ACCEPTANCE: usize = 2;
+
+    /// The tool version the test rules report. Any fixed string does: what the
+    /// stored verdict turns on is that the string does not change between two
+    /// reviews.
+    const TEST_TOOL_VERSION: &str = "1.0.0";
+
+    /// How long the overlap test waits for a fleet pair to finish while the
+    /// tool script is still blocked. Well under [`PIPELINE_TIMEOUT`], so the
+    /// test states what went wrong instead of hanging.
+    const OVERLAP_WAIT: Duration = Duration::from_secs(10);
+
+    /// How many times the blocking run script looks for its release file
+    /// before it gives up. With [`TOOL_WAIT_STEP_SECONDS`] this bounds the
+    /// wait at 30 seconds, so a run that never overlaps still ends.
+    const TOOL_WAIT_STEPS: u32 = 600;
+
+    /// How long the blocking run script sleeps between two looks for its
+    /// release file.
+    const TOOL_WAIT_STEP_SECONDS: &str = "0.05";
+
+    /// A ruleset named `set` over `*.rs` whose only rule is the tool rule
+    /// `rule`, running `script`.
+    ///
+    /// The doctor block reports the tool present and [`TEST_TOOL_VERSION`] as
+    /// its version, so the rule is one a stored verdict can be keyed on.
+    /// `base` is where the health check reads `fixtures/`.
+    fn tool_only_ruleset(
+        set: &str,
+        rule: &str,
+        base: &std::path::Path,
+        script: &str,
+    ) -> crate::validators::types::RuleSet {
+        let mut ruleset = ruleset(set, "*.rs", &[]);
+        ruleset.base_path = base.to_path_buf();
+        ruleset.rules = vec![Rule {
+            name: rule.to_string(),
+            description: "findings by tool".to_string(),
+            body: TOOL_RULE_BODY.to_string(),
+            tool: Some(ToolSpec {
+                scope: ToolScope::Files,
+                run: script.to_string(),
+                doctor: Some(ToolDoctor {
+                    check_command: "true".to_string(),
+                    check_version_command: Some(format!("echo {TEST_TOOL_VERSION}")),
+                    fix_hint: None,
+                }),
+                install: None,
+            }),
+            ..Rule::default()
+        }];
+        ruleset
+    }
+
+    /// A ruleset named `set` over `*.rs` whose only rule is the `missing-docs`
+    /// prompt rule, so the fleet has a pair to review.
+    fn prompt_only_ruleset(set: &str) -> crate::validators::types::RuleSet {
+        let mut ruleset = ruleset(set, "*.rs", &[]);
+        ruleset.rules = vec![Rule {
+            name: "missing-docs".to_string(),
+            description: "docs by prompt".to_string(),
+            body: PROMPT_RULE_BODY.to_string(),
+            ..Rule::default()
+        }];
+        ruleset
+    }
+
+    /// A `files`-scope script that reports one `path:line: message` finding per
+    /// line holding `TODO`, and waits for a `released` file first when a
+    /// `wait-here` marker sits in its working directory.
+    ///
+    /// The test plants `wait-here` at the repo root alone, so the doctor's
+    /// fixture runs never wait.
+    fn blocking_tool_script() -> String {
+        format!(
+            r#"
+if [ -f wait-here ]; then
+  waited=0
+  while [ ! -f released ] && [ "$waited" -lt {TOOL_WAIT_STEPS} ]; do
+    sleep {TOOL_WAIT_STEP_SECONDS}
+    waited=$((waited+1))
+  done
+fi
+for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" }}' "$f"; done
+"#
+        )
+    }
+
+    /// Acceptance: the fixture proof is kept. Two reviews of the same
+    /// workspace, with the same tool and the same rule, run the fixture
+    /// scripts once — the second reads the stored verdict.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_second_review_of_an_unchanged_tool_rule_runs_no_fixture_script() {
+        let (repo, conn) = todo_repo();
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        crate::review::test_support::write_counted_tool_rule_fixtures(base.path(), "docs-tool");
+        let counter = base.path().join("fixture-runs");
+        let mut loader = ValidatorLoader::new();
+        loader.add_builtin_ruleset(tool_only_ruleset(
+            "docs",
+            "docs-tool",
+            base.path(),
+            &counting_tool_script(&counter),
+        ));
+
+        for _ in 0..REVIEWS_IN_THE_ACCEPTANCE {
+            let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+            let agent = broadcast_agent(vec![], notify_tx, true);
+            let report =
+                drive_file_review(agent, notification_rx, &repo, &conn, &loader, None).await;
+            assert_eq!(
+                report.counts().tool_errors(),
+                0,
+                "the tool rule must stay healthy across both reviews: {}",
+                report.markdown()
+            );
+            assert_eq!(
+                report.counts().findings(),
+                1,
+                "every review must report the tool's finding: {}",
+                report.markdown()
+            );
+        }
+
+        assert_eq!(
+            fixture_runs(&counter),
+            FIXTURE_RUNS_PER_PROOF,
+            "the first review proves the rule with the fail fixture and the pass fixture; \
+             the second must read that verdict back instead of proving it again"
+        );
+    }
+
+    /// Wait for a `PairDone` naming `validator`, up to [`OVERLAP_WAIT`],
+    /// keeping every event it read on the way.
+    ///
+    /// `false` means none arrived in time — the fleet never finished a pair
+    /// while the tool script was still running.
+    async fn wait_for_pair_done(
+        progress: &mut tokio::sync::mpsc::UnboundedReceiver<ReviewProgressEvent>,
+        validator: &str,
+        seen: &mut Vec<ReviewProgressEvent>,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + OVERLAP_WAIT;
+        loop {
+            match tokio::time::timeout_at(deadline, progress.recv()).await {
+                Ok(Some(event)) => {
+                    let finished = matches!(
+                        &event,
+                        ReviewProgressEvent::PairDone { validator: name, .. } if name == validator
+                    );
+                    seen.push(event);
+                    if finished {
+                        return true;
+                    }
+                }
+                Ok(None) | Err(_) => return false,
+            }
+        }
+    }
+
+    /// Every finding `events` reported under `validator`.
+    fn findings_of<'a>(
+        events: &'a [ReviewProgressEvent],
+        validator: &str,
+    ) -> Vec<&'a crate::review::types::Finding> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ReviewProgressEvent::Findings {
+                    validator: name,
+                    findings,
+                } if name == validator => Some(findings),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Acceptance: the tool scripts run WHILE the fleet works, and both sides'
+    /// findings reach synthesis under their own rule.
+    ///
+    /// The run script blocks until the test releases it, and the test releases
+    /// it only after a fleet pair has finished. A run that waited for the tool
+    /// before it started the fleet therefore never reaches the release.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_tool_run_overlaps_the_fleet_instead_of_delaying_it() {
+        let (repo, conn) = todo_repo();
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "todo-tool");
+        std::fs::write(repo.path().join("wait-here"), "").expect("plant the wait marker");
+
+        let mut loader = ValidatorLoader::new();
+        loader.add_builtin_ruleset(prompt_only_ruleset("docs"));
+        loader.add_builtin_ruleset(tool_only_ruleset(
+            "todo",
+            "todo-tool",
+            base.path(),
+            &blocking_tool_script(),
+        ));
+
+        let script = vec![
+            (
+                "undocumented-item-claim".to_string(),
+                ScriptedReply::Text(verdict_json(true, "the missing docs are real")),
+            ),
+            (
+                "# Validator: docs".to_string(),
+                ScriptedReply::Text(shared_findings_json(
+                    "src/lib.rs",
+                    1,
+                    "missing-docs",
+                    "undocumented-item-claim",
+                )),
+            ),
+        ];
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(script, notify_tx, true);
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let (report, watched) = tokio::join!(
+            drive_file_review(
+                Arc::clone(&agent),
+                notification_rx,
+                &repo,
+                &conn,
+                &loader,
+                Some(progress_tx),
+            ),
+            async {
+                let mut seen = Vec::new();
+                let finished = wait_for_pair_done(&mut progress_rx, "docs", &mut seen).await;
+                std::fs::write(repo.path().join("released"), "")
+                    .expect("release the blocked tool script");
+                (finished, seen)
+            }
+        );
+        let (fleet_finished, mut events) = watched;
+        while let Some(event) = progress_rx.recv().await {
+            events.push(event);
+        }
+
+        assert!(
+            fleet_finished,
+            "a fleet pair must finish while the tool script is still running; \
+             the tool run delayed the fan-out instead of overlapping it"
+        );
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:2`"),
+            "the tool finding must survive the overlap and reach synthesis: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            "the prompt rule's finding must reach synthesis too: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().tool_errors(),
+            0,
+            "the overlapped tool run must not break: {}",
+            report.markdown()
+        );
+        let prompts = agent.seen_prompts();
+        assert!(
+            prompts.iter().any(|p| p.contains(PROMPT_RULE_BODY)),
+            "the prompt rule must run as a normal LLM task"
+        );
+        assert!(
+            prompts.iter().all(|p| !p.contains(TOOL_RULE_BODY)),
+            "no LLM prompt may ever carry a tool rule's body"
+        );
+
+        let tool_findings = findings_of(&events, "todo");
+        assert_eq!(
+            tool_findings.len(),
+            1,
+            "the tool must report its finding under its own validator: {events:?}"
+        );
+        assert_eq!(
+            tool_findings[0].rule.as_deref(),
+            Some("todo-tool"),
+            "the tool finding must carry the tool rule's name"
+        );
+        let prompt_findings = findings_of(&events, "docs");
+        assert!(
+            prompt_findings
+                .iter()
+                .all(|finding| finding.rule.as_deref() == Some("missing-docs")),
+            "no tool finding may be reported as a prompt-rule finding: {prompt_findings:?}"
         );
     }
 }

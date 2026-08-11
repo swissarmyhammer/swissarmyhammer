@@ -4,13 +4,13 @@
 //! and returns project metadata with language-specific guidelines rendered through the
 //! Liquid template engine via `TemplateLibrary`.
 
+use super::support::resolve_workspace_root;
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_project_detection::{detect_projects, spec_for, DetectedProject, ProjectType};
 use swissarmyhammer_templating::TemplateLibrary;
@@ -196,12 +196,7 @@ fn resolve_workspace_path(request_path: Option<&str>, context: &ToolContext) -> 
         return PathBuf::from(p);
     }
 
-    let working_dir = context
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-
-    find_git_repository_root_from(&working_dir).unwrap_or(working_dir)
+    resolve_workspace_root(context)
 }
 
 /// Execute project detection.

@@ -5,11 +5,60 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::command::{shell_command, Shell};
 use swissarmyhammer_common::Pretty;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 use super::infrastructure::{OutputBuffer, OutputLimits, ShellError, ShellExecutionResult};
+
+/// How long `Drop` polls a killed child before it gives up on reaping it.
+/// `Drop` cannot await, so this bounds the blocking wait.
+const PROCESS_REAP_TIMEOUT_MILLIS: u64 = 100;
+
+/// How long `Drop` sleeps between two reap attempts on a killed child.
+const PROCESS_REAP_POLL_MILLIS: u64 = 10;
+
+/// The exit code reported when the operating system gives none, which happens
+/// when a signal terminates the process.
+const SIGNAL_TERMINATED_EXIT_CODE: i32 = -1;
+
+/// How a process group is asked to end.
+#[derive(Debug, Clone, Copy)]
+enum GroupSignal {
+    /// Ask the group to exit, which lets each process run its own cleanup.
+    Terminate,
+    /// End the group at once, with no chance to clean up.
+    Kill,
+}
+
+/// Send `signal` to the whole process group `child` leads, so the shell's own
+/// children die with the shell instead of outliving it.
+///
+/// Off Unix there is no process group to signal and this does nothing —
+/// [`Child::kill`] is the only lever there, and every caller already uses it.
+fn signal_process_group(child: &Child, signal: GroupSignal) {
+    #[cfg(unix)]
+    {
+        let number = match signal {
+            GroupSignal::Terminate => libc::SIGTERM,
+            GroupSignal::Kill => libc::SIGKILL,
+        };
+        if let Some(pid) = child.id() {
+            // SAFETY: `killpg` reads only the two integers it is given and
+            // returns an error code for a group it cannot signal, so the call
+            // touches no memory this process owns.
+            unsafe {
+                libc::killpg(pid as i32, number);
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (child, signal);
+    }
+}
 
 /// Async process guard for automatic cleanup of tokio Child processes
 ///
@@ -18,6 +67,7 @@ use super::infrastructure::{OutputBuffer, OutputLimits, ShellError, ShellExecuti
 ///
 /// Unlike the sync ProcessGuard in test_utils.rs, this version works with tokio::process::Child
 /// and provides async methods for graceful termination with timeouts.
+#[derive(Debug)]
 pub struct AsyncProcessGuard {
     pub(super) child: Option<Child>,
     pub(super) command: String,
@@ -71,19 +121,12 @@ impl AsyncProcessGuard {
 
             // Try to terminate the process and wait for it to exit
             let termination_result = tokio::time::timeout(timeout_duration, async {
-                // On Unix systems, we can try to send SIGTERM first
-                #[cfg(unix)]
-                {
-                    // Kill the process group to handle child processes
-                    if let Some(pid) = child.id() {
-                        unsafe {
-                            // Send SIGTERM to the process group
-                            libc::killpg(pid as i32, libc::SIGTERM);
-                        }
-                    }
-                }
+                // Ask the whole process group to exit, so the shell's own
+                // children go with it.
+                signal_process_group(child, GroupSignal::Terminate);
 
-                // On Windows or if Unix signal handling fails, use kill()
+                // On Windows there is no process group to ask, so kill() is
+                // the only lever.
                 #[cfg(not(unix))]
                 {
                     let _ = child.kill().await;
@@ -123,16 +166,7 @@ impl AsyncProcessGuard {
         if let Some(mut child) = self.child.take() {
             tracing::debug!("Force killing process for command: {}", self.command);
 
-            #[cfg(unix)]
-            {
-                // Kill the process group to handle child processes
-                if let Some(pid) = child.id() {
-                    unsafe {
-                        // Send SIGKILL to the process group
-                        libc::killpg(pid as i32, libc::SIGKILL);
-                    }
-                }
-            }
+            signal_process_group(&child, GroupSignal::Kill);
 
             child.kill().await?;
             child.wait().await?;
@@ -152,15 +186,7 @@ impl Drop for AsyncProcessGuard {
                 self.command
             );
 
-            #[cfg(unix)]
-            {
-                // Kill the process group on Unix systems
-                if let Some(pid) = child.id() {
-                    unsafe {
-                        libc::killpg(pid as i32, libc::SIGKILL);
-                    }
-                }
-            }
+            signal_process_group(&child, GroupSignal::Kill);
 
             // Kill the process
             let _ = child.start_kill();
@@ -172,8 +198,8 @@ impl Drop for AsyncProcessGuard {
             // We use try_wait() in a loop with a timeout rather than blocking wait()
             // to avoid hanging Drop. The tokio Child doesn't have a blocking wait(),
             // but try_wait() will eventually succeed after start_kill().
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_millis(100);
+            let start = Instant::now();
+            let timeout = Duration::from_millis(PROCESS_REAP_TIMEOUT_MILLIS);
 
             while start.elapsed() < timeout {
                 match child.try_wait() {
@@ -184,7 +210,7 @@ impl Drop for AsyncProcessGuard {
                     }
                     Ok(None) => {
                         // Process still running, wait a bit and try again
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(Duration::from_millis(PROCESS_REAP_POLL_MILLIS));
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -525,30 +551,23 @@ pub(super) fn prepare_working_directory(
     Ok(work_dir)
 }
 
-/// Prepare shell command for execution
+/// Prepare shell command for execution.
+///
+/// The interpreter and the stream wiring come from
+/// [`shell_command`](swissarmyhammer_common::command::shell_command); this
+/// adds the working directory and the caller's environment, and hands the
+/// result to tokio so the child can be awaited.
 pub(super) fn prepare_shell_command(
     command: &str,
     work_dir: &Path,
     environment: Option<&std::collections::HashMap<String, String>>,
 ) -> Command {
-    let (program, args) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", command])
-    } else {
-        ("sh", vec!["-c", command])
-    };
-
-    let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(work_dir);
+    let mut cmd = Command::from(shell_command(Shell::Platform, command));
+    cmd.current_dir(work_dir);
 
     if let Some(env_vars) = environment {
-        for (key, value) in env_vars {
-            cmd.env(key, value);
-        }
+        cmd.envs(env_vars);
     }
-
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
 
     cmd
 }
@@ -584,7 +603,7 @@ pub(super) fn format_execution_result(
     execution_time_ms: u64,
     output_limits: &OutputLimits,
 ) -> ShellExecutionResult {
-    let exit_code = exit_status.code().unwrap_or(-1);
+    let exit_code = exit_status.code().unwrap_or(SIGNAL_TERMINATED_EXIT_CODE);
     let truncation_info = if output_buffer.is_truncated() {
         format!(
             " (output truncated at {} bytes)",

@@ -604,12 +604,7 @@ fn plan_fan_out(
             continue;
         };
         for (skip_set, files) in group_files_by_suppression(validator, suppressed) {
-            let rules: Vec<Rule> = ruleset
-                .rules
-                .iter()
-                .filter(|rule| !rule.is_tool_rule() && !skip_set.contains(&rule.name))
-                .cloned()
-                .collect();
+            let rules = prompt_rules_for(ruleset, &skip_set);
             if rules.is_empty() && !ruleset.rules.is_empty() {
                 tracing::info!(
                     validator = %validator.validator_name(),
@@ -644,6 +639,26 @@ fn plan_fan_out(
         }
     }
     plan
+}
+
+/// The rules the fleet puts in front of an agent for one group of files.
+///
+/// Two kinds never reach an agent. A tool rule does not, because its script IS
+/// the review. Nor does a prompt rule a healthy tool rule superseded for these
+/// files, which is what `suppressed_rules` names — the set
+/// [`ToolSuppression::suppressed_rules`] returns for the pair.
+///
+/// What is left is the whole of an LLM's reading list for those files, so a
+/// rule absent from it is a rule no agent will ever see. That is what makes a
+/// tool rule's "no LLM reads this" claim a thing a test can check rather than
+/// a thing a rule file asserts.
+pub fn prompt_rules_for(ruleset: &RuleSet, suppressed_rules: &BTreeSet<String>) -> Vec<Rule> {
+    ruleset
+        .rules
+        .iter()
+        .filter(|rule| !rule.is_tool_rule() && !suppressed_rules.contains(&rule.name))
+        .cloned()
+        .collect()
 }
 
 /// Group a validator's files by their suppressed prompt-rule set, preserving

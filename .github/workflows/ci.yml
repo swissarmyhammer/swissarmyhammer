@@ -25,6 +25,12 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The `missing-docs-rust` and `complexity-rust` tool rules check
+          # `which cargo-clippy jq`, and their tests state that tool as a
+          # precondition rather than installing it. A job states the components
+          # it needs, the same way the Clippy and Rustfmt jobs do.
+          components: clippy
       - name: Install rust-analyzer
         run: rustup component add rust-analyzer
       - uses: Swatinem/rust-cache@v2
@@ -35,6 +41,65 @@ jobs:
         run: |
           if ! command -v chromium &>/dev/null && ! [ -d "/Applications/Chromium.app" ] && ! [ -d "/Applications/Google Chrome.app" ]; then
             brew install --cask chromium --no-quarantine
+          fi
+      - name: Ensure jq is available
+        # The second half of the `which cargo-clippy jq` doctor check above.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
+      - name: Install vulture
+        # The tool `dead-code-python` requires, at the version that rule pins.
+        # `uv` is not part of this runner's contract, so install it the way the
+        # step above installs Chromium. `uv tool install` links executables into
+        # a bin directory that is not on the runner PATH by default, so state it
+        # for the steps that follow. Both commands are no-ops when the pinned
+        # version is already there.
+        run: |
+          if ! command -v uv &>/dev/null; then
+            brew install uv
+          fi
+          uv tool install vulture==2.14
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: Install cargo-machete
+        # The tool `unused-dependencies-rust` requires, installed by the command
+        # that rule declares. Cargo skips the build when the pinned version is
+        # already installed.
+        run: cargo install cargo-machete@0.9.2 --locked
+      - name: Put the user bin directory on PATH
+        # `uv tool install`, `pipx install` and the Go rules' `GOBIN` all land
+        # their binaries here, and a doctor check finds a tool only on PATH.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        # The TypeScript rules install eslint and ts-prune with
+        # `npm install -g`, so the roster tests need npm on this job too.
+        with:
+          node-version: 22
+      - name: Ensure the language toolchains the roster tests need are available
+        # `go` and `swift` are the toolchains the Go and Swift rules run, and
+        # the roster tests require every row. Each command is a no-op when the
+        # toolchain is already there.
+        run: |
+          if ! command -v go &>/dev/null; then
+            brew install go
+          fi
+          swift --version
+      - name: Ensure the tools that declare no install command are available
+        # `swiftlint`, `periphery` and `dart` ship only through Homebrew, which
+        # installs the current version and therefore cannot pin one, so their
+        # rules state a `doctor.fix_hint` instead of an install command. A rule
+        # with no install command cannot install itself, so this job does it.
+        run: |
+          if ! command -v swiftlint &>/dev/null; then
+            brew install swiftlint
+          fi
+          if ! command -v periphery &>/dev/null; then
+            brew install peripheryapp/periphery/periphery
+          fi
+          if ! command -v dart &>/dev/null; then
+            brew install dart-sdk
           fi
       - name: Run tests
         run: cargo nextest run --no-fail-fast

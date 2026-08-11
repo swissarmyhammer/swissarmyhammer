@@ -102,7 +102,7 @@ pub struct ValidatorLoader {
 /// The loader keeps loading the rest of the stack when one validator is broken
 /// (a broken validator never aborts the run); each failure is recorded here so
 /// the lint surface can name the offending path and its parse problem.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadFailure {
     /// The RuleSet directory that failed to parse.
     pub path: PathBuf,
@@ -433,6 +433,25 @@ impl ValidatorLoader {
         Ok(())
     }
 
+    /// Every loaded validator set's `fixtures/` directory, across all three
+    /// layers (builtin, user, and project), sorted and de-duplicated.
+    ///
+    /// The store is the single source of truth for what a fixture is: a set's
+    /// `fixtures/` directory holds the fail/pass inputs `sah doctor` runs each
+    /// tool rule against, and a fail fixture exists to make its rule fire. A
+    /// consumer that must tell fixture data from ordinary source — the review
+    /// scope stage — reads this list rather than matching a path pattern of its
+    /// own.
+    ///
+    /// A directory is listed whether or not it exists on disk: a set with no
+    /// fixtures yet still owns the path its fixtures would take.
+    pub fn fixture_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = self.rulesets.values().map(RuleSet::fixtures_dir).collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
     /// Add a builtin RuleSet from embedded directory structure.
     ///
     /// This is used by the build system to load RuleSets embedded in the binary.
@@ -488,12 +507,12 @@ impl ValidatorLoader {
     /// scoping the fan-out to just the chosen validators. A name in `names` that
     /// isn't loaded is simply ignored. An empty `names` is a no-op (callers that
     /// want "all" should not call this).
-    pub fn retain_rulesets(&mut self, names: &[String]) {
+    pub fn retain_rulesets(&mut self, names: &[&str]) {
         if names.is_empty() {
             return;
         }
         self.rulesets
-            .retain(|name, _| names.iter().any(|n| n == name));
+            .retain(|name, _| names.iter().any(|n| *n == name));
     }
 
     /// The RuleSet directories that failed to parse during loading.
@@ -579,7 +598,7 @@ impl ValidatorLoader {
 }
 
 /// Information about a validator directory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryInfo {
     /// Path to the directory (if resolvable).
     pub path: Option<std::path::PathBuf>,
@@ -590,7 +609,7 @@ pub struct DirectoryInfo {
 }
 
 /// Diagnostic information about validator loading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatorDiagnostics {
     /// Information about the user validators directory (~/.validators).
     pub user_directory: DirectoryInfo,
@@ -628,6 +647,8 @@ mod tests {
     use std::fs;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard};
     use tempfile::TempDir;
+
+    use crate::validators::types::FIXTURES_DIR_NAME;
 
     /// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`.
     fn write_ruleset(base: &Path, name: &str, description: &str) {
@@ -701,6 +722,55 @@ mod tests {
         let shared = loader.get_ruleset("shared").expect("shared ruleset");
         assert_eq!(shared.source, ValidatorSource::Project);
         assert_eq!(shared.description(), "Project version");
+    }
+
+    /// `fixture_dirs` answers with one `fixtures/` directory for each loaded
+    /// set, in every layer: a builtin set added in memory, a user set under
+    /// `~/.validators`, and a project set under `<workspace_root>/.validators`.
+    /// This is what lets a consumer tell fixture data from ordinary source
+    /// without a path pattern of its own.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn fixture_dirs_names_every_loaded_sets_fixtures_directory_in_every_layer() {
+        let home = TempDir::new().unwrap();
+        let user_validators = home.path().join(".validators");
+        write_ruleset(&user_validators, "user-set", "User set");
+
+        let project_root = TempDir::new().unwrap();
+        let project_validators = project_root.path().join(".validators");
+        write_ruleset(&project_validators, "project-set", "Project set");
+
+        let _env = EnvVarGuard::set("HOME", home.path());
+
+        let mut loader = ValidatorLoader::new();
+        loader.add_builtin_ruleset(crate::review::test_support::ruleset(
+            "builtin-set",
+            "*.rs",
+            &[],
+        ));
+        loader.load_all(Some(project_root.path())).unwrap();
+
+        let dirs = loader.fixture_dirs();
+
+        assert!(
+            dirs.contains(&user_validators.join("user-set").join(FIXTURES_DIR_NAME)),
+            "the user layer's set must name its fixtures directory, got: {dirs:?}"
+        );
+        assert!(
+            dirs.contains(
+                &project_validators
+                    .join("project-set")
+                    .join(FIXTURES_DIR_NAME)
+            ),
+            "the project layer's set must name its fixtures directory, got: {dirs:?}"
+        );
+        let builtin = loader
+            .get_ruleset("builtin-set")
+            .expect("the builtin set loaded");
+        assert!(
+            dirs.contains(&builtin.fixtures_dir()),
+            "the builtin layer's set must name its fixtures directory, got: {dirs:?}"
+        );
     }
 
     /// A tool rule loads through the same layer precedence as a prompt rule:
@@ -865,7 +935,7 @@ mod tests {
         assert_eq!(loader.ruleset_count(), 3);
 
         // Subset the loader the way the `review` tool's `validators` modifier does.
-        loader.retain_rulesets(&["dead-code".to_string()]);
+        loader.retain_rulesets(&["dead-code"]);
 
         assert_eq!(loader.ruleset_count(), 1);
         assert!(loader.get_ruleset("dead-code").is_some());

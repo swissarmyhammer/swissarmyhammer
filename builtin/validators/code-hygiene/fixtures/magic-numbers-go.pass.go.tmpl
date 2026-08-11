@@ -2,9 +2,10 @@
 //
 // Every position the failing fixture leaves unnamed — a condition, a switch
 // case, an operation, a return, and a call argument — reads a named constant
-// here, and the last two functions hold the contexts the rule allows: the
-// carve-out values and a short variable binding. The tool must report nothing. A
-// tool upgrade that reports one anyway makes the doctor mark the rule unusable.
+// here, and the functions after them hold the contexts the rule allows: the
+// carve-out values, `100` for percent, and a short variable binding. The tool
+// must report nothing. A tool upgrade that reports one anyway makes the doctor
+// mark the rule unusable.
 package fixtures
 
 const (
@@ -59,6 +60,23 @@ func NamedCarvedOut(index, total int) int {
 		return total
 	}
 	return index
+}
+
+// NamedPercent reads 100 for percent, the conventional value the rule allows.
+// The product is bound to a name first, because `mnd` reads the direct operands
+// of the expression a `return` holds, and 100 would stand nested inside one.
+func NamedPercent(part, total int) int {
+	scaled := part * 100
+	return scaled / total
+}
+
+// NamedPercentCompare compares against 100 for percent, the same allowed value
+// in a condition.
+func NamedPercentCompare(usage int) bool {
+	if usage == 100 {
+		return true
+	}
+	return false
 }
 
 // NamedBinding binds a literal to a name, a position the rule allows.

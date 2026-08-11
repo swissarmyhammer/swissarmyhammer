@@ -68,10 +68,12 @@ pub use swissarmyhammer_leader_election::HEARTBEAT_INTERVAL as LEASE_HEARTBEAT_I
 // on `swissarmyhammer-lsp`). Re-export them here so existing consumers of
 // `swissarmyhammer_code_context::{...}` compile unchanged.
 pub use lsp_worker::{new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, ShutdownFlag};
+pub use ops::find_commented_code::{find_commented_code, CommentedCodeFinding};
 pub use ops::find_duplicates::{
     find_duplicates, find_duplicates_in, ChunkRef, DuplicateGroup, DuplicateMatch,
     FindDuplicatesOptions, FindDuplicatesResult,
 };
+pub use ops::find_duplication::{find_duplication, similarity_percent, DuplicationFinding};
 pub use ops::get_blastradius::{
     get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
 };

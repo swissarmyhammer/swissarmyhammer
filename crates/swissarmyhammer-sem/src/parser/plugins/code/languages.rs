@@ -395,6 +395,18 @@ pub fn get_language_config(extension: &str) -> Option<&'static LanguageConfig> {
         .copied()
 }
 
+/// The file extensions one language claims, dotted and lowercase.
+///
+/// `language` is the id [`LanguageConfig::id`] carries (e.g. `"rust"`). `None`
+/// means **the roster has no such language**, so a caller reports "not
+/// computed" rather than an empty extension list.
+pub fn extensions_for_language(language: &str) -> Option<&'static [&'static str]> {
+    ALL_CONFIGS
+        .iter()
+        .find(|config| config.id == language)
+        .map(|config| config.extensions)
+}
+
 /// All file extensions the code parser plugin handles, in the canonical
 /// dotted-lowercase form (e.g. `".rs"`). The single source of truth other
 /// crates reuse instead of keeping their own extension lists.

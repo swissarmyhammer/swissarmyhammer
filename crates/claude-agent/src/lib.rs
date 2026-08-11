@@ -36,6 +36,7 @@ pub mod content_security_validator;
 pub mod conversation_manager;
 pub mod editor_state;
 pub mod elicitation_bridge;
+pub mod embedded_resource;
 pub mod json_rpc_codes;
 pub mod mime_type_validator;
 
@@ -822,29 +823,45 @@ mod collect_response_content_tests {
     /// possibly this turn's chunks. The reply can no longer be proven whole, so
     /// the drain reports it instead of returning text that may be missing the
     /// middle.
+    ///
+    /// The lag is forced by the ORDER of the two steps, not by the scheduler.
+    /// The receiver subscribes BEFORE the first send and the collector task
+    /// starts only AFTER the last one, so the receiver is still holding its
+    /// place at the first notification while the ring overwrites it. Its first
+    /// `recv()` can answer nothing but `Lagged`.
+    ///
+    /// Starting the task first is what made this test race: a collector that
+    /// the scheduler ran between two sends emptied the ring, nothing was ever
+    /// dropped, and the drain rightly returned the whole reply.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_lagged_collector_is_an_error_not_a_reply_with_holes() {
         let session = SessionId::new("sess-lagged");
         let (notifier, _seed_rx) = NotificationSender::new(LAGGING_NOTIFICATION_RING);
 
-        let collector =
-            spawn_notification_collector(notifier.sender().subscribe(), session.clone());
+        let notifications = notifier.sender().subscribe();
 
         for chunk in ["one ", "two ", "three ", "four "] {
             send_chunk(&notifier, &session, chunk).await;
         }
         notifier
-            .send_update(turn_complete_notification(session))
+            .send_update(turn_complete_notification(session.clone()))
             .await
             .expect("the end-of-turn marker broadcasts");
+
+        let collector = spawn_notification_collector(notifications, session);
 
         let prompt_response = PromptResponse::new(StopReason::EndTurn);
         let error = collect_response_content(collector, &prompt_response)
             .await
             .expect_err("a lagged collector cannot prove the reply is whole");
+        // `DrainFailure::Backstop` also says "dropped", so the assertion names
+        // the wording only `DrainFailure::Lagged` writes. A drain that hit the
+        // hang guard instead would otherwise pass this test.
         assert!(
-            error.to_string().contains("dropped"),
-            "the error must name the dropped notifications: {error}"
+            error
+                .to_string()
+                .contains("the notification broadcast dropped"),
+            "the error must name the notifications the broadcast dropped: {error}"
         );
     }
 

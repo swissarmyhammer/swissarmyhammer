@@ -35,7 +35,7 @@ tool:
     check_version_command: "golangci-lint --version"
   install:
     commands:
-      - "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2"
+      - 'mkdir -p "$HOME/.local/bin" && GOBIN="$HOME/.local/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2'
 ---
 
 # Function Length — Go

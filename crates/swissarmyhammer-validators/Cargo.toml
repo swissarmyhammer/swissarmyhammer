@@ -11,12 +11,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
-# Per-reviewed-file context-hash tracking: SHA-256 over path+content+rules so an
-# unchanged file is subtracted from the next `review working` pass, and an RFC3339
-# `reviewed_at` timestamp on each tracking entry.
-sha2 = { workspace = true }
-chrono = { workspace = true }
-
 # Error handling
 thiserror = { workspace = true }
 
@@ -54,6 +48,12 @@ swissarmyhammer-project-detection = { workspace = true }
 # status facts and converts them into checks, mirroring `mirdan::status`.
 swissarmyhammer-doctor = { workspace = true }
 
+# The shared shell-command builder and failed-command summary the tool-rule
+# runner spawns every script through, plus `CurrentDirGuard` for the loader
+# tests that pin the process working directory away from the workspace they
+# load.
+swissarmyhammer-common = { workspace = true }
+
 # ACP agent connection driven by the shared agent pool
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }
@@ -77,6 +77,11 @@ swissarmyhammer-code-context = { workspace = true }
 model-embedding = { workspace = true }
 # The code_context ops take a `&Connection`; the probe runner's public API mirrors
 # that established pattern, so rusqlite is a normal dependency, not just dev.
+# Digests the stored tool-health verdicts are keyed on: the rule content and
+# its fixture files. A persisted key needs a hash that is the same in every
+# process and every toolchain, which `DefaultHasher` is not.
+sha2 = { workspace = true }
+
 rusqlite = { workspace = true }
 
 # Async runtime backing the agent pool's worker tasks
@@ -97,6 +102,12 @@ git2 = { workspace = true }
 # `#[cfg(test)]` runs use the same crate.
 tempfile = { workspace = true }
 
+# The tool install lifecycle serializes install commands machine-wide with an
+# `flock(2)` file lock, the same crate the leader election uses. Install
+# destinations are shared per-user directories, and only `cargo install` locks
+# one of its own.
+fs2 = { workspace = true }
+
 [features]
 # Export the review `test_support` fixtures (the shared scripted ACP agent
 # harness, the throwaway git repo, and the seeded in-memory code_context index)
@@ -112,11 +123,6 @@ swissarmyhammer-build = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-# `CurrentDirGuard`: the loader tests pin the process working directory to a
-# DIFFERENT workspace than the one they load, proving the process CWD never
-# reaches the project validator layer. The guard is the shared RAII helper, not
-# a local copy.
-swissarmyhammer-common = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-test = { workspace = true }
 # The shared ACP mock-agent harness (MockAgent trait + adapter + dispatch) the

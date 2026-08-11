@@ -9,6 +9,7 @@ use super::utils::*;
 use anyhow::Result;
 use std::env;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::command::command_failure_detail;
 
 /// Check names constants to avoid typos and improve maintainability
 #[allow(dead_code)]
@@ -311,6 +312,11 @@ pub fn check_file_permissions(checks: &mut impl Extend<Check>) -> Result<()> {
     Ok(())
 }
 
+/// How many directory levels below the workspace root the doctor scans for
+/// project markers. Deep enough to find the members of a normal monorepo,
+/// shallow enough to keep the scan fast.
+const DETECTION_DEPTH: usize = 3;
+
 /// Check LSP server availability for all detected project types
 ///
 /// Uses project detection to find all project types in the workspace
@@ -323,7 +329,7 @@ pub fn check_lsp_servers(checks: &mut impl Extend<Check>) -> Result<()> {
     use swissarmyhammer_project_detection::detect_projects;
 
     let workspace_root = doctor_workspace_root();
-    let projects = detect_projects(&workspace_root, Some(3)).unwrap_or_default();
+    let projects = detect_projects(&workspace_root, Some(DETECTION_DEPTH)).unwrap_or_default();
 
     let mut seen_commands = HashSet::new();
     let mut specs = Vec::new();
@@ -376,12 +382,7 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
             fix: None,
         },
         Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let reason = if stderr.is_empty() {
-                format!("exited with status {}", output.status)
-            } else {
-                stderr
-            };
+            let reason = command_failure_detail(&output);
             Check {
                 name: check_name,
                 status: CheckStatus::Error,

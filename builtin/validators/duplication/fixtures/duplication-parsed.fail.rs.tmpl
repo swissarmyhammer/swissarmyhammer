@@ -1,0 +1,49 @@
+//! The fail half of the `duplication-parsed` fixture pair.
+//!
+//! Two whole functions that differ ONLY by the name of one variable. No run
+//! of tokens is spelled the same twice, so a token matcher reads them as two
+//! different blocks. Once each body is normalized — the first distinct
+//! identifier to `v1`, the second to `v2` — the two streams are equal.
+//!
+//! The pair is intra-file on purpose: that is the case a path glob can never
+//! reach, and the case the rule exists to catch.
+
+/// Folds the readings of one grid into a band.
+pub fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    let mut seen = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                band += *cell;
+                seen += 1;
+            } else {
+                band -= *cell;
+            }
+        }
+        if seen > limit {
+            band = limit;
+        }
+    }
+    band
+}
+
+/// Folds the readings of one mirrored grid into a band.
+pub fn mirrored_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut total = 0;
+    let mut count = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                total += *cell;
+                count += 1;
+            } else {
+                total -= *cell;
+            }
+        }
+        if count > limit {
+            total = limit;
+        }
+    }
+    total
+}

@@ -26,18 +26,134 @@ probes:
   Reading the arms and deciding they differ only in constants is a judgment no
   tool makes, so no tool rule supersedes it.
 - `magic-numbers` owns the **name**: a literal repeated across sites, or a shared
-  configuration value, needs one constant. Four tool rules supersede it, each for
+  configuration value, needs one constant. Five tool rules supersede it, each for
   the languages a linter can decide — `magic-numbers-python` (ruff `PLR2004`),
   `magic-numbers-typescript` (eslint `no-magic-numbers`), `magic-numbers-go`
-  (`mnd`), and `magic-numbers-swift` (swiftlint `no_magic_numbers`).
+  (`mnd`), `magic-numbers-swift` (swiftlint `no_magic_numbers`), and
+  `magic-numbers-dart` (solid_lints `no_magic_number`).
 
-Rust and Dart keep the `magic-numbers` prompt rule. No healthy Rust lint reports
-an unnamed literal, and the Dart check needs a `custom_lint` package, which is a
-dependency of the project under review rather than a tool the rule can install.
+Rust keeps the `magic-numbers` prompt rule; the survey below states why. Dart no
+longer keeps it: the earlier verdict — that the Dart check needs a `custom_lint`
+package, which is a dependency of the project under review — is **reversed**
+below.
 
 A tool reports by position and the prompt rule reports by repetition, so a tool
 rule reports the one-off literal the prompt rule carves out. Each tool rule's own
 file states the measurement behind its thresholds.
+
+### The magic-number survey for Rust and Dart
+
+Two languages had no rule, and neither had an obvious stock lint, so the whole
+tool space was read for each before the verdict. This is the record.
+
+**Rust — no usable tool, and the earlier claim is corrected.** The earlier claim
+said "no healthy Rust lint reports an unnamed literal". The first half holds and
+the second half does not: no CLIPPY lint reports one, and a dylint lint does.
+
+- **clippy 0.1.97 (8bab26f4f6 2026-07-14)**, on rustc 1.97.1. `clippy-driver
+  -Whelp` prints 1114 lines — every rustc lint, every clippy lint, and all nine
+  groups, the opt-in `restriction` group included. Read whole, and filtered for
+  `literal`, `magic`, `numeric`, `number` and `constant`: 69 lines match, and not
+  one of them asks for a NAME. Each reads the literal's representation, its
+  suffix, or its type — `decimal-literal-representation` (restriction) prefers
+  hex, `default-numeric-fallback` (restriction) prefers a type suffix,
+  `unreadable-literal` and `large-digit-groups` (pedantic) prefer underscores,
+  and `inconsistent-digit-grouping`, `unusual-byte-groupings`,
+  `mixed-case-hex-literals`, `zero-prefixed-literal`, `separated-literal-suffix`,
+  `unseparated-literal-suffix`, `mistyped-literal-suffixes`,
+  `excessive-precision`, `lossy-float-literal` and `non-ascii-literal` are the
+  rest of that same family.
+- **dylint (cargo-dylint 6.0.3, published 2026-08-01)** ships
+  `examples/supplementary/unnamed_constant`, whose own README opens "Checks for
+  unnamed constants, aka magic numbers." So the lint EXISTS, and the sentence
+  that said no Rust lint reports an unnamed literal was wrong as written.
+
+  It was installed and RUN before this verdict, in a toolchain home of its own
+  so that no machine was changed. What it reads is the reason it is not taken.
+  Measured over a probe crate holding one literal of each position, with the
+  lint at its default `threshold` of `10`:
+
+  | Written | Reported |
+  |---|---|
+  | `age > 18` | yes |
+  | `part * 100` | yes |
+  | `with_capacity(3600)` | yes |
+  | `return 42;` | yes |
+  | `n * 3600` | yes |
+  | `word << 8` | no |
+  | `n * 4096` | no |
+  | `with_capacity(65535)` | no |
+  | `42` as a tail expression | no |
+  | `n * 7` | no |
+  | `const NAMED_LIMIT: u64 = 4096;` | no |
+  | `let timeout = 3600;` | no |
+
+  The last two are the carve-out, and they are right. The four above them are
+  the defect. `unnamed_constant` passes a value at or under the threshold, and
+  it passes any value whose bits form one run — so `4096`, `65535` and every
+  other power of two and all-ones mask are silent wherever they stand, and
+  those are the values a name helps most. It reports `100`, which the prompt
+  rule carves out for percent, and no setting restores that: `threshold` is its
+  only key, and raising it to `100` would silence `status == 42` too. It reads
+  a literal only where the parent node is an expression, so `return 42;`
+  reports and a bare `42` tail expression does not.
+
+  Two more properties would each be a problem on their own. The lint is
+  published in no form a rule can pin: it is an example crate inside a git
+  repository, built from source at first use, and it is on crates.io under no
+  name. And building it needs a SECOND toolchain —
+  `examples/supplementary/rust-toolchain.toml` pins
+  `channel = "nightly-2026-05-28"` with
+  `components = ["llvm-tools-preview", "rustc-dev"]`, because the lint links
+  against `rustc_private` through `clippy_utils`. Measured: that toolchain
+  takes **2.4 GB** on disk, `cargo install cargo-dylint@6.0.3
+  dylint-link@6.0.3` takes 22 s, and the first `cargo dylint` run builds
+  `clippy_utils` and the lint before it reads anything. Every machine that
+  reviewed Rust would pay all of it, and then rebuild the crate under review
+  with a custom rustc driver in a target directory of its own. Every other rule
+  in this set is a released binary that runs in seconds.
+- Nothing else in the space reports one either. `cargo machete`, `cargo udeps`,
+  `cargo geiger`, `cargo audit` and `cargo deny` each read manifests or unsafe
+  code, and `rust-code-analysis` computes metrics.
+
+**Dart — a usable tool, and the earlier claim is reversed.** The earlier claim
+said the Dart check needs a `custom_lint` package, "which is a dependency of the
+project under review rather than a tool the rule can install". The first half
+holds and the conclusion does not: the plugin is a dependency of the PROBE
+PACKAGE the rule writes, and the project under review never sees it. The
+`missing-docs-dart` rule already builds such a package, so the mechanism was in
+the set before this rule used it.
+
+- **The Dart SDK linter, 3.11.0 (Flutter 3.41.2)**: 263 rules, enumerated from
+  the SDK's published rule index. None reports an unnamed literal, and the word
+  "magic" appears nowhere in the index. `use_named_constants` is the nearest
+  name, and it reports a literal that an EXISTING named constant already
+  equals — `EdgeInsets.all(0)` for `EdgeInsets.zero` — rather than one that
+  needs a name.
+- **`lints` 6.1.0** (`core.yaml` 34 rules, `recommended.yaml` 55) and
+  **`flutter_lints` 6.0.0** (10 rules over `recommended`): each is a selection
+  from the same 263, so neither adds one.
+- **`dart_code_metrics` 5.7.6**, the discontinued package the DCM verdict below
+  names, carries a `no-magic-number` rule and a `metrics` executable. It cannot
+  be installed on a current toolchain: its pubspec states
+  `sdk: '>=2.18.0 <3.0.0'`, so `dart pub global activate` cannot resolve it
+  against Dart 3.11.0. That is a firmer disqualification than "discontinued".
+- **`solid_lints` 0.3.3** (a `custom_lint` plugin) carries `no_magic_number`,
+  and it is what `magic-numbers-dart` runs. Measured over `dart-lang/http` at
+  `a9176ac`, 324 files: 683 findings in 13 s.
+- **`dart_code_linter` 4.1.9**, the maintained fork of `dart_code_metrics`, was
+  measured over the same corpus: 653 findings in 5 s. It was NOT taken. It
+  reports default parameter values, which the prompt rule carves out, and it
+  exempts every literal inside a variable declaration's initializer, so it
+  misses real findings. The rule file states the whole comparison.
+- **`dcm`** is the commercial product, and the DCM verdict below still rejects
+  it.
+
+Two silent-zero traps were found and answered inside `magic-numbers-dart`, and
+each one belongs to `dart run custom_lint`, the command that rule runs:
+`--root-folder` does not move where `dart run custom_lint` reads its
+configuration, and a failed `dart pub get` would leave a clean-looking run. Both
+are recorded in the rule file.
 
 ## Complexity and length: seven tool rules, and a probe that stays
 
@@ -53,7 +169,8 @@ prompt rules:
   at `7`, and `type_complexity` at `250`.
 - `complexity-typescript` — one `eslint` run over
   `sonarjs/cognitive-complexity` at `15` and `max-lines-per-function` at `250`
-  with blank lines and comments skipped.
+  with blank lines and comments skipped. The config wraps both rules to keep
+  the test carve-out that the two prompt rules state.
 - `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
   with `ignores_case_statements` on, and `function_body_length` at `250`.
 
@@ -80,12 +197,46 @@ function for its nesting inside the one score. Python and Swift drop it, because
 ruff names no nesting rule and swiftlint's `nesting` rule measures nested type
 and function declarations rather than nested conditions.
 
-Dart takes no tool rule; see the rejection recorded below. It keeps the
-`complexity` probe and both prompt rules.
+Dart takes no COMPLEXITY tool rule; see the rejection recorded below. It keeps
+the `complexity` probe and both prompt rules. Dart does take a magic-number tool
+rule, and the section above records it.
 
 The `complexity` probe stays. Dart, every other language, and every workspace
 whose tool doctor cannot find keep the probe and the prompt rules. That is the
 designed fallback, not a gap.
+
+## Commented-out code: one tool rule, and the parse as the judge
+
+`no-commented-code-parsed` supersedes the `no-commented-code` prompt rule for
+eleven languages, and its tool is `sah` itself. The op it runs —
+`sah tool code_context commented_code find` — extracts each comment block with
+tree-sitter, strips the delimiters, and hands the text back to the grammar the
+file itself is parsed with. Text that re-parses as two or more statements with
+almost no error nodes IS code; text that does not is prose.
+
+One rule reads eleven languages, which is what makes this rule unlike every
+other one in the set: the verdict is a re-parse rather than a language-specific
+linter, so Rust, Python, TypeScript, TSX, JavaScript, Go, Java, C, C++, C# and
+Swift all take the same rule.
+
+Five languages the grammar roster parses take no verdict, and each is a
+measured decision. `bash`, `ruby` and `elixir` accept a paren-less call, so a
+line of English parses as a command with arguments and a paragraph of prose
+re-parses as clean code. `php` needs an opening tag a comment's text never
+carries. `fortran` has no delimiter convention that separates documentation
+from a disabled line. Those five, and every language the roster does not parse,
+keep the prompt rule.
+
+The exemption is structural on both halves. Documentation is excluded before
+any gate runs — by the grammar's own doc-marker node in Rust, and by the
+comment's own opening delimiter everywhere else — and a block of five lines or
+fewer is under the gate. There is no ignore marker, because the thing the tool
+reads is the grammar: move an example into a doc comment and the grammar
+exempts it.
+
+`ruff`'s `ERA001` was used to cross-check the Python fixtures rather than
+shipped as a rule of its own. One finding has one owner, and the re-parse op
+already covers Python.
 
 ## Dead code: six tool rules, and the prompt rule as the fallback
 

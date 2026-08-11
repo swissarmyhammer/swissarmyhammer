@@ -791,6 +791,27 @@ pub fn create_temp_dir() -> std::io::Result<TempDir> {
     retry_with_backoff(TempDir::new)
 }
 
+/// Quote `path` so a shell reads it as one literal word.
+///
+/// A test that builds an `sh -c` command string around a path takes that path
+/// from a temporary directory, so its text is not under the test's control.
+/// Double quotes are not enough: they still let a backtick, a `$(...)`, or an
+/// embedded quote in the path run as code. Single quotes stop every one of
+/// them, and the only character a single-quoted word cannot hold is the
+/// single quote itself, which `'\''` writes — close the quote, write an
+/// escaped literal quote, open the quote again.
+///
+/// A script that takes its value as a positional parameter needs no quoting at
+/// all, and is the better shape where it fits. It does not fit every script:
+/// the review engine's tool rules already pass the changed files as the
+/// script's positional parameters.
+///
+/// This lives here, beside the other cross-crate test fixtures, so every crate
+/// that builds such a command shares one answer rather than a copy of its own.
+pub fn shell_escape_path(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1360,5 +1381,38 @@ mod tests {
 
         // After drop, HOME is removed again (restored to the None baseline).
         assert_eq!(restored, None);
+    }
+
+    /// [`shell_escape_path`] must make a path data rather than code: a path
+    /// that holds a command substitution and a single quote reaches the shell
+    /// as its own text, and the substitution never runs.
+    #[test]
+    fn shell_escape_path_keeps_a_command_substitution_in_a_path_from_running() {
+        let dir = TempDir::new().unwrap();
+        let hostile = dir.path().join(r#"$(touch pwned)'x"#);
+        let echoed = dir.path().join("echoed");
+
+        let script = format!(
+            "printf '%s' {hostile} > {echoed}",
+            hostile = shell_escape_path(&hostile),
+            echoed = shell_escape_path(&echoed),
+        );
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .current_dir(dir.path())
+            .status()
+            .expect("run the quoted script");
+
+        assert!(status.success(), "the quoted script must run: {script}");
+        assert_eq!(
+            std::fs::read_to_string(&echoed).expect("read what the shell wrote"),
+            hostile.display().to_string(),
+            "the shell must read the path as one literal word"
+        );
+        assert!(
+            !dir.path().join("pwned").exists(),
+            "the command substitution in the path must never run"
+        );
     }
 }

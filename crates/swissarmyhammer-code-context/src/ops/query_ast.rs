@@ -9,6 +9,10 @@ use std::path::Path;
 use tree_sitter::StreamingIterator;
 
 use crate::error::CodeContextError;
+use crate::ops::workspace_path::resolve_within;
+
+/// How many matches the operation returns when the caller names no limit.
+const DEFAULT_MAX_RESULTS: usize = 50;
 
 /// Options for the query AST operation.
 #[derive(Debug, Clone)]
@@ -19,7 +23,9 @@ pub struct QueryAstOptions {
 
 impl Default for QueryAstOptions {
     fn default() -> Self {
-        Self { max_results: 50 }
+        Self {
+            max_results: DEFAULT_MAX_RESULTS,
+        }
     }
 }
 
@@ -66,7 +72,10 @@ pub struct QueryAstResult {
 ///
 /// `workspace_root` is used to resolve relative `file_paths` to absolute paths.
 /// `language` is the tree-sitter Language to parse with and query against.
-/// `file_paths` are relative paths to scan.
+/// `file_paths` are relative paths to scan. Each one is resolved inside
+/// `workspace_root` by
+/// [`resolve_within`](crate::ops::workspace_path::resolve_within), so a path
+/// that climbs out of the workspace names no file this op will read.
 /// `query_str` is the S-expression pattern (e.g., `(function_item name: (identifier) @name)`).
 pub fn query_ast(
     workspace_root: &Path,
@@ -89,7 +98,10 @@ pub fn query_ast(
     let mut truncated = false;
 
     for relative_path in file_paths {
-        let abs_path = workspace_root.join(relative_path);
+        let abs_path = match resolve_within(workspace_root, relative_path) {
+            Some(path) => path,
+            None => continue, // skip a path that names no file inside the workspace
+        };
         let content = match std::fs::read_to_string(&abs_path) {
             Ok(c) => c,
             Err(_) => continue, // skip unreadable files
@@ -150,6 +162,7 @@ pub fn query_ast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::{workspace_beside_an_outside_file, WORKSPACE_OUTSIDE_RUST_FILE};
     use std::fs;
     use tempfile::TempDir;
 
@@ -311,6 +324,50 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.files_scanned, 1);
+        assert_eq!(result.matches.len(), 0);
+    }
+
+    /// The Rust source written beside the workspace, which no test may reach.
+    const OUTSIDE_RUST_SOURCE: &str = "fn secret() {}\n";
+
+    #[test]
+    fn a_relative_path_that_climbs_out_of_the_workspace_is_refused() {
+        let (_dir, workspace) =
+            workspace_beside_an_outside_file(WORKSPACE_OUTSIDE_RUST_FILE, OUTSIDE_RUST_SOURCE);
+
+        let result = query_ast(
+            &workspace,
+            &rust_language(),
+            &[format!("../{WORKSPACE_OUTSIDE_RUST_FILE}")],
+            "(function_item name: (identifier) @name)",
+            &QueryAstOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.files_scanned, 0);
+        assert_eq!(result.matches.len(), 0);
+    }
+
+    #[test]
+    fn an_absolute_path_outside_the_workspace_is_refused() {
+        let (dir, workspace) =
+            workspace_beside_an_outside_file(WORKSPACE_OUTSIDE_RUST_FILE, OUTSIDE_RUST_SOURCE);
+        let outside = dir
+            .path()
+            .join(WORKSPACE_OUTSIDE_RUST_FILE)
+            .to_string_lossy()
+            .to_string();
+
+        let result = query_ast(
+            &workspace,
+            &rust_language(),
+            &[outside],
+            "(function_item name: (identifier) @name)",
+            &QueryAstOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.files_scanned, 0);
         assert_eq!(result.matches.len(), 0);
     }
 }

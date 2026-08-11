@@ -28,14 +28,18 @@ use std::process::Output;
 
 use tempfile::TempDir;
 
+use swissarmyhammer_common::command::{command_failure_detail, shell_command, Shell};
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::error::AvpError;
 use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
-use crate::review::tool_output::parse_tool_stdout;
-use crate::review::tool_rules::{normalize_tool_path, project_tool_rules};
+use crate::review::tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
+use crate::review::tool_rules::{
+    normalize_tool_path, project_tool_rules, run_script_findings, script_args, ScriptFailure,
+};
 use crate::validators::types::{
-    FixHint, Rule, RuleSet, Supersedes, ToolScope, ToolSpec, ValidatorMatch, ValidatorSource,
+    FixHint, Rule, RuleSet, Supersedes, ToolSpec, ValidatorMatch, ValidatorSource,
+    FIXTURES_DIR_NAME,
 };
 use crate::validators::ValidatorLoader;
 
@@ -46,9 +50,6 @@ pub const PROJECT_TYPES_CHECK_NAME: &str = "Validator Project Types";
 /// project-types row.
 const PROJECT_TYPES_ROWS: usize = 1;
 
-/// The directory inside a validator set that carries tool-rule fixtures.
-const FIXTURES_DIR_NAME: &str = "fixtures";
-
 /// The suffix that marks a fixture file as a template rather than source.
 ///
 /// A fixture carries the very defect its tool rule reports, so a fixture
@@ -57,7 +58,7 @@ const FIXTURES_DIR_NAME: &str = "fixtures";
 /// make it fire. The stored name therefore ends in `.tmpl`, which no language
 /// owns and no file group matches. [`materialize_fixtures`] drops the suffix
 /// when it copies the file, so the tool still sees the extension it needs.
-const FIXTURE_TEMPLATE_SUFFIX: &str = ".tmpl";
+pub(crate) const FIXTURE_TEMPLATE_SUFFIX: &str = ".tmpl";
 
 /// The fixture that must make the tool report at least one finding.
 const FAIL_FIXTURE_KIND: &str = "fail";
@@ -121,6 +122,11 @@ pub enum ToolPresence {
 }
 
 /// The result of running a tool rule against its fixtures.
+///
+/// The outcome is never stored. [`ToolHealthCache`](crate::review::ToolHealthCache)
+/// keeps a PASS and nothing else, so an entry standing under a rule's key is
+/// itself the statement that the rule passed, and every other outcome is
+/// proved again on the next run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixtureOutcome {
     /// The fail fixture produced findings and the pass fixture none.
@@ -219,10 +225,11 @@ impl ToolRuleStatus {
 pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, AvpError> {
     let loader = crate::load_rules(Some(workspace_root))?;
     let project_types = detected_project_type_keys(workspace_root);
-    Ok(check_review_engine_with(
-        &loader,
-        &as_borrowed_strings(&project_types),
-    ))
+    let health = ToolHealthCache::open(workspace_root);
+    let status =
+        check_review_engine_with(&loader, &as_borrowed_strings(&project_types), Some(&health));
+    health.save();
+    Ok(status)
 }
 
 /// Produce the review-engine facts from an explicit loader and detected
@@ -231,9 +238,17 @@ pub fn check_review_engine(workspace_root: &Path) -> Result<ReviewEngineStatus, 
 /// This is the injectable core of [`check_review_engine`]: tests drive it
 /// with a synthetic loader and type list, without depending on the host's
 /// validator directories or workspace.
+///
+/// `health` is the workspace's stored fixture verdicts, when one is open.
+/// Doctor never reads a stored verdict — it proves every rule, stores the
+/// pass, and drops what a rule no longer earns — so a review that follows
+/// doctor reads doctor's own answer. The caller saves the cache afterwards,
+/// which is what carries the drop to the next process. `None` proves every
+/// rule and stores nothing.
 pub fn check_review_engine_with(
     loader: &ValidatorLoader,
     project_types: &[&str],
+    health: Option<&ToolHealthCache>,
 ) -> ReviewEngineStatus {
     let sets = loader
         .list_rulesets()
@@ -248,9 +263,20 @@ pub fn check_review_engine_with(
         })
         .collect();
 
+    // Doctor is the ground truth, so it proves every rule for itself and
+    // replaces whatever verdict `health` holds. A review that follows then
+    // reads doctor's own answer rather than an older one.
     let tool_rules = project_tool_rules(loader, project_types)
         .into_iter()
-        .map(|matched| check_tool_rule(matched.ruleset, matched.rule, matched.spec))
+        .map(|matched| {
+            tool_rule_health(
+                health,
+                HealthProof::Fresh,
+                matched.ruleset,
+                matched.rule,
+                matched.spec,
+            )
+        })
         .collect();
 
     ReviewEngineStatus {
@@ -266,9 +292,39 @@ pub fn check_review_engine_with(
 /// ([`crate::review::tool_rules`]) reuses the same health decision doctor
 /// reports — "healthy" can never mean two different things.
 pub(crate) fn check_tool_rule(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> ToolRuleStatus {
+    check_tool_rule_with(ruleset, rule, spec, |ruleset, rule, spec, _version| {
+        check_fixtures(ruleset, rule, spec)
+    })
+}
+
+/// Produce the doctor facts for one tool rule, with `fixture_check` deciding
+/// the fixture half.
+///
+/// Presence and version are read fresh on every call — each is one cheap
+/// command — and the version is handed to `fixture_check` because a stored
+/// fixture verdict is keyed on it (see
+/// [`ToolHealthCache`](crate::review::ToolHealthCache)). `fixture_check` runs
+/// only when the tool is present, so a missing tool still costs one command.
+///
+/// This is the ONE place presence, version, and fixtures become a
+/// [`ToolRuleStatus`], so the review engine's stored verdict and `sah doctor`'s
+/// proved one describe a tool rule the same way.
+pub(crate) fn check_tool_rule_with<F>(
+    ruleset: &RuleSet,
+    rule: &Rule,
+    spec: &ToolSpec,
+    fixture_check: F,
+) -> ToolRuleStatus
+where
+    F: FnOnce(&RuleSet, &Rule, &ToolSpec, Option<&str>) -> FixtureOutcome,
+{
     let presence = check_presence(spec);
     let (version, fixtures) = match &presence {
-        ToolPresence::Present => (check_version(spec), check_fixtures(ruleset, rule, spec)),
+        ToolPresence::Present => {
+            let version = check_version(spec);
+            let fixtures = fixture_check(ruleset, rule, spec, version.as_deref());
+            (version, fixtures)
+        }
         ToolPresence::Missing { .. } => (None, FixtureOutcome::Skipped),
     };
 
@@ -333,7 +389,12 @@ fn check_version(spec: &ToolSpec) -> Option<String> {
 /// The fail fixture must produce at least one finding; the pass fixture must
 /// produce none. Any broken run — nonzero exit, unparseable stdout — is a
 /// failure with its detail.
-fn check_fixtures(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> FixtureOutcome {
+///
+/// This is the expensive half of a health check, and the only half a stored
+/// verdict replaces. Crate-visible so
+/// [`ToolHealthCache`](crate::review::ToolHealthCache) proves a rule by
+/// calling exactly what doctor calls.
+pub(crate) fn check_fixtures(ruleset: &RuleSet, rule: &Rule, spec: &ToolSpec) -> FixtureOutcome {
     match verify_fixture_contract(ruleset, rule, spec) {
         Ok(()) => FixtureOutcome::Passed,
         Err(outcome) => outcome,
@@ -347,7 +408,7 @@ fn verify_fixture_contract(
     rule: &Rule,
     spec: &ToolSpec,
 ) -> Result<(), FixtureOutcome> {
-    let fixtures_dir = ruleset.base_path.join(FIXTURES_DIR_NAME);
+    let fixtures_dir = ruleset.fixtures_dir();
     let fail_fixture = find_fixture(&fixtures_dir, &rule.name, FAIL_FIXTURE_KIND);
     let pass_fixture = find_fixture(&fixtures_dir, &rule.name, PASS_FIXTURE_KIND);
 
@@ -427,28 +488,20 @@ fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
     let scratch = materialize_fixtures(source_dir)?;
     let fixture_dir = scratch.path();
 
-    let args: Vec<&OsStr> = match spec.scope {
-        ToolScope::Files => vec![fixture_name.as_os_str()],
-        ToolScope::Workspace => Vec::new(),
-    };
-
-    let output = run_shell(&spec.run, Some(fixture_dir), &args)
-        .map_err(|e| format!("tool failed to run on {}: {e}", fixture_label(fixture)))?;
-    if !output.status.success() {
-        return Err(format!(
-            "tool broke on {}: {}",
-            fixture_label(fixture),
-            command_failure_detail(&output),
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let findings = parse_tool_stdout(&stdout).map_err(|e| {
-        format!(
-            "tool stdout on {} broke the contract: {e}",
-            fixture_label(fixture)
-        )
-    })?;
+    let args = script_args(spec.scope, std::slice::from_ref(&fixture_name));
+    let findings =
+        run_script_findings(&spec.run, fixture_dir, &args).map_err(|failure| match failure {
+            ScriptFailure::Start(e) => {
+                format!("tool failed to run on {}: {e}", fixture_label(fixture))
+            }
+            ScriptFailure::Exit(detail) => {
+                format!("tool broke on {}: {detail}", fixture_label(fixture))
+            }
+            ScriptFailure::Contract(detail) => format!(
+                "tool stdout on {} broke the contract: {detail}",
+                fixture_label(fixture)
+            ),
+        })?;
     let about_fixture = findings
         .iter()
         .filter(|finding| {
@@ -514,17 +567,6 @@ fn fixture_label(fixture: &Path) -> String {
         .and_then(OsStr::to_str)
         .map(str::to_string)
         .unwrap_or_else(|| fixture.display().to_string())
-}
-
-/// Summarize a failed command: its stderr when present, its exit status
-/// otherwise.
-pub(crate) fn command_failure_detail(output: &Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if stderr.is_empty() {
-        format!("exited with {}", output.status)
-    } else {
-        stderr
-    }
 }
 
 /// Convert the review-engine facts into doctor [`Check`] rows.
@@ -653,20 +695,73 @@ fn fix_hint_fix(rule: &ToolRuleStatus) -> Option<String> {
     Some(format!("{FIX_LEAD_IN}{hint}"))
 }
 
-/// Run a tool-rule shell snippet the way the engine does: `bash -c <script>`
-/// with `args` as the script's positional parameters (`"$@"`).
+/// The environment variable every tool-rule script reads to invoke `sah`.
+///
+/// A rule whose tool IS sah writes `"$SAH_BIN"` rather than `sah`, so the
+/// script runs the binary the engine is running inside — never whichever
+/// older copy happens to sit first on `PATH`.
+pub(crate) const SAH_BINARY_ENV: &str = "SAH_BIN";
+
+/// The file stem the sah command line interface is installed under.
+const SAH_BINARY_NAME: &str = "sah";
+
+/// The `sah` binary a tool-rule script invokes, exported as [`SAH_BINARY_ENV`].
+///
+/// Resolution order, and why each step is there:
+///
+/// 1. An existing `SAH_BIN` in the environment wins, so a test or a wrapper can
+///    point every script at a freshly built binary.
+/// 2. `current_exe()`, when its file stem is `sah` — the engine invoking
+///    itself, which is the whole point.
+/// 3. The bare name, resolved by `PATH`. Under `cargo nextest` the current
+///    executable is a test binary rather than the command line interface, so
+///    step 2 declines and this is what a test run gets.
+fn sah_binary() -> OsString {
+    if let Some(configured) = std::env::var_os(SAH_BINARY_ENV) {
+        return configured;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if is_sah_binary(&exe) {
+            return exe.into_os_string();
+        }
+    }
+    OsString::from(SAH_BINARY_NAME)
+}
+
+/// Whether `exe` is the sah command line interface, judged by its file stem.
+///
+/// The comparison ignores ASCII case because a file system need not preserve
+/// it. Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so a
+/// case-sensitive stem test would decline the very binary it is looking for
+/// and fall through to the bare name on `PATH` — which on that machine is
+/// whatever older copy happens to sit first.
+fn is_sah_binary(exe: &Path) -> bool {
+    exe.file_stem()
+        .and_then(OsStr::to_str)
+        .is_some_and(|stem| stem.eq_ignore_ascii_case(SAH_BINARY_NAME))
+}
+
+/// Run a tool-rule shell snippet, with `args` as the script's positional
+/// parameters (`"$@"`).
 ///
 /// The ONE shell runner for tool-rule scripts — the doctor's fixture checks
 /// and the review engine's tool runs ([`crate::review::tool_rules`]) both go
 /// through it, so a script can never pass its fixtures under one shell and
-/// run under another.
+/// run under another. The interpreter and the stream wiring come from
+/// [`shell_command`], the same builder every other caller in the workspace
+/// spawns a shell with. What this runner adds is its own: the tool-rule
+/// contract's `"$@"` and [`SAH_BINARY_ENV`] in the environment; see
+/// [`sah_binary`].
 pub(crate) fn run_shell(
     script: &str,
     cwd: Option<&Path>,
     args: &[&OsStr],
 ) -> std::io::Result<Output> {
-    let mut command = std::process::Command::new("bash");
-    command.arg("-c").arg(script).arg("bash").args(args);
+    // `bash` is the `$0` a shell reads before `"$@"` begins, so the first real
+    // argument is not swallowed as the script's own name.
+    let mut command = shell_command(Shell::Bash, script);
+    command.arg("bash").args(args);
+    command.env(SAH_BINARY_ENV, sah_binary());
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
@@ -676,6 +771,7 @@ pub(crate) fn run_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
 
     /// Write one validator set directory: a VALIDATOR.md manifest, rule
     /// files under `rules/`, and fixture files under `fixtures/`.
@@ -708,6 +804,63 @@ mod tests {
             .load_rulesets_directory(root, ValidatorSource::Project)
             .expect("load rulesets");
         loader
+    }
+
+    /// A script that prints the `sah` binary the engine handed it.
+    const ECHO_SAH_BIN_SCRIPT: &str = r#"printf '%s' "$SAH_BIN""#;
+
+    #[test]
+    #[serial_test::serial(env)]
+    fn run_shell_exports_the_sah_binary_to_every_script() {
+        let _guard = EnvVarGuard::unset(SAH_BINARY_ENV);
+
+        let output = run_shell(ECHO_SAH_BIN_SCRIPT, None, &[]).expect("bash runs");
+
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            SAH_BINARY_NAME,
+            "under a test binary `current_exe` is not `sah`, so a script falls back to the name"
+        );
+    }
+
+    /// Every spelling of the command line interface's own name a file system
+    /// can hand back, and whether the stem test must accept it.
+    ///
+    /// Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so
+    /// only the STEM decides and it decides without reading case. The
+    /// separators are written `/` so the same rows exercise the same stems on
+    /// every platform — the case is what is under test, not the separator.
+    const BINARY_NAME_SPELLINGS: &[(&str, bool)] = &[
+        ("/usr/local/bin/sah", true),
+        ("/Program Files/sah/SAH.EXE", true),
+        ("/Program Files/sah/Sah.exe", true),
+        ("/usr/local/bin/sah.exe", true),
+        ("/usr/local/bin/sahara", false),
+        ("/usr/local/bin/notsah", false),
+        ("/workspace/target/debug/deps/doctor-9f2c1a", false),
+        ("/usr/local/bin", false),
+    ];
+
+    #[test]
+    fn the_binary_stem_test_reads_the_name_and_not_its_case() {
+        for (path, is_sah) in BINARY_NAME_SPELLINGS {
+            assert_eq!(
+                is_sah_binary(Path::new(path)),
+                *is_sah,
+                "{path} should {}be read as the sah command line interface",
+                if *is_sah { "" } else { "not " }
+            );
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(env)]
+    fn a_configured_sah_binary_wins_over_every_other_source() {
+        let _guard = EnvVarGuard::set(SAH_BINARY_ENV, "/opt/build/sah");
+
+        let output = run_shell(ECHO_SAH_BIN_SCRIPT, None, &[]).expect("bash runs");
+
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "/opt/build/sah");
     }
 
     const PLAIN_MANIFEST: &str =
@@ -789,6 +942,23 @@ tool:
 Always silent.
 "#;
 
+    /// A tool rule whose script is present but broken: it says why on stderr
+    /// and exits nonzero. Exit 0 means the tool judged the code, so a nonzero
+    /// exit is a broken tool rather than a clean run.
+    const BROKEN_TOOL_RULE: &str = r#"---
+name: broken-check
+description: A rule whose tool fails whenever it runs.
+tool:
+  scope: files
+  run: |
+    echo "the analyzer could not load its grammar" >&2
+    exit 4
+  doctor:
+    check_command: "true"
+---
+Always broken.
+"#;
+
     /// A `workspace`-scope tool rule: the script reads the whole directory it
     /// runs in, never the fixture it is asked about, so both fixture runs see
     /// both fixture files and report the same findings.
@@ -845,7 +1015,7 @@ Python only.
 
         let loader = ValidatorLoader::new();
         let detected_keys: Vec<&str> = detected.iter().map(String::as_str).collect();
-        let status = check_review_engine_with(&loader, &detected_keys);
+        let status = check_review_engine_with(&loader, &detected_keys, None);
         assert_eq!(status.project_types, detected);
     }
 
@@ -856,7 +1026,7 @@ Python only.
         write_ruleset(temp.path(), "python-set", PYTHON_ONLY_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let applies: std::collections::BTreeMap<&str, bool> = status
             .sets
@@ -875,7 +1045,7 @@ Python only.
         write_ruleset(temp.path(), "tool-set", TOOL_SET_MANIFEST, &[], &[]);
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let names: Vec<&str> = status.sets.iter().map(|s| s.name.as_str()).collect();
         let mut sorted = names.clone();
@@ -899,7 +1069,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -928,7 +1098,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -942,6 +1112,42 @@ Python only.
         assert_eq!(
             rule.install_commands,
             vec!["brew install definitely-not-a-real-tool-1f9c".to_string()]
+        );
+        assert!(!rule.usable());
+        assert!(rule.on_prompt_fallback());
+    }
+
+    /// A script that exits nonzero is a BROKEN tool, never a clean run, and
+    /// the row says what the script said on stderr.
+    #[test]
+    fn test_a_nonzero_exit_is_reported_as_a_broken_tool_with_its_own_words() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        write_ruleset(
+            temp.path(),
+            "tool-set",
+            TOOL_SET_MANIFEST,
+            &[("broken-check.md", BROKEN_TOOL_RULE)],
+            &[
+                ("broken-check.fail.txt", "a defect the tool must flag\n"),
+                ("broken-check.pass.txt", "clean\n"),
+            ],
+        );
+        let loader = loader_for(temp.path());
+
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
+
+        assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
+        let rule = &status.tool_rules[0];
+        assert_eq!(rule.presence, ToolPresence::Present);
+        let FixtureOutcome::Failed { detail } = &rule.fixtures else {
+            panic!(
+                "a script that exits nonzero must fail, got {:?}",
+                rule.fixtures
+            );
+        };
+        assert!(
+            detail.contains("the analyzer could not load its grammar"),
+            "the row must carry the script's own stderr, got {detail:?}"
         );
         assert!(!rule.usable());
         assert!(rule.on_prompt_fallback());
@@ -962,7 +1168,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -995,7 +1201,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1020,7 +1226,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         assert_eq!(status.tool_rules.len(), 1, "one tool rule expected");
         let rule = &status.tool_rules[0];
@@ -1057,7 +1263,7 @@ Python only.
         );
         let loader = loader_for(temp.path());
 
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let names: Vec<&str> = status
             .tool_rules
@@ -1086,7 +1292,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1143,7 +1349,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1188,7 +1394,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1219,7 +1425,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 
@@ -1251,7 +1457,7 @@ Python only.
     #[test]
     fn test_to_checks_no_project_types_row_says_none() {
         let loader = ValidatorLoader::new();
-        let status = check_review_engine_with(&loader, &[]);
+        let status = check_review_engine_with(&loader, &[], None);
 
         let checks = to_checks(&status);
 
@@ -1368,7 +1574,7 @@ Python only.
             ],
         );
         let loader = loader_for(temp.path());
-        let status = check_review_engine_with(&loader, RUST_TYPES);
+        let status = check_review_engine_with(&loader, RUST_TYPES, None);
 
         let checks = to_checks(&status);
 

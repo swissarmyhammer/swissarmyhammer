@@ -1,8 +1,12 @@
 """The failing fixture of the `missing-docs-python` tool rule.
 
-It holds one undocumented public item of every kind the passing fixture
-documents. The tool must report each one. A tool upgrade that stops reporting
-a kind makes the doctor mark the rule unusable.
+It holds one undocumented public item of every kind the rule reports inside a
+module. The tool must report each one. A tool upgrade that stops reporting a
+kind makes the doctor mark the rule unusable.
+
+`D100` and `D104` stand outside this file. The doctor materializes the fixture
+as one loose file with a docstring of its own, so no fixture can hold a module
+with no docstring, and no fixture can take the name `__init__.py`.
 """
 
 
@@ -11,6 +15,16 @@ def documented_neighbor() -> None:
 
 
 class UndocumentedClass:
+    class UndocumentedNested:
+        value = 0
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
     def undocumented_method(self) -> None:
         return None
 

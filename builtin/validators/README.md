@@ -46,20 +46,20 @@ matcher — a tool rule is a rule with more keys.
 
 A tool rule binds one tool to one language. Example:
 
-    # rules/missing-docs-python.md
+    # rules/complexity-python.md
     ---
-    name: missing-docs-python
-    description: Public items need docs — checked by ruff, not by prompt.
+    name: complexity-python
+    description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
     match:
       files:
         - "**/*.py"
       project_types:
         - python
-    supersedes: missing-docs
+    supersedes: cognitive-complexity
     tool:
       scope: files
       run: |
-        ruff check --isolated --no-cache --select D1 --output-format json "$@" |
+        ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
           jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
       doctor:
         check_command: "which ruff jq"
@@ -67,6 +67,11 @@ A tool rule binds one tool to one language. Example:
       install:
         commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
     ---
+
+That is the frontmatter of `rules/complexity-python.md`, all 22 lines of it,
+and its `run` is one pipe. A rule whose tool needs several steps writes a
+script rather than one pipe; `rules/missing-docs-python.md` is one of those,
+and its script is 51 lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
@@ -105,22 +110,56 @@ The `tool` block keys:
   you would type in a terminal: the tool, piped through `jq`, `sed`, or
   `grep`. Select the findings this rule owns and shape them in the pipe.
   There is no mapping configuration — the pipe is the mapping.
+
+  A pipe carries one trap, and it is how a rule answers zero for a broken tool.
+  A shell pipeline takes the exit status of its LAST command, so a pipe that
+  ends in `jq` exits 0 whatever the tool did. The engine reads exit 0 as "the
+  tool judged the code", so a tool that refused to start reports as a clean
+  file. Write a pipe only where the tool cannot exit nonzero. Otherwise write a
+  script: run the tool into a file, test the status, and exit nonzero yourself.
+  `rules/missing-docs-python.md` is the worked example, and its body states each
+  status it read. Two more shapes of the same trap:
+
+  - A tool can exit 0 for a file it could not open, and print an empty report.
+    Test each file the script is given before the tool starts.
+  - A `files`-scope script given NO file must report nothing and exit 0. The
+    loop over `"$@"` is a no-op, so a tool handed no path falls back to a
+    default target of its own and answers for the whole tree.
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and
   the engine keeps only the findings in changed files.
 - `doctor` — the commands that show the script's tools are installed and show
-  the main tool's version. Name everything the pipe needs (`which ruff jq`).
+  the main tool's version. Name everything the script needs (`which ruff jq`).
 - `install.commands` — the install commands, in order of preference. Pin the
   tool version in each command. An unpinned tool can change its rules and
   break the gate. A tool that ships with the language toolchain has no package
   to pin (clippy is a `rustup` component), so its rule declares no install
-  commands at all.
+  commands at all. An install command must also put the binary where
+  `check_command` can find it, because `check_command` alone decides whether the
+  install worked. `uv`, `pipx` and `npm install -g` write a directory a user
+  PATH usually holds; a bare `go install` writes `$(go env GOPATH)/bin`, which
+  a default PATH does not hold, so the Go rules state
+  `GOBIN="$HOME/.local/bin"` and land the binary in the same directory `uv` and
+  `pipx` use.
 - `doctor.fix_hint` — the command a person runs when there is nothing to
   install. A toolchain component has no package version to pin, so its rule
   states `fix_hint: "rustup component add clippy"` and doctor reports that as
   the fix. A fix hint is text for a person. The install lifecycle never runs
   it, and it never enters `install.commands`.
+
+Every script runs with `SAH_BIN` in its environment, naming the `sah` binary
+the engine is running inside. A rule whose tool IS sah — the review engine
+calling one of its own ops — writes `"$SAH_BIN"` and never a bare `sah`, so it
+can never reach an older copy that happens to sit first on `PATH`. The engine
+resolves the value in three steps: an `SAH_BIN` already in the environment,
+then `std::env::current_exe()` when its file stem is `sah`, then the bare name.
+Such a rule declares no install commands — there is no package to pin, and a
+review is already running inside the tool — so its `doctor.fix_hint` names what
+a person does when `check_command` still fails.
+
+`sah tool` renders a JSON result as YAML, which this contract cannot read, so
+an op a tool rule calls returns PLAIN TEXT: the finding lines and nothing else.
 
 The script's contract is its stdout. One finding per line, in either shape:
 
@@ -134,6 +173,22 @@ exit means the script broke — its stderr goes to the diagnosing agent, and no
 findings are read. A pipe that ends in `jq` or `sed` exits 0 even when the
 linter before it exits 1 on findings; that is the behavior you want, so do
 not add `pipefail` for linters that exit nonzero on findings.
+
+The same exit status hides a linter that BROKE. A linter keeps one status for
+findings and a higher status for a failure, and the pipe drops both. So a pipe
+is safe only where the tool exits nonzero for findings alone. Where the tool
+has a failure status of its own, run it into a file, test the status against
+the findings status, and exit nonzero yourself.
+
+One status can carry both a measured run and a broken run. The script must
+then test the REPORT beside the status, and accept the shared status only for
+the report shape a measured run writes. Measured with swiftlint 0.65.0: a run
+that breaches `warning_threshold:` exits 2 and writes a JSON array of 2
+entries; a run beside a project `swiftlint_version:` that names a version that
+is not installed exits 2, writes 0 bytes and lints no file. The three shipped
+swiftlint rules accept status 2 only when the report holds a JSON array of one
+entry or more. A script that accepted every status 2 reported 0 findings and
+exited 0 for the second shape, and the engine read a dirty file as clean.
 
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.
@@ -172,8 +227,25 @@ Rules for tool rules:
   tree around the file it examines. The script then builds that tree: it makes
   a temporary package, writes the configuration into it, copies the changed
   files in, runs the tool on the package, and maps the temporary paths back to
-  the paths it was given. `dart analyze` works this way. The project's own
-  configuration is still never read.
+  the paths it was given. `dart analyze` works this way. The script writes the
+  configuration of that tree itself, and it copies no configuration of the
+  project's own into the tree.
+- A script MAY read the project's own configuration for the FILE LIST alone,
+  and only where the tool merges two configurations and lets the script's own
+  one win. Which files a linter passes over — a generated tree, a vendored
+  tree — is the project's decision and belongs in the project's file. What the
+  rule MEASURES is the rule's decision. The three shipped swiftlint rules do
+  this: each names the project's `.swiftlint.yml` as the PARENT config and its
+  own temporary file as the CHILD, and passes `--force-exclude` so the
+  project's `excluded:` list reaches a file named on the command line.
+
+  A script that reads the project's configuration must state EVERY option of
+  EVERY rule it measures with, in its own child configuration, and the rule
+  body must carry a measurement of a project configuration that states other
+  options. Without that, a project silently changes the gate. Measured with
+  swiftlint 0.65.0: a parent stating `missing_docs: excludes_inherited_types:
+  false` moves the count when the child states no `missing_docs:` block, and it
+  moves nothing when the child states the block.
 
 ### Fixtures
 
@@ -243,6 +315,15 @@ When a review needs a tool rule and the tool is missing:
 types, so the tools are already there the first time a review needs them. It
 never runs step 3 — install never spends an agent turn. A tool `sah init`
 could not install is a warning that names the rule, never an error.
+
+One install runs at a time. An exclusive lock covers steps 2 and 3 together,
+so two installers never write one destination at once. A process that waits out
+the lock installs nothing and reports the tool blocked, which lands on step 4:
+the superseded prompt rule runs. The lock covers the processes that share one
+temporary directory, which on a machine that gives each user a temporary
+directory of its own means one user. Homebrew locks its own shared prefix.
+`npm install -g` under a Homebrew node writes that shared prefix and takes
+neither lock; two users installing at that moment are not serialized.
 
 ## Doctor
 

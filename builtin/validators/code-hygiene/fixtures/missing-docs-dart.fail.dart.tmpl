@@ -3,12 +3,23 @@
 // It holds one undocumented public member of every kind the passing fixture
 // documents. The tool must report each one. A tool upgrade that stops
 // reporting a kind makes the doctor mark the rule unusable.
+//
+// The getter and the setter are load-bearing. The `missing-docs` prompt rule
+// carves out "Simple getters/setters with self-explanatory names", and
+// `public_member_api_docs` has no setting that restores it, so both report.
+// They carry the same name because a setter alone reports nothing.
 
 /// A documented public function, so only the members below are reported.
 void documentedNeighbor() {}
 
 class UndocumentedClass {
+  int _value = 0;
+
   void undocumentedMethod() {}
+
+  int get undocumentedProperty => _value;
+
+  set undocumentedProperty(int next) => _value = next;
 }
 
 void undocumentedFunction() {}

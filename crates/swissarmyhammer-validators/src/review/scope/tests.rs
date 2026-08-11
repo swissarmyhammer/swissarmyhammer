@@ -7,7 +7,7 @@ use super::*;
 use model_embedding::mock::MockEmbedder;
 
 use crate::review::test_support::{
-    body, dup_emb, index_conn, loader_with, seed_chunk, uniform_budget, TestRepo, DIM,
+    body, dup_emb, index_conn, loader_with, ruleset, seed_chunk, uniform_budget, TestRepo, DIM,
 };
 
 // ---- ScopeSpec::resolve ----------------------------------------------
@@ -142,6 +142,49 @@ async fn scope_review_emits_one_file_scoped_event_per_resolved_file() {
         vec!["src/alpha.rs".to_string(), "src/beta.rs".to_string()],
         "one FileScoped event per resolved file"
     );
+}
+
+/// A changed file under a loaded validator set's `fixtures/` directory leaves
+/// the work-list entirely: it pairs with NO validator, so no fan-out task ever
+/// renders it and no tool rule ever receives it as an argument (both read the
+/// work-list this stage produces). It is reported on the work-list instead,
+/// with its reason.
+#[tokio::test]
+async fn scope_review_drops_a_validator_sets_fixture_from_the_work_list() {
+    let repo = TestRepo::new();
+    repo.write("src/lib.rs", "pub fn base() {}\n");
+    repo.commit("initial");
+    // The change: one ordinary source file, and one file under the set's own
+    // fixtures directory. Both are `.rs`, so the set matches both.
+    repo.write("src/alpha.rs", &format!("{}\n", body("alpha")));
+    let fixture = ".validators/probe/fixtures/probe-rule.fail.rs";
+    repo.write(fixture, &format!("{}\n", body("fixture")));
+
+    let conn = index_conn();
+    let mut set = ruleset("probe", "*.rs", &[]);
+    set.base_path = repo.path().join(".validators/probe");
+    let mut loader = ValidatorLoader::new();
+    loader.add_builtin_ruleset(set);
+    let embedder = MockEmbedder::new(DIM);
+
+    let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+        .await
+        .unwrap();
+
+    let reviewed: Vec<&str> = work.distinct_files().map(FileWork::path).collect();
+    assert_eq!(
+        reviewed,
+        ["src/alpha.rs"],
+        "the fixture pairs with no validator; the source file still does"
+    );
+    assert_eq!(
+        work.excluded().len(),
+        1,
+        "the fixture is reported, not dropped in silence: {:?}",
+        work.excluded()
+    );
+    assert_eq!(work.excluded()[0].path(), fixture);
+    assert_eq!(work.excluded()[0].reason(), "validator fixture");
 }
 
 // ---- scope_review: working scope, duplicate function ------------------
@@ -607,6 +650,7 @@ async fn a_findings_line_number_survives_from_the_prime_to_the_report() {
             crate::review::synthesize::TasksFailed(0),
         ),
         &[],
+        &[],
         &crate::review::ToolReport::default(),
         "2026-04-11 13:08",
     );
@@ -752,6 +796,7 @@ async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_sy
             crate::review::synthesize::TasksAttempted(1),
             crate::review::synthesize::TasksFailed(0),
         ),
+        &[],
         &[],
         &crate::review::ToolReport::default(),
         "2026-08-03 12:00",
@@ -1035,13 +1080,13 @@ fn work_list_getters_and_constructors_round_trip_the_private_fields() {
 fn batch_work_list_packs_whole_files_within_the_byte_budget() {
     // Three 10-byte files, budget 25 → greedy packing gives [a,b],[c]; the
     // running total never exceeds the budget and no file is split.
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![validator_sized(
+    let work = WorkList::new(
+        "p",
+        vec![validator_sized(
             "v",
             &[("a.rs", 10), ("b.rs", 10), ("c.rs", 10)],
         )],
-    };
+    );
 
     let (batches, skipped) = batch_work_list(&work, uniform_budget(25), raw_source_bytes);
 
@@ -1062,10 +1107,10 @@ fn batch_work_list_skips_a_single_file_over_the_budget_and_packs_the_rest() {
     // One file larger than the budget cannot be packed without splitting it
     // (forbidden) — it is excluded and reported, never a hard error that
     // blocks the rest of the scope. `small.rs` still packs normally.
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
-    };
+    let work = WorkList::new(
+        "p",
+        vec![validator_sized("v", &[("big.rs", 100), ("small.rs", 10)])],
+    );
 
     let (batches, skipped) = batch_work_list(&work, uniform_budget(32), raw_source_bytes);
 
@@ -1088,10 +1133,10 @@ fn batch_work_list_skips_a_single_file_over_the_budget_and_packs_the_rest() {
 #[test]
 fn batch_work_list_small_diff_is_exactly_one_batch() {
     // Today's fast path: a small diff fits one batch, unchanged.
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
-    };
+    let work = WorkList::new(
+        "p",
+        vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
+    );
 
     let (batches, skipped) = batch_work_list(&work, uniform_budget(32 * 1024), raw_source_bytes);
 
@@ -1105,13 +1150,13 @@ fn batch_work_list_projects_each_validator_onto_its_batch_files() {
     // v1 owns a.rs,b.rs; v2 owns c.rs. Budget 25 splits into [a,b],[c], so v1
     // lands wholly in batch 1 and v2 wholly in batch 2 — a validator with no
     // files in a batch is dropped from it.
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "p",
+        vec![
             validator_sized("v1", &[("a.rs", 10), ("b.rs", 10)]),
             validator_sized("v2", &[("c.rs", 10)]),
         ],
-    };
+    );
 
     let (batches, skipped) = batch_work_list(&work, uniform_budget(25), raw_source_bytes);
 
@@ -1127,13 +1172,13 @@ fn batch_work_list_projects_each_validator_onto_its_batch_files() {
 fn batch_work_list_keeps_a_shared_file_atomic_in_one_batch() {
     // `shared.rs` is matched by two validators but is ONE distinct file: it is
     // packed once, into a single batch, never duplicated or split.
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "p",
+        vec![
             validator_sized("v1", &[("shared.rs", 10)]),
             validator_sized("v2", &[("shared.rs", 10)]),
         ],
-    };
+    );
 
     let (batches, skipped) = batch_work_list(&work, uniform_budget(25), raw_source_bytes);
 
@@ -1149,10 +1194,7 @@ fn batch_work_list_keeps_a_shared_file_atomic_in_one_batch() {
 
 #[test]
 fn batch_work_list_empty_work_yields_no_batches() {
-    let work = WorkList {
-        change_purpose: "p".to_string(),
-        validators: vec![],
-    };
+    let work = WorkList::new("p", vec![]);
     let (batches, skipped) = batch_work_list(&work, uniform_budget(32 * 1024), raw_source_bytes);
     assert!(batches.is_empty());
     assert!(skipped.is_empty());
@@ -1162,13 +1204,13 @@ fn batch_work_list_empty_work_yields_no_batches() {
 fn distinct_files_dedups_by_path_in_first_seen_order() {
     // Three validators; `src/shared.rs` is matched by two of them, and the
     // overall first-seen order is b, shared, a.
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose",
+        vec![
             validator_over("v1", &["src/b.rs", "src/shared.rs"]),
             validator_over("v2", &["src/shared.rs", "src/a.rs"]),
         ],
-    };
+    );
 
     let distinct: Vec<&str> = work.distinct_files().map(|f| f.path.as_str()).collect();
     assert_eq!(

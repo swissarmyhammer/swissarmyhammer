@@ -4,6 +4,11 @@
 // names — a condition, a switch case, an operation, and a call argument. The
 // tool must report each one. A tool upgrade that stops reporting a position
 // makes the doctor mark the rule unusable.
+//
+// The last one is the edge of the tool's own shift carve-out. swiftlint reads
+// the shift operator and carves out a whole shift, so the passing fixture holds
+// `word << 8` and stays silent; a shift that is one link of a longer
+// unparenthesised chain is read as the chain, so it reports here.
 
 /// Take a delay so the call-argument position below has a callee.
 public func schedule(delayMillis: Int) -> Int {
@@ -36,4 +41,11 @@ public func operation(size: Int) -> Int {
 /// Pass an unnamed literal as a call argument.
 public func argument() -> Int {
     return schedule(delayMillis: 250)
+}
+
+/// Shift inside a longer operator chain, which the shift carve-out does not
+/// reach. Parentheses around the shift, or
+/// `// swiftlint:disable:next no_magic_numbers`, is the recourse.
+public func packedFlag(word: Int) -> Int {
+    return word << 8 | 1
 }

@@ -1641,30 +1641,30 @@ Body.
     #[test]
     fn test_parse_tool_rule_full_block() {
         let content = r#"---
-name: missing-docs-python
-description: Public items need docs — checked by ruff, not by prompt.
+name: complexity-python
+description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
 match:
   files:
     - "**/*.py"
   project_types:
     - python
-supersedes: missing-docs
+supersedes: cognitive-complexity
 tool:
   scope: files
   run: |
-    ruff check --select D1 --output-format json "$@" |
-      jq -c '.[] | {file: .filename, line: .location.row, message: .message}'
+    ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
+      jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
   doctor:
     check_command: "which ruff jq"
     check_version_command: "ruff --version"
   install:
-    commands: ["uv tool install ruff", "pipx install ruff"]
+    commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
 ---
 "#;
-        let rule = parse_rule_plain(content, Path::new("missing-docs-python.md")).unwrap();
+        let rule = parse_rule_plain(content, Path::new("complexity-python.md")).unwrap();
 
         assert!(rule.is_tool_rule());
-        assert_eq!(rule.supersedes.names(), ["missing-docs"]);
+        assert_eq!(rule.supersedes.names(), ["cognitive-complexity"]);
 
         let match_criteria = rule.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.files, vec!["**/*.py"]);
@@ -1672,7 +1672,8 @@ tool:
 
         let tool = rule.tool.as_ref().unwrap();
         assert_eq!(tool.scope, ToolScope::Files);
-        assert!(tool.run.contains("ruff check --select D1"));
+        assert!(tool.run.contains("ruff check --isolated --no-cache"));
+        assert!(tool.run.contains("--select C901"));
         let doctor = tool.doctor.as_ref().unwrap();
         assert_eq!(doctor.check_command, "which ruff jq");
         assert_eq!(
@@ -1682,7 +1683,7 @@ tool:
         let install = tool.install.as_ref().unwrap();
         assert_eq!(
             install.commands,
-            vec!["uv tool install ruff", "pipx install ruff"]
+            vec!["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
         );
     }
 

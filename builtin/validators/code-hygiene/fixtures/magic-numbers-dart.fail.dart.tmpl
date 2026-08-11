@@ -1,0 +1,33 @@
+/// A fail fixture for the `magic-numbers-dart` tool rule.
+///
+/// Each line below leaves one literal unnamed, and each stands in a different
+/// position, so a release that stopped reading one position makes this file
+/// report fewer findings.
+library;
+
+/// Answers whether the person may drive.
+bool mayDrive(int age) => age > 18;
+
+/// Schedules the work, and reads the delay in seconds.
+void schedule(int seconds) {}
+
+/// Calls the work with an unnamed argument.
+void callSite() {
+  schedule(3600);
+}
+
+/// Answers an unnamed limit.
+int limit() {
+  return 65535;
+}
+
+/// Scales the value by an unnamed factor.
+int scale(int value) => value * 4096;
+
+/// Packs the word. The shift operand reports, because no value allow-list can
+/// state a position.
+int pack(int word) => word << 8;
+
+/// Reads the share. `100` reports, because `solid_lints` 0.3.3 cannot take a
+/// value allow-list.
+int share(int part) => part * 100;

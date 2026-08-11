@@ -1,3 +1,17 @@
+//! Tests that drive a whole [`ContentBlockProcessor`] against the three security
+//! presets.
+//!
+//! Every module in the content pipeline carries its own unit tests, and each of
+//! those proves one check in isolation. This file proves the checks compose. A
+//! processor is assembled the way production assembles one — a real
+//! [`ContentSecurityValidator`], a real [`Base64Processor`] and the limits that
+//! match the chosen preset — and whole content blocks are pushed through it.
+//!
+//! That is what catches the failures isolation cannot see: a check that is
+//! correct on its own but never reached, a preset whose parts disagree with each
+//! other, and a security addition that silently blocks content the agent is
+//! supposed to accept.
+
 use crate::base64_processor::Base64Processor;
 use crate::content_block_processor::ContentBlockProcessor;
 use crate::content_security_validator::ContentSecurityValidator;

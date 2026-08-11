@@ -1,15 +1,17 @@
 """The passing fixture of the `magic-numbers-python` tool rule.
 
-Every comparison kind the failing fixture leaves unnamed — equality, ordering,
-and a chained comparison — reads a named constant here, and the last function
-holds the carve-outs the rule must never report. The tool must report nothing. A
-tool upgrade that reports one anyway makes the doctor mark the rule unusable.
+Every comparison the failing fixture leaves unnamed — equality, ordering, a
+chained comparison, and the conventional `100` — reads a named constant here,
+and the last function holds the carve-outs the rule must never report. The tool
+must report nothing. A tool upgrade that reports one anyway makes the doctor
+mark the rule unusable.
 """
 
 NOT_FOUND_STATUS = 404
 MAX_BUFFER_BYTES = 4096
 MIN_RATIO_PERCENT = 10
 MAX_RATIO_PERCENT = 90
+WHOLE_RATIO_PERCENT = 100
 
 
 def equality(status: int) -> bool:
@@ -27,10 +29,17 @@ def chained(ratio: int) -> bool:
     return MIN_RATIO_PERCENT <= ratio <= MAX_RATIO_PERCENT
 
 
+def conventional(ratio: int) -> bool:
+    """Compare against a named constant for a whole ratio."""
+    return ratio == WHOLE_RATIO_PERCENT
+
+
 def carved_out(index: int, total: int) -> int:
     """Compare against 0, 1, and -1, the values the rule always allows."""
     if index == 0:
         return total
+    if index == 1:
+        return total - index
     if index == -1:
         return total - 1
     return index

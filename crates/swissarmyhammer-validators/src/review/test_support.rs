@@ -25,9 +25,14 @@ use tempfile::TempDir;
 
 use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
+use swissarmyhammer_common::test_utils::shell_escape_path;
 
-use crate::review::scope::{BatchBudget, BatchBytes, FileCapBytes};
-use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
+use crate::review::scope::{
+    BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
+};
+use crate::validators::types::{
+    RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch, FIXTURES_DIR_NAME,
+};
 use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
 /// The engine's own validator↔file pairing, re-exported through the shared seam
@@ -45,6 +50,56 @@ pub fn uniform_budget(bytes: usize) -> BatchBudget {
     BatchBudget::new(FileCapBytes(bytes), BatchBytes(bytes))
 }
 
+/// The repository root, from this crate's manifest directory.
+///
+/// `CARGO_MANIFEST_DIR` expands when THIS crate compiles, so it always names
+/// `<repo>/crates/swissarmyhammer-validators` and the root stands two
+/// directories above it. This is the ONE definition of the walk: a test that
+/// must reach the real repository — the shipped validator sets, their fixture
+/// files — reads the root from here instead of carrying its own copy.
+pub fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repository root above crates/<crate>")
+        .to_path_buf()
+}
+
+/// A loader carrying every shipped validator set.
+///
+/// Every tool-rule test plans against the rules AS THEY SHIP, so the loader
+/// they plan with lives here once rather than in a copy per test file.
+pub fn builtin_loader() -> ValidatorLoader {
+    let mut loader = ValidatorLoader::new();
+    crate::load_builtins(&mut loader);
+    loader
+}
+
+/// A one-validator work-list over `files`, naming `rules` for `validator`.
+///
+/// Every tool-rule test builds the same shape: one validator, a rule list
+/// holding the prompt rules the tool rule supersedes and the tool rule itself,
+/// no probes, and one [`FileWork`] for each probe file. `files` carries the
+/// path and the whole content of each, in the order the run must report them.
+pub fn tool_rule_work<'a>(
+    change_purpose: &str,
+    validator: &str,
+    rules: impl IntoIterator<Item = String>,
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> WorkList {
+    WorkList::new(
+        change_purpose,
+        vec![ValidatorWork::new(
+            validator,
+            RuleNames::new(rules),
+            ProbeNames::new([]),
+            files
+                .into_iter()
+                .map(|(path, content)| FileWork::new(path, vec![], vec![], content, vec![])),
+        )],
+    )
+}
+
 /// Write the fixture pair the doctor health check demands for the tool rule
 /// named `rule`: a `fixtures/<rule>.fail.rs` carrying a TODO marker (the tool
 /// must flag it) and a `fixtures/<rule>.pass.rs` that is clean (the tool must
@@ -54,7 +109,7 @@ pub fn uniform_budget(bytes: usize) -> BatchBudget {
 /// the name would otherwise write the fixture pair outside the directory the
 /// doctor check reads.
 pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
-    let fixtures = base.join("fixtures");
+    let fixtures = base.join(FIXTURES_DIR_NAME);
     std::fs::create_dir_all(&fixtures).expect("create fixtures dir");
     std::fs::write(
         join_confined(&fixtures, &format!("{rule}.fail.rs")),
@@ -66,6 +121,49 @@ pub fn write_tool_rule_fixtures(base: &Path, rule: &str) {
         "fn clean() {}\n",
     )
     .expect("write pass fixture");
+}
+
+/// The file a fixture run sees in its working directory and a real run does
+/// not.
+///
+/// The doctor's fixture check copies the whole fixtures directory into a
+/// scratch directory and runs there, so a marker written beside the fixture
+/// pair reaches every fixture run and no other run. That is what lets a run
+/// script count the fixture runs a stored health verdict is meant to save.
+pub const FIXTURE_RUN_MARKER: &str = "fixture-run-marker";
+
+/// How many times a healthy tool rule runs its script to prove itself: one
+/// fail fixture and one pass fixture.
+pub const FIXTURE_RUNS_PER_PROOF: usize = 2;
+
+/// Write the fixture pair for `rule` under `base`, plus the
+/// [`FIXTURE_RUN_MARKER`] every fixture run then sees in its working
+/// directory.
+pub fn write_counted_tool_rule_fixtures(base: &Path, rule: &str) {
+    write_tool_rule_fixtures(base, rule);
+    std::fs::write(base.join(FIXTURES_DIR_NAME).join(FIXTURE_RUN_MARKER), "")
+        .expect("write the fixture run marker");
+}
+
+/// A `files`-scope script that reports one `path:line: message` finding per
+/// line holding `TODO`, and appends one line to `counter` first when it is
+/// running against the fixtures.
+pub fn counting_tool_script(counter: &Path) -> String {
+    format!(
+        r#"
+if [ -f {FIXTURE_RUN_MARKER} ]; then echo run >> {counter}; fi
+for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" }}' "$f"; done
+"#,
+        counter = shell_escape_path(counter),
+    )
+}
+
+/// How many fixture runs [`counting_tool_script`] recorded in `counter`. A
+/// file that does not exist means none ran.
+pub fn fixture_runs(counter: &Path) -> usize {
+    std::fs::read_to_string(counter)
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
 }
 
 /// Embedding dimension shared by the seeded index and the mock embedder.

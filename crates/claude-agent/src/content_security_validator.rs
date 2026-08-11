@@ -1,5 +1,24 @@
+//! The policy layer that refuses content which is well formed but hostile.
+//!
+//! The rest of the content pipeline asks whether a block has the right shape.
+//! This module asks a different question: whether a block of the right shape
+//! should be accepted at all. A URI on a scheme the deployment does not allow, a
+//! URI aimed at the loopback address or a private network range, text carrying a
+//! script-injection pattern, bytes whose sniffed type disagrees with the type
+//! they declare — each is valid ACP and each is refused here.
+//!
+//! The answer is data rather than control flow. A [`SecurityPolicy`] holds the
+//! allowed schemes, the blocked URI patterns, the blocked address ranges, the
+//! array bounds and the request-rate budget, and turns each heuristic on or off
+//! by a named field. [`SecurityPolicy::strict`], [`SecurityPolicy::moderate`]
+//! and [`SecurityPolicy::permissive`] are the three presets a deployment chooses
+//! between. Tightening the agent is therefore a change to a policy value, not a
+//! new branch in a validator, and two deployments can differ without the code
+//! differing.
+
 use crate::base64_validation;
 use crate::constants::sizes;
+use crate::embedded_resource::UnsupportedResourceKind;
 use crate::error::ToJsonRpcError;
 use crate::json_rpc_codes::{INVALID_PARAMS, SERVER_ERROR};
 use crate::size_validator::{SizeValidationError, SizeValidator};
@@ -207,6 +226,15 @@ pub enum ContentSecurityError {
     },
 }
 
+impl From<UnsupportedResourceKind> for ContentSecurityError {
+    fn from(_kind: UnsupportedResourceKind) -> Self {
+        Self::SecurityValidationFailed {
+            reason: "Unsupported resource type".to_string(),
+            policy_violated: "resource_type_allowlist".to_string(),
+        }
+    }
+}
+
 impl ToJsonRpcError for ContentSecurityError {
     fn to_json_rpc_code(&self) -> i32 {
         match self {
@@ -334,7 +362,7 @@ impl From<SizeValidationError> for ContentSecurityError {
 ///
 /// The level selects the whole preset — size limits, URI rules, heuristics and
 /// rate limits — rather than one setting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecurityLevel {
     /// Smallest limits, HTTPS only, every heuristic on. Use for untrusted
     /// input.
@@ -858,21 +886,11 @@ impl ContentSecurityValidator {
         &self,
         resource_content: &agent_client_protocol::schema::EmbeddedResource,
     ) -> Result<(), ContentSecurityError> {
-        use agent_client_protocol::schema::EmbeddedResourceResource;
-
-        match &resource_content.resource {
-            EmbeddedResourceResource::TextResourceContents(text_resource) => {
-                self.validate_text_resource(text_resource)
-            }
-            EmbeddedResourceResource::BlobResourceContents(blob_resource) => {
-                self.validate_blob_resource(blob_resource)
-            }
-            // Unknown or unsupported resource type - reject for security
-            _ => Err(ContentSecurityError::SecurityValidationFailed {
-                reason: "Unsupported resource type".to_string(),
-                policy_violated: "resource_type_allowlist".to_string(),
-            }),
-        }
+        crate::embedded_resource::dispatch(
+            resource_content,
+            |text_resource| self.validate_text_resource(text_resource),
+            |blob_resource| self.validate_blob_resource(blob_resource),
+        )
     }
 
     /// Validate the URI and the text of a text resource.

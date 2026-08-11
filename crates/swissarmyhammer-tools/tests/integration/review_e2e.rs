@@ -40,9 +40,10 @@ use swissarmyhammer_kanban::{
 };
 
 use super::review_fixture::{
-    plant_diff, report_has_claim, run_review_op, seed_on_disk_index, working_args, TestRepo,
-    CLAIM_DATA, CLAIM_DEAD_ORPHAN, CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_REUSE,
-    CLAIM_RUST_IDIOM, CLAIM_SECRET,
+    plant_diff, plant_project_validator_set, plant_validator_fixture, report_has_claim,
+    run_review_op, seed_on_disk_index, working_args, TestRepo, CLAIM_DATA, CLAIM_DEAD_ORPHAN,
+    CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_REUSE, CLAIM_RUST_IDIOM, CLAIM_SECRET,
+    FILE_PROJECT_FIXTURE,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,6 +179,75 @@ async fn review_e2e_sha_range_confirms_the_same_defects() {
         parsed["counts"]["refuted"],
         json!(2),
         "two refuted via sha: {parsed}"
+    );
+}
+
+/// `review sha <range>` over a commit that touches BOTH a validator set's own
+/// fail fixture and ordinary source: the source is reviewed, and the fixture
+/// leaves the work-list and is reported with its reason.
+///
+/// A fail fixture holds the very defect its rule reports, so an engine that read
+/// it as source would fire every matching rule on the file built to make it
+/// fire. The exclusion comes from the validator STORE — the loaded set's own
+/// `fixtures/` directory — so this test plants a real project set at
+/// `<repo>/.validators/` and drives the registered production tool over it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_source() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    // The set is standing configuration, so it lands in the baseline commit
+    // `plant_diff` makes; the CHANGE under review is the planted source plus
+    // the set's own fail fixture.
+    plant_project_validator_set(&repo);
+    plant_diff(&repo);
+    plant_validator_fixture(&repo);
+    repo.commit("plant the reviewable defects beside a validator fixture");
+    seed_on_disk_index(repo.path());
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review sha"));
+    args.insert("sha".to_string(), json!("HEAD~1..HEAD"));
+    args.insert("backend".to_string(), json!("local"));
+
+    let parsed = run_review_op(&repo, args).await;
+    let markdown = parsed["markdown"].as_str().expect("markdown string");
+
+    // The source half: the planted defects are still confirmed, so excluding a
+    // fixture costs the review nothing it was meant to read.
+    assert!(
+        report_has_claim(markdown, CLAIM_DEAD_ORPHAN),
+        "the changed source file is still reviewed: {markdown}"
+    );
+    assert!(
+        report_has_claim(markdown, CLAIM_SECRET),
+        "the changed source file is still reviewed: {markdown}"
+    );
+
+    // The fixture half: reported with its reason, and never as a finding.
+    assert_eq!(
+        parsed["counts"]["skipped_files"],
+        json!([FILE_PROJECT_FIXTURE]),
+        "the fixture is the one file the run did not review: {parsed}"
+    );
+    assert!(
+        markdown.contains("validator fixture"),
+        "the reason must be reported: {markdown}"
+    );
+    assert_eq!(
+        parsed["counts"]["skipped"],
+        json!(0),
+        "a fixture exclusion is not an over-cap coverage failure: {parsed}"
+    );
+    let fixture_findings = markdown
+        .lines()
+        .filter(|line| line.starts_with("- [ ] ") && line.contains(FILE_PROJECT_FIXTURE))
+        .count();
+    assert_eq!(
+        fixture_findings, 0,
+        "no checklist finding may name the fixture: {markdown}"
     );
 }
 

@@ -11,6 +11,35 @@ pub fn load_env_string(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+/// The spellings of a set environment variable that mean "true".
+///
+/// Compared against the trimmed, ASCII-lowercased value, so `TRUE`, `Yes`, and
+/// ` on ` all count.
+const TRUTHY_ENV_VALUES: [&str; 4] = ["1", "true", "yes", "on"];
+
+/// Load an environment variable as a boolean flag, falling back to `default`
+/// when the variable is not set.
+///
+/// This is the one truthy-value parser for the workspace. A set variable is
+/// true when it spells one of [`TRUTHY_ENV_VALUES`] and false otherwise, so
+/// `0`, `false`, the empty string, and any unrecognised word all read as
+/// false. An unset variable takes `default`, which lets a caller express both
+/// an opt-in toggle (`default = false`) and an opt-out one (`default = true`).
+///
+/// ```
+/// use swissarmyhammer_common::env_loader::load_env_bool;
+/// use swissarmyhammer_common::test_utils::EnvVarGuard;
+///
+/// let _guard = EnvVarGuard::set("SAH_DOC_EXAMPLE_FLAG", "TRUE");
+/// assert!(load_env_bool("SAH_DOC_EXAMPLE_FLAG", false));
+/// ```
+pub fn load_env_bool(key: &str, default: bool) -> bool {
+    match env::var(key) {
+        Ok(value) => TRUTHY_ENV_VALUES.contains(&value.trim().to_ascii_lowercase().as_str()),
+        Err(_) => default,
+    }
+}
+
 /// Load an environment variable with type conversion and default
 pub fn load_env_parsed<T>(key: &str, default: T) -> T
 where
@@ -45,7 +74,7 @@ where
 }
 
 /// Builder for loading multiple environment variables with consistent prefix
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EnvLoader {
     prefix: String,
 }
@@ -96,6 +125,7 @@ impl EnvLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::EnvVarGuard;
 
     #[test]
     fn test_load_env_string() {
@@ -230,5 +260,78 @@ mod tests {
 
         // Clean up
         env::remove_var(key);
+    }
+
+    /// The variable the boolean-flag tests below scope with an [`EnvVarGuard`].
+    const BOOL_KEY: &str = "SWISSARMYHAMMER_TEST_BOOL";
+
+    #[test]
+    #[serial_test::serial(env_loader_bool)]
+    fn an_unset_variable_takes_the_default() {
+        let _guard = EnvVarGuard::unset(BOOL_KEY);
+
+        assert!(!load_env_bool(BOOL_KEY, false));
+        assert!(load_env_bool(BOOL_KEY, true));
+    }
+
+    #[test]
+    #[serial_test::serial(env_loader_bool)]
+    fn every_truthy_spelling_reads_as_true() {
+        for value in TRUTHY_ENV_VALUES {
+            let _guard = EnvVarGuard::set(BOOL_KEY, value);
+
+            assert!(load_env_bool(BOOL_KEY, false), "{value} must read as true");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(env_loader_bool)]
+    fn a_truthy_spelling_is_matched_without_regard_to_case_or_padding() {
+        for value in ["TRUE", "Yes", " On "] {
+            let _guard = EnvVarGuard::set(BOOL_KEY, value);
+
+            assert!(load_env_bool(BOOL_KEY, false), "{value} must read as true");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(env_loader_bool)]
+    fn a_set_variable_that_is_not_truthy_reads_as_false() {
+        for value in ["0", "false", "off", "", "banana"] {
+            let _guard = EnvVarGuard::set(BOOL_KEY, value);
+
+            assert!(
+                !load_env_bool(BOOL_KEY, true),
+                "{value} must read as false even against a true default"
+            );
+        }
+    }
+
+    /// The prefix the clone test builds its loader on.
+    const CLONE_PREFIX: &str = "SWISSARMYHAMMER_TEST_CLONE";
+
+    /// The suffix the clone test loads under [`CLONE_PREFIX`].
+    const CLONE_SUFFIX: &str = "STRING";
+
+    /// The value the clone test sets. It differs from [`CLONE_FALLBACK`], so a
+    /// clone that lost the prefix reads the fallback instead of this.
+    const CLONE_VALUE: &str = "cloned";
+
+    /// The default the clone test passes, which a correct clone never reads.
+    const CLONE_FALLBACK: &str = "unset";
+
+    #[test]
+    #[serial_test::serial(env_loader_clone)]
+    fn a_clone_reads_the_same_prefix_as_the_loader_it_came_from() {
+        let _guard = EnvVarGuard::set(format!("{CLONE_PREFIX}_{CLONE_SUFFIX}"), CLONE_VALUE);
+        let loader = EnvLoader::new(CLONE_PREFIX);
+
+        let clone = loader.clone();
+
+        assert_eq!(clone.load_string(CLONE_SUFFIX, CLONE_FALLBACK), CLONE_VALUE);
+        assert_eq!(
+            clone.load_string(CLONE_SUFFIX, CLONE_FALLBACK),
+            loader.load_string(CLONE_SUFFIX, CLONE_FALLBACK)
+        );
     }
 }

@@ -1,3 +1,20 @@
+//! Base64 decoding for ACP media, with hostile payloads refused at the decode
+//! step.
+//!
+//! Decoding is the moment a caller-supplied string first becomes bytes, so this
+//! module is a gate and not a plain codec. The order of the work is the point: a
+//! payload is measured by [`crate::size_validator`] while it is still encoded,
+//! so an oversized string never allocates; only then is it decoded; and the
+//! decoded bytes are matched against the declared MIME type by
+//! [`crate::mime_type_validator`] and against a table of executable magic
+//! signatures, so a DOS, ELF or Mach-O image cannot arrive labelled
+//! `image/png`.
+//!
+//! [`Base64Processor`] holds the limit, the accepted MIME types and the optional
+//! [`crate::content_security_validator`] together, so a caller decodes through
+//! one configured value instead of repeating the checks, in the right order, at
+//! each call site.
+
 use crate::base64_validation;
 use crate::constants::sizes;
 use crate::content_security_validator::{ContentSecurityError, ContentSecurityValidator};

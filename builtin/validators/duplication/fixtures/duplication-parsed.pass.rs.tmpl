@@ -1,0 +1,143 @@
+//! The pass half of the `duplication-parsed` fixture pair.
+//!
+//! Four copies, and the rule reports none of them. Each one is a gate the
+//! rule states, so a run that stopped reading any one of the four makes this
+//! pair fail:
+//!
+//! 1. `mirrored_band` repeats `folded_band` and carries the marker comment.
+//! 2. `near_edge` and `near_floor` repeat a body under the minimum size.
+//! 3. `counted_rows` carries the whole of `folded_band`'s body and twice as
+//!    much again, so the run the two share spans one definition and part of
+//!    another. That run is what a sliding window reported; a whole-definition
+//!    comparison reads the two as different shapes.
+//! 4. `first_grid` and `second_grid` repeat a body inside a `#[cfg(test)]`
+//!    module.
+
+/// Folds the readings of one grid into a band.
+pub fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    let mut seen = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                band += *cell;
+                seen += 1;
+            } else {
+                band -= *cell;
+            }
+        }
+        if seen > limit {
+            band = limit;
+        }
+    }
+    band
+}
+
+// sah:allow duplication the mirrored reading forks when it gains its own limit
+/// Folds the readings of one mirrored grid into a band.
+pub fn mirrored_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut total = 0;
+    let mut count = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                total += *cell;
+                count += 1;
+            } else {
+                total -= *cell;
+            }
+        }
+        if count > limit {
+            total = limit;
+        }
+    }
+    total
+}
+
+/// Reads the band one step over the edge.
+pub fn near_edge(limit: i32) -> i32 {
+    limit + 1
+}
+
+/// Reads the band one step over the floor.
+pub fn near_floor(limit: i32) -> i32 {
+    limit + 1
+}
+
+/// Counts the rows of one grid, folding the same band on the way.
+pub fn counted_rows(grid: &[Vec<i32>], limit: i32) -> i32 {
+    let mut band = 0;
+    let mut seen = 0;
+    for row in grid {
+        for cell in row {
+            if *cell < limit {
+                band += *cell;
+                seen += 1;
+            } else {
+                band -= *cell;
+            }
+        }
+        if seen > limit {
+            band = limit;
+        }
+    }
+    let mut carried = 0;
+    while carried < limit {
+        carried += 1;
+        band -= carried;
+        if band < 0 {
+            band = 0;
+        }
+    }
+    let mut spread = band;
+    for step in 0..limit {
+        spread += step;
+        if spread > limit {
+            spread -= limit;
+        }
+    }
+    spread
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds the grid the first case reads.
+    fn first_grid(limit: i32) -> Vec<Vec<i32>> {
+        let mut grid = Vec::new();
+        let mut row = Vec::new();
+        for step in 0..limit {
+            row.push(step);
+            if row.len() > 3 {
+                grid.push(row);
+                row = Vec::new();
+            }
+        }
+        grid.push(row);
+        grid
+    }
+
+    /// Builds the grid the second case reads.
+    fn second_grid(limit: i32) -> Vec<Vec<i32>> {
+        let mut cells = Vec::new();
+        let mut line = Vec::new();
+        for step in 0..limit {
+            line.push(step);
+            if line.len() > 3 {
+                cells.push(line);
+                line = Vec::new();
+            }
+        }
+        cells.push(line);
+        cells
+    }
+
+    #[test]
+    fn the_two_grids_read_the_same_band() {
+        assert_eq!(
+            folded_band(&first_grid(8), 4),
+            folded_band(&second_grid(8), 4)
+        );
+    }
+}

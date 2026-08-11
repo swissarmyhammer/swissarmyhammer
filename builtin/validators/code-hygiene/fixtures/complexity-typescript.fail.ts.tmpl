@@ -1,317 +1,567 @@
 // The failing fixture of the `complexity-typescript` tool rule.
 //
-// It holds one function for each gate the rule decides.
+// Every guard below stands inside a `describe(...)` block, and the tool must
+// report all eight. A tool upgrade that stops reporting one of them makes the
+// doctor mark the rule unusable.
 //
 // - `foldGrid` nests six control-flow blocks and scores 21 against the
 //   cognitive complexity gate of 15.
 // - `mixState` runs 264 counted lines against the line gate of 250.
+// - `GridFolder.foldRows` holds the same shape as `foldGrid` as a class
+//   METHOD.
+// - `readings.band` holds the same shape as an ACCESSOR.
+// - `context.run(...)`, `context.each(rows)(...)` and `context.for(rows)(...)`
+//   each hold the same shape in the callback of a call whose root identifier
+//   is a test-framework name but which is not a test-framework call.
+// - `step(...)` holds the same shape in the callback of a BARE call to a name
+//   only Playwright spells, and Playwright spells it `test.step` alone.
 //
-// The tool must report both. A tool upgrade that stops reporting one of the
-// two makes the doctor mark the rule unusable.
+// The `describe` block holds the second half of the carve-out contract. The
+// two prompt rules this rule supersedes exempt a function marked as a test,
+// and they read that mark at the DEFINITION, not from the file name: a helper
+// defined inside a test block is still measured. A carve-out broad enough to
+// exempt everything inside a test block makes this fixture report nothing,
+// and the doctor marks the rule unusable.
+//
+// The five shapes after the two functions hold the narrow direction of the
+// same contract. Both gates report at the HEAD of the function they measure,
+// and for a method and for an accessor that head starts at the NAME, which
+// stands outside the function node the tool measures. A carve-out that reads
+// the report position against the function ranges alone therefore climbs to
+// the `describe` callback and exempts the method in silence.
+//
+// The three `context` calls hold the other narrow direction. `context` is a
+// test-framework name only in Mocha, and Mocha gives it `only` and `skip` and
+// no other modifier. A mark that reads the root identifier alone exempts
+// `context.run`. A mark that reads any pair of a test name and a modifier
+// name exempts `context.each` and `context.for`, because `each` and `for` are
+// also usual collection method names. The mark must read the segment that
+// names the framework function, and then accept only the modifiers that
+// framework gives that function.
+//
+// The bare `step(...)` call holds the third narrow direction. `globals.mocha`
+// and `globals.jest` name no `step`, and Playwright puts it on the `test`
+// root. A mark that takes `step` with no root therefore exempts a build step,
+// a wizard step and a saga step, which the two prompt rules both measure.
 
 /** The wrap the mixing steps below fold each state through. */
 const MODULUS = 4294967296;
 
-/**
- * Folds a grid of readings into one band, one nested block for each test.
- *
- * The shape under measurement nests six control-flow blocks, and the Sonar
- * algorithm charges each one its own depth: 1 + 2 + 3 + 4 + 5 + 6 = 21 against
- * the gate of 15.
- *
- * @param grid - Rows of readings to fold.
- * @param limit - The reading the middle band stops at.
- * @returns The folded band.
- */
-export function foldGrid(grid: number[][], limit: number): number {
-  let band = 0;
-  for (const row of grid) {
-    for (const cell of row) {
-      if (cell > 0) {
-        if (cell < limit) {
-          while (band < cell) {
-            if (band % 2 === 0) {
-              band += 2;
+describe("the complexity and length gates", () => {
+  /**
+   * Folds a grid of readings into one band, one nested block for each test.
+   *
+   * The shape under measurement nests six control-flow blocks, and the Sonar
+   * algorithm charges each one its own depth: 1 + 2 + 3 + 4 + 5 + 6 = 21 against
+   * the gate of 15.
+   *
+   * @param grid - Rows of readings to fold.
+   * @param limit - The reading the middle band stops at.
+   * @returns The folded band.
+   */
+  function foldGrid(grid: number[][], limit: number): number {
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
             }
-            band += 1;
           }
         }
       }
     }
+    return band;
   }
-  return band;
-}
 
-/**
- * Folds a seed into a state, one unrolled mixing step for each round.
- *
- * The body is mechanical on purpose. Its one job is to stand over the line
- * gate, so the counted lines are 264.
- *
- * @param seed - The state to fold.
- * @returns The folded state.
- */
-export function mixState(seed: number): number {
-  let state = seed;
-  state = (state * 31 + 0) % MODULUS;
-  state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
-  state = (state * 31 + 1) % MODULUS;
-  state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
-  state = (state * 31 + 2) % MODULUS;
-  state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
-  state = (state * 31 + 3) % MODULUS;
-  state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
-  state = (state * 31 + 4) % MODULUS;
-  state = ((state << 5) | (state >>> (32 - 5))) % MODULUS;
-  state = (state * 31 + 5) % MODULUS;
-  state = ((state << 6) | (state >>> (32 - 6))) % MODULUS;
-  state = (state * 31 + 6) % MODULUS;
-  state = ((state << 7) | (state >>> (32 - 7))) % MODULUS;
-  state = (state * 31 + 7) % MODULUS;
-  state = ((state << 8) | (state >>> (32 - 8))) % MODULUS;
-  state = (state * 31 + 8) % MODULUS;
-  state = ((state << 9) | (state >>> (32 - 9))) % MODULUS;
-  state = (state * 31 + 9) % MODULUS;
-  state = ((state << 10) | (state >>> (32 - 10))) % MODULUS;
-  state = (state * 31 + 10) % MODULUS;
-  state = ((state << 11) | (state >>> (32 - 11))) % MODULUS;
-  state = (state * 31 + 11) % MODULUS;
-  state = ((state << 12) | (state >>> (32 - 12))) % MODULUS;
-  state = (state * 31 + 12) % MODULUS;
-  state = ((state << 13) | (state >>> (32 - 13))) % MODULUS;
-  state = (state * 31 + 13) % MODULUS;
-  state = ((state << 14) | (state >>> (32 - 14))) % MODULUS;
-  state = (state * 31 + 14) % MODULUS;
-  state = ((state << 15) | (state >>> (32 - 15))) % MODULUS;
-  state = (state * 31 + 15) % MODULUS;
-  state = ((state << 16) | (state >>> (32 - 16))) % MODULUS;
-  state = (state * 31 + 16) % MODULUS;
-  state = ((state << 17) | (state >>> (32 - 17))) % MODULUS;
-  state = (state * 31 + 17) % MODULUS;
-  state = ((state << 18) | (state >>> (32 - 18))) % MODULUS;
-  state = (state * 31 + 18) % MODULUS;
-  state = ((state << 19) | (state >>> (32 - 19))) % MODULUS;
-  state = (state * 31 + 19) % MODULUS;
-  state = ((state << 20) | (state >>> (32 - 20))) % MODULUS;
-  state = (state * 31 + 20) % MODULUS;
-  state = ((state << 21) | (state >>> (32 - 21))) % MODULUS;
-  state = (state * 31 + 21) % MODULUS;
-  state = ((state << 22) | (state >>> (32 - 22))) % MODULUS;
-  state = (state * 31 + 22) % MODULUS;
-  state = ((state << 23) | (state >>> (32 - 23))) % MODULUS;
-  state = (state * 31 + 23) % MODULUS;
-  state = ((state << 24) | (state >>> (32 - 24))) % MODULUS;
-  state = (state * 31 + 24) % MODULUS;
-  state = ((state << 25) | (state >>> (32 - 25))) % MODULUS;
-  state = (state * 31 + 25) % MODULUS;
-  state = ((state << 26) | (state >>> (32 - 26))) % MODULUS;
-  state = (state * 31 + 26) % MODULUS;
-  state = ((state << 27) | (state >>> (32 - 27))) % MODULUS;
-  state = (state * 31 + 27) % MODULUS;
-  state = ((state << 28) | (state >>> (32 - 28))) % MODULUS;
-  state = (state * 31 + 28) % MODULUS;
-  state = ((state << 29) | (state >>> (32 - 29))) % MODULUS;
-  state = (state * 31 + 29) % MODULUS;
-  state = ((state << 30) | (state >>> (32 - 30))) % MODULUS;
-  state = (state * 31 + 30) % MODULUS;
-  state = ((state << 31) | (state >>> (32 - 31))) % MODULUS;
-  state = (state * 31 + 31) % MODULUS;
-  state = ((state << 32) | (state >>> (32 - 32))) % MODULUS;
-  state = (state * 31 + 32) % MODULUS;
-  state = ((state << 33) | (state >>> (32 - 33))) % MODULUS;
-  state = (state * 31 + 33) % MODULUS;
-  state = ((state << 34) | (state >>> (32 - 34))) % MODULUS;
-  state = (state * 31 + 34) % MODULUS;
-  state = ((state << 35) | (state >>> (32 - 35))) % MODULUS;
-  state = (state * 31 + 35) % MODULUS;
-  state = ((state << 36) | (state >>> (32 - 36))) % MODULUS;
-  state = (state * 31 + 36) % MODULUS;
-  state = ((state << 37) | (state >>> (32 - 37))) % MODULUS;
-  state = (state * 31 + 37) % MODULUS;
-  state = ((state << 38) | (state >>> (32 - 38))) % MODULUS;
-  state = (state * 31 + 38) % MODULUS;
-  state = ((state << 39) | (state >>> (32 - 39))) % MODULUS;
-  state = (state * 31 + 39) % MODULUS;
-  state = ((state << 40) | (state >>> (32 - 40))) % MODULUS;
-  state = (state * 31 + 40) % MODULUS;
-  state = ((state << 41) | (state >>> (32 - 41))) % MODULUS;
-  state = (state * 31 + 41) % MODULUS;
-  state = ((state << 42) | (state >>> (32 - 42))) % MODULUS;
-  state = (state * 31 + 42) % MODULUS;
-  state = ((state << 43) | (state >>> (32 - 43))) % MODULUS;
-  state = (state * 31 + 43) % MODULUS;
-  state = ((state << 44) | (state >>> (32 - 44))) % MODULUS;
-  state = (state * 31 + 44) % MODULUS;
-  state = ((state << 45) | (state >>> (32 - 45))) % MODULUS;
-  state = (state * 31 + 45) % MODULUS;
-  state = ((state << 46) | (state >>> (32 - 46))) % MODULUS;
-  state = (state * 31 + 46) % MODULUS;
-  state = ((state << 47) | (state >>> (32 - 47))) % MODULUS;
-  state = (state * 31 + 47) % MODULUS;
-  state = ((state << 48) | (state >>> (32 - 48))) % MODULUS;
-  state = (state * 31 + 48) % MODULUS;
-  state = ((state << 49) | (state >>> (32 - 49))) % MODULUS;
-  state = (state * 31 + 49) % MODULUS;
-  state = ((state << 50) | (state >>> (32 - 50))) % MODULUS;
-  state = (state * 31 + 50) % MODULUS;
-  state = ((state << 51) | (state >>> (32 - 51))) % MODULUS;
-  state = (state * 31 + 51) % MODULUS;
-  state = ((state << 52) | (state >>> (32 - 52))) % MODULUS;
-  state = (state * 31 + 52) % MODULUS;
-  state = ((state << 53) | (state >>> (32 - 53))) % MODULUS;
-  state = (state * 31 + 53) % MODULUS;
-  state = ((state << 54) | (state >>> (32 - 54))) % MODULUS;
-  state = (state * 31 + 54) % MODULUS;
-  state = ((state << 55) | (state >>> (32 - 55))) % MODULUS;
-  state = (state * 31 + 55) % MODULUS;
-  state = ((state << 56) | (state >>> (32 - 56))) % MODULUS;
-  state = (state * 31 + 56) % MODULUS;
-  state = ((state << 57) | (state >>> (32 - 57))) % MODULUS;
-  state = (state * 31 + 57) % MODULUS;
-  state = ((state << 58) | (state >>> (32 - 58))) % MODULUS;
-  state = (state * 31 + 58) % MODULUS;
-  state = ((state << 59) | (state >>> (32 - 59))) % MODULUS;
-  state = (state * 31 + 59) % MODULUS;
-  state = ((state << 60) | (state >>> (32 - 60))) % MODULUS;
-  state = (state * 31 + 60) % MODULUS;
-  state = ((state << 61) | (state >>> (32 - 61))) % MODULUS;
-  state = (state * 31 + 61) % MODULUS;
-  state = ((state << 62) | (state >>> (32 - 62))) % MODULUS;
-  state = (state * 31 + 62) % MODULUS;
-  state = ((state << 63) | (state >>> (32 - 63))) % MODULUS;
-  state = (state * 31 + 63) % MODULUS;
-  state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
-  state = (state * 31 + 64) % MODULUS;
-  state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
-  state = (state * 31 + 65) % MODULUS;
-  state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
-  state = (state * 31 + 66) % MODULUS;
-  state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
-  state = (state * 31 + 67) % MODULUS;
-  state = ((state << 5) | (state >>> (32 - 5))) % MODULUS;
-  state = (state * 31 + 68) % MODULUS;
-  state = ((state << 6) | (state >>> (32 - 6))) % MODULUS;
-  state = (state * 31 + 69) % MODULUS;
-  state = ((state << 7) | (state >>> (32 - 7))) % MODULUS;
-  state = (state * 31 + 70) % MODULUS;
-  state = ((state << 8) | (state >>> (32 - 8))) % MODULUS;
-  state = (state * 31 + 71) % MODULUS;
-  state = ((state << 9) | (state >>> (32 - 9))) % MODULUS;
-  state = (state * 31 + 72) % MODULUS;
-  state = ((state << 10) | (state >>> (32 - 10))) % MODULUS;
-  state = (state * 31 + 73) % MODULUS;
-  state = ((state << 11) | (state >>> (32 - 11))) % MODULUS;
-  state = (state * 31 + 74) % MODULUS;
-  state = ((state << 12) | (state >>> (32 - 12))) % MODULUS;
-  state = (state * 31 + 75) % MODULUS;
-  state = ((state << 13) | (state >>> (32 - 13))) % MODULUS;
-  state = (state * 31 + 76) % MODULUS;
-  state = ((state << 14) | (state >>> (32 - 14))) % MODULUS;
-  state = (state * 31 + 77) % MODULUS;
-  state = ((state << 15) | (state >>> (32 - 15))) % MODULUS;
-  state = (state * 31 + 78) % MODULUS;
-  state = ((state << 16) | (state >>> (32 - 16))) % MODULUS;
-  state = (state * 31 + 79) % MODULUS;
-  state = ((state << 17) | (state >>> (32 - 17))) % MODULUS;
-  state = (state * 31 + 80) % MODULUS;
-  state = ((state << 18) | (state >>> (32 - 18))) % MODULUS;
-  state = (state * 31 + 81) % MODULUS;
-  state = ((state << 19) | (state >>> (32 - 19))) % MODULUS;
-  state = (state * 31 + 82) % MODULUS;
-  state = ((state << 20) | (state >>> (32 - 20))) % MODULUS;
-  state = (state * 31 + 83) % MODULUS;
-  state = ((state << 21) | (state >>> (32 - 21))) % MODULUS;
-  state = (state * 31 + 84) % MODULUS;
-  state = ((state << 22) | (state >>> (32 - 22))) % MODULUS;
-  state = (state * 31 + 85) % MODULUS;
-  state = ((state << 23) | (state >>> (32 - 23))) % MODULUS;
-  state = (state * 31 + 86) % MODULUS;
-  state = ((state << 24) | (state >>> (32 - 24))) % MODULUS;
-  state = (state * 31 + 87) % MODULUS;
-  state = ((state << 25) | (state >>> (32 - 25))) % MODULUS;
-  state = (state * 31 + 88) % MODULUS;
-  state = ((state << 26) | (state >>> (32 - 26))) % MODULUS;
-  state = (state * 31 + 89) % MODULUS;
-  state = ((state << 27) | (state >>> (32 - 27))) % MODULUS;
-  state = (state * 31 + 90) % MODULUS;
-  state = ((state << 28) | (state >>> (32 - 28))) % MODULUS;
-  state = (state * 31 + 91) % MODULUS;
-  state = ((state << 29) | (state >>> (32 - 29))) % MODULUS;
-  state = (state * 31 + 92) % MODULUS;
-  state = ((state << 30) | (state >>> (32 - 30))) % MODULUS;
-  state = (state * 31 + 93) % MODULUS;
-  state = ((state << 31) | (state >>> (32 - 31))) % MODULUS;
-  state = (state * 31 + 94) % MODULUS;
-  state = ((state << 32) | (state >>> (32 - 32))) % MODULUS;
-  state = (state * 31 + 95) % MODULUS;
-  state = ((state << 33) | (state >>> (32 - 33))) % MODULUS;
-  state = (state * 31 + 96) % MODULUS;
-  state = ((state << 34) | (state >>> (32 - 34))) % MODULUS;
-  state = (state * 31 + 97) % MODULUS;
-  state = ((state << 35) | (state >>> (32 - 35))) % MODULUS;
-  state = (state * 31 + 98) % MODULUS;
-  state = ((state << 36) | (state >>> (32 - 36))) % MODULUS;
-  state = (state * 31 + 99) % MODULUS;
-  state = ((state << 37) | (state >>> (32 - 37))) % MODULUS;
-  state = (state * 31 + 100) % MODULUS;
-  state = ((state << 38) | (state >>> (32 - 38))) % MODULUS;
-  state = (state * 31 + 101) % MODULUS;
-  state = ((state << 39) | (state >>> (32 - 39))) % MODULUS;
-  state = (state * 31 + 102) % MODULUS;
-  state = ((state << 40) | (state >>> (32 - 40))) % MODULUS;
-  state = (state * 31 + 103) % MODULUS;
-  state = ((state << 41) | (state >>> (32 - 41))) % MODULUS;
-  state = (state * 31 + 104) % MODULUS;
-  state = ((state << 42) | (state >>> (32 - 42))) % MODULUS;
-  state = (state * 31 + 105) % MODULUS;
-  state = ((state << 43) | (state >>> (32 - 43))) % MODULUS;
-  state = (state * 31 + 106) % MODULUS;
-  state = ((state << 44) | (state >>> (32 - 44))) % MODULUS;
-  state = (state * 31 + 107) % MODULUS;
-  state = ((state << 45) | (state >>> (32 - 45))) % MODULUS;
-  state = (state * 31 + 108) % MODULUS;
-  state = ((state << 46) | (state >>> (32 - 46))) % MODULUS;
-  state = (state * 31 + 109) % MODULUS;
-  state = ((state << 47) | (state >>> (32 - 47))) % MODULUS;
-  state = (state * 31 + 110) % MODULUS;
-  state = ((state << 48) | (state >>> (32 - 48))) % MODULUS;
-  state = (state * 31 + 111) % MODULUS;
-  state = ((state << 49) | (state >>> (32 - 49))) % MODULUS;
-  state = (state * 31 + 112) % MODULUS;
-  state = ((state << 50) | (state >>> (32 - 50))) % MODULUS;
-  state = (state * 31 + 113) % MODULUS;
-  state = ((state << 51) | (state >>> (32 - 51))) % MODULUS;
-  state = (state * 31 + 114) % MODULUS;
-  state = ((state << 52) | (state >>> (32 - 52))) % MODULUS;
-  state = (state * 31 + 115) % MODULUS;
-  state = ((state << 53) | (state >>> (32 - 53))) % MODULUS;
-  state = (state * 31 + 116) % MODULUS;
-  state = ((state << 54) | (state >>> (32 - 54))) % MODULUS;
-  state = (state * 31 + 117) % MODULUS;
-  state = ((state << 55) | (state >>> (32 - 55))) % MODULUS;
-  state = (state * 31 + 118) % MODULUS;
-  state = ((state << 56) | (state >>> (32 - 56))) % MODULUS;
-  state = (state * 31 + 119) % MODULUS;
-  state = ((state << 57) | (state >>> (32 - 57))) % MODULUS;
-  state = (state * 31 + 120) % MODULUS;
-  state = ((state << 58) | (state >>> (32 - 58))) % MODULUS;
-  state = (state * 31 + 121) % MODULUS;
-  state = ((state << 59) | (state >>> (32 - 59))) % MODULUS;
-  state = (state * 31 + 122) % MODULUS;
-  state = ((state << 60) | (state >>> (32 - 60))) % MODULUS;
-  state = (state * 31 + 123) % MODULUS;
-  state = ((state << 61) | (state >>> (32 - 61))) % MODULUS;
-  state = (state * 31 + 124) % MODULUS;
-  state = ((state << 62) | (state >>> (32 - 62))) % MODULUS;
-  state = (state * 31 + 125) % MODULUS;
-  state = ((state << 63) | (state >>> (32 - 63))) % MODULUS;
-  state = (state * 31 + 126) % MODULUS;
-  state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
-  state = (state * 31 + 127) % MODULUS;
-  state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
-  state = (state * 31 + 128) % MODULUS;
-  state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
-  state = (state * 31 + 129) % MODULUS;
-  state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
-  return state;
-}
+  /**
+   * Folds a seed into a state, one unrolled mixing step for each round.
+   *
+   * The body is mechanical on purpose. Its one job is to stand over the line
+   * gate, so the counted lines are 264.
+   *
+   * @param seed - The state to fold.
+   * @returns The folded state.
+   */
+  function mixState(seed: number): number {
+    let state = seed;
+    state = (state * 31 + 0) % MODULUS;
+    state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
+    state = (state * 31 + 1) % MODULUS;
+    state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
+    state = (state * 31 + 2) % MODULUS;
+    state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
+    state = (state * 31 + 3) % MODULUS;
+    state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
+    state = (state * 31 + 4) % MODULUS;
+    state = ((state << 5) | (state >>> (32 - 5))) % MODULUS;
+    state = (state * 31 + 5) % MODULUS;
+    state = ((state << 6) | (state >>> (32 - 6))) % MODULUS;
+    state = (state * 31 + 6) % MODULUS;
+    state = ((state << 7) | (state >>> (32 - 7))) % MODULUS;
+    state = (state * 31 + 7) % MODULUS;
+    state = ((state << 8) | (state >>> (32 - 8))) % MODULUS;
+    state = (state * 31 + 8) % MODULUS;
+    state = ((state << 9) | (state >>> (32 - 9))) % MODULUS;
+    state = (state * 31 + 9) % MODULUS;
+    state = ((state << 10) | (state >>> (32 - 10))) % MODULUS;
+    state = (state * 31 + 10) % MODULUS;
+    state = ((state << 11) | (state >>> (32 - 11))) % MODULUS;
+    state = (state * 31 + 11) % MODULUS;
+    state = ((state << 12) | (state >>> (32 - 12))) % MODULUS;
+    state = (state * 31 + 12) % MODULUS;
+    state = ((state << 13) | (state >>> (32 - 13))) % MODULUS;
+    state = (state * 31 + 13) % MODULUS;
+    state = ((state << 14) | (state >>> (32 - 14))) % MODULUS;
+    state = (state * 31 + 14) % MODULUS;
+    state = ((state << 15) | (state >>> (32 - 15))) % MODULUS;
+    state = (state * 31 + 15) % MODULUS;
+    state = ((state << 16) | (state >>> (32 - 16))) % MODULUS;
+    state = (state * 31 + 16) % MODULUS;
+    state = ((state << 17) | (state >>> (32 - 17))) % MODULUS;
+    state = (state * 31 + 17) % MODULUS;
+    state = ((state << 18) | (state >>> (32 - 18))) % MODULUS;
+    state = (state * 31 + 18) % MODULUS;
+    state = ((state << 19) | (state >>> (32 - 19))) % MODULUS;
+    state = (state * 31 + 19) % MODULUS;
+    state = ((state << 20) | (state >>> (32 - 20))) % MODULUS;
+    state = (state * 31 + 20) % MODULUS;
+    state = ((state << 21) | (state >>> (32 - 21))) % MODULUS;
+    state = (state * 31 + 21) % MODULUS;
+    state = ((state << 22) | (state >>> (32 - 22))) % MODULUS;
+    state = (state * 31 + 22) % MODULUS;
+    state = ((state << 23) | (state >>> (32 - 23))) % MODULUS;
+    state = (state * 31 + 23) % MODULUS;
+    state = ((state << 24) | (state >>> (32 - 24))) % MODULUS;
+    state = (state * 31 + 24) % MODULUS;
+    state = ((state << 25) | (state >>> (32 - 25))) % MODULUS;
+    state = (state * 31 + 25) % MODULUS;
+    state = ((state << 26) | (state >>> (32 - 26))) % MODULUS;
+    state = (state * 31 + 26) % MODULUS;
+    state = ((state << 27) | (state >>> (32 - 27))) % MODULUS;
+    state = (state * 31 + 27) % MODULUS;
+    state = ((state << 28) | (state >>> (32 - 28))) % MODULUS;
+    state = (state * 31 + 28) % MODULUS;
+    state = ((state << 29) | (state >>> (32 - 29))) % MODULUS;
+    state = (state * 31 + 29) % MODULUS;
+    state = ((state << 30) | (state >>> (32 - 30))) % MODULUS;
+    state = (state * 31 + 30) % MODULUS;
+    state = ((state << 31) | (state >>> (32 - 31))) % MODULUS;
+    state = (state * 31 + 31) % MODULUS;
+    state = ((state << 32) | (state >>> (32 - 32))) % MODULUS;
+    state = (state * 31 + 32) % MODULUS;
+    state = ((state << 33) | (state >>> (32 - 33))) % MODULUS;
+    state = (state * 31 + 33) % MODULUS;
+    state = ((state << 34) | (state >>> (32 - 34))) % MODULUS;
+    state = (state * 31 + 34) % MODULUS;
+    state = ((state << 35) | (state >>> (32 - 35))) % MODULUS;
+    state = (state * 31 + 35) % MODULUS;
+    state = ((state << 36) | (state >>> (32 - 36))) % MODULUS;
+    state = (state * 31 + 36) % MODULUS;
+    state = ((state << 37) | (state >>> (32 - 37))) % MODULUS;
+    state = (state * 31 + 37) % MODULUS;
+    state = ((state << 38) | (state >>> (32 - 38))) % MODULUS;
+    state = (state * 31 + 38) % MODULUS;
+    state = ((state << 39) | (state >>> (32 - 39))) % MODULUS;
+    state = (state * 31 + 39) % MODULUS;
+    state = ((state << 40) | (state >>> (32 - 40))) % MODULUS;
+    state = (state * 31 + 40) % MODULUS;
+    state = ((state << 41) | (state >>> (32 - 41))) % MODULUS;
+    state = (state * 31 + 41) % MODULUS;
+    state = ((state << 42) | (state >>> (32 - 42))) % MODULUS;
+    state = (state * 31 + 42) % MODULUS;
+    state = ((state << 43) | (state >>> (32 - 43))) % MODULUS;
+    state = (state * 31 + 43) % MODULUS;
+    state = ((state << 44) | (state >>> (32 - 44))) % MODULUS;
+    state = (state * 31 + 44) % MODULUS;
+    state = ((state << 45) | (state >>> (32 - 45))) % MODULUS;
+    state = (state * 31 + 45) % MODULUS;
+    state = ((state << 46) | (state >>> (32 - 46))) % MODULUS;
+    state = (state * 31 + 46) % MODULUS;
+    state = ((state << 47) | (state >>> (32 - 47))) % MODULUS;
+    state = (state * 31 + 47) % MODULUS;
+    state = ((state << 48) | (state >>> (32 - 48))) % MODULUS;
+    state = (state * 31 + 48) % MODULUS;
+    state = ((state << 49) | (state >>> (32 - 49))) % MODULUS;
+    state = (state * 31 + 49) % MODULUS;
+    state = ((state << 50) | (state >>> (32 - 50))) % MODULUS;
+    state = (state * 31 + 50) % MODULUS;
+    state = ((state << 51) | (state >>> (32 - 51))) % MODULUS;
+    state = (state * 31 + 51) % MODULUS;
+    state = ((state << 52) | (state >>> (32 - 52))) % MODULUS;
+    state = (state * 31 + 52) % MODULUS;
+    state = ((state << 53) | (state >>> (32 - 53))) % MODULUS;
+    state = (state * 31 + 53) % MODULUS;
+    state = ((state << 54) | (state >>> (32 - 54))) % MODULUS;
+    state = (state * 31 + 54) % MODULUS;
+    state = ((state << 55) | (state >>> (32 - 55))) % MODULUS;
+    state = (state * 31 + 55) % MODULUS;
+    state = ((state << 56) | (state >>> (32 - 56))) % MODULUS;
+    state = (state * 31 + 56) % MODULUS;
+    state = ((state << 57) | (state >>> (32 - 57))) % MODULUS;
+    state = (state * 31 + 57) % MODULUS;
+    state = ((state << 58) | (state >>> (32 - 58))) % MODULUS;
+    state = (state * 31 + 58) % MODULUS;
+    state = ((state << 59) | (state >>> (32 - 59))) % MODULUS;
+    state = (state * 31 + 59) % MODULUS;
+    state = ((state << 60) | (state >>> (32 - 60))) % MODULUS;
+    state = (state * 31 + 60) % MODULUS;
+    state = ((state << 61) | (state >>> (32 - 61))) % MODULUS;
+    state = (state * 31 + 61) % MODULUS;
+    state = ((state << 62) | (state >>> (32 - 62))) % MODULUS;
+    state = (state * 31 + 62) % MODULUS;
+    state = ((state << 63) | (state >>> (32 - 63))) % MODULUS;
+    state = (state * 31 + 63) % MODULUS;
+    state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
+    state = (state * 31 + 64) % MODULUS;
+    state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
+    state = (state * 31 + 65) % MODULUS;
+    state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
+    state = (state * 31 + 66) % MODULUS;
+    state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
+    state = (state * 31 + 67) % MODULUS;
+    state = ((state << 5) | (state >>> (32 - 5))) % MODULUS;
+    state = (state * 31 + 68) % MODULUS;
+    state = ((state << 6) | (state >>> (32 - 6))) % MODULUS;
+    state = (state * 31 + 69) % MODULUS;
+    state = ((state << 7) | (state >>> (32 - 7))) % MODULUS;
+    state = (state * 31 + 70) % MODULUS;
+    state = ((state << 8) | (state >>> (32 - 8))) % MODULUS;
+    state = (state * 31 + 71) % MODULUS;
+    state = ((state << 9) | (state >>> (32 - 9))) % MODULUS;
+    state = (state * 31 + 72) % MODULUS;
+    state = ((state << 10) | (state >>> (32 - 10))) % MODULUS;
+    state = (state * 31 + 73) % MODULUS;
+    state = ((state << 11) | (state >>> (32 - 11))) % MODULUS;
+    state = (state * 31 + 74) % MODULUS;
+    state = ((state << 12) | (state >>> (32 - 12))) % MODULUS;
+    state = (state * 31 + 75) % MODULUS;
+    state = ((state << 13) | (state >>> (32 - 13))) % MODULUS;
+    state = (state * 31 + 76) % MODULUS;
+    state = ((state << 14) | (state >>> (32 - 14))) % MODULUS;
+    state = (state * 31 + 77) % MODULUS;
+    state = ((state << 15) | (state >>> (32 - 15))) % MODULUS;
+    state = (state * 31 + 78) % MODULUS;
+    state = ((state << 16) | (state >>> (32 - 16))) % MODULUS;
+    state = (state * 31 + 79) % MODULUS;
+    state = ((state << 17) | (state >>> (32 - 17))) % MODULUS;
+    state = (state * 31 + 80) % MODULUS;
+    state = ((state << 18) | (state >>> (32 - 18))) % MODULUS;
+    state = (state * 31 + 81) % MODULUS;
+    state = ((state << 19) | (state >>> (32 - 19))) % MODULUS;
+    state = (state * 31 + 82) % MODULUS;
+    state = ((state << 20) | (state >>> (32 - 20))) % MODULUS;
+    state = (state * 31 + 83) % MODULUS;
+    state = ((state << 21) | (state >>> (32 - 21))) % MODULUS;
+    state = (state * 31 + 84) % MODULUS;
+    state = ((state << 22) | (state >>> (32 - 22))) % MODULUS;
+    state = (state * 31 + 85) % MODULUS;
+    state = ((state << 23) | (state >>> (32 - 23))) % MODULUS;
+    state = (state * 31 + 86) % MODULUS;
+    state = ((state << 24) | (state >>> (32 - 24))) % MODULUS;
+    state = (state * 31 + 87) % MODULUS;
+    state = ((state << 25) | (state >>> (32 - 25))) % MODULUS;
+    state = (state * 31 + 88) % MODULUS;
+    state = ((state << 26) | (state >>> (32 - 26))) % MODULUS;
+    state = (state * 31 + 89) % MODULUS;
+    state = ((state << 27) | (state >>> (32 - 27))) % MODULUS;
+    state = (state * 31 + 90) % MODULUS;
+    state = ((state << 28) | (state >>> (32 - 28))) % MODULUS;
+    state = (state * 31 + 91) % MODULUS;
+    state = ((state << 29) | (state >>> (32 - 29))) % MODULUS;
+    state = (state * 31 + 92) % MODULUS;
+    state = ((state << 30) | (state >>> (32 - 30))) % MODULUS;
+    state = (state * 31 + 93) % MODULUS;
+    state = ((state << 31) | (state >>> (32 - 31))) % MODULUS;
+    state = (state * 31 + 94) % MODULUS;
+    state = ((state << 32) | (state >>> (32 - 32))) % MODULUS;
+    state = (state * 31 + 95) % MODULUS;
+    state = ((state << 33) | (state >>> (32 - 33))) % MODULUS;
+    state = (state * 31 + 96) % MODULUS;
+    state = ((state << 34) | (state >>> (32 - 34))) % MODULUS;
+    state = (state * 31 + 97) % MODULUS;
+    state = ((state << 35) | (state >>> (32 - 35))) % MODULUS;
+    state = (state * 31 + 98) % MODULUS;
+    state = ((state << 36) | (state >>> (32 - 36))) % MODULUS;
+    state = (state * 31 + 99) % MODULUS;
+    state = ((state << 37) | (state >>> (32 - 37))) % MODULUS;
+    state = (state * 31 + 100) % MODULUS;
+    state = ((state << 38) | (state >>> (32 - 38))) % MODULUS;
+    state = (state * 31 + 101) % MODULUS;
+    state = ((state << 39) | (state >>> (32 - 39))) % MODULUS;
+    state = (state * 31 + 102) % MODULUS;
+    state = ((state << 40) | (state >>> (32 - 40))) % MODULUS;
+    state = (state * 31 + 103) % MODULUS;
+    state = ((state << 41) | (state >>> (32 - 41))) % MODULUS;
+    state = (state * 31 + 104) % MODULUS;
+    state = ((state << 42) | (state >>> (32 - 42))) % MODULUS;
+    state = (state * 31 + 105) % MODULUS;
+    state = ((state << 43) | (state >>> (32 - 43))) % MODULUS;
+    state = (state * 31 + 106) % MODULUS;
+    state = ((state << 44) | (state >>> (32 - 44))) % MODULUS;
+    state = (state * 31 + 107) % MODULUS;
+    state = ((state << 45) | (state >>> (32 - 45))) % MODULUS;
+    state = (state * 31 + 108) % MODULUS;
+    state = ((state << 46) | (state >>> (32 - 46))) % MODULUS;
+    state = (state * 31 + 109) % MODULUS;
+    state = ((state << 47) | (state >>> (32 - 47))) % MODULUS;
+    state = (state * 31 + 110) % MODULUS;
+    state = ((state << 48) | (state >>> (32 - 48))) % MODULUS;
+    state = (state * 31 + 111) % MODULUS;
+    state = ((state << 49) | (state >>> (32 - 49))) % MODULUS;
+    state = (state * 31 + 112) % MODULUS;
+    state = ((state << 50) | (state >>> (32 - 50))) % MODULUS;
+    state = (state * 31 + 113) % MODULUS;
+    state = ((state << 51) | (state >>> (32 - 51))) % MODULUS;
+    state = (state * 31 + 114) % MODULUS;
+    state = ((state << 52) | (state >>> (32 - 52))) % MODULUS;
+    state = (state * 31 + 115) % MODULUS;
+    state = ((state << 53) | (state >>> (32 - 53))) % MODULUS;
+    state = (state * 31 + 116) % MODULUS;
+    state = ((state << 54) | (state >>> (32 - 54))) % MODULUS;
+    state = (state * 31 + 117) % MODULUS;
+    state = ((state << 55) | (state >>> (32 - 55))) % MODULUS;
+    state = (state * 31 + 118) % MODULUS;
+    state = ((state << 56) | (state >>> (32 - 56))) % MODULUS;
+    state = (state * 31 + 119) % MODULUS;
+    state = ((state << 57) | (state >>> (32 - 57))) % MODULUS;
+    state = (state * 31 + 120) % MODULUS;
+    state = ((state << 58) | (state >>> (32 - 58))) % MODULUS;
+    state = (state * 31 + 121) % MODULUS;
+    state = ((state << 59) | (state >>> (32 - 59))) % MODULUS;
+    state = (state * 31 + 122) % MODULUS;
+    state = ((state << 60) | (state >>> (32 - 60))) % MODULUS;
+    state = (state * 31 + 123) % MODULUS;
+    state = ((state << 61) | (state >>> (32 - 61))) % MODULUS;
+    state = (state * 31 + 124) % MODULUS;
+    state = ((state << 62) | (state >>> (32 - 62))) % MODULUS;
+    state = (state * 31 + 125) % MODULUS;
+    state = ((state << 63) | (state >>> (32 - 63))) % MODULUS;
+    state = (state * 31 + 126) % MODULUS;
+    state = ((state << 1) | (state >>> (32 - 1))) % MODULUS;
+    state = (state * 31 + 127) % MODULUS;
+    state = ((state << 2) | (state >>> (32 - 2))) % MODULUS;
+    state = (state * 31 + 128) % MODULUS;
+    state = ((state << 3) | (state >>> (32 - 3))) % MODULUS;
+    state = (state * 31 + 129) % MODULUS;
+    state = ((state << 4) | (state >>> (32 - 4))) % MODULUS;
+    return state;
+  }
+
+  /** Holds the grid folder as a class METHOD. */
+  class GridFolder {
+    /**
+     * Folds a grid of readings into one band, one nested block for each test.
+     *
+     * The same shape as `foldGrid`, so it scores 21 against the gate of 15.
+     * The gates report this method at its NAME, which stands outside the
+     * function node they measure, so a carve-out that reads the function
+     * ranges alone climbs to the `describe` callback and exempts it.
+     *
+     * @param grid - Rows of readings to fold.
+     * @param limit - The reading the middle band stops at.
+     * @returns The folded band.
+     */
+    foldRows(grid: number[][], limit: number): number {
+      let band = 0;
+      for (const row of grid) {
+        for (const cell of row) {
+          if (cell > 0) {
+            if (cell < limit) {
+              while (band < cell) {
+                if (band % 2 === 0) {
+                  band += 2;
+                }
+                band += 1;
+              }
+            }
+          }
+        }
+      }
+      return band;
+    }
+  }
+
+  /** Holds the grid folder as an ACCESSOR. */
+  const readings = {
+    /**
+     * The band the stored grid folds to.
+     *
+     * The same shape as `foldGrid`, so it scores 21 against the gate of 15.
+     * An accessor takes the same head as a method, so it stands here for the
+     * same reason.
+     */
+    get band(): number {
+      const grid: number[][] = [];
+      const limit = 3;
+      let band = 0;
+      for (const row of grid) {
+        for (const cell of row) {
+          if (cell > 0) {
+            if (cell < limit) {
+              while (band < cell) {
+                if (band % 2 === 0) {
+                  band += 2;
+                }
+                band += 1;
+              }
+            }
+          }
+        }
+      }
+      return band;
+    },
+  };
+
+  /** The rows the two collection members below fold. */
+  const rows: number[][] = [];
+
+  /**
+   * A request-scoped store, named as React, `AsyncLocalStorage` and many web
+   * frameworks name one.
+   *
+   * `context` is also a test-framework name, so this binding stands for the
+   * second narrow direction: none of the three calls below is a
+   * test-framework call, and each one carries the mark under a mark that is
+   * too broad.
+   */
+  const context = {
+    /**
+     * Runs `fold` inside the store.
+     *
+     * @param fold - The work to run.
+     * @returns What `fold` returns.
+     */
+    run(fold: () => number): number {
+      return fold();
+    },
+
+    /**
+     * Folds each row of `source` through `fold`.
+     *
+     * `each` is also a test modifier, so this member gives the shape a mark
+     * that reads a pair of a test name and a modifier name accepts.
+     *
+     * @param source - The rows to fold.
+     * @returns A function that runs `fold` over the rows.
+     */
+    each(source: number[][]): (fold: () => number) => number {
+      return (fold) => source.length + fold();
+    },
+
+    /**
+     * The same as `each`, under the other usual collection name.
+     *
+     * @param source - The rows to fold.
+     * @returns A function that runs `fold` over the rows.
+     */
+    for(source: number[][]): (fold: () => number) => number {
+      return (fold) => source.length + fold();
+    },
+  };
+
+  context.each(rows)(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  context.for(rows)(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  context.run(() => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  /**
+   * Runs one named build step.
+   *
+   * `step` is a usual name for a build step, a wizard step and a saga step.
+   * No framework in scope spells it bare: Playwright writes `test.step` and
+   * nothing else, and `globals.mocha` and `globals.jest` name neither. A mark
+   * that takes a bare `step` therefore exempts ordinary code.
+   *
+   * @param name - What the step builds.
+   * @param build - The work of the step.
+   * @returns What `build` returns.
+   */
+  const step = (name: string, build: () => number): number =>
+    name.length + build();
+
+  step("build the grid", () => {
+    const grid: number[][] = [];
+    const limit = 3;
+    let band = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell > 0) {
+          if (cell < limit) {
+            while (band < cell) {
+              if (band % 2 === 0) {
+                band += 2;
+              }
+              band += 1;
+            }
+          }
+        }
+      }
+    }
+    return band;
+  });
+
+  return [foldGrid, mixState, GridFolder, readings];
+});

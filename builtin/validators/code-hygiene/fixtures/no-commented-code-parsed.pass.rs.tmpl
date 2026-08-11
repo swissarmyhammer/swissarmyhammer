@@ -1,0 +1,40 @@
+//! The pass fixture for `no-commented-code-parsed`.
+//!
+//! It holds the three shapes the rule must leave alone, and each one is the
+//! same commented-out function the fail fixture carries, exempted a different
+//! way. A rule that stopped reading one of the three still passes the pair
+//! unless all three are here.
+
+/// Folds a grid of readings into one band.
+///
+/// The doc comment carries the example, which is the exemption the rule states:
+/// intentional example code lives in documentation.
+///
+/// ```
+/// fn folded_band(grid: &[Vec<i32>], limit: i32) -> i32 {
+///     let mut band = 0;
+///     for row in grid {
+///         band += row.iter().filter(|cell| **cell < limit).count() as i32;
+///     }
+///     band
+/// }
+/// ```
+pub fn documented_band(limit: i32) -> i32 {
+    limit
+}
+
+// TODO: fold the band over the whole grid rather than one row at a time.
+// The caller reads one row today, and the shape below is what the change
+// wants. It stays prose until the settings file grows a section for the
+// limit, because the limit is what decides how many rows a fold may touch.
+// See the design note beside this module for the order the rows must take.
+// Until then this comment is a note to a reader and nothing more.
+pub fn noted_band(limit: i32) -> i32 {
+    limit
+}
+
+// let band = 0;
+// let limit = 1;
+pub fn short_band(limit: i32) -> i32 {
+    limit
+}

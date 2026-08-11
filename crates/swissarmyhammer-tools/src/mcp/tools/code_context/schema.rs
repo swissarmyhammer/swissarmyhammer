@@ -59,6 +59,14 @@ fn generate_code_context_examples() -> Vec<Value> {
             "value": {"op": "query ast", "query": "(function_item name: (identifier) @name)", "language": "rust"}
         }),
         json!({
+            "description": "Report the token-identical blocks a file repeats",
+            "value": {"op": "find duplication", "files": ["src/main.rs"]}
+        }),
+        json!({
+            "description": "Report the comment blocks that re-parse as code",
+            "value": {"op": "find commented_code", "files": ["src/main.rs"]}
+        }),
+        json!({
             "description": "Traverse call graph from a symbol",
             "value": {"op": "get callgraph", "symbol": "process_request", "direction": "outbound"}
         }),
@@ -92,29 +100,17 @@ fn generate_code_context_examples() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tools::code_context::{
-        ClearStatus, DetectProjects, FindDuplicates, GetBlastradius, GetCallgraph, GetCodeStatus,
-        GetSymbol, GrepCode, ListSymbols, LspStatus, QueryAst, RebuildIndex, SearchCode,
-        SearchSymbol,
-    };
+    use crate::mcp::tools::code_context::code_context_operations;
 
+    /// The operations the schema tests generate against — the production
+    /// roster, never a hand-copied subset of it.
+    ///
+    /// A second list here would have to gain a row every time an op lands, and
+    /// would silently stop covering the op that forgot to update it. Reading
+    /// the real roster means a new op is under these assertions the moment it
+    /// joins [`code_context_operations`].
     fn test_operations() -> Vec<&'static dyn Operation> {
-        vec![
-            &GetSymbol as &dyn Operation,
-            &SearchSymbol as &dyn Operation,
-            &ListSymbols as &dyn Operation,
-            &GrepCode as &dyn Operation,
-            &SearchCode as &dyn Operation,
-            &FindDuplicates as &dyn Operation,
-            &QueryAst as &dyn Operation,
-            &GetCallgraph as &dyn Operation,
-            &GetBlastradius as &dyn Operation,
-            &GetCodeStatus as &dyn Operation,
-            &RebuildIndex as &dyn Operation,
-            &ClearStatus as &dyn Operation,
-            &LspStatus as &dyn Operation,
-            &DetectProjects as &dyn Operation,
-        ]
+        code_context_operations().to_vec()
     }
 
     use swissarmyhammer_operations::WIRE_DROPPED_KEYS;
@@ -162,7 +158,7 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op should have enum");
-        assert_eq!(op_enum.len(), 14);
+        assert_eq!(op_enum.len(), ops.len());
         assert!(op_enum.contains(&json!("get symbol")));
         assert!(op_enum.contains(&json!("search symbol")));
         assert!(op_enum.contains(&json!("list symbols")));
@@ -185,7 +181,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 14);
+        assert_eq!(op_schemas.len(), ops.len());
     }
 
     #[test]
@@ -274,8 +270,33 @@ mod tests {
         let ops = test_operations();
         let schema = generate_code_context_schema_full(&ops);
 
-        assert!(schema["examples"].is_array());
-        assert_eq!(schema["examples"].as_array().unwrap().len(), 14);
+        let examples = schema["examples"]
+            .as_array()
+            .expect("full schema must carry examples");
+        assert_eq!(examples, &generate_code_context_examples());
+    }
+
+    /// Every example names an op the tool really dispatches.
+    ///
+    /// An example for an op that is not on the roster is an example no caller
+    /// can run: the schema advertises it, the dispatch rejects it.
+    #[test]
+    fn test_every_example_names_an_operation_on_the_roster() {
+        let op_strings: Vec<String> = test_operations()
+            .iter()
+            .map(|operation| operation.op_string())
+            .collect();
+
+        for example in generate_code_context_examples() {
+            let op = example["value"]["op"]
+                .as_str()
+                .expect("every example names an op")
+                .to_string();
+            assert!(
+                op_strings.contains(&op),
+                "example op {op:?} is not on the roster {op_strings:?}"
+            );
+        }
     }
 
     #[test]

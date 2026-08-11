@@ -26,7 +26,7 @@ tool:
         plugins: { "@typescript-eslint": tseslint.plugin },
         rules: {
           "@typescript-eslint/no-magic-numbers": ["warn", {
-            ignore: [0, 1, -1],
+            ignore: [0, 1, -1, 100],
             ignoreArrayIndexes: true,
             ignoreDefaultValues: true,
             ignoreClassFieldInitialValues: true,
@@ -63,7 +63,11 @@ carves out. Measured against a probe module holding one literal of each kind, th
 base rule reported the array index, the default value, and the enumeration
 member; with these options it reported none of them:
 
-- `ignore: [0, 1, -1]` is the prompt carve-out list, spelled as the rule spells it.
+- `ignore: [0, 1, -1, 100]` is the prompt carve-out value list. `0`, `1` and
+  `-1` are the first half of it, and `100` is the percent half of "conventional
+  values". Measured: with `[0, 1, -1]` both `(part * 100) / total` and
+  `usage === 100` reported `No magic number: 100.`; with `100` in the list both
+  are silent, and `size * 4096` still reports.
 - `ignoreArrayIndexes`, `ignoreDefaultValues`, `ignoreClassFieldInitialValues`,
   `ignoreEnums`, `ignoreNumericLiteralTypes`, `ignoreReadonlyClassProperties`,
   and `ignoreTypeIndexes` each name a position where a declaration already names
@@ -73,6 +77,35 @@ member; with these options it reported none of them:
 
 What is left is the positions where nothing names the number: a comparison, an
 operation, and a call argument.
+
+## The shift carve-out cannot be expressed
+
+The prompt rule names two conventional values, and this rule restores one of
+them. `100` for percent is a VALUE, so `ignore` states it. A `<< 8` is a
+POSITION — the operand of a shift — and `ignore` selects a value and never a
+position.
+
+Measured on the same probe: `word << 8`, `word >> 8` and `word === 8` each
+reported `No magic number: 8.`, and `8` added to `ignore` silenced all three. A
+list that carried `8` would therefore drop a genuine `status === 8` to keep the
+shift silent, which trades a real finding for a carve-out.
+
+No option answers it either. `eslint` validates the option object against the
+rule schema and names the whole set the rule accepts — `detectObjects`,
+`enforceConst`, `ignore`, `ignoreArrayIndexes`, `ignoreDefaultValues`,
+`ignoreClassFieldInitialValues`, `ignoreEnums`, `ignoreNumericLiteralTypes`,
+`ignoreReadonlyClassProperties`, and `ignoreTypeIndexes`. None of the ten names
+an operand of a shift, and an eleventh key is refused: an added `ignoreShift`
+makes `eslint` answer `Unexpected property "ignoreShift"` and stop.
+
+So a shift operand REPORTS, and the recourse is the inline suppression at the
+end of this file: write `// eslint-disable-next-line
+@typescript-eslint/no-magic-numbers` above the shift, with the reason after it.
+The fail fixture carries `word << 8` for that reason, and the acceptance test
+`the_shipped_typescript_magic_numbers_tool_rule_reports_every_fail_fixture_value`
+holds `eslint` to reporting it, so the gap stays measured.
+
+## How the run is shaped
 
 The script writes its own flat config to a temporary path and passes it with
 `--config`. `--no-config-lookup` keeps eslint from reading the project's own

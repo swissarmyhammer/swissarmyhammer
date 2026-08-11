@@ -9,10 +9,10 @@
 //! - [`plan_tool_rules`] matches every tool rule against the scoped
 //!   [`WorkList`] through the same `ValidatorMatch` path prompt rules use,
 //!   checks the tool's health with the doctor logic
-//!   ([`check_tool_rule`](crate::doctor)), and produces the [`ToolPlan`]: the
-//!   healthy runs, the fallbacks (unhealthy tool → the superseded prompt rule
-//!   runs as before), and the [`ToolSuppression`] map that tells the fleet
-//!   which superseded prompt rules to skip per file.
+//!   ([`tool_rule_health`](crate::review::tool_health)), and produces the
+//!   [`ToolPlan`]: the healthy runs, the fallbacks (unhealthy tool → the
+//!   superseded prompt rule runs as before), and the [`ToolSuppression`] map
+//!   that tells the fleet which superseded prompt rules to skip per file.
 //! - [`execute_tool_runs`] runs each planned script with bash at the workspace
 //!   root. `scope: files` passes the matched changed files as the script's
 //!   arguments (`"$@"`); `scope: workspace` runs once with no arguments and
@@ -36,9 +36,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
 
-use crate::doctor::{check_tool_rule, command_failure_detail, run_shell};
+use swissarmyhammer_common::command::command_failure_detail;
+
+use crate::doctor::run_shell;
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
 use crate::review::scope::{ValidatorWork, WorkList};
+use crate::review::tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
 use crate::review::tool_output::parse_tool_stdout;
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::validators::types::{
@@ -336,7 +339,8 @@ impl ToolReport {
 /// rule matches the intersection of its set's `match` and its own — evaluated
 /// per file with the workspace's detected `project_types`. A tool rule with no
 /// matched file contributes nothing. For each tool rule with matched files the
-/// doctor health check ([`check_tool_rule`](crate::doctor)) runs ONCE:
+/// health check ([`tool_rule_health`](crate::review::tool_health)) runs ONCE,
+/// reading `health` for the fixture verdict it already proved:
 ///
 /// - Healthy (tool present, fixtures pass) → a [`ToolRun`], plus one
 ///   [`ToolSuppression`] entry per matched file for each prompt rule the
@@ -347,22 +351,24 @@ pub fn plan_tool_rules(
     work: &WorkList,
     loader: &ValidatorLoader,
     project_types: &[&str],
+    health: Option<&ToolHealthCache>,
 ) -> ToolPlan {
     let mut plan = ToolPlan::default();
     for matched in matched_tool_rules(work, loader, project_types) {
         plan_rule_by_health(
             &mut plan,
-            matched.ruleset.name(),
             matched.ruleset,
             matched.rule,
             matched.spec,
             matched.files,
+            health,
         );
     }
     plan
 }
 
 /// One tool rule the work-list matched, with the files it matched.
+#[derive(Debug)]
 pub(crate) struct MatchedToolRule<'a> {
     /// The owning validator set. The doctor reads its `fixtures/` directory,
     /// and its name is the validator name the work-list keys on.
@@ -435,6 +441,7 @@ fn matched_rule_files(
 }
 
 /// One tool rule that serves the detected project types, with its owning set.
+#[derive(Debug)]
 pub(crate) struct ProjectToolRule<'a> {
     /// The owning validator set — the doctor reads its `fixtures/` directory.
     pub ruleset: &'a RuleSet,
@@ -488,19 +495,24 @@ pub(crate) fn project_tool_rules<'a>(
     matched
 }
 
-/// Run the doctor health check ONCE for a matched tool rule and record the
+/// Run the health check ONCE for a matched tool rule and record the
 /// verdict on the plan: a healthy rule becomes a [`ToolRun`] (plus one
 /// suppression entry per matched file for each prompt rule its `supersedes`
 /// names), an unhealthy one a [`ToolFallback`] that suppresses nothing.
+///
+/// The check reads presence and version fresh and takes the fixture verdict
+/// `health` stored, so a review that changed neither the tool nor the rule
+/// costs no fixture run.
 fn plan_rule_by_health(
     plan: &mut ToolPlan,
-    validator: &str,
     ruleset: &RuleSet,
     rule: &Rule,
     spec: &ToolSpec,
     files: Vec<String>,
+    health: Option<&ToolHealthCache>,
 ) {
-    let status = check_tool_rule(ruleset, rule, spec);
+    let validator = ruleset.name();
+    let status = tool_rule_health(health, HealthProof::Stored, ruleset, rule, spec);
     if !status.usable() {
         let detail = status.degraded_detail();
         tracing::warn!(
@@ -616,6 +628,153 @@ pub fn execute_tool_runs(
     outcome
 }
 
+/// Start every planned tool run and hand back a handle to its outcome.
+///
+/// The fan-out needs only the plan's suppression map, and that is already
+/// decided by the time the runs start; the tool findings are needed at
+/// synthesis and nowhere earlier. Starting the runs here therefore lets a
+/// `cargo clippy` that takes a minute overlap the fleet instead of delaying
+/// its first task.
+///
+/// The `run` scripts are blocking shell processes, so they run on the blocking
+/// pool. A tool script that ran on an async task would hold a runtime worker
+/// thread for its whole run and stall the fleet it is meant to overlap.
+pub fn start_tool_runs(
+    runs: Vec<ToolRun>,
+    repo_root: &Path,
+    progress: Option<&ReviewProgressSender>,
+) -> ToolRunsInFlight {
+    let identities = runs.iter().map(RunIdentity::of).collect();
+    let repo_root = repo_root.to_path_buf();
+    let progress = progress.cloned();
+    let task = tokio::task::spawn_blocking(move || {
+        execute_tool_runs(&runs, &repo_root, progress.as_ref())
+    });
+    ToolRunsInFlight { task, identities }
+}
+
+/// The names one tool run is reported under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunIdentity {
+    /// The owning validator (RuleSet) name.
+    validator: String,
+    /// The tool rule's name.
+    rule: String,
+}
+
+impl RunIdentity {
+    /// The names `run` is reported under.
+    fn of(run: &ToolRun) -> Self {
+        Self {
+            validator: run.validator.clone(),
+            rule: run.rule.clone(),
+        }
+    }
+}
+
+/// The tool runs of one review, running while the fleet works.
+#[derive(Debug)]
+pub struct ToolRunsInFlight {
+    /// The blocking task running the scripts.
+    task: tokio::task::JoinHandle<ToolOutcome>,
+    /// The names of every run the task carries, so a task that did not finish
+    /// is still reported as a broken run for each one rather than as silence.
+    identities: Vec<RunIdentity>,
+}
+
+impl ToolRunsInFlight {
+    /// Wait for the runs to finish and take their outcome.
+    ///
+    /// A task that did not finish reports one [`ToolRunError`] per run it
+    /// carried. The runs are never cancelled, so this can only be a panic in
+    /// the run loop — a bug, and the reader has to see which rules it cost.
+    pub async fn finish(self) -> ToolOutcome {
+        match self.task.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    runs = self.identities.len(),
+                    "the tool runs did not finish; reporting every run as broken"
+                );
+                let detail = format!("the tool run task did not finish: {error}");
+                ToolOutcome {
+                    findings: Vec::new(),
+                    errors: self
+                        .identities
+                        .into_iter()
+                        .map(|identity| ToolRunError {
+                            validator: identity.validator,
+                            rule: identity.rule,
+                            detail: detail.clone(),
+                        })
+                        .collect(),
+                }
+            }
+        }
+    }
+}
+
+/// Why a tool-rule script run produced no findings.
+///
+/// A variant carries WHAT went wrong and never how the caller words it: the
+/// doctor names the fixture it was proving, the review engine names the rule it
+/// was running, and each writes its own sentence from the same three facts.
+///
+/// The `Display` states the one sentence no caller can improve on — a shell
+/// that would not start — and the [`std::error::Error`] impl keeps that
+/// failure's own error reachable through [`std::error::Error::source`] rather
+/// than flattening the chain into a string.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ScriptFailure {
+    /// The shell could not be started at all.
+    #[error("the run script failed to start: {0}")]
+    Start(#[from] std::io::Error),
+    /// The script ran and exited nonzero. Carries
+    /// [`command_failure_detail`] — the script's own stderr, or its status.
+    #[error("the run script exited nonzero: {0}")]
+    Exit(String),
+    /// The script exited 0, but its stdout broke the finding contract.
+    #[error("the run script broke the finding contract: {0}")]
+    Contract(String),
+}
+
+/// The positional arguments a script of `scope` receives.
+///
+/// A `files`-scope script reads the paths it is handed. A `workspace`-scope
+/// script reads the tree it runs in and is handed none, so the caller filters
+/// its findings by path afterwards.
+pub(crate) fn script_args<S: AsRef<OsStr>>(scope: ToolScope, files: &[S]) -> Vec<&OsStr> {
+    match scope {
+        ToolScope::Files => files.iter().map(AsRef::as_ref).collect(),
+        ToolScope::Workspace => Vec::new(),
+    }
+}
+
+/// Run a tool-rule script in `dir` with `args` as its positional parameters,
+/// and parse its stdout into findings.
+///
+/// The ONE way a tool-rule script is run for its findings. The doctor's
+/// fixture checks ([`crate::doctor`]) prove a rule works by calling this, and
+/// [`run_tool_script`] uses the rule by calling this, so a rule can never pass
+/// its fixtures under one interpretation of the contract and be used under
+/// another.
+///
+/// Exit 0 means the script judged the code, whether or not it found anything;
+/// a nonzero exit is a broken tool, not a clean run.
+pub(crate) fn run_script_findings(
+    script: &str,
+    dir: &Path,
+    args: &[&OsStr],
+) -> Result<Vec<Finding>, ScriptFailure> {
+    let output = run_shell(script, Some(dir), args).map_err(ScriptFailure::Start)?;
+    if !output.status.success() {
+        return Err(ScriptFailure::Exit(command_failure_detail(&output)));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_tool_stdout(&stdout).map_err(|e| ScriptFailure::Contract(e.to_string()))
+}
+
 /// Run one tool rule's script and parse its stdout into tagged findings.
 ///
 /// The script runs with bash at `repo_root`. `scope: files` passes the run's
@@ -624,19 +783,13 @@ pub fn execute_tool_runs(
 /// the script judged the code; a nonzero exit (or stdout that violates the
 /// contract) is the error string — the raw stderr, or the parse problem.
 fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<Vec<Finding>, String> {
-    let args: Vec<&OsStr> = match run.spec.scope {
-        ToolScope::Files => run.files.iter().map(OsStr::new).collect(),
-        ToolScope::Workspace => Vec::new(),
-    };
-
-    let output = run_shell(&run.spec.run, Some(repo_root), &args)
-        .map_err(|e| format!("the run script failed to start: {e}"))?;
-    if !output.status.success() {
-        return Err(command_failure_detail(&output));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut findings = parse_tool_stdout(&stdout).map_err(|e| e.to_string())?;
+    let args = script_args(run.spec.scope, &run.files);
+    let mut findings =
+        run_script_findings(&run.spec.run, repo_root, &args).map_err(|failure| match failure {
+            ScriptFailure::Exit(detail) | ScriptFailure::Contract(detail) => detail,
+            // The shell that would not start: its own `Display` says it best.
+            start => start.to_string(),
+        })?;
 
     if run.spec.scope == ToolScope::Workspace {
         let matched: BTreeSet<&str> = run.files.iter().map(String::as_str).collect();
@@ -679,1277 +832,4 @@ fn confirm(finding: Finding) -> VerifiedFinding {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::path::PathBuf;
-
-    use crate::doctor::ToolPresence;
-    use crate::review::scope::{FileWork, ProbeNames, RuleNames};
-    use crate::review::test_support::write_tool_rule_fixtures;
-    use crate::validators::types::{Rule, RuleSet, ToolDoctor, ToolInstall, ValidatorMatch};
-
-    /// A shell probe that always succeeds — "the tool is installed".
-    const TOOL_PRESENT: &str = "true";
-
-    /// A shell probe that always fails — "the tool is missing".
-    const TOOL_MISSING: &str = "false";
-
-    /// A `files`-scope script that reports one `path:line: message` finding
-    /// per line containing `TODO`, and exits 0 whether or not it found any.
-    const TODO_SCRIPT: &str = r#"for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }' "$f"; done"#;
-
-    /// The placeholder install command the planner tests never run — they only
-    /// assert on the plan, never on the install lifecycle.
-    const UNUSED_INSTALL_COMMAND: &str = "brew install fake-tool@1.0.0";
-
-    /// A tool rule named `docs-tool` superseding `missing-docs`, with the
-    /// given run script and doctor check command.
-    fn tool_rule(run: &str, check_command: &str, match_criteria: Option<ValidatorMatch>) -> Rule {
-        tool_rule_with_install(
-            run,
-            check_command,
-            match_criteria,
-            vec![UNUSED_INSTALL_COMMAND.to_string()],
-        )
-    }
-
-    /// A tool rule named `docs-tool` superseding `missing-docs`, with the given
-    /// run script, doctor check command, and install commands.
-    fn tool_rule_with_install(
-        run: &str,
-        check_command: &str,
-        match_criteria: Option<ValidatorMatch>,
-        install_commands: Vec<String>,
-    ) -> Rule {
-        Rule {
-            name: "docs-tool".to_string(),
-            description: "docs by tool".to_string(),
-            body: "TOOL RULE BODY — an LLM must never read this".to_string(),
-            supersedes: Supersedes::from_iter(["missing-docs"]),
-            match_criteria,
-            tool: Some(ToolSpec {
-                scope: ToolScope::Files,
-                run: run.to_string(),
-                doctor: Some(ToolDoctor {
-                    check_command: check_command.to_string(),
-                    check_version_command: None,
-                    fix_hint: None,
-                }),
-                install: Some(ToolInstall {
-                    commands: install_commands,
-                }),
-            }),
-            ..Rule::default()
-        }
-    }
-
-    /// The prompt rule the tool rule supersedes.
-    fn prompt_rule() -> Rule {
-        Rule {
-            name: "missing-docs".to_string(),
-            description: "docs by prompt".to_string(),
-            body: "Report public items without docs.".to_string(),
-            ..Rule::default()
-        }
-    }
-
-    /// A ruleset named `docs` matching `*.rs`, holding the given rules, based
-    /// at `base` (where the doctor looks for `fixtures/`).
-    fn docs_ruleset(base: &Path, rules: Vec<Rule>) -> RuleSet {
-        let mut ruleset = crate::review::test_support::ruleset("docs", "*.rs", &[]);
-        ruleset.rules = rules;
-        ruleset.base_path = PathBuf::from(base);
-        ruleset
-    }
-
-    /// A loader holding exactly `ruleset`.
-    fn loader_of(ruleset: RuleSet) -> ValidatorLoader {
-        let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset);
-        loader
-    }
-
-    /// A one-validator work-list over `files` for the `docs` validator.
-    fn docs_work(files: &[&str]) -> WorkList {
-        let file_work = files
-            .iter()
-            .map(|path| FileWork::new(*path, vec![], vec![], "fn undocumented() {}\n", vec![]));
-        WorkList::new(
-            "test change",
-            vec![ValidatorWork::new(
-                "docs",
-                RuleNames::new(["missing-docs".to_string(), "docs-tool".to_string()]),
-                ProbeNames::new([]),
-                file_work,
-            )],
-        )
-    }
-
-    #[test]
-    fn plan_includes_a_healthy_tool_rule_and_suppresses_the_superseded_rule_per_file() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![prompt_rule(), tool_rule(TODO_SCRIPT, TOOL_PRESENT, None)],
-        ));
-        let work = docs_work(&["src/lib.rs"]);
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-
-        assert_eq!(plan.runs().len(), 1);
-        assert_eq!(plan.runs()[0].validator(), "docs");
-        assert_eq!(plan.runs()[0].rule(), "docs-tool");
-        assert_eq!(plan.runs()[0].files(), ["src/lib.rs".to_string()]);
-        assert!(plan.fallbacks().is_empty());
-        assert!(plan
-            .suppression()
-            .suppressed_rules("docs", "src/lib.rs")
-            .contains("missing-docs"));
-    }
-
-    /// A healthy tool rule that names two prompt rules suppresses BOTH of them
-    /// for every file it matched: one `cargo clippy` run answers more than one
-    /// prompt rule, so one entry per named rule per file is the contract.
-    #[test]
-    fn plan_suppresses_every_named_prompt_rule_per_file() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        let mut rule = tool_rule(TODO_SCRIPT, TOOL_PRESENT, None);
-        rule.supersedes =
-            Supersedes::from_iter([MISSING_DOCS_PROMPT_RULE, FUNCTION_LENGTH_PROMPT_RULE]);
-        let loader = loader_of(docs_ruleset(base.path(), vec![prompt_rule(), rule]));
-        let files = ["src/lib.rs", "src/main.rs"];
-        let work = docs_work(&files);
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-
-        let expected = BTreeSet::from([
-            MISSING_DOCS_PROMPT_RULE.to_string(),
-            FUNCTION_LENGTH_PROMPT_RULE.to_string(),
-        ]);
-        for file in files {
-            assert_eq!(
-                plan.suppression().suppressed_rules("docs", file),
-                expected,
-                "both named prompt rules must be suppressed for {file}"
-            );
-        }
-    }
-
-    #[test]
-    fn plan_reports_a_fallback_when_the_tool_is_missing_and_suppresses_nothing() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![prompt_rule(), tool_rule(TODO_SCRIPT, TOOL_MISSING, None)],
-        ));
-        let work = docs_work(&["src/lib.rs"]);
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-
-        assert!(plan.runs().is_empty());
-        assert_eq!(plan.fallbacks().len(), 1);
-        assert_eq!(plan.fallbacks()[0].rule(), "docs-tool");
-        assert_eq!(plan.fallbacks()[0].supersedes().names(), ["missing-docs"]);
-        assert!(!plan.fallbacks()[0].detail().is_empty());
-        assert!(plan.suppression().is_empty());
-    }
-
-    #[test]
-    fn plan_reports_a_fallback_when_the_fixtures_are_missing() {
-        let base = tempfile::tempdir().unwrap();
-        // No fixtures written: the rule cannot be proven healthy.
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![prompt_rule(), tool_rule(TODO_SCRIPT, TOOL_PRESENT, None)],
-        ));
-        let work = docs_work(&["src/lib.rs"]);
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-
-        assert!(plan.runs().is_empty());
-        assert_eq!(plan.fallbacks().len(), 1);
-        assert!(plan.suppression().is_empty());
-    }
-
-    #[test]
-    fn plan_narrows_a_tool_rule_to_the_files_its_own_match_covers() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        // The set matches *.rs; the rule narrows to src/covered.rs only.
-        let narrowed = ValidatorMatch {
-            files: vec!["src/covered.rs".to_string()],
-            ..ValidatorMatch::default()
-        };
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![
-                prompt_rule(),
-                tool_rule(TODO_SCRIPT, TOOL_PRESENT, Some(narrowed)),
-            ],
-        ));
-        let work = docs_work(&["src/covered.rs", "src/other.rs"]);
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-
-        assert_eq!(plan.runs().len(), 1);
-        assert_eq!(plan.runs()[0].files(), ["src/covered.rs".to_string()]);
-        assert!(plan
-            .suppression()
-            .suppressed_rules("docs", "src/covered.rs")
-            .contains("missing-docs"));
-        assert!(plan
-            .suppression()
-            .suppressed_rules("docs", "src/other.rs")
-            .is_empty());
-    }
-
-    /// The workspace-wide selection reports its rules in set-name order, and
-    /// that order does not depend on the order the sets were loaded in. It is
-    /// the order the doctor rows and the `sah init` pre-install both read, so
-    /// nothing along the way re-sorts.
-    #[test]
-    fn project_tool_rules_reports_the_sets_in_name_order() {
-        let base = tempfile::tempdir().unwrap();
-        let mut loader = ValidatorLoader::new();
-        // Loaded last-name-first, so load order is not name order.
-        for name in ["zeta-set", "alpha-set"] {
-            let mut ruleset = crate::review::test_support::ruleset(name, "*.rs", &[]);
-            ruleset.rules = vec![tool_rule(TODO_SCRIPT, TOOL_PRESENT, None)];
-            ruleset.base_path = PathBuf::from(base.path());
-            loader.add_builtin_ruleset(ruleset);
-        }
-
-        let selected = project_tool_rules(&loader, &[]);
-
-        let sets: Vec<&str> = selected
-            .iter()
-            .map(|selected| selected.ruleset.name())
-            .collect();
-        assert_eq!(sets, ["alpha-set", "zeta-set"]);
-    }
-
-    /// A doctor check that passes only once `marker` exists — a missing tool
-    /// that an install command can make present.
-    fn marker_check_command(marker: &Path) -> String {
-        format!("test -f '{}'", marker.display())
-    }
-
-    /// An install command that creates `marker`, standing in for a real one.
-    fn marker_install_command(marker: &Path) -> String {
-        format!("touch '{}'", marker.display())
-    }
-
-    /// Acceptance: with the tool absent and a working install command, the
-    /// engine installs it and then plans the runner over the changed files.
-    #[tokio::test]
-    async fn a_missing_tool_with_a_working_install_command_is_installed_and_then_planned() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        let marker = base.path().join("installed-tool");
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![
-                prompt_rule(),
-                tool_rule_with_install(
-                    TODO_SCRIPT,
-                    &marker_check_command(&marker),
-                    None,
-                    vec![marker_install_command(&marker)],
-                ),
-            ],
-        ));
-        let work = docs_work(&["src/lib.rs"]);
-
-        // Before the install stage the tool is missing, so the rule falls back.
-        let before = plan_tool_rules(&work, &loader, &[]);
-        assert!(before.runs().is_empty());
-        assert_eq!(before.fallbacks().len(), 1);
-
-        let installs =
-            crate::review::tool_install::install_missing_tools(&work, &loader, &[], None).await;
-
-        assert_eq!(installs.len(), 1);
-        assert_eq!(installs[0].set_name(), "docs");
-        assert_eq!(installs[0].rule_name(), "docs-tool");
-        assert!(
-            installs[0].outcome().tool_present(),
-            "the install command must make the doctor check pass; got {:?}",
-            installs[0].outcome()
-        );
-
-        // The planner re-runs the same doctor check, so the rule is now healthy.
-        let after = plan_tool_rules(&work, &loader, &[]);
-        assert_eq!(after.runs().len(), 1, "the installed tool must be planned");
-        assert_eq!(after.runs()[0].rule(), "docs-tool");
-        assert!(after.fallbacks().is_empty());
-        assert!(after
-            .suppression()
-            .suppressed_rules("docs", "src/lib.rs")
-            .contains("missing-docs"));
-    }
-
-    /// Acceptance: with every install command failing, the run completes on the
-    /// prompt fallback — the missing tool degrades the review, never blocks it.
-    #[tokio::test]
-    async fn a_missing_tool_whose_installs_all_fail_stays_on_the_prompt_fallback() {
-        let base = tempfile::tempdir().unwrap();
-        write_tool_rule_fixtures(base.path(), "docs-tool");
-        let marker = base.path().join("never-installed");
-        let loader = loader_of(docs_ruleset(
-            base.path(),
-            vec![
-                prompt_rule(),
-                tool_rule_with_install(
-                    TODO_SCRIPT,
-                    &marker_check_command(&marker),
-                    None,
-                    vec!["echo 'no such package' >&2; exit 1".to_string()],
-                ),
-            ],
-        ));
-        let work = docs_work(&["src/lib.rs"]);
-
-        let installs =
-            crate::review::tool_install::install_missing_tools(&work, &loader, &[], None).await;
-
-        assert_eq!(installs.len(), 1);
-        assert!(
-            !installs[0].outcome().tool_present(),
-            "every install command failed, so the tool stays missing"
-        );
-
-        let plan = plan_tool_rules(&work, &loader, &[]);
-        assert!(plan.runs().is_empty());
-        assert_eq!(plan.fallbacks().len(), 1);
-        assert_eq!(plan.fallbacks()[0].supersedes().names(), ["missing-docs"]);
-        assert!(
-            plan.suppression().is_empty(),
-            "the superseded prompt rule must still run for every file"
-        );
-    }
-
-    /// A run over `script` with `scope` and `files`, for the execute tests.
-    fn run_of(script: &str, scope: ToolScope, files: &[&str]) -> ToolRun {
-        ToolRun {
-            validator: "docs".to_string(),
-            rule: "docs-tool".to_string(),
-            spec: ToolSpec {
-                scope,
-                run: script.to_string(),
-                doctor: None,
-                install: None,
-            },
-            files: files.iter().map(|f| f.to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn execute_passes_the_changed_files_as_arguments_and_tags_the_findings() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(repo.path().join("src/lib.rs"), "fn a() {}\n// TODO: fix\n").unwrap();
-        let run = run_of(TODO_SCRIPT, ToolScope::Files, &["src/lib.rs"]);
-
-        let outcome = execute_tool_runs(&[run], repo.path(), None);
-
-        assert!(outcome.errors().is_empty());
-        assert_eq!(outcome.findings().len(), 1);
-        let verified = &outcome.findings()[0];
-        assert!(
-            verified.confirmed,
-            "tool findings are confirmed by construction"
-        );
-        assert_eq!(verified.finding.file, "src/lib.rs");
-        assert_eq!(verified.finding.line, 2);
-        assert_eq!(verified.finding.validator, "docs");
-        assert_eq!(verified.finding.rule.as_deref(), Some("docs-tool"));
-    }
-
-    #[test]
-    fn execute_keeps_only_matched_file_findings_for_a_workspace_scope_run() {
-        let repo = tempfile::tempdir().unwrap();
-        // The script reports findings in a matched and an unmatched file.
-        let script = r#"printf 'src/lib.rs:1: in scope\n./src/lib.rs:2: dot slash in scope\nsrc/unrelated.rs:1: out of scope\n'"#;
-        let run = run_of(script, ToolScope::Workspace, &["src/lib.rs"]);
-
-        let outcome = execute_tool_runs(&[run], repo.path(), None);
-
-        assert!(outcome.errors().is_empty());
-        let files: Vec<&str> = outcome
-            .findings()
-            .iter()
-            .map(|v| v.finding.file.as_str())
-            .collect();
-        assert_eq!(files, ["src/lib.rs", "src/lib.rs"]);
-    }
-
-    #[test]
-    fn execute_reports_a_nonzero_exit_as_a_tool_error_with_the_raw_stderr() {
-        let repo = tempfile::tempdir().unwrap();
-        // The script prints a well-formed finding line but exits nonzero: the
-        // exit code wins — a tool error, no findings read.
-        let script =
-            r#"echo "src/lib.rs:1: would-be finding"; echo "the linter exploded" >&2; exit 3"#;
-        let run = run_of(script, ToolScope::Files, &["src/lib.rs"]);
-
-        let outcome = execute_tool_runs(&[run], repo.path(), None);
-
-        assert!(outcome.findings().is_empty());
-        assert_eq!(outcome.errors().len(), 1);
-        assert_eq!(outcome.errors()[0].validator(), "docs");
-        assert_eq!(outcome.errors()[0].rule(), "docs-tool");
-        assert!(outcome.errors()[0].detail().contains("the linter exploded"));
-    }
-
-    #[test]
-    fn execute_reports_contract_breaking_stdout_as_a_tool_error() {
-        let repo = tempfile::tempdir().unwrap();
-        let script = r#"echo "this is not a finding line""#;
-        let run = run_of(script, ToolScope::Files, &["src/lib.rs"]);
-
-        let outcome = execute_tool_runs(&[run], repo.path(), None);
-
-        assert!(outcome.findings().is_empty());
-        assert_eq!(outcome.errors().len(), 1);
-        assert!(outcome.errors()[0]
-            .detail()
-            .contains("this is not a finding line"));
-    }
-
-    #[test]
-    fn a_tool_run_error_displays_the_rule_the_validator_and_the_detail() {
-        let error = ToolRunError::for_test("docs", "docs-tool", "the linter exploded");
-
-        assert_eq!(
-            error.to_string(),
-            "tool rule `docs-tool` in validator `docs` broke: the linter exploded"
-        );
-    }
-
-    #[test]
-    fn a_tool_run_error_is_a_standard_error() {
-        let error = ToolRunError::for_test("docs", "docs-tool", "the linter exploded");
-        let standard: &dyn std::error::Error = &error;
-
-        assert_eq!(standard.to_string(), error.to_string());
-    }
-
-    #[test]
-    fn a_tool_fallback_displays_the_rule_the_validator_and_the_detail() {
-        let fallback = ToolFallback::for_test(
-            "docs",
-            "docs-tool",
-            &["missing-docs"],
-            "the tool is not installed",
-        );
-
-        assert_eq!(
-            fallback.to_string(),
-            "tool rule `docs-tool` in validator `docs` fell back: the tool is not installed"
-        );
-    }
-
-    #[test]
-    fn execute_streams_planned_pair_and_findings_events() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(repo.path().join("src/lib.rs"), "// TODO: fix\n").unwrap();
-        let run = run_of(TODO_SCRIPT, ToolScope::Files, &["src/lib.rs"]);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-        execute_tool_runs(&[run], repo.path(), Some(&tx));
-
-        let mut events = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            events.push(event);
-        }
-        assert!(matches!(
-            events[0],
-            ReviewProgressEvent::Planned { total_pairs: 1 }
-        ));
-        assert!(
-            matches!(&events[1], ReviewProgressEvent::PairStarted { validator, file }
-            if validator == "docs" && file == "src/lib.rs")
-        );
-        assert!(
-            matches!(&events[2], ReviewProgressEvent::Findings { validator, findings }
-            if validator == "docs" && findings.len() == 1)
-        );
-        assert!(
-            matches!(&events[3], ReviewProgressEvent::PairDone { validator, file }
-            if validator == "docs" && file == "src/lib.rs")
-        );
-        assert_eq!(events.len(), 4);
-    }
-
-    /// The builtin `code-hygiene` set, the one that carries the shipped
-    /// missing-docs tool rules.
-    const CODE_HYGIENE_SET: &str = "code-hygiene";
-
-    /// The prompt rule every shipped missing-docs tool rule supersedes.
-    const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
-
-    /// The prompt rule that owns the length gate. The Rust complexity tool rule
-    /// supersedes it beside `cognitive-complexity`, and the Python one owns it
-    /// alone.
-    const FUNCTION_LENGTH_PROMPT_RULE: &str = "function-length";
-
-    /// The prompt rule that owns the branching gate.
-    const COGNITIVE_COMPLEXITY_PROMPT_RULE: &str = "cognitive-complexity";
-
-    /// What a missing-docs tool rule supersedes.
-    const SUPERSEDES_MISSING_DOCS: &[&str] = &[MISSING_DOCS_PROMPT_RULE];
-
-    /// What a dead-code tool rule supersedes.
-    const SUPERSEDES_DEAD_CODE: &[&str] = &[DEAD_CODE_PROMPT_RULE];
-
-    /// What a magic-numbers tool rule supersedes.
-    const SUPERSEDES_MAGIC_NUMBERS: &[&str] = &[MAGIC_NUMBERS_PROMPT_RULE];
-
-    /// What a tool rule that decides both complexity gates supersedes.
-    const SUPERSEDES_BOTH_COMPLEXITY_GATES: &[&str] = &[
-        COGNITIVE_COMPLEXITY_PROMPT_RULE,
-        FUNCTION_LENGTH_PROMPT_RULE,
-    ];
-
-    /// What a tool rule that decides the branching gate alone supersedes.
-    const SUPERSEDES_COGNITIVE_COMPLEXITY: &[&str] = &[COGNITIVE_COMPLEXITY_PROMPT_RULE];
-
-    /// What a tool rule that decides the length gate alone supersedes.
-    const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
-
-    /// The shipped missing-docs tool rule for Rust, the one the pipeline
-    /// acceptance test drives end to end.
-    const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
-
-    /// Every shipped missing-docs tool rule, with the project type it serves
-    /// and the prompt rules it supersedes.
-    const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
-        ("rust", RUST_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
-        ("python", "missing-docs-python", SUPERSEDES_MISSING_DOCS),
-        ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
-        ("go", "missing-docs-go", SUPERSEDES_MISSING_DOCS),
-        ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),
-        ("flutter", "missing-docs-dart", SUPERSEDES_MISSING_DOCS),
-    ];
-
-    /// The prompt rule every shipped dead-code tool rule supersedes.
-    const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
-
-    /// The shipped dead-code tool rule for Python, the one the pipeline
-    /// acceptance test drives end to end.
-    const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
-
-    /// Every shipped dead-code tool rule, with the project type it serves.
-    ///
-    /// Each supersedes the `dead-code` prompt rule for its language. Three of
-    /// that rule's four carve-outs are compiler behavior — an exported item, a
-    /// test, and an entry point are exempt because the compiler already sees
-    /// which callers exist and which cannot. The fourth, work-in-process
-    /// scaffolding, is an annotation contract: staged code carries the
-    /// language's own suppression marker with a reason, or it is dead.
-    const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
-        ("rust", "dead-code-rust", SUPERSEDES_DEAD_CODE),
-        ("go", "unused-code-go", SUPERSEDES_DEAD_CODE),
-        ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
-        ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
-        ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
-        ("swift", "dead-code-swift", SUPERSEDES_DEAD_CODE),
-    ];
-
-    /// The prompt rule every shipped magic-numbers tool rule supersedes.
-    const MAGIC_NUMBERS_PROMPT_RULE: &str = "magic-numbers";
-
-    /// Every shipped magic-numbers tool rule, with the project type it serves.
-    ///
-    /// Rust and Dart are absent on purpose. No healthy Rust lint reports an
-    /// unnamed literal, and the Dart check needs a `custom_lint` package, so
-    /// both languages keep the `magic-numbers` prompt rule.
-    const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
-        ("python", "magic-numbers-python", SUPERSEDES_MAGIC_NUMBERS),
-        (
-            "nodejs",
-            "magic-numbers-typescript",
-            SUPERSEDES_MAGIC_NUMBERS,
-        ),
-        ("go", "magic-numbers-go", SUPERSEDES_MAGIC_NUMBERS),
-        ("swift", "magic-numbers-swift", SUPERSEDES_MAGIC_NUMBERS),
-    ];
-
-    /// The shipped complexity tool rule for Rust, the one the pipeline
-    /// acceptance test drives end to end.
-    const RUST_COMPLEXITY_RULE: &str = "complexity-rust";
-
-    /// Every shipped complexity tool rule, with the project type it serves and
-    /// the prompt rules it supersedes.
-    ///
-    /// This is the one roster whose rows do not share a `supersedes` list. One
-    /// run decides both gates for Rust, TypeScript and Swift, so those rules
-    /// replace both prompt rules; Python and Go name one tool for each gate, so
-    /// each takes one rule for each. Dart keeps the `complexity` probe and both
-    /// prompt rules, because its only metrics tool is commercial.
-    const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
-        (
-            "rust",
-            RUST_COMPLEXITY_RULE,
-            SUPERSEDES_BOTH_COMPLEXITY_GATES,
-        ),
-        (
-            "python",
-            "complexity-python",
-            SUPERSEDES_COGNITIVE_COMPLEXITY,
-        ),
-        (
-            "python",
-            "function-length-python",
-            SUPERSEDES_FUNCTION_LENGTH,
-        ),
-        (
-            "nodejs",
-            "complexity-typescript",
-            SUPERSEDES_BOTH_COMPLEXITY_GATES,
-        ),
-        (
-            "swift",
-            "complexity-swift",
-            SUPERSEDES_BOTH_COMPLEXITY_GATES,
-        ),
-        ("go", "complexity-go", SUPERSEDES_COGNITIVE_COMPLEXITY),
-        ("go", "function-length-go", SUPERSEDES_FUNCTION_LENGTH),
-    ];
-
-    /// The builtin `manifests` set, the one that matches dependency manifests
-    /// rather than source code.
-    const MANIFESTS_SET: &str = "manifests";
-
-    /// The shipped unused-dependency tool rule for Rust, the one the pipeline
-    /// acceptance test drives end to end.
-    const RUST_UNUSED_DEPENDENCIES_RULE: &str = "unused-dependencies-rust";
-
-    /// What an unused-dependency tool rule supersedes: nothing.
-    ///
-    /// No shipped prompt rule asks whether a declared dependency is used, so
-    /// this group replaces no rule and degrades to no rule. A machine without
-    /// `cargo machete` gets no answer to the question rather than a worse one.
-    const SUPERSEDES_NOTHING: &[&str] = &[];
-
-    /// The name [`verify_shipped_tool_rules_pass_fixtures`] puts in its failure
-    /// messages for this group. Every other group is named for the prompt rule
-    /// it replaces; this one replaces none, so it is named for its own concern.
-    const UNUSED_DEPENDENCIES_RULE_KIND: &str = "unused-dependency";
-
-    /// Every shipped unused-dependency tool rule, with the project type it
-    /// serves and the prompt rules it supersedes.
-    const SHIPPED_UNUSED_DEPENDENCY_RULES: &[(&str, &str, &[&str])] =
-        &[("rust", RUST_UNUSED_DEPENDENCIES_RULE, SUPERSEDES_NOTHING)];
-
-    /// A cargo package holding one undocumented public item and one documented
-    /// one. `[workspace]` keeps cargo inside the temporary directory.
-    const UNDOCUMENTED_PACKAGE_MANIFEST: &str = concat!(
-        "[package]\nname = \"undocumented-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-        "\n[workspace]\n",
-    );
-
-    /// The library of [`UNDOCUMENTED_PACKAGE_MANIFEST`]. The undocumented
-    /// struct is the finding the Rust tool rule must report.
-    const UNDOCUMENTED_LIB_RS: &str = concat!(
-        "//! A probe crate for the shipped Rust missing-docs tool rule.\n\n",
-        "/// A documented public struct.\n",
-        "pub struct Documented;\n\n",
-        "pub struct Undocumented;\n",
-    );
-
-    /// The library path inside the probe package, as the work-list holds it.
-    const UNDOCUMENTED_LIB_PATH: &str = "src/lib.rs";
-
-    /// A loader carrying every shipped validator set.
-    fn builtin_loader() -> ValidatorLoader {
-        let mut loader = ValidatorLoader::new();
-        crate::load_builtins(&mut loader);
-        loader
-    }
-
-    /// A one-validator work-list over `files` for the builtin `code-hygiene`
-    /// set, naming both the prompt rule and the Rust tool rule.
-    fn code_hygiene_work(files: &[&str]) -> WorkList {
-        let file_work = files
-            .iter()
-            .map(|path| FileWork::new(*path, vec![], vec![], UNDOCUMENTED_LIB_RS, vec![]));
-        WorkList::new(
-            "an undocumented public item",
-            vec![ValidatorWork::new(
-                CODE_HYGIENE_SET,
-                RuleNames::new([
-                    MISSING_DOCS_PROMPT_RULE.to_string(),
-                    RUST_MISSING_DOCS_RULE.to_string(),
-                ]),
-                ProbeNames::new([]),
-                file_work,
-            )],
-        )
-    }
-
-    /// Executes `run` over `repo_root` and holds it to the report contract every
-    /// shipped tool rule keeps: the pipeline breaks nothing, and it reports
-    /// exactly one finding in `path` — confirmed, attributed to `set` and to
-    /// `rule`, carrying `claim_fragment` of the tool's own message.
-    ///
-    /// This is the half every shipped-rule acceptance test shares. The half
-    /// above it — the probe repository, the work-list, and what the plan must
-    /// suppress — differs per rule and stays in the test.
-    fn verify_run_reports_one_finding(
-        run: &ToolRun,
-        repo_root: &Path,
-        path: &str,
-        set: &str,
-        rule: &str,
-        claim_fragment: &str,
-    ) {
-        let outcome = execute_tool_runs(std::slice::from_ref(run), repo_root, None);
-
-        assert!(
-            outcome.errors().is_empty(),
-            "the shipped pipeline must not break; errors: {:?}",
-            outcome.errors()
-        );
-        let findings: Vec<&VerifiedFinding> = outcome
-            .findings()
-            .iter()
-            .filter(|verified| verified.finding.file == path)
-            .collect();
-        assert_eq!(
-            findings.len(),
-            1,
-            "exactly one finding must be reported in {path}; got {:?}",
-            outcome.findings()
-        );
-        assert!(findings[0].confirmed);
-        assert_eq!(findings[0].finding.validator, set);
-        assert_eq!(findings[0].finding.rule.as_deref(), Some(rule));
-        assert!(
-            findings[0].finding.claim.contains(claim_fragment),
-            "the claim must be the tool's message carrying '{claim_fragment}'; got '{}'",
-            findings[0].finding.claim
-        );
-    }
-
-    /// Acceptance: the shipped Rust tool rule reports an undocumented public
-    /// item on a real cargo workspace, through the real clippy pipeline.
-    ///
-    /// No LLM reads the pair: the rule plans healthy, so the `missing-docs`
-    /// prompt rule is suppressed for the file, and the finding comes from the
-    /// script's stdout — [`execute_tool_runs`] never reaches an agent.
-    #[test]
-    fn the_shipped_rust_tool_rule_reports_an_undocumented_public_item() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(
-            repo.path().join("Cargo.toml"),
-            UNDOCUMENTED_PACKAGE_MANIFEST,
-        )
-        .unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(repo.path().join(UNDOCUMENTED_LIB_PATH), UNDOCUMENTED_LIB_RS).unwrap();
-        let loader = builtin_loader();
-        let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
-
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
-
-        let run = plan
-            .runs()
-            .iter()
-            .find(|run| run.rule() == RUST_MISSING_DOCS_RULE)
-            .unwrap_or_else(|| {
-                panic!(
-                    "the shipped Rust tool rule must plan a run; fallbacks: {:?}",
-                    plan.fallbacks()
-                )
-            });
-        assert_eq!(run.files(), [UNDOCUMENTED_LIB_PATH.to_string()]);
-        assert!(
-            plan.suppression()
-                .suppressed_rules(CODE_HYGIENE_SET, UNDOCUMENTED_LIB_PATH)
-                .contains(MISSING_DOCS_PROMPT_RULE),
-            "a healthy tool rule must suppress the prompt rule, so no LLM reads the pair"
-        );
-
-        verify_run_reports_one_finding(
-            run,
-            repo.path(),
-            UNDOCUMENTED_LIB_PATH,
-            CODE_HYGIENE_SET,
-            RUST_MISSING_DOCS_RULE,
-            "missing documentation",
-        );
-    }
-
-    /// A cargo package holding one function over the nesting gate and nothing
-    /// else the four lints report. `[workspace]` keeps cargo inside the
-    /// temporary directory.
-    const COMPLEX_PACKAGE_MANIFEST: &str = concat!(
-        "[package]\nname = \"complex-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-        "\n[workspace]\n",
-    );
-
-    /// The library of [`COMPLEX_PACKAGE_MANIFEST`]. `fold_grid` is a free
-    /// function at control-flow depth 6, and a free function body is itself one
-    /// level, so its innermost block sits at nesting level 7 against the gate
-    /// of 6. The Rust tool rule must report it once. The body stays well under
-    /// the line gate and takes two arguments, so the same run reports nothing
-    /// else.
-    const COMPLEX_LIB_RS: &str = r#"//! A probe crate for the shipped Rust complexity tool rule.
-
-/// Folds a grid of readings into one band, one nested block for each test.
-pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
-    let mut band = 0;
-    for row in grid {
-        for cell in row {
-            if *cell > 0 {
-                if *cell < limit {
-                    while band < *cell {
-                        if band % 2 == 0 {
-                            band += 2;
-                        }
-                        band += 1;
-                    }
-                }
-            }
-        }
-    }
-    band
-}
-"#;
-
-    /// The library path inside the complexity probe package, as the work-list
-    /// holds it.
-    const COMPLEX_LIB_PATH: &str = "src/lib.rs";
-
-    /// A one-validator work-list over `path` for the builtin `code-hygiene`
-    /// set, naming both complexity prompt rules and the Rust tool rule.
-    fn complexity_work(path: &str, content: &str) -> WorkList {
-        WorkList::new(
-            "a function over the nesting gate",
-            vec![ValidatorWork::new(
-                CODE_HYGIENE_SET,
-                RuleNames::new([
-                    COGNITIVE_COMPLEXITY_PROMPT_RULE.to_string(),
-                    FUNCTION_LENGTH_PROMPT_RULE.to_string(),
-                    RUST_COMPLEXITY_RULE.to_string(),
-                ]),
-                ProbeNames::new([]),
-                [FileWork::new(path, vec![], vec![], content, vec![])],
-            )],
-        )
-    }
-
-    /// Acceptance: the shipped Rust complexity tool rule reports an over-complex
-    /// function on a real cargo workspace, through the real clippy pipeline,
-    /// and suppresses both prompt rules it supersedes.
-    ///
-    /// The suppression half is what a rule that supersedes two names buys. A
-    /// healthy `complexity-rust` must silence `cognitive-complexity` AND
-    /// `function-length` for the file, so no LLM re-reads a gate the tool
-    /// already decided.
-    ///
-    /// The reporting half also proves the threshold reached clippy.
-    /// `excessive-nesting-threshold` defaults to `0`, which turns the lint off
-    /// altogether, so the probe reports only when the script's temporary
-    /// `clippy.toml` is the file `CLIPPY_CONF_DIR` names.
-    #[test]
-    fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(repo.path().join("Cargo.toml"), COMPLEX_PACKAGE_MANIFEST).unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(repo.path().join(COMPLEX_LIB_PATH), COMPLEX_LIB_RS).unwrap();
-        let loader = builtin_loader();
-        let work = complexity_work(COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
-
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
-
-        let run = plan
-            .runs()
-            .iter()
-            .find(|run| run.rule() == RUST_COMPLEXITY_RULE)
-            .unwrap_or_else(|| {
-                panic!(
-                    "the shipped Rust complexity tool rule must plan a run; fallbacks: {:?}",
-                    plan.fallbacks()
-                )
-            });
-        assert_eq!(run.files(), [COMPLEX_LIB_PATH.to_string()]);
-        let suppressed = plan
-            .suppression()
-            .suppressed_rules(CODE_HYGIENE_SET, COMPLEX_LIB_PATH);
-        for prompt_rule in SUPERSEDES_BOTH_COMPLEXITY_GATES {
-            assert!(
-                suppressed.contains(*prompt_rule),
-                "a healthy tool rule that supersedes two prompt rules must suppress both; \
-                 `{prompt_rule}` is missing from {suppressed:?}"
-            );
-        }
-
-        verify_run_reports_one_finding(
-            run,
-            repo.path(),
-            COMPLEX_LIB_PATH,
-            CODE_HYGIENE_SET,
-            RUST_COMPLEXITY_RULE,
-            "too nested",
-        );
-    }
-
-    /// A Python module with one statement stranded behind a `return`.
-    ///
-    /// `__all__` names the one function, which is how Python declares an
-    /// exported surface and how vulture is told the function has callers
-    /// outside the module. Without it the run reports the function as unused
-    /// too, and the probe would measure two findings rather than the one
-    /// stranded statement it is built to measure.
-    const UNREACHABLE_MODULE_PY: &str = concat!(
-        "\"\"\"A probe module for the shipped Python dead-code tool rule.\"\"\"\n\n",
-        "__all__ = [\"stops_early\"]\n\n\n",
-        "def stops_early():\n",
-        "    \"\"\"Return a value, then strand the statement below it.\"\"\"\n",
-        "    return 1\n",
-        "    print(\"stranded\")\n",
-    );
-
-    /// The module path inside the probe repository, as the work-list holds it.
-    const UNREACHABLE_MODULE_PATH: &str = "src/stops_early.py";
-
-    /// A one-validator work-list over `files` for the builtin `code-hygiene`
-    /// set, naming both the `dead-code` prompt rule and the Python tool rule.
-    fn dead_code_work(path: &str, content: &str) -> WorkList {
-        WorkList::new(
-            "a statement behind a return",
-            vec![ValidatorWork::new(
-                CODE_HYGIENE_SET,
-                RuleNames::new([
-                    DEAD_CODE_PROMPT_RULE.to_string(),
-                    PYTHON_DEAD_CODE_RULE.to_string(),
-                ]),
-                ProbeNames::new([]),
-                [FileWork::new(path, vec![], vec![], content, vec![])],
-            )],
-        )
-    }
-
-    /// Acceptance: the shipped Python dead-code tool rule suppresses the
-    /// `dead-code` prompt rule, and reports the stranded statement through the
-    /// real vulture pipeline.
-    ///
-    /// The suppression half is the load-bearing one, and it is asserted only
-    /// when the rule planned a run — a healthy tool rule suppresses whatever
-    /// its `supersedes` names, and a machine without vulture falls the rule
-    /// back to the prompt rule instead. Superseding is what makes dead code
-    /// objective for Python: the prompt rule's carve-outs for the exported
-    /// surface and for staged work become `__all__` and `# noqa: V1xx`, which
-    /// the tool reads.
-    ///
-    /// The reporting half runs under the same condition, the one
-    /// [`every_shipped_dead_code_tool_rule_passes_its_fixtures`] applies: a
-    /// missing tool degrades the rule and never blocks a review.
-    #[test]
-    fn the_shipped_python_dead_code_tool_rule_reports_and_suppresses_dead_code() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(
-            repo.path().join(UNREACHABLE_MODULE_PATH),
-            UNREACHABLE_MODULE_PY,
-        )
-        .unwrap();
-        let loader = builtin_loader();
-        let work = dead_code_work(UNREACHABLE_MODULE_PATH, UNREACHABLE_MODULE_PY);
-
-        let plan = plan_tool_rules(&work, &loader, &["python"]);
-
-        let Some(run) = plan
-            .runs()
-            .iter()
-            .find(|run| run.rule() == PYTHON_DEAD_CODE_RULE)
-        else {
-            return;
-        };
-        assert_eq!(run.files(), [UNREACHABLE_MODULE_PATH.to_string()]);
-        assert!(
-            plan.suppression()
-                .suppressed_rules(CODE_HYGIENE_SET, UNREACHABLE_MODULE_PATH)
-                .contains(DEAD_CODE_PROMPT_RULE),
-            "a healthy dead-code tool rule must suppress the `dead-code` prompt rule, \
-             so no LLM re-reads a question the tool already decided"
-        );
-
-        verify_run_reports_one_finding(
-            run,
-            repo.path(),
-            UNREACHABLE_MODULE_PATH,
-            CODE_HYGIENE_SET,
-            PYTHON_DEAD_CODE_RULE,
-            "unreachable code after",
-        );
-    }
-
-    /// Names the prompt rules a roster row expects, for a failure message.
-    fn supersedes_label(expected: &[&str]) -> String {
-        match expected.is_empty() {
-            true => "nothing".to_string(),
-            false => expected.join(", "),
-        }
-    }
-
-    /// Drives every rule in `rules` through the real pre-install and doctor
-    /// path, and holds each one to the fixture contract.
-    ///
-    /// Each row names a project type, the tool rule that serves it, and the
-    /// prompt rules that rule must supersede — empty for a rule that must leave
-    /// its prompt rule running. For each row, the helper runs the same
-    /// pre-install `sah init` runs, reads the doctor row, and asserts what the
-    /// row supersedes. The list belongs to the row rather than to the call
-    /// because one roster — the complexity rules — mixes rules that replace one
-    /// prompt rule with a rule that replaces two.
-    ///
-    /// A rule whose tool the machine does not have — and whose install commands
-    /// could not get it — is reported as degraded, which is the documented
-    /// behavior: a missing tool falls the rule back to its prompt rule and never
-    /// blocks a review. That state cannot run the fixtures, so the fixture
-    /// assertion applies to the rules whose tool doctor found. The exercised
-    /// count guards against every rule taking that branch and the caller
-    /// asserting nothing.
-    ///
-    /// `rule_kind` names the group in the failure messages — the prompt rule the
-    /// group is named for, whether the group replaces that rule or runs beside
-    /// it — so a failing run says which roster came up empty.
-    fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule_kind: &str) {
-        let loader = builtin_loader();
-        let mut exercised = 0;
-
-        for (project_type, rule_name, expected_supersedes) in rules {
-            let project_types = [*project_type];
-            crate::review::tool_install::install_project_tool_rules(&loader, &project_types);
-
-            let status = crate::doctor::check_review_engine_with(&loader, &project_types);
-            let row = status
-                .tool_rules
-                .iter()
-                .find(|row| row.rule_name == *rule_name)
-                .unwrap_or_else(|| {
-                    panic!("{rule_name} must be reported for a {project_type} project")
-                });
-            assert_eq!(
-                row.supersedes.names(),
-                *expected_supersedes,
-                "{rule_name} must supersede {}, the contract every {rule_kind} tool rule keeps",
-                supersedes_label(expected_supersedes)
-            );
-            if row.presence == ToolPresence::Present {
-                assert!(
-                    row.usable(),
-                    "{rule_name}'s tool is installed, so its fixtures must pass; \
-                     doctor says: {}",
-                    row.degraded_detail()
-                );
-                exercised += 1;
-            }
-        }
-
-        assert!(
-            exercised > 0,
-            "no shipped {rule_kind} tool rule's tool was installed, so the fixture \
-             pairs were never run and this test asserts nothing"
-        );
-    }
-
-    /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
-    /// in doctor, and supersedes the `missing-docs` prompt rule.
-    ///
-    /// A tool that reads the whole public surface answers the documentation
-    /// question the prompt rule asks, so it replaces it for the files it covers.
-    /// [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
-    /// contract, including what a machine without the tool proves.
-    #[test]
-    fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(
-            SHIPPED_MISSING_DOCS_RULES,
-            MISSING_DOCS_PROMPT_RULE,
-        );
-    }
-
-    /// Acceptance: every shipped dead-code tool rule passes its fixture pair in
-    /// doctor, and supersedes the `dead-code` prompt rule.
-    ///
-    /// The pass fixture is the load-bearing half. Each pass fixture holds the
-    /// same dead shapes its fail fixture holds, each behind the language's own
-    /// suppression marker, so a marker the tool stops reading makes the pair
-    /// fail. That marker is the whole staging contract: with it the tool
-    /// replaces the prompt rule's judgment, and without it the tool would
-    /// report staged work as dead.
-    #[test]
-    fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(SHIPPED_DEAD_CODE_RULES, DEAD_CODE_PROMPT_RULE);
-    }
-
-    /// Acceptance: every shipped magic-numbers tool rule passes its fixture pair
-    /// in doctor, and supersedes the `magic-numbers` prompt rule.
-    ///
-    /// The pass fixture is the load-bearing half here. Each of these tools will
-    /// report every inline literal at its default settings, and the rule's
-    /// configuration narrows it to the contexts the prompt rule names. The pass
-    /// fixture holds the carve-outs — `0`, `1`, `-1`, a value a declaration
-    /// already names — so a configuration that stopped applying makes the pair
-    /// fail. [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
-    /// contract, including what a machine without the tool proves.
-    #[test]
-    fn every_shipped_magic_numbers_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(
-            SHIPPED_MAGIC_NUMBERS_RULES,
-            MAGIC_NUMBERS_PROMPT_RULE,
-        );
-    }
-
-    /// Acceptance: every shipped complexity tool rule passes its fixture pair
-    /// in doctor, and supersedes exactly the gates its own tool decides.
-    ///
-    /// The `supersedes` assertion is the load-bearing half. `complexity-rust`
-    /// must name both prompt rules, because one `cargo clippy` run answers
-    /// both; naming only one would leave an agent re-reading the probe for the
-    /// gate the tool already decided. The two Python rules must name one each,
-    /// because ruff decides one gate per lint; naming both from either rule
-    /// would silence a gate no tool measures.
-    #[test]
-    fn every_shipped_complexity_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(
-            SHIPPED_COMPLEXITY_RULES,
-            COGNITIVE_COMPLEXITY_PROMPT_RULE,
-        );
-    }
-
-    /// Acceptance: every shipped unused-dependency tool rule passes its fixture
-    /// pair in doctor, and supersedes nothing.
-    ///
-    /// The pass fixture is the load-bearing half. It declares the same unused
-    /// dependency its fail fixture declares, and the only difference between
-    /// the two is `[package.metadata.cargo-machete] ignored`, so a machete
-    /// release that stopped reading that key — or stopped reading it through
-    /// the trailing comment the entry carries — makes the pair fail and takes
-    /// the rule out of the review.
-    #[test]
-    fn every_shipped_unused_dependency_tool_rule_passes_its_fixtures() {
-        verify_shipped_tool_rules_pass_fixtures(
-            SHIPPED_UNUSED_DEPENDENCY_RULES,
-            UNUSED_DEPENDENCIES_RULE_KIND,
-        );
-    }
-
-    /// A cargo package that uses one dependency and declares a second one no
-    /// source names. `[workspace]` keeps cargo inside the temporary directory.
-    const UNUSED_DEPENDENCY_PACKAGE_MANIFEST: &str = concat!(
-        "[package]\nname = \"unused-dependency-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-        "\n[dependencies]\nlibc = \"0.2\"\nserde = \"1\"\n",
-        "\n[workspace]\n",
-    );
-
-    /// The library of [`UNUSED_DEPENDENCY_PACKAGE_MANIFEST`]. It names `libc`
-    /// and never `serde`, so `serde` is the one finding the rule must report.
-    const UNUSED_DEPENDENCY_LIB_RS: &str = concat!(
-        "//! A probe crate for the shipped Rust unused-dependency tool rule.\n\n",
-        "/// The system page size, read through the one dependency this file names.\n",
-        "pub fn page_size() -> i64 {\n",
-        "    unsafe { libc::sysconf(libc::_SC_PAGESIZE) }\n",
-        "}\n",
-    );
-
-    /// The manifest path inside the probe repository, as the work-list holds
-    /// it. This is the file the finding must land on — not the source file that
-    /// fails to name the dependency.
-    const UNUSED_DEPENDENCY_MANIFEST_PATH: &str = "Cargo.toml";
-
-    /// The library path inside the probe package.
-    const UNUSED_DEPENDENCY_LIB_PATH: &str = "src/lib.rs";
-
-    /// A one-validator work-list over `path` for the builtin `manifests` set,
-    /// naming its one tool rule.
-    fn manifests_work(path: &str, content: &str) -> WorkList {
-        WorkList::new(
-            "a declared dependency no source names",
-            vec![ValidatorWork::new(
-                MANIFESTS_SET,
-                RuleNames::new([RUST_UNUSED_DEPENDENCIES_RULE.to_string()]),
-                ProbeNames::new([]),
-                [FileWork::new(path, vec![], vec![], content, vec![])],
-            )],
-        )
-    }
-
-    /// Acceptance: the shipped Rust unused-dependency tool rule reports a
-    /// declared dependency no source names, on a real cargo package, through
-    /// the real `cargo machete` pipeline.
-    ///
-    /// This is the production path the fixture pair cannot reach. A fixture is
-    /// a manifest under a fixture name, which machete refuses to read, so the
-    /// script normalizes it into a temporary package; a real manifest is named
-    /// `Cargo.toml` and is scanned where it lies. Only a run over a real
-    /// package exercises that half, and only it proves the finding lands on the
-    /// manifest rather than on the source file.
-    ///
-    /// The run is asserted only when the rule planned one, the same condition
-    /// [`every_shipped_unused_dependency_tool_rule_passes_its_fixtures`]
-    /// applies: a missing tool degrades the rule and never blocks a review.
-    #[test]
-    fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(
-            repo.path().join(UNUSED_DEPENDENCY_MANIFEST_PATH),
-            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
-        )
-        .unwrap();
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(
-            repo.path().join(UNUSED_DEPENDENCY_LIB_PATH),
-            UNUSED_DEPENDENCY_LIB_RS,
-        )
-        .unwrap();
-        let loader = builtin_loader();
-        let work = manifests_work(
-            UNUSED_DEPENDENCY_MANIFEST_PATH,
-            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
-        );
-
-        let plan = plan_tool_rules(&work, &loader, &["rust"]);
-
-        let Some(run) = plan
-            .runs()
-            .iter()
-            .find(|run| run.rule() == RUST_UNUSED_DEPENDENCIES_RULE)
-        else {
-            return;
-        };
-        assert_eq!(
-            run.files(),
-            [UNUSED_DEPENDENCY_MANIFEST_PATH.to_string()],
-            "the run must carry the changed manifest, so the engine keeps the finding"
-        );
-
-        verify_run_reports_one_finding(
-            run,
-            repo.path(),
-            UNUSED_DEPENDENCY_MANIFEST_PATH,
-            MANIFESTS_SET,
-            RUST_UNUSED_DEPENDENCIES_RULE,
-            "unused dependency `serde`",
-        );
-    }
-
-    #[test]
-    fn execute_emits_no_planned_event_when_there_are_no_runs() {
-        let repo = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let outcome = execute_tool_runs(&[], repo.path(), Some(&tx));
-
-        assert_eq!(outcome, ToolOutcome::default());
-        assert!(rx.try_recv().is_err(), "no events for an empty plan");
-    }
-}
+mod tests;

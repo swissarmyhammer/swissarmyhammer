@@ -1,16 +1,48 @@
 """The passing fixture of the `missing-docs-python` tool rule.
 
-Every public item here has documentation. The tool must report nothing. A
-tool upgrade that reports one anyway makes the doctor mark the rule unusable.
+Every public item here has documentation, and every shape the rule carves out
+stands here with none. The tool must report nothing. A tool upgrade that
+reports one anyway makes the doctor mark the rule unusable.
 """
 
 
 class DocumentedClass:
     """A documented public class."""
 
-    def documented_method(self) -> None:
-        """A documented public method."""
+    def __init__(self) -> None:
+        """Hold one value."""
+        self._value = 0
+
+    def __str__(self) -> str:
+        return ""
+
+    def __repr__(self) -> str:
+        return ""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    @property
+    def value(self) -> int:
+        """The value this class holds."""
+        return self._value
+
+    @value.setter
+    def value(self, next_value: int) -> None:
+        self._value = next_value
+
+    def _private_method(self) -> None:
+        return None
 
 
-def documented_function() -> None:
-    """A documented public function."""
+class TestCollected:
+    def test_method(self) -> None:
+        assert True
+
+
+def test_collected_function() -> None:
+    assert True
+
+
+def _private_function() -> None:
+    return None
