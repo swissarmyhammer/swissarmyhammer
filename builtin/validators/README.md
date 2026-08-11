@@ -68,9 +68,10 @@ A tool rule binds one tool to one language. Example:
         commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
     ---
 
-This is the shortest shipped tool rule, so it shows the whole schema and no
-more. A rule whose tool needs several steps writes a script rather than one
-pipe; `rules/missing-docs-python.md` is one of those.
+That is the frontmatter of `rules/complexity-python.md`, all 22 lines of it,
+and its `run` is one pipe. A rule whose tool needs several steps writes a
+script rather than one pipe; `rules/missing-docs-python.md` is one of those,
+and its script is 47 lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
