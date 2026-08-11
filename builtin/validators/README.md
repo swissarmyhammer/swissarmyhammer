@@ -135,18 +135,25 @@ The `tool` block keys:
     a shell option line stand over them. A shell option line opens with
     `set` and it names one option or more, such as `set -e`, `set +e` or
     `set -euo pipefail`. Each word under `set` opens with `-` or `+`, or it
-    is the name a long option takes. Three other `set` lines do not stand
-    over the guard: `set` alone writes every shell variable, `set -o` alone
+    is the name a long option takes, or it opens a comment. A `#` word and
+    every word under it are a comment, so `set -e # keep going` stands over
+    the guard. An option cluster that ends with `o` takes a name. The name
+    stands only under such a cluster, and it must be the name of a shell
+    option, so `set -euo`, `set -o rm`, `set -e pipefail` and `set pipefail`
+    do not stand over the guard. Three other `set` lines do not stand over
+    the guard: `set` alone writes every shell variable, `set -o` alone
     writes every shell option, and a `set --` line writes the positional
-    parameters that `$#` counts. A `set` line that holds `;`, `&`, `|`, `$`
-    or a backtick runs a second command, so it does not stand over the
-    guard either. A guard under the first `mktemp -d` leaves a directory
-    behind; a guard under the first tool call answers after the tool read
-    the tree; and a guard in a subshell, in the body of a function or in a
-    heredoc never runs. This text and this place ARE the contract:
-    a coverage guard reads the shipped script of each `files`-scope rule and
-    holds it to both. Another shape with the same behaviour, such as
-    `[ "$#" -eq 0 ] && exit 0`, does not meet the contract.
+    parameters that `$#` counts. A `set` line that holds `;`, `&`, `|`, `$`,
+    a backtick, `>` or `<` runs a second command, or it reads or writes a
+    file. A `set` line that ends with a backslash joins the line under it.
+    None of those lines stands over the guard. A guard under the first
+    `mktemp -d` leaves a directory behind; a guard under the first tool call
+    answers after the tool read the tree; and a guard in a subshell, in the
+    body of a function or in a heredoc never runs. This text and this place
+    ARE the contract: a coverage guard reads the shipped script of each
+    `files`-scope rule and holds it to both. Another shape with the same
+    behaviour, such as `[ "$#" -eq 0 ] && exit 0`, does not meet the
+    contract.
   - A script that makes a temporary directory removes it. Write
     `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` on the line
     directly under it. No line stands between the two, so no statement
