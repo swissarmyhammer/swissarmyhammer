@@ -56,17 +56,32 @@ Every measurement below was made on revive 1.15.0.
 `exported` holds a second check. It reports an exported name that repeats its
 own package name, because a caller then writes the word two times:
 `staged.StagedType`. revive gives that finding the rule name `exported`, the
-same rule name a documentation finding carries, so a filter cannot tell the two
-apart.
+same rule name a documentation finding carries.
 
-That finding is about a name. This rule supersedes the `missing-docs` prompt
-rule and no other, and the `naming-consistency` prompt rule owns a name. A rule
-that reported both would give one defect two owners.
+The two findings differ in the CATEGORY revive writes beside the rule name. A
+documentation finding carries `comments`. A stuttering name carries `naming`.
+Measured over one file that holds a documented stuttering type, an undocumented
+plain type, an undocumented stuttering type and an undocumented stuttering
+constant: the config without the setting reports 5 findings — three `comments`
+and two `naming` — and the config with the setting reports the three `comments`
+findings and no other. A documented stuttering type still reports its name. A
+stuttering constant reports no name.
 
-`disableStutteringCheck` is the revive setting that turns the name check off.
-Measured over two files that hold three stuttering names and two undocumented
-items: the config without the setting reports 5 findings, and the config with
-the setting reports the 2 documentation findings and no other.
+`disableStutteringCheck` is the revive setting that turns the name check off,
+and the config states it. This rule supersedes the `missing-docs` prompt rule
+and no other. `missing-docs` asks for a doc comment, and a stuttering name is
+not a missing doc comment, so this rule does not own that defect. The config
+asks revive for the one check the rule owns. A filter on the category would
+guard a finding this config never makes, and no test could measure it.
+
+**No shipped rule owns a stuttering Go name today.** Measured: 27 shipped rules
+match a `.go` file, and no one of them reports a NAME as the defect. The naming
+rules that ship — `swift/naming-clarity`, `swift/doc-parameter-naming` and
+`js-ts/naming-and-style` — read no `.go` file. The acceptance test
+`the_shipped_rules_that_read_a_go_file_stay_the_stated_list` holds that list of
+27, so a rule added later fails the test and the reader then decides. Card
+^6jzgb8v carries the gap. The `naming` category above is how a Go naming rule
+selects the finding.
 
 ## A doc comment must open with the item's own name
 
