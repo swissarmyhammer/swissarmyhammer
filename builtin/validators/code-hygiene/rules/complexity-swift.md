@@ -180,9 +180,10 @@ version 99.0.0.` to stderr, write 0 bytes to stdout, lint no file, and exit 2.
 At status 2 the REPORT tells the two apart: the probe run writes a JSON array,
 and the version-mismatch run writes 0 bytes. The report makes that one
 distinction. At status 1 the report is 0 bytes for the clean run beside a
-project `excluded:` list, and 0 bytes for the broken run over a path that
-holds no file. Measured against the child configuration this script writes,
-over one file holding one function of cyclomatic complexity 16:
+project `excluded:` list, and 0 bytes for the run over the directory
+`hollow`, which holds no Swift file. Measured against the child configuration
+this script writes, over one file holding one function of cyclomatic
+complexity 16:
 
 | what the run is | status | stdout |
 |---|---|---|
@@ -190,6 +191,8 @@ over one file holding one function of cyclomatic complexity 16:
 | the probe file | 2 | 1 entry, 413 bytes |
 | the probe file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
 | the probe file beside a project `excluded:` that covers it | 1 | 0 bytes |
+| a path that holds no file | 1 | 0 bytes |
+| the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
 
 So the script accepts status 0, and it accepts status 2 only when the report
 holds a JSON array of one entry or more. At each other status, and at status 2

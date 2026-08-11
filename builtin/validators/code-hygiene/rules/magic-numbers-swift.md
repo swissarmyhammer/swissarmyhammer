@@ -270,9 +270,9 @@ The status alone does not tell a measured run from a broken run. At status 2
 the REPORT tells the two apart: the threshold run writes a JSON array, and the
 version-mismatch run writes 0 bytes. The report makes that one distinction. At
 status 1 the report is 0 bytes for the clean run beside a project `excluded:`
-list, and 0 bytes for the broken run over a path that holds no file. Each
-status swiftlint 0.65.0 answers with was measured against the child
-configuration this script writes:
+list, and 0 bytes for the run over the directory `hollow`, which holds no
+Swift file. Each status swiftlint 0.65.0 answers with was measured against the
+child configuration this script writes:
 
 | what the run is | status | stdout |
 |---|---|---|
@@ -283,6 +283,7 @@ configuration this script writes:
 | the same file beside a project `excluded:` that covers it | 1 | 0 bytes |
 | one file whose only line is `public func oops( {` | 0 | an empty array, 5 bytes |
 | a path that holds no file | 1 | 0 bytes |
+| the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
 | a `--config` path that holds no file | 134 | 0 bytes |
 | a project configuration that holds `child_config:` | 134 | 0 bytes |
 | a command-line option that does not exist | 64 | 0 bytes |
