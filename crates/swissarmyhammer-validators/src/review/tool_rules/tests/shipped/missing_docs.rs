@@ -194,6 +194,7 @@ const DART_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedP
         rule: DART_MISSING_DOCS_RULE,
         expected: DART_STAGED_REPORTED,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "one undocumented public class, staged in three positions",
     declarations: DART_STAGED_LIBRARY,
     staged: DART_STAGED_POSITIONS,
@@ -393,6 +394,7 @@ const GO_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPos
         rule: GO_MISSING_DOCS_RULE,
         expected: GO_STAGED_REPORTED,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "one undocumented exported type, staged in four positions",
     declarations: GO_STAGED_DECLARATIONS,
     staged: GO_STAGED_POSITIONS,
@@ -523,6 +525,7 @@ const GO_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
         rule: GO_MISSING_DOCS_RULE,
         expected: GO_UNPARSABLE_ERROR,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Go file the parser cannot read",
     path: GO_UNPARSABLE_PATH,
     source: Some(GO_UNPARSABLE_SOURCE),
@@ -708,6 +711,7 @@ const PYTHON_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStage
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_STAGED_REPORTS,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "one test class, one test function and one helper at four positions",
     declarations: PYTHON_STAGED_DECLARATIONS,
     staged: PYTHON_STAGED_FILES,
@@ -757,6 +761,7 @@ const PYTHON_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_UNPARSABLE_ERROR,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_UNPARSABLE_PATH,
     source: Some(PYTHON_UNPARSABLE_SOURCE),
@@ -792,6 +797,7 @@ const PYTHON_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_ABSENT_ERROR,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Python file that is not there",
     path: PYTHON_ABSENT_PATH,
     source: None,
@@ -824,9 +830,6 @@ const PYTHON_UNREAD_FILES: &[(&str, &str)] = &[
     ("top.py", PYTHON_UNREAD_TOP_SOURCE),
     ("deep/nested/other.py", PYTHON_UNREAD_NESTED_SOURCE),
 ];
-
-/// What a run given no file must report: nothing.
-const NO_FINDINGS: &[&str] = &[];
 
 /// The `missing-docs-python` probe over a run that is given no file.
 const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
@@ -944,6 +947,7 @@ const RUST_MISSING_DOCS_WORKSPACE_PROBE: ShippedStagedPositions = ShippedStagedP
         rule: RUST_MISSING_DOCS_RULE,
         expected: RUST_WORKSPACE_REPORTS,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "one undocumented public struct in each package of a workspace",
     declarations: RUST_WORKSPACE_DECLARATIONS,
     staged: RUST_WORKSPACE_STAGED_FILES,
@@ -1081,6 +1085,7 @@ const RUST_UNCOMPILABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
         rule: RUST_MISSING_DOCS_RULE,
         expected: RUST_UNCOMPILABLE_ERROR,
     },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Rust crate the compiler cannot build",
     path: RUST_UNCOMPILABLE_PATH,
     source: Some(RUST_UNCOMPILABLE_SOURCE),
@@ -1099,4 +1104,310 @@ const RUST_UNCOMPILABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
 #[test]
 fn the_shipped_rust_missing_docs_tool_rule_breaks_on_a_crate_that_does_not_compile() {
     verify_shipped_run_breaks(&RUST_UNCOMPILABLE_PROBE);
+}
+
+/// The materialized name of the `missing-docs-swift` fail fixture.
+const SWIFT_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-swift.fail.swift";
+
+/// Where the `missing-docs-swift` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const SWIFT_MISSING_DOCS_FIXTURE_PATH: &str = "Sources/MissingDocsSwiftFail.swift";
+
+/// Every declaration the `missing-docs-swift` fail fixture leaves
+/// undocumented, trimmed as the fixture writes it.
+///
+/// A line, and not a claim, because `missing_docs` writes one message —
+/// `public declarations should be documented` — for every declaration, so the
+/// claim never spells which one it read.
+const SWIFT_MISSING_DOCS_FAIL_LINES: &[&str] = &[
+    "public struct UndocumentedStructure {",
+    "public func undocumentedMethod() {}",
+    "public func undocumentedFunction() {}",
+];
+
+/// The `missing-docs-swift` fail fixture, and every undocumented declaration
+/// the real swiftlint pipeline must report inside it.
+const SWIFT_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_MISSING_DOCS_FAIL_LINES,
+    },
+    fixture: SWIFT_MISSING_DOCS_FAIL_FIXTURE,
+    path: SWIFT_MISSING_DOCS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    noun: "line holding an undocumented public declaration",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule reports every
+/// undocumented declaration its fail fixture holds, through the real swiftlint
+/// pipeline.
+///
+/// A declaration is held to the SOURCE LINE its finding stands on, because
+/// `missing_docs` writes one message for every declaration and never spells
+/// the declaration it read.
+///
+/// The count is the other half, and it is what a silent run cannot fake. The
+/// script writes its own configuration and names the project's own
+/// `.swiftlint.yml` beside it, and a run that reached neither would report
+/// zero findings. Holding this run to exactly these three lines states that
+/// swiftlint read the configuration the script wrote and reported each kind
+/// the fixture holds.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_reports_every_fail_fixture_line() {
+    verify_shipped_fail_fixture_reports_each(
+        &SWIFT_MISSING_DOCS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an undocumented public structure, method and function",
+                CODE_HYGIENE_SET,
+                [
+                    MISSING_DOCS_PROMPT_RULE.to_string(),
+                    SWIFT_MISSING_DOCS_RULE.to_string(),
+                ],
+                [(SWIFT_MISSING_DOCS_FIXTURE_PATH, content)],
+            )
+        },
+        fail_fixture_source_line,
+        |reported, expected| reported == expected,
+    );
+}
+
+/// One undocumented public structure, and one undocumented stored property
+/// inside it.
+///
+/// Every staged position holds these same bytes, so the POSITION is the only
+/// thing that can tell one file of the run from another.
+const SWIFT_STAGED_DECLARATIONS: &str = concat!(
+    "public struct StagedThing {\n",
+    "    public var value: Int = 0\n",
+    "}\n",
+);
+
+/// The file of each finding the Swift run must report: the ordinary file, once
+/// for its structure and once for its stored property.
+const SWIFT_STAGED_REPORTED: &[&str] =
+    &[SWIFT_ORDINARY_POSITION.path, SWIFT_ORDINARY_POSITION.path];
+
+/// The staged Swift positions, and the one of them the real swiftlint pipeline
+/// must report.
+const SWIFT_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_STAGED_REPORTED,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "one undocumented public structure, staged in two positions",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_EXCLUDE_POSITIONS,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the ordinary file reports its structure and its stored property, and the \
+             file under the project's excluded directory reports nothing",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule honours the project's
+/// own `excluded:` list, through the real swiftlint pipeline.
+///
+/// This is the half the fixture pair cannot reach. The doctor materializes one
+/// fixture as a loose file with no directory, so no fixture can carry a
+/// position and no fixture can stand beside a project configuration.
+///
+/// The two files hold the same bytes on purpose. The project's `excluded:`
+/// list is the only difference between the file that reports and the file that
+/// stays silent. swiftlint applies that list to a file named as a command-line
+/// argument only under `--force-exclude`, so this test fails the moment the
+/// script drops the flag or stops naming the project configuration.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_reads_the_project_exclude_list() {
+    verify_shipped_staged_positions_report(&SWIFT_MISSING_DOCS_POSITIONS_PROBE);
+}
+
+/// The `missing-docs-swift` probe over a run whose every file the project's
+/// `excluded:` list names.
+const SWIFT_EVERY_FILE_EXCLUDED_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "one undocumented public structure under the project's excluded directory",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_EXCLUDED_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project excludes every file of the run, so the run reports nothing and \
+             breaks nothing",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule reports nothing, and
+/// breaks nothing, when the project excludes every file of the run, through
+/// the real swiftlint pipeline.
+///
+/// swiftlint exits 1 with `Error: No lintable files found at paths` when
+/// `--force-exclude` leaves it no file to read. That status reads as a broken
+/// tool, so a run over a change that touched generated code alone would report
+/// a tool error rather than a clean answer. The script tests each file it is
+/// given for readability first, so the message can mean one thing only, and it
+/// then exits 0 with no finding.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_answers_zero_when_the_project_excludes_every_file() {
+    verify_shipped_staged_positions_report(&SWIFT_EVERY_FILE_EXCLUDED_PROBE);
+}
+
+/// One undocumented type that declares an inherited type, and one that
+/// declares none, each holding one undocumented stored property.
+///
+/// `excludes_inherited_types: true` is what keeps `Wide` and its property
+/// silent, and `warning: [open, public]` is what makes `Plain` and its
+/// property report. The two shapes stand together so one run measures both.
+const SWIFT_OPTION_DECLARATIONS: &str = concat!(
+    "public struct Wide: Equatable {\n",
+    "    public var name: String = \"\"\n",
+    "}\n",
+    "\n",
+    "public struct Plain {\n",
+    "    public var value: Int = 0\n",
+    "}\n",
+);
+
+/// A project `.swiftlint.yml` that switches the rule off and states other
+/// options for it.
+///
+/// Each of the three settings changes the answer on its own: `disabled_rules`
+/// switches `missing_docs` off, `warning: [open]` drops every `public`
+/// declaration, and `excludes_inherited_types: false` adds the two rows of
+/// `Wide`.
+const SWIFT_OVERRIDING_PROJECT_CONFIG: &str = concat!(
+    "disabled_rules:\n",
+    "  - missing_docs\n",
+    "missing_docs:\n",
+    "  warning: [open]\n",
+    "  excludes_inherited_types: false\n",
+);
+
+/// The overriding project configuration staged beside the two shapes, which
+/// the work-list does NOT name.
+const SWIFT_OVERRIDING_SUPPORT_FILES: &[(&str, &str)] =
+    &[(SWIFT_PROJECT_CONFIG_PATH, SWIFT_OVERRIDING_PROJECT_CONFIG)];
+
+/// The file of each finding the run must report: the staged file, once for
+/// `Plain` and once for its stored property.
+const SWIFT_OPTION_REPORTED: &[&str] =
+    &[SWIFT_ORDINARY_POSITION.path, SWIFT_ORDINARY_POSITION.path];
+
+/// The `missing-docs-swift` probe over a project that states other options for
+/// the rule.
+const SWIFT_RULE_OPTIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_OPTION_REPORTED,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "one undocumented type with an inherited type and one without",
+    declarations: SWIFT_OPTION_DECLARATIONS,
+    staged: SWIFT_ORDINARY_POSITION_ONLY,
+    support: SWIFT_OVERRIDING_SUPPORT_FILES,
+    reason: "the rule's own options decide: the type with no inherited type reports its \
+             declaration and its property, and the type with one reports nothing",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule keeps its own rule
+/// options against a project that states other ones, through the real
+/// swiftlint pipeline.
+///
+/// The script names the project's `.swiftlint.yml` as the PARENT of its own
+/// configuration, so the project decides which files are read. It must not
+/// decide what the rule measures. The script's own configuration states every
+/// `missing_docs` option, and a child block replaces the parent's block whole.
+///
+/// Each setting in the staged project configuration moves the count on its
+/// own, so this run tells the three apart: 0 findings if the project switched
+/// the rule off or dropped `public`, and 4 if it widened the rule to a type
+/// that declares an inherited type.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_keeps_its_own_rule_options() {
+    verify_shipped_staged_positions_report(&SWIFT_RULE_OPTIONS_PROBE);
+}
+
+/// Where the Swift file that is never written stands inside the probe
+/// repository.
+const SWIFT_ABSENT_PATH: &str = "Sources/Absent.swift";
+
+/// What the script writes for a file it cannot read.
+const SWIFT_CANNOT_READ_MESSAGE: &str = "missing-docs-swift cannot read";
+
+/// What the one error of an absent file must name.
+const SWIFT_ABSENT_ERROR: &[&str] = &[SWIFT_CANNOT_READ_MESSAGE, SWIFT_ABSENT_PATH];
+
+/// The `missing-docs-swift` probe over a path that holds no file.
+const SWIFT_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_ABSENT_ERROR,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a Swift file that is not there",
+    path: SWIFT_ABSENT_PATH,
+    source: None,
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a file it
+/// cannot read, through the real swiftlint pipeline.
+///
+/// swiftlint exits 1 for a path that is not there and writes nothing to
+/// stdout. A pipeline takes the exit status of its LAST command, and that
+/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
+/// answering zero for a reason other than a clean file. The script tests each
+/// file it is given before it starts, and exits 1 with the name of the file it
+/// cannot read.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
+}
+
+/// An undocumented Swift file at the root of the probe repository.
+const SWIFT_UNREAD_TOP_SOURCE: &str = "public struct Top {\n    public var value: Int = 0\n}\n";
+
+/// The same, nested three directories deep. swiftlint walks a whole tree, so a
+/// default target reaches this file as readily as the one at the root.
+const SWIFT_UNREAD_NESTED_SOURCE: &str =
+    "public enum Other {\n    public static let value = 2\n}\n";
+
+/// Every Swift file staged in the probe repository the script is given none
+/// of.
+const SWIFT_UNREAD_FILES: &[(&str, &str)] = &[
+    ("Top.swift", SWIFT_UNREAD_TOP_SOURCE),
+    ("deep/nested/Other.swift", SWIFT_UNREAD_NESTED_SOURCE),
+];
+
+/// The `missing-docs-swift` probe over a run that is given no file.
+const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: SWIFT_UNREAD_FILES,
+    reason: "the script judges the files it is given and no other: given none, it reports none \
+             and exits 0, and the staged tree stays unread",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule reads only the files
+/// it is given, through the real swiftlint pipeline.
+///
+/// `swiftlint lint` with no path argument falls back to a default target of
+/// the working directory, and it walks that whole tree. A script that hands
+/// `"$@"` straight to swiftlint therefore answers for every Swift file under
+/// the repository root when the run carries no file, and it exits 0, so the
+/// answer reads as a measured result rather than a mistake.
+///
+/// The script therefore answers an empty argument list at once, with no
+/// finding and an exit status of 0.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&SWIFT_EMPTY_RUN_PROBE);
 }

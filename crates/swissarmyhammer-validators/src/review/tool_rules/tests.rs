@@ -95,6 +95,15 @@ const DART_MISSING_DOCS_RULE: &str = "missing-docs-dart";
 /// revive reads, and one holds the run to breaking on a file it cannot parse.
 const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
 
+/// The shipped missing-docs tool rule for Swift. swiftlint reads the
+/// project's own `.swiftlint.yml` as the parent of the rule's own config, so
+/// five more acceptance tests drive it end to end: one names every line its
+/// fail fixture leaves undocumented, one holds the project's `excluded:` list,
+/// one holds a run whose every file that list excludes, one holds the rule's
+/// own options against a project that states other ones, and one holds the run
+/// to breaking on a file it cannot read.
+const SWIFT_MISSING_DOCS_RULE: &str = "missing-docs-swift";
+
 /// Every shipped missing-docs tool rule, with the project type it serves
 /// and the prompt rules it supersedes.
 const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
@@ -102,7 +111,7 @@ const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("python", PYTHON_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
     ("go", GO_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
-    ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),
+    ("swift", SWIFT_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("flutter", DART_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
 ];
 
@@ -194,6 +203,14 @@ const RUST_COMPLEXITY_RULE: &str = "complexity-rust";
 /// drives its fail fixture end to end and names every guard the fixture holds.
 const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
 
+/// The shipped complexity tool rule for Swift. swiftlint reads the project's
+/// own `.swiftlint.yml` as the parent of the rule's own config, so four more
+/// acceptance tests drive it end to end: one holds the project's `excluded:`
+/// list, one holds a run whose every file that list excludes, one holds the
+/// rule's own thresholds against a project that states other ones, and one
+/// holds the run to breaking on a file it cannot read.
+const SWIFT_COMPLEXITY_RULE: &str = "complexity-swift";
+
 /// Every shipped complexity tool rule, with the project type it serves and
 /// the prompt rules it supersedes.
 ///
@@ -225,7 +242,7 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "swift",
-        "complexity-swift",
+        SWIFT_COMPLEXITY_RULE,
         SUPERSEDES_BOTH_COMPLEXITY_GATES,
     ),
     ("go", "complexity-go", SUPERSEDES_COGNITIVE_COMPLEXITY),

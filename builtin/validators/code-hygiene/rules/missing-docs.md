@@ -74,13 +74,14 @@ The two carve-outs were measured against each of the six shipped language rules
   `excludes_inherited_types: false` the run reports rows 1, 2, 3 and 4. The
   fourth probe file holds the five rows of the first probe file in an
   undocumented `public struct Plain`, which declares no inherited type. The run
-  reports rows 1, 2, 3, 4 and 5. The swiftlint `missing_docs` default
-  `excludes_inherited_types: true` is the cause. The default makes the tool pass
-  over the type declaration, over each member, over a nested type and over each
-  member of the nested type. The three inherited types measured are a protocol
-  conformance, a superclass and a raw-value type. No other inherited type was
-  measured. Swift stays silent for every getter in a type that declares an
-  inherited type.
+  reports rows 1, 2, 3, 4 and 5. The setting `excludes_inherited_types: true`
+  is the cause. The shipped `missing-docs-swift` script writes that value into
+  its own configuration, and it is swiftlint's own default as well. The setting
+  makes the tool pass over the type declaration, over each member, over a
+  nested type and over each member of the nested type. The three inherited
+  types measured are a protocol conformance, a superclass and a raw-value type.
+  No other inherited type was measured. Swift stays silent for every getter in
+  a type that declares an inherited type.
 - "Obvious implementations (Display, Debug, ToString, etc.)": four of the six
   stay silent on it. Dart, Go, Python and Rust stay silent. TypeScript reports
   an undocumented `toString()` and an undocumented `valueOf()`. Swift stays

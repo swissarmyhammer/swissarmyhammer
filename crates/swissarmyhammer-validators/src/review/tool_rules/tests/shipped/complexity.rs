@@ -404,3 +404,212 @@ struct FrameworkNames {
     /// The framework functions that need a framework root before them.
     rooted: Vec<String>,
 }
+
+/// The declarations every staged Swift position holds: one function whose
+/// cyclomatic complexity is 16.
+///
+/// The gate the rule states is 15, and `cyclomatic_complexity` reports only
+/// over the gate, so 16 `if` statements are one finding and no more. Measured:
+/// swiftlint answers `Function should have complexity 15 or less; currently
+/// complexity is 16`.
+const SWIFT_COMPLEXITY_STAGED: &str = concat!(
+    "func branchy(_ n: Int) -> Int {\n",
+    "    var total = 0\n",
+    "    if n > 1 { total += 1 }\n",
+    "    if n > 2 { total += 1 }\n",
+    "    if n > 3 { total += 1 }\n",
+    "    if n > 4 { total += 1 }\n",
+    "    if n > 5 { total += 1 }\n",
+    "    if n > 6 { total += 1 }\n",
+    "    if n > 7 { total += 1 }\n",
+    "    if n > 8 { total += 1 }\n",
+    "    if n > 9 { total += 1 }\n",
+    "    if n > 10 { total += 1 }\n",
+    "    if n > 11 { total += 1 }\n",
+    "    if n > 12 { total += 1 }\n",
+    "    if n > 13 { total += 1 }\n",
+    "    if n > 14 { total += 1 }\n",
+    "    if n > 15 { total += 1 }\n",
+    "    if n > 16 { total += 1 }\n",
+    "    return total\n",
+    "}\n",
+);
+
+/// The file of the one finding the staged Swift positions must report.
+const SWIFT_COMPLEXITY_STAGED_REPORTED: &[&str] = &[SWIFT_ORDINARY_POSITION.path];
+
+/// The staged Swift positions, and the one of them the real swiftlint pipeline
+/// must report.
+const SWIFT_COMPLEXITY_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: SWIFT_COMPLEXITY_STAGED_REPORTED,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "one function over the complexity gate, staged in two positions",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_EXCLUDE_POSITIONS,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the ordinary file reports its function, and the file under the project's \
+             excluded directory reports nothing",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule honours the project's
+/// own `excluded:` list, through the real swiftlint pipeline.
+///
+/// Both prompt rules this rule supersedes carve out generated code, and
+/// swiftlint holds no generated-code check of its own, so the project's
+/// `excluded:` list is the whole carve-out for a generated file.
+///
+/// The two files hold the same bytes on purpose. The list is the only
+/// difference between the file that reports and the file that stays silent.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_reads_the_project_exclude_list() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_POSITIONS_PROBE);
+}
+
+/// The `complexity-swift` probe over a run whose every file the project's
+/// `excluded:` list names.
+const SWIFT_COMPLEXITY_EVERY_FILE_EXCLUDED_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "one function over the complexity gate under the project's excluded directory",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_EXCLUDED_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project excludes every file of the run, so the run reports nothing and \
+             breaks nothing",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule reports nothing, and
+/// breaks nothing, when the project excludes every file of the run, through
+/// the real swiftlint pipeline.
+///
+/// swiftlint exits 1 with `Error: No lintable files found at paths` when
+/// `--force-exclude` leaves it no file to read, and that status reads as a
+/// broken tool. The script tests each file it is given for readability first,
+/// so the message can carry one cause only, and it then exits 0 with no
+/// finding.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_answers_zero_when_the_project_excludes_every_file() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_EVERY_FILE_EXCLUDED_PROBE);
+}
+
+/// A project `.swiftlint.yml` that switches both rules off and raises the
+/// complexity gate.
+///
+/// Each of the two settings silences the staged function on its own:
+/// `disabled_rules` switches `cyclomatic_complexity` off, and a `warning` of
+/// 30 stands over the staged function's score of 16.
+const SWIFT_COMPLEXITY_OVERRIDING_CONFIG: &str = concat!(
+    "disabled_rules:\n",
+    "  - cyclomatic_complexity\n",
+    "  - function_body_length\n",
+    "cyclomatic_complexity:\n",
+    "  warning: 30\n",
+);
+
+/// The overriding project configuration staged beside the ordinary position,
+/// which the work-list does NOT name.
+const SWIFT_COMPLEXITY_OVERRIDING_SUPPORT: &[(&str, &str)] = &[(
+    SWIFT_PROJECT_CONFIG_PATH,
+    SWIFT_COMPLEXITY_OVERRIDING_CONFIG,
+)];
+
+/// The `complexity-swift` probe over a project that states another gate.
+const SWIFT_COMPLEXITY_OPTIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: SWIFT_COMPLEXITY_STAGED_REPORTED,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "one function a project gate would let through",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_ORDINARY_POSITION_ONLY,
+    support: SWIFT_COMPLEXITY_OVERRIDING_SUPPORT,
+    reason: "the rule's own gate decides, so the staged function still reports",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule keeps its own gates
+/// against a project that states other ones, through the real swiftlint
+/// pipeline.
+///
+/// The script names the project's `.swiftlint.yml` as the PARENT of its own
+/// configuration, so the project decides which files are read. It must not
+/// decide what the rule measures. The script's own configuration states the
+/// gate of each rule, and a child block replaces the parent's block whole.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_keeps_its_own_gates() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_OPTIONS_PROBE);
+}
+
+/// Where the Swift file that is never written stands inside the probe
+/// repository.
+const SWIFT_COMPLEXITY_ABSENT_PATH: &str = "Sources/Absent.swift";
+
+/// What the one error of an absent file must name.
+const SWIFT_COMPLEXITY_ABSENT_ERROR: &[&str] =
+    &["complexity-swift cannot read", SWIFT_COMPLEXITY_ABSENT_PATH];
+
+/// The `complexity-swift` probe over a path that holds no file.
+const SWIFT_COMPLEXITY_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: SWIFT_COMPLEXITY_ABSENT_ERROR,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a Swift file that is not there",
+    path: SWIFT_COMPLEXITY_ABSENT_PATH,
+    source: None,
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift complexity tool rule BREAKS on a file it
+/// cannot read, through the real swiftlint pipeline.
+///
+/// swiftlint exits 1 for a path that is not there and writes nothing to
+/// stdout. A pipeline takes the exit status of its LAST command, and that
+/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
+/// answering zero for a reason other than a clean file.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&SWIFT_COMPLEXITY_ABSENT_PROBE);
+}
+
+/// Every Swift file staged in the probe repository the complexity script is
+/// given none of.
+const SWIFT_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
+    ("Top.swift", SWIFT_COMPLEXITY_STAGED),
+    ("deep/nested/Other.swift", SWIFT_COMPLEXITY_STAGED),
+];
+
+/// The `complexity-swift` probe over a run that is given no file.
+const SWIFT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: SWIFT_COMPLEXITY_UNREAD_FILES,
+    reason: "the script judges the files it is given and no other: given none, it reports none \
+             and exits 0, and the staged tree stays unread",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule reads only the files it
+/// is given, through the real swiftlint pipeline.
+///
+/// `swiftlint lint` with no path argument walks the whole tree under the
+/// working directory, and it exits 0, so the answer reads as a measured result
+/// rather than a mistake. The script answers an empty argument list at once,
+/// with no finding and an exit status of 0.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&SWIFT_COMPLEXITY_EMPTY_RUN_PROBE);
+}

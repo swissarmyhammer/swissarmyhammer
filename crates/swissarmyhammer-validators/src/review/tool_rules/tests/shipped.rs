@@ -287,6 +287,10 @@ struct ShippedStagedPositions {
     /// file of each finding, in the order the run reports them.
     run: ShippedRun,
 
+    /// The prompt rule the work-list names beside the tool rule, which is the
+    /// rule the tool rule supersedes.
+    prompt_rule: &'static str,
+
     /// What the work-list states the change is for.
     change_purpose: &'static str,
 
@@ -352,10 +356,7 @@ fn verify_shipped_staged_positions_report(probe: &ShippedStagedPositions) {
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
-        [
-            MISSING_DOCS_PROMPT_RULE.to_string(),
-            probe.run.rule.to_string(),
-        ],
+        [probe.prompt_rule.to_string(), probe.run.rule.to_string()],
         staged
             .iter()
             .map(|(path, content)| (*path, content.as_str())),
@@ -398,6 +399,10 @@ struct ShippedBrokenRun {
     /// the one error detail must carry.
     run: ShippedRun,
 
+    /// The prompt rule the work-list names beside the tool rule, which is the
+    /// rule the tool rule supersedes.
+    prompt_rule: &'static str,
+
     /// What the work-list states the change is for.
     change_purpose: &'static str,
 
@@ -434,10 +439,7 @@ fn verify_shipped_run_breaks(probe: &ShippedBrokenRun) {
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
-        [
-            MISSING_DOCS_PROMPT_RULE.to_string(),
-            probe.run.rule.to_string(),
-        ],
+        [probe.prompt_rule.to_string(), probe.run.rule.to_string()],
         [(probe.path, content)],
     );
     let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
@@ -577,6 +579,58 @@ fn supersedes_label(expected: &[&str]) -> String {
         false => expected.join(", "),
     }
 }
+
+/// The project types a Swift workspace carries, as the plan holds them.
+const SWIFT_PROJECT_TYPES: &[&str] = &["swift"];
+
+/// Where a project states its own swiftlint settings, as the work-list holds
+/// the path.
+const SWIFT_PROJECT_CONFIG_PATH: &str = ".swiftlint.yml";
+
+/// A project `.swiftlint.yml` that excludes the directory its generator writes
+/// into.
+///
+/// The three shipped swiftlint rules name this file as the PARENT of the
+/// configuration each of them writes, so each of the three is measured against
+/// the same project settings.
+const SWIFT_EXCLUDING_PROJECT_CONFIG: &str = concat!("excluded:\n", "  - Generated\n");
+
+/// The project configuration staged beside a Swift probe's positions, which
+/// the work-list does NOT name.
+const SWIFT_EXCLUDING_SUPPORT_FILES: &[(&str, &str)] =
+    &[(SWIFT_PROJECT_CONFIG_PATH, SWIFT_EXCLUDING_PROJECT_CONFIG)];
+
+/// The head a Swift staged file carries: none. The project's `excluded:` list
+/// decides on the path alone, so every position holds the same bytes.
+const SWIFT_NO_HEAD: &[&str] = &[];
+
+/// The generated position: a file under the directory the project excludes.
+const SWIFT_GENERATED_POSITION: ShippedStagedFile = ShippedStagedFile {
+    path: "Generated/Staged.swift",
+    head: SWIFT_NO_HEAD,
+};
+
+/// The ordinary position, which the project's exclude list does not name.
+const SWIFT_ORDINARY_POSITION: ShippedStagedFile = ShippedStagedFile {
+    path: "Sources/Staged.swift",
+    head: SWIFT_NO_HEAD,
+};
+
+/// Both Swift positions, in the order the work-list holds them.
+const SWIFT_EXCLUDE_POSITIONS: &[ShippedStagedFile] =
+    &[SWIFT_GENERATED_POSITION, SWIFT_ORDINARY_POSITION];
+
+/// The generated position alone, which is then every file of the run.
+const SWIFT_EXCLUDED_POSITION_ONLY: &[ShippedStagedFile] = &[SWIFT_GENERATED_POSITION];
+
+/// The ordinary position alone, for a probe that stages no excluded file.
+const SWIFT_ORDINARY_POSITION_ONLY: &[ShippedStagedFile] = &[SWIFT_ORDINARY_POSITION];
+
+/// What a run whose every file the project excludes must report: nothing.
+const NO_STAGED_REPORTS: &[&str] = &[];
+
+/// What a script given no file must report: nothing.
+const NO_FINDINGS: &[&str] = &[];
 
 /// The name of the SwiftPM manifest, and of the fixture template that
 /// carries one.

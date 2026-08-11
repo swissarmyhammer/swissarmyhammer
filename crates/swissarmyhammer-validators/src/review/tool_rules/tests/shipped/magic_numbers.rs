@@ -389,3 +389,196 @@ fn the_shipped_dart_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
         |reported, expected| reported == expected,
     );
 }
+
+/// The declarations every staged Swift position holds: one unnamed literal in
+/// a comparison.
+///
+/// `404` stands outside the `allowed_numbers` list the rule states, so
+/// `no_magic_numbers` reports it once in every file it reads.
+const SWIFT_MAGIC_NUMBERS_STAGED: &str = concat!(
+    "public func check(_ status: Int) -> Bool {\n",
+    "    return status == 404\n",
+    "}\n",
+);
+
+/// The file of the one finding the staged Swift positions must report.
+const SWIFT_MAGIC_NUMBERS_STAGED_REPORTED: &[&str] = &[SWIFT_ORDINARY_POSITION.path];
+
+/// The staged Swift positions, and the one of them the real swiftlint pipeline
+/// must report.
+const SWIFT_MAGIC_NUMBERS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: SWIFT_MAGIC_NUMBERS_STAGED_REPORTED,
+    },
+    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+    change_purpose: "one unnamed literal, staged in two positions",
+    declarations: SWIFT_MAGIC_NUMBERS_STAGED,
+    staged: SWIFT_EXCLUDE_POSITIONS,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the ordinary file reports its literal, and the file under the project's \
+             excluded directory reports nothing",
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule honours the project's
+/// own `excluded:` list, through the real swiftlint pipeline.
+///
+/// The `magic-numbers` prompt rule this rule supersedes carves out nothing by
+/// path, and swiftlint holds no generated-code check of its own, so the
+/// project's `excluded:` list is the whole carve-out for a generated file.
+///
+/// The two files hold the same bytes on purpose. The list is the only
+/// difference between the file that reports and the file that stays silent.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_reads_the_project_exclude_list() {
+    verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_POSITIONS_PROBE);
+}
+
+/// The `magic-numbers-swift` probe over a run whose every file the project's
+/// `excluded:` list names.
+const SWIFT_MAGIC_NUMBERS_EVERY_FILE_EXCLUDED_PROBE: ShippedStagedPositions =
+    ShippedStagedPositions {
+        run: ShippedRun {
+            project_types: SWIFT_PROJECT_TYPES,
+            rule: SWIFT_MAGIC_NUMBERS_RULE,
+            expected: NO_STAGED_REPORTS,
+        },
+        prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+        change_purpose: "one unnamed literal under the project's excluded directory",
+        declarations: SWIFT_MAGIC_NUMBERS_STAGED,
+        staged: SWIFT_EXCLUDED_POSITION_ONLY,
+        support: SWIFT_EXCLUDING_SUPPORT_FILES,
+        reason: "the project excludes every file of the run, so the run reports nothing and \
+                 breaks nothing",
+    };
+
+/// Acceptance: the shipped Swift magic-numbers tool rule reports nothing, and
+/// breaks nothing, when the project excludes every file of the run, through
+/// the real swiftlint pipeline.
+///
+/// swiftlint exits 1 with `Error: No lintable files found at paths` when
+/// `--force-exclude` leaves it no file to read, and that status reads as a
+/// broken tool. The script tests each file it is given for readability first,
+/// so the message can carry one cause only, and it then exits 0 with no
+/// finding.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_answers_zero_when_the_project_excludes_every_file() {
+    verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_EVERY_FILE_EXCLUDED_PROBE);
+}
+
+/// A project `.swiftlint.yml` that switches the rule off and states another
+/// allow-list for it.
+///
+/// Each of the two settings silences the staged literal on its own:
+/// `disabled_rules` switches `no_magic_numbers` off, and an `allowed_numbers`
+/// list carrying `404` names the staged literal.
+const SWIFT_MAGIC_NUMBERS_OVERRIDING_CONFIG: &str = concat!(
+    "disabled_rules:\n",
+    "  - no_magic_numbers\n",
+    "no_magic_numbers:\n",
+    "  allowed_numbers: [404]\n",
+);
+
+/// The overriding project configuration staged beside the ordinary position,
+/// which the work-list does NOT name.
+const SWIFT_MAGIC_NUMBERS_OVERRIDING_SUPPORT: &[(&str, &str)] = &[(
+    SWIFT_PROJECT_CONFIG_PATH,
+    SWIFT_MAGIC_NUMBERS_OVERRIDING_CONFIG,
+)];
+
+/// The `magic-numbers-swift` probe over a project that states another
+/// allow-list for the rule.
+const SWIFT_MAGIC_NUMBERS_OPTIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: SWIFT_MAGIC_NUMBERS_STAGED_REPORTED,
+    },
+    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+    change_purpose: "one unnamed literal a project allow-list names",
+    declarations: SWIFT_MAGIC_NUMBERS_STAGED,
+    staged: SWIFT_ORDINARY_POSITION_ONLY,
+    support: SWIFT_MAGIC_NUMBERS_OVERRIDING_SUPPORT,
+    reason: "the rule's own allow-list decides, so the staged literal still reports",
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule keeps its own
+/// allow-list against a project that states another one, through the real
+/// swiftlint pipeline.
+///
+/// The script names the project's `.swiftlint.yml` as the PARENT of its own
+/// configuration, so the project decides which files are read. It must not
+/// decide what the rule measures. The script's own configuration states
+/// `allowed_numbers`, and a child block replaces the parent's block whole.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_keeps_its_own_allowed_numbers() {
+    verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_OPTIONS_PROBE);
+}
+
+/// Where the Swift file that is never written stands inside the probe
+/// repository.
+const SWIFT_MAGIC_NUMBERS_ABSENT_PATH: &str = "Sources/Absent.swift";
+
+/// What the one error of an absent file must name.
+const SWIFT_MAGIC_NUMBERS_ABSENT_ERROR: &[&str] = &[
+    "magic-numbers-swift cannot read",
+    SWIFT_MAGIC_NUMBERS_ABSENT_PATH,
+];
+
+/// The `magic-numbers-swift` probe over a path that holds no file.
+const SWIFT_MAGIC_NUMBERS_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: SWIFT_MAGIC_NUMBERS_ABSENT_ERROR,
+    },
+    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+    change_purpose: "a Swift file that is not there",
+    path: SWIFT_MAGIC_NUMBERS_ABSENT_PATH,
+    source: None,
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule BREAKS on a file it
+/// cannot read, through the real swiftlint pipeline.
+///
+/// swiftlint exits 1 for a path that is not there and writes nothing to
+/// stdout. A pipeline takes the exit status of its LAST command, and that
+/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
+/// answering zero for a reason other than a clean file.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_ABSENT_PROBE);
+}
+
+/// Every Swift file staged in the probe repository the magic-numbers script is
+/// given none of.
+const SWIFT_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("Top.swift", SWIFT_MAGIC_NUMBERS_STAGED),
+    ("deep/nested/Other.swift", SWIFT_MAGIC_NUMBERS_STAGED),
+];
+
+/// The `magic-numbers-swift` probe over a run that is given no file.
+const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: SWIFT_MAGIC_NUMBERS_UNREAD_FILES,
+    reason: "the script judges the files it is given and no other: given none, it reports none \
+             and exits 0, and the staged tree stays unread",
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule reads only the files
+/// it is given, through the real swiftlint pipeline.
+///
+/// `swiftlint lint` with no path argument walks the whole tree under the
+/// working directory, and it exits 0, so the answer reads as a measured result
+/// rather than a mistake. The script answers an empty argument list at once,
+/// with no finding and an exit status of 0.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
+}

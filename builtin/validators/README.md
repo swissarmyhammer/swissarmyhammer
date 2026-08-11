@@ -219,6 +219,22 @@ Rules for tool rules:
   files in, runs the tool on the package, and maps the temporary paths back to
   the paths it was given. `dart analyze` works this way. The project's own
   configuration is still never read.
+- A script MAY read the project's own configuration for the FILE LIST alone,
+  and only where the tool merges two configurations and lets the script's own
+  one win. Which files a linter passes over — a generated tree, a vendored
+  tree — is the project's decision and belongs in the project's file. What the
+  rule MEASURES is the rule's decision. The three shipped swiftlint rules do
+  this: each names the project's `.swiftlint.yml` as the PARENT config and its
+  own temporary file as the CHILD, and passes `--force-exclude` so the
+  project's `excluded:` list reaches a file named on the command line.
+
+  A script that reads the project's configuration must state EVERY option of
+  EVERY rule it measures with, in its own child configuration, and the rule
+  body must carry a measurement of a project configuration that states other
+  options. Without that, a project silently changes the gate. Measured with
+  swiftlint 0.65.0: a parent stating `missing_docs: excludes_inherited_types:
+  false` moves the count when the child states no `missing_docs:` block, and it
+  moves nothing when the child states the block.
 
 ### Fixtures
 
