@@ -1255,6 +1255,50 @@ fn the_shipped_swift_missing_docs_tool_rule_answers_zero_when_the_project_exclud
     verify_shipped_staged_positions_report(&SWIFT_EVERY_FILE_EXCLUDED_PROBE);
 }
 
+/// The file of each finding the `child_config:` probe must report: the file
+/// under the project's excluded directory, once for its structure and once for
+/// its stored property.
+///
+/// The project excludes that directory, and the run drops that exclude list,
+/// so the file reports.
+const SWIFT_CHILD_CONFIG_REPORTED: &[&str] =
+    &[SWIFT_GENERATED_POSITION.path, SWIFT_GENERATED_POSITION.path];
+
+/// The `missing-docs-swift` probe beside a project that names a child
+/// configuration of its own.
+const SWIFT_CHILD_CONFIG_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_CHILD_CONFIG_REPORTED,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "one undocumented public structure beside a project child configuration",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_EXCLUDED_POSITION_ONLY,
+    support: SWIFT_CHILD_CONFIG_SUPPORT_FILES,
+    reason: "swiftlint cannot read that project configuration beside the rule's own, so the run \
+             measures with the rule's configuration alone and reports the staged declarations",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule measures beside a
+/// project that names a child configuration of its own, through the real
+/// swiftlint pipeline.
+///
+/// swiftlint reads a list of `--config` paths as one parent-child hierarchy. A
+/// parent that names a child of its own makes that hierarchy ambiguous, and
+/// swiftlint aborts with exit 134. The script read that as a broken tool, so a
+/// project switched the gate off with a configuration swiftlint reads on its
+/// own.
+///
+/// The script now runs a second time with its own configuration alone. The
+/// project's `excluded:` list is dropped for that run, so the staged file under
+/// the excluded directory reports.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_child_config() {
+    verify_shipped_staged_positions_report(&SWIFT_CHILD_CONFIG_PROBE);
+}
+
 /// One undocumented type that declares an inherited type, and one that
 /// declares none, each holding one undocumented stored property.
 ///

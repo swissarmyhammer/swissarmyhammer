@@ -500,6 +500,47 @@ fn the_shipped_swift_complexity_tool_rule_answers_zero_when_the_project_excludes
     verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_EVERY_FILE_EXCLUDED_PROBE);
 }
 
+/// The file of the one finding the `child_config:` probe must report.
+///
+/// The project excludes this directory, and the run drops that exclude list,
+/// so the file reports.
+const SWIFT_COMPLEXITY_CHILD_CONFIG_REPORTED: &[&str] = &[SWIFT_GENERATED_POSITION.path];
+
+/// The `complexity-swift` probe beside a project that names a child
+/// configuration of its own.
+const SWIFT_COMPLEXITY_CHILD_CONFIG_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: SWIFT_COMPLEXITY_CHILD_CONFIG_REPORTED,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "one function over the complexity gate, beside a project child configuration",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_EXCLUDED_POSITION_ONLY,
+    support: SWIFT_CHILD_CONFIG_SUPPORT_FILES,
+    reason: "swiftlint cannot read that project configuration beside the rule's own, so the run \
+             measures with the rule's configuration alone and reports the staged function",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule measures beside a
+/// project that names a child configuration of its own, through the real
+/// swiftlint pipeline.
+///
+/// swiftlint reads a list of `--config` paths as one parent-child hierarchy. A
+/// parent that names a child of its own makes that hierarchy ambiguous, and
+/// swiftlint aborts with exit 134. The script read that as a broken tool, so a
+/// project switched the gate off with a configuration swiftlint reads on its
+/// own.
+///
+/// The script now runs a second time with its own configuration alone. The
+/// project's `excluded:` list is dropped for that run, so the staged file under
+/// the excluded directory reports.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_measures_beside_a_project_child_config() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_CHILD_CONFIG_PROBE);
+}
+
 /// A project `.swiftlint.yml` that switches both rules off and raises the
 /// complexity gate.
 ///

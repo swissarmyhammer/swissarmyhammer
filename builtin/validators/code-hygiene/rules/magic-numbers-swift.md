@@ -23,18 +23,33 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     printf '%s\n' 'only_rules:' '  - no_magic_numbers' \
-      'no_magic_numbers:' '  allowed_numbers: [0, 1, -1, 100]' > "$work/swiftlint.yml"
+      'no_magic_numbers:' '  severity: warning' \
+      '  test_parent_classes: ["QuickSpec", "XCTestCase"]' \
+      '  allowed_numbers: [0, 1, -1, 100]' > "$work/swiftlint.yml"
+    status=0
     lint() {
-      if [ -f .swiftlint.yml ]; then
-        swiftlint lint --config .swiftlint.yml --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+      parent="$1"
+      shift
+      status=0
+      if [ -n "$parent" ]; then
+        swiftlint lint --config "$parent" --config "$work/swiftlint.yml" \
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       else
         swiftlint lint --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       fi
     }
-    status=0
-    lint "$@" > "$work/report.json" 2> "$work/lint.err" || status=$?
+    project=""
+    if [ -f .swiftlint.yml ]; then
+      project=".swiftlint.yml"
+    fi
+    lint "$project" "$@"
+    if [ -n "$project" ] && grep -qF 'Could not read configuration' "$work/lint.err"; then
+      printf '%s\n' 'magic-numbers-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
+      lint "" "$@"
+    fi
     cat "$work/lint.err" >&2
     if [ "$status" -ne 0 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
@@ -141,7 +156,7 @@ shape, and `missing-docs-swift` states each measurement behind it.
   holds no file aborts swiftlint. The parent gives the run the project's
   `excluded:` list.
 - The CHILD is the file the script writes into a temporary directory. It states
-  `only_rules: [no_magic_numbers]` and the rule's `allowed_numbers`, so the rule
+  `only_rules: [no_magic_numbers]` and every option of that rule, so the rule
   owns what it measures.
 
 `--force-exclude` makes swiftlint apply the `excluded:` list to a file named as
@@ -187,11 +202,56 @@ acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_answers_zero_when_the_project_excludes_every_file`
 holds that behaviour.
 
-## The rule owns its own allow-list
+## A project configuration swiftlint cannot read beside this rule
+
+swiftlint reads the two `--config` paths as one hierarchy, and two shapes of
+the project file stop it. Measured over one file that holds
+`return status == 404`:
+
+| the project `.swiftlint.yml` | what swiftlint does |
+|---|---|
+| `child_config: other.yml` | aborts, exit 134, `There's an ambiguity in the child / parent configuration tree` |
+| bytes that are not YAML | aborts, exit 134, `Cannot parse YAML file` |
+
+Each abort writes `Could not read configuration` to stderr, and leaves stdout
+empty. The script read that as a broken tool and exited 1. Both shapes are
+configurations swiftlint reads on its own, so a project switched the gate off
+without meaning to.
+
+The script now tests stderr for `Could not read configuration`, and it then
+runs a second time with its own configuration alone. It writes one line to
+stderr that names what it dropped. The project's `excluded:` list is not read
+for that second run. Measured over one file under `Generated/` that holds
+`return status == 404`, beside a project file that states
+`child_config: other.yml` and `excluded: [Generated]`: the run reports 1
+finding and exits 0.
+
+`parent_config:` in the project file is not one of the two shapes. Measured
+with `parent_config: other.yml` beside the same file: swiftlint reads both
+configurations and exits 0.
+
+The acceptance test
+`the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_child_config`
+holds that behaviour.
+
+## The rule owns its own options
 
 A project configuration can state options for `no_magic_numbers`. The child's
 `no_magic_numbers:` block replaces the parent's block whole, so the project
-cannot change what the rule measures.
+cannot change what the rule measures. `swiftlint rules no_magic_numbers` names
+three options, and the child states each one:
+
+| option | the value the script states |
+|---|---|
+| `severity` | `warning` |
+| `test_parent_classes` | `["QuickSpec", "XCTestCase"]` |
+| `allowed_numbers` | `[0, 1, -1, 100]` |
+
+`severity` and `test_parent_classes` are swiftlint's own defaults, written out
+so the project cannot change them. Measured over one file holding
+`return status == 404`, with no project configuration: the child above reports
+1 finding, and a child that states `allowed_numbers` alone reports the same 1
+finding.
 
 Measured against a project configuration that states `disabled_rules:
 [no_magic_numbers]` and `allowed_numbers: [404]`, over one file holding

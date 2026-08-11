@@ -25,21 +25,35 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     printf '%s\n' 'only_rules:' '  - cyclomatic_complexity' '  - function_body_length' \
-      'cyclomatic_complexity:' '  warning: 15' '  ignores_case_statements: true' \
-      'function_body_length:' '  warning: 250' > "$work/swiftlint.yml"
+      'cyclomatic_complexity:' '  warning: 15' '  error: 15' \
+      '  ignores_case_statements: true' \
+      'function_body_length:' '  warning: 250' '  error: 250' > "$work/swiftlint.yml"
+    status=0
     lint() {
-      if [ -f .swiftlint.yml ]; then
-        swiftlint lint --config .swiftlint.yml --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+      parent="$1"
+      shift
+      status=0
+      if [ -n "$parent" ]; then
+        swiftlint lint --config "$parent" --config "$work/swiftlint.yml" \
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       else
         swiftlint lint --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       fi
     }
-    status=0
-    lint "$@" > "$work/report.json" 2> "$work/lint.err" || status=$?
+    project=""
+    if [ -f .swiftlint.yml ]; then
+      project=".swiftlint.yml"
+    fi
+    lint "$project" "$@"
+    if [ -n "$project" ] && grep -qF 'Could not read configuration' "$work/lint.err"; then
+      printf '%s\n' 'complexity-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
+      lint "" "$@"
+    fi
     cat "$work/lint.err" >&2
-    if [ "$status" -ne 0 ]; then
+    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
         exit 0
       fi
@@ -124,10 +138,29 @@ review where it was, and a wrong finding is a requirement to change correct code
 reports 262 — the code lines exactly, because the count covers the body and not
 the signature line.
 
-Naming only `warning:` also disables the rule's default `error:` level. That
-matters for `function_body_length`, whose default error level is 100: the 262-line
-probe reports as a warning against 250, not as an error against 100, so the gate
-is the number this rule writes and nothing else.
+## Each rule has one gate, and swiftlint then exits 2
+
+The child states `error:` at the same number as `warning:` for each of the two
+rules, so each rule holds ONE gate. Measured with swiftlint 0.65.0 over a body
+of 150 code lines and a body of 300 code lines:
+
+| what the child states | 150-line body | 300-line body |
+|---|---|---|
+| `warning: 250` and `error: 250` | 0 findings | 1 finding, error severity |
+| `warning: 250` alone | 0 findings | 1 finding, warning severity |
+| `warning: 250` and `error: 100` | 1 finding, error severity | 1 finding, error severity |
+
+Row 3 is swiftlint's own default error level for `function_body_length`, and it
+moves the gate from 250 to 100. Row 1 keeps the count of row 2 at each body,
+and it states the option. `error:` with no value is refused: swiftlint answers
+`Invalid configuration for 'function_body_length' rule. Falling back to
+default.` and measures against `warning: 50`.
+
+swiftlint exits 2 when it reports a finding of error severity, and 0 when it
+reports none. Row 1 therefore makes every finding of this rule an exit of 2, so
+the script reads status 2 as a measured run beside status 0. Measured over one
+file holding one function of cyclomatic complexity 16: the run reports 1
+finding, and swiftlint exits 2.
 
 ## How the run is shaped
 
@@ -140,8 +173,8 @@ shape, and `missing-docs-swift` states each measurement behind it.
   holds no file aborts swiftlint. The parent gives the run the project's
   `excluded:` list.
 - The CHILD is the file the script writes into a temporary directory. It states
-  `only_rules` and the gate of each of the two rules, so the rule owns what it
-  measures.
+  `only_rules` and every option of each of the two rules, so the rule owns what
+  it measures.
 
 `--force-exclude` makes swiftlint apply the `excluded:` list to a file named as
 a command-line argument. `--no-cache` keeps swiftlint from writing a cache
@@ -187,11 +220,45 @@ acceptance test
 `the_shipped_swift_complexity_tool_rule_answers_zero_when_the_project_excludes_every_file`
 holds that behaviour.
 
+## A project configuration swiftlint cannot read beside this rule
+
+swiftlint reads the two `--config` paths as one hierarchy, and two shapes of
+the project file stop it. Measured over one file that holds one function of
+cyclomatic complexity 16:
+
+| the project `.swiftlint.yml` | what swiftlint does |
+|---|---|
+| `child_config: other.yml` | aborts, exit 134, `There's an ambiguity in the child / parent configuration tree` |
+| bytes that are not YAML | aborts, exit 134, `Cannot parse YAML file` |
+
+Each abort writes `Could not read configuration` to stderr, and leaves stdout
+empty. The script read that as a broken tool and exited 1. Both shapes are
+configurations swiftlint reads on its own, so a project switched the gate off
+without meaning to.
+
+The script now tests stderr for `Could not read configuration`, and it then
+runs a second time with its own configuration alone. It writes one line to
+stderr that names what it dropped. The project's `excluded:` list is not read
+for that second run. Measured over one file under `Generated/` that holds the
+same function, beside a project file that states `child_config: other.yml` and
+`excluded: [Generated]`: the run reports 1 finding, and swiftlint exits 2.
+
+`parent_config:` in the project file is not one of the two shapes. Measured
+with `parent_config: other.yml` beside the same file: swiftlint reads both
+configurations and reports 1 finding.
+
+The acceptance test
+`the_shipped_swift_complexity_tool_rule_measures_beside_a_project_child_config`
+holds that behaviour.
+
 ## The rule owns its own gates
 
 A project configuration can state options for either rule. The child's block for
 a rule replaces the parent's block whole, so the project cannot change the gate
-this rule measures against.
+this rule measures against. `swiftlint rules cyclomatic_complexity` names
+`warning`, `error` and `ignores_case_statements`, and
+`swiftlint rules function_body_length` names `warning` and `error`. The child
+states each of the five.
 
 Measured against a project configuration that states `disabled_rules:
 [cyclomatic_complexity, function_body_length]` and `cyclomatic_complexity:

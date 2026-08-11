@@ -600,6 +600,35 @@ const SWIFT_EXCLUDING_PROJECT_CONFIG: &str = concat!("excluded:\n", "  - Generat
 const SWIFT_EXCLUDING_SUPPORT_FILES: &[(&str, &str)] =
     &[(SWIFT_PROJECT_CONFIG_PATH, SWIFT_EXCLUDING_PROJECT_CONFIG)];
 
+/// Where a project names a child configuration of its own, as the work-list
+/// holds the path.
+const SWIFT_OTHER_CONFIG_PATH: &str = "other.yml";
+
+/// A project `.swiftlint.yml` that names a child configuration of its own.
+///
+/// swiftlint reads a list of `--config` paths as one parent-child hierarchy,
+/// and a parent that names a child of its own makes that hierarchy ambiguous:
+/// swiftlint aborts with exit 134 and writes `Could not read configuration` to
+/// stderr. Each of the three shipped swiftlint rules then runs a second time
+/// with its own configuration alone, so the run still measures. The
+/// `excluded:` list stands here to show it is dropped for that second run.
+const SWIFT_CHILD_CONFIG_PROJECT_CONFIG: &str = concat!(
+    "child_config: other.yml\n",
+    "excluded:\n",
+    "  - Generated\n",
+);
+
+/// What the child configuration a project names holds. swiftlint reads this
+/// file only when it accepts the hierarchy, and it never accepts one here.
+const SWIFT_OTHER_CONFIG: &str = concat!("only_rules:\n", "  - todo\n");
+
+/// The project configuration that names a child of its own, with that child
+/// beside it, staged for a Swift probe. The work-list names neither.
+const SWIFT_CHILD_CONFIG_SUPPORT_FILES: &[(&str, &str)] = &[
+    (SWIFT_PROJECT_CONFIG_PATH, SWIFT_CHILD_CONFIG_PROJECT_CONFIG),
+    (SWIFT_OTHER_CONFIG_PATH, SWIFT_OTHER_CONFIG),
+];
+
 /// The head a Swift staged file carries: none. The project's `excluded:` list
 /// decides on the path alone, so every position holds the same bytes.
 const SWIFT_NO_HEAD: &[&str] = &[];

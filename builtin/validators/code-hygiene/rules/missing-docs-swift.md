@@ -27,17 +27,30 @@ tool:
       '  excludes_extensions: true' '  excludes_inherited_types: true' \
       '  excludes_trivial_init: false' \
       '  evaluate_effective_access_control_level: false' > "$work/swiftlint.yml"
+    status=0
     lint() {
-      if [ -f .swiftlint.yml ]; then
-        swiftlint lint --config .swiftlint.yml --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+      parent="$1"
+      shift
+      status=0
+      if [ -n "$parent" ]; then
+        swiftlint lint --config "$parent" --config "$work/swiftlint.yml" \
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       else
         swiftlint lint --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@"
+          --force-exclude --no-cache --quiet --reporter json "$@" \
+          > "$work/report.json" 2> "$work/lint.err" || status=$?
       fi
     }
-    status=0
-    lint "$@" > "$work/report.json" 2> "$work/lint.err" || status=$?
+    project=""
+    if [ -f .swiftlint.yml ]; then
+      project=".swiftlint.yml"
+    fi
+    lint "$project" "$@"
+    if [ -n "$project" ] && grep -qF 'Could not read configuration' "$work/lint.err"; then
+      printf '%s\n' 'missing-docs-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
+      lint "" "$@"
+    fi
     cat "$work/lint.err" >&2
     if [ "$status" -ne 0 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
@@ -146,6 +159,37 @@ writes swiftlint's own message to stderr. The acceptance test
 `the_shipped_swift_missing_docs_tool_rule_answers_zero_when_the_project_excludes_every_file`
 holds that behaviour.
 
+## A project configuration swiftlint cannot read beside this rule
+
+swiftlint reads the two `--config` paths as one hierarchy, and two shapes of
+the project file stop it. Measured over one file that holds an undocumented
+`public struct` and one undocumented stored property:
+
+| the project `.swiftlint.yml` | what swiftlint does |
+|---|---|
+| `child_config: other.yml` | aborts, exit 134, `There's an ambiguity in the child / parent configuration tree` |
+| bytes that are not YAML | aborts, exit 134, `Cannot parse YAML file` |
+
+Each abort writes `Could not read configuration` to stderr, and leaves stdout
+empty. The script read that as a broken tool and exited 1. Both shapes are
+configurations swiftlint reads on its own, so a project switched the gate off
+without meaning to.
+
+The script now tests stderr for `Could not read configuration`, and it then
+runs a second time with its own configuration alone. It writes one line to
+stderr that names what it dropped. The project's `excluded:` list is not read
+for that second run. Measured over one file under `Generated/` that holds the
+same declarations, beside a project file that states `child_config: other.yml`
+and `excluded: [Generated]`: the run reports 2 findings and exits 0.
+
+`parent_config:` in the project file is not one of the two shapes. Measured
+with `parent_config: other.yml` beside the same file: swiftlint reads both
+configurations and exits 0.
+
+The acceptance test
+`the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_child_config`
+holds that behaviour.
+
 ## The rule owns its own options
 
 A project configuration can state options for `missing_docs`, and the parent's
@@ -212,11 +256,19 @@ section under this one. The run reports 7 findings, at rows 22, 25, 26, 27, 28,
 
 Each shape here is one of the 7 findings above.
 
-- **A getter and a setter.** The `missing-docs` prompt rule carves out "Simple
-  getters/setters with self-explanatory names". Measured: the undocumented
+- **A getter and a setter, inside a type that declares no inherited type.** The
+  `missing-docs` prompt rule carves out "Simple getters/setters with
+  self-explanatory names". Measured: the undocumented
   `public var value: Int { 1 }` at row 27 and the undocumented `public func
-  setValue(_ next: Int)` at row 28 each report. So a public getter and a public
-  setter each need a doc comment.
+  setValue(_ next: Int)` at row 28 each report. Both stand inside a type that
+  declares no inherited type, and the inherited type decides. Measured on a
+  second probe of two files: one holds `public struct Plain` with the same two
+  undocumented items, and the run reports 3 findings, at rows 1, 2 and 3; the
+  other holds `public struct Wide: Equatable` with the same two undocumented
+  items, and the run reports 0 findings. `excludes_inherited_types: true`
+  passes over the whole of `Wide`. So a public getter and a public setter each
+  need a doc comment inside a type that declares no inherited type.
+  `missing-docs.md` states the same condition.
 - **A trivial initializer.** The undocumented `public init() {}` at row 26
   reports. `excludes_trivial_init: false` is the cause. Measured: the same run
   with that option set to `true` reports 6 findings and drops row 26.

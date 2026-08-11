@@ -217,8 +217,9 @@ Rules for tool rules:
   tree around the file it examines. The script then builds that tree: it makes
   a temporary package, writes the configuration into it, copies the changed
   files in, runs the tool on the package, and maps the temporary paths back to
-  the paths it was given. `dart analyze` works this way. The project's own
-  configuration is still never read.
+  the paths it was given. `dart analyze` works this way. The script writes the
+  configuration of that tree itself, and it copies no configuration of the
+  project's own into the tree.
 - A script MAY read the project's own configuration for the FILE LIST alone,
   and only where the tool merges two configurations and lets the script's own
   one win. Which files a linter passes over — a generated tree, a vendored
