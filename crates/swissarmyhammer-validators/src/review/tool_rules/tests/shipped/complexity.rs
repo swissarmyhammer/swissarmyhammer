@@ -894,13 +894,21 @@ const GO_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// Acceptance: the shipped Go complexity tool rule reads only the files it is
 /// given, through the real gocognit pipeline.
 ///
-/// gocognit holds no default target of its own. Given no path it writes 39
-/// lines of usage text to stderr and exits nonzero, and the pipe ends in
-/// `jq`, so the script exits 0 with no finding. Measured over this probe with
-/// no argument: the script reported 0 findings and exited 0 both without the
-/// guard and with it, and the same script over the two staged files reports
-/// 2. The guard makes that 0 the script's own answer rather than a tool
-/// refusal a pipe hid, and it keeps the usage text off stderr.
+/// gocognit holds no default target of its own. Measured with gocognit
+/// v1.2.1, given no path: 52 lines of usage text on stderr, nothing on stdout,
+/// and exit 2. The pipe ends in `jq`, so a run that reached the tool with no
+/// path would exit 0 with no finding, and that refusal would read as a clean
+/// tree.
+///
+/// The shipped script reaches no such run. It hands gocognit one file at a
+/// time, inside the loop that drops a generated file, so the tool takes no
+/// empty argument list. The head of the script counts its arguments, which is
+/// the guard the `run` key of `builtin/validators/README.md` states for each
+/// `files`-scope rule.
+///
+/// Measured over this probe with no argument: the script reported 0 findings,
+/// wrote nothing to stderr, and exited 0. The same script over the two staged
+/// files reports 2.
 #[test]
 fn the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&GO_COMPLEXITY_EMPTY_RUN_PROBE);

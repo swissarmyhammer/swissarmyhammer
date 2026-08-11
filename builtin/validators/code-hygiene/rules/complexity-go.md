@@ -13,20 +13,12 @@ tool:
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
-    remaining="$#"
-    while [ "$remaining" -gt 0 ]; do
-      remaining=$((remaining - 1))
-      file="$1"
-      shift
+    for file in "$@"; do
       if sed -n '/^package[[:space:]]/q;p' "$file" | grep -qE '^// Code generated .* DO NOT EDIT\.$'; then
         continue
       fi
-      set -- "$@" "$file"
-    done
-    if [ "$#" -eq 0 ]; then
-      exit 0
-    fi
-    gocognit -over 15 -json "$@" |
+      gocognit -over 15 -json "$file"
+    done |
       jq -c '(. // [])[]
              | {file: .Pos.Filename, line: .Pos.Line,
                 message: "cognitive complexity \(.Complexity) of func \(.FuncName) is over the gate of 15"}'
@@ -129,7 +121,7 @@ generator, and it can never name the convention.
 
 So the script makes the test itself. For each file it is given, `sed` prints the
 lines above the `package` clause and `grep` looks for the header line in them. A
-file that carries the header is dropped before `gocognit` starts.
+file that carries the header reaches no `gocognit` run.
 
 Measured over three files, each holding one function that scores 18: the script
 without the test reported the ordinary file and the generated file; the script
@@ -181,23 +173,47 @@ reported nothing.
 
 ## The run answers for its own arguments
 
-`gocognit` holds no default target. Given no path it writes 39 lines of
-usage text to stderr and exits nonzero. The pipe ends in `jq`, which exits
-0, so that refusal reached the engine as a clean tree. The script counts
-its arguments first, and a count of zero exits 0 with no finding.
+`gocognit` holds no default target. Measured with gocognit v1.2.1, given no
+path: 52 lines of usage text on stderr, nothing on stdout, and exit 2. Three
+runs each gave the same 52 lines. The pipe ends in `jq`, which exits 0, so that
+refusal reaches the engine as a clean tree.
 
-Measured over two Go files, each holding one function of cognitive
-complexity 21, with no argument: 0 findings and exit 0 before the guard,
-and the same after it. The same script over the two files reports 2. So
-the guard makes the 0 an answer of the script's own, and it keeps the
-usage text off stderr. The acceptance test
-`the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given`
-holds both halves: the run with no argument, and the run over the two
-files.
+The script therefore counts its arguments one time, at its head, and a count of
+zero exits 0 with no finding. That count is the guard the `run` key of
+`builtin/validators/README.md` states for each `files`-scope rule, and it stands
+above every line that runs. The coverage guard
+`each_shipped_files_scope_script_answers_a_run_that_gives_it_no_file` holds each
+such rule to the text and to the place.
 
-The generated-code test can empty the argument list of a run that started
-with files in it. A change that touches a generated file alone leaves the
-script no file to give the tool, and `gocognit` then writes its usage text
-again. So the script counts its arguments a second time, under the test,
-and a count of zero exits 0 with no finding. Measured over one generated
-file alone: 0 findings and exit 0.
+One count is enough because the loop gives `gocognit` one file at a time. The
+generated-file test drops a file inside that loop, so it can drop every file of
+a run and the tool still takes no empty argument list.
+
+Measured with gocognit v1.2.1, over one ordinary Go file and one generated Go
+file, each holding one function of cognitive complexity 21:
+
+- no argument: nothing on stdout, nothing on stderr, exit 0.
+- the ordinary file: one finding on stdout, nothing on stderr, exit 0.
+- the generated file alone: nothing on stdout, nothing on stderr, exit 0.
+- the two files together: the one finding of the ordinary file on stdout,
+  nothing on stderr, exit 0.
+
+An earlier shape of this script gave `gocognit` every file at one time. That
+shape counted its arguments a second time, under the generated-file test,
+because the test can empty a list that started with files in it. The first count
+was then dead. Measured over the four runs above, with the first count removed:
+the same stdout, the same stderr and the same exit status, byte for byte. With
+the second count removed instead: the run over the generated file alone let the
+52 lines of usage text reach stderr. Deleting the dead count breaks the coverage
+guard, which named `complexity-go` on the run that measured it. So the loop
+takes the second count away, and the one count that is left stands where the
+contract puts it.
+
+The loop reports in the order of its arguments. The one call over every file
+reported in sorted order. Measured over two ordinary files: both shapes report
+the same 2 findings.
+
+The acceptance test
+`the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given` holds two
+halves: the run with no argument reports nothing, and the run over the two
+staged files reports 2.
