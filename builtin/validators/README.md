@@ -174,11 +174,21 @@ findings are read. A pipe that ends in `jq` or `sed` exits 0 even when the
 linter before it exits 1 on findings; that is the behavior you want, so do
 not add `pipefail` for linters that exit nonzero on findings.
 
-The same exit status hides a linter that BROKE. A linter usually keeps one
-status for findings and a higher status for a failure, and the pipe drops both.
-So a pipe is safe only where the tool exits nonzero for findings alone. Where
-the tool has a failure status of its own, run it into a file, test the status
-against the findings status, and exit nonzero yourself.
+The same exit status hides a linter that BROKE. A linter keeps one status for
+findings and a higher status for a failure, and the pipe drops both. So a pipe
+is safe only where the tool exits nonzero for findings alone. Where the tool
+has a failure status of its own, run it into a file, test the status against
+the findings status, and exit nonzero yourself.
+
+One status can carry both a measured run and a broken run. The script must
+then test the REPORT beside the status, and accept the shared status only for
+the report shape a measured run writes. Measured with swiftlint 0.65.0: a run
+that breaches `warning_threshold:` exits 2 and writes a JSON array of 2
+entries; a run beside a project `swiftlint_version:` that names a version that
+is not installed exits 2, writes 0 bytes and lints no file. The three shipped
+swiftlint rules accept status 2 only when the report holds a JSON array of one
+entry or more. A script that accepted every status 2 reported 0 findings and
+exited 0 for the second shape, and the engine read a dirty file as clean.
 
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.

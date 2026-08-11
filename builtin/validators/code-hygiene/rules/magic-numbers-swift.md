@@ -51,7 +51,15 @@ tool:
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    measured=0
+    if [ "$status" -eq 0 ]; then
+      measured=1
+    elif [ "$status" -eq 2 ] &&
+      jq -e 'type == "array" and length > 0' "$work/report.json" >/dev/null 2>&1
+    then
+      measured=1
+    fi
+    if [ "$measured" -eq 0 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
         exit 0
       fi
@@ -234,7 +242,7 @@ The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_child_config`
 holds that behaviour.
 
-## A project warning threshold, and why the script reads status 2
+## A project warning threshold, and what the script accepts at status 2
 
 swiftlint counts the warnings of a run against the `warning_threshold:` key of
 the project configuration. At that number, and over it, swiftlint adds one
@@ -252,42 +260,62 @@ Measured over one file that holds `return status == 404`:
 The script tested `[ "$status" -ne 0 ]`, so it read status 2 as a broken tool.
 It then reported 0 findings and exited 1 for the third row, and the engine read
 that exit as a broken tool. One line in the project file switched the gate off.
-The script now tests `[ "$status" -ne 0 ] && [ "$status" -ne 2 ]`, and the
-third row keeps the 1 finding of the first row.
+The script now accepts status 2, and the third row keeps the 1 finding of the
+first row.
 
 The `jq` filter selects `rule_id == "no_magic_numbers"`, so the
 `warning_threshold` entry never becomes a finding.
 
-Status 2 states a measured run, and no broken run states it. Each status
-swiftlint 0.65.0 answers with was measured against the child configuration this
-script writes:
+The status alone does not tell a measured run from a broken run. The REPORT
+does. Each status swiftlint 0.65.0 answers with was measured against the child
+configuration this script writes:
 
 | what the run is | status | stdout |
 |---|---|---|
-| a file that holds no literal | 0 | 0 entries |
-| one file that holds `return status == 404` | 0 | 1 entry |
-| the same file beside `warning_threshold: 1` | 2 | 2 entries |
-| one file whose only line is `public func oops( {` | 0 | 0 entries |
-| a path that holds no file | 1 | empty |
-| a `--config` path that holds no file | 134 | empty |
-| a project configuration that holds `child_config:` | 134 | empty |
-| a command-line option that does not exist | 64 | empty |
+| a file that holds no literal | 0 | an empty array, 5 bytes |
+| one file that holds `return status == 404` | 0 | 1 entry, 385 bytes |
+| the same file beside `warning_threshold: 1` | 2 | 2 entries, 608 bytes |
+| the same file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
+| one file whose only line is `public func oops( {` | 0 | an empty array, 5 bytes |
+| a path that holds no file | 1 | 0 bytes |
+| a `--config` path that holds no file | 134 | 0 bytes |
+| a project configuration that holds `child_config:` | 134 | 0 bytes |
+| a command-line option that does not exist | 64 | 0 bytes |
 
-The one run of status 2 wrote 2 entries. Each run that broke wrote an empty
-stdout, and its status was 1, 134 or 64. So the script measures at status 0 and
-at status 2, and it breaks at every other status.
+The two runs of status 2 differ in the report. The threshold run wrote 2
+entries. The version run wrote 0 bytes and linted no file: swiftlint compares
+`swiftlint_version:` with the version it is, and at a difference it writes
+`warning: Currently running SwiftLint 0.65.0 but configuration specified
+version 99.0.0.` to stderr and stops. Each run that broke wrote 0 bytes, at
+status 1, 134, 64 or 2. Each run that measured wrote a JSON array, at status 0
+or 2.
 
-A finding of error severity is the other shape that makes swiftlint exit 2, and
-this rule cannot reach it. The child states `severity: warning`, and a child
-block replaces the parent block whole. Measured with a project configuration
-that states `no_magic_numbers:` with `severity: error`, over the same file:
+So the script accepts status 0, and it accepts status 2 only when the report
+holds a JSON array of one entry or more. It breaks at every other status, and
+it breaks at status 2 with a report of 0 bytes. Measured over one file that
+holds `return status == 404`, beside a project `.swiftlint.yml` that states
+`swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at
+`0.64.0`, at `99.0.0` and at `0.1.0` the script reports 0 findings and exits 1,
+which the engine reads as a broken tool. A script that accepted every status 2
+reported 0 findings and exited 0 for each of those three values, and the engine
+read a dirty file as clean.
+
+`warning_threshold:` and a finding of error severity are the two shapes that
+make swiftlint exit 2 with a report of one entry or more, and this rule cannot
+reach the second. The child states `severity: warning`, and a child block
+replaces the parent block whole. Measured with a project configuration that
+states `no_magic_numbers:` with `severity: error`, over the same file:
 swiftlint exits 0 and writes 1 entry of warning severity. Measured with a child
 that states `severity: error` instead: swiftlint exits 2 and writes 1 entry of
 error severity.
 
 The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_warning_threshold`
-holds the run to the 1 finding of the third row of the first table.
+holds the run to the 1 finding of the third row of the first table. The
+acceptance test
+`the_shipped_swift_magic_numbers_tool_rule_breaks_beside_a_project_version_mismatch`
+holds the run beside `swiftlint_version: 99.0.0` to no finding and one tool
+error.
 
 ## The rule owns its own options
 

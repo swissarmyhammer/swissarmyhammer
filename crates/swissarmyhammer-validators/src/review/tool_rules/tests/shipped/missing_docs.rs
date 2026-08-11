@@ -1331,6 +1331,38 @@ fn the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_warning_th
     verify_shipped_staged_positions_report(&SWIFT_WARNING_THRESHOLD_PROBE);
 }
 
+/// The `missing-docs-swift` probe beside a project that names a swiftlint
+/// version that is not installed.
+const SWIFT_VERSION_MISMATCH_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_VERSION_MISMATCH_ERROR,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "undocumented public declarations beside a project version mismatch",
+    path: SWIFT_ORDINARY_POSITION.path,
+    source: Some(SWIFT_STAGED_DECLARATIONS),
+    support: SWIFT_VERSION_MISMATCH_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule BREAKS beside a
+/// project that names a swiftlint version that is not installed, through the
+/// real swiftlint pipeline.
+///
+/// swiftlint compares `swiftlint_version:` with the version it is. At a
+/// difference it writes one warning line to stderr, writes 0 bytes to stdout,
+/// runs no lint, and exits 2. Measured with swiftlint 0.65.0 over the staged
+/// declarations: a run with no project configuration reports 2 findings, and a
+/// run beside `swiftlint_version: 99.0.0` reports 0. A script that reads every
+/// status 2 as a measured run hands `jq` an empty report, reports 0 findings
+/// and exits 0, so the engine reads a dirty file as clean. The script accepts
+/// status 2 only when the report holds a JSON array of one entry or more.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_breaks_beside_a_project_version_mismatch() {
+    verify_shipped_run_breaks(&SWIFT_VERSION_MISMATCH_PROBE);
+}
+
 /// One undocumented type that declares an inherited type, and one that
 /// declares none, each holding one undocumented stored property.
 ///

@@ -53,7 +53,15 @@ tool:
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    measured=0
+    if [ "$status" -eq 0 ]; then
+      measured=1
+    elif [ "$status" -eq 2 ] &&
+      jq -e 'type == "array" and length > 0' "$work/report.json" >/dev/null 2>&1
+    then
+      measured=1
+    fi
+    if [ "$measured" -eq 0 ]; then
       if grep -qF 'No lintable files found' "$work/lint.err"; then
         exit 0
       fi
@@ -158,9 +166,39 @@ default.` and measures against `warning: 50`.
 
 swiftlint exits 2 when it reports a finding of error severity, and 0 when it
 reports none. Row 1 therefore makes every finding of this rule an exit of 2, so
-the script reads status 2 as a measured run beside status 0. Measured over one
-file holding one function of cyclomatic complexity 16: the run reports 1
-finding, and swiftlint exits 2.
+the script accepts status 2 beside status 0. Measured over one file holding one
+function of cyclomatic complexity 16: the run reports 1 finding of error
+severity, swiftlint exits 2, and stdout carries 1 entry in 413 bytes.
+
+## What the script accepts at status 2
+
+The status alone does not tell a measured run from a broken run. A project
+`.swiftlint.yml` that states `swiftlint_version:` with a version that is not
+installed makes swiftlint write
+`warning: Currently running SwiftLint 0.65.0 but configuration specified
+version 99.0.0.` to stderr, write 0 bytes to stdout, lint no file, and exit 2.
+The REPORT tells the two apart. Measured against the child configuration this
+script writes, over one file holding one function of cyclomatic complexity 16:
+
+| what the run is | status | stdout |
+|---|---|---|
+| a file that holds no function over a gate | 0 | an empty array, 5 bytes |
+| the probe file | 2 | 1 entry, 413 bytes |
+| the probe file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
+
+So the script accepts status 0, and it accepts status 2 only when the report
+holds a JSON array of one entry or more. It breaks at every other status, and
+it breaks at status 2 with a report of 0 bytes.
+
+Measured over the same file, beside a project `.swiftlint.yml` that states
+`swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at
+`0.64.0`, at `99.0.0` and at `0.1.0` the script reports 0 findings and exits 1,
+which the engine reads as a broken tool. A script that accepted every status 2
+reported 0 findings and exited 0 for each of those three values, and the engine
+read a dirty file as clean. The acceptance test
+`the_shipped_swift_complexity_tool_rule_breaks_beside_a_project_version_mismatch`
+holds the run beside `swiftlint_version: 99.0.0` to no finding and one tool
+error.
 
 ## How the run is shaped
 

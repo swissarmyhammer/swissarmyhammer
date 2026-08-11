@@ -647,6 +647,30 @@ const SWIFT_WARNING_THRESHOLD_SUPPORT_FILES: &[(&str, &str)] = &[(
     SWIFT_WARNING_THRESHOLD_PROJECT_CONFIG,
 )];
 
+/// A project `.swiftlint.yml` that names a swiftlint version that is not
+/// installed.
+///
+/// swiftlint compares this value with the version it is. At a difference it
+/// writes one warning line to stderr, writes 0 bytes to stdout, runs no lint,
+/// and exits 2. Measured with swiftlint 0.65.0: a run beside this file writes
+/// 0 bytes and exits 2, and a run beside `warning_threshold: 1` writes 608
+/// bytes and exits 2. So the status alone cannot tell a broken run from a
+/// measured one, and the report tells them apart. Each of the three shipped
+/// swiftlint rules accepts status 2 only when the report holds a JSON array of
+/// one entry or more.
+const SWIFT_VERSION_MISMATCH_PROJECT_CONFIG: &str = "swiftlint_version: 99.0.0\n";
+
+/// The version-mismatch project configuration staged beside a Swift probe's
+/// file, which the work-list does NOT name.
+const SWIFT_VERSION_MISMATCH_SUPPORT_FILES: &[(&str, &str)] = &[(
+    SWIFT_PROJECT_CONFIG_PATH,
+    SWIFT_VERSION_MISMATCH_PROJECT_CONFIG,
+)];
+
+/// What the one error of a version-mismatch run must name: the swiftlint
+/// warning line, which carries the version the project stated.
+const SWIFT_VERSION_MISMATCH_ERROR: &[&str] = &["configuration specified version 99.0.0"];
+
 /// The head a Swift staged file carries: none. The project's `excluded:` list
 /// decides on the path alone, so every position holds the same bytes.
 const SWIFT_NO_HEAD: &[&str] = &[];

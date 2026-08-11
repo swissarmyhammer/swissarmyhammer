@@ -590,6 +590,38 @@ fn the_shipped_swift_magic_numbers_tool_rule_keeps_its_own_allowed_numbers() {
     verify_shipped_staged_positions_report(&SWIFT_MAGIC_NUMBERS_OPTIONS_PROBE);
 }
 
+/// The `magic-numbers-swift` probe beside a project that names a swiftlint
+/// version that is not installed.
+const SWIFT_MAGIC_NUMBERS_VERSION_MISMATCH_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        expected: SWIFT_VERSION_MISMATCH_ERROR,
+    },
+    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
+    change_purpose: "one unnamed literal beside a project version mismatch",
+    path: SWIFT_ORDINARY_POSITION.path,
+    source: Some(SWIFT_MAGIC_NUMBERS_STAGED),
+    support: SWIFT_VERSION_MISMATCH_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift magic-numbers tool rule BREAKS beside a
+/// project that names a swiftlint version that is not installed, through the
+/// real swiftlint pipeline.
+///
+/// swiftlint compares `swiftlint_version:` with the version it is. At a
+/// difference it writes one warning line to stderr, writes 0 bytes to stdout,
+/// runs no lint, and exits 2. Measured with swiftlint 0.65.0 over the staged
+/// literal: a run with no project configuration reports 1 finding, and a run
+/// beside `swiftlint_version: 99.0.0` reports 0. A script that reads every
+/// status 2 as a measured run hands `jq` an empty report, reports 0 findings
+/// and exits 0, so the engine reads a dirty file as clean. The script accepts
+/// status 2 only when the report holds a JSON array of one entry or more.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_breaks_beside_a_project_version_mismatch() {
+    verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_VERSION_MISMATCH_PROBE);
+}
+
 /// Where the Swift file that is never written stands inside the probe
 /// repository.
 const SWIFT_MAGIC_NUMBERS_ABSENT_PATH: &str = "Sources/Absent.swift";
