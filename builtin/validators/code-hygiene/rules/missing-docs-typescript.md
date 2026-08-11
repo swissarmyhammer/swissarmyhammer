@@ -15,8 +15,13 @@ supersedes: missing-docs
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     modules="$(cd "$(dirname "$(readlink -f "$(command -v eslint)")")/../.." && pwd -P)"
-    config="$(mktemp -d)/eslint.config.cjs"
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    config="$work/eslint.config.cjs"
     cat > "$config" <<'ESLINT_CONFIG'
     const jsdoc = require("eslint-plugin-jsdoc");
     const tseslint = require("typescript-eslint");
@@ -88,3 +93,31 @@ The scope is `files` because eslint reads the files it is given.
 
 Selection in the pipe is attribution, not exemption: to exempt one item, write
 `// eslint-disable-next-line jsdoc/require-jsdoc` above it in the code.
+
+## The run answers for its own arguments
+
+eslint takes the working directory as its target when the command line
+names no path, and the configuration this rule writes matches
+`**/*.{js,jsx,mjs,cjs,ts,tsx}`. A run with no file therefore asks for a
+JSDoc comment on every declaration under the workspace root, at exit 0.
+The script counts its arguments first, and a count of zero exits 0 with no
+finding.
+
+Measured over two TypeScript files, each exporting one undocumented
+function:
+
+| what the script is given | findings |
+|---|---|
+| no argument, before the guard | 2 |
+| no argument, after the guard | 0 |
+| the two files | 2 |
+
+The acceptance test in `shipped/missing_docs.rs` holds the first two rows.
+
+## The temporary directory the configuration stands in
+
+`mktemp -d` makes the directory the eslint configuration is written into,
+and `trap 'rm -rf "$work"' EXIT` removes it. The exit status of the pipe
+stays the exit status of the script. Measured over one file: one run
+raised the count of entries under `TMPDIR` by 1 before the trap, and
+leaves that count unchanged after it.

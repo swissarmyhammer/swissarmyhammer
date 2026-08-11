@@ -10,7 +10,12 @@ supersedes: missing-docs
 tool:
   scope: files
   run: |
-    package="$(cd "$(mktemp -d)" && pwd -P)"
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    package="$(cd "$work" && pwd -P)"
     printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '>=3.0.0 <5.0.0'" > "$package/pubspec.yaml"
     cat > "$package/analysis_options.yaml" <<'ANALYSIS_OPTIONS'
     analyzer:
@@ -206,3 +211,27 @@ write `// ignore: public_member_api_docs` above it in the code. Measured: the
 marker on the line above silences the finding, and
 `// ignore_for_file: public_member_api_docs` at the top of a file silences the
 whole file.
+
+## The run answers for its own arguments
+
+`dart analyze` reads the one path this script names, which is the package
+the script builds. A run with no argument copies no file into that
+package, so the analyzer walks a package with no Dart file in it and
+answers nothing. The build still costs a `dart pub get` and an analysis
+pass.
+
+The script counts its arguments first, and a count of zero exits 0 with no
+finding, before the package exists. Measured over two Dart files, each
+holding one undocumented class and one undocumented method, with no
+argument: 0 findings and exit 0 before the guard, and the same after it.
+The same script over the two files reports 4. The acceptance test
+`the_shipped_dart_missing_docs_tool_rule_reads_only_the_files_it_is_given`
+holds the answer of 0.
+
+## The temporary directory the package stands in
+
+`mktemp -d` makes the package directory, and `trap 'rm -rf "$work"' EXIT`
+removes it. The package holds a `pubspec.yaml`, an `analysis_options.yaml`
+and a copy of each file the run takes. Measured over one file: one run
+raised the count of entries under `TMPDIR` by 1 before the trap, and
+leaves that count unchanged after it.

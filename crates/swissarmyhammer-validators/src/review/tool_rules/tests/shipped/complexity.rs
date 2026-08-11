@@ -703,8 +703,7 @@ const SWIFT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_COMPLEXITY_UNREAD_FILES,
-    reason: "the script judges the files it is given and no other: given none, it reports none \
-             and exits 0, and the staged tree stays unread",
+    reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
 /// Acceptance: the shipped Swift complexity tool rule reads only the files it
@@ -717,4 +716,232 @@ const SWIFT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_swift_complexity_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&SWIFT_COMPLEXITY_EMPTY_RUN_PROBE);
+}
+
+/// A Python function of 17 branches, which stands over the `C901` gate of
+/// 15. ruff counts one decision point for each `if`, and it counts neither a
+/// nested block nor a chain of `and` operators, so the branches are written
+/// out one for each line.
+const PYTHON_COMPLEXITY_UNREAD_SOURCE: &str = r#"def branch(value):
+    if value == 2: return 2
+    if value == 3: return 3
+    if value == 4: return 4
+    if value == 5: return 5
+    if value == 6: return 6
+    if value == 7: return 7
+    if value == 8: return 8
+    if value == 9: return 9
+    if value == 10: return 10
+    if value == 11: return 11
+    if value == 12: return 12
+    if value == 13: return 13
+    if value == 14: return 14
+    if value == 15: return 15
+    if value == 16: return 16
+    if value == 17: return 17
+    if value == 18: return 18
+    return 0
+"#;
+
+/// Every Python file staged in the probe repository the complexity script is
+/// given none of. ruff walks a whole tree, so a default target reaches the
+/// nested file as readily as the one at the root.
+const PYTHON_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.py", PYTHON_COMPLEXITY_UNREAD_SOURCE),
+    ("deep/nested/other.py", PYTHON_COMPLEXITY_UNREAD_SOURCE),
+];
+
+/// The `complexity-python` probe over a run that is given no file.
+const PYTHON_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_COMPLEXITY_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: PYTHON_COMPLEXITY_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Python complexity tool rule reads only the files
+/// it is given, through the real ruff pipeline.
+///
+/// `ruff check` with no path argument falls back to a default target of `.`,
+/// and it walks that whole tree. A script that hands `"$@"` straight to ruff
+/// therefore answers for every Python file under the repository root when the
+/// run carries no file, and it exits 0, so the answer reads as a measured
+/// result rather than a mistake. Measured over this probe with no argument:
+/// without the guard the script reported 2 findings and exited 0; with the
+/// guard it reports none and exits 0. The same script over the two staged
+/// files reports 2.
+#[test]
+fn the_shipped_python_complexity_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&PYTHON_COMPLEXITY_EMPTY_RUN_PROBE);
+}
+
+/// A Python function of 190 statements, which stands over the `PLR0915` gate
+/// of 180. `PLR0915` counts a statement rather than a line, and a semicolon
+/// separates one statement from the next, so 19 lines carry the whole count.
+const PYTHON_LENGTH_UNREAD_SOURCE: &str = r#"def long_function():
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0; value = 0
+    return 0
+"#;
+
+/// Every Python file staged in the probe repository the function-length
+/// script is given none of.
+const PYTHON_LENGTH_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.py", PYTHON_LENGTH_UNREAD_SOURCE),
+    ("deep/nested/other.py", PYTHON_LENGTH_UNREAD_SOURCE),
+];
+
+/// The `function-length-python` probe over a run that is given no file.
+const PYTHON_LENGTH_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_FUNCTION_LENGTH_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: PYTHON_LENGTH_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Python function-length tool rule reads only the
+/// files it is given, through the real ruff pipeline.
+///
+/// The two Python rules of this roster share one tool and one default target,
+/// so the length gate answers for the tree the same way the complexity gate
+/// does. Measured over this probe with no argument: without the guard the
+/// script reported 2 findings and exited 0; with the guard it reports none
+/// and exits 0. The same script over the two staged files reports 2.
+#[test]
+fn the_shipped_python_function_length_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&PYTHON_LENGTH_EMPTY_RUN_PROBE);
+}
+
+/// A Go function whose innermost block stands 6 levels deep. gocognit adds
+/// one for a block and one more for each level that block stands under, so
+/// the cognitive complexity is 21 against the gate of 15.
+const GO_COMPLEXITY_UNREAD_SOURCE: &str = r#"package probe
+
+// Branch narrows a value, one nested block for each test.
+func Branch(value int) int {
+    if value > 0 {
+        if value > 0 {
+            if value > 0 {
+                if value > 0 {
+                    if value > 0 {
+                        if value > 0 {
+                            value--
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return value
+}
+"#;
+
+/// Every Go file staged in the probe repository the complexity script is
+/// given none of.
+const GO_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.go", GO_COMPLEXITY_UNREAD_SOURCE),
+    ("deep/nested/other.go", GO_COMPLEXITY_UNREAD_SOURCE),
+];
+
+/// The `complexity-go` probe over a run that is given no file.
+const GO_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: GO_PROJECT_TYPES,
+        rule: GO_COMPLEXITY_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: GO_COMPLEXITY_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Go complexity tool rule reads only the files it is
+/// given, through the real gocognit pipeline.
+///
+/// gocognit holds no default target of its own. Given no path it writes 39
+/// lines of usage text to stderr and exits nonzero, and the pipe ends in
+/// `jq`, so the script exits 0 with no finding. Measured over this probe with
+/// no argument: the script reported 0 findings and exited 0 both without the
+/// guard and with it, and the same script over the two staged files reports
+/// 2. The guard makes that 0 the script's own answer rather than a tool
+/// refusal a pipe hid, and it keeps the usage text off stderr.
+#[test]
+fn the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&GO_COMPLEXITY_EMPTY_RUN_PROBE);
+}
+
+/// A TypeScript function whose innermost block stands 6 levels deep. The
+/// published Sonar algorithm adds one for a block and one more for each level
+/// that block stands under, so the cognitive complexity is 21 against the
+/// gate of 15.
+const TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE: &str = r#"export function branch(value: number): number {
+  if (value > 0) {
+    if (value > 0) {
+      if (value > 0) {
+        if (value > 0) {
+          if (value > 0) {
+            if (value > 0) {
+              value -= 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  return value;
+}
+"#;
+
+/// Every TypeScript file staged in the probe repository the complexity script
+/// is given none of.
+const TYPESCRIPT_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.ts", TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE),
+    ("deep/nested/other.ts", TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE),
+];
+
+/// The `complexity-typescript` probe over a run that is given no file.
+const TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_COMPLEXITY_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: TYPESCRIPT_COMPLEXITY_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped TypeScript complexity tool rule reads only the
+/// files it is given, through the real eslint pipeline.
+///
+/// eslint with no path argument reads the working directory, and the config
+/// this rule writes names `**/*.{js,jsx,mjs,cjs,ts,tsx}`, so the run reaches
+/// every TypeScript file under the repository root. Measured over this probe
+/// with no argument: without the guard the script reported 2 findings and
+/// exited 0; with the guard it reports none and exits 0. The same script over
+/// the two staged files reports 2.
+#[test]
+fn the_shipped_typescript_complexity_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE);
 }

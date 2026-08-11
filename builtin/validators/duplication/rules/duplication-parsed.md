@@ -41,6 +41,9 @@ supersedes:
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     files=()
     for file in "$@"; do files+=(--files "$file"); done
     "$SAH_BIN" tool code_context duplication find "${files[@]}"
@@ -352,3 +355,19 @@ roster's extensions explicitly, and a test holds that list to the roster itself
 so the two cannot drift. A file the roster does not claim reaches the
 `duplication` prompt rule unchanged, together with the `duplicates` probe that
 rule reads.
+
+## The run answers for its own arguments
+
+A pair is a fact about the files handed in, so `files` is a required
+parameter of the op. The script builds that list out of `"$@"`, and an
+empty list reaches no smaller run: `sah` answers `missing required
+parameter 'files'` and exits 2, which the review reads as a broken tool.
+
+The script counts its arguments first, and a count of zero exits 0 with no
+finding. Measured over two Rust files, each holding a pair of functions of
+73 normalized tokens that are 100 percent alike, with no argument: the
+script exited 2 before the guard, and it reports no finding and exits 0
+after it. The same script over the two files reports 3, one for each
+definition after the first. The acceptance test
+`the_shipped_duplication_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.

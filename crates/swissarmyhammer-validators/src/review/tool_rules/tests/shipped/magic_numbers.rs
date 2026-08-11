@@ -705,8 +705,7 @@ const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_MAGIC_NUMBERS_UNREAD_FILES,
-    reason: "the script judges the files it is given and no other: given none, it reports none \
-             and exits 0, and the staged tree stays unread",
+    reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
 /// Acceptance: the shipped Swift magic-numbers tool rule reads only the files
@@ -719,4 +718,133 @@ const SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_swift_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&SWIFT_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
+}
+
+/// A Python function that compares against an unnamed literal. `PLR2004`
+/// reports the literal in the comparison and stays silent about the one the
+/// `return` carries, so each file holds one finding.
+const PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE: &str = r#"def gate(value):
+    if value == 42:
+        return 7
+    return 0
+"#;
+
+/// Every Python file staged in the probe repository the magic-numbers script
+/// is given none of.
+const PYTHON_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.py", PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE),
+    ("deep/nested/other.py", PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE),
+];
+
+/// The `magic-numbers-python` probe over a run that is given no file.
+const PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_MAGIC_NUMBERS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: PYTHON_MAGIC_NUMBERS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Python magic-numbers tool rule reads only the
+/// files it is given, through the real ruff pipeline.
+///
+/// `ruff check` with no path argument falls back to a default target of `.`.
+/// Measured over this probe with no argument: without the guard the script
+/// reported 2 findings and exited 0; with the guard it reports none and exits
+/// 0. The same script over the two staged files reports 2.
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
+}
+
+/// A TypeScript function that compares against an unnamed literal and returns
+/// another one. `@typescript-eslint/no-magic-numbers` reports both, so each
+/// file holds two findings.
+const TYPESCRIPT_MAGIC_NUMBERS_UNREAD_SOURCE: &str = r#"export function gate(value: number): number {
+  if (value === 42) {
+    return 7;
+  }
+  return 0;
+}
+"#;
+
+/// Every TypeScript file staged in the probe repository the magic-numbers
+/// script is given none of.
+const TYPESCRIPT_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.ts", TYPESCRIPT_MAGIC_NUMBERS_UNREAD_SOURCE),
+    (
+        "deep/nested/other.ts",
+        TYPESCRIPT_MAGIC_NUMBERS_UNREAD_SOURCE,
+    ),
+];
+
+/// The `magic-numbers-typescript` probe over a run that is given no file.
+const TYPESCRIPT_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_MAGIC_NUMBERS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: TYPESCRIPT_MAGIC_NUMBERS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped TypeScript magic-numbers tool rule reads only the
+/// files it is given, through the real eslint pipeline.
+///
+/// eslint with no path argument reads the working directory, and the config
+/// this rule writes names `**/*.{js,jsx,mjs,cjs,ts,tsx}`. Measured over this
+/// probe with no argument: without the guard the script reported 4 findings
+/// and exited 0; with the guard it reports none and exits 0. The same script
+/// over the two staged files reports 4.
+#[test]
+fn the_shipped_typescript_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&TYPESCRIPT_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
+}
+
+/// A Dart method that compares against an unnamed literal and returns another
+/// one. `no_magic_number` reports both, so each file holds two findings.
+const DART_MAGIC_NUMBERS_UNREAD_SOURCE: &str = r#"class Widget {
+  int gate(int value) {
+    if (value > 42) {
+      return 7;
+    }
+    return 0;
+  }
+}
+"#;
+
+/// Every Dart file staged in the probe repository the magic-numbers script is
+/// given none of.
+const DART_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.dart", DART_MAGIC_NUMBERS_UNREAD_SOURCE),
+    ("deep/nested/other.dart", DART_MAGIC_NUMBERS_UNREAD_SOURCE),
+];
+
+/// The `magic-numbers-dart` probe over a run that is given no file.
+const DART_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MAGIC_NUMBERS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: DART_MAGIC_NUMBERS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Dart magic-numbers tool rule reads only the files
+/// it is given, through the real custom_lint pipeline.
+///
+/// This script copies each file it is given into a package it makes, and it
+/// runs the tool inside that package, so the tool holds no default target
+/// that could reach the probe tree. Measured over this probe with no
+/// argument: the script reported 0 findings and exited 0 both without the
+/// guard and with it, and the same script over the two staged files reports
+/// 4. The guard is what keeps the script from making that package, resolving
+/// its dependencies and running the tool for a run with nothing to judge.
+#[test]
+fn the_shipped_dart_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&DART_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
 }

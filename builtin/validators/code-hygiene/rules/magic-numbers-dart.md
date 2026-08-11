@@ -10,7 +10,12 @@ supersedes: magic-numbers
 tool:
   scope: files
   run: |
-    package="$(cd "$(mktemp -d)" && pwd -P)"
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    package="$(cd "$work" && pwd -P)"
     printf '%s\n' 'name: sah_magic_numbers_probe' 'environment:' "  sdk: '>=3.5.0 <4.0.0'" \
       'dev_dependencies:' '  custom_lint: 0.8.1' '  solid_lints: 0.3.3' > "$package/pubspec.yaml"
     printf '%s\n' 'analyzer:' '  plugins:' '    - custom_lint' 'custom_lint:' '  rules:' \
@@ -203,3 +208,28 @@ it. Measured: the marker on the line above silences the finding, and the same
 marker at the end of the line does NOT — `custom_lint` reads the preceding line
 only. `// ignore_for_file: no_magic_number` at the top of a file exempts the
 whole file.
+
+## The run answers for its own arguments
+
+This script copies each file it takes into a package of its own, and it
+runs `custom_lint` inside that package. The tool therefore reads no
+default target, and a run with no argument hands it a package that holds
+no Dart file. The cost of that run is the whole package build: a
+`pubspec.yaml`, a `dart pub get`, and a lint pass over nothing.
+
+The script counts its arguments first, and a count of zero exits 0 with no
+finding, before it makes the package. Measured over two Dart files, each
+comparing against one unnamed literal and returning another, with no
+argument: 0 findings and exit 0 before the guard, and the same after it.
+The same script over the two files reports 4. The acceptance test
+`the_shipped_dart_magic_numbers_tool_rule_reads_only_the_files_it_is_given`
+holds the answer of 0.
+
+## The temporary directory the package stands in
+
+`mktemp -d` makes the package directory, and `trap 'rm -rf "$work"' EXIT`
+removes it. A package carries a `pubspec.yaml`, an `analysis_options.yaml`
+and a copy of each file the run takes, so the directory left behind was
+the largest of the roster. Measured over one file: one run raised the
+count of entries under `TMPDIR` by 1 before the trap, and leaves that
+count unchanged after it.

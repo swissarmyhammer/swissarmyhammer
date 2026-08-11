@@ -839,8 +839,7 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: PYTHON_UNREAD_FILES,
-    reason: "the script judges the files it is given and no other: given none, it reports none \
-             and exits 0, and the staged tree stays unread",
+    reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
 /// Acceptance: the shipped Python missing-docs tool rule reads only the files
@@ -1532,8 +1531,7 @@ const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
         expected: NO_FINDINGS,
     },
     staged: SWIFT_UNREAD_FILES,
-    reason: "the script judges the files it is given and no other: given none, it reports none \
-             and exits 0, and the staged tree stays unread",
+    reason: READS_ONLY_ITS_ARGUMENTS,
 };
 
 /// Acceptance: the shipped Swift missing-docs tool rule reads only the files
@@ -1550,4 +1548,133 @@ const SWIFT_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&SWIFT_EMPTY_RUN_PROBE);
+}
+
+/// A TypeScript function that carries no JSDoc comment.
+/// `jsdoc/require-jsdoc` reports the declaration, so each file holds one
+/// finding.
+const TYPESCRIPT_MISSING_DOCS_UNREAD_SOURCE: &str = r#"export function undocumented(value: number): number {
+  return value;
+}
+"#;
+
+/// Every TypeScript file staged in the probe repository the missing-docs
+/// script is given none of.
+const TYPESCRIPT_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.ts", TYPESCRIPT_MISSING_DOCS_UNREAD_SOURCE),
+    (
+        "deep/nested/other.ts",
+        TYPESCRIPT_MISSING_DOCS_UNREAD_SOURCE,
+    ),
+];
+
+/// The `missing-docs-typescript` probe over a run that is given no file.
+const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_MISSING_DOCS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: TYPESCRIPT_MISSING_DOCS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped TypeScript missing-docs tool rule reads only the
+/// files it is given, through the real eslint pipeline.
+///
+/// eslint with no path argument reads the working directory, and the config
+/// this rule writes names `**/*.{js,jsx,mjs,cjs,ts,tsx}`. Measured over this
+/// probe with no argument: without the guard the script reported 2 findings
+/// and exited 0; with the guard it reports none and exits 0. The same script
+/// over the two staged files reports 2.
+#[test]
+fn the_shipped_typescript_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE);
+}
+
+/// An exported Go function that carries no doc comment. revive's `exported`
+/// rule reports the declaration, so each file holds one finding.
+const GO_MISSING_DOCS_UNREAD_SOURCE: &str = r#"package probe
+
+func Exported() int {
+    return 0
+}
+"#;
+
+/// Every Go file staged in the probe repository the missing-docs script is
+/// given none of.
+///
+/// revive reads the package in the working directory, so the file at the root
+/// stands inside its default target and the nested file stands outside it.
+const GO_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.go", GO_MISSING_DOCS_UNREAD_SOURCE),
+    ("deep/nested/other.go", GO_MISSING_DOCS_UNREAD_SOURCE),
+];
+
+/// The `missing-docs-go` probe over a run that is given no file.
+const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: GO_PROJECT_TYPES,
+        rule: GO_MISSING_DOCS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: GO_MISSING_DOCS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Go missing-docs tool rule reads only the files it
+/// is given, through the real revive pipeline.
+///
+/// revive with no path argument reads the package standing in the working
+/// directory. Measured over this probe with no argument: without the guard
+/// the script reported 1 finding, on `top.go`, and exited 0; with the guard
+/// it reports none and exits 0. The same script over the two staged files
+/// reports 2, so the guard is the whole difference and the nested file is
+/// what the default target leaves out.
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&GO_MISSING_DOCS_EMPTY_RUN_PROBE);
+}
+
+/// A Dart class and method that carry no documentation comment.
+/// `public_member_api_docs` reports each of the two, so each file holds two
+/// findings.
+const DART_MISSING_DOCS_UNREAD_SOURCE: &str = r#"class Widget {
+  int gate(int value) {
+    return value;
+  }
+}
+"#;
+
+/// Every Dart file staged in the probe repository the missing-docs script is
+/// given none of.
+const DART_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.dart", DART_MISSING_DOCS_UNREAD_SOURCE),
+    ("deep/nested/other.dart", DART_MISSING_DOCS_UNREAD_SOURCE),
+];
+
+/// The `missing-docs-dart` probe over a run that is given no file.
+const DART_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: DART_MISSING_DOCS_UNREAD_FILES,
+    reason: READS_ONLY_ITS_ARGUMENTS,
+};
+
+/// Acceptance: the shipped Dart missing-docs tool rule reads only the files
+/// it is given, through the real `dart analyze` pipeline.
+///
+/// This script names the package it makes as the one path `dart analyze`
+/// reads, and it copies each file it is given under that package. A run with
+/// no argument therefore hands the tool a package holding no Dart file.
+/// Measured over this probe with no argument: the script reported 0 findings
+/// and exited 0 both without the guard and with it, and the same script over
+/// the two staged files reports 4. The guard is what keeps the script from
+/// making that package and running the analyzer over it.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&DART_MISSING_DOCS_EMPTY_RUN_PROBE);
 }

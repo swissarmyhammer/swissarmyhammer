@@ -27,6 +27,9 @@ supersedes: no-commented-code
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     files=()
     for file in "$@"; do files+=(--files "$file"); done
     "$SAH_BIN" tool code_context commented_code find "${files[@]}"
@@ -182,3 +185,18 @@ JSON result as YAML, which the stdout contract cannot read.
 The rule declares no install commands. The tool is sah, and a review is already
 running inside it, so there is no package to pin and nothing to install. The
 `doctor.fix_hint` names what a person does when `check_command` still fails.
+
+## The run answers for its own arguments
+
+The script builds a `--files` list out of `"$@"`. `files` is a required
+parameter of the op, so an empty list is not a smaller run: `sah` answers
+`missing required parameter 'files'` and exits 2, and the review then
+reports a tool error over a change the rule had nothing to say about.
+
+The script counts its arguments first, and a count of zero exits 0 with no
+finding. Measured over two Rust files, each carrying one commented-out
+block of 6 lines, with no argument: the script exited 2 before the guard,
+and it reports no finding and exits 0 after it. The same script over the
+two files reports 2. The acceptance test
+`the_shipped_commented_code_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.

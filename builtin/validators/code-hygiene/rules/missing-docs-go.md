@@ -11,7 +11,11 @@ tool:
   scope: files
   run: |
     set -e
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     printf '%s\n' '[rule.exported]' '  arguments = ["disableStutteringCheck"]' > "$work/revive.toml"
     revive -config "$work/revive.toml" -formatter json "$@" > "$work/revive.json"
     unread="$(jq -r '(. // []) | map(select(.RuleName == "")) | length' "$work/revive.json")"
@@ -242,3 +246,27 @@ Selection in the filter is attribution, not exemption: to exempt one item, write
 `//revive:disable-next-line:exported` above it in the code. Measured: the marker
 on the line above silences the finding, and `//revive:disable:exported` inside a
 file silences the whole file.
+
+## The run answers for its own arguments
+
+revive reads the package standing in the working directory when it takes
+no path. A run with no file therefore reports an undocumented exported
+item of the workspace root package, at exit 0, and it says nothing about a
+package deeper in the tree. The script counts its arguments first, and a
+count of zero exits 0 with no finding.
+
+Measured over two Go files, each exporting one undocumented function, one
+at the root and one three directories down, with no argument: 1 finding
+before the guard, on the file at the root, and 0 after it. The same script
+over the two files reports 2. The acceptance test
+`the_shipped_go_missing_docs_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.
+
+## The temporary directory the configuration stands in
+
+`mktemp -d` makes the directory that holds the `revive.toml` this rule
+writes and the JSON report revive answers with. `trap 'rm -rf "$work"'
+EXIT` removes it, and the trap covers the `exit 1` this script takes for a
+file revive cannot parse. Measured over one file: one run raised the count
+of entries under `TMPDIR` by 1 before the trap, and leaves that count
+unchanged after it.

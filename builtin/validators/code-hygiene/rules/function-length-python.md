@@ -10,6 +10,9 @@ supersedes: function-length
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json "$@" |
       jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
   doctor:
@@ -67,3 +70,16 @@ The scope is `files` because ruff reads the files it is given.
 
 Selection in the pipe is attribution, not exemption: to exempt one function,
 write `# noqa: PLR0915` on its `def` line in the code.
+
+## The run answers for its own arguments
+
+This rule and `complexity-python` drive one tool, so they share its
+default target of `.`. A run with no path walks the tree for the statement
+gate as it does for the branch gate. The script counts its arguments
+first, and a count of zero exits 0 with no finding.
+
+Measured over two Python files, each holding one function of 190
+statements, with no argument: 2 findings before the guard, 0 after it. The
+same script over the two files reports 2. The acceptance test
+`the_shipped_python_function_length_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.

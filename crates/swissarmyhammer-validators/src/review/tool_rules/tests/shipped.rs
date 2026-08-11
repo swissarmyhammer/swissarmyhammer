@@ -10,8 +10,10 @@
 //! stays small enough for a reviewer, and for the review engine, to read
 //! whole.
 
+mod commented_code;
 mod complexity;
 mod dead_code;
+mod duplication;
 mod magic_numbers;
 mod missing_docs;
 mod unused_dependencies;
@@ -639,6 +641,24 @@ fn supersedes_label(expected: &[&str]) -> String {
     }
 }
 
+/// The project types a Python workspace carries, as the plan holds them.
+const PYTHON_PROJECT_TYPES: &[&str] = &["python"];
+
+/// The project types a Go workspace carries, as the plan holds them.
+const GO_PROJECT_TYPES: &[&str] = &["go"];
+
+/// The project types a Node.js workspace carries, as the plan holds them.
+const NODEJS_PROJECT_TYPES: &[&str] = &["nodejs"];
+
+/// The project types a Flutter workspace carries, as the plan holds them.
+const FLUTTER_PROJECT_TYPES: &[&str] = &["flutter"];
+
+/// The project types a Rust workspace carries, as the plan holds them.
+///
+/// The two rules whose tool IS sah match a path by its extension and name no
+/// project type of their own, so any project type reaches them.
+const RUST_PROJECT_TYPES: &[&str] = &["rust"];
+
 /// The project types a Swift workspace carries, as the plan holds them.
 const SWIFT_PROJECT_TYPES: &[&str] = &["swift"];
 
@@ -777,6 +797,14 @@ const NO_STAGED_REPORTS: &[&str] = &[];
 
 /// What a script given no file must report: nothing.
 const NO_FINDINGS: &[&str] = &[];
+
+/// Why the staged tree of a [`ShippedEmptyRun`] probe stays silent.
+///
+/// Every rule keeps the same contract, so every probe states it in the same
+/// words and one sentence carries them all.
+const READS_ONLY_ITS_ARGUMENTS: &str =
+    "the script judges the files it is given and no other: given none, it reports none \
+     and exits 0, and the staged tree stays unread";
 
 /// The name of the SwiftPM manifest, and of the fixture template that
 /// carries one.

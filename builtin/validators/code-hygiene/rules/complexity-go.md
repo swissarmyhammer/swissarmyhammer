@@ -10,6 +10,9 @@ supersedes: cognitive-complexity
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     gocognit -over 15 -json "$@" |
       jq -c '(. // [])[]
              | {file: .Pos.Filename, line: .Pos.Line,
@@ -69,3 +72,18 @@ therefore named in `check_command` beside `gocognit` and `jq`.
 `gocognit` has no suppression comment of its own. To exempt one function, split
 it — that is the fix the finding asks for — or set the whole rule aside in this
 project by overriding it in `./.validators/`.
+
+## The run answers for its own arguments
+
+`gocognit` holds no default target. Given no path it writes 39 lines of
+usage text to stderr and exits nonzero. The pipe ends in `jq`, which exits
+0, so that refusal reached the engine as a clean tree. The script counts
+its arguments first, and a count of zero exits 0 with no finding.
+
+Measured over two Go files, each holding one function of cognitive
+complexity 21, with no argument: 0 findings and exit 0 before the guard,
+and the same after it. The same script over the two files reports 2. So
+the guard makes the 0 an answer of the script's own, and it keeps the
+usage text off stderr. The acceptance test
+`the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given`
+holds that behaviour.

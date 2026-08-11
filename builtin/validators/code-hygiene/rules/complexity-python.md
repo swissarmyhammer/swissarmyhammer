@@ -10,6 +10,9 @@ supersedes: cognitive-complexity
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
       jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
   doctor:
@@ -57,3 +60,15 @@ The scope is `files` because ruff reads the files it is given.
 
 Selection in the pipe is attribution, not exemption: to exempt one function,
 write `# noqa: C901` on its `def` line in the code.
+
+## The run answers for its own arguments
+
+`ruff check` reads a default target of `.` when it takes no path, and it
+walks that whole tree. The script therefore counts its arguments first,
+and a count of zero exits 0 with no finding.
+
+Measured over two Python files, each holding one function of 17 branches,
+with no argument: 2 findings before the guard, 0 after it. The same script
+over the two files reports 2. The acceptance test
+`the_shipped_python_complexity_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.

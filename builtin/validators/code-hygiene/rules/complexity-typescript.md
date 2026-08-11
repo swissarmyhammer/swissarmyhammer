@@ -17,8 +17,13 @@ supersedes:
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     modules="$(cd "$(dirname "$(readlink -f "$(command -v eslint)")")/../.." && pwd -P)"
-    config="$(mktemp -d)/eslint.config.cjs"
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    config="$work/eslint.config.cjs"
     cat > "$config" <<'ESLINT_CONFIG'
     const path = require("path");
     const tseslint = require("typescript-eslint");
@@ -589,3 +594,32 @@ load turns each one into a "Definition for rule ... was not found" message —
 is attribution, not exemption: to exempt one function, write
 `// eslint-disable-next-line code-hygiene/cognitive-complexity` — or the matching
 rule name — above it in the code.
+
+## The run answers for its own arguments
+
+eslint reads the working directory when it takes no path, and the
+configuration this rule writes matches `**/*.{js,jsx,mjs,cjs,ts,tsx}`, so
+a run with no file reaches every such file under the workspace root at
+exit 0. The script counts its arguments first, and a count of zero exits 0
+with no finding.
+
+Measured over two TypeScript files, each holding one function of cognitive
+complexity 21:
+
+| what the script is given | findings |
+|---|---|
+| no argument, before the guard | 2 |
+| no argument, after the guard | 0 |
+| the two files | 2 |
+
+The acceptance test
+`the_shipped_typescript_complexity_tool_rule_reads_only_the_files_it_is_given`
+holds the first two rows.
+
+## The temporary directory the configuration stands in
+
+`mktemp -d` makes the directory the eslint configuration is written into,
+and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers each way the
+script leaves, and it leaves the exit status of the pipe alone. Measured
+over one file: one run raised the count of entries under `TMPDIR` by 1
+before the trap, and leaves that count unchanged after it.

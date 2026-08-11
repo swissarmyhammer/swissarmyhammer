@@ -125,6 +125,10 @@ The `tool` block keys:
   - A `files`-scope script given NO file must report nothing and exit 0. The
     loop over `"$@"` is a no-op, so a tool handed no path falls back to a
     default target of its own and answers for the whole tree.
+  - A script that makes a temporary directory removes it. Write
+    `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` under it. The
+    trap covers a clean run, a run with findings and a broken run alike, and
+    it leaves the exit status of the script alone.
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and

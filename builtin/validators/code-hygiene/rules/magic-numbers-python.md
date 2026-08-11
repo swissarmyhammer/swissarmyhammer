@@ -10,6 +10,9 @@ supersedes: magic-numbers
 tool:
   scope: files
   run: |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     ruff check --isolated --no-cache --select PLR2004 --output-format json "$@" |
       jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
   doctor:
@@ -132,3 +135,16 @@ fixture carries `404`, `4096`, `10`, `90` and `100`, and the acceptance test
 `the_shipped_python_magic_numbers_tool_rule_reports_every_fail_fixture_value`
 holds the run to exactly those five: `100` proves the carve-out is absent, and
 the count proves no other position reports.
+
+## The run answers for its own arguments
+
+A run with no path leaves ruff its default target of `.`, and `PLR2004`
+then reports a comparison literal in each Python file of the tree. The
+script counts its arguments first, and a count of zero exits 0 with no
+finding.
+
+Measured over two Python files, each comparing against one unnamed
+literal, with no argument: 2 findings before the guard, 0 after it. The
+same script over the two files reports 2. The acceptance test
+`the_shipped_python_magic_numbers_tool_rule_reads_only_the_files_it_is_given`
+holds the pair.

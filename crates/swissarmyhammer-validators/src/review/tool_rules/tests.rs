@@ -104,12 +104,21 @@ const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
 /// to breaking on a file it cannot read.
 const SWIFT_MISSING_DOCS_RULE: &str = "missing-docs-swift";
 
+/// The shipped missing-docs tool rule for TypeScript and JavaScript. A
+/// second acceptance test holds its script to reading only the files it is
+/// given.
+const TYPESCRIPT_MISSING_DOCS_RULE: &str = "missing-docs-typescript";
+
 /// Every shipped missing-docs tool rule, with the project type it serves
 /// and the prompt rules it supersedes.
 const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("rust", RUST_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("python", PYTHON_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
-    ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
+    (
+        "nodejs",
+        TYPESCRIPT_MISSING_DOCS_RULE,
+        SUPERSEDES_MISSING_DOCS,
+    ),
     ("go", GO_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("swift", SWIFT_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("flutter", DART_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
@@ -211,6 +220,18 @@ const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
 /// holds the run to breaking on a file it cannot read.
 const SWIFT_COMPLEXITY_RULE: &str = "complexity-swift";
 
+/// The shipped complexity tool rule for Python. A second acceptance test
+/// holds its script to reading only the files it is given.
+const PYTHON_COMPLEXITY_RULE: &str = "complexity-python";
+
+/// The shipped function-length tool rule for Python. A second acceptance
+/// test holds its script to reading only the files it is given.
+const PYTHON_FUNCTION_LENGTH_RULE: &str = "function-length-python";
+
+/// The shipped complexity tool rule for Go. A second acceptance test holds
+/// its script to reading only the files it is given.
+const GO_COMPLEXITY_RULE: &str = "complexity-go";
+
 /// Every shipped complexity tool rule, with the project type it serves and
 /// the prompt rules it supersedes.
 ///
@@ -227,12 +248,12 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "python",
-        "complexity-python",
+        PYTHON_COMPLEXITY_RULE,
         SUPERSEDES_COGNITIVE_COMPLEXITY,
     ),
     (
         "python",
-        "function-length-python",
+        PYTHON_FUNCTION_LENGTH_RULE,
         SUPERSEDES_FUNCTION_LENGTH,
     ),
     (
@@ -245,7 +266,7 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
         SWIFT_COMPLEXITY_RULE,
         SUPERSEDES_BOTH_COMPLEXITY_GATES,
     ),
-    ("go", "complexity-go", SUPERSEDES_COGNITIVE_COMPLEXITY),
+    ("go", GO_COMPLEXITY_RULE, SUPERSEDES_COGNITIVE_COMPLEXITY),
     ("go", "function-length-go", SUPERSEDES_FUNCTION_LENGTH),
 ];
 

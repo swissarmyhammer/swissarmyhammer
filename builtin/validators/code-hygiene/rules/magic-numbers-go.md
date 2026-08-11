@@ -11,7 +11,9 @@ tool:
   scope: workspace
   run: |
     cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"
-    config="$(mktemp -d)/golangci.yml"
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    config="$work/golangci.yml"
     cat > "$config" <<'MND_CONFIG'
     version: "2"
     run:
@@ -147,3 +149,16 @@ Selection in the pipe is attribution, not exemption. `golangci-lint` also emits
 `typecheck` diagnostics on the same stream, and the `jq` filter drops them; they
 belong to the build, not to this rule. To exempt one literal, write
 `//nolint:mnd // <reason>` on it in the code.
+
+## The temporary directory the configuration stands in
+
+The script names two directories under `TMPDIR`, and each has an owner.
+The golangci-lint cache is named after the working directory and stands
+between runs on purpose. The configuration directory `mktemp -d` makes is
+the run's own, and `trap 'rm -rf "$work"' EXIT` removes it. The scope is
+`workspace`, so this script takes no file argument.
+
+Measured over a Go module of one file: the first run raised the count of
+entries under `TMPDIR` by 2 before the trap, one for the cache and one for
+the configuration, and each run after it raised the count by 1. After the
+trap the count stays unchanged.

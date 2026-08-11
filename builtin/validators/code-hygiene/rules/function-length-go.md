@@ -10,7 +10,9 @@ supersedes: function-length
 tool:
   scope: workspace
   run: |
-    config="$(mktemp -d)/golangci.yml"
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    config="$work/golangci.yml"
     cat > "$config" <<'FUNLEN_CONFIG'
     version: "2"
     linters:
@@ -118,3 +120,12 @@ Selection in the pipe is attribution, not exemption. `golangci-lint` also emits
 `typecheck` diagnostics on the same stream, and the `jq` filter drops them; they
 belong to the build, not to this rule. To exempt one function, write
 `//nolint:funlen // <reason>` on it in the code.
+
+## The temporary directory the configuration stands in
+
+`mktemp -d` makes the directory the golangci-lint configuration is written
+into, and `trap 'rm -rf "$work"' EXIT` removes it. The scope is
+`workspace`, so this script takes no file argument and the trap is the one
+change of the pair this rule needed. Measured over a Go module of one
+file: one run raised the count of entries under `TMPDIR` by 1 before the
+trap, and leaves that count unchanged after it.
