@@ -31,9 +31,18 @@ Examine the file content for public items lacking documentation:
 - Items with #[doc(hidden)] or equivalent
 
 Note: These exemptions yield to stricter language-specific documentation rules.
-Where a language validator requires documentation on every public item (e.g. the
-Swift and Rust documentation rules), that rule wins and the "obvious
-implementation" / "simple getter" carve-outs above do not apply — never cite
-them against a language-rule finding.
+Where a language rule covers the file, that rule decides which of these
+carve-outs hold. Its decision wins, and the language rule states it.
+
+A language rule can KEEP a carve-out. The Python documentation rule keeps the
+"obvious implementation" carve-out: it leaves the magic-method code `D105` out of
+its selector, so an undocumented `__str__` is not a finding.
+
+A language rule can DROP a carve-out. The same Python rule reports an
+undocumented `@property` getter, so the "simple getter" carve-out does not hold
+for Python.
+
+Never cite a carve-out against a language-rule finding. Read the language rule to
+learn which carve-outs it keeps.
 
 Note: Identify test items from the structural marker on the item itself (attribute, decorator, or framework-specific function-name convention applied at the definition), not from the file name or path. A function named `process_user` in a file called `foo_test.rs` is still a public API that needs documentation.

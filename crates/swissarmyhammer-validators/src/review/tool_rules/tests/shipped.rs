@@ -673,6 +673,94 @@ fn verify_shipped_run_breaks(probe: &ShippedBrokenRun) {
     }
 }
 
+/// A tool rule's script driven with NO file, and the tree it must not read.
+///
+/// A `files`-scope script judges the files it is given as its arguments. Given
+/// none, a script that hands `"$@"` straight to its tool hands the tool an
+/// empty argument list, and a tool that falls back to a default target of its
+/// own then reads the whole tree. The run answers for files the review never
+/// gave it, and it exits 0, so the answer reads as a measured result. This
+/// shape measures the other behaviour: the script reports nothing and exits 0.
+struct ShippedEmptyRun {
+    /// The run whose script is driven with no file. Its `expected` names each
+    /// finding the script must report, and a script given no file reports none.
+    run: ShippedRun,
+
+    /// Each file staged in the probe repository, with the bytes it holds. The
+    /// script is given none of them, and a tool that reads a default target of
+    /// its own finds every one.
+    staged: &'static [(&'static str, &'static str)],
+
+    /// Why the staged files stay silent.
+    reason: &'static str,
+}
+
+/// The `run` script the shipped tool rule `rule` carries.
+///
+/// The script is read where the set ships it, so the run measures the SHIPPED
+/// bytes rather than a copy a test wrote.
+fn shipped_run_script(loader: &ValidatorLoader, rule: &str) -> String {
+    loader
+        .list_rulesets()
+        .iter()
+        .flat_map(|ruleset| ruleset.rules.iter())
+        .find(|candidate| candidate.name == rule)
+        .and_then(|candidate| candidate.tool.as_ref())
+        .unwrap_or_else(|| panic!("the shipped tool rule `{rule}` must carry a tool block"))
+        .run
+        .clone()
+}
+
+/// Drives the shipped script of `probe` with no file argument at all, over a
+/// probe repository the script was never given, and holds it to reporting
+/// exactly the entries the probe names.
+///
+/// The arguments come from [`script_args`], the one function the engine builds
+/// them with, so the run reads the argument list a `files`-scope rule with no
+/// matched file would really receive.
+fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let repo = tempfile::tempdir().unwrap();
+    for (path, content) in probe.staged {
+        let file = repo.path().join(path);
+        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
+        std::fs::write(&file, content).unwrap();
+    }
+    // A tool prints the resolved path of each file it reads, and on macOS a
+    // temporary directory stands behind a symbolic link. The engine strips the
+    // repository root off each reported path, so the root it is given has to be
+    // the resolved form or no path matches.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let script = shipped_run_script(&loader, probe.run.rule);
+    let no_files: [&str; 0] = [];
+    let args = script_args(ToolScope::Files, &no_files);
+
+    let findings = run_script_findings(&script, &repo_root, &args)
+        .expect("a script given no file must judge nothing and exit 0");
+
+    let reported: Vec<String> = findings
+        .iter()
+        .map(|finding| {
+            format!(
+                "{}:{}",
+                normalize_tool_path(&finding.file, &repo_root),
+                finding.line
+            )
+        })
+        .collect();
+    let expected: Vec<String> = probe
+        .run
+        .expected
+        .iter()
+        .map(|entry| (*entry).to_string())
+        .collect();
+    assert_eq!(reported, expected, "{}", probe.reason);
+}
+
 /// The materialized name of the `complexity-typescript` fail fixture.
 const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
 
@@ -1823,6 +1911,54 @@ const PYTHON_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&PYTHON_ABSENT_PROBE);
+}
+
+/// An undocumented Python module at the root of the probe repository. ruff
+/// reports `D100` on the module and `D103` on the function.
+const PYTHON_UNREAD_TOP_SOURCE: &str = "def top():\n    return 1\n";
+
+/// The same, nested three directories deep. ruff walks a whole tree, so a
+/// default target reaches this file as readily as the one at the root.
+const PYTHON_UNREAD_NESTED_SOURCE: &str = "class Other:\n    def method(self):\n        return 2\n";
+
+/// Every Python file staged in the probe repository the script is given none
+/// of.
+const PYTHON_UNREAD_FILES: &[(&str, &str)] = &[
+    ("top.py", PYTHON_UNREAD_TOP_SOURCE),
+    ("deep/nested/other.py", PYTHON_UNREAD_NESTED_SOURCE),
+];
+
+/// What a run given no file must report: nothing.
+const NO_FINDINGS: &[&str] = &[];
+
+/// The `missing-docs-python` probe over a run that is given no file.
+const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
+    run: ShippedRun {
+        project_types: &["python"],
+        rule: PYTHON_MISSING_DOCS_RULE,
+        expected: NO_FINDINGS,
+    },
+    staged: PYTHON_UNREAD_FILES,
+    reason: "the script judges the files it is given and no other: given none, it reports none \
+             and exits 0, and the staged tree stays unread",
+};
+
+/// Acceptance: the shipped Python missing-docs tool rule reads only the files
+/// it is given, through the real ruff pipeline.
+///
+/// `ruff check` with no path argument falls back to a default target of `.`,
+/// and it walks that whole tree. A script that hands `"$@"` straight to ruff
+/// therefore answers for every Python file under the repository root when the
+/// run carries no file, and it exits 0, so the answer reads as a measured
+/// result rather than a mistake. Measured over this probe before the guard:
+/// 5 findings across `top.py` and `deep/nested/other.py`, neither of which the
+/// script was given, and an exit status of 0.
+///
+/// The script therefore answers an empty argument list at once, with no
+/// finding and an exit status of 0.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&PYTHON_EMPTY_RUN_PROBE);
 }
 
 /// Acceptance: every shipped dead-code tool rule passes its fixture pair in

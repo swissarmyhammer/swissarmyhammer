@@ -71,7 +71,7 @@ A tool rule binds one tool to one language. Example:
 That is the frontmatter of `rules/complexity-python.md`, all 22 lines of it,
 and its `run` is one pipe. A rule whose tool needs several steps writes a
 script rather than one pipe; `rules/missing-docs-python.md` is one of those,
-and its script is 47 lines.
+and its script is 51 lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
@@ -110,12 +110,27 @@ The `tool` block keys:
   you would type in a terminal: the tool, piped through `jq`, `sed`, or
   `grep`. Select the findings this rule owns and shape them in the pipe.
   There is no mapping configuration — the pipe is the mapping.
+
+  A pipe carries one trap, and it is how a rule answers zero for a broken tool.
+  A shell pipeline takes the exit status of its LAST command, so a pipe that
+  ends in `jq` exits 0 whatever the tool did. The engine reads exit 0 as "the
+  tool judged the code", so a tool that refused to start reports as a clean
+  file. Write a pipe only where the tool cannot exit nonzero. Otherwise write a
+  script: run the tool into a file, test the status, and exit nonzero yourself.
+  `rules/missing-docs-python.md` is the worked example, and its body states each
+  status it read. Two more shapes of the same trap:
+
+  - A tool can exit 0 for a file it could not open, and print an empty report.
+    Test each file the script is given before the tool starts.
+  - A `files`-scope script given NO file must report nothing and exit 0. The
+    loop over `"$@"` is a no-op, so a tool handed no path falls back to a
+    default target of its own and answers for the whole tree.
 - `scope` — `files` or `workspace`. With `files`, the script receives the
   changed files as its arguments (`"$@"`). With `workspace`, the script runs
   one time at the workspace root with no arguments (for example `cargo`), and
   the engine keeps only the findings in changed files.
 - `doctor` — the commands that show the script's tools are installed and show
-  the main tool's version. Name everything the pipe needs (`which ruff jq`).
+  the main tool's version. Name everything the script needs (`which ruff jq`).
 - `install.commands` — the install commands, in order of preference. Pin the
   tool version in each command. An unpinned tool can change its rules and
   break the gate. A tool that ships with the language toolchain has no package
@@ -158,6 +173,12 @@ exit means the script broke — its stderr goes to the diagnosing agent, and no
 findings are read. A pipe that ends in `jq` or `sed` exits 0 even when the
 linter before it exits 1 on findings; that is the behavior you want, so do
 not add `pipefail` for linters that exit nonzero on findings.
+
+The same exit status hides a linter that BROKE. A linter usually keeps one
+status for findings and a higher status for a failure, and the pipe drops both.
+So a pipe is safe only where the tool exits nonzero for findings alone. Where
+the tool has a failure status of its own, run it into a file, test the status
+against the findings status, and exit nonzero yourself.
 
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.

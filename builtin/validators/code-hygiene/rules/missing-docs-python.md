@@ -11,8 +11,12 @@ tool:
   scope: files
   run: |
     set -e
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     codes="D100,D101,D102,D103,D104,D106,D107"
     work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
     for file in "$@"; do
       if [ ! -r "$file" ]; then
         printf 'missing-docs-python cannot read %s\n' "$file" >&2
@@ -123,8 +127,12 @@ Python that marker is the NAME, and two tools define it.
 ruff has no filter on a name, and `--isolated` discards the
 `per-file-ignores` entry a project holds for its own test tree. The filter in
 the script therefore reads the DEFINITION LINE each finding stands on. It drops
-a `D102` or `D103` whose line reads `def test...`, and a `D101` or `D106` whose
-line reads `class Test...`.
+a `D102` or `D103` whose line reads `def test...` or `async def test...`, and a
+`D101` or `D106` whose line reads `class Test...`.
+
+An asynchronous test is a test. Measured over one documented module that holds
+`async def test_async`, `async def helper` and `def test_plain`: the rule reports
+`D103` on `helper` alone, and it drops both test functions.
 
 Measured over one file that holds no module docstring, `def test_foo()`,
 `def helper_for_tests()`, `class TestThing` and `def test_method` inside it:
@@ -191,13 +199,26 @@ This is the prompt rule's private carve-out, reproduced by the language.
 
 ruff states a failure in three ways, and the earlier pipe read none of them.
 
-- **ruff exits 2 for a selector and for a configuration it cannot read.** A
-  pipeline takes the exit status of its LAST command, and that command was
-  `jq`, so the run exited 0 with no output. The script holds no pipe. It writes
-  each report to a file, and `set -e` makes each step's own failure the exit
-  status of the script. A ruff status over 1 writes ruff's report to stderr and
-  exits 1. Measured: `--select ZZ999` exits 2. A status of 1 is not a failure —
-  ruff exits 0 for a clean file and 1 for a file with findings.
+- **ruff exits 2 for a selector it cannot read.** A pipeline takes the exit
+  status of its LAST command, and that command was `jq`, so the run exited 0
+  with no output. The script holds no pipe. It writes each report to a file, and
+  `set -e` makes each step's own failure the exit status of the script. A ruff
+  status over 1 exits the script 1. Measured: `--select ZZ999` exits 2. A status
+  of 1 is not a failure — ruff exits 0 for a clean file and 1 for a file with
+  findings.
+
+  ruff writes its own diagnostic to stderr, and the engine reads the script's
+  stderr, so the agent gets ruff's words. Measured on `--select ZZ999`: ruff
+  writes 0 bytes to stdout and 93 bytes to stderr, the text `error: invalid
+  value 'ZZ999' for '--select <RULE_CODE>'`. The `cat` of the stdout file adds
+  nothing in that case. It stands to forward a partial report ruff wrote before
+  it stopped.
+
+  ruff exits 2 for a configuration file it cannot read as well, and this script
+  never meets that. `--isolated` makes ruff read no configuration file at all.
+  Measured beside a `pyproject.toml` that holds `[[[ not toml`: with
+  `--isolated` ruff exits 1 and judges the Python file; without `--isolated`
+  ruff exits 2 and writes `Failed to parse ... pyproject.toml`.
 - **ruff exits 0 for a file it cannot read.** Measured: a path that is not
   there prints `[]`, exits 0, and writes `warning: Failed to lint ...` to
   stderr. The empty report reads as a clean file. The script therefore tests
@@ -219,6 +240,26 @@ The scan in the filter reads each file ruff reports. Measured with a path that
 is not there: the scan writes `missing-docs-python cannot read ...` to stderr
 and exits 1. A row the scan does not hold keeps its finding, so a short read
 can add a finding and can drop none.
+
+## A run answers for the files it is given, and for no other
+
+`ruff check` with no path argument falls back to a default target of `.`, and it
+walks that whole tree. A `files`-scope script that hands `"$@"` straight to ruff
+therefore answers for every Python file under the workspace root when the run
+carries no file. That answer exits 0, so it reads as a measured result.
+
+The script counts its arguments first. A count of zero exits 0 with no finding.
+Measured over a probe tree of `top.py` and `deep/nested/other.py`, with no
+argument: before the guard the script reported 5 findings over those two files
+and exited 0; after the guard it reports none and exits 0. The acceptance test
+`the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given`
+holds that behaviour.
+
+`mktemp -d` makes the working directory the script writes each report into, and
+`trap 'rm -rf "$work"' EXIT` removes it. The trap covers every way the script
+leaves: a clean run, a finding, and a failure. Measured: five runs over one file
+leave the count of directories under `TMPDIR` unchanged, and a run that exits 1
+on an unparsable file leaves it unchanged as well.
 
 ## How to exempt one item
 
