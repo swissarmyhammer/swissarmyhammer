@@ -40,6 +40,59 @@ comments:
     - evidence: 10 files — deleted `crates/swissarmyhammer-tools/src/mcp/inline_diagnostics.rs`; edited `mcp/mod.rs`, `mcp/server.rs`, `mcp/tool_registry.rs`, `mcp/tools/files/edit/mod.rs`, `mcp/tools/files/edit/description.md`, `mcp/tools/files/write/mod.rs`, `mcp/tools/files/shared_utils.rs`, `ideas/diagnostic.md`, `ideas/file-edit-tools.md`. `cargo build --workspace --all-targets` clean, zero warnings. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo nextest run --workspace --no-fail-fast` → 14097 run, 14093 passed, 4 failed. The 4 (`review_e2e` x3, `review_progress_stdio_test` x1) reproduce identically with this change stashed, so they are pre-existing and not from this card. `diagnostics` tool: 29 tests pass.
     - next: /review
   timestamp: 2026-08-11T21:58:42.491309+00:00
+- actor: claude-code
+  id: 01kzseq1pt3ff4vk7kbfvm0aqt
+  text: |
+    ### review — findings
+    - evidence: 6 findings (6 confirmed, 11 refuted, 32 attempted, 3 failed, 1 skipped) on `review sha ffaffc3cd~1..ffaffc3cd` — crates/swissarmyhammer-tools/src/mcp/server.rs:87, crates/swissarmyhammer-tools/src/mcp/server.rs:316, crates/swissarmyhammer-tools/src/mcp/tools/files/edit/mod.rs:1, crates/swissarmyhammer-tools/src/mcp/tools/files/shared_utils.rs:691, crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:102, crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:216
+    - next: implement the 6 open findings; the run is INCOMPLETE — 3/32 review tasks failed and `files/edit/mod.rs` was skipped by the duplication validator at 432476 rendered bytes against the 262144-byte cap, so re-review after the split
+  timestamp: 2026-08-11T22:22:29.594850+00:00
+- actor: claude-code
+  id: 01kzseqwt25xar81yr02vbvjhp
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 10 files; deleted mcp/inline_diagnostics.rs, removed both fold_in_diagnostics call sites and the mutated_paths side-channel from ToolContext
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14097 run, 14093 passed; the 4 failures (review_e2e x3, review_progress_stdio_test x1) were reproduced on clean HEAD with the change stashed, so they are pre-existing
+    - commit: ffaffc3cd
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/server.rs:87, crates/swissarmyhammer-tools/src/mcp/server.rs:316, crates/swissarmyhammer-tools/src/mcp/tools/files/edit/mod.rs:1, crates/swissarmyhammer-tools/src/mcp/tools/files/shared_utils.rs:691, crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:102, crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:216
+    - note: the review run was incomplete — 3 of 32 tasks failed, and files/edit/mod.rs (432476 bytes) exceeded the 262144-byte per-file prompt cap, so the duplication validator did not review it. Re-review after the split.
+  timestamp: 2026-08-11T22:22:57.346359+00:00
+- actor: claude-code
+  id: 01kzsgcmcb1na381cs58y9brpa
+  text: |-
+    All 6 review findings closed. What I did, finding by finding.
+
+    **1. `server.rs:87` — missing documentation for a struct field.** Documented `pub tool_context`. The cause is an undocumented `McpServer` field, so I removed it from the whole struct, not the named line: `library`, `file_watcher`, and `tool_registry` also got doc comments. Verified with the rule's own command — `cargo clippy --workspace -W missing_docs` now reports nothing for `server.rs` or for any file this card touches.
+
+    **2. `server.rs:316` — `init_agent_library` near-duplicates `init_skill_library`.** Extracted `McpServer::init_builtin_library`, which owns the `Arc<RwLock<_>>` wiring, the write lock, the debug log, and the guard drop. Each library now names its own type, its log label, and how it counts what it loaded. Verified with `sah tool code_context duplication find` — the pair no longer reports.
+
+    **3. `edit/mod.rs:1` — over the review prompt cap.** Split `files/edit/` into five modules plus a test-support module, one per rung of the pipeline:
+    - `args.rs` (22637 B) — aliases, `EditPair`, `normalize_edit_args`
+    - `prompts.rs` (19085 B) — `Candidate`, `NearMiss`, every renderer
+    - `cascade.rs` (50002 B) — `Resolution`, `PairOutcome`, `ApplyOutcome`, `apply_all_pairs`
+    - `atomic.rs` (23344 B) — `LineEnding`, `EditResult`, `EditFileTool`
+    - `mod.rs` (47974 B) — `EditFile`, `execute_edit`, module docs, re-exports
+    - `test_support.rs` (2326 B) — the three test helpers used by more than one module
+
+    The largest file is now 50002 bytes against 159344 before. Public API is unchanged: `EditFile`, `execute_edit` and `looks_like_edit` are still reached the same way, and `EditPair`, `normalize_edit_args`, `EditResult` and `EditFileTool` are re-exported from `mod.rs`. Verified mechanically, not by eye: every top-level item and every method of the original production region is present in the new set (diff of the two symbol lists is empty), and `cargo nextest list` reports exactly 100 tests under `files::edit::`, the same 100 the original 100 `#[test]`/`#[tokio::test]` attributes declared.
+
+    **4. `shared_utils.rs:691` — `validate_path` duplicates `validate_file_path`.** Took the second option the finding offers. Three shared helpers now exist and each runs once per call: `check_path_length`, `resolve_against_base`, and `canonicalize_resolved`, the last taking the already-resolved `PathBuf`. `validate_path` no longer converts the resolved path back to a string and no longer resolves it a second time. `MAX_PATH_LENGTH` moved to module scope; it was declared twice, once inside each function.
+
+    **5. `write/mod.rs:102` — repeated literal `.tmp.`.** Named it `TEMP_FILE_SUFFIX`. I put it in `files/shared_utils.rs` rather than in `write/mod.rs`, because the same literal was repeated four more times in `edit/` — the same staging convention, written out five times across two files. It is now referenced from every one of them, so a change to the convention propagates everywhere it is read. `grep '\.tmp\.'` over `files/` returns only the constant's own definition.
+
+    **6. `write/mod.rs:216` — `execute_write` documentation.** Written with all four sections the finding asks for: what the operation does, `# Arguments` (each member of the JSON map, its aliases, and what `context` supplies), `# Returns` (the envelope's shape), and `# Errors` (each `McpError` variant and the condition that raises it).
+
+    Verification: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo nextest run --workspace --no-fail-fast` → 14097 run, 14093 passed, 4 failed. The 4 are the same `review_e2e` x3 and `review_progress_stdio_test` x1 this card's earlier implement step already reproduced on clean HEAD with the change stashed. I re-read one: it fails on the review engine's own fixture repo (`src/orphan.rs`, `src/payments.rs`), which this card does not touch.
+
+    For the next agent — a note worth keeping. Splitting `edit/mod.rs` made a duplicate visible that the single file had hidden: `create_edit_arguments` and `ambiguity_args` are one function with an argument, and `duplication-parsed` had never reported them because everything inside a `#[cfg(test)] mod tests` is structurally exempt. Moved to `test_support.rs`, the exemption no longer covered them and the pair reported at 96%. That is the split working as intended, not a regression. Fixed properly: both now delegate to one `edit_arguments` that owns the map building.
+  timestamp: 2026-08-11T22:51:45.419593+00:00
+- actor: claude-code
+  id: 01kzsgcx1g60wa6627s5c3xj7j
+  text: |-
+    ### implement — changed
+    - evidence: 9 files — new `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/{args,prompts,cascade,atomic,test_support}.rs`; edited `mcp/tools/files/edit/mod.rs`, `mcp/tools/files/shared_utils.rs`, `mcp/tools/files/write/mod.rs`, `mcp/server.rs`. All 6 review findings checked off. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14097 run, 14093 passed, 4 pre-existing failures (review_e2e x3, review_progress_stdio_test x1, all on the review engine's own fixture repo). `sah tool code_context duplication find` over every touched file reports nothing. `cargo clippy -W missing_docs` reports nothing in any touched file. 100 of 100 `files::edit::` tests preserved.
+    - next: /review — re-run so the `duplication` validator can read `files/edit/` now that no file is over the 262144-byte cap
+  timestamp: 2026-08-11T22:51:54.288725+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -104,3 +157,17 @@ Remove the inline-on-edit diagnostics feature completely.
 - `cargo build` and the full test suite are green with no warnings.
 - An edit of a Rust file returns with no LSP round-trip.
 - The `diagnostics` MCP tool still works.
+
+## Review Findings (2026-08-11 17:07)
+
+> ⚠️ 3/32 review tasks failed — results are INCOMPLETE.
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/mod.rs` — 432476 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:87` — missing documentation for a struct field.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:316` — fn `init_agent_library` is a near-duplicate of `init_skill_library` at crates/swissarmyhammer-tools/src/mcp/server.rs:306 (63 tokens, 95% alike).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/mod.rs:1` — This file exceeds the review prompt cap — 432476 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/shared_utils.rs:691` — FilePathValidator::validate_path duplicates path validation logic already in validate_file_path. The method checks path length (lines 652-664) and resolves relative paths (lines 669-677) before calling validate_file_path, which repeats the same checks (path length at lines 243-254, path resolution at lines 256-265). This causes redundant validation steps and reconversion of the path to string and back. Refactor validate_file_path to accept an already-resolved PathBuf directly (as an internal overload), eliminating the need to convert back to string and re-resolve. Or move the common validation (length check, empty check) into a shared helper so both functions call it once instead of duplicating the logic.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:102` — Repeated literal `.tmp.` used in two places: temp file naming (line 102) and test cleanup search (line 359). Should be a named constant so changes propagate to both locations. Define `const TEMP_FILE_SUFFIX: &str = ".tmp.";` at module level and reference it in both the format string at line 102 and the filter at line 359.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:216` — Public function `execute_write` has minimal documentation (one brief sentence) that fails to document errors, argument structure, or context meaning. The rule requires that 'Panics, errors, and safety requirements' be documented; this function returns `Result<CallToolResult, McpError>` but provides no explanation of what errors can occur, under what conditions, or what they mean. Callers cannot learn from the doc comment what the `arguments` JSON parameter should contain, what `context` is for, or what errors to expect. Expand the doc comment to include: (1) detailed description of the operation, (2) `# Arguments` section explaining what fields must be in the `arguments` Map and what `context` provides, (3) `# Returns` section describing the `CallToolResult` structure, and (4) `# Errors` section listing what `McpError` variants can be returned (e.g., invalid path, permission denied, content too large) and when they occur.

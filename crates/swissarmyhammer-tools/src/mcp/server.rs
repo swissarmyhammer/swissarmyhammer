@@ -72,8 +72,10 @@ const INITIAL_BACKOFF_MS: u64 = 100;
 /// MCP server for all SwissArmyHammer functionality.
 #[derive(Clone)]
 pub struct McpServer {
+    /// Prompt template library the server renders prompts from.
     library: Arc<RwLock<TemplateLibrary>>,
 
+    /// Watches the prompt directories and reloads `library` when they change.
     file_watcher: Arc<Mutex<FileWatcher>>,
     /// Handle to the in-flight background file-watch startup task, if any.
     ///
@@ -83,7 +85,10 @@ pub struct McpServer {
     /// Set once shutdown has run; suppresses a late, off-lock store from an
     /// in-flight startup task so the watcher is never resurrected post-shutdown.
     file_watch_stopped: Arc<std::sync::atomic::AtomicBool>,
+    /// Every MCP tool this server can dispatch, keyed by tool name.
     tool_registry: Arc<RwLock<ToolRegistry>>,
+    /// Shared state every tool handler reads — storage backends, session
+    /// working directory, and the rate limiter.
     pub tool_context: Arc<ToolContext>,
     /// Skill library - kept alive to back the SkillTool's shared reference
     #[allow(dead_code)]
@@ -302,24 +307,42 @@ impl McpServer {
         })
     }
 
+    /// Wrap `library` for shared access, populate it with its builtins, and log
+    /// how many arrived.
+    ///
+    /// Every builtin library shares this shape: build empty, load the defaults,
+    /// report the count. `load` populates the library and answers how many
+    /// definitions it holds — each library type spells that count differently —
+    /// and `kind` names them in the debug log.
+    async fn init_builtin_library<L>(
+        library: L,
+        kind: &str,
+        load: impl FnOnce(&mut L) -> usize,
+    ) -> Arc<RwLock<L>> {
+        let shared = Arc::new(RwLock::new(library));
+        let mut lib = shared.write().await;
+        let loaded = load(&mut lib);
+        tracing::debug!("Loaded {} {}", loaded, kind);
+        drop(lib);
+        shared
+    }
+
     /// Construct a `SkillLibrary` pre-populated with the builtin skills.
     async fn init_skill_library() -> Arc<RwLock<SkillLibrary>> {
-        let library = Arc::new(RwLock::new(SkillLibrary::new()));
-        let mut lib = library.write().await;
-        lib.load_defaults();
-        tracing::debug!("Loaded {} skills", lib.len());
-        drop(lib);
-        library
+        Self::init_builtin_library(SkillLibrary::new(), "skills", |lib| {
+            lib.load_defaults();
+            lib.len()
+        })
+        .await
     }
 
     /// Construct an `AgentLibrary` pre-populated with the builtin agents.
     async fn init_agent_library() -> Arc<RwLock<AgentLibrary>> {
-        let library = Arc::new(RwLock::new(AgentLibrary::new()));
-        let mut lib = library.write().await;
-        lib.load_defaults();
-        tracing::debug!("Loaded {} agents", lib.names().len());
-        drop(lib);
-        library
+        Self::init_builtin_library(AgentLibrary::new(), "agents", |lib| {
+            lib.load_defaults();
+            lib.names().len()
+        })
+        .await
     }
 
     /// How often followers retry promotion to leader.
