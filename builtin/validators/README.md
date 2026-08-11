@@ -193,6 +193,17 @@ swiftlint rules accept status 2 only when the report holds a JSON array of one
 entry or more. A script that accepted every status 2 reported 0 findings and
 exited 0 for the second shape, and the engine read a dirty file as clean.
 
+A failure status and a clean answer can share a report of 0 bytes. The script
+must then test STDERR, and answer clean for the shape stderr names. Measured
+with swiftlint 0.65.0: a project `.swiftlint.yml` that holds `excluded: [src]`
+makes swiftlint write `Error: No lintable files found at paths:
+'src/Magic.swift'` to stderr, write 0 bytes to stdout, and exit 1. Each of the
+three shipped swiftlint rules tests stderr for `No lintable files found` after
+the status gate, and each exits 0 with no finding for that shape. Measured over
+three dirty fixtures beside that project file: each of the three reported 0
+findings at exit 0. A script without the stderr test answers a tool error for
+each project `excluded:` list.
+
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.
 The `jq 'select(...)'` or `grep` in your pipe says which findings this rule

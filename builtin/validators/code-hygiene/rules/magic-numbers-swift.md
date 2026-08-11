@@ -287,9 +287,11 @@ The two runs of status 2 differ in the report. The threshold run wrote 2
 entries. The version run wrote 0 bytes and linted no file: swiftlint compares
 `swiftlint_version:` with the version it is, and at a difference it writes
 `warning: Currently running SwiftLint 0.65.0 but configuration specified
-version 99.0.0.` to stderr and stops. Each run that broke wrote 0 bytes, at
-status 1, 134, 64 or 2. Each run that measured wrote a JSON array, at status 0
-or 2.
+version 99.0.0.` to stderr and stops. Each run that measured wrote a JSON
+array, at status 0 or 2. Each other run wrote 0 bytes, at status 1, 134, 64 or
+2. A report of 0 bytes does not make a run broken. The run beside a project
+`excluded:` that covers the file writes 0 bytes at status 1, and it gives a
+clean answer. Stderr tells that run from a run that broke.
 
 So the script accepts status 0, and it accepts status 2 only when the report
 holds a JSON array of one entry or more. At each other status, and at status 2
@@ -306,9 +308,9 @@ script reports no finding and exits 0.
 Measured over one file that holds `return status == 404`, beside a project
 `.swiftlint.yml` that states `swiftlint_version:`: at `0.65.0` the script
 reports 1 finding and exits 0; at `0.64.0`, at `99.0.0` and at `0.1.0` the
-script reports 0 findings and exits 1, which the engine reads as a broken tool. A script that accepted every status 2
-reported 0 findings and exited 0 for each of those three values, and the engine
-read a dirty file as clean.
+script reports 0 findings and exits 1, which the engine reads as a broken
+tool. A script that accepted every status 2 reported 0 findings and exited 0
+for each of those three values, and the engine read a dirty file as clean.
 
 `warning_threshold:` and a finding of error severity are the two shapes that
 make swiftlint exit 2 with a report of one entry or more, and this rule cannot
