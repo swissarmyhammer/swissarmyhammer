@@ -177,8 +177,12 @@ The status alone does not tell a measured run from a broken run. A project
 installed makes swiftlint write
 `warning: Currently running SwiftLint 0.65.0 but configuration specified
 version 99.0.0.` to stderr, write 0 bytes to stdout, lint no file, and exit 2.
-The REPORT tells the two apart. Measured against the child configuration this
-script writes, over one file holding one function of cyclomatic complexity 16:
+At status 2 the REPORT tells the two apart: the probe run writes a JSON array,
+and the version-mismatch run writes 0 bytes. The report makes that one
+distinction. At status 1 the report is 0 bytes for the clean run beside a
+project `excluded:` list, and 0 bytes for the broken run over a path that
+holds no file. Measured against the child configuration this script writes,
+over one file holding one function of cyclomatic complexity 16:
 
 | what the run is | status | stdout |
 |---|---|---|
@@ -198,6 +202,18 @@ below states it. Measured with a project `.swiftlint.yml` that states
 cyclomatic complexity 16: swiftlint writes `Error: No lintable files found at
 paths: 'src/Complex.swift'` to stderr, writes 0 bytes to stdout, and exits 1;
 the script reports no finding and exits 0.
+
+The stderr string names the path, and it does not name the reason. Measured
+against the child configuration this script writes, 4 shapes each wrote 0
+bytes at status 1 with the string `No lintable files found`: a project
+`excluded: [src]` list over `src/Complex.swift`; the directory `hollow`,
+which holds no Swift file; the path `src/Absent.swift`, which holds no file;
+the file `src/Notes.txt`, whose name does not end in `.swift`. The script
+reports 0 findings and exits 0 for 3 of the 4 shapes. The `[ ! -r "$file" ]`
+guard runs before swiftlint, and it reports 0 findings and exits 1 with
+`complexity-swift cannot read src/Absent.swift` for the path that holds no
+file. That guard makes that one distinction, and no test separates the other
+3 shapes.
 
 Measured over the same file, beside a project `.swiftlint.yml` that states
 `swiftlint_version:`: at `0.65.0` the script reports 1 finding and exits 0; at

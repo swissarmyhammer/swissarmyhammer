@@ -266,8 +266,12 @@ first row.
 The `jq` filter selects `rule_id == "no_magic_numbers"`, so the
 `warning_threshold` entry never becomes a finding.
 
-The status alone does not tell a measured run from a broken run. The REPORT
-does. Each status swiftlint 0.65.0 answers with was measured against the child
+The status alone does not tell a measured run from a broken run. At status 2
+the REPORT tells the two apart: the threshold run writes a JSON array, and the
+version-mismatch run writes 0 bytes. The report makes that one distinction. At
+status 1 the report is 0 bytes for the clean run beside a project `excluded:`
+list, and 0 bytes for the broken run over a path that holds no file. Each
+status swiftlint 0.65.0 answers with was measured against the child
 configuration this script writes:
 
 | what the run is | status | stdout |
@@ -291,7 +295,8 @@ version 99.0.0.` to stderr and stops. Each run that measured wrote a JSON
 array, at status 0 or 2. Each other run wrote 0 bytes, at status 1, 134, 64 or
 2. A report of 0 bytes does not make a run broken. The run beside a project
 `excluded:` that covers the file writes 0 bytes at status 1, and it gives a
-clean answer. Stderr tells that run from a run that broke.
+clean answer. The guard on each file and the test on stderr separate that run
+from a run that broke. The two paragraphs below state each test and its limit.
 
 So the script accepts status 0, and it accepts status 2 only when the report
 holds a JSON array of one entry or more. At each other status, and at status 2
@@ -304,6 +309,18 @@ above states it. Measured with a project `.swiftlint.yml` that states
 `return status == 404`: swiftlint writes `Error: No lintable files found at
 paths: 'src/Magic.swift'` to stderr, writes 0 bytes to stdout, and exits 1; the
 script reports no finding and exits 0.
+
+The stderr string names the path, and it does not name the reason. Measured
+against the child configuration this script writes, 4 shapes each wrote 0
+bytes at status 1 with the string `No lintable files found`: a project
+`excluded: [src]` list over `src/Magic.swift`; the directory `hollow`, which
+holds no Swift file; the path `src/Absent.swift`, which holds no file; the
+file `src/Notes.txt`, whose name does not end in `.swift`. The script reports
+0 findings and exits 0 for 3 of the 4 shapes. The `[ ! -r "$file" ]` guard
+runs before swiftlint, and it reports 0 findings and exits 1 with
+`magic-numbers-swift cannot read src/Absent.swift` for the path that holds no
+file. That guard makes that one distinction, and no test separates the other
+3 shapes.
 
 Measured over one file that holds `return status == 404`, beside a project
 `.swiftlint.yml` that states `swiftlint_version:`: at `0.65.0` the script
