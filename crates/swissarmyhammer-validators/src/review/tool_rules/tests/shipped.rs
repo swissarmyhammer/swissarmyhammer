@@ -332,7 +332,8 @@ struct ShippedRun {
     /// The tool rule that must plan the run.
     rule: &'static str,
 
-    /// One entry for each finding the run must report, and no other.
+    /// One entry for each thing the run must report, and no other. The probe
+    /// that holds the run states what one entry is.
     expected: &'static [&'static str],
 }
 
@@ -587,6 +588,89 @@ fn verify_shipped_staged_positions_report(probe: &ShippedStagedPositions) {
         .map(|verified| verified.finding.file.as_str())
         .collect();
     assert_eq!(reported, probe.run.expected, "{}", probe.reason);
+}
+
+/// A staged file one tool rule cannot judge, and what the broken run must say.
+///
+/// A run that reports no finding and exits 0 for a file the tool never judged
+/// reads exactly like a clean file. This shape measures the other behaviour: the
+/// run reports no finding, and it reports one error that names what broke.
+struct ShippedBrokenRun {
+    /// The run the staged file must produce. Its `expected` names each fragment
+    /// the one error detail must carry.
+    run: ShippedRun,
+
+    /// What the work-list states the change is for.
+    change_purpose: &'static str,
+
+    /// Where the staged file stands inside the probe repository, as the
+    /// work-list holds it.
+    path: &'static str,
+
+    /// The bytes written at `path`, or `None` to write no file at all.
+    ///
+    /// `None` stages the file the tool cannot open. The work-list names the path
+    /// either way, so the run reads the same file list, and the tool is the only
+    /// thing that sees the difference.
+    source: Option<&'static str>,
+}
+
+/// Drives the staged file of `probe` through the real tool pipeline, and holds
+/// the run to reporting no finding and one error that names what broke.
+fn verify_shipped_run_breaks(probe: &ShippedBrokenRun) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let repo = tempfile::tempdir().unwrap();
+    let content = probe.source.unwrap_or_default();
+    if probe.source.is_some() {
+        let file = repo.path().join(probe.path);
+        std::fs::create_dir_all(file.parent().expect("the staged path has a parent")).unwrap();
+        std::fs::write(&file, content).unwrap();
+    }
+    // A tool prints the resolved path of each file it reads, and on macOS a
+    // temporary directory stands behind a symbolic link. The engine strips the
+    // repository root off each reported path, so the root it is given has to be
+    // the resolved form or no path matches.
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .expect("resolve the probe repository path");
+    let work = tool_rule_work(
+        probe.change_purpose,
+        CODE_HYGIENE_SET,
+        [
+            MISSING_DOCS_PROMPT_RULE.to_string(),
+            probe.run.rule.to_string(),
+        ],
+        [(probe.path, content)],
+    );
+    let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
+    let run = required_run(&plan, probe.run.rule);
+
+    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+
+    assert!(
+        outcome.findings().is_empty(),
+        "a file the tool never judged must report no finding; got {:?}",
+        outcome.findings()
+    );
+    let details: Vec<&str> = outcome
+        .errors()
+        .iter()
+        .map(|error| error.detail())
+        .collect();
+    assert_eq!(
+        details.len(),
+        1,
+        "the run must report exactly one tool error; got {details:?}"
+    );
+    for fragment in probe.run.expected {
+        assert!(
+            details[0].contains(fragment),
+            "the error must carry '{fragment}'; got '{}'",
+            details[0]
+        );
+    }
 }
 
 /// The materialized name of the `complexity-typescript` fail fixture.
@@ -1448,6 +1532,21 @@ const GO_UNPARSABLE_PATH: &str = "broken.go";
 /// error learns which file broke.
 const GO_INVALID_FILE_PREFIX: &str = "invalid file";
 
+/// What the one error of an unparsable Go file must name.
+const GO_UNPARSABLE_ERROR: &[&str] = &[GO_INVALID_FILE_PREFIX, GO_UNPARSABLE_PATH];
+
+/// The `missing-docs-go` probe over a Go file revive cannot parse.
+const GO_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: &["go"],
+        rule: GO_MISSING_DOCS_RULE,
+        expected: GO_UNPARSABLE_ERROR,
+    },
+    change_purpose: "a Go file the parser cannot read",
+    path: GO_UNPARSABLE_PATH,
+    source: Some(GO_UNPARSABLE_SOURCE),
+};
+
 /// Acceptance: the shipped Go missing-docs tool rule BREAKS on a Go file it
 /// cannot parse, through the real revive pipeline.
 ///
@@ -1459,50 +1558,271 @@ const GO_INVALID_FILE_PREFIX: &str = "invalid file";
 /// each one to stderr, and exits nonzero.
 #[test]
 fn the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    let loader = builtin_loader();
-    let project_types = ["go"];
-    require_tool_installed(&loader, &project_types, GO_MISSING_DOCS_RULE);
-    let repo = tempfile::tempdir().unwrap();
-    std::fs::write(repo.path().join(GO_UNPARSABLE_PATH), GO_UNPARSABLE_SOURCE).unwrap();
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
-    let work = tool_rule_work(
-        "a Go file the parser cannot read",
-        CODE_HYGIENE_SET,
-        [
-            MISSING_DOCS_PROMPT_RULE.to_string(),
-            GO_MISSING_DOCS_RULE.to_string(),
-        ],
-        [(GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE)],
-    );
-    let plan = plan_tool_rules(&work, &loader, &project_types, None);
-    let run = required_run(&plan, GO_MISSING_DOCS_RULE);
+    verify_shipped_run_breaks(&GO_UNPARSABLE_PROBE);
+}
 
-    let outcome = execute_tool_runs(std::slice::from_ref(run), &repo_root, None);
+/// The materialized name of the `missing-docs-python` fail fixture.
+const PYTHON_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-python.fail.py";
 
-    assert!(
-        outcome.findings().is_empty(),
-        "a file revive could not read judges nothing, so the run must report no \
-         finding; got {:?}",
-        outcome.findings()
+/// Where the fail fixture stands inside the probe repository, as the work-list
+/// holds it.
+const PYTHON_MISSING_DOCS_FIXTURE_PATH: &str = "src/missing_docs_python_fail.py";
+
+/// The definition line of each item the `missing-docs-python` fail fixture
+/// leaves undocumented.
+///
+/// One entry for each of the five codes a loose file can hold — `D101`, `D106`,
+/// `D107`, `D102` and `D103` — and one more `D102` for the property getter.
+/// `D100` and `D104` stand outside the fixture: the doctor materializes one
+/// loose file that carries a docstring of its own, and it cannot take the name
+/// `__init__.py`.
+///
+/// The getter is the entry the rule body owes a measurement. ruff carves out no
+/// getter and the prompt rule does, so this entry holds ruff to reporting it.
+const PYTHON_MISSING_DOCS_FAIL_ITEMS: &[&str] = &[
+    "class UndocumentedClass:",
+    "class UndocumentedNested:",
+    "def __init__(self, name: str) -> None:",
+    "def name(self) -> str:",
+    "def undocumented_method(self) -> None:",
+    "def undocumented_function() -> None:",
+];
+
+/// The `missing-docs-python` fail fixture, and every undocumented item the real
+/// ruff pipeline must report inside it.
+const PYTHON_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    run: ShippedRun {
+        project_types: &["python"],
+        rule: PYTHON_MISSING_DOCS_RULE,
+        expected: PYTHON_MISSING_DOCS_FAIL_ITEMS,
+    },
+    fixture: PYTHON_MISSING_DOCS_FAIL_FIXTURE,
+    path: PYTHON_MISSING_DOCS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    noun: "undocumented item",
+};
+
+/// Acceptance: the shipped Python missing-docs tool rule reports every
+/// undocumented item its fail fixture holds, through the real ruff pipeline.
+///
+/// An item is held to the SOURCE LINE its finding stands on, because ruff writes
+/// one message for each code and never spells the name it read.
+///
+/// The count is the other half, and it is what a silent run cannot fake. The
+/// pass fixture holds an undocumented `__str__`, `__repr__`, `__eq__`, property
+/// setter, test class, test method and test function, so a run that reported one
+/// of them would fail the pair; holding this run to exactly these six states the
+/// same silence from the other side.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_reports_every_fail_fixture_item() {
+    verify_shipped_fail_fixture_reports_each(
+        &PYTHON_MISSING_DOCS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an undocumented class, nested class, constructor, getter, method and function",
+                CODE_HYGIENE_SET,
+                [
+                    MISSING_DOCS_PROMPT_RULE.to_string(),
+                    PYTHON_MISSING_DOCS_RULE.to_string(),
+                ],
+                [(PYTHON_MISSING_DOCS_FIXTURE_PATH, content)],
+            )
+        },
+        fail_fixture_source_line,
+        |reported, item| reported == item,
     );
-    let details: Vec<&str> = outcome
-        .errors()
-        .iter()
-        .map(|error| error.detail())
-        .collect();
-    assert_eq!(
-        details.len(),
-        1,
-        "the run must report exactly one tool error; got {details:?}"
-    );
-    assert!(
-        details[0].contains(GO_INVALID_FILE_PREFIX) && details[0].contains(GO_UNPARSABLE_PATH),
-        "the error must name the file revive could not read; got '{}'",
-        details[0]
-    );
+}
+
+/// The declarations every staged Python position holds, each one undocumented.
+///
+/// `TestShared`, `test_method` and `test_shared` carry the name pytest and
+/// unittest collect by, so the rule must drop each one at every position.
+/// `helper_shared` carries no such name, so the rule must report it at every
+/// position — the test file included.
+const PYTHON_STAGED_DECLARATIONS: &str = concat!(
+    "class TestShared:\n",
+    "    def test_method(self) -> None:\n",
+    "        assert True\n",
+    "\n",
+    "\n",
+    "def test_shared() -> None:\n",
+    "    assert True\n",
+    "\n",
+    "\n",
+    "def helper_shared() -> None:\n",
+    "    return None\n",
+);
+
+/// The module docstring a documented position carries above the shared
+/// declarations.
+const PYTHON_MODULE_DOCSTRING: &str = "\"\"\"A documented module.\"\"\"\n\n\n";
+
+/// The head of a documented module: the docstring and nothing else.
+const PYTHON_DOCUMENTED_HEAD: &[&str] = &[PYTHON_MODULE_DOCSTRING];
+
+/// The head of an undocumented module: nothing at all.
+const PYTHON_UNDOCUMENTED_HEAD: &[&str] = &[];
+
+/// The ordinary position. It carries a module docstring, so the helper is its
+/// one finding.
+const PYTHON_STAGED_DOCUMENTED_PATH: &str = "documented.py";
+
+/// The package position. An `__init__.py` with no docstring reports `D104`.
+const PYTHON_STAGED_PACKAGE_PATH: &str = "pkg/__init__.py";
+
+/// The test position. The directory and the file name are both what pytest
+/// collects by, and the rule reads neither, so it reports the same finding the
+/// ordinary position reports.
+const PYTHON_STAGED_TEST_PATH: &str = "tests/test_documented.py";
+
+/// The undocumented module position. It reports `D100` above the helper.
+const PYTHON_STAGED_UNDOCUMENTED_PATH: &str = "undocumented.py";
+
+/// Each position the shared declarations are staged at.
+///
+/// The ordinary position and the test position hold the same bytes, so their
+/// PATHS are the only difference. The undocumented position drops the module
+/// docstring, so that DOCSTRING is its only difference. The package position
+/// drops the same docstring under the one file name Python reads as a package.
+const PYTHON_STAGED_FILES: &[ShippedStagedFile] = &[
+    ShippedStagedFile {
+        path: PYTHON_STAGED_DOCUMENTED_PATH,
+        head: PYTHON_DOCUMENTED_HEAD,
+    },
+    ShippedStagedFile {
+        path: PYTHON_STAGED_PACKAGE_PATH,
+        head: PYTHON_UNDOCUMENTED_HEAD,
+    },
+    ShippedStagedFile {
+        path: PYTHON_STAGED_TEST_PATH,
+        head: PYTHON_DOCUMENTED_HEAD,
+    },
+    ShippedStagedFile {
+        path: PYTHON_STAGED_UNDOCUMENTED_PATH,
+        head: PYTHON_UNDOCUMENTED_HEAD,
+    },
+];
+
+/// The file of each finding the four staged positions must report, in the order
+/// ruff writes them.
+///
+/// ruff sorts its report by path, and it holds one file's findings in row order,
+/// so the package docstring stands above the helper of the same file. Measured:
+/// the order does not move when the file arguments are shuffled.
+const PYTHON_STAGED_REPORTS: &[&str] = &[
+    PYTHON_STAGED_DOCUMENTED_PATH,
+    PYTHON_STAGED_PACKAGE_PATH,
+    PYTHON_STAGED_PACKAGE_PATH,
+    PYTHON_STAGED_TEST_PATH,
+    PYTHON_STAGED_UNDOCUMENTED_PATH,
+    PYTHON_STAGED_UNDOCUMENTED_PATH,
+];
+
+/// The four staged Python positions, and what the real ruff pipeline must
+/// report over them.
+const PYTHON_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: &["python"],
+        rule: PYTHON_MISSING_DOCS_RULE,
+        expected: PYTHON_STAGED_REPORTS,
+    },
+    change_purpose: "one test class, one test function and one helper at four positions",
+    declarations: PYTHON_STAGED_DECLARATIONS,
+    staged: PYTHON_STAGED_FILES,
+    reason: "the rule reads the item's own name and never the path: the test class, the test \
+             method and the test function are silent at every position, the helper reports at \
+             every position, and a module or a package with no docstring reports one more",
+};
+
+/// Acceptance: the shipped Python missing-docs tool rule carves a test out by
+/// the item's own NAME, through the real ruff pipeline.
+///
+/// The `missing-docs` prompt rule asks for exactly this test: "Identify test
+/// items from the structural marker on the item itself ... not from the file
+/// name or path." ruff has no filter on a name, and `--isolated` discards the
+/// `per-file-ignores` entry a project holds for its own test tree, so the script
+/// reads the definition line each finding stands on.
+///
+/// The four positions hold the same declarations, so the path and the module
+/// docstring are the only things that differ. `tests/test_documented.py` carries
+/// the directory and the file name pytest collects by, and it reports the same
+/// helper the ordinary position reports — which is what a path-shaped carve-out
+/// would lose in silence.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_reads_the_item_name_and_not_the_path() {
+    verify_shipped_staged_positions_report(&PYTHON_MISSING_DOCS_POSITIONS_PROBE);
+}
+
+/// A Python file that does not parse: the parameter list of `broken` never
+/// closes.
+const PYTHON_UNPARSABLE_SOURCE: &str = "def broken(\n";
+
+/// Where the unparsable file stands inside the probe repository.
+const PYTHON_UNPARSABLE_PATH: &str = "broken.py";
+
+/// The code ruff writes for a Python file it cannot parse. The run's error
+/// detail must carry it, so the agent reading the error learns what broke.
+const PYTHON_INVALID_SYNTAX_CODE: &str = "invalid-syntax";
+
+/// What the one error of an unparsable file must name.
+const PYTHON_UNPARSABLE_ERROR: &[&str] = &[PYTHON_INVALID_SYNTAX_CODE, PYTHON_UNPARSABLE_PATH];
+
+/// The `missing-docs-python` probe over a Python file ruff cannot parse.
+const PYTHON_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: &["python"],
+        rule: PYTHON_MISSING_DOCS_RULE,
+        expected: PYTHON_UNPARSABLE_ERROR,
+    },
+    change_purpose: "a Python file the parser cannot read",
+    path: PYTHON_UNPARSABLE_PATH,
+    source: Some(PYTHON_UNPARSABLE_SOURCE),
+};
+
+/// Acceptance: the shipped Python missing-docs tool rule BREAKS on a Python
+/// file it cannot parse, through the real ruff pipeline.
+///
+/// ruff reports such a file under the code `invalid-syntax`, beside the codes
+/// the rule selects. A filter that selected the seven documentation codes alone
+/// dropped that record, and the file read as clean — a run answering zero for a
+/// reason other than a clean file. The script counts each record outside the
+/// seven codes, writes each one to stderr, and exits nonzero.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
+    verify_shipped_run_breaks(&PYTHON_UNPARSABLE_PROBE);
+}
+
+/// Where the file that is never written stands inside the probe repository.
+const PYTHON_ABSENT_PATH: &str = "absent.py";
+
+/// What the script writes for a file it cannot read.
+const PYTHON_CANNOT_READ_MESSAGE: &str = "missing-docs-python cannot read";
+
+/// What the one error of an absent file must name.
+const PYTHON_ABSENT_ERROR: &[&str] = &[PYTHON_CANNOT_READ_MESSAGE, PYTHON_ABSENT_PATH];
+
+/// The `missing-docs-python` probe over a path that holds no file.
+const PYTHON_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: &["python"],
+        rule: PYTHON_MISSING_DOCS_RULE,
+        expected: PYTHON_ABSENT_ERROR,
+    },
+    change_purpose: "a Python file that is not there",
+    path: PYTHON_ABSENT_PATH,
+    source: None,
+};
+
+/// Acceptance: the shipped Python missing-docs tool rule BREAKS on a file it
+/// cannot read, through the real ruff pipeline.
+///
+/// ruff answers a path that is not there with an empty report and an exit status
+/// of 0, and it puts the failure on stderr alone. That report reads exactly like
+/// a clean file. The script therefore tests each file it is given before it
+/// starts, and exits nonzero with the name of the file it cannot read.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&PYTHON_ABSENT_PROBE);
 }
 
 /// Acceptance: every shipped dead-code tool rule passes its fixture pair in

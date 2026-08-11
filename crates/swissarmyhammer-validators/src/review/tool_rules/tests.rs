@@ -71,6 +71,15 @@ const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
 /// acceptance test drives end to end.
 const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
 
+/// The shipped missing-docs tool rule for Python. ruff has no filter on a
+/// name, so the rule reads the definition line of each finding and carves out
+/// the items pytest and unittest collect by name. Three more acceptance tests
+/// drive it end to end: one names every item its fail fixture leaves
+/// undocumented, one holds the carve-out to the item's own name at four
+/// staged positions, and one holds the run to breaking on a file ruff cannot
+/// read.
+const PYTHON_MISSING_DOCS_RULE: &str = "missing-docs-python";
+
 /// The shipped missing-docs tool rule for Dart. `public_member_api_docs` reads
 /// only a package's `lib/` directory, so the rule stages each changed file
 /// under a probe `lib/` of its own. Two more acceptance tests drive it end to
@@ -90,7 +99,7 @@ const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
 /// and the prompt rules it supersedes.
 const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("rust", RUST_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
-    ("python", "missing-docs-python", SUPERSEDES_MISSING_DOCS),
+    ("python", PYTHON_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("nodejs", "missing-docs-typescript", SUPERSEDES_MISSING_DOCS),
     ("go", GO_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
     ("swift", "missing-docs-swift", SUPERSEDES_MISSING_DOCS),

@@ -46,20 +46,20 @@ matcher — a tool rule is a rule with more keys.
 
 A tool rule binds one tool to one language. Example:
 
-    # rules/missing-docs-python.md
+    # rules/complexity-python.md
     ---
-    name: missing-docs-python
-    description: Public items need docs — checked by ruff, not by prompt.
+    name: complexity-python
+    description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
     match:
       files:
         - "**/*.py"
       project_types:
         - python
-    supersedes: missing-docs
+    supersedes: cognitive-complexity
     tool:
       scope: files
       run: |
-        ruff check --isolated --no-cache --select D1 --output-format json "$@" |
+        ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
           jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
       doctor:
         check_command: "which ruff jq"
@@ -67,6 +67,10 @@ A tool rule binds one tool to one language. Example:
       install:
         commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
     ---
+
+This is the shortest shipped tool rule, so it shows the whole schema and no
+more. A rule whose tool needs several steps writes a script rather than one
+pipe; `rules/missing-docs-python.md` is one of those.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
