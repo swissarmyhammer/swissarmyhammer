@@ -1641,18 +1641,21 @@ Body.
     #[test]
     fn test_parse_tool_rule_full_block() {
         let content = r#"---
-name: complexity-python
-description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
+name: function-length-python
+description: Python functions stay under the length gate — checked by ruff, not by prompt.
 match:
   files:
     - "**/*.py"
   project_types:
     - python
-supersedes: cognitive-complexity
+supersedes: function-length
 tool:
   scope: files
   run: |
-    ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
+    ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json "$@" |
       jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
   doctor:
     check_command: "which ruff jq"
@@ -1661,10 +1664,10 @@ tool:
     commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
 ---
 "#;
-        let rule = parse_rule_plain(content, Path::new("complexity-python.md")).unwrap();
+        let rule = parse_rule_plain(content, Path::new("function-length-python.md")).unwrap();
 
         assert!(rule.is_tool_rule());
-        assert_eq!(rule.supersedes.names(), ["cognitive-complexity"]);
+        assert_eq!(rule.supersedes.names(), ["function-length"]);
 
         let match_criteria = rule.match_criteria.as_ref().unwrap();
         assert_eq!(match_criteria.files, vec!["**/*.py"]);
@@ -1673,7 +1676,7 @@ tool:
         let tool = rule.tool.as_ref().unwrap();
         assert_eq!(tool.scope, ToolScope::Files);
         assert!(tool.run.contains("ruff check --isolated --no-cache"));
-        assert!(tool.run.contains("--select C901"));
+        assert!(tool.run.contains("--select PLR0915"));
         let doctor = tool.doctor.as_ref().unwrap();
         assert_eq!(doctor.check_command, "which ruff jq");
         assert_eq!(

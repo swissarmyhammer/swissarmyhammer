@@ -46,32 +46,38 @@ matcher — a tool rule is a rule with more keys.
 
 A tool rule binds one tool to one language. Example:
 
-    # rules/complexity-python.md
+    # rules/function-length-python.md
     ---
-    name: complexity-python
-    description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
+    name: function-length-python
+    description: Python functions stay under the length gate — checked by ruff, not by prompt.
     match:
       files:
         - "**/*.py"
       project_types:
         - python
-    supersedes: cognitive-complexity
+    supersedes: function-length
     tool:
       scope: files
       run: |
-        ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
+        if [ "$#" -eq 0 ]; then
+          exit 0
+        fi
+        ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json "$@" |
           jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
       doctor:
         check_command: "which ruff jq"
         check_version_command: "ruff --version"
       install:
-        commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
+        commands:
+          - "uv tool install ruff==0.14.5"
+          - "pipx install ruff==0.14.5"
     ---
 
-That is the frontmatter of `rules/complexity-python.md`, all 22 lines of it,
-and its `run` is one pipe. A rule whose tool needs several steps writes a
-script rather than one pipe; `rules/missing-docs-python.md` is one of those,
-and its script is 51 lines.
+That is the frontmatter of `rules/function-length-python.md`, all 25 lines of
+it, and its `run` is the zero-argument guard this contract states plus one
+pipe. A rule whose tool needs several steps writes a script rather than one
+pipe; `rules/missing-docs-python.md` is one of those, and its script is 51
+lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:

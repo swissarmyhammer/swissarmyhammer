@@ -3,9 +3,9 @@
 //! A shipped-rule test drives the SHIPPED script over a probe repository and
 //! reads what the real tool reports. This module carries the shapes those
 //! tests are written in — a planned run, a fail fixture, a staged position
-//! set, one path the work-list names, and a run measured with no file beside
-//! the same run measured with the files — and the helpers that drive each
-//! shape.
+//! set, a staged row set, one path the work-list names, and a run measured
+//! with no file beside the same run measured with the files — and the helpers
+//! that drive each shape.
 //!
 //! The tests themselves stand one module per rule family, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
@@ -809,6 +809,44 @@ fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
         sorted_names(&expected_script_findings(probe.with_files)),
         "the same script must report exactly these findings over the staged files, or \
          the guard swallows the run it is meant to leave standing"
+    );
+}
+
+/// Staged files, and the exact ROWS one tool rule's real pipeline must report
+/// over them.
+///
+/// [`ShippedStagedPositions`] names the FILE of each finding, so it cannot tell
+/// one definition of a file from another. A carve-out a script decides by the
+/// NAME of a definition needs the row: the file reports either way, and the row
+/// states which definition the script kept and which one it dropped.
+struct ShippedStagedRows {
+    /// The run the staged files must produce. Each entry of its `expected` is
+    /// one `path:line` the script must report.
+    run: ShippedRun,
+
+    /// Each file staged in the probe repository, with the bytes it holds. The
+    /// script is given every one of them.
+    staged: &'static [(&'static str, &'static str)],
+
+    /// Why those rows report and the others stay silent.
+    reason: &'static str,
+}
+
+/// Drives the shipped script of `probe` over every file it stages, and holds
+/// the run to reporting exactly the rows the probe names.
+fn verify_shipped_staged_rows_report(probe: &ShippedStagedRows) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let staged_files: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
+
+    let reported = shipped_script_findings(&loader, probe.run.rule, probe.staged, &staged_files)
+        .expect("a script given its own files must judge them and exit 0");
+
+    assert_eq!(
+        sorted_names(&reported),
+        sorted_names(&expected_script_findings(probe.run.expected)),
+        "{}",
+        probe.reason
     );
 }
 

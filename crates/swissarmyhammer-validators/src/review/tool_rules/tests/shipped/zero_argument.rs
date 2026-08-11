@@ -512,8 +512,8 @@ pub(super) fn script_holds_the_three_lines(script: &str) -> bool {
 /// The guard stands on the script rather than on the tool, because each tool
 /// answers an empty argument list its own way and a rule author cannot see
 /// which way from the rule. The one shape all 16 rules write is the shape
-/// this guard reads. Measured over the 16 shipped scripts: 10 write the guard
-/// on the first line, and 6 write it under `set -e` alone.
+/// this guard reads. Measured over the 16 shipped scripts: 9 write the guard
+/// on the first line, and 7 write it under `set -e` alone.
 #[test]
 fn each_shipped_files_scope_script_answers_a_run_that_gives_it_no_file() {
     let loader = builtin_loader();

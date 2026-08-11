@@ -176,26 +176,32 @@ prompt rules:
 
 Two languages name one tool for each gate, so each takes one rule for each:
 
-- `complexity-python` — ruff `C901` at `max-complexity=15`, and
+- `complexity-python` — `complexipy --max-complexity-allowed 15`, and
   `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
   statement count 250 code lines of Python measures out to.
 - `complexity-go` — `gocognit -over 15`, and `function-length-go` — `funlen`
   through golangci-lint at `lines: 250` with `ignore-comments` on.
 
-A tool measures its own way, and only two of the five complexity gates are the
+A tool measures its own way, and three of the five complexity gates are the
 published Sonar cognitive complexity the `complexity` probe computes:
-`sonarjs/cognitive-complexity` and `gocognit` are that algorithm, clippy's
-`excessive_nesting` counts lexical nesting depth, `C901` counts McCabe decision
-points, and swiftlint's `cyclomatic_complexity` counts decision points with
-`switch` arms left out. So the numbers need not agree. Each tool rule's own file
-states what its tool measures and what the threshold rests on.
+`sonarjs/cognitive-complexity`, `gocognit` and `complexipy` are that algorithm,
+clippy's `excessive_nesting` counts lexical nesting depth, and swiftlint's
+`cyclomatic_complexity` counts decision points with `switch` arms left out. So
+the numbers need not agree. Each tool rule's own file states what its tool
+measures and what the threshold rests on.
+
+`complexity-python` ran ruff `C901` before, which is McCabe cyclomatic
+complexity. It was replaced because that metric reads no nesting: measured over
+one function of six nested `if` blocks, `C901` scores 7 and complexipy scores
+21, so the gate stayed silent on the shape the prompt rule exists for. The rule
+file carries the whole comparison.
 
 The languages split on the nesting gate. Rust keeps it: nesting depth is the
 backbone of the Sonar cognitive metric, and `excessive_nesting` measures exactly
-that. TypeScript and Go keep it another way, because the Sonar metric charges a
-function for its nesting inside the one score. Python and Swift drop it, because
-ruff names no nesting rule and swiftlint's `nesting` rule measures nested type
-and function declarations rather than nested conditions.
+that. TypeScript, Go and Python keep it another way, because the Sonar metric
+charges a function for its nesting inside the one score. Swift drops it, because
+swiftlint's `nesting` rule measures nested type and function declarations rather
+than nested conditions.
 
 Dart takes no COMPLEXITY tool rule; see the rejection recorded below. It keeps
 the `complexity` probe and both prompt rules. Dart does take a magic-number tool

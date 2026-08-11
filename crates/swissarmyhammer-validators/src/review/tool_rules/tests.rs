@@ -220,8 +220,12 @@ const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
 /// holds the run to breaking on a file it cannot read.
 const SWIFT_COMPLEXITY_RULE: &str = "complexity-swift";
 
-/// The shipped complexity tool rule for Python. A second acceptance test
-/// holds its script to reading only the files it is given.
+/// The shipped complexity tool rule for Python. It carries the test carve-out
+/// the prompt rule states, and it carries neither of the other two, so five
+/// acceptance tests drive it end to end: one holds its script to reading only
+/// the files it is given, one holds the test carve-out, one holds the
+/// generated file it still reports, and two hold it to breaking on a file the
+/// tool cannot read.
 const PYTHON_COMPLEXITY_RULE: &str = "complexity-python";
 
 /// The shipped function-length tool rule for Python. A second acceptance
