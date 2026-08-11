@@ -149,6 +149,33 @@ struct ShippedFailFixture {
 /// files it is given, so the fail fixture alone is the whole repository.
 const NO_SUPPORT_FIXTURES: &[(&str, &str)] = &[];
 
+/// What a `files`-scope probe names for a support FILE list: nothing. The tool
+/// reads the files it is given, so the staged files are the whole repository.
+const NO_SUPPORT_FILES: &[(&str, &str)] = &[];
+
+/// Writes each `(path, bytes)` pair of `files` into `repo`, making the
+/// directory of each one first.
+fn stage_probe_files<'a>(repo: &Path, files: impl IntoIterator<Item = (&'a str, &'a str)>) {
+    for (path, content) in files {
+        let file = repo.join(path);
+        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
+        std::fs::write(&file, content).unwrap();
+    }
+}
+
+/// The RESOLVED root of the probe repository `repo`.
+///
+/// A tool prints the resolved path of each file it reads, and on macOS a
+/// temporary directory stands behind a symbolic link. The engine strips the
+/// repository root off each reported path, so the root it is given has to be
+/// the resolved form or no path matches and every finding keeps an absolute
+/// path.
+fn probe_repository_root(repo: &tempfile::TempDir) -> PathBuf {
+    repo.path()
+        .canonicalize()
+        .expect("resolve the probe repository path")
+}
+
 /// Copies the shipped fixture template named `fixture` into `repo` at `path`,
 /// and answers the bytes it wrote.
 ///
@@ -197,15 +224,7 @@ fn verify_shipped_fail_fixture_reports_each<W, E, M>(
     for (fixture, path) in probe.support {
         copy_shipped_fixture(&loader, repo.path(), fixture, path);
     }
-    // A tool prints the resolved path of each file it reads, and on macOS a
-    // temporary directory stands behind a symbolic link. The engine strips the
-    // repository root off each reported path, so the root it is given has to be
-    // the resolved form or no path matches and every finding keeps an absolute
-    // path.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
+    let repo_root = probe_repository_root(&repo);
     let work = build_work(&content);
 
     let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
@@ -277,6 +296,14 @@ struct ShippedStagedPositions {
     /// Each position the declarations are staged at.
     staged: &'static [ShippedStagedFile],
 
+    /// Each file staged beside the positions that the work-list does NOT name.
+    ///
+    /// A `files`-scope rule reads the files it is given and needs none. A
+    /// `workspace`-scope rule loads a project rather than a file list, so the
+    /// project manifests, and every other file the project needs to build,
+    /// stand here.
+    support: &'static [(&'static str, &'static str)],
+
     /// Why those files report and the others stay silent.
     reason: &'static str,
 }
@@ -314,19 +341,14 @@ fn verify_shipped_staged_positions_report(probe: &ShippedStagedPositions) {
             )
         })
         .collect();
-    for (path, content) in &staged {
-        let file = repo.path().join(path);
-        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
-        std::fs::write(&file, content).unwrap();
-    }
-    // A tool prints the resolved path of each file it reads, and on macOS a
-    // temporary directory stands behind a symbolic link. The engine strips the
-    // repository root off each reported path, so the root it is given has to be
-    // the resolved form or no path matches.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
+    stage_probe_files(
+        repo.path(),
+        staged
+            .iter()
+            .map(|(path, content)| (*path, content.as_str())),
+    );
+    stage_probe_files(repo.path(), probe.support.iter().copied());
+    let repo_root = probe_repository_root(&repo);
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
@@ -389,6 +411,14 @@ struct ShippedBrokenRun {
     /// either way, so the run reads the same file list, and the tool is the only
     /// thing that sees the difference.
     source: Option<&'static str>,
+
+    /// Each file staged beside `path` that the work-list does NOT name.
+    ///
+    /// A `files`-scope rule reads the files it is given and needs none. A
+    /// `workspace`-scope rule loads a project rather than a file list, so the
+    /// project manifest stands here, and the tool then breaks on the staged
+    /// file rather than on a project it could not find.
+    support: &'static [(&'static str, &'static str)],
 }
 
 /// Drives the staged file of `probe` through the real tool pipeline, and holds
@@ -398,19 +428,9 @@ fn verify_shipped_run_breaks(probe: &ShippedBrokenRun) {
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let repo = tempfile::tempdir().unwrap();
     let content = probe.source.unwrap_or_default();
-    if probe.source.is_some() {
-        let file = repo.path().join(probe.path);
-        std::fs::create_dir_all(file.parent().expect("the staged path has a parent")).unwrap();
-        std::fs::write(&file, content).unwrap();
-    }
-    // A tool prints the resolved path of each file it reads, and on macOS a
-    // temporary directory stands behind a symbolic link. The engine strips the
-    // repository root off each reported path, so the root it is given has to be
-    // the resolved form or no path matches.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
+    stage_probe_files(repo.path(), probe.source.map(|bytes| (probe.path, bytes)));
+    stage_probe_files(repo.path(), probe.support.iter().copied());
+    let repo_root = probe_repository_root(&repo);
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
@@ -487,38 +507,34 @@ fn shipped_run_script(loader: &ValidatorLoader, rule: &str) -> String {
         .clone()
 }
 
-/// Drives the shipped script of `probe` with no file argument at all, over a
-/// probe repository the script was never given, and holds it to reporting
-/// exactly the entries the probe names.
+/// Stages `files` in a temporary repository, drives the shipped script of
+/// `rule` there with the argument list a run of `scope` carries, and answers
+/// each finding it reported as `path:line`.
 ///
 /// The arguments come from [`script_args`], the one function the engine builds
-/// them with, so the run reads the argument list a `files`-scope rule with no
-/// matched file would really receive.
-fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+/// them with, so a `files`-scope rule reads the argument list it would really
+/// receive with no matched file, and a `workspace`-scope rule reads the empty
+/// list it always receives.
+///
+/// The findings are the SCRIPT's own, before the engine keeps only the ones in
+/// the changed files. A script that names a file the author cannot edit is
+/// visible here and nowhere else.
+fn shipped_script_findings(
+    loader: &ValidatorLoader,
+    rule: &str,
+    scope: ToolScope,
+    staged: &[(&str, &str)],
+) -> Result<Vec<String>, ScriptFailure> {
     let repo = tempfile::tempdir().unwrap();
-    for (path, content) in probe.staged {
-        let file = repo.path().join(path);
-        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
-        std::fs::write(&file, content).unwrap();
-    }
-    // A tool prints the resolved path of each file it reads, and on macOS a
-    // temporary directory stands behind a symbolic link. The engine strips the
-    // repository root off each reported path, so the root it is given has to be
-    // the resolved form or no path matches.
-    let repo_root = repo
-        .path()
-        .canonicalize()
-        .expect("resolve the probe repository path");
-    let script = shipped_run_script(&loader, probe.run.rule);
+    stage_probe_files(repo.path(), staged.iter().copied());
+    let repo_root = probe_repository_root(&repo);
+    let script = shipped_run_script(loader, rule);
     let no_files: [&str; 0] = [];
-    let args = script_args(ToolScope::Files, &no_files);
+    let args = script_args(scope, &no_files);
 
-    let findings = run_script_findings(&script, &repo_root, &args)
-        .expect("a script given no file must judge nothing and exit 0");
+    let findings = run_script_findings(&script, &repo_root, &args)?;
 
-    let reported: Vec<String> = findings
+    Ok(findings
         .iter()
         .map(|finding| {
             format!(
@@ -527,14 +543,31 @@ fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
                 finding.line
             )
         })
-        .collect();
-    let expected: Vec<String> = probe
-        .run
-        .expected
-        .iter()
-        .map(|entry| (*entry).to_string())
-        .collect();
-    assert_eq!(reported, expected, "{}", probe.reason);
+        .collect())
+}
+
+/// The entries of `expected` as the owned strings [`shipped_script_findings`]
+/// answers with.
+fn expected_script_findings(expected: &[&str]) -> Vec<String> {
+    expected.iter().map(|entry| (*entry).to_string()).collect()
+}
+
+/// Drives the shipped script of `probe` with no file argument at all, over a
+/// probe repository the script was never given, and holds it to reporting
+/// exactly the entries the probe names.
+fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+
+    let reported = shipped_script_findings(&loader, probe.run.rule, ToolScope::Files, probe.staged)
+        .expect("a script given no file must judge nothing and exit 0");
+
+    assert_eq!(
+        reported,
+        expected_script_findings(probe.run.expected),
+        "{}",
+        probe.reason
+    );
 }
 
 /// Names the prompt rules a roster row expects, for a failure message.

@@ -197,6 +197,7 @@ const DART_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedP
     change_purpose: "one undocumented public class, staged in three positions",
     declarations: DART_STAGED_LIBRARY,
     staged: DART_STAGED_POSITIONS,
+    support: NO_SUPPORT_FILES,
     reason: "the file under `lib/` reports its class and its method, and the test \
              file and the generated file report nothing",
 };
@@ -395,6 +396,7 @@ const GO_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPos
     change_purpose: "one undocumented exported type, staged in four positions",
     declarations: GO_STAGED_DECLARATIONS,
     staged: GO_STAGED_POSITIONS,
+    support: NO_SUPPORT_FILES,
     reason: "the ordinary library file reports its type and its method, and the \
              test file, the generated file and the command file report nothing",
 };
@@ -524,6 +526,7 @@ const GO_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
     change_purpose: "a Go file the parser cannot read",
     path: GO_UNPARSABLE_PATH,
     source: Some(GO_UNPARSABLE_SOURCE),
+    support: NO_SUPPORT_FILES,
 };
 
 /// Acceptance: the shipped Go missing-docs tool rule BREAKS on a Go file it
@@ -708,6 +711,7 @@ const PYTHON_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStage
     change_purpose: "one test class, one test function and one helper at four positions",
     declarations: PYTHON_STAGED_DECLARATIONS,
     staged: PYTHON_STAGED_FILES,
+    support: NO_SUPPORT_FILES,
     reason: "the rule reads the item's own name and never the path: the test class, the test \
              method and the test function are silent at every position, the helper reports at \
              every position, and a module or a package with no docstring reports one more",
@@ -756,6 +760,7 @@ const PYTHON_UNPARSABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_UNPARSABLE_PATH,
     source: Some(PYTHON_UNPARSABLE_SOURCE),
+    support: NO_SUPPORT_FILES,
 };
 
 /// Acceptance: the shipped Python missing-docs tool rule BREAKS on a Python
@@ -790,6 +795,7 @@ const PYTHON_ABSENT_PROBE: ShippedBrokenRun = ShippedBrokenRun {
     change_purpose: "a Python file that is not there",
     path: PYTHON_ABSENT_PATH,
     source: None,
+    support: NO_SUPPORT_FILES,
 };
 
 /// Acceptance: the shipped Python missing-docs tool rule BREAKS on a file it
@@ -850,4 +856,247 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_EMPTY_RUN_PROBE);
+}
+
+/// The manifest of the root package of the Rust workspace probe.
+///
+/// It names `shared` as a dependency AND as a build-dependency, so cargo
+/// compiles `shared` two times and clippy writes its finding two times.
+/// `lonely` is a member no package depends on, so cargo builds it only when
+/// the command selects the whole workspace.
+const RUST_WORKSPACE_ROOT_MANIFEST: &str = concat!(
+    "[package]\nname = \"workspace-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[dependencies]\nshared = { path = \"shared\" }\n",
+    "\n[build-dependencies]\nshared = { path = \"shared\" }\n",
+    "\n[workspace]\nmembers = [\"shared\", \"lonely\"]\n",
+);
+
+/// The build script of the Rust workspace probe. It carries a crate comment,
+/// because `missing_docs` asks each compiled target for one.
+const RUST_WORKSPACE_BUILD_RS: &str =
+    "//! The build script of the workspace probe.\n\nfn main() {}\n";
+
+/// The manifest of the `shared` member of the Rust workspace probe.
+const RUST_WORKSPACE_SHARED_MANIFEST: &str =
+    "[package]\nname = \"shared\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+
+/// The manifest of the `lonely` member of the Rust workspace probe.
+const RUST_WORKSPACE_LONELY_MANIFEST: &str =
+    "[package]\nname = \"lonely\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+
+/// Every file of the Rust workspace probe the work-list does not name.
+const RUST_WORKSPACE_SUPPORT_FILES: &[(&str, &str)] = &[
+    ("Cargo.toml", RUST_WORKSPACE_ROOT_MANIFEST),
+    ("build.rs", RUST_WORKSPACE_BUILD_RS),
+    ("shared/Cargo.toml", RUST_WORKSPACE_SHARED_MANIFEST),
+    ("lonely/Cargo.toml", RUST_WORKSPACE_LONELY_MANIFEST),
+];
+
+/// The library of the root package of the Rust workspace probe.
+const RUST_WORKSPACE_ROOT_LIB_PATH: &str = "src/lib.rs";
+
+/// The library of the `shared` member, the one cargo compiles two times.
+const RUST_WORKSPACE_SHARED_LIB_PATH: &str = "shared/src/lib.rs";
+
+/// The library of the `lonely` member, the one no package depends on.
+const RUST_WORKSPACE_LONELY_LIB_PATH: &str = "lonely/src/lib.rs";
+
+/// The one undocumented declaration every library of the Rust workspace probe
+/// holds.
+const RUST_WORKSPACE_DECLARATIONS: &str = "pub struct Undocumented;\n";
+
+/// The three libraries of the Rust workspace probe. Each carries a crate
+/// comment of its own, so the only undocumented item is the shared
+/// declaration.
+const RUST_WORKSPACE_STAGED_FILES: &[ShippedStagedFile] = &[
+    ShippedStagedFile {
+        path: RUST_WORKSPACE_ROOT_LIB_PATH,
+        head: &["//! The root package of the workspace probe.\n\n"],
+    },
+    ShippedStagedFile {
+        path: RUST_WORKSPACE_SHARED_LIB_PATH,
+        head: &["//! The shared member of the workspace probe.\n\n"],
+    },
+    ShippedStagedFile {
+        path: RUST_WORKSPACE_LONELY_LIB_PATH,
+        head: &["//! The lonely member of the workspace probe.\n\n"],
+    },
+];
+
+/// Each library of the Rust workspace probe, one time, in the order `sort -u`
+/// leaves them.
+///
+/// `lonely/src/lib.rs` is what `--workspace` buys: cargo builds no member
+/// nothing depends on, so a command without the flag never reads it.
+/// `shared/src/lib.rs` standing one time is what `sort -u` buys: cargo
+/// compiles that member two times, and clippy writes its finding two times.
+const RUST_WORKSPACE_REPORTS: &[&str] = &[
+    RUST_WORKSPACE_LONELY_LIB_PATH,
+    RUST_WORKSPACE_SHARED_LIB_PATH,
+    RUST_WORKSPACE_ROOT_LIB_PATH,
+];
+
+/// The three libraries of the Rust workspace probe, and what the real clippy
+/// pipeline must report over them.
+const RUST_MISSING_DOCS_WORKSPACE_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: &["rust"],
+        rule: RUST_MISSING_DOCS_RULE,
+        expected: RUST_WORKSPACE_REPORTS,
+    },
+    change_purpose: "one undocumented public struct in each package of a workspace",
+    declarations: RUST_WORKSPACE_DECLARATIONS,
+    staged: RUST_WORKSPACE_STAGED_FILES,
+    support: RUST_WORKSPACE_SUPPORT_FILES,
+    reason: "the rule declares `scope: workspace`, so the run reads every member one time: the \
+             member no package depends on reports, and the member cargo compiles two times \
+             reports one finding and not two",
+};
+
+/// Acceptance: the shipped Rust missing-docs tool rule reports every member of
+/// a workspace, one time each, through the real clippy pipeline.
+///
+/// Two parts of the command are load-bearing here, and the probe holds both.
+/// `--workspace` selects every member; without it cargo builds the package the
+/// working directory names and the packages that package depends on, so
+/// `lonely/src/lib.rs` stays unread. `sort -u` collapses the repeat; without it
+/// `shared/src/lib.rs` arrives two times, because the root package names that
+/// member as a dependency and as a build-dependency and cargo therefore
+/// compiles it two times.
+#[test]
+fn the_shipped_rust_missing_docs_tool_rule_reports_every_workspace_member() {
+    verify_shipped_staged_positions_report(&RUST_MISSING_DOCS_WORKSPACE_PROBE);
+}
+
+/// The manifest of the generated-code probe crate.
+const RUST_GENERATED_MANIFEST: &str = concat!(
+    "[package]\nname = \"generated-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[workspace]\n",
+);
+
+/// The build script of the generated-code probe crate. It writes one
+/// undocumented public struct and one undocumented public function into
+/// `OUT_DIR`, which is a directory under `target/` that no author edits.
+const RUST_GENERATED_BUILD_RS: &str = r#"//! The build script of the generated-code probe.
+
+use std::io::Write;
+
+fn main() {
+    let out = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
+    let generated = std::path::Path::new(&out).join("generated.rs");
+    let mut file = std::fs::File::create(generated).expect("create the generated file");
+    writeln!(file, "pub struct GeneratedUndocumented;").expect("write the generated struct");
+    writeln!(file, "pub fn generated_undocumented() {{}}").expect("write the generated function");
+}
+"#;
+
+/// The library of the generated-code probe crate. It reads the generated file
+/// with an `include!`, which is how a crate takes code out of `OUT_DIR`, and it
+/// holds one undocumented item of its own.
+const RUST_GENERATED_LIB_RS: &str = concat!(
+    "//! A probe crate for the generated-code step of the shipped Rust rule.\n",
+    "\n",
+    "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\n",
+    "\n",
+    "pub struct HandWritten;\n",
+);
+
+/// Every file of the generated-code probe crate.
+const RUST_GENERATED_PROBE_FILES: &[(&str, &str)] = &[
+    ("Cargo.toml", RUST_GENERATED_MANIFEST),
+    ("build.rs", RUST_GENERATED_BUILD_RS),
+    ("src/lib.rs", RUST_GENERATED_LIB_RS),
+];
+
+/// What the shipped script must name over the generated-code probe: the
+/// hand-written item, and no generated one.
+const RUST_GENERATED_REPORTS: &[&str] = &["src/lib.rs:5"];
+
+/// Acceptance: the shipped Rust missing-docs tool rule names no generated file,
+/// through the real clippy pipeline.
+///
+/// Cargo writes generated code under `OUT_DIR`, and clippy reports an item
+/// there with the absolute path of a file the author cannot edit. The
+/// `select(.file | startswith("/") | not)` step drops it. Measured over this
+/// probe without the step: 3 findings, two of them at an absolute path under
+/// `target/`.
+///
+/// The script's OWN findings are what this test reads, because the engine keeps
+/// only the findings in the changed files and would drop a generated one on its
+/// own. The step is what makes the script's answer equal the rule's answer.
+#[test]
+fn the_shipped_rust_missing_docs_tool_rule_names_no_generated_file() {
+    let loader = builtin_loader();
+    let project_types = ["rust"];
+    require_tool_installed(&loader, &project_types, RUST_MISSING_DOCS_RULE);
+
+    let reported = shipped_script_findings(
+        &loader,
+        RUST_MISSING_DOCS_RULE,
+        ToolScope::Workspace,
+        RUST_GENERATED_PROBE_FILES,
+    )
+    .expect("the shipped script must judge the probe crate and exit 0");
+
+    assert_eq!(
+        reported,
+        expected_script_findings(RUST_GENERATED_REPORTS),
+        "the script must name the hand-written item and no file under `target/`"
+    );
+}
+
+/// The manifest of the probe crate cargo cannot compile.
+const RUST_UNCOMPILABLE_MANIFEST: &str = concat!(
+    "[package]\nname = \"uncompilable-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[workspace]\n",
+);
+
+/// Every file of the uncompilable probe crate the work-list does not name.
+const RUST_UNCOMPILABLE_SUPPORT_FILES: &[(&str, &str)] =
+    &[("Cargo.toml", RUST_UNCOMPILABLE_MANIFEST)];
+
+/// A Rust library that does not compile: the struct declaration ends with no
+/// semicolon.
+const RUST_UNCOMPILABLE_SOURCE: &str = concat!(
+    "//! A probe crate the compiler cannot build.\n",
+    "\n",
+    "pub struct Undocumented\n",
+);
+
+/// Where the library that does not compile stands inside the probe repository.
+const RUST_UNCOMPILABLE_PATH: &str = "src/lib.rs";
+
+/// What cargo puts at the front of the failure it writes for a crate it cannot
+/// compile. The run's error detail must carry it, so the agent reading the
+/// error learns what broke.
+const RUST_CANNOT_COMPILE_MESSAGE: &str = "could not compile";
+
+/// What the one error of a crate cargo cannot compile must name.
+const RUST_UNCOMPILABLE_ERROR: &[&str] = &[RUST_CANNOT_COMPILE_MESSAGE, "uncompilable-probe"];
+
+/// The `missing-docs-rust` probe over a crate cargo cannot compile.
+const RUST_UNCOMPILABLE_PROBE: ShippedBrokenRun = ShippedBrokenRun {
+    run: ShippedRun {
+        project_types: &["rust"],
+        rule: RUST_MISSING_DOCS_RULE,
+        expected: RUST_UNCOMPILABLE_ERROR,
+    },
+    change_purpose: "a Rust crate the compiler cannot build",
+    path: RUST_UNCOMPILABLE_PATH,
+    source: Some(RUST_UNCOMPILABLE_SOURCE),
+    support: RUST_UNCOMPILABLE_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Rust missing-docs tool rule BREAKS on a crate cargo
+/// cannot compile, through the real clippy pipeline.
+///
+/// `cargo clippy` exits 101 for such a crate and writes no `missing_docs`
+/// diagnostic for it. A shell pipeline takes the exit status of its LAST
+/// command, so the earlier pipe — which ended in `jq` — exited 0 and reported
+/// nothing, a run answering zero for a reason other than a clean crate. The
+/// script writes cargo's report to a file, and `set -e` makes cargo's own exit
+/// status the exit status of the script.
+#[test]
+fn the_shipped_rust_missing_docs_tool_rule_breaks_on_a_crate_that_does_not_compile() {
+    verify_shipped_run_breaks(&RUST_UNCOMPILABLE_PROBE);
 }
