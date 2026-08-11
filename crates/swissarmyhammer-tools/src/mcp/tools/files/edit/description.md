@@ -100,5 +100,5 @@ fails to resolve, no pair is committed and the file is byte-identical to before.
 ## Returns
 
 Returns the bytes written, the number of edit operations applied, the detected
-encoding, and the preserved line-ending format. Diagnostics for the edited file
-are folded into the result when it is a diagnosable source file.
+encoding, and the preserved line-ending format. To read the diagnostics for what
+you changed, call the `diagnostics` tool.

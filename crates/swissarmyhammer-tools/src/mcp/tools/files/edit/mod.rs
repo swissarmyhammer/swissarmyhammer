@@ -1360,13 +1360,6 @@ pub async fn execute_edit(
     )?;
     let total_replacements = edit_operations.len();
 
-    // Record the mutated path on the typed side-channel so the dispatch
-    // chokepoint can fold inline diagnostics into this result (no content
-    // parsing). This is DISTINCT from the `mutated_paths` carried in the result
-    // body below — the side-channel drives inline diagnostics; the body surfaces
-    // the paths to the model. Keep both.
-    context.record_mutated_path(path.clone());
-
     // Create success response
     let success_message = if edit_operations.len() == 1 {
         "OK".to_string()
@@ -2780,32 +2773,6 @@ mod tests {
         let result = execute_edit(args, &context).await;
         assert!(result.is_ok(), "both pairs should apply: {result:?}");
         assert_eq!(fs::read_to_string(&test_file).unwrap(), "1\ntwo\n3\n");
-    }
-
-    /// On a successful edit, the mutated path is recorded on the typed channel so
-    /// the inline-diagnostics fold-in still fires.
-    #[tokio::test]
-    async fn cascade_records_mutated_path_on_success() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("recorded.txt");
-        fs::write(&test_file, "hello world").unwrap();
-
-        // A fresh per-call sink, exactly as the dispatch chokepoint installs.
-        let context = crate::test_utils::create_test_context()
-            .await
-            .with_fresh_mutated_paths();
-        let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
-
-        let result = execute_edit(args, &context).await;
-        assert!(result.is_ok());
-
-        let recorded = context.take_mutated_paths();
-        assert_eq!(recorded.len(), 1, "exactly one path recorded");
-        assert!(
-            recorded[0].to_string_lossy().ends_with("recorded.txt"),
-            "recorded path: {}",
-            recorded[0].display()
-        );
     }
 
     /// An empty `replace` deletes the matched span (delete = empty replace).

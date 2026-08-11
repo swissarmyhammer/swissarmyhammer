@@ -239,14 +239,6 @@ pub async fn execute_write(
     // Perform atomic write operation
     let bytes_written = WriteFileTool::write_file_atomic(&validated_path, &request.content).await?;
 
-    // Record the mutated path on the typed side-channel so the dispatch
-    // chokepoint can fold inline diagnostics into this result (no content
-    // parsing). This is DISTINCT from the `mutated_paths` carried in the result
-    // body below — the side-channel drives inline diagnostics; the body surfaces
-    // the paths to the model. Keep both. `validated_path` is already the absolute
-    // path that was written.
-    context.record_mutated_path(validated_path.clone());
-
     let success_message = "OK".to_string();
 
     debug!(path = %request.file_path, bytes_written = bytes_written, "File write operation completed successfully");

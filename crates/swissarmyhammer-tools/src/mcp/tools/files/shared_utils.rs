@@ -93,16 +93,15 @@ pub fn whole_file_hash(content: &str) -> String {
 /// freshness-guard re-base — return a plain success response and never carry the
 /// envelope.
 ///
-/// The envelope rides on BOTH surfaces, mirroring the inline-diagnostics
-/// fold-in convention so the model sees it regardless of how the host renders
-/// tool results:
+/// The envelope rides on BOTH surfaces, so the model sees it regardless of how
+/// the host renders tool results:
 ///
 /// * `structured_content.mutation` — an object carrying `tagged_content`
 ///   (the post-mutation file re-tagged with [`swissarmyhammer_hashline::tag`],
 ///   so fresh `N:HH` anchors are immediately available), `mutated_paths` (the
-///   absolute paths changed, surfaced to the model — distinct from the typed
-///   `record_mutated_path` diagnostics side-channel), plus any operation-specific
-///   `extra` fields (e.g. an edit's `bytes_written` / `replacements_made`).
+///   absolute paths changed, surfaced to the model), plus any
+///   operation-specific `extra` fields (e.g. an edit's `bytes_written` /
+///   `replacements_made`).
 /// * An appended text block carrying the `#hash:<token>` line and the same
 ///   tagged content, for hosts that only forward result text.
 ///

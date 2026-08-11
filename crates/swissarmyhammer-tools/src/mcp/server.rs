@@ -1277,13 +1277,8 @@ impl McpServer {
                 serde_json::Value::Object(map) => map,
                 _ => serde_json::Map::new(), // Use empty map if not an object
             };
-            // Install a per-call mutated-paths sink so a mutator's recorded
-            // paths are scoped to this call (the shared `self.tool_context`
-            // would otherwise accumulate across calls), then fold inline
-            // diagnostics in via the same shared helper `call_tool` uses.
-            let tool_context = (*self.tool_context).clone().with_fresh_mutated_paths();
-            let result = tool.execute(arguments_map, &tool_context).await;
-            crate::mcp::inline_diagnostics::fold_in_diagnostics(result, &tool_context).await
+            let tool_context = (*self.tool_context).clone();
+            tool.execute(arguments_map, &tool_context).await
         } else {
             Err(rmcp::ErrorData::invalid_request(
                 format!("unknown tool: {}", name),
@@ -2438,9 +2433,7 @@ impl ServerHandler for McpServer {
                 .meta
                 .get_progress_token()
                 .or_else(|| request.meta.as_ref().and_then(|m| m.get_progress_token()));
-            let mut tool_context_with_peer = self
-                .prepare_tool_context(context.peer.clone())
-                .with_fresh_mutated_paths();
+            let mut tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
             if let Some(token) = progress_token {
                 tool_context_with_peer = tool_context_with_peer.with_progress_token(token);
             }
@@ -2448,15 +2441,7 @@ impl ServerHandler for McpServer {
             let dispatch_ms = dispatch_start.elapsed().as_millis() as u64;
 
             let handler_start = std::time::Instant::now();
-            let raw_result = tool.execute(arguments, &tool_context_with_peer).await;
-            // Fold inline diagnostics into a mutating tool's own result via the
-            // shared helper (the same one `execute_tool` uses), reading the typed
-            // `mutated_paths` channel rather than parsing the result content.
-            let result = crate::mcp::inline_diagnostics::fold_in_diagnostics(
-                raw_result,
-                &tool_context_with_peer,
-            )
-            .await;
+            let result = tool.execute(arguments, &tool_context_with_peer).await;
             let handler_ms = handler_start.elapsed().as_millis() as u64;
 
             let is_error = match &result {
