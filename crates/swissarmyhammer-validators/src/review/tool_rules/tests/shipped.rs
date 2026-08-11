@@ -1121,7 +1121,7 @@ const SWIFT_MAGIC_NUMBERS_FIXTURE_PATH: &str = "Sources/MagicNumbersSwiftFail.sw
 ///
 /// `return word << 8 | 1` is the load-bearing entry. The `magic-numbers` prompt
 /// rule carves out "conventional values (a `<< 8`, `100` for percent)", and this
-/// is the one rule of the four that restores BOTH halves: `allowed_numbers`
+/// is the one rule of the five that restores BOTH halves: `allowed_numbers`
 /// carries `100`, and `swiftlint` reads the shift OPERATOR, so `word << 8` is
 /// silent while `status == 8` still reports. The carve-out reaches a whole
 /// shift and not a link of a longer unparenthesised chain, so this line is the

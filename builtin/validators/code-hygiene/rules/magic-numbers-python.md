@@ -81,20 +81,27 @@ in the pipe, and it would drop a genuine `status == 100` along with the percent
 one, because the pipe reads the value and never the meaning. The `# noqa` reads
 the meaning, because the author writes it at the one site that has one.
 
-## This is the one rule of the four that cannot allow `100`
+## This rule and `magic-numbers-dart` are the two of five that cannot allow `100`
 
-The other three tools each take a value allow-list, and the allow-list is where
-the percent carve-out goes:
+Three of the five tools take a usable value allow-list, and the allow-list is
+where the percent carve-out goes:
 
 - `magic-numbers-swift` states `allowed_numbers: [0, 1, -1, 100]`.
 - `magic-numbers-typescript` states `ignore: [0, 1, -1, 100]`.
 - `magic-numbers-go` states `ignored-numbers: ["0", "1", "-1", "100"]`. The
   `mnd` key takes strings, and the values are the same four.
 
-`ruff` is the one tool of the four that offers no value allow-list at all, so
-`x == 100` reports here and the divergence belongs to `ruff`. The
-`# noqa: PLR2004` above is the recourse: a percent comparison carries the marker
-and the reason, and the review then stays silent on it.
+`ruff` and `solid_lints` are the two tools of the five that give no usable value
+allow-list, and each fails in its own way. `ruff` states no allow-list key at
+all, as the paragraph above measures. `solid_lints` 0.3.3 states an `allowed`
+key that its own parameter parser cannot read, so `magic-numbers-dart` keeps the
+built-in default `[-1, 0, 1]` and that file records the measurement.
+
+So `x == 100` reports here, `part * 100` reports in Dart, and the divergence
+belongs to the tool in each case. The `# noqa: PLR2004` above is the recourse
+here: a percent comparison carries the marker and the reason, and the review
+then stays silent on it. `magic-numbers-dart` states its own marker for the same
+purpose.
 
 ## Where this rule is NARROWER than the rule it supersedes
 
@@ -105,9 +112,10 @@ operation, or in a `return` is never reported — measured: `a * 100`,
 rule's primary target, so for Python this tool answers the position question and
 leaves the repetition question unanswered.
 
-That gap is real and it is the price of the trade. `mnd` reads six positions and
-`no-magic-numbers` reads three; `PLR2004` reads one, which makes this the
-narrowest of the four `magic-numbers-*` rules. A Python reviewer gets one
+That gap is real and it is the price of the trade. `mnd` reads six positions,
+`no-magic-numbers` reads three, and `no_magic_number` reads every position its
+own carve-out list does not exempt; `PLR2004` reads one, which makes this the
+narrowest of the five `magic-numbers-*` rules. A Python reviewer gets one
 comparison verdict every reviewer gets the same, in place of a repetition count
 an agent makes by eye.
 

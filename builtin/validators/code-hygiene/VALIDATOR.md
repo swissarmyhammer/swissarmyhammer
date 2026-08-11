@@ -149,10 +149,11 @@ the set before this rule used it.
 - **`dcm`** is the commercial product, and the DCM verdict below still rejects
   it.
 
-Two silent-zero traps were found and answered inside `magic-numbers-dart`:
-`--root-folder` does not move where `dart_code_linter` reads its configuration,
-and a failed `dart pub get` would leave a clean-looking run. Both are recorded
-in the rule file.
+Two silent-zero traps were found and answered inside `magic-numbers-dart`, and
+each one belongs to `dart run custom_lint`, the command that rule runs:
+`--root-folder` does not move where `dart run custom_lint` reads its
+configuration, and a failed `dart pub get` would leave a clean-looking run. Both
+are recorded in the rule file.
 
 ## Complexity and length: seven tool rules, and a probe that stays
 
@@ -196,8 +197,9 @@ function for its nesting inside the one score. Python and Swift drop it, because
 ruff names no nesting rule and swiftlint's `nesting` rule measures nested type
 and function declarations rather than nested conditions.
 
-Dart takes no tool rule; see the rejection recorded below. It keeps the
-`complexity` probe and both prompt rules.
+Dart takes no COMPLEXITY tool rule; see the rejection recorded below. It keeps
+the `complexity` probe and both prompt rules. Dart does take a magic-number tool
+rule, and the section above records it.
 
 The `complexity` probe stays. Dart, every other language, and every workspace
 whose tool doctor cannot find keep the probe and the prompt rules. That is the
