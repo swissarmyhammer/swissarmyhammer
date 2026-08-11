@@ -1185,6 +1185,87 @@ fn the_shipped_swift_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
     );
 }
 
+/// The materialized name of the `magic-numbers-dart` fail fixture.
+const DART_MAGIC_NUMBERS_FAIL_FIXTURE: &str = "magic-numbers-dart.fail.dart";
+
+/// Where the `magic-numbers-dart` fail fixture stands inside the probe
+/// repository, as the work-list holds it.
+const DART_MAGIC_NUMBERS_FIXTURE_PATH: &str = "lib/magic_numbers_dart_fail.dart";
+
+/// Every line the `magic-numbers-dart` fail fixture leaves unnamed, trimmed as
+/// the fixture writes it.
+///
+/// A line, and not a value, because `no_magic_number` reports one message —
+/// `Avoid using magic numbers.Extract them to named constants or variables.` —
+/// for every literal, so the claim never spells which one it read.
+///
+/// The last two entries are load-bearing. The `magic-numbers` prompt rule
+/// carves out "conventional values (a `<< 8`, `100` for percent)", and this
+/// rule restores neither: `solid_lints` 0.3.3 throws on any `allowed` list, so
+/// `100` reports, and no value allow-list can state a shift POSITION, so
+/// `word << 8` reports. The rule body states both, and these two entries hold
+/// the tool to the statement.
+const DART_MAGIC_NUMBERS_FAIL_LINES: &[&str] = &[
+    "bool mayDrive(int age) => age > 18;",
+    "schedule(3600);",
+    "return 65535;",
+    "int scale(int value) => value * 4096;",
+    "int pack(int word) => word << 8;",
+    "int share(int part) => part * 100;",
+];
+
+/// The `magic-numbers-dart` fail fixture, and every unnamed literal the real
+/// `custom_lint` pipeline must report inside it.
+const DART_MAGIC_NUMBERS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+    project_types: &["flutter"],
+    rule: DART_MAGIC_NUMBERS_RULE,
+    fixture: DART_MAGIC_NUMBERS_FAIL_FIXTURE,
+    path: DART_MAGIC_NUMBERS_FIXTURE_PATH,
+    support: NO_SUPPORT_FIXTURES,
+    expected: DART_MAGIC_NUMBERS_FAIL_LINES,
+    noun: "line holding an unnamed literal",
+};
+
+/// Acceptance: the shipped Dart magic-numbers tool rule reports every unnamed
+/// literal its fail fixture holds, through the real `custom_lint` pipeline.
+///
+/// A literal is held to the SOURCE LINE its finding stands on, because
+/// `no_magic_number` writes one message for every literal and never spells the
+/// value it read.
+///
+/// The count is the other half, and it is what a silent run cannot fake. The
+/// script builds a probe package and runs `dart pub get` inside it, and a run
+/// that reached neither the plugin nor the package would report zero findings
+/// and exit `0`. Holding this run to exactly these six lines states that the
+/// plugin loaded, read its configuration, and read each position.
+#[test]
+fn the_shipped_dart_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
+    verify_shipped_fail_fixture_reports_each(
+        &DART_MAGIC_NUMBERS_FAIL_PROBE,
+        |content| {
+            tool_rule_work(
+                "an unnamed literal in a comparison, a call argument, a return, \
+                 an operation, a shift, and a percent",
+                CODE_HYGIENE_SET,
+                [
+                    MAGIC_NUMBERS_PROMPT_RULE.to_string(),
+                    DART_MAGIC_NUMBERS_RULE.to_string(),
+                ],
+                [(DART_MAGIC_NUMBERS_FIXTURE_PATH, content)],
+            )
+        },
+        |verified, source| {
+            let line = verified.finding.line;
+            source
+                .get(line as usize - 1)
+                .unwrap_or_else(|| panic!("line {line} stands past the end of the fixture"))
+                .trim()
+                .to_string()
+        },
+        |reported, expected| reported == expected,
+    );
+}
+
 /// Acceptance: every shipped complexity tool rule passes its fixture pair
 /// in doctor, and supersedes exactly the gates its own tool decides.
 ///

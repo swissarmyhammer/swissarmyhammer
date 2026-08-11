@@ -42,9 +42,19 @@ can check.
 ## Where a Tool Owns This Instead
 
 A `magic-numbers-<language>` tool rule supersedes this rule for the languages a
-linter can decide: Python, TypeScript and JavaScript, Go, and Swift. Rust and
-Dart keep this rule, because no healthy Rust lint reports an unnamed literal and
-the Dart check needs a `custom_lint` package.
+linter can decide: Python, TypeScript and JavaScript, Go, Swift, and Dart.
+
+Rust keeps this rule, and a survey states why. Every lint the installed
+toolchain carries was read — 1114 lines of `clippy-driver -Whelp` on clippy
+0.1.97, the opt-in `restriction` group included — and no clippy lint reports an
+unnamed literal. The lints that name a literal read its REPRESENTATION or its
+TYPE instead: `decimal-literal-representation` asks for hex,
+`default-numeric-fallback` asks for a suffix, and `unreadable-literal` asks for
+underscores. One Rust lint does report a magic number — dylint's
+`unnamed_constant` — and it is an unpublished example crate inside the dylint
+repository that builds from a git checkout against its own pinned nightly
+toolchain with `rustc-dev`. `builtin/validators/code-hygiene/VALIDATOR.md`
+records the whole survey.
 
 A tool reports by *position* — a literal in a comparison, a switch case, an
 operation, or a call argument — where this rule reports by *repetition*. The tool

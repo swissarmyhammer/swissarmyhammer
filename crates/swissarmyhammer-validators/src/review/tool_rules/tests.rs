@@ -133,11 +133,18 @@ const GO_MAGIC_NUMBERS_RULE: &str = "magic-numbers-go";
 /// the edge of that carve-out included.
 const SWIFT_MAGIC_NUMBERS_RULE: &str = "magic-numbers-swift";
 
+/// The shipped magic-numbers tool rule for Dart. `solid_lints` 0.3.3 cannot
+/// read its own value allow-list, so `100` reports, and a second acceptance
+/// test drives its fail fixture end to end and names every line the fixture
+/// holds unnamed.
+const DART_MAGIC_NUMBERS_RULE: &str = "magic-numbers-dart";
+
 /// Every shipped magic-numbers tool rule, with the project type it serves.
 ///
-/// Rust and Dart are absent on purpose. No healthy Rust lint reports an
-/// unnamed literal, and the Dart check needs a `custom_lint` package, so
-/// both languages keep the `magic-numbers` prompt rule.
+/// Rust is absent on purpose. The one Rust lint that reports an unnamed
+/// literal is dylint's `unnamed_constant`, an unpublished example crate that
+/// is built from a git checkout against a pinned nightly toolchain with
+/// `rustc-dev`, so Rust keeps the `magic-numbers` prompt rule.
 const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
     (
         "python",
@@ -151,6 +158,7 @@ const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
     ),
     ("go", GO_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
     ("swift", SWIFT_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
+    ("flutter", DART_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
 ];
 
 /// The shipped complexity tool rule for Rust, the one the pipeline

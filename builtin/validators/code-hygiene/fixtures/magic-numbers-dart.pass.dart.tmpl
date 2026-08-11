@@ -1,0 +1,70 @@
+/// A pass fixture for the `magic-numbers-dart` tool rule.
+///
+/// It holds the same six positions the fail fixture holds, each with a name,
+/// and then every carve-out the tool keeps.
+library;
+
+/// The age at which a person may drive.
+const int drivingAge = 18;
+
+/// The interval between two runs, in seconds.
+const int runIntervalSeconds = 3600;
+
+/// The largest value the counter holds.
+const int counterLimit = 65535;
+
+/// The size of one page, in bytes.
+const int pageBytes = 4096;
+
+/// How far a packed word moves.
+const int packShift = 8;
+
+/// Answers whether the person may drive.
+bool mayDrive(int age) => age > drivingAge;
+
+/// Schedules the work, and reads the delay in seconds.
+void schedule(int seconds) {}
+
+/// Calls the work with a named argument.
+void callSite() {
+  schedule(runIntervalSeconds);
+}
+
+/// Answers the named limit.
+int limit() {
+  return counterLimit;
+}
+
+/// Scales the value by the named factor.
+int scale(int value) => value * pageBytes;
+
+/// Packs the word by the named shift.
+int pack(int word) => word << packShift;
+
+/// Reads the share. The inline suppression is the one exemption this rule
+/// takes, and it stands on the line above the literal.
+// ignore: no_magic_number
+int share(int part) => part * 100;
+
+/// Steps the value. `0`, `1` and `-1` are the value carve-out the tool keeps.
+int step(int value) => value + 1 - 1 + 0;
+
+/// Reads a default parameter value, which the declaration already names.
+void sized({int width = 24}) {}
+
+/// Answers a collection literal, which names no position.
+List<int> sizes() => [11, 12, 13];
+
+/// A size an enumeration member names.
+enum Sized {
+  /// The small size.
+  small(24),
+
+  /// The large size.
+  large(48);
+
+  const Sized(this.px);
+
+  /// The size in pixels.
+  final int px;
+}

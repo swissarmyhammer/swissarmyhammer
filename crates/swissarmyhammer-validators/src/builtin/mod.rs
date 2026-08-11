@@ -263,15 +263,16 @@ mod tests {
     ];
 
     /// The magic-number tool rules `code-hygiene` carries. Each supersedes the
-    /// `magic-numbers` prompt rule for the language it serves. Rust and Dart
-    /// have no rule here: no healthy Rust lint reports an unnamed literal, and
-    /// the Dart check needs a `custom_lint` package, so both languages keep the
-    /// prompt rule.
+    /// `magic-numbers` prompt rule for the language it serves. Rust has no rule
+    /// here: its one lint is an unpublished dylint example crate that builds
+    /// from a git checkout against a pinned nightly toolchain, so Rust keeps
+    /// the prompt rule.
     const CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES: &[&str] = &[
         "magic-numbers-python",
         "magic-numbers-typescript",
         "magic-numbers-go",
         "magic-numbers-swift",
+        "magic-numbers-dart",
     ];
 
     /// The complexity tool rules `code-hygiene` carries, each paired with the
