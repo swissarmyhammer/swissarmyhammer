@@ -135,6 +135,265 @@ fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
     );
 }
 
+/// Where the probe cargo manifest stands inside a Rust probe repository.
+const RUST_PROBE_MANIFEST_PATH: &str = "Cargo.toml";
+
+/// The probe cargo manifest, staged beside a Rust probe file that the
+/// work-list does NOT name.
+///
+/// A `workspace`-scope rule loads a project rather than a file list, so cargo
+/// breaks on the staged file only when it finds a package to lint.
+const RUST_PROBE_SUPPORT_FILES: &[(&str, &str)] =
+    &[(RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST)];
+
+/// One line of the body of a function built to run over the length gate.
+const LONG_FUNCTION_BODY_LINE: &str = "    let _ = 1;\n";
+
+/// How many body lines carry a function over `too-many-lines-threshold = 250`.
+///
+/// Clippy counts the body lines and the two brace lines alike, so 300 body
+/// lines answer 302 against the gate of 250.
+const LONG_FUNCTION_BODY_LINES: usize = 300;
+
+/// A Rust function named `name` whose body runs [`LONG_FUNCTION_BODY_LINES`]
+/// lines, with `head` written above its `pub fn` line.
+///
+/// Every shape the length gate measures runs past 250 lines, and
+/// [`ShippedStagedRows`] carries only `&'static` bytes, so a probe of that gate
+/// builds its source here rather than writing 300 lines out for each function.
+fn long_rust_function(head: &str, name: &str) -> String {
+    format!(
+        "{head}pub fn {name}() {{\n{}}}\n",
+        LONG_FUNCTION_BODY_LINE.repeat(LONG_FUNCTION_BODY_LINES)
+    )
+}
+
+/// Drives the shipped `complexity-rust` script over a probe cargo package that
+/// holds `files`, and answers each finding it reported as `path:line`, sorted.
+///
+/// The manifest is staged beside `files` because cargo lints a package and
+/// never a loose file. The findings are the SCRIPT's own, before the engine
+/// keeps only the ones in the changed files.
+fn rust_complexity_findings(files: &[(&str, &str)]) -> Vec<String> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
+    let mut staged: Vec<(&str, &str)> = vec![(RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST)];
+    staged.extend_from_slice(files);
+    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+
+    let reported = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+        .expect("the shipped Rust complexity script must judge the probe package and exit 0");
+
+    sorted_names(&reported)
+}
+
+/// The annotation the rule states for a function the length gate reports.
+const LENGTH_GATE_ANNOTATION: &str =
+    "#[expect(clippy::too_many_lines, reason = \"one line for each field\")]\n";
+
+/// The one row the annotation probe must report.
+///
+/// The bare function opens the probe library, so its `pub fn` line is row 1.
+/// The annotated function holds the same 300 body lines under it, and a run
+/// that reported it as well would name row 304.
+const RUST_LENGTH_ANNOTATION_ROWS: &[&str] = &["src/lib.rs:1"];
+
+/// Acceptance: the shipped Rust complexity tool rule drops a long function
+/// that carries the length-gate annotation, and keeps the bare one beside it,
+/// through the real clippy pipeline.
+///
+/// `function-length`, one of the two prompt rules this rule supersedes, exempts
+/// "Functions that are mostly configuration/data (e.g., builder patterns with
+/// many options)" and "Initialization functions that set many fields". Clippy
+/// counts a data line like a code line, and its configuration holds no key that
+/// tells the two apart, so the run cannot reproduce that carve-out. The
+/// annotation is the whole answer, and this test holds it.
+///
+/// Both functions hold the same 300 body lines, so the annotation is the one
+/// difference between the function that reports and the function that stays
+/// silent.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_answers_the_length_gate_annotation() {
+    let source = format!(
+        "{}{}",
+        long_rust_function("", "bare_defaults"),
+        long_rust_function(LENGTH_GATE_ANNOTATION, "annotated_defaults")
+    );
+
+    let reported = rust_complexity_findings(&[(COMPLEX_LIB_PATH, &source)]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&expected_script_findings(RUST_LENGTH_ANNOTATION_ROWS)),
+        "the annotation is the author's answer to the data carve-out, so the annotated \
+         function must stay silent and the bare one must report"
+    );
+}
+
+/// A probe crate root with nothing for the four lints to read, for a probe that
+/// measures another file of the same package.
+const EMPTY_PROBE_LIB_RS: &str = "//! A probe crate root with nothing to lint.\n";
+
+/// Where the probe integration test stands inside the probe repository.
+const RUST_PROBE_INTEGRATION_TEST_PATH: &str = "tests/it.rs";
+
+/// The attribute that marks the probe's test function at its DEFINITION, which
+/// is the mark `cognitive-complexity` states for its test carve-out.
+const RUST_TEST_ATTRIBUTE: &str = "#[test]\n";
+
+/// Both rows the test-carve-out probe must report.
+///
+/// The attribute stands on row 1, so the `pub fn` line of the test function is
+/// row 2. The helper holds the same 300 body lines under it, so its `pub fn`
+/// line is row 304.
+const RUST_TEST_CARVE_OUT_ROWS: &[&str] = &["tests/it.rs:2", "tests/it.rs:304"];
+
+/// Acceptance: the shipped Rust complexity tool rule REPORTS a long test
+/// function, and the helper beside it, through the real clippy pipeline.
+///
+/// Both prompt rules this rule supersedes exempt a test, and
+/// `cognitive-complexity` names the DEFINITION as the mark: "A complex helper
+/// named `build_request` in a file called `foo_test.rs` is still a complex
+/// function and is still listed."
+///
+/// Clippy holds no flag and no configuration key that reads `#[test]`, so the
+/// run reproduces none of that carve-out and the author answers it with the
+/// annotation. `--all-targets` is what puts the test target in front of the
+/// gates. Dropping the flag would read the TARGET, which is the mark the prompt
+/// rule forbids: it drops the helper beside the test, and it drops every
+/// `#[cfg(test)]` module as well. This test holds both rows, so a run that
+/// silenced either half answers another list.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_reports_a_test_function_and_its_helper() {
+    let source = format!(
+        "{}{}",
+        long_rust_function(RUST_TEST_ATTRIBUTE, "test_table"),
+        long_rust_function("", "build_request")
+    );
+
+    let reported = rust_complexity_findings(&[
+        (COMPLEX_LIB_PATH, EMPTY_PROBE_LIB_RS),
+        (RUST_PROBE_INTEGRATION_TEST_PATH, &source),
+    ]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&expected_script_findings(RUST_TEST_CARVE_OUT_ROWS)),
+        "`--all-targets` puts the test target in front of the gates, and no clippy key \
+         reads `#[test]`, so the test function and the helper beside it both report"
+    );
+}
+
+/// The head a generated Rust file carries in the probe: one generator writes
+/// the first line, another writes the second, and clippy reads neither.
+const RUST_GENERATED_HEAD: &str = concat!(
+    "// This file is @generated by prost-build.\n",
+    "// Code generated by tool. DO NOT EDIT.\n",
+);
+
+/// The crate root of the generated-code probe.
+///
+/// It names two module files that hold the same bytes, so the annotation on the
+/// second declaration is the one difference between them. The declaration
+/// stands in this file, which the generator never writes again.
+const RUST_GENERATED_ROOT_RS: &str = concat!(
+    "//! A probe crate root that names two generated modules.\n",
+    "pub mod bare;\n",
+    "#[expect(clippy::too_many_lines, reason = \"the generator writes this file\")]\n",
+    "pub mod annotated;\n",
+);
+
+/// Where the generated module file with no annotation stands inside the probe
+/// repository.
+const RUST_GENERATED_BARE_PATH: &str = "src/bare.rs";
+
+/// Where the generated module file whose declaration carries the annotation
+/// stands inside the probe repository.
+const RUST_GENERATED_ANNOTATED_PATH: &str = "src/annotated.rs";
+
+/// The one row the generated-code probe must report.
+///
+/// The head runs two lines, so the `pub fn` line of each module file is row 3.
+/// The annotated module holds the same bytes, and a run that reported it as
+/// well would name `src/annotated.rs:3`.
+const RUST_GENERATED_ROWS: &[&str] = &["src/bare.rs:3"];
+
+/// Acceptance: the shipped Rust complexity tool rule REPORTS a checked-in
+/// generated file, and drops the one whose module declaration carries the
+/// annotation, through the real clippy pipeline.
+///
+/// Both prompt rules this rule supersedes exempt generated code. Rust states no
+/// generated-file header convention, and clippy reads no header: the two module
+/// files here each carry the header two generators write, and the bare one
+/// still reports. A header test in the script would name the first lines of one
+/// generator and never a convention, which is why the sibling `complexity-go`
+/// makes such a test and this rule does not.
+///
+/// The author answers this carve-out at the `mod` declaration, which stands in
+/// the PARENT file and which the generator never writes again. The two module
+/// files hold the same bytes, so the annotation is the one difference between
+/// the file that reports and the file that stays silent.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_reports_a_generated_file() {
+    let generated = long_rust_function(RUST_GENERATED_HEAD, "fold_grid");
+
+    let reported = rust_complexity_findings(&[
+        (COMPLEX_LIB_PATH, RUST_GENERATED_ROOT_RS),
+        (RUST_GENERATED_BARE_PATH, &generated),
+        (RUST_GENERATED_ANNOTATED_PATH, &generated),
+    ]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&expected_script_findings(RUST_GENERATED_ROWS)),
+        "clippy reads no generated-file header, so the bare module reports; the annotation \
+         on the other module's declaration is what silences it"
+    );
+}
+
+/// A Rust library the compiler refuses: the body of `broken` answers a string
+/// where its signature states an integer.
+const RUST_COMPLEXITY_UNCOMPILABLE_SOURCE: &str = concat!(
+    "//! A probe crate the compiler refuses.\n",
+    "pub fn broken() -> i32 { \"not an integer\" }\n",
+);
+
+/// What the one error of a workspace cargo cannot lint must name: the script's
+/// own line, and cargo's own words beside it.
+const RUST_COMPLEXITY_UNCOMPILABLE_ERROR: &[&str] = &[
+    "complexity-rust: cargo clippy could not lint the workspace",
+    "could not compile",
+];
+
+/// The `complexity-rust` probe over a workspace that does not compile.
+const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_COMPLEXITY_RULE,
+        expected: RUST_COMPLEXITY_UNCOMPILABLE_ERROR,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a Rust workspace the compiler refuses",
+    path: COMPLEX_LIB_PATH,
+    source: Some(RUST_COMPLEXITY_UNCOMPILABLE_SOURCE),
+    support: RUST_PROBE_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace it
+/// cannot compile, through the real clippy pipeline.
+///
+/// `cargo clippy` lints nothing when the workspace does not compile: it writes
+/// its own errors to stderr, writes no lint message, and exits nonzero. An
+/// earlier shape of this script was one pipe that ended in `sort -u`, and a
+/// shell pipeline takes the status of its last command, so that shape answered
+/// exit 0 with no finding and the engine read the whole tree as clean. The
+/// script now writes the report to a file, tests the status, and exits 1 with a
+/// line that names the rule.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile() {
+    verify_shipped_run_breaks(&RUST_COMPLEXITY_UNCOMPILABLE_PROBE);
+}
+
 /// The materialized name of the `complexity-typescript` fail fixture.
 const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
 
