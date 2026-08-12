@@ -242,6 +242,60 @@ comments:
     - evidence: 4 files — `crates/swissarmyhammer-tools/src/mcp/server/handler.rs`, `crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs`, `crates/swissarmyhammer-tools/src/mcp/server/code_context.rs`, `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`. All 13 review findings checked off; the 16 earlier ones stay checked. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo clippy --workspace -W missing_docs` reports nothing under `mcp/server/`; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 4 pre-existing failures re-proved with the change stashed. Baseline 14098 rose by exactly the one new `Debug` test.
     - next: /review
   timestamp: 2026-08-12T01:40:14.629820+00:00
+- actor: claude-code
+  id: 01kzstx4b980j874sxtvb43v9x
+  text: |-
+    ### review — findings
+    - scope: `review sha 43f17b211~1..43f17b211` (explicit range; HEAD moves under a parallel shell, so HEAD~1..HEAD was NOT used)
+    - counts: 2 findings, 2 confirmed, 6 refuted; 8 tasks attempted, 0 failed, 0 skipped
+    - prompt cap: no file skipped — `skipped_files` was empty, so every file in the commit was read by every validator, duplication included
+    - recorded: 1 finding — crates/swissarmyhammer-tools/src/mcp/server/mod.rs:165 (empty `# Errors` doc section on `new_with_work_dir`)
+    - dropped: 1 finding — crates/swissarmyhammer-tools/src/mcp/server/mod.rs:659, pre-existing test code from 47ecbce0d3, blanket test-refactor exception
+    - prior decisions held: the engine did NOT re-raise the djb2 constant naming or the hand-written `Debug` impl; the 13 findings this commit closed are all still checked
+    - next: document the errors `new_with_work_dir()` returns, or drop the empty `# Errors` header
+  timestamp: 2026-08-12T01:55:31.817099+00:00
+- actor: claude-code
+  id: 01kzstxzmtzfb05bax7sj2pxa9
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — 4 files; closed all 13 prior findings. Documented all eight public ServerHandler methods, replaced the local slugify with the existing slugify_string, named the djb2 constants, moved a misplaced doc paragraph, added a manual Debug impl for McpServer
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14099 run, 14095 passed. Count rose 14098 to 14099 by the one new Debug test. Same 4 pre-existing failures
+    - commit: 43f17b211
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/server/mod.rs:165, an empty `# Errors` doc section on new_with_work_dir
+    - note: converging. 13 findings became 1. The run completed again — 8 attempted, 0 failed, 0 skipped, no file over the cap. Two earlier decisions held and were not re-raised: DJB2_SEED/DJB2_MULTIPLIER (5381 and 33 are djb2, not FNV-1a, so the earlier finding named the algorithm wrongly) and the hand-written Debug impl (a derive does not compile, because five field types have no Debug).
+  timestamp: 2026-08-12T01:55:59.770466+00:00
+- actor: claude-code
+  id: 01kzsvs2tqq4w7yd5cbn6kd9ns
+  text: |-
+    The one open review finding is closed. Details.
+
+    **`server/mod.rs:165` — public function returning `Result` has an empty `# Errors` doc section.** `new_with_work_dir` now documents its error contract.
+
+    I removed the cause from the whole file rather than the named line. A sweep of every `/// # Errors` header in all nine `mcp/server/` modules — the header, then a bare `///`, then a non-doc line — found the same defect a second time, on `new` at the line above `new_with_work_dir`. The review named only one of the two. Both are now written. No other file under `mcp/server/` has an empty header: `initialize`, `start_file_watching` and `reload_prompts` each carry a filled one. The sweep now reports nothing.
+
+    The card's instruction also says "empty **or missing**". Checking every public function in the file against that, `execute_tool` returns `Result<CallToolResult, ErrorData>` and had no `# Errors` section at all. It now has one. The other public functions — `library`, `set_server_port`, `list_tools`, `get_tool_registry`, `has_tool`, `set_review_factories` — return no `Result`, so no section is due.
+
+    **What the docs say, and why they read this way.** Read this before re-reporting the text as evasive.
+
+    `new_with_work_dir` holds exactly one `?`, on `Self::resolve_agent_config()`. That function returns `Result`, but both of its match arms return `Ok`: an unreadable model config is turned into the default config and a warning in the log. `initialize_git_operations` absorbs its failure the same way. So the constructor **cannot** return `Err` on any current path.
+
+    So the honest `# Errors` names the error type, names the one fallible call the `Result` comes from, and states that each step in the current path keeps its own failure. I did not write "returns an error if the chat model configuration does not resolve" — the reading a caller would expect — because that sentence is false as the code stands, and a false doc is worse than an empty header. I did not change the signature either: `Result<Self>` is public API reached from the CLI and other crates, and the finding asks for documentation, not for a new contract.
+
+    **One thing to keep for the next agent.** Do not link a private item from a public doc. My first draft wrote `[`resolve_agent_config`](Self::resolve_agent_config)`; `resolve_agent_config` is private, and rustdoc answers "public documentation for `new_with_work_dir` links to private item". Plain backticks instead. I proved the three surviving links are clean by running rustdoc, not by eye: `cargo doc -p swissarmyhammer-tools --no-deps` names `server/mod.rs` in eight warnings, all of them the module-doc links to the private submodules that commit `47ecbce0d3` introduced, and none from the text this card added.
+
+    Verification:
+    - `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `diagnostics check file` on `server/mod.rs` reports 0 errors, 0 warnings.
+    - `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped. The total holds at the 14099 baseline, so no test was lost.
+    - The 4 failures are the same `review_e2e` x3 and `review_progress_stdio_test` x1 that all four earlier steps on this card recorded. I re-proved it rather than citing it: `git stash push -- crates/swissarmyhammer-tools/src/mcp/server/mod.rs`, then those 4 tests alone, gives 4 failed 0 passed with my change absent.
+    - The change is documentation only. The diff holds three added doc blocks and no code.
+  timestamp: 2026-08-12T02:10:47.767618+00:00
+- actor: claude-code
+  id: 01kzsvsb2cvca4n4ztzedve5yz
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`. The 1 open review finding is checked off; the 29 earlier ones stay checked, 30 of 30 now. Documentation only, three added doc blocks, no code. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo doc -p swissarmyhammer-tools --no-deps` raises nothing on the added text; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped, holding the 14099 baseline. The 4 failures (review_e2e x3, review_progress_stdio_test x1) were re-proved pre-existing with the change stashed.
+    - next: /review
+  timestamp: 2026-08-12T02:10:56.204716+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -358,3 +412,11 @@ Remove the inline-on-edit diagnostics feature completely.
 - [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:295` — Public trait method call_tool lacks a doc comment. Add a doc comment describing the method's behavior and any implementation-specific details.
 - [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:437` — Public trait method get_info lacks a doc comment. Add a doc comment describing the method's behavior.
 - [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:59` — Public struct McpServer does not derive or implement Debug. Public types should implement applicable traits; Debug is essential for debugging and logging. Add Debug to the derive list: `#[derive(Clone, Debug)]`.
+
+## Review Findings (2026-08-11 20:47)
+
+> Scope: `43f17b211~1..43f17b211`. Run COMPLETE — 8 tasks attempted, 0 failed, 0 skipped. No file exceeded the per-file prompt cap; `skipped_files` was empty, so every file in the commit was read by every validator, duplication included.
+
+> One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:659` (name the hardcoded `3` minimum tool count). `git blame` puts that line in commit `47ecbce0d3`, so it is test code that already existed before the commit under review.
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:165` — Public function returning `Result` has empty `# Errors` doc section. Errors must be documented so callers know what can go wrong. Document what errors `new_with_work_dir()` can return, or remove the empty `# Errors` header and document error cases inline.

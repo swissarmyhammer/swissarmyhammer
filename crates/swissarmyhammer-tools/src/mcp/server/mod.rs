@@ -141,6 +141,11 @@ impl McpServer {
     ///
     /// # Errors
     ///
+    /// Returns the errors of
+    /// [`new_with_work_dir`](Self::new_with_work_dir), which does the
+    /// construction. The current directory adds no error of its own: if it does
+    /// not read, this call uses the temporary directory as the working
+    /// directory.
     pub async fn new(library: TemplateLibrary) -> Result<Self> {
         let work_dir = std::env::current_dir().unwrap_or_else(|_| {
             // Fallback to a temporary directory if current directory is not accessible
@@ -162,6 +167,13 @@ impl McpServer {
     ///
     /// # Errors
     ///
+    /// Returns [`SwissArmyHammerError`] if a construction step reports a
+    /// failure. No step in the current path does. A `work_dir` that is not a
+    /// git repository gives no git operations, and a chat model configuration
+    /// that does not read falls back to the default configuration. Each of the
+    /// two writes a warning in the log instead of an error. The one fallible
+    /// call is the private `resolve_agent_config`, and this `Result` carries
+    /// its error to the caller.
     pub async fn new_with_work_dir(library: TemplateLibrary, work_dir: PathBuf) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
@@ -461,6 +473,14 @@ impl McpServer {
     /// # Returns
     ///
     /// * `Result<rmcp::model::CallToolResult, rmcp::ErrorData>` - The tool execution result
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-request [`rmcp::ErrorData`] if the registry holds no
+    /// tool with this name. If the tool runs, its own error comes back
+    /// unchanged. An `arguments` value that is not a JSON object is not an
+    /// error here: it becomes an empty argument map, and the tool then reports
+    /// what it needs.
     pub async fn execute_tool(
         &self,
         name: &str,
