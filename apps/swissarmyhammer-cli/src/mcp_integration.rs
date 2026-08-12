@@ -487,7 +487,7 @@ mod tests {
             .await
             .expect("mcp server");
         let server_names: BTreeSet<String> = server
-            .get_tool_registry()
+            .tool_registry()
             .read()
             .await
             .list_tool_names()

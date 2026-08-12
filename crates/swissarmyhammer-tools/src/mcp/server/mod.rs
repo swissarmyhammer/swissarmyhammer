@@ -446,7 +446,7 @@ impl McpServer {
     /// # Returns
     ///
     /// * `Arc<RwLock<ToolRegistry>>` - Shared reference to the tool registry
-    pub fn get_tool_registry(&self) -> Arc<RwLock<ToolRegistry>> {
+    pub fn tool_registry(&self) -> Arc<RwLock<ToolRegistry>> {
         self.tool_registry.clone()
     }
 
@@ -759,14 +759,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // get_tool_registry() tests
+    // tool_registry() tests
     // ---------------------------------------------------------------
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_get_tool_registry_shares_reference() {
+    async fn test_tool_registry_shares_reference() {
         let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
-        let registry = server.get_tool_registry();
+        let registry = server.tool_registry();
         let tools = registry.read().await;
         assert!(!tools.is_empty(), "Registry should have tools");
     }

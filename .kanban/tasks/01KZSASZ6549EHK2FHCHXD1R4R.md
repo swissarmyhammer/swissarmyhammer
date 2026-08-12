@@ -296,6 +296,74 @@ comments:
     - evidence: 1 file — `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`. The 1 open review finding is checked off; the 29 earlier ones stay checked, 30 of 30 now. Documentation only, three added doc blocks, no code. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo doc -p swissarmyhammer-tools --no-deps` raises nothing on the added text; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped, holding the 14099 baseline. The 4 failures (review_e2e x3, review_progress_stdio_test x1) were re-proved pre-existing with the change stashed.
     - next: /review
   timestamp: 2026-08-12T02:10:56.204716+00:00
+- actor: claude-code
+  id: 01kzswbasc0hpbwe2vft0s2vg1
+  text: |-
+    ### review — findings
+    - evidence: `review sha 5e7531c1b~1..5e7531c1b`. counts: 2 findings, 2 confirmed, 3 refuted, 8 attempted, 0 failed, 0 skipped. `skipped_files` empty — no file went over the per-file prompt cap. 1 finding recorded: crates/swissarmyhammer-tools/src/mcp/server/mod.rs:449 (rename `get_tool_registry()` to `tool_registry()`). 1 finding dropped under the blanket test-refactor exception: crates/swissarmyhammer-tools/src/mcp/server/mod.rs:637, test code from commit 47ecbce0d3.
+    - next: Rename the getter across the workspace, then review again. The task stays in `review`.
+  timestamp: 2026-08-12T02:20:45.740445+00:00
+- actor: claude-code
+  id: 01kzswcbbwj9r2zas5bm7p22s7
+  text: |-
+    ### finish iteration 5 — findings
+    - implement: changed — 1 file; closed the last finding. Filled in the `# Errors` sections on McpServer::new, new_with_work_dir, and execute_tool. The sweep found the same defect on `new`, which the review named only once
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14099 run, 14095 passed, count held. Same 4 pre-existing failures
+    - commit: 5e7531c1b
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/server/mod.rs:449, get_tool_registry() uses the get_ prefix on a getter
+    - note: the run completed again — 8 attempted, 0 failed, 0 skipped, no file over the cap. The documentation findings are shut and did not come back. The new finding is a rename on public API, so every call site must change.
+  timestamp: 2026-08-12T02:21:19.100715+00:00
+- actor: claude-code
+  id: 01kzswjd6hm9qhebzd04adyxv4
+  text: |-
+    Picked up the one open finding (`server/mod.rs:449`, `get_tool_registry()` uses the `get_` prefix). Research before the edit:
+
+    - The rule behind the finding is `rust/api-design`: "No `get_` prefix on getters. Use `field_name()`, `field_mut()`." The finding names `library()` in the same impl block as the pattern to match, and `library()` is a method whose name equals its own field. Rust keeps methods and fields in separate namespaces, so `fn tool_registry()` beside the field `tool_registry` compiles, exactly as `library()` already does.
+    - Whole-file sweep for the same cause: `get_tool_registry` is the ONLY `get_`-prefixed function in `mcp/server/mod.rs`. The public functions of the file are `new`, `new_with_work_dir`, `library`, `set_server_port`, `initialize`, `list_tools`, `get_tool_registry`, `has_tool`, `execute_tool`, `set_review_factories`. `McpServer` is the file's only public type.
+    - The one other `fn get_` under `mcp/server/` is `get_info` in `handler.rs`. That is a required method of the `rmcp::ServerHandler` trait, so its name is fixed by the external contract, and it stands in a different file than the finding.
+    - Blast radius across the whole workspace, by grep over every tracked file and by `get blastradius` on the symbol: exactly two call sites outside the definition — `mcp/server/mod.rs::tests::test_get_tool_registry_shares_reference`, and `apps/swissarmyhammer-cli/src/mcp_integration.rs:490` (a test that compares the CLI registry against the server registry).
+    - `get_tool_registry_arc` in `apps/swissarmyhammer-cli/src/mcp_integration.rs` is a DIFFERENT method, on `CliToolContext`, in a different file and crate. The finding's cause is confined to `mcp/server/mod.rs`, so that method is out of this card's scope.
+  timestamp: 2026-08-12T02:24:37.585125+00:00
+- actor: claude-code
+  id: 01kzsx4ahq8hze6gyt9aerfsek
+  text: |-
+    The one open review finding is closed.
+
+    **`server/mod.rs:449` — the public method `get_tool_registry()` uses the `get_` prefix on a getter.** It is now `tool_registry()`, the name the finding asks for and the shape `library()` already has in the same impl block. The rule behind it is `rust/api-design`: "No `get_` prefix on getters. Use `field_name()`, `field_mut()`."
+
+    **The whole-file sweep, not the named line.** `get_tool_registry` was the ONLY `get_`-prefixed function in `mcp/server/mod.rs`. I proved that with the tool rather than by eye: `rg 'fn get_'` over `mcp/server/` reports two hits, and the second is `get_info` in `handler.rs` — a required method of the `rmcp::ServerHandler` trait, so its name is fixed by an external contract and it stands in a different file than the finding. `McpServer` is the only public type in `mod.rs`, so the file's whole public surface is the ten functions of its impl block, and none of the other nine carries the prefix.
+
+    **Every call site, found by tool and not by guess.** `get blastradius` on the symbol, plus a grep over every tracked `.rs` and `.md` file of the workspace, name exactly two callers:
+    - `mcp/server/mod.rs::tests::test_get_tool_registry_shares_reference`, now `test_tool_registry_shares_reference`, with its section header comment renamed to match.
+    - `apps/swissarmyhammer-cli/src/mcp_integration.rs:490`, inside `test_cli_tool_registry_matches_server_registry`, which builds an `McpServer` and compares its registry against the CLI's.
+
+    Both are changed. `rg 'get_tool_registry\b'` over the tree now reports nothing outside this card's own history on the board.
+
+    `get_tool_registry_arc` in `apps/swissarmyhammer-cli/src/mcp_integration.rs` is left alone on purpose, and this is worth recording so it is not re-raised as a miss. It is a DIFFERENT method, on `CliToolContext`, in a different file and a different crate. The finding's cause is confined to `mcp/server/mod.rs`, which is the file the whole-file sweep covers.
+
+    **Written test-first.** The rename is compiler-enforced, so RED is a compile error and I proved it rather than assuming it. I renamed the test's call first, with the method still named `get_tool_registry`, and `cargo check -p swissarmyhammer-tools --all-targets` answered
+
+        error[E0599]: no method named `tool_registry` found for struct `mcp::server::McpServer`
+           --> crates/swissarmyhammer-tools/src/mcp/server/mod.rs:769:31
+            |
+        769 |         let registry = server.tool_registry();
+            |                               ^^^^^^^^^^^^^ field, not a method
+
+    Then I renamed the method, and both tests pass. Note what that error says: the struct already carries a FIELD named `tool_registry`. A method of the same name is legal beside it — Rust keeps methods and fields in separate namespaces — and `library()` beside the `library` field is the same shape already living in this impl block. The test at `mod.rs:559` reads the field directly (`server.tool_registry.write()`), and it still compiles and passes, so the two spellings coexist.
+
+    Verification:
+    - `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped. The total holds the 14099 baseline exactly: a rename neither adds nor loses a test.
+    - The 4 failures are the same `review_e2e` x3 and `review_progress_stdio_test` x1 that all five earlier steps on this card recorded. I re-proved it rather than citing it: `git stash push` of the two changed source files, then those 4 tests alone, gives 4 failed 0 passed with my change absent. The stash popped clean and the diff is intact.
+    - The diff is 4 lines in 2 files — the method, the test name, the test's call, and the caller in the CLI. No behaviour changed.
+  timestamp: 2026-08-12T02:34:24.695172+00:00
+- actor: claude-code
+  id: 01kzsx4hdebp6dgvwnx7c51pg3
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`, `apps/swissarmyhammer-cli/src/mcp_integration.rs`. The 1 open review finding is checked off; the 30 earlier ones stay checked, 31 of 31 now, progress 1.0. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped, holding the 14099 baseline exactly. RED proved first with `error[E0599]: no method named tool_registry`, GREEN after. The 4 failures (review_e2e x3, review_progress_stdio_test x1) were re-proved pre-existing with the change stashed.
+    - next: /review
+  timestamp: 2026-08-12T02:34:31.726903+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -420,3 +488,11 @@ Remove the inline-on-edit diagnostics feature completely.
 > One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:659` (name the hardcoded `3` minimum tool count). `git blame` puts that line in commit `47ecbce0d3`, so it is test code that already existed before the commit under review.
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:165` — Public function returning `Result` has empty `# Errors` doc section. Errors must be documented so callers know what can go wrong. Document what errors `new_with_work_dir()` can return, or remove the empty `# Errors` header and document error cases inline.
+
+## Review Findings (2026-08-11 21:16)
+
+> Scope: `5e7531c1b~1..5e7531c1b`. Run COMPLETE — 8 tasks attempted, 0 failed, 0 skipped. No file exceeded the per-file prompt cap; `skipped_files` was empty, so every file in the commit was read by every validator, duplication included.
+
+> One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:637` (name the hardcoded `9090` port constant `TEST_PORT_SECONDARY`). `git blame` puts that line in commit `47ecbce0d3`, so it is test code that already existed before the commit under review.
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:449` — The public method `get_tool_registry()` uses the `get_` prefix on a getter, violating Rust API design conventions. Getters should omit the prefix and be named after the field or concept they expose. Rename `get_tool_registry()` to `tool_registry()` to align with Rust API conventions and match the pattern used by `library()` in the same impl block.
