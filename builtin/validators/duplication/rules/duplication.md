@@ -47,6 +47,23 @@ the changed-set comparison). Confirm and report each real duplicate:
   duplication is resolved — do not flag the shim. Copies that contain no logic
   cannot drift.
 
+  **Judge the body. The probe's measurement cannot overturn this carve-out.**
+  The probe measures the whole chunk, so a trait- or interface-required pair
+  carries its signature and its doc comment into the token count and the
+  similarity score. The declaration forces those bytes, and no edit removes
+  them while the contract stands. A high count and a high similarity over such
+  a pair state that the language forced the shape; they never make the pair a
+  finding. Read the two bodies. If each is a single call forwarding to a shared
+  helper, there is nothing to report, whatever the row says.
+
+  Measured on 2026-08-12: `init` and `deinit` in
+  `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs` are 303 and 304
+  bytes and differ by 2 lines — the name and one enum variant. Both bodies are
+  one call to the shared `run_lifecycle`. `Initializable`
+  (`crates/swissarmyhammer-common/src/lifecycle.rs`) declares both with the
+  same signature, so stopping the report means deleting a trait method. This
+  pair is the shape of this carve-out, not an exception to it.
+
 The language-specific rules in this validator give concrete per-language shapes
 of forced boilerplate. When a file in scope is in one of those languages, apply
 that rule's carve-outs alongside this rule before reporting a finding in it.
