@@ -16,9 +16,7 @@ async fn create_test_context_with_git() -> Result<(tempfile::TempDir, CliToolCon
     let temp = tempfile::TempDir::new()?;
     let temp_path = temp.path().to_path_buf();
     setup_git_repo(&temp_path)?;
-    let context = CliToolContext::new_isolated(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let context = CliToolContext::new_isolated(&temp_path).await?;
 
     // Initialize kanban board (required before adding tasks)
     let init_args = context.create_arguments(vec![
@@ -37,9 +35,7 @@ async fn create_test_context() -> Result<(tempfile::TempDir, CliToolContext)> {
     let temp = tempfile::TempDir::new()?;
     let temp_path = temp.path().to_path_buf();
     setup_git_repo(&temp_path)?;
-    let context = CliToolContext::new_isolated(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let context = CliToolContext::new_isolated(&temp_path).await?;
     Ok((temp, context))
 }
 
@@ -148,9 +144,7 @@ async fn test_argument_passing_and_validation() -> Result<()> {
 pub fn test_function() -> String { "test".to_string() }"#,
     )?;
 
-    let context = CliToolContext::new_isolated(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let context = CliToolContext::new_isolated(&temp_path).await?;
 
     // Test correct argument types
     let valid_args = create_kanban_add_task_args(&context, "String Title", "String content");
@@ -211,9 +205,7 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 
     // Create multiple tasks concurrently
     for i in 0..3 {
-        let context_clone = CliToolContext::new_isolated(&temp_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let context_clone = CliToolContext::new_isolated(&temp_path).await?;
         let handle = tokio::spawn(async move {
             let args = create_kanban_add_task_args(
                 &context_clone,
@@ -276,9 +268,7 @@ async fn test_tool_context_configurations() -> Result<()> {
     let temp_path = _temp.path().to_path_buf();
 
     // Test with another context using the same directory
-    let context2 = CliToolContext::new_isolated(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let context2 = CliToolContext::new_isolated(&temp_path).await?;
 
     // Both should work independently
     let args1 = create_kanban_add_task_args(&context1, "Context 1 Task", "From context 1");

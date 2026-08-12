@@ -364,6 +364,48 @@ comments:
     - evidence: 2 files — `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`, `apps/swissarmyhammer-cli/src/mcp_integration.rs`. The 1 open review finding is checked off; the 30 earlier ones stay checked, 31 of 31 now, progress 1.0. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 0 skipped, holding the 14099 baseline exactly. RED proved first with `error[E0599]: no method named tool_registry`, GREEN after. The 4 failures (review_e2e x3, review_progress_stdio_test x1) were re-proved pre-existing with the change stashed.
     - next: /review
   timestamp: 2026-08-12T02:34:31.726903+00:00
+- actor: claude-code
+  id: 01kzsxvjxkmwcy7mcha4k3fefj
+  text: |
+    ### review — findings
+    - evidence: 4 findings — apps/swissarmyhammer-cli/src/mcp_integration.rs:52, :91, :210, :210. Scope `c0b50a67e~1..c0b50a67e`. Run COMPLETE: 8 tasks attempted, 0 failed, 0 skipped. `skipped_files` empty — no file exceeded the per-file prompt cap, so every file in the commit was read by every validator, duplication included.
+    - note: The commit closed the prior finding — `McpServer::get_tool_registry()` is now `tool_registry()`. The new findings are on the CLI call site file the rename touched. Two of them name the same method, `get_tool_registry_arc()` at line 210, reported by two validators.
+    - dropped: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:637` (name the hardcoded `9090` port) under the skill's blanket test-refactor exception. `git blame` puts that line in commit `47ecbce0d3` — pre-existing test code, not touched by this commit. Same line was dropped in the 21:16 pass.
+    - next: Change both `Box<dyn std::error::Error>` return types in `mcp_integration.rs` to `anyhow::Result<Self>` with `.context()`, and rename `get_tool_registry_arc()` to `tool_registry_arc()` with its call sites. Task stays in `review`.
+  timestamp: 2026-08-12T02:47:06.931836+00:00
+- actor: claude-code
+  id: 01kzsxwpjrd3wh3namecbqk3s1
+  text: |-
+    ### finish iteration 6 — findings
+    - implement: changed — 2 files; closed the get_tool_registry finding. Renamed McpServer::get_tool_registry() to tool_registry() and updated both call sites, found with get blastradius
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14099 run, 14095 passed, count held. Same 4 pre-existing failures
+    - commit: c0b50a67e
+    - review: findings — apps/swissarmyhammer-cli/src/mcp_integration.rs:52, :91, :210 (reported twice by two validators)
+    - note: watch this pattern. The rename touched one CLI call-site file, which pulled that file into review scope, and all 4 new findings are pre-existing defects in it: two Box<dyn Error> returns that should be anyhow::Result, and get_tool_registry_arc keeping the get_ prefix. Each round is small and the count falls, but the scope walks outward into files the task only touched by accident. If iteration 7 opens yet another new file, stop and ask a human whether to keep widening.
+  timestamp: 2026-08-12T02:47:43.448656+00:00
+- actor: claude-code
+  id: 01kzsycg9x9cb5n00pk4rwa9nn
+  text: |-
+    Picked up the card for the 4 open review findings, all in `apps/swissarmyhammer-cli/src/mcp_integration.rs`.
+
+    Research:
+    - The `Box<dyn std::error::Error>` cause appears 5 times in that file, not 2: `new`, `new_isolated`, `new_with_work_dir`, `initialize_mcp_server`, and `response_formatting::extract_json_data`. All 5 are now `anyhow::Result<T>` with `.context(...)` on every `?`.
+    - `get_tool_registry_arc` is the only `get_`-prefixed item DECLARED in the file. `get_cli_tools` / `get_validation_stats` are called there but declared in `swissarmyhammer-tools` and `dynamic_cli`, so they belong to those files' own cause.
+    - Call sites of `get_tool_registry_arc`, found with grep + code_context blast radius: 13 total. main.rs (8), cli_executor.rs (1), validate.rs (1), mcp_integration.rs test (1), tests/integration/cli_mcp_integration.rs (1), plus the declaration. All renamed to `tool_registry_arc`.
+    - Callers of the changed error types all keep working: `unwrap_or_exit` takes `E: Display`, `CliExecutor::new` maps through `to_string()`, and the integration tests `.expect(...)`. The now-redundant `map_err(|e| anyhow::anyhow!("{}", e))` in `comprehensive_cli_mcp_integrations.rs` (5 sites) became a bare `?`.
+  timestamp: 2026-08-12T02:56:21.309415+00:00
+- actor: claude-code
+  id: 01kzsyw2kcafdmexvp97demt9j
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — apps/swissarmyhammer-cli/src/mcp_integration.rs, apps/swissarmyhammer-cli/src/main.rs, apps/swissarmyhammer-cli/src/cli_executor.rs, apps/swissarmyhammer-cli/src/validate.rs, apps/swissarmyhammer-cli/tests/integration/cli_mcp_integration.rs, apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs
+    - `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` exit 0.
+    - `cargo nextest run --workspace --no-fail-fast`: 14099 tests run, 14095 passed, 4 failed, 0 skipped. Baseline 14099 held.
+    - `cargo nextest run -p swissarmyhammer-cli`: 707/707 passed.
+    - The 4 failures are the known pre-existing ones on `^bh5ncd0` (three `review_e2e` tests plus `review_progress_stdio_test`). They live in `crates/swissarmyhammer-tools`, which has NO dependency on `swissarmyhammer-cli` (checked its Cargo.toml), so this change cannot reach them.
+    - All 4 open review findings are now `- [x]`; the 31 earlier ones were untouched. Card progress is 1.0.
+    - next: /review
+  timestamp: 2026-08-12T03:04:51.564993+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -496,3 +538,14 @@ Remove the inline-on-edit diagnostics feature completely.
 > One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:637` (name the hardcoded `9090` port constant `TEST_PORT_SECONDARY`). `git blame` puts that line in commit `47ecbce0d3`, so it is test code that already existed before the commit under review.
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:449` — The public method `get_tool_registry()` uses the `get_` prefix on a getter, violating Rust API design conventions. Getters should omit the prefix and be named after the field or concept they expose. Rename `get_tool_registry()` to `tool_registry()` to align with Rust API conventions and match the pattern used by `library()` in the same impl block.
+
+## Review Findings (2026-08-11 21:40)
+
+> Scope: `c0b50a67e~1..c0b50a67e`. Run COMPLETE — 8 tasks attempted, 0 failed, 0 skipped. No file exceeded the per-file prompt cap; `skipped_files` was empty, so every file in the commit was read by every validator, duplication included.
+
+> One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:637` (name the hardcoded `9090` port constant). `git blame` puts that line in commit `47ecbce0d3`, so it is test code that already existed before the commit under review. This is the same pre-existing line that was dropped in the 21:16 pass.
+
+- [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:52` — Application code returns `Result<Self, Box<dyn std::error::Error>>` instead of `anyhow::Result<Self>`. The rule requires applications to use `anyhow::Result<T>` for error handling; `Box<dyn Error>` prevents callers from matching specific failures and is explicitly forbidden from public APIs. Change return type to `anyhow::Result<Self>` and add `.context()` annotations to all `?` operations on I/O or external calls (e.g., `std::env::current_dir().context("failed to get current directory")?`).
+- [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:91` — Application code returns `Result<Self, Box<dyn std::error::Error>>` instead of `anyhow::Result<Self>`. The rule requires applications to use `anyhow::Result<T>` for error handling. Change return type to `anyhow::Result<Self>` and add `.context()` to the `initialize_mcp_server()` call (e.g., `.context("failed to initialize MCP server")`).
+- [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:210` — Method name uses `get_` prefix, which deviates from the established project pattern of omitting `get_` for simple getter methods. The `McpServer` type establishes the convention with `library()` and `tool_registry()` methods (both without `get_` prefix), which this codebase should follow uniformly. Rename `get_tool_registry_arc()` to `tool_registry_arc()` to match the established pattern in the codebase.
+- [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:210` — Method name `get_tool_registry_arc()` has `get_` prefix, which violates Rust API guidelines — getters should not use this prefix. Rename to `tool_registry_arc()` to match the style of similarly paired methods (e.g. `tool_registry()` on McpServer). Rename `pub fn get_tool_registry_arc(&self)` to `pub fn tool_registry_arc(&self)` and update call sites.

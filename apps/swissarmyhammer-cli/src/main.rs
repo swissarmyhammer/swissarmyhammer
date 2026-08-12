@@ -207,7 +207,7 @@ async fn display_verbose_validation_report(
         return;
     }
 
-    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let tool_registry = cli_tool_context.tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
     let validation_stats = cli_builder.get_validation_stats();
 
@@ -406,7 +406,7 @@ async fn main() {
     // Initialize tool context and registry for the dynamic CLI
     let cli_tool_context = initialize_tool_context().await;
 
-    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let tool_registry = cli_tool_context.tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
 
     // Build CLI and parse arguments
@@ -518,7 +518,7 @@ fn display_fix_suggestions() {
 }
 
 async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: bool) -> i32 {
-    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let tool_registry = cli_tool_context.tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry.clone());
 
     println!("🔍 Validating MCP tool schemas for CLI compatibility...\n");
@@ -713,7 +713,7 @@ async fn lookup_tool_by_cli_name(
     category: &str,
     tool_name: &str,
 ) -> Result<String, String> {
-    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry_arc = cli_tool_context.tool_registry_arc();
     let registry = registry_arc.read().await;
 
     // For the unified "tool" category, tool_name is already the full MCP tool name
@@ -813,7 +813,7 @@ async fn tool_property<T>(
     full_tool_name: &str,
     read: impl FnOnce(&dyn swissarmyhammer_tools::mcp::tool_registry::McpTool) -> T,
 ) -> Result<T, String> {
-    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry_arc = cli_tool_context.tool_registry_arc();
     let registry = registry_arc.read().await;
     let tool = registry
         .get_tool(full_tool_name)
@@ -994,7 +994,7 @@ async fn convert_matches_to_arguments(
     let mut arguments = serde_json::Map::new();
 
     // Get the tool to access its schema
-    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry_arc = cli_tool_context.tool_registry_arc();
     let registry = registry_arc.read().await;
     let tool = registry
         .get_tool(tool_name)
@@ -1195,7 +1195,7 @@ fn handle_completion_command(
     matches: &clap::ArgMatches,
     cli_tool_context: &Arc<CliToolContext>,
 ) -> i32 {
-    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let tool_registry = cli_tool_context.tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
     let cli = cli_builder.build_cli();
 
@@ -1458,7 +1458,7 @@ mod tests_relax_required_tool_args {
         let context = CliToolContext::new_isolated(temp.path())
             .await
             .expect("cli tool context");
-        let real_cli = CliBuilder::new(context.get_tool_registry_arc()).build_cli_with_warnings();
+        let real_cli = CliBuilder::new(context.tool_registry_arc()).build_cli_with_warnings();
 
         assert!(
             real_cli
