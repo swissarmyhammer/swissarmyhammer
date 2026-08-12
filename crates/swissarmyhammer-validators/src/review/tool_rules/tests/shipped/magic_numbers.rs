@@ -17,6 +17,7 @@ use super::*;
 /// fail. [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
 /// contract, including what a machine without the tool proves.
 #[test]
+#[serial_test::serial(cwd)]
 fn every_shipped_magic_numbers_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(SHIPPED_MAGIC_NUMBERS_RULES, MAGIC_NUMBERS_PROMPT_RULE);
 }

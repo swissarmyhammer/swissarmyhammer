@@ -1266,6 +1266,15 @@ const SWIFT_MANIFEST: &str = "Package.swift";
 /// The fixture runs are unaffected: doctor materializes each pair into its
 /// own scratch directory, `Package.swift.tmpl` included, and runs the script
 /// there.
+///
+/// The working directory is one value that every thread of the test binary
+/// shares. [`CurrentDirGuard`] holds a global lock, so no two guards stand at
+/// the same time. That lock does not cover what a test does BEFORE it takes
+/// the guard: a test that reads the working directory first reads the value
+/// another test set. Each test that calls this helper therefore stands under
+/// `#[serial_test::serial(cwd)]`. That key holds the whole test body apart
+/// from every other test in the binary that moves the working directory —
+/// the tests of `validators::loader` and of `review::drive` already use it.
 fn swift_package_root(loader: &ValidatorLoader) -> (CurrentDirGuard, tempfile::TempDir) {
     let manifest = shipped_asset(loader, &FIXTURE_TEMPLATE_ASSET, SWIFT_MANIFEST);
     let root = tempfile::tempdir().expect("temp dir");
@@ -1283,7 +1292,11 @@ fn swift_package_root(loader: &ValidatorLoader) -> (CurrentDirGuard, tempfile::T
 /// root is still the process working directory, and `getcwd` then fails for
 /// the whole window until the guard runs. The guard therefore has to be the
 /// first element.
+///
+/// The test reads the working directory before it takes the guard, so it
+/// stands under the `cwd` key [`swift_package_root`] states.
 #[test]
+#[serial_test::serial(cwd)]
 fn the_swift_package_root_restores_the_directory_before_it_removes_it() {
     let loader = builtin_loader();
     let outside = std::env::current_dir().expect("a working directory before the guard");
@@ -1333,6 +1346,9 @@ fn the_swift_package_root_restores_the_directory_before_it_removes_it() {
 /// `rule_kind` names the group in the failure messages — the prompt rule the
 /// group is named for, whether the group replaces that rule or runs beside
 /// it — so a failing run says which roster broke.
+///
+/// Each caller stands under `#[serial_test::serial(cwd)]`, because
+/// [`swift_package_root`] moves the process working directory.
 fn verify_shipped_tool_rules_pass_fixtures(rules: &[(&str, &str, &[&str])], rule_kind: &str) {
     let loader = builtin_loader();
     let _package_root = swift_package_root(&loader);

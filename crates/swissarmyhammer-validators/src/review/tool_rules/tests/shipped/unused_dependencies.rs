@@ -17,6 +17,7 @@ use super::*;
 /// the trailing comment the entry carries — makes the pair fail and takes
 /// the rule out of the review.
 #[test]
+#[serial_test::serial(cwd)]
 fn every_shipped_unused_dependency_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(
         SHIPPED_UNUSED_DEPENDENCY_RULES,
@@ -209,10 +210,12 @@ const MACHETE_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// exits 127: the pipe shape wrote 0 findings and exited 0; the shipped shape
 /// writes no finding, that line, and exit 1.
 ///
-/// This is the one test of the module that writes process state, so it is the
-/// one that stands under `#[serial_test::serial(env)]`. The two tests above it
-/// read the tool a stubbed `PATH` hands them, because that stub breaks only for
-/// a run whose working directory holds the marker file this probe stages.
+/// This is the one test of the module that writes the process environment, so
+/// it is the one that stands under `#[serial_test::serial(env)]`. The two tests
+/// above it read the tool a stubbed `PATH` hands them, because that stub breaks
+/// only for a run whose working directory holds the marker file this probe
+/// stages. The roster test at the head of the module writes the working
+/// directory instead, so it stands under the `cwd` key.
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]

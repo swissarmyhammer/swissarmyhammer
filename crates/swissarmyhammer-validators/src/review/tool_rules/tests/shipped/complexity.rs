@@ -20,6 +20,7 @@ use super::*;
 /// because ruff decides one gate per lint; naming both from either rule
 /// would silence a gate no tool measures.
 #[test]
+#[serial_test::serial(cwd)]
 fn every_shipped_complexity_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(
         SHIPPED_COMPLEXITY_RULES,
