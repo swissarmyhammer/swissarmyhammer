@@ -122,6 +122,19 @@ pub(super) fn format_call_result_text(result: &rmcp::model::CallToolResult) -> (
 }
 
 impl ServerHandler for McpServer {
+    /// Complete the MCP handshake and start everything the connection needs.
+    ///
+    /// Logs the client name and version against the session id, installs this
+    /// connection's peer on the process-wide diagnostics resource, starts the
+    /// prompt-directory watcher, ensures the kanban actor for the client,
+    /// applies the serve-time native-tool deny, starts code-context background
+    /// work, and runs `start()` on every registered tool. Answers the server's
+    /// capabilities, identity, and health-aware instructions.
+    ///
+    /// # Errors
+    ///
+    /// Returns no error today. Each step above is best-effort and logs its own
+    /// failure rather than refusing the connection.
     async fn initialize(
         &self,
         request: InitializeRequestParams,
@@ -188,6 +201,18 @@ impl ServerHandler for McpServer {
             .with_instructions(build_instructions_with_health(self.work_dir.as_deref())))
     }
 
+    /// Answer the tool list this client is allowed to see.
+    ///
+    /// Reloads `tools.yaml` first when it changed on disk, then composes the
+    /// advertised set: the full server filters by the connecting client's
+    /// [`Host`] and each tool's category, while a pre-scoped server
+    /// (`compose_per_client == false`) serves its registry verbatim. The whole
+    /// set comes back in one page — no cursor is issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns no error. An unreadable `tools.yaml` leaves the registry as it
+    /// was.
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -240,6 +265,14 @@ impl ServerHandler for McpServer {
         })
     }
 
+    /// List the resources this server publishes.
+    ///
+    /// The one entry is the aggregate diagnostics resource. The whole list comes
+    /// back in one page — no cursor is issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns no error.
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -248,6 +281,14 @@ impl ServerHandler for McpServer {
         Ok(crate::mcp::diagnostics_resource::diagnostics_resources().list())
     }
 
+    /// Read one published resource by uri.
+    ///
+    /// Answers the current contents of the aggregate diagnostics resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-not-found error when no published resource carries the
+    /// requested uri.
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
@@ -264,6 +305,16 @@ impl ServerHandler for McpServer {
             })
     }
 
+    /// Acknowledge a subscription to the diagnostics resource.
+    ///
+    /// The resource pushes to the connected peer on its own, so there is no
+    /// per-uri subscriber set to record. The acknowledgement only checks that
+    /// the uri is one this server publishes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-not-found error for any uri other than the
+    /// diagnostics resource.
     async fn subscribe(
         &self,
         request: SubscribeRequestParams,
@@ -283,6 +334,14 @@ impl ServerHandler for McpServer {
         }
     }
 
+    /// Acknowledge an unsubscribe.
+    ///
+    /// Symmetric with `subscribe`: nothing per-uri was recorded, so nothing is
+    /// torn down and every uri is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns no error.
     async fn unsubscribe(
         &self,
         _request: UnsubscribeRequestParams,
@@ -292,6 +351,20 @@ impl ServerHandler for McpServer {
         Ok(())
     }
 
+    /// Dispatch one tool call, and log its arguments, result, and timing.
+    ///
+    /// Looks the tool up in the registry, builds a tool context for this peer —
+    /// carrying the JSON-RPC `_meta.progressToken` when the client sent one, so
+    /// a long-running tool can emit `notifications/progress` — and runs the
+    /// tool. The call rides an info span naming the tool, the dispatched `op`,
+    /// and the session, and the completion line breaks the wall clock into its
+    /// parse, dispatch, handler and response phases. Arguments and result text
+    /// are logged in full, never truncated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-request error when no registered tool carries the
+    /// requested name. The tool's own error passes through unchanged.
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -434,6 +507,11 @@ impl ServerHandler for McpServer {
         .await
     }
 
+    /// Answer the server's capabilities, identity, and instructions.
+    ///
+    /// A transport asks for this description outside the `initialize`
+    /// handshake. The content is the same one `initialize` answers, including
+    /// the health line the instructions carry.
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(create_server_capabilities())
             .with_server_info(create_server_implementation())

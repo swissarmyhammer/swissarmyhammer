@@ -6,6 +6,7 @@
 
 use super::McpServer;
 use std::path::PathBuf;
+use swissarmyhammer_templating::filters::slugify_string;
 
 impl McpServer {
     /// Ensure an agent actor exists for the connecting MCP client.
@@ -28,7 +29,7 @@ impl McpServer {
             return;
         }
 
-        let actor_id = slugify(client_name);
+        let actor_id = slugify_string(client_name);
         let color = agent_deterministic_color(&actor_id);
 
         // No stored avatar — frontend renders initials as fallback
@@ -55,34 +56,27 @@ impl McpServer {
     }
 }
 
-/// Slugify a name into a valid actor ID (lowercase, hyphens for spaces/special chars).
-fn slugify(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 /// Curated palette for agent actors (cooler tones to distinguish from human actors).
 const AGENT_COLORS: &[&str] = &[
     "5a67d8", "3182ce", "319795", "2f855a", "805ad5", "6b46c1", "2b6cb0", "2c7a7b", "4c51bf",
     "38a169",
 ];
 
+/// The DJB2 starting hash. Part of the published algorithm, not a tunable.
+const DJB2_SEED: u64 = 5381;
+
+/// The DJB2 per-byte multiplier. Part of the published algorithm, not a tunable.
+const DJB2_MULTIPLIER: u64 = 33;
+
 /// Derive a deterministic hex color for an agent actor.
+///
+/// The actor id is folded with djb2 — a short, stable, non-cryptographic string
+/// hash — and the digest picks one entry of [`AGENT_COLORS`]. The same client
+/// name therefore always arrives at the same colour.
 fn agent_deterministic_color(id: &str) -> String {
-    let hash: u64 = id
-        .bytes()
-        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    let hash: u64 = id.bytes().fold(DJB2_SEED, |h, b| {
+        h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(b as u64)
+    });
     AGENT_COLORS[(hash as usize) % AGENT_COLORS.len()].to_string()
 }
 
@@ -90,13 +84,16 @@ fn agent_deterministic_color(id: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The actor id comes from the shared `slugify_string`. These are the client
+    /// names the board must keep answering the same id for, so the contract this
+    /// module leans on is pinned here.
     #[test]
-    fn test_slugify() {
-        assert_eq!(slugify("Claude Code"), "claude-code");
-        assert_eq!(slugify("my_agent"), "my-agent");
-        assert_eq!(slugify("  spaces  "), "spaces");
-        assert_eq!(slugify("UPPER"), "upper");
-        assert_eq!(slugify("a--b"), "a-b");
+    fn test_slugify_string_derives_the_actor_id() {
+        assert_eq!(slugify_string("Claude Code"), "claude-code");
+        assert_eq!(slugify_string("my_agent"), "my-agent");
+        assert_eq!(slugify_string("  spaces  "), "spaces");
+        assert_eq!(slugify_string("UPPER"), "upper");
+        assert_eq!(slugify_string("a--b"), "a-b");
     }
 
     #[test]

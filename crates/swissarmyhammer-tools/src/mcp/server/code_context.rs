@@ -228,12 +228,6 @@ impl McpServer {
         })
     }
 
-    /// Followers poll every 5s trying to become leader. Once promoted (or if
-    /// already leader), the loop exits permanently.
-    ///
-    /// One-shot promotion: if leadership is lost after promotion there is no
-    /// automatic recovery, but the LeaderGuard is held for the process lifetime
-    /// via the Arc kept by `spawn_lsp_health_loop`.
     /// Subscribe a follower to the leader's diagnostics broadcast.
     ///
     /// A follower spawns no LSP server, so it cannot observe diagnostics
@@ -292,6 +286,12 @@ impl McpServer {
     /// successful promotion it is signaled before the leader-side publish path
     /// starts (see `handle_promotion_result`). The leader path passes `None` (it
     /// never started a follower subscriber).
+    ///
+    /// A follower retries every [`REELECTION_POLL_INTERVAL`](Self::REELECTION_POLL_INTERVAL).
+    /// Once it is promoted — or if it was the leader already — the loop exits
+    /// permanently. Promotion is one-shot: leadership lost afterwards is not
+    /// recovered automatically, but the `LeaderGuard` is held for the lifetime of
+    /// the process by the `Arc` that `spawn_lsp_health_loop` keeps.
     fn spawn_reelection_loop(
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,

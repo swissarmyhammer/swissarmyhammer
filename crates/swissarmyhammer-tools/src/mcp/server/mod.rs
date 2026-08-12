@@ -110,6 +110,24 @@ pub struct McpServer {
     bash_denied: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Prints the fields a reader can learn without taking a lock.
+///
+/// The library, the watcher, the registry, the tool context and the two
+/// builtin libraries all sit behind a `tokio` lock. `Debug` runs wherever a log
+/// line asks for it, including inside the async runtime, so it must never wait
+/// on one of those locks. It therefore names the plain fields and closes with
+/// `..` for the rest.
+impl std::fmt::Debug for McpServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServer")
+            .field("work_dir", &self.work_dir)
+            .field("compose_per_client", &self.compose_per_client)
+            .field("file_watch_stopped", &self.file_watch_stopped)
+            .field("bash_denied", &self.bash_denied)
+            .finish_non_exhaustive()
+    }
+}
+
 impl McpServer {
     /// Create a new MCP server with the provided prompt library.
     ///
@@ -500,6 +518,34 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------
+    // Debug tests
+    // ---------------------------------------------------------------
+
+    /// `Debug` names the working directory and the per-client composition flag —
+    /// the two fields that decide what a connection is served — and it answers
+    /// while another task holds a lock, because a `Debug` that waits on a lock
+    /// deadlocks the log line that asks for it.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_debug_names_work_dir_and_composition_under_a_held_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server =
+            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
+                .await
+                .unwrap();
+
+        let _registry = server.tool_registry.write().await;
+        let rendered = format!("{server:?}");
+
+        assert!(rendered.contains("McpServer"), "{rendered}");
+        assert!(
+            rendered.contains(&format!("{:?}", tmp.path())),
+            "{rendered}"
+        );
+        assert!(rendered.contains("compose_per_client: true"), "{rendered}");
+    }
 
     // ---------------------------------------------------------------
     // new_with_work_dir() tests

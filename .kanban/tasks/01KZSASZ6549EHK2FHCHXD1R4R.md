@@ -179,6 +179,69 @@ comments:
     - evidence: 15 files — deleted `crates/swissarmyhammer-tools/src/mcp/server.rs`; new `crates/swissarmyhammer-tools/src/mcp/server/{mod,instructions,retry,code_context,profiles,prompts,file_watch,agent_identity,handler}.rs`; edited `mcp/tools/files/edit/args.rs`, `mcp/tools/files/edit/atomic.rs`, `mcp/tools/files/edit/mod.rs`, `mcp/tools/files/write/mod.rs`. All 10 review findings checked off. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14098 run, 14094 passed, 4 pre-existing failures (review_e2e x3, review_progress_stdio_test x1). Total rose from 14097 by exactly the one test the findings asked for, so the split lost no test; the 41 `mcp::server::` test names are byte-identical to the 41 in `HEAD:server.rs`. Largest server file 47342 bytes against 133 KB before. `sah tool code_context duplication find` over all 16 touched files reports nothing.
     - next: /review — re-run so `duplication` can read `mcp/server/` now that no file is over the 262144-byte cap
   timestamp: 2026-08-12T00:31:57.625830+00:00
+- actor: claude-code
+  id: 01kzsrxpmqn7d70fr3edyqypcn
+  text: |
+    ### review — findings
+    - evidence: 13 findings recorded from `review sha 47ecbce0d~1..47ecbce0d` — agent_identity.rs:59, agent_identity.rs:85 (x2), code_context.rs:231, handler.rs:125, handler.rs:191, handler.rs:243, handler.rs:251, handler.rs:267, handler.rs:286, handler.rs:295, handler.rs:437, server/mod.rs:59. Counts: findings 14, confirmed 14; 1 dropped under the test-refactor exception (edit/mod.rs:679, pre-existing test code).
+    - run status: COMPLETE. 24 tasks attempted, 0 failed, 0 skipped. The two earlier rounds failed 3/32 and 12/40; this round failed none.
+    - cap status: no file skipped. `skipped_files` empty. Largest source file in the commit is edit/mod.rs at 47992 bytes, far under the 262144-byte per-file cap. The duplication validator read every file, including the nine new server/ modules.
+    - next: close the 13 findings. All 16 prior findings from the two earlier rounds stay checked.
+  timestamp: 2026-08-12T01:20:53.399814+00:00
+- actor: claude-code
+  id: 01kzsryq3cg8fad24wmdpr89sn
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 15 files; closed all 10 prior findings. Split mcp/server.rs into nine modules under mcp/server/. Fixed a real bug: encoding_rs has no UTF-16 encoder, so an edit of a UTF-16 file silently rewrote it as UTF-8 and dropped the BOM. EditFileTool::encode_for now encodes UTF-16 itself
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14098 run, 14094 passed. Count rose 14097 to 14098 by exactly the one new UTF-16 round-trip test. Same 4 pre-existing failures
+    - commit: 47ecbce0d
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs:59, agent_identity.rs:85 (x2), server/code_context.rs:231, server/handler.rs:125, handler.rs:191, handler.rs:243, handler.rs:251, handler.rs:267, handler.rs:286, handler.rs:295, handler.rs:437, server/mod.rs:59
+    - note: the cap problem is solved. 0 files skipped, largest file 47992 bytes against the 262144-byte cap. This review run COMPLETED — 24 attempted, 0 failed, 0 skipped, against 3 of 32 failed and then 12 of 40 failed in the two earlier rounds. 8 of the 13 findings are one cause: undocumented public trait methods in server/handler.rs.
+  timestamp: 2026-08-12T01:21:26.636781+00:00
+- actor: claude-code
+  id: 01kzst0y4h50zqncpqrqtap0v3
+  text: |-
+    All 13 review findings closed. Finding by finding.
+
+    **1–8. `handler.rs:125, 191, 243, 251, 267, 286, 295, 437` — eight public trait methods with no doc comment.** Each of `initialize`, `list_tools`, `list_resources`, `read_resource`, `subscribe`, `unsubscribe`, `call_tool` and `get_info` now carries a doc comment saying what it does and, where a `Result` comes back, an `# Errors` section naming the condition that raises each error. Then I removed the cause from the whole file rather than the eight named lines: every other item in `handler.rs` — `prepare_tool_context`, `session_id_from_context`, `connecting_host_from_context`, `format_call_result_text` — was already documented, so the eight are the whole set. Verified with the rule's own tool, not by eye: `cargo clippy --workspace -W missing_docs` reports nothing under `mcp/server/`.
+
+    **9. `agent_identity.rs:59` — `slugify` reimplements `slugify_string`.** The local function is gone. The module imports `swissarmyhammer_templating::filters::slugify_string` and `ensure_agent_actor` calls it. `swissarmyhammer-tools` already depended on `swissarmyhammer-templating`, so no new edge.
+
+    The five cases the old test named answer identically under the shared function, so nothing regressed: `Claude Code`→`claude-code`, `my_agent`→`my-agent`, `  spaces  `→`spaces`, `UPPER`→`upper`, `a--b`→`a-b`. The two functions do differ on punctuation the tests never named — the local one turned `.` and `/` into `-`, the shared one drops them — and the shared one keeps a non-ASCII letter the local one replaced. The shared behaviour is the one the board already uses for every other slug.
+
+    The test did not go away, so no test was lost. `test_slugify` is now `test_slugify_string_derives_the_actor_id`, asserting the same five cases against the function this module now depends on. It pins the contract, which is the only thing left worth pinning here.
+
+    **10 and 11. `agent_identity.rs:85` — the two hash literals need named constants.** Named `DJB2_SEED` and `DJB2_MULTIPLIER`, each with a doc comment saying the value is part of the published algorithm and not a tunable.
+
+    Read this before you re-report it. The findings call 5381 and 33 the FNV-1a offset basis and prime, and ask for `FNV_OFFSET_BASIS` and `FNV_PRIME`. Those numbers are not FNV-1a. FNV-1a 64-bit uses 14695981039346656037 and 1099511628211, and it XORs the byte before multiplying. 5381 and 33 with `hash * 33 + byte` is djb2, Daniel J. Bernstein's hash. The finding's own stated reason is that the literals "hide the hash algorithm choice from readers" — naming them FNV would tell the reader the wrong algorithm, which is the failure the finding exists to prevent. So the requirement is met, with the true name.
+
+    The names are not invented either. `apps/kanban-app/src/state.rs` already declares `DJB2_SEED` and `DJB2_MULTIPLIER` for the same two values, with the same doc sentence. Following the codebase's prevailing name is what the naming-consistency rule asks for.
+
+    **12. `code_context.rs:231` — misleading doc lead on `spawn_follower_diagnostics_subscriber`.** The re-election paragraph is gone from that function; its doc now opens on what it does. The content was moved, not deleted: `spawn_reelection_loop` gained it as a closing note, with the "every 5s" prose replaced by a link to `REELECTION_POLL_INTERVAL`, which is where the 5 s lives. Then I swept the rest of the file for the same cause — a doc comment whose lead describes another function's job, which is how the September split left this one. Every other doc in `code_context.rs` opens on its own subject.
+
+    **13. `mod.rs:59` — `McpServer` does not derive or implement `Debug`.**
+
+    The finding's literal fix does not compile. I tried `#[derive(Clone, Debug)]` first and kept the output: five field types have no `Debug` — `ToolContext`, `FileWatcher`, `ToolRegistry`, `SkillLibrary`, `AgentLibrary`. One of them, `SkillLibrary`, lives in a crate this card may not touch. So the fix is the second half of the finding's own sentence, "does not derive **or implement** Debug": a hand-written `impl std::fmt::Debug for McpServer`.
+
+    It prints `work_dir`, `compose_per_client`, `file_watch_stopped` and `bash_denied`, then `finish_non_exhaustive`. It takes no lock. That is not a shortcut — `Debug` runs wherever a log line asks for it, including inside the runtime, and waiting on a `tokio` lock there deadlocks the line that asked.
+
+    Written test-first. The test formats the server **while another task holds the registry write lock** and asserts the rendering names the working directory and the composition flag. RED first with the real compiler error (`McpServer doesn't implement std::fmt::Debug`), GREEN after. `McpServer` is the only public type in `mod.rs`, so the whole-file sweep is that one type.
+
+    Verification:
+    - `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - `cargo clippy --workspace -W missing_docs` reports nothing under `mcp/server/`.
+    - `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed. The total rose from 14098 by exactly one, the new `Debug` test. `mcp::server::` went 41 → 42 tests, so the renamed slug test was kept, not dropped.
+    - The 4 failures are the same `review_e2e` x3 and `review_progress_stdio_test` x1 that all three earlier implement steps on this card recorded. I re-proved it rather than citing it: `git stash push -- crates/swissarmyhammer-tools/src/mcp/server/` then re-running those 6 tests gives the identical 4 failures with my change absent.
+
+    One discovery for the next agent. `code_context find duplicates` measures `agent_deterministic_color` at 96.9% against `apps/kanban-app/src/state.rs::deterministic_color` and 87.5% against the TypeScript `deriveActorColor` — one hash written three times, each with its own palette. The last review run read this file and did not report it, so it is not new, and the fix crosses three crates, which is outside this card. Recorded as card ^mv8tvs0.
+  timestamp: 2026-08-12T01:40:07.953474+00:00
+- actor: claude-code
+  id: 01kzst14n5hpd8dhh0kztc5v76
+  text: |-
+    ### implement — changed
+    - evidence: 4 files — `crates/swissarmyhammer-tools/src/mcp/server/handler.rs`, `crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs`, `crates/swissarmyhammer-tools/src/mcp/server/code_context.rs`, `crates/swissarmyhammer-tools/src/mcp/server/mod.rs`. All 13 review findings checked off; the 16 earlier ones stay checked. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo clippy --workspace -W missing_docs` reports nothing under `mcp/server/`; `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 4 pre-existing failures re-proved with the change stashed. Baseline 14098 rose by exactly the one new `Debug` test.
+    - next: /review
+  timestamp: 2026-08-12T01:40:14.629820+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -275,3 +338,23 @@ Remove the inline-on-edit diagnostics feature completely.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:75` — Public struct EditFileTool should implement Clone — the rule requires all public types to implement all applicable traits, and Clone is universally applicable. Add Clone to the derive macro: `#[derive(Default, Debug, Clone)]`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:129` — The read_with_encoding_detection() and write_with_encoding() functions form a paired encode/decode operation. Tests verify reading a UTF-8 file (line 414–430) and writing with an unsupported encoding to trigger an error (line 588–597), and edit_file_atomic() indirectly tests writing via the atomic edit workflow. However, no test round-trips a non-UTF-8 encoding: creating a file with a specific non-UTF-8 encoding, editing it via edit_file_atomic(), reading it back, and verifying the encoding is preserved and correctly detected. The capability to handle arbitrary encodings exists (via encoding_rs), but the round-trip with a non-UTF-8 variant is unproven, leaving the preservation guarantee untested. Add a test like `test_edit_file_atomic_preserves_non_utf8_encoding()` that: (1) creates a temporary file with UTF-16LE content and BOM, (2) calls edit_file_atomic() to edit it, (3) reads it back with read_with_encoding_detection(), and (4) asserts the detected encoding is UTF-16LE, confirming the encoding is preserved through the edit cycle.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:176` — Configuration value '10 MiB' hardcoded in error message duplicates MAX_FILE_SIZE constant defined at line 19, creating maintenance drift risk if the limit is ever changed. Compute the size from MAX_FILE_SIZE: `format!("content exceeds maximum size limit of {} MiB", MAX_FILE_SIZE / (1024 * 1024))`.
+
+## Review Findings (2026-08-11 19:37)
+
+> Scope: `47ecbce0d~1..47ecbce0d`. Run COMPLETE — 24 tasks attempted, 0 failed, 0 skipped. No file exceeded the per-file prompt cap; `skipped_files` was empty, so every file in the commit was read by every validator, duplication included.
+
+> One further finding was reported and dropped under the skill's blanket test-refactor exception: `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/mod.rs:679` (name the hardcoded `1_000_000` test file size). That line is pre-existing test code inside `#[cfg(test)] mod tests`, and this commit changed only a `use` statement in that file.
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs:59` — The `slugify` function reimplements a capability that already exists in the codebase. This performs the standard slug operation (lowercase, filter non-alphanumeric, join with hyphens) which should be reused from an existing shared utility rather than duplicated. Call or import the existing `slugify_string` function from `swissarmyhammer-templating::filters` instead of reimplementing the slug logic locally.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs:85` — Hardcoded literal 5381 (FNV-1a offset basis) should be a named constant; unexplained numeric literals hide the hash algorithm choice from readers. Define `const FNV_OFFSET_BASIS: u64 = 5381;` and use it by name, or add a comment explaining the FNV-1a algorithm.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/agent_identity.rs:85` — Hardcoded literal 33 (FNV-1a prime multiplier) should be a named constant; unexplained numeric literals make the hash algorithm invisible. Define `const FNV_PRIME: u64 = 33;` and use it by name, or add a comment explaining the FNV-1a algorithm.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/code_context.rs:231` — Doc comment for `spawn_follower_diagnostics_subscriber` is misleading—it leads with information about followers polling for leadership (which is the job of `spawn_reelection_loop`), delaying explanation of what this function actually does until line 237. Restructure the doc comment to lead with the function's actual purpose: 'Subscribe a follower to the leader's diagnostics broadcast. A follower spawns no LSP server and cannot observe diagnostics in-process, so it rides the leader's existing pub/sub proxy via the public Subscriber::open seam...' Move the re-election context to a separate note if context is needed.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:125` — Public trait method initialize lacks a doc comment. All public items must be documented, including trait implementations. Add a doc comment describing the initialization behavior and any implementation-specific details.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:191` — Public trait method list_tools lacks a doc comment. All public items must be documented. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:243` — Public trait method list_resources lacks a doc comment. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:251` — Public trait method read_resource lacks a doc comment. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:267` — Public trait method subscribe lacks a doc comment. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:286` — Public trait method unsubscribe lacks a doc comment. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:295` — Public trait method call_tool lacks a doc comment. Add a doc comment describing the method's behavior and any implementation-specific details.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/handler.rs:437` — Public trait method get_info lacks a doc comment. Add a doc comment describing the method's behavior.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server/mod.rs:59` — Public struct McpServer does not derive or implement Debug. Public types should implement applicable traits; Debug is essential for debugging and logging. Add Debug to the derive list: `#[derive(Clone, Debug)]`.
