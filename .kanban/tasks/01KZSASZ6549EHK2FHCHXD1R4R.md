@@ -406,8 +406,56 @@ comments:
     - All 4 open review findings are now `- [x]`; the 31 earlier ones were untouched. Card progress is 1.0.
     - next: /review
   timestamp: 2026-08-12T03:04:51.564993+00:00
-position_column: doing
-position_ordinal: '8580'
+- actor: claude-code
+  id: 01kzt006vhzwjmp5sh2p5684x3
+  text: |-
+    ### review — findings
+    - scope: `review sha 043825b7c~1..043825b7c` (task-mode)
+    - engine: 21 findings, 21 confirmed, 7 refuted. 16 tasks attempted, 0 failed, 0 skipped. `skipped_files` empty — no file exceeded the per-file prompt cap.
+    - recorded: 17 findings. 2 NEW, 15 PRE-EXISTING.
+    - NEW: `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:19`, `:38` — this commit replaced `.map_err(|e| anyhow::anyhow!("{}", e))?` with a bare `?`, so the error loses all context.
+    - PRE-EXISTING: `cli_executor.rs:55,62,65`; `main.rs:1,370,503,715,815,842,852,864,993`; `validate.rs:47,56,375`. The commit changed one rename line in each file and pulled the file into scope.
+    - dropped 4 under the test-refactor exception: `cli_mcp_integration.rs:71`; `comprehensive_cli_mcp_integrations.rs:18,35,37`. `git blame` puts each line before this commit.
+    - the 4 findings of the 21:40 pass are closed. No finding lands in `mcp_integration.rs`, the file this commit rewrote.
+    - note for the implementer: the NEW finding names 2 lines, but the same bare `?` on `CliToolContext::new_isolated` appears at 3 more places this commit wrote in the same file (in `test_argument_passing_and_validation`, `test_concurrent_tool_execution`, `test_tool_context_configurations`). Remove the cause from the whole file.
+    - next: implement the 17 findings, then re-review.
+  timestamp: 2026-08-12T03:24:35.569835+00:00
+- actor: claude-code
+  id: 01kzt01q7w713tt28nekh2jv13
+  text: |-
+    ### finish iteration 7 — findings
+    - implement: changed — 6 files; closed all 4 prior findings. Five CLI functions now return anyhow::Result<T> instead of Result<T, Box<dyn Error>>, and get_tool_registry_arc became tool_registry_arc across 13 call sites
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14099 run, 14095 passed, count held. Same 4 pre-existing failures
+    - commit: 043825b7c
+    - review: findings — 17 open. NEW (2): apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:19, :38. PRE-EXISTING (15): apps/swissarmyhammer-cli/src/cli_executor.rs:55, :62, :65; src/main.rs:1, :370, :503, :715, :815, :842, :852, :864, :993; src/validate.rs:47, :56, :375
+    - GUARDRAIL: the loop diverged. The finding count went 1, then 4, then 17. 15 of the 17 are defects that already existed in files the rename only touched by accident, and only 2 come from this commit. mcp_integration.rs, the file the last round rewrote, is now clean. The task target is met; the review scope is walking outward through the CLI crate. Stopping to ask a human whether to keep widening. The 2 NEW findings get fixed first, because this work created them.
+  timestamp: 2026-08-12T03:25:25.116366+00:00
+- actor: claude-code
+  id: 01kzt08n3dpzpbcsbn2cf73y3t
+  text: |-
+    Fixed the 2 NEW findings from the 22:09 review pass, and removed the cause from the whole file.
+
+    Commit `043825b7c` replaced `.map_err(|e| anyhow::anyhow!("{}", e))?` with a bare `?` on `CliToolContext::new_isolated` at 5 places in `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs`. The review named 2 of them. A finding shows one example of a cause, so all 5 got the fix:
+
+    - `create_test_context_with_git` (the `:19` finding)
+    - `create_test_context` (the `:38` finding)
+    - `test_argument_passing_and_validation`
+    - `test_concurrent_tool_execution`
+    - `test_tool_context_configurations`
+
+    Each call now reads `.await.context("creating isolated CLI tool context")?`. The import became `use anyhow::{Context, Result};`.
+
+    Scope held to that one file. The other 15 open findings in the 22:09 section are PRE-EXISTING defects in `src/cli_executor.rs`, `src/main.rs`, and `src/validate.rs`. I did not touch those files, and I left their checklist items unchecked for human triage.
+  timestamp: 2026-08-12T03:29:12.301446+00:00
+- actor: claude-code
+  id: 01kzt0f5kt9zpy03dbp4fw2chf
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs`. All 5 `CliToolContext::new_isolated` calls now carry `.context("creating isolated CLI tool context")`. `cargo fmt --all` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo nextest run -p swissarmyhammer-cli -E 'binary_id(swissarmyhammer-cli::cli_tests) and test(comprehensive_cli_mcp_integrations)'` → 7 run, 7 passed. `cargo nextest run --workspace --no-fail-fast` → 14099 run, 14095 passed, 4 failed. The count holds at the 14099 baseline and the 4 failures are the known pre-existing ones (`review_e2e` x3, `review_progress_stdio_test` x1).
+    - next: 2 NEW findings checked off. 15 PRE-EXISTING findings stay open for human triage in `src/cli_executor.rs`, `src/main.rs`, `src/validate.rs`. Task stays in `review`.
+  timestamp: 2026-08-12T03:32:45.818776+00:00
+position_column: review
+position_ordinal: '8380'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
 ---
 ## Problem
@@ -549,3 +597,35 @@ Remove the inline-on-edit diagnostics feature completely.
 - [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:91` — Application code returns `Result<Self, Box<dyn std::error::Error>>` instead of `anyhow::Result<Self>`. The rule requires applications to use `anyhow::Result<T>` for error handling. Change return type to `anyhow::Result<Self>` and add `.context()` to the `initialize_mcp_server()` call (e.g., `.context("failed to initialize MCP server")`).
 - [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:210` — Method name uses `get_` prefix, which deviates from the established project pattern of omitting `get_` for simple getter methods. The `McpServer` type establishes the convention with `library()` and `tool_registry()` methods (both without `get_` prefix), which this codebase should follow uniformly. Rename `get_tool_registry_arc()` to `tool_registry_arc()` to match the established pattern in the codebase.
 - [x] `apps/swissarmyhammer-cli/src/mcp_integration.rs:210` — Method name `get_tool_registry_arc()` has `get_` prefix, which violates Rust API guidelines — getters should not use this prefix. Rename to `tool_registry_arc()` to match the style of similarly paired methods (e.g. `tool_registry()` on McpServer). Rename `pub fn get_tool_registry_arc(&self)` to `pub fn tool_registry_arc(&self)` and update call sites.
+
+## Review Findings (2026-08-11 22:09)
+
+> Scope: `043825b7c~1..043825b7c`. Run COMPLETE — 16 tasks attempted, 0 failed, 0 skipped. No file exceeded the per-file prompt cap; `skipped_files` was empty, so every file in the commit was read by every validator, duplication included.
+
+> The 4 findings of the 21:40 pass are closed. No new finding lands in `apps/swissarmyhammer-cli/src/mcp_integration.rs`, the file this commit rewrote.
+
+> Each finding below carries a mark: **NEW** means this commit introduced the defect. **PRE-EXISTING** means the commit changed only a nearby line and pulled the file into review scope. `git blame 043825b7c` decides the mark.
+
+> Four further findings were reported and dropped under the skill's blanket test-refactor exception. `git blame` puts each line in a commit that precedes this one, so each asks to change test code that already existed:
+> - `apps/swissarmyhammer-cli/tests/integration/cli_mcp_integration.rs:71` (add assertions to `test_cli_can_call_mcp_tools`) — blame `03887cb2c2`.
+> - `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:18` (add `.context()` to the `setup_git_repo` call) — blame `d0e19df80f`.
+> - `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:35` (add `.context()` to the `TempDir::new` call) — blame `3eeb1d566d`.
+> - `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:37` (add `.context()` to the `setup_git_repo` call) — blame `3eeb1d566d`.
+
+- [ ] `apps/swissarmyhammer-cli/src/cli_executor.rs:55` — **PRE-EXISTING** (blame `b34e5321b8`) — Public struct `CliExecutor` does not implement `Debug`. Per the trait-implementations rule, new public types must implement all applicable traits. Since it holds `Arc` and `RwLock` with non-Debug internals, it should have an explicit Debug implementation. Add a manual `impl Debug for CliExecutor` similar to CliToolContext's implementation, or add `#[derive(Debug)]` if the internal types support it. Alternatively, manually implement it to show opaque placeholders for complex types like ToolRegistry.
+- [ ] `apps/swissarmyhammer-cli/src/cli_executor.rs:62` — **PRE-EXISTING** (blame `b34e5321b8`) — Application code should use `anyhow::Result<T>` instead of `Result<T, Box<dyn Error + Send + Sync>>`. The boxed error type prevents callers from matching on specific error variants and loses error context. Change to `pub async fn new(working_dir: &Path) -> anyhow::Result<Self> {`, add `use anyhow::Context;` at the top, and replace line 65 with `.context("failed to initialize tool context")?;`.
+- [ ] `apps/swissarmyhammer-cli/src/cli_executor.rs:65` — **PRE-EXISTING** (blame `b34e5321b8`) — Error handling should use `.context()` to attach context about what operation was being performed, not manual `.map_err()` with `.to_string()`. This preserves error chains and provides better debugging information. Replace `.map_err(|e| Box::<dyn Error + Send + Sync>::from(e.to_string()))?;` with `.context("failed to initialize tool context")?;` (once anyhow::Result is adopted).
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:1` — **PRE-EXISTING** (blame `074a2b0065`) — missing documentation for the crate.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:370` — **PRE-EXISTING** (blame `d0e19df80f`) — Hardcoded limit `5` for max_warnings should be a named constant; it represents a display threshold for validation warnings. Define a named constant like `const MAX_VALIDATION_WARNINGS_DISPLAY: usize = 5;` and use it instead of the literal.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:503` — **PRE-EXISTING** (blame `d0e19df80f`) — Hardcoded limit `10` for max_errors should be a named constant; it represents a display threshold for validation errors. Define a named constant like `const MAX_VALIDATION_ERRORS_DISPLAY: usize = 10;` and use it instead of the literal.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:715` — **PRE-EXISTING** (blame `d0e19df80f`) — Function returns `Result<String, String>` using String as error type instead of `anyhow::Result<T>` for application code. This prevents context about what operation failed. Change return type to `anyhow::Result<String>` and use `.context()` at error sites instead of returning String errors.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:815` — **PRE-EXISTING** (blame `1bea6b3ce4`) — Function returns `Result<T, String>` using String as error type instead of `anyhow::Result<T>` for application code. Change return type to `anyhow::Result<T>` and use `.context()` on error paths.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:842` — **PRE-EXISTING** (blame `894d179933`) — Function returns `Result<bool, String>` using String as error type instead of `anyhow::Result<T>` for application code. Change return type to `anyhow::Result<bool>` and use `.context()` on error paths.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:852` — **PRE-EXISTING** (blame `a1ea138f02`) — Function returns `Result<serde_json::Value, String>` using String as error type instead of `anyhow::Result<T>` for application code. Change return type to `anyhow::Result<serde_json::Value>` and use `.context()` on error paths.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:864` — **PRE-EXISTING** (blame `a1ea138f02`) — Function returns `Result<serde_json::Map<String, serde_json::Value>, String>` using String as error type instead of `anyhow::Result<T>` for application code. Change return type to `anyhow::Result<serde_json::Map<String, serde_json::Value>>` and use `.context()` on error paths.
+- [ ] `apps/swissarmyhammer-cli/src/main.rs:993` — **PRE-EXISTING** (blame `6e2231fbd4`) — Function returns `Result<serde_json::Map<String, serde_json::Value>, Box<dyn std::error::Error>>` using boxed error instead of `anyhow::Result<T>`. This prevents context attachment and error chaining. Change return type to `anyhow::Result<serde_json::Map<String, serde_json::Value>>` and replace `.map_err()` chains with `.context()` calls.
+- [ ] `apps/swissarmyhammer-cli/src/validate.rs:47` — **PRE-EXISTING** (blame `074a2b0065`) — missing documentation for an associated function.
+- [ ] `apps/swissarmyhammer-cli/src/validate.rs:56` — **PRE-EXISTING** (blame `d5b834e593`) — missing documentation for a method.
+- [ ] `apps/swissarmyhammer-cli/src/validate.rs:375` — **PRE-EXISTING** (blame `a1ea138f02`) — fn `tool_validation_success_issue` is a near-duplicate of `tool_context_init_error_issue` at apps/swissarmyhammer-cli/src/validate.rs:338 (53 tokens, 92% alike).
+- [x] `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:19` — **NEW** (blame `043825b7c1` — this commit replaced `.map_err(|e| anyhow::anyhow!("{}", e))?` with a bare `?` on this line) — External call on `?` operator lacks `.context()` — bare context creation errors reveal no information about what the test was doing when it failed. Change to `let context = CliToolContext::new_isolated(&temp_path).await.context("creating isolated CLI tool context")?;`.
+- [x] `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs:38` — **NEW** (blame `043825b7c1` — this commit replaced `.map_err(|e| anyhow::anyhow!("{}", e))?` with a bare `?` on this line) — External call on `?` operator lacks `.context()` — bare context creation errors reveal no information about what the test was doing when it failed. Change to `let context = CliToolContext::new_isolated(&temp_path).await.context("creating isolated CLI tool context")?;`.
