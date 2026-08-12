@@ -435,6 +435,7 @@ mod tests {
         TextContent,
     };
     use futures::future::BoxFuture;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
     use tokio::sync::Notify;
 
     use crate::review::fleet::{FleetConfig, ReviewProgressEvent};
@@ -2103,6 +2104,104 @@ for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" 
                 .iter()
                 .all(|finding| finding.rule.as_deref() == Some("missing-docs")),
             "no tool finding may be reported as a prompt-rule finding: {prompt_findings:?}"
+        );
+    }
+
+    // ---- the shipped builtin layer's own fixture data
+
+    /// The builtin set whose fixtures the review below reads, and whose name
+    /// the planted user set shadows.
+    const SHADOWED_BUILTIN_SET: &str = "code-hygiene";
+
+    /// A fixture the `code-hygiene` set SHIPS, as the review scope holds its
+    /// path. It stands under [`builtin_validators_dir`], the runtime builtin
+    /// fixture root.
+    const SHIPPED_BUILTIN_FIXTURE: &str =
+        "builtin/validators/code-hygiene/fixtures/missing-docs-rust.fail.rs.tmpl";
+
+    /// Acceptance: a REAL review of a SHIPPED builtin fixture reports the file
+    /// as excluded with its reason, while the USER layer carries a set of the
+    /// same name.
+    ///
+    /// This is the runtime shape `sah init` leaves behind: `~/.validators/`
+    /// holds a copy of every builtin set, and a same-named copy replaces the
+    /// builtin entry of the loader's ruleset map. The builtin set's own
+    /// `fixtures/` directory must stay a fixture root through that, or a
+    /// shipped fixture leaves the scope in silence — which is the one outcome
+    /// the exclusion exists to stop.
+    ///
+    /// The loader is the one [`crate::load_rules`] builds for a live review,
+    /// the repository is this one, and the fixture is a file it ships.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial(cwd)]
+    async fn review_file_excludes_a_shipped_builtin_fixture_under_a_shadowing_user_set() {
+        let home = tempfile::tempdir().expect("temp home");
+        crate::review::test_support::write_tool_rule_ruleset(
+            &home.path().join(".validators"),
+            SHADOWED_BUILTIN_SET,
+            "**/*.rs",
+            "true",
+        )
+        .expect("write the shadowing user set");
+        let _env = EnvVarGuard::set("HOME", home.path());
+
+        let repo = crate::review::test_support::repo_root();
+        assert!(
+            repo.join(SHIPPED_BUILTIN_FIXTURE).exists(),
+            "the shipped fixture must exist for this test to mean anything"
+        );
+
+        // The loader a live review builds: builtins, then the user layer, then
+        // the project layer of the repository under review.
+        let loader = crate::load_rules(Some(&repo)).expect("the live review's loader");
+        assert_eq!(
+            loader
+                .get_ruleset(SHADOWED_BUILTIN_SET)
+                .map(|set| set.source.clone()),
+            Some(crate::validators::ValidatorSource::User),
+            "precondition: the user layer's set must shadow the builtin one"
+        );
+
+        let conn = crate::review::test_support::index_conn();
+        let embedder = model_embedding::mock::MockEmbedder::new(crate::review::test_support::DIM);
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(vec![], notify_tx, true);
+
+        let report = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            run_review_over_agent(
+                DynConnectTo::new(ScriptedAdapter::new(agent)),
+                notification_rx,
+                Scope::File(SHIPPED_BUILTIN_FIXTURE.to_string()),
+                &repo,
+                &loader,
+                &conn,
+                &embedder,
+                PoolConfig::remote(TEST_POOL_WORKERS),
+                FleetConfig::default(),
+                None,
+                TEST_NOW,
+            ),
+        )
+        .await
+        .expect("the review file pipeline must not hang")
+        .expect("the review file pipeline must produce a report");
+
+        assert_eq!(
+            report.counts().skipped_files(),
+            [SHIPPED_BUILTIN_FIXTURE.to_string()],
+            "the shipped fixture is the one file the run did not review: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("validator fixture"),
+            "the reason must be reported: {}",
+            report.markdown()
+        );
+        assert!(
+            !report.markdown().contains("Nothing in scope to review."),
+            "an excluded fixture is a reported exclusion, never an empty scope: {}",
+            report.markdown()
         );
     }
 }

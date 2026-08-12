@@ -51,16 +51,29 @@ pub fn load_builtins(loader: &mut ValidatorLoader) {
         }
     }
 
-    // Load RuleSets from builtin/validators directory
-    // The path is relative to the crate root where Cargo.toml is located
-    let builtin_validators_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators");
-
     if let Err(e) =
-        loader.load_rulesets_directory(&builtin_validators_path, ValidatorSource::Builtin)
+        loader.load_rulesets_directory(&builtin_validators_dir(), ValidatorSource::Builtin)
     {
         tracing::error!("Failed to load builtin RuleSets: {}", e);
     }
+}
+
+/// The directory the BUILTIN validator sets are loaded from at runtime, and so
+/// the root every builtin `fixtures/` directory stands under.
+///
+/// It is `<repository>/builtin/validators`, resolved from `CARGO_MANIFEST_DIR`
+/// at COMPILE time — an absolute path into the source checkout this engine was
+/// built from, not a copy beside the binary and not a `sah init` snapshot under
+/// the user's home. Two consequences are worth stating, because the review
+/// scope stage compares changed files against this root
+/// ([`ValidatorLoader::fixture_dirs`](crate::validators::ValidatorLoader::fixture_dirs)):
+///
+/// - Reviewing THIS repository, a changed `builtin/validators/*/fixtures/*`
+///   file resolves under this root, so it is excluded as fixture data.
+/// - Reviewing any other repository, no file of it can stand under this root,
+///   so the builtin roots exclude nothing there.
+pub fn builtin_validators_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators")
 }
 
 /// Get all builtin YAML includes as (name, content) tuples.

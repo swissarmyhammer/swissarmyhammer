@@ -21,7 +21,7 @@
 //! The loader supports `@path/to/file` references in validator frontmatter that
 //! expand to YAML file contents. See [`YamlExpander`] for details.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig, YamlExpander};
@@ -89,6 +89,17 @@ pub struct ValidatorLoader {
     /// `len`, `values`/`keys` iteration) is identical on both map types, so
     /// there is no behavior cost to the switch.
     rulesets: BTreeMap<String, RuleSet>,
+    /// The `fixtures/` directory of every RuleSet this loader has loaded, in
+    /// every layer.
+    ///
+    /// It is kept beside `rulesets` rather than derived from it because
+    /// `rulesets` holds ONE entry per set NAME. A user or project set of the
+    /// same name replaces the builtin entry, and the replaced set's fixture
+    /// directory would go with it — the very shape `sah init` leaves behind,
+    /// where `~/.validators/` carries a copy of every builtin set. A fixture is
+    /// fixture data whichever layer's copy of the set won the name, so this set
+    /// only ever grows.
+    fixture_dirs: BTreeSet<PathBuf>,
     /// YAML expander for `@` include references.
     expander: YamlExpander<ValidatorsConfig>,
     /// RuleSet directories that failed to parse and were skipped, retained so a
@@ -121,12 +132,7 @@ impl Default for ValidatorLoader {
 impl ValidatorLoader {
     /// Create a new empty validator loader.
     pub fn new() -> Self {
-        Self {
-            validators: HashMap::new(),
-            rulesets: BTreeMap::new(),
-            expander: YamlExpander::new(),
-            load_failures: Vec::new(),
-        }
+        Self::with_expander(YamlExpander::new())
     }
 
     /// Create a new loader with a pre-configured expander.
@@ -134,6 +140,7 @@ impl ValidatorLoader {
         Self {
             validators: HashMap::new(),
             rulesets: BTreeMap::new(),
+            fixture_dirs: BTreeSet::new(),
             expander,
             load_failures: Vec::new(),
         }
@@ -417,7 +424,7 @@ impl ValidatorLoader {
                         ruleset.rules.len(),
                         dir_path.display()
                     );
-                    self.rulesets.insert(ruleset.name().to_string(), ruleset);
+                    self.insert_ruleset(ruleset);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to parse RuleSet at {}: {}", dir_path.display(), e);
@@ -445,11 +452,19 @@ impl ValidatorLoader {
     ///
     /// A directory is listed whether or not it exists on disk: a set with no
     /// fixtures yet still owns the path its fixtures would take.
+    ///
+    /// A set a later layer SHADOWED keeps its directory here. `~/.validators/`
+    /// carries a copy of every builtin set after `sah init`, and each copy
+    /// takes the builtin set's name in `rulesets` — but the builtin set's own
+    /// `fixtures/` directory under [`crate::builtin::builtin_validators_dir`]
+    /// still holds fixture data, and a review that read it as source would fire
+    /// every matching rule on the file built to make it fire.
+    ///
+    /// [`ValidatorLoader::retain_rulesets`] does not narrow this list either: a
+    /// review scoped to one validator still must not read another set's
+    /// fixtures as source.
     pub fn fixture_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: Vec<PathBuf> = self.rulesets.values().map(RuleSet::fixtures_dir).collect();
-        dirs.sort();
-        dirs.dedup();
-        dirs
+        self.fixture_dirs.iter().cloned().collect()
     }
 
     /// Add a builtin RuleSet from embedded directory structure.
@@ -461,6 +476,18 @@ impl ValidatorLoader {
             ruleset.name(),
             ruleset.rules.len()
         );
+        self.insert_ruleset(ruleset);
+    }
+
+    /// Store `ruleset` under its name and record the `fixtures/` directory it
+    /// owns.
+    ///
+    /// The ONE place a RuleSet enters this loader, so a set can never be
+    /// loaded without its fixture directory being remembered — including a set
+    /// this insert shadows, whose directory stays in
+    /// [`ValidatorLoader::fixture_dirs`].
+    fn insert_ruleset(&mut self, ruleset: RuleSet) {
+        self.fixture_dirs.insert(ruleset.fixtures_dir());
         self.rulesets.insert(ruleset.name().to_string(), ruleset);
     }
 
@@ -507,6 +534,11 @@ impl ValidatorLoader {
     /// scoping the fan-out to just the chosen validators. A name in `names` that
     /// isn't loaded is simply ignored. An empty `names` is a no-op (callers that
     /// want "all" should not call this).
+    ///
+    /// [`ValidatorLoader::fixture_dirs`] is NOT narrowed with the subset. A
+    /// dropped set's `fixtures/` directory still holds fixture data, and the
+    /// review scope stage must keep excluding it however few validators the
+    /// caller asked to run.
     pub fn retain_rulesets(&mut self, names: &[&str]) {
         if names.is_empty() {
             return;
@@ -770,6 +802,54 @@ mod tests {
         assert!(
             dirs.contains(&builtin.fixtures_dir()),
             "the builtin layer's set must name its fixtures directory, got: {dirs:?}"
+        );
+    }
+
+    /// `fixture_dirs` keeps the directory of a set a LATER layer shadowed, and
+    /// a validator subset never narrows the list.
+    ///
+    /// `sah init` writes a copy of every builtin set under `~/.validators`, so
+    /// the user layer takes each builtin name and replaces its entry in
+    /// `rulesets`. The builtin set's own `fixtures/` directory still holds
+    /// fixture data, so the review scope stage must keep excluding it.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn fixture_dirs_keeps_a_shadowed_sets_directory_through_a_subset() {
+        let builtin_store = TempDir::new().unwrap();
+        write_ruleset(builtin_store.path(), "shared", "Builtin version");
+
+        let home = TempDir::new().unwrap();
+        let user_validators = home.path().join(".validators");
+        write_ruleset(&user_validators, "shared", "User version");
+        let _env = EnvVarGuard::set("HOME", home.path());
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_rulesets_directory(builtin_store.path(), ValidatorSource::Builtin)
+            .unwrap();
+        loader.load_all(None).unwrap();
+
+        let shadowed = loader.get_ruleset("shared").expect("shared ruleset");
+        assert_eq!(
+            shadowed.source,
+            ValidatorSource::User,
+            "precondition: the user layer's set must win the name"
+        );
+
+        let builtin_fixtures = builtin_store.path().join("shared").join(FIXTURES_DIR_NAME);
+        assert!(
+            loader.fixture_dirs().contains(&builtin_fixtures),
+            "the shadowed builtin set keeps its fixtures directory, got: {:?}",
+            loader.fixture_dirs()
+        );
+
+        // The `review` tool's `validators` subset modifier drops every set it
+        // did not name; the fixture roots stand whatever it drops.
+        loader.retain_rulesets(&["a-set-that-is-not-loaded"]);
+        assert!(
+            loader.fixture_dirs().contains(&builtin_fixtures),
+            "a validator subset never narrows the fixture roots, got: {:?}",
+            loader.fixture_dirs()
         );
     }
 
