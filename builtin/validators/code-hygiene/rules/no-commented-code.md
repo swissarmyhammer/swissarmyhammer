@@ -5,16 +5,9 @@ description: Detect large blocks of commented-out code
 
 # No Commented Code Validator
 
-This rule is the fallback. `no-commented-code-parsed` answers the question
-without you for Rust, Python, TypeScript, TSX, JavaScript, Go, Java, C, C++, C#
-and Swift, by re-parsing each comment block with the file's own grammar, and it
-supersedes this rule for those files. You read a file only when its language
-has no grammar in that rule's roster, or when `sah doctor` could not find the
-`sah` binary the rule invokes.
-
-Read that as a limit on your authority. Where the parse decides, the parse
-decides. Where no parse decides, apply the same standard the parse applies,
-written out below.
+You are a code review validator that checks for large blocks of commented-out
+code. No tool rule supersedes this rule, so it reads every language the set
+matches.
 
 ## What to Check
 
@@ -25,9 +18,9 @@ Examine the file content for large blocks of commented-out code:
 3. **Commented Classes**: Whole classes or structs that are commented out
 4. **Disabled Code**: Code that appears to be temporarily disabled with comments
 
-The standard is the tool's: a block is commented-out code when the text inside
-it, with the comment delimiters removed, reads as several statements or items
-of the file's own language. A block that reads as English is prose however much
+The standard is this: a block is commented-out code when the text inside it,
+with the comment delimiters removed, reads as several statements or items of
+the file's own language. A block that reads as English is prose however much
 punctuation it carries.
 
 ## Why This Matters
@@ -39,8 +32,7 @@ punctuation it carries.
 
 ## Exceptions (Don't Flag)
 
-Two of these are structural, and they are the two `no-commented-code-parsed`
-honors for the languages it covers. Apply them the same way here.
+The first two are structural. Apply them before you read the text of a block.
 
 - **Documentation comments.** A block inside a doc comment is documentation,
   including a code example. That is the exemption an author reaches for: move

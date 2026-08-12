@@ -861,6 +861,13 @@ mod tests {
     /// command, and `store_command_output` runs solely in
     /// `finalize_completed`, so `get lines` on a timed-out command returns
     /// nothing.
+    ///
+    /// It must also send file search and file edits off the shell — the
+    /// same rules the `shell` skill states (see
+    /// `shell_output_guidance_states_blocking_and_no_tail` in
+    /// `swissarmyhammer-skills/tests/shell_output_guidance.rs`), since the
+    /// guidance is duplicated in the tool description and the skill by
+    /// design.
     #[test]
     fn shell_description_states_blocking_and_no_tail() {
         let tool = ShellExecuteTool::new_isolated();
@@ -871,8 +878,9 @@ mod tests {
             "get lines",
             "grep history",
             "no output is stored",
-            "grep files",
-            "never `grep -r`",
+            "Do not use grep to search files",
+            "use `rg`",
+            "Do not use shell to edit files",
         ] {
             assert!(
                 description.contains(marker),

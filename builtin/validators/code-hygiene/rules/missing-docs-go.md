@@ -78,12 +78,12 @@ not a missing doc comment, so this rule does not own that defect. The config
 asks revive for the one check the rule owns. A filter on the category would
 guard a finding this config never makes, and no test could measure it.
 
-**No shipped rule owns a stuttering Go name today.** Measured: 27 shipped rules
+**No shipped rule owns a stuttering Go name today.** Measured: 25 shipped rules
 match a `.go` file, and no one of them reports a NAME as the defect. The naming
 rules that ship — `swift/naming-clarity`, `swift/doc-parameter-naming` and
 `js-ts/naming-and-style` — read no `.go` file. The acceptance test
 `the_shipped_rules_that_read_a_go_file_stay_the_stated_list` holds that list of
-27, so a rule added later fails the test and the reader then decides. Card
+25, so a rule added later fails the test and the reader then decides. Card
 ^6jzgb8v carries the gap. The `naming` category above is how a Go naming rule
 selects the finding.
 

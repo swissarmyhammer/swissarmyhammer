@@ -274,8 +274,57 @@ comments:
     - evidence: 8 files — crates/claude-agent/src/embedded_resource.rs (new), constants/sizes.rs, content_block_processor.rs, content_security_validator.rs, path_validator.rs, size_validator.rs, lib.rs. All 24 findings are now checked. Re-run counts: `cargo clippy -p claude-agent --all-targets -- -W missing_docs` 9 rows in the named files before, 0 after (crate 187 to 178); `sah tool code_context duplication find` 1 pair before, 0 after; `sah tool code_context commented_code find` 0. Commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` 0 warnings, `cargo doc -p claude-agent --no-deps` no warning names a touched file, `cargo nextest run --workspace` 14027 run / 14023 passed / 0 skipped with only the 4 known ^bh5ncd0 failures, `a_lagged_collector_is_an_error_not_a_reply_with_holes` PASS.
     - next: /review
   timestamp: 2026-08-10T17:46:50.403496+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzpd6yre0wkgvxqrhhrckrr6
+  text: |-
+    ### review — clean
+
+    - scope: `review sha HEAD~1..HEAD`, commit 3439a7d27.
+    - engine: 16 tasks started. 0 tasks failed. The result set is complete. The pass before this one had 2 failed tasks.
+    - counts: 9 findings, 9 confirmed, 5 refuted. All 9 findings were dropped. See below.
+    - prior findings: all 31 items are correct. 7 items from the first pass and 24 items from the second pass.
+
+    #### Why all 9 findings were dropped
+
+    The review skill removes a finding that asks you to change test code that is already in the repository. All 9 findings ask for this. Each finding is thus dropped.
+
+    Proof:
+
+    - All 9 lines are in a `#[cfg(test)] mod tests` block. The block starts at `size_validator.rs:171` and at `path_validator.rs:613`. The flagged lines are 211, 214, 215, 258, 272, 276, 295, 365, and 805.
+    - `git blame` gives commit cf03df67a of 2025-12-09 for all 9 lines. This is 8 months before commit 3439a7d27.
+    - Commit 3439a7d27 does not touch a test line. Its last hunk in these two files ends at line 95. This is above both test blocks.
+
+    The 9 findings are thus pre-existing debt. The commit did not cause them. They came into scope because the commit touched the file.
+
+    #### Proof that the 24 prior findings are correct
+
+    - `content_block_processor.rs` — `ContentProcessingSummary` has `#[derive(Debug, Clone)]`.
+    - The duplicated pair is removed. `content_block_processor.rs` and `content_security_validator.rs` both call `embedded_resource::dispatch`.
+    - `path_validator.rs` — `PathValidationError` has `PartialEq, Eq`.
+    - `size_validator.rs` — `SizeValidationError` has `Clone, PartialEq, Eq`. `SizeLimits` has `PartialEq, Eq`.
+    - The `SizeExceeded` variant and all 8 fields have doc comments.
+    - The `strict` and `permissive` near-duplicates are gone. Three named tiers replace them: `STRICT`, `MODERATE`, and `PERMISSIVE`.
+    - The unexplained numbers are gone. `constants/sizes.rs` holds `STRICT_META_SIZE_DIVISOR`, `PERMISSIVE_LIMIT_MULTIPLIER`, and `PERMISSIVE_META_MULTIPLIER`.
+    - `cargo clippy -p claude-agent --lib -- -W missing_docs` gives no warning for any of the 7 touched files.
+
+    - evidence: 9 findings, all dropped by the written test-code exception. 0 recordable findings.
+    - next: none. The card is done.
+  timestamp: 2026-08-10T17:58:30.414001+00:00
+- actor: claude-code
+  id: 01kzpd8b5cg5b507dkt0q8cg39
+  text: |
+    ### finish iteration 3 — clean
+    - implement: changed — 7 files, one of them new. All 24 findings closed, plus 3 more instances of the same causes that a whole-file sweep found: a 4th `PartialEq` without `Eq` (`SecurityLevel`) and a 2nd public type without `Clone` (`ContentBlockProcessor`).
+    - the duplicated pair needed two tries. The first fix kept the refusal as a third closure and the tool still reported the pair at 47 tokens, 92 percent alike. Naming the refusal as a type (`UnsupportedResourceKind`) in a new `embedded_resource` module, converted through `From`, took the error literal out of both call sites and closed it.
+    - a positional `SizeLimits::new(usize x 5)` was refused, because the Rust type-safety rule bars several parameters of one primitive type with different meanings and the fields cannot become newtypes. Three private associated constants (`STRICT`, `MODERATE`, `PERMISSIVE`) carry the tiers instead.
+    - test: `cargo nextest run --workspace` 14027 run, 14023 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set
+    - commit: 3439a7d27
+    - review: clean — 16 tasks attempted, 0 failed. The previous pass had 2 failed tasks, so this is the first complete result set on this card.
+    - the loop ended at the boundary the written rule draws, not by a weaker gate. This round gave 9 findings of the same shape, but all 9 sit inside a `#[cfg(test)] mod tests` block, `git blame` puts all 9 on commit cf03df67a from 2025-12-09, and the hunks of 3439a7d27 in those two files stop at line 95. They are pre-existing test code that the file-level scope pulled in, which the review skill drops by an explicit written rule.
+    - standing debt, out of scope and NOT closed: `cargo clippy -p claude-agent -W missing_docs` still reports 178 rows across the crate, all in files this card did not touch (`terminal_manager.rs`, `tools.rs`, and others).
+  timestamp: 2026-08-10T17:59:15.884451+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd880
 title: claude-agent lagged-collector test races the scheduler under full-workspace parallelism
 ---
 `claude-agent collect_response_content_tests::a_lagged_collector_is_an_error_not_a_reply_with_holes` failed once in a `cargo nextest run --workspace` run of 13783 tests. It passes alone, and it passed 10 of 10 full `-p claude-agent --lib` runs afterwards.

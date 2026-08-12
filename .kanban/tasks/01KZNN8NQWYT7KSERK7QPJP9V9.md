@@ -84,8 +84,57 @@ comments:
     - evidence: 2 files — crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs, crates/swissarmyhammer-code-context/src/ops/find_duplication.rs. Probe counts before/after: Java 1/0, C# 1/0, Swift 1/0, PHP 1/0, Python 0/0, Rust over 1191 tracked `.rs` files 403/386. Commands: `cargo nextest run --workspace` (14038 tests, 14034 pass, the 4 known pre-existing failures of ^bh5ncd0 and no others), `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings` clean. The three `review_e2e` failures carry the same text before and after the change, measured by taking the change out and putting it back.
     - next: a person decides between "Done when" item 1 and item 3. They cannot both hold. New card ^kqhmzbe holds the stale rule-body measurement.
   timestamp: 2026-08-10T20:28:37.901396+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzpny8qwxqncc6cgmq3ntx99
+  text: |
+    ### finish iteration 1 — stuck
+    - implement: stuck — the fix is written, green and correct, but "Done when" item 1 and item 3 cannot both hold. A person must decide.
+    - 4 tests were written first and all 4 failed first, each for the right reason. The pair was reported at 50 tokens and 98 percent alike before the change.
+    - measured, with a release `sah` built before the change and after it on the same tree:
+      - Java, two classes under one annotation block: 1 -> 0
+      - C#, two classes under one attribute list: 1 -> 0
+      - Swift, two classes under one modifier list: 1 -> 0
+      - PHP, two classes under one attribute list: 1 -> 0
+      - Python, two dataclasses under one decorator block: 0 -> 0
+      - Rust, 1191 tracked `.rs` files: **403 -> 386**
+    - THE CONFLICT: the card says the Rust count must not move, because "tree-sitter-rust makes `attribute_item` a sibling of `struct_item`". That is true for an attribute ON an item and false for an attribute INSIDE one. `#[serde(...)]` on a field, `#[error("...")]` on a variant, `#[command(...)]` on a clap variant and `#[cfg(target_os = "macos")]` on a match arm are all children of the definition node, so `write_shape` reads them today. 20 findings go and 3 appear, and all 23 are the rule reading an attribute as code. `enum EmbeddingError` in `crates/llama-embedding/src/error.rs` measures 115 tokens before and 44 after; 71 of its tokens were `#[error(...)]`.
+    - there is no narrower fix inside the card. A comment is skipped everywhere in the walk, so an attribute is too.
+    - two more facts a decision needs: `modifiers` is in `ATTRIBUTE_KINDS`, so Java and Swift also lose `public`, `static`, `final` and `open` from the shape; and `builtin/validators/duplication/rules/duplication-parsed.md` was already stale before this change (it states 416 over 1183 files, the tree reports 403 over 1191). That file was not touched. Card ^kqhmzbe is filed for the re-measurement.
+    - test: `cargo nextest run --workspace` 14038 run, 14034 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set. The change was taken out, the three `review_e2e` tests were run again, and the change was put back: the failure text is identical. The fixture's duplicate `sum_amounts` carries no attribute, so the change cannot reach it.
+    - commit: 8dcbc6b9a — a CHECKPOINT of the green work, not a closure. The card stays open.
+    - next: a person decides whether the Rust count is permitted to move from 403 to 386. If yes, item 3 of "Done when" is wrong and must be rewritten before the card can pass its own gate.
+  timestamp: 2026-08-10T20:31:02.908399+00:00
+- actor: claude-code
+  id: 01kzpremt9satmavfgshwggyqx
+  text: |-
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit 8dcbc6b9a)
+    - engine: 8 tasks attempted, 0 failed, 0 skipped, 0 skipped_files; 0 findings, 0 confirmed, 0 refuted
+    - files: the commit touches 6 files. 2 are source (`crates/swissarmyhammer-sem/src/parser/plugins/code/duplication.rs`, `crates/swissarmyhammer-code-context/src/ops/find_duplication.rs`). The other 4 are the kanban records of this card and of ^kqhmzbe.
+    - item 1 holds: `write_shape` skips `is_attribute_kind(child.kind())`, and `is_attribute_kind` is `ATTRIBUTE_KINDS.contains(&kind)`. All 7 kinds are thus skipped.
+    - item 2 holds: `two_classes_that_share_only_their_annotations_are_not_reported` passes, and `two_classes_that_repeat_their_members_are_reported_though_one_is_annotated` proves the gate stays closed. 26 of 26 `find_duplication` tests pass. 37 of 37 `duplication` tests pass.
+    - item 3 holds, measured again: a release `sah` built from 87a8c3da7 reports 403 findings, and a release `sah` built from 8dcbc6b9a reports 386, both over the same 1191 tracked `.rs` files. The delta is 19 pairs removed, 2 pairs added and 1 pair measured again (`EmbeddingError`, 115 tokens to 44). Each one has an attribute cause: the removed `embedder.rs` functions matched on `#[cfg(target_os = "macos")]` in their match arms, and the added `WebSearchRequest`/`SearchUrl` pair holds the same 7 field types and differed only by `#[serde]` and `#[schemars]`.
+    - item 4 holds: `a_rust_test_function_contributes_no_definition`, `a_rust_cfg_test_function_contributes_no_definition`, `a_java_method_is_read_and_the_annotated_test_is_not` and `a_csharp_method_is_read_and_the_fact_is_not` all pass. `marked_by_attribute` and `definition_range` are not changed by this commit.
+    - note, not a finding: the commit subject of 8dcbc6b9a says "card is stuck". A person has since accepted the count drop, so that word is out of date. The code is correct.
+    - note, not a finding: `builtin/validators/duplication/rules/duplication-parsed.md` still states 416 over 1183 files. Card ^kqhmzbe owns that re-measurement.
+    - next: card moves to done.
+  timestamp: 2026-08-10T21:14:56.713558+00:00
+- actor: claude-code
+  id: 01kzprfyr3yesnn26ngskbj0fn
+  text: |
+    ### finish iteration 2 — clean
+    - the conflict of iteration 1 was resolved by a person on 2026-08-10: the Rust count drop is accepted, and acceptance item 3 is rewritten to state the measured result. The card's wrong premise about the Rust grammar is corrected in the description.
+    - review: clean — 0 findings, 8 tasks attempted, 0 failed, 0 skipped, `skipped_files` empty. 2 of 2 source files reviewed of the 6 files the commit touches.
+    - the reviewer re-measured the count itself rather than trusting the card: it built a release `sah` from 87a8c3da7 in a detached scratch worktree and one from 8dcbc6b9a in the main tree, then ran both over the same 1191 files. 403 and 386.
+    - the delta reads as 19 pairs removed, 2 pairs added, 1 pair re-measured. Two were inspected at the source:
+      - REMOVED: the `crates/swissarmyhammer-embedding/src/embedder.rs` function pairs matched on `#[cfg(target_os = "macos")]` on match arms. That is the in-item Rust leak the corrected description names.
+      - ADDED: `WebSearchRequest` against `SearchUrl` carry the same 7 field types and differed only by `#[serde]` and `#[schemars]`. The fix uncovered a real duplicate the attributes had masked. A finding that APPEARS is as much a proof of the fix as one that goes.
+    - markers still work, proved by test: `a_rust_test_function_contributes_no_definition`, `a_rust_cfg_test_function_contributes_no_definition`, `a_java_method_is_read_and_the_annotated_test_is_not`, `a_csharp_method_is_read_and_the_fact_is_not`. `marked_by_attribute` and `definition_range` are untouched.
+    - commit: 8dcbc6b9a. Its subject still says "card is stuck", which the person's decision has made out of date. The commit is not amended, because it is already the parent of the review that passed.
+    - open, owned by ^kqhmzbe: `builtin/validators/duplication/rules/duplication-parsed.md` states 416 over 1183 files. The tree now reports 386 over 1191.
+  timestamp: 2026-08-10T21:15:39.651015+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffda80
 title: duplication must never read an attribute, an annotation or a decorator as code
 ---
 An attribute is a declaration to the compiler, not code a reader can make dry. `#[derive(Debug, Clone)]`, `@Override`, `@dataclass`, `[Fact]` and `@Test` repeat because the language makes them repeat. A finding on them asks the author to change something they cannot change, so it is not a requirement. See [[dont-fix-wrong-rule]].
@@ -108,10 +157,12 @@ It has no such test for an attribute. The file already holds `is_attribute_kind`
 
 `shape_of` decides what the walk starts from:
 
-- `Normalization::Positional`, used for a function or a method, starts at `definition_body(node)`. A body holds no attribute, so a callable escapes.
+- `Normalization::Positional`, used for a function or a method, starts at `definition_body(node)`.
 - `Normalization::Nameless`, used for a type — `record(...)` — starts at the definition node itself. Every child is walked, the annotation children included.
 
-So the leak is on type declarations, in the languages whose grammar nests the marker inside the definition node: the Java `modifiers` child, the C# `attribute_list` child, the Python `decorator`, and the Swift and PHP attributes. Rust escapes by structure alone, not by intent — tree-sitter-rust makes `attribute_item` a **sibling** of `struct_item`, which is why `definition_range` and `attribute_texts` both walk `prev_sibling`. A grammar change would put the derives straight into the shape.
+The leak is on type declarations, in the languages whose grammar nests the marker inside the definition node: the Java `modifiers` child, the C# `attribute_list` child, the Python `decorator`, and the Swift and PHP attributes.
+
+**Rust leaks too.** An earlier version of this card said Rust escapes, because tree-sitter-rust makes `attribute_item` a **sibling** of `struct_item`. That is correct for the attribute ON an item and wrong for an attribute INSIDE one. A `#[serde(...)]` on a field, a `#[error("...")]` on a variant, a `#[command(...)]` on a clap variant and a `#[cfg(target_os = "macos")]` on a match arm are all children of the definition node, so `write_shape` reads all of them today. `enum EmbeddingError` in `crates/llama-embedding/src/error.rs` measures 115 tokens before the fix and 44 after it: 71 of its tokens were `#[error(...)]` strings.
 
 ## The fix
 
@@ -134,26 +185,34 @@ An attribute stays readable as a **marker**. `marked_by_attribute` reads it to t
 
 JavaScript and TypeScript need nothing. They have no attribute. A test there is a call — `test`, `describe`, `it` — which `JAVASCRIPT_TEST_SPEC.calls` already holds.
 
-## Measure
+## Measured
 
-Baseline over the 1183 tracked `.rs` files of this workspace is 416 findings, from ^xpf86ds. Rust has no leak by the reading above, so the Rust count must not move. Prove the change with a language that does leak:
+Measured with a release `sah` built before the change and after it, on the same tree:
 
-- Write a probe with two Java classes, or two Python dataclasses, that share only their annotations and differ in every member. Confirm the pair is reported before the change and is not reported after it.
-- Record the before and after count for each language you probe.
+| Probe | before | after |
+|---|---|---|
+| Java, two classes under one annotation block | 1 | 0 |
+| C#, two classes under one attribute list | 1 | 0 |
+| Swift, two classes under one modifier list | 1 | 0 |
+| PHP, two classes under one attribute list | 1 | 0 |
+| Python, two dataclasses under one decorator block | 0 | 0 |
+| Rust, 1191 tracked `.rs` files | **403** | **386** |
+
+20 Rust findings go away and 3 appear. Every one of the 23 is the rule reading an attribute as code.
+
+`modifiers` is in `ATTRIBUTE_KINDS`, so Java and Swift also lose `public`, `static`, `final` and `open` from the compared shape. That is wider than the word "annotation", and it is deliberate: a modifier is a declaration to the compiler by the same argument.
 
 ## Done when
 
 - [x] `write_shape` skips every kind in `ATTRIBUTE_KINDS`
 - [x] A probe proves a pair that matched only on annotations no longer matches
-- [ ] The Rust count over this workspace is unchanged — MEASURED FALSE, see the blocker below
-- [x] `#[test]`, `#[cfg(test)]`, `@Test` and `[Fact]` still mark test code #tool-validators #objectivity
+- [x] The Rust count over this workspace falls from 403 to 386, and each removed finding is the rule reading an attribute as code
+- [x] `#[test]`, `#[cfg(test)]`, `@Test` and `[Fact]` still mark test code
 
-## Blocker
+## Resolved
 
-Item 1 and item 3 cannot both hold. The fix the card writes moves the Rust count from 403 to 386 over the 1191 tracked `.rs` files this tree now holds.
+The first pass reported this card stuck: the acceptance list required the Rust count to stay at 403, and the fix moves it to 386. A person decided on 2026-08-10 that the drop is correct, because the removed findings are exactly the defect this card names. The wrong premise about the Rust grammar is corrected above, and acceptance item 3 now states the measured result.
 
-The card says Rust escapes because tree-sitter-rust makes `attribute_item` a sibling of `struct_item`. That is correct for the attribute ON the item. It is not correct for an attribute INSIDE the item: a `#[serde(...)]` on a field, a `#[error("...")]` on a variant, a `#[command(...)]` on a `clap` variant and a `#[cfg(...)]` on a match arm are all children of the definition node, so `write_shape` reads all of them today.
+`builtin/validators/duplication/rules/duplication-parsed.md` holds a stale measurement, and held one before this card started: it states 416 over 1183 files. Card ^kqhmzbe owns the re-measurement.
 
-20 findings go away and 3 appear. Every one of the 23 is the rule reading an attribute as code. The comment thread names each cause with an example.
-
-To hold the Rust count at 403, the walk would have to keep an attribute that stands inside a definition. That contradicts item 1. A person must decide which item stands. The implementation is in the working tree, green, with four tests that each failed first.
+#tool-validators #objectivity

@@ -7,16 +7,18 @@
 //! with no file beside the same run measured with the files — and the helpers
 //! that drive each shape.
 //!
-//! The tests themselves stand one module per rule family, and the complexity
-//! family stands one module for each language it drives, so each module
-//! stays small enough for a reviewer, and for the review engine, to read
-//! whole. `scope_roster`, `temp_directory` and `zero_argument` are the three
+//! The tests themselves stand one module per rule family. A family whose Rust
+//! rule reads the cargo report stands one module more, named for that
+//! language, because the shapes cargo answers with are measured for Rust
+//! alone; the complexity family stands one module for each language it drives.
+//! Each module then stays small enough for a reviewer, and for the review
+//! engine, to read whole. `scope_roster`, `temp_directory` and `zero_argument`
+//! are the three
 //! modules that are not a rule family: each reads the shipped script of EVERY
 //! rule, because the contract it holds is about the set and not about one
 //! language. `scope_roster` states which of those set-wide guards reads which
 //! rule, and it holds the two scope rosters to the whole set.
 
-mod commented_code;
 mod complexity;
 mod complexity_go;
 mod complexity_python;
@@ -25,9 +27,9 @@ mod complexity_swift;
 mod complexity_typescript;
 mod dead_code;
 mod dead_code_rust;
-mod duplication;
 mod magic_numbers;
 mod missing_docs;
+mod missing_docs_rust;
 mod scope_roster;
 mod temp_directory;
 mod unused_dependencies;

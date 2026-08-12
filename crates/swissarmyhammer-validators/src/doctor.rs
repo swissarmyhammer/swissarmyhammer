@@ -695,52 +695,6 @@ fn fix_hint_fix(rule: &ToolRuleStatus) -> Option<String> {
     Some(format!("{FIX_LEAD_IN}{hint}"))
 }
 
-/// The environment variable every tool-rule script reads to invoke `sah`.
-///
-/// A rule whose tool IS sah writes `"$SAH_BIN"` rather than `sah`, so the
-/// script runs the binary the engine is running inside — never whichever
-/// older copy happens to sit first on `PATH`.
-pub(crate) const SAH_BINARY_ENV: &str = "SAH_BIN";
-
-/// The file stem the sah command line interface is installed under.
-const SAH_BINARY_NAME: &str = "sah";
-
-/// The `sah` binary a tool-rule script invokes, exported as [`SAH_BINARY_ENV`].
-///
-/// Resolution order, and why each step is there:
-///
-/// 1. An existing `SAH_BIN` in the environment wins, so a test or a wrapper can
-///    point every script at a freshly built binary.
-/// 2. `current_exe()`, when its file stem is `sah` — the engine invoking
-///    itself, which is the whole point.
-/// 3. The bare name, resolved by `PATH`. Under `cargo nextest` the current
-///    executable is a test binary rather than the command line interface, so
-///    step 2 declines and this is what a test run gets.
-fn sah_binary() -> OsString {
-    if let Some(configured) = std::env::var_os(SAH_BINARY_ENV) {
-        return configured;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if is_sah_binary(&exe) {
-            return exe.into_os_string();
-        }
-    }
-    OsString::from(SAH_BINARY_NAME)
-}
-
-/// Whether `exe` is the sah command line interface, judged by its file stem.
-///
-/// The comparison ignores ASCII case because a file system need not preserve
-/// it. Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so a
-/// case-sensitive stem test would decline the very binary it is looking for
-/// and fall through to the bare name on `PATH` — which on that machine is
-/// whatever older copy happens to sit first.
-fn is_sah_binary(exe: &Path) -> bool {
-    exe.file_stem()
-        .and_then(OsStr::to_str)
-        .is_some_and(|stem| stem.eq_ignore_ascii_case(SAH_BINARY_NAME))
-}
-
 /// Run a tool-rule shell snippet, with `args` as the script's positional
 /// parameters (`"$@"`).
 ///
@@ -750,8 +704,7 @@ fn is_sah_binary(exe: &Path) -> bool {
 /// run under another. The interpreter and the stream wiring come from
 /// [`shell_command`], the same builder every other caller in the workspace
 /// spawns a shell with. What this runner adds is its own: the tool-rule
-/// contract's `"$@"` and [`SAH_BINARY_ENV`] in the environment; see
-/// [`sah_binary`].
+/// contract's `"$@"`.
 pub(crate) fn run_shell(
     script: &str,
     cwd: Option<&Path>,
@@ -761,7 +714,6 @@ pub(crate) fn run_shell(
     // argument is not swallowed as the script's own name.
     let mut command = shell_command(Shell::Bash, script);
     command.arg("bash").args(args);
-    command.env(SAH_BINARY_ENV, sah_binary());
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
@@ -771,7 +723,6 @@ pub(crate) fn run_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_common::test_utils::EnvVarGuard;
 
     /// Write one validator set directory: a VALIDATOR.md manifest, rule
     /// files under `rules/`, and fixture files under `fixtures/`.
@@ -804,63 +755,6 @@ mod tests {
             .load_rulesets_directory(root, ValidatorSource::Project)
             .expect("load rulesets");
         loader
-    }
-
-    /// A script that prints the `sah` binary the engine handed it.
-    const ECHO_SAH_BIN_SCRIPT: &str = r#"printf '%s' "$SAH_BIN""#;
-
-    #[test]
-    #[serial_test::serial(env)]
-    fn run_shell_exports_the_sah_binary_to_every_script() {
-        let _guard = EnvVarGuard::unset(SAH_BINARY_ENV);
-
-        let output = run_shell(ECHO_SAH_BIN_SCRIPT, None, &[]).expect("bash runs");
-
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            SAH_BINARY_NAME,
-            "under a test binary `current_exe` is not `sah`, so a script falls back to the name"
-        );
-    }
-
-    /// Every spelling of the command line interface's own name a file system
-    /// can hand back, and whether the stem test must accept it.
-    ///
-    /// Windows resolves `SAH.EXE`, `Sah.exe` and `sah.exe` to one file, so
-    /// only the STEM decides and it decides without reading case. The
-    /// separators are written `/` so the same rows exercise the same stems on
-    /// every platform — the case is what is under test, not the separator.
-    const BINARY_NAME_SPELLINGS: &[(&str, bool)] = &[
-        ("/usr/local/bin/sah", true),
-        ("/Program Files/sah/SAH.EXE", true),
-        ("/Program Files/sah/Sah.exe", true),
-        ("/usr/local/bin/sah.exe", true),
-        ("/usr/local/bin/sahara", false),
-        ("/usr/local/bin/notsah", false),
-        ("/workspace/target/debug/deps/doctor-9f2c1a", false),
-        ("/usr/local/bin", false),
-    ];
-
-    #[test]
-    fn the_binary_stem_test_reads_the_name_and_not_its_case() {
-        for (path, is_sah) in BINARY_NAME_SPELLINGS {
-            assert_eq!(
-                is_sah_binary(Path::new(path)),
-                *is_sah,
-                "{path} should {}be read as the sah command line interface",
-                if *is_sah { "" } else { "not " }
-            );
-        }
-    }
-
-    #[test]
-    #[serial_test::serial(env)]
-    fn a_configured_sah_binary_wins_over_every_other_source() {
-        let _guard = EnvVarGuard::set(SAH_BINARY_ENV, "/opt/build/sah");
-
-        let output = run_shell(ECHO_SAH_BIN_SCRIPT, None, &[]).expect("bash runs");
-
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "/opt/build/sah");
     }
 
     const PLAIN_MANIFEST: &str =

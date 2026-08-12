@@ -305,19 +305,17 @@ pub(super) fn execute_query_ast(
     json_result(&result)
 }
 
-/// Execute a tool-rule file report: run `operation` over the `files` argument
-/// and render its findings as PLAIN TEXT, one `path:line: message` line each.
+/// Execute a file report: run `operation` over the `files` argument and render
+/// its findings as PLAIN TEXT, one `path:line: message` line each.
 ///
-/// The two tool-rule ops below are this one handler with an argument. Both
-/// take the same `files` array, resolve the same working directory, and print
-/// the same contract, because a tool rule runs its op through `sah tool` and
-/// the review engine parses the stdout directly — a JSON result would reach
-/// that script as YAML, which the contract cannot read.
+/// The two ops below are this one handler with an argument. Both take the same
+/// `files` array, resolve the same working directory, and print the same
+/// contract, so a caller reads one line for each finding rather than a nested
+/// document.
 ///
 /// No workspace is opened. Each verdict is a fact about the files named, so
 /// the op answers without the code-context index and runs in a scratch
-/// directory that holds no `.code-context` database — which is where the
-/// rules' doctor fixtures live.
+/// directory that holds no `.code-context` database.
 fn execute_file_report<Finding: std::fmt::Display>(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -338,9 +336,8 @@ fn execute_file_report<Finding: std::fmt::Display>(
 /// Execute the "find duplication" operation.
 ///
 /// Reports every function, method or type of the named files that is a
-/// near-duplicate of another. The
-/// `duplication-parsed` tool rule reads the report — see
-/// [`execute_file_report`] for the contract it prints.
+/// near-duplicate of another — see [`execute_file_report`] for the contract it
+/// prints.
 pub(super) fn execute_find_duplication(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -351,8 +348,8 @@ pub(super) fn execute_find_duplication(
 /// Execute the "find commented_code" operation.
 ///
 /// Reads each named file and reports the comment blocks that re-parse as code
-/// in that file's own language. The `no-commented-code-parsed` tool rule reads
-/// the report — see [`execute_file_report`] for the contract it prints.
+/// in that file's own language — see [`execute_file_report`] for the contract
+/// it prints.
 pub(super) fn execute_find_commented_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,

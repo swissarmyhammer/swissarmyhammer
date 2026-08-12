@@ -43,8 +43,42 @@ comments:
 
     - next: ready for `/review`.
   timestamp: 2026-08-10T23:03:53.509947+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzpz0fdzt2tpzkxtmfa0ty1k
+  text: |
+    ### review — clean
+
+    - scope: `review sha HEAD~1..HEAD` (commit `0612f0429`).
+    - counts: findings 1, confirmed 1, refuted 0, attempted 8, failed 0, skipped 0, skipped_files [].
+    - the one engine finding is dropped by the written exception of the review skill: it asks to deduplicate test code that already existed.
+      - `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:207` — `dead_code_work` is a near-duplicate of `complexity_work` at `shipped.rs:121` (75 tokens, 91% alike).
+      - Both functions are pre-existing debt, not caused by this commit. `git blame` gives `complexity_work` to `da41103e63` and `dead_code_work` to `087d052b43`. This commit touches only `shipped.rs` lines 923-991.
+    - the four sibling claims of the `magic-numbers-python` rule are each TRUE against the rule files:
+      - `magic-numbers-swift.md` line 15 writes `allowed_numbers: [0, 1, -1, 100]`.
+      - `magic-numbers-typescript.md` line 29 writes `ignore: [0, 1, -1, 100]`.
+      - `magic-numbers-go.md` line 22 writes `ignored-numbers: ["0", "1", "-1"]`, so it does not name `100`. The card `^s2ftjys` ("magic-numbers-go omits 100 and shift constants from ignored-numbers") is open in `todo`.
+      - `magic-numbers-python.md` lines 56-61 measure that `ruff` has no value allow-list, and lines 63-72 measure `# noqa: PLR2004` as the recourse.
+    - the shift statement is honest. The eslint `ignore` option holds numbers, so it selects a value. `8` in the list therefore silences `word << 8`, `word >> 8` and `word === 8` together. The stated recourse also works: the `tool.run` script passes `--no-config-lookup --config`, and neither the flags nor the config turn inline comments off, so `// eslint-disable-next-line @typescript-eslint/no-magic-numbers` applies.
+    - the new acceptance test drives the real tool. `verify_shipped_fail_fixture_reports_each` reads the shipped fixture, writes it into a temporary repository, plans the rule from `builtin_loader()`, and calls `execute_tool_runs`. `require_tool_installed` panics when eslint is absent, so the test cannot pass silently.
+    - next: the card is clean. Move to done.
+  timestamp: 2026-08-10T23:09:32.479157+00:00
+- actor: claude-code
+  id: 01kzpz20g7xhcsmxypvggvvmbb
+  text: |
+    ### finish iteration 1 — clean
+    - the allow-list decision: restore the `100` carve-out wherever the tool can express it. The reason is the governing principle of this card series — a rule that declares `supersedes` must reproduce the carve-outs of the rule it supersedes, and dropping one is the defect the survey exists to remove.
+    - implement: changed — 6 files. `ignore: [0, 1, -1, 100]`. Measured with eslint 10.8.0 and `@typescript-eslint/no-magic-numbers` 8.66.0 through a copy of the shipped run script: before, `(n * 100) / total` and `usage === 100` each reported "No magic number: 100."; after, both are silent and `size * 4096` still reports.
+    - the SHIFT carve-out cannot be expressed, and the rule now says so instead of leaving it silent. `word << 8`, `word >> 8` and `word === 8` all report, and putting `8` in `ignore` would silence all three, because `ignore` selects a value and never a position. eslint refuses an `ignoreShift` key and names its ten accepted options, none for a shift operand. The recourse is the inline `// eslint-disable-next-line`, and the fail fixture plus a new acceptance test hold eslint to reporting the shift, so the gap is measured rather than asserted.
+    - THE CROSS-CARD CORRECTION: adding `100` here made a paragraph of `magic-numbers-python.md` false. ^2syfvyt had written "The sibling rules report `100` too ... Python agreeing with them is deliberate", which was true when it landed two commits earlier. That paragraph is replaced by "This is the one rule of the four that cannot allow `100`". Leaving a false claim about a sibling in a rule body is the exact defect this series removes, so the correction belongs in this commit and not in a later one.
+    - test: `cargo nextest run --workspace` 14040 run, 14036 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set.
+    - commit: 0612f0429
+    - review: clean — 1 finding, 8 tasks attempted, 0 failed. The one finding is the pre-existing `dead_code_work` pair, dropped under the written exception; the reviewer confirmed by `git blame` that both functions pre-date the commit and that the commit's only hunk in that file is elsewhere.
+    - the reviewer checked each of the four sibling claims against the actual rule files rather than reading the prose: Swift `allowed_numbers: [0, 1, -1, 100]`, TypeScript `ignore: [0, 1, -1, 100]`, Go `ignored-numbers: ["0", "1", "-1"]` with ^s2ftjys open to add it, and ruff with no value allow-list at all. All four true.
+    - CAUTION carried forward: `sah doctor` serves the `~/.validators` snapshot, so every set row reads `(user)`. Its rows are NOT evidence about the builtin rules. The builtin-backed check is `every_shipped_magic_numbers_tool_rule_passes_its_fixtures`.
+    - the validator-fixture exclusion of ^4cc5y9b did not fire again: `skipped_files` empty, both `.tmpl` fixtures in scope. Tracked on ^07pmgmx.
+  timestamp: 2026-08-10T23:10:22.727401+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffdc80
 title: magic-numbers-typescript omits 100 from ignore although the option supports it
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-typescript.md` runs `@typescript-eslint/no-magic-numbers` with `ignore: [0,1,-1]` and seven `ignore*` position options, and declares `supersedes: [magic-numbers]`.

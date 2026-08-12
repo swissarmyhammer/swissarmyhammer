@@ -45,8 +45,24 @@ comments:
     - evidence: 2 files — builtin/validators/code-hygiene/rules/dead-code-rust.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_rust.rs; 13/13 rule tests, 687/687 crate tests, fmt and clippy clean
     - next: /review
   timestamp: 2026-08-12T09:00:57.268808+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kztkw80h5f8v7yfrmamw2d4y
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 0de4a3936) — 0 findings, 0 confirmed, 0 refuted, 8 validators attempted, 0 failed, 0 skipped. No prior Review Findings sections open on this card.
+    - next: none — task moved to `done`.
+  timestamp: 2026-08-12T09:11:57.201541+00:00
+- actor: claude-code
+  id: 01kztkx059z45n8heerdr1xcnv
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 2 files (builtin/validators/code-hygiene/rules/dead-code-rust.md, tests/shipped/dead_code_rust.rs). All three carded defects fixed: include! resolution, an awk lexer that drops comments and string bodies, and nested inline module declarations resolved to their path. New `// sah:ignore orphan-module <reason>` marker. 7 acceptance tests watched RED then GREEN.
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3436 passed, 13/13 rule tests. The 5 remaining failures are pre-existing: 4 carded on ^bh5ncd0, 1 newly carded on ^neb2era. fmt and clippy clean.
+    - commit: 0de4a3936
+    - review: clean — 0 findings over HEAD~1..HEAD, task moved to done
+  timestamp: 2026-08-12T09:12:21.929054+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffeb80
 title: dead-code-rust reports an include! file as an orphan module, and offers no suppression
 ---
 `builtin/validators/code-hygiene/rules/dead-code-rust.md` runs `cargo check --workspace --all-targets` for `dead_code`, and adds a shell orphan-module scan.

@@ -143,8 +143,24 @@ comments:
     - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs. `cargo nextest run -p swissarmyhammer-validators -E 'test(/tool_rules::tests::shipped/)'`: 116 run, 116 passed, 0 failed. The narrowed filter, five runs: 24 passed each time. `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean. Both review findings checked.
     - next: /review
   timestamp: 2026-08-12T08:26:02.339985+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kztht3f9zhcwy24g39sc2eat
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (0142cffbc) — 0 findings, 0 confirmed, 0 refuted, 8 validator runs attempted, 0 failed. Both findings of the round of 2026-08-12 03:10 are checked.
+    - next: none. The task moves to done.
+  timestamp: 2026-08-12T08:35:49.865922+00:00
+- actor: claude-code
+  id: 01kzthtnv6rft8t3nky11fjhgh
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file (tests/shipped/unused_dependencies.rs), both prior findings checked
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3439 passed. The 4 remaining failures are pre-existing and carded on ^bh5ncd0. Run 3 times to prove the dropped serial(env) markers add no race. fmt and clippy clean.
+    - commit: 0142cffbc
+    - review: clean — 0 findings over HEAD~1..HEAD, task moved to done
+  timestamp: 2026-08-12T08:36:08.678879+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffea80
 title: Three Rust tool rules answer zero and exit 0 for a crate that does not compile
 ---
 Found by the measurement on ^302hw8c. That card removed the defect from `missing-docs-rust.md`. Three Rust rules still hold it.

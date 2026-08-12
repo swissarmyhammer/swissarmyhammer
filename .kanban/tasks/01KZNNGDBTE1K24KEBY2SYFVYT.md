@@ -129,8 +129,43 @@ comments:
     - `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: ready for `/review`
   timestamp: 2026-08-10T22:30:20.443751+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzpxkr3983qdb8h7ndng0e8t
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha HEAD~1..HEAD`, commit 5a20b44b1. Engine counts: 1 finding, 1 confirmed, 1 refuted, 8 tasks attempted, 0 tasks failed, 0 files skipped, `skipped_files` empty. The commit changes 1 source file, and the engine reviewed that 1 file.
+    - The one engine finding is `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:207` — `dead_code_work` is a near-duplicate of `complexity_work` at `shipped.rs:121`. Both functions were in the repository before this commit, and `git show HEAD` does not touch either one. The review skill drops a finding that asks to refactor test code that already exists. That written rule drops this finding, as on the pass before. This is debt that exists before this commit, not a result of it.
+    - The prior finding is addressed. The commit adds `ShippedFailFixture` and `verify_shipped_fail_fixture_reports_each`, and the two fixture tests call the helper. The commit also adds `required_run`, which replaces the run-lookup block that was written six times.
+    - The two tests still drive their real tool. The helper calls `plan_tool_rules`, then `required_run`, then `execute_tool_runs`. To prove this, made a mutation in a separate git worktree, NOT in the working tree. Changed one expected TypeScript guard and one expected Python value. Both tests failed, and each failure names real tool output:
+      - Python names real ruff claims: `PLR2004 Magic value used in comparison, consider replacing 404 with a constant variable`, and four more.
+      - TypeScript names full source lines of the fixture, for example `function foldGrid(grid: number[][], limit: number): number {` and `get band(): number {`. The helper reads the line that eslint reports and resolves it into the source line. Pre-computed data would give back the guard constants instead.
+    - No assertion is weaker. TypeScript holds each guard with `starts_with` against the source line, and keeps the panic `line {line} stands past the end of the fixture`. Python holds each value with `contains`. The shared helper holds the count for both with `assert_eq!(reported.len(), probe.expected.len())`.
+    - With the file put back to its committed state, both tests pass.
+    - Observation, not a finding: `the_swift_package_root_restores_the_directory_before_it_removes_it` fails when the module runs in parallel. It fails 2 of 3 runs at HEAD~1 also, and it passes when it runs alone. This commit does not touch it. It is test isolation debt that exists before this commit.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-10T22:45:06.793706+00:00
+- actor: claude-code
+  id: 01kzpxn59smk6hh86g9r9xqg11
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file. The finding named one example of a cause that reached wider than the pair: `ShippedFailFixture` plus `verify_shipped_fail_fixture_reports_each` for the two fixture-driven tests, and `required_run` for a run-lookup block that was written SIX times, three of them in tests the finding never named.
+    - the `dead_code_work` / `complexity_work` pair was deliberately left alone. It is not fixture-driven, and routing it through the helper would make the two MORE alike after normalization, not less.
+    - test: `cargo nextest run --workspace` 14039 run, 14035 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set.
+    - commit: 5a20b44b1
+    - review: clean — 1 finding, 8 tasks attempted, 0 failed. The one finding is the same pre-existing `dead_code_work` pair, dropped again under the written exception; the reviewer confirmed by `git show` that the commit touches neither function.
+    - BOTH tests were proved to still drive their real tool, by the implementer AND independently by the reviewer, each by mutating an expected value and reading the tool output back out of the failure. The reviewer made its mutation in a separate git worktree, never in the shared tree. The decisive detail it names: the TypeScript failure prints whole fixture SOURCE LINES resolved from the line numbers eslint reported, which pre-computed data could not produce.
+    - no assertion weakened: `starts_with` for TypeScript with the past-the-end panic retained, `contains` for Python, the count held for both, and the error and path filters retained.
+  timestamp: 2026-08-10T22:45:53.081748+00:00
+- actor: claude-code
+  id: 01kzpyn8fqenwrt9a6mjn2vdpe
+  text: |-
+    The section this card added to `magic-numbers-python.md` under the heading "The sibling rules report `100` too" became false when ^eedma7g put `100` in the `magic-numbers-typescript` allow-list. ^eedma7g rewrote it as "This is the one rule of the four that cannot allow `100`", which states the real shape: Swift and TypeScript allow `100` because their tools take a value allow-list, Go can state the same list and does not yet, and `ruff` is the one tool of the four with no value allow-list at all, so `# noqa: PLR2004` is the recourse.
+
+    The decision this card records — that Python reports `100` because `ruff` cannot express a value allow-list — stands unchanged. Only the justification that pointed at the siblings changed.
+  timestamp: 2026-08-10T23:03:24.919675+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffdb80
 title: magic-numbers-python reports 100, and ruff exposes no value allow-list to carve it out
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-python.md` runs `ruff check --isolated --select PLR2004` and declares `supersedes: [magic-numbers]`.

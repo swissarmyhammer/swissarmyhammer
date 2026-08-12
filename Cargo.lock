@@ -7817,7 +7817,6 @@ dependencies = [
  "swissarmyhammer-lsp",
  "swissarmyhammer-operations",
  "swissarmyhammer-project-detection",
- "swissarmyhammer-sem",
  "swissarmyhammer-skills",
  "swissarmyhammer-statusline",
  "swissarmyhammer-templating",

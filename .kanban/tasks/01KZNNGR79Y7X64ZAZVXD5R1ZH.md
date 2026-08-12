@@ -91,8 +91,36 @@ comments:
     - `touch crates/swissarmyhammer-validators/src/builtin/mod.rs` was run before every measurement run, so each ran against the rebuilt compiled-in builtins.
     - next: `/review`.
   timestamp: 2026-08-11T00:10:11.895618+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzq2v37j3mmxyfbd8x5amy43
+  text: |-
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit aaf01c890).
+    - counts: 1 finding, 1 confirmed, 0 refuted, 8 attempted, 0 failed, 0 skipped. `skipped_files` is empty — the fixture exclusion did NOT fire on this range.
+    - The one finding is DROPPED under the written exception for tests that already exist: `shipped.rs:207` `dead_code_work` against `shipped.rs:121` `complexity_work`. Both functions are byte-identical at the same lines in HEAD~1, so this is pre-existing debt, and this commit does not cause it.
+    - Verified the refutation by an independent run of swiftlint 0.65.0 with the shipped config `allowed_numbers: [0, 1, -1, 100]`. Every line of the rule table agrees with the measurement. Silent: `return word << 8`, `return word >> 8`, `return 4096 << width`, `let packed = word << 8`, `return (word << 8) | 1`. Reports: `return status == 8`, `return word &<< 8`, `return word * 8`, `acc = word << 8`, `return word << 8 | 1`, `if word << 8 > 0`, `return flag ? word << 8 : word`. The claim is also internally consistent: `status == 8` reports while `word << 8` is silent, which is possible only if the rule reads the operator.
+    - Verified `8` is NOT in `allowed_numbers`. The committed rule states `allowed_numbers: [0, 1, -1, 100]`, so a true `status == 8` finding stays.
+    - Verified the rule body states the measurement, the residual edge for a shift in a longer unparenthesised chain, and both recourses — parentheses, or `// swiftlint:disable:next no_magic_numbers`.
+    - Verified the new acceptance test drives the real tool. `verify_shipped_fail_fixture_reports_each` copies the shipped fixture, calls `plan_tool_rules`, then `execute_tool_runs`, and holds the count to an exact match. It does not read pre-computed data. `cargo test -p swissarmyhammer-validators --lib the_shipped_swift_magic_numbers_tool_rule_reports_every_fail_fixture_line` passed after `touch crates/swissarmyhammer-validators/src/builtin/mod.rs`.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-11T00:16:30.450241+00:00
+- actor: claude-code
+  id: 01kzq2wfc5zznh71t98dpb5brw
+  text: |
+    ### finish iteration 1 — clean
+    - THE CARD'S CLAIM IS REFUTED. The card says `x << 8` reports "because `8` is not in `allowed_numbers` and swiftlint reads the position, not the operator". Measured on swiftlint 0.65.0 with the shipped `allowed_numbers: [0, 1, -1, 100]`: `word << 8` and `word >> 8` are SILENT, `4096 << width` is silent (both operands), and `status == 8` still REPORTS. swiftlint reads the OPERATOR. In one identical shape `word <op> 8`, only `<<` and `>>` are silent; `&<<`, `*`, `+`, `&`, `|`, `^` and `==` all report.
+    - so Swift is the ONE rule of the four that expresses the shift carve-out, and it already did. Go and TypeScript cannot, for the structural reason both of those cards measured: their allow-list selects a value and never a position.
+    - `8` stays OUT of `allowed_numbers`. Adding it would buy nothing and would silence a genuine `status == 8`.
+    - the residual edge is measured and stated: the carve-out reaches a whole shift, not one link of a longer unparenthesised chain. `acc = word << 8`, `return word << 8 | 1`, `if word << 8 > 0` and a ternary all report; parentheses silence all four, and so does `// swiftlint:disable:next no_magic_numbers`. The option set is exactly `severity`, `test_parent_classes`, `allowed_numbers`, and a fourth key is refused by name.
+    - the discarded `.swiftlint.yml` defect was LEFT here on purpose. It belongs to the config-build shape all three Swift rules share, so fixing one would give three rules three shapes. A note naming `magic-numbers-swift` as the third site is on ^xv57pf8, with the measurements the fix needs.
+    - an end-to-end acceptance test now drives the real swiftlint pipeline, holding each finding to its source line because swiftlint never spells the value. RED proved both ways.
+    - test: `cargo nextest run --workspace --no-fail-fast` 14042 run, 14038 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set.
+    - commit: aaf01c890
+    - review: clean — 1 finding, 8 tasks attempted, 0 failed. The one finding is the pre-existing `dead_code_work` pair, dropped under the written exception for the fourth time.
+    - the reviewer re-ran swiftlint itself rather than trusting the rule body, and reproduced all ten rows of the table. Its decisive check: `status == 8` reports while `word << 8` is silent — the same value with a different operator, which is only possible if the rule reads the operator.
+  timestamp: 2026-08-11T00:17:15.653208+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffde80
 title: magic-numbers-swift reports a conventional shift constant
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-swift.md` runs `swiftlint` with `only_rules: [no_magic_numbers]` and `allowed_numbers: [0, 1, -1, 100]`, and declares `supersedes: [magic-numbers]`.

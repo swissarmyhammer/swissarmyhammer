@@ -1,8 +1,27 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffd680
+comments:
+- actor: claude-code
+  id: 01kztm98s6x9h51gj2mthw7y81
+  text: |-
+    Research done. All 10 delete targets exist. Line numbers verified against the current tree:
+
+    - `shipped.rs:19` = `mod commented_code;`, `shipped.rs:28` = `mod duplication;` — the card's numbers still hold after f495f760c/0142cffbc/0de4a3936.
+    - `mirdan/src/builtin_validators.rs:275-276` = the two `no-commented-code-parsed` fixture names. The duplication set ships no fixture in that roster.
+    - `apps/swissarmyhammer-cli/Cargo.toml:116-118` = the `swissarmyhammer-sem` dev-dep. `tests/duplication_tool_rule.rs` is its only reader in the package, so it goes.
+    - `doctor.rs:703,706,719,738,764` = `SAH_BINARY_ENV`, `SAH_BINARY_NAME`, `sah_binary()`, `is_sah_binary()`, the `command.env(...)` line. The three tests are at 814, 845 and 858, plus the `EnvVarGuard` import and the `ECHO_SAH_BIN_SCRIPT` and `BINARY_NAME_SPELLINGS` constants they alone read.
+
+    Three files the card does not list also name the two rules, and each must change or the suite goes red or the prose goes false:
+
+    1. `shipped/missing_docs.rs:456,466` — the `SHIPPED_RULES_THAT_READ_A_GO_FILE` roster. It falls from 27 entries to 25.
+    2. `builtin/validators/code-hygiene/rules/missing-docs-go.md:81,86` — states "27 shipped rules match a `.go` file". The roster above is what holds that sentence, so the number becomes 25.
+    3. `crates/swissarmyhammer-tools/src/mcp/tools/code_context/execute.rs:342,354` — doc comments naming the two rules as the readers of the two ops. The ops stay; the sentence naming a deleted rule goes.
+
+    `rg -l '^tool:' builtin/validators` reports 27 rules today, so 25 after the two deletions.
+  timestamp: 2026-08-12T09:19:03.974907+00:00
+position_column: doing
+position_ordinal: '8280'
 title: Delete the two -parsed tool rules that shell out to sah itself
 ---
 `duplication-parsed` and `no-commented-code-parsed` are the only two tool rules

@@ -62,8 +62,42 @@ comments:
     - evidence: 6 files — builtin/validators/code-hygiene/rules/magic-numbers-go.md, builtin/validators/code-hygiene/rules/magic-numbers-python.md, builtin/validators/code-hygiene/fixtures/magic-numbers-go.fail.go.tmpl, builtin/validators/code-hygiene/fixtures/magic-numbers-go.pass.go.tmpl, crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs. `cargo nextest run --workspace`: 14041 run, 14037 passed, 4 failed — the known ^bh5ncd0 set only (3 review_e2e + the stdio timeout). `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. `every_shipped_magic_numbers_tool_rule_passes_its_fixtures` PASS, and the validators crate ran 579/579 green three times in a row.
     - next: /review
   timestamp: 2026-08-10T23:43:30.363064+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzq1bpn7srnqh3sefnavrgxf
+  text: |-
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit 7cf57eeda). HEAD is 7cf57eeda, so the range holds only this commit.
+    - counts: findings 1, confirmed 1, refuted 0, attempted 8, failed 0, skipped 0, skipped_files [].
+    - The one finding is dropped under the written exception for test code that already exists: "`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:207` — fn `dead_code_work` is a near-duplicate of `complexity_work` at crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:121 (75 tokens, 91% alike)." This commit adds no line and removes no line that names `dead_code_work` or `complexity_work`. `git log -S` puts both functions in commit 087d052b4 (^a4ebnw3). The finding asks to deduplicate test code that already existed, so the review skill drops it. It is pre-existing debt, not a defect of this commit.
+    - Zero open findings. No prior `## Review Findings` section stands on the card.
+
+    Checks made by hand against the committed bytes:
+    - `allow-serial-runners: true` IS in the written config, under `run:` in `tool.run` of `builtin/validators/code-hygiene/rules/magic-numbers-go.md`. The heredoc writes it to the temporary config the script passes with `--config`.
+    - `GOLANGCI_LINT_CACHE` IS derived per workspace, not fixed: `cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"`, and the variable is set on the `golangci-lint` command line. The name changes with `$PWD`, so two workspaces take two cache directories.
+    - The acceptance test drives the real tool. `verify_shipped_fail_fixture_reports_each` calls `require_tool_installed`, copies the SHIPPED fixture bytes and the shipped `go.mod` into a temporary repository, then calls `plan_tool_rules` and `execute_tool_runs` over the real repository root. `require_tool_installed` panics when the tool is absent; it does not skip. The Go probe names `project_types: ["go"]` and the rule states `scope: workspace`, and the `go.mod` support fixture makes `./...` load a module. No pre-computed data stands in the assertions.
+    - The Python rule states the fact. `magic-numbers-python.md` now reads "`magic-numbers-go` states `ignored-numbers: ["0", "1", "-1", "100"]`." That is the same list the committed `magic-numbers-go.md` writes. The sentence about future work and the card reference are gone.
+    - next: none. The card is done.
+  timestamp: 2026-08-10T23:50:37.479484+00:00
+- actor: claude-code
+  id: 01kzq1d1wcs679ec97sg8t6tzz
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 6 files. `ignored-numbers: ["0", "1", "-1", "100"]`, so the three tools that CAN state a value allow-list now agree and Python stays the one documented exception.
+    - the shift carve-out cannot be expressed, and BOTH levers were measured and refused, not assumed: `8` in `ignored-numbers` also silences a genuine `status == 8`; and `checks` without `operation` does not even buy the carve-out, because `mnd` attributes a literal to the check of the statement that holds it — `return word << 8` and `f(word << 8)` still report — while it loses `n * 3600`. `golangci-lint config verify` accepts only four keys under `linters.settings.mnd`. The gap is stated with `//nolint:mnd` as the recourse.
+    - THE IMPORTANT PART: the new end-to-end acceptance test exposed TWO defects that made this rule report ZERO findings and name no reason.
+      1. `golangci-lint` takes one file lock for each run. A second instance writes `Error: parallel golangci-lint is running` to stderr, which the pipe drops, so the run reads as a CLEAN FILE. Measured: eight concurrent runs reported `6, 6, 6, 0, 6, 0, 6, 0`. With `run: allow-serial-runners: true`, all eight reported `6`.
+      2. `golangci-lint` answers from a content-keyed cache that stores the ABSOLUTE path of the run that first cached the package. A second directory with the same bytes and module name got back the first directory's paths, which the engine then drops because it cannot place them in the workspace. Measured, then fixed with a `GOLANGCI_LINT_CACHE` named for `$PWD`. Two checkouts of one repository are the everyday form of this, and a review runs in a worktree.
+    - both defects are written into the rule body with their measurements, so the next reader does not have to rediscover them.
+    - `function-length-go` has the identical script shape and both defects; `unused-code-go` needs the same question asked of `staticcheck`. Filed as ^mms9g8d. Those rules were NOT touched here.
+    - the stale Go sentence in `magic-numbers-python.md` is now a statement of fact.
+    - test: `cargo nextest run --workspace` 14041 run, 14037 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set. The validators crate ran 579/579 three times in a row.
+    - commit: 7cf57eeda
+    - review: clean — 1 finding, 8 tasks attempted, 0 failed. The one finding is the pre-existing `dead_code_work` pair, dropped under the written exception; the reviewer proved by `git log -S` that both functions came in commit 087d052b4.
+    - the reviewer checked both silent-zero mechanisms against the committed bytes rather than the prose: `allow-serial-runners` is inside the heredoc the run reads, and the cache path is derived from `$PWD` through `cksum`, so two workspaces take two caches.
+    - TRAP worth remembering: a rule `.md` edit alone does not rebuild the compiled-in builtins. `touch crates/swissarmyhammer-validators/src/builtin/mod.rs` is required first. This cost one debugging cycle.
+  timestamp: 2026-08-10T23:51:21.740023+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffdd80
 title: magic-numbers-go omits 100 and shift constants from ignored-numbers
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-go.md` runs `mnd` through golangci-lint with `ignored-numbers: ["0","1","-1"]` and declares `supersedes: [magic-numbers]`.
