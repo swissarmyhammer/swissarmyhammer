@@ -82,6 +82,19 @@ jobs:
         # `npm install -g`, so the roster tests need npm on this job too.
         with:
           node-version: 22
+      - name: Install the tools the TypeScript rules declare
+        # The exact packages `complexity-typescript`, `magic-numbers-typescript`,
+        # `missing-docs-typescript` and `dead-code-typescript` state under
+        # `install.commands`. The step above gives this job its own global
+        # package prefix, so a plugin an earlier run installed is not there.
+        # Without the plugins the rules' eslint config cannot load, eslint
+        # writes nothing, and a fail fixture that must report findings reports
+        # none. Each version is pinned, so the command is a no-op the second
+        # time.
+        run: |
+          npm install -g eslint@10.8.0 eslint-plugin-jsdoc@63.3.3 \
+            eslint-plugin-sonarjs@4.2.0 typescript-eslint@8.66.0 \
+            typescript@5.9.3 ts-prune@0.10.3
       - name: Ensure the language toolchains the roster tests need are available
         # `go` and `swift` are the toolchains the Go and Swift rules run, and
         # the roster tests require every row. Each command is a no-op when the
@@ -100,12 +113,36 @@ jobs:
           if ! command -v swiftlint &>/dev/null; then
             brew install swiftlint
           fi
+          # `periphery` comes from homebrew-core, not from the vendor tap. The
+          # tap ships 2.21.2, whose scan output `dead-code-swift` cannot read,
+          # so the rule reports nothing on a fixture that must report. Drop a
+          # tap copy an earlier run left behind before installing the formula.
+          brew uninstall --cask peripheryapp/periphery/periphery &>/dev/null || true
           if ! command -v periphery &>/dev/null; then
-            brew install peripheryapp/periphery/periphery
+            brew install periphery
+          fi
+          # `magic-numbers-dart` builds a probe package that depends on
+          # `solid_lints`, which depends on the Flutter SDK, so `dart` alone
+          # cannot resolve it. The Flutter cask carries both, and it links its
+          # own `dart`, so remove the formula of that name first and let the
+          # `dart` check below find the one Flutter ships.
+          if ! command -v flutter &>/dev/null; then
+            brew uninstall --formula dart-sdk &>/dev/null || true
+            brew install --cask flutter
           fi
           if ! command -v dart &>/dev/null; then
             brew install dart-sdk
           fi
+      - name: Build the sah command line interface
+        # A tool rule whose tool IS sah runs `"$SAH_BIN"`. Under `cargo nextest`
+        # the running executable is a test binary rather than the command line
+        # interface, so the resolver falls back to the bare name on PATH, which
+        # this runner does not carry. Point every such script at the binary
+        # built from this commit.
+        run: |
+          cargo build -p swissarmyhammer-cli
+          target="$(cargo metadata --format-version 1 --no-deps | jq -r '.target_directory')"
+          echo "SAH_BIN=$target/debug/sah" >> "$GITHUB_ENV"
       - name: Run tests
         run: cargo nextest run --no-fail-fast
 
