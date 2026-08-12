@@ -175,9 +175,20 @@ fn long_rust_function(head: &str, name: &str) -> String {
 /// never a loose file. The findings are the SCRIPT's own, before the engine
 /// keeps only the ones in the changed files.
 fn rust_complexity_findings(files: &[(&str, &str)]) -> Vec<String> {
+    rust_complexity_findings_under(COMPLEX_PACKAGE_MANIFEST, files)
+}
+
+/// Drives the shipped `complexity-rust` script over a probe cargo package whose
+/// manifest holds `manifest` and which holds `files`, and answers each finding
+/// it reported as `path:line`, sorted.
+///
+/// The manifest is a parameter because one probe writes a clippy lint at deny
+/// level into it, and that shape shares its exit status with a run cargo could
+/// not make.
+fn rust_complexity_findings_under(manifest: &str, files: &[(&str, &str)]) -> Vec<String> {
     let loader = builtin_loader();
     require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let mut staged: Vec<(&str, &str)> = vec![(RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST)];
+    let mut staged: Vec<(&str, &str)> = vec![(RUST_PROBE_MANIFEST_PATH, manifest)];
     staged.extend_from_slice(files);
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
@@ -187,16 +198,32 @@ fn rust_complexity_findings(files: &[(&str, &str)]) -> Vec<String> {
     sorted_names(&reported)
 }
 
+/// The `path:line` entry [`shipped_script_findings`] answers a finding at row
+/// `row` of `path` with.
+///
+/// Every expected entry of a Rust complexity probe is built here, from the
+/// same constant the probe stages the file under, so a path that moves moves
+/// its expected entries with it.
+fn probe_row(path: &str, row: usize) -> String {
+    format!("{path}:{row}")
+}
+
+/// How many lines one [`long_rust_function`] runs with no head above it: the
+/// `pub fn` line, [`LONG_FUNCTION_BODY_LINES`] body lines, and the closing
+/// brace.
+const BARE_LONG_FUNCTION_LINES: usize = LONG_FUNCTION_BODY_LINES + 2;
+
 /// The annotation the rule states for a function the length gate reports.
 const LENGTH_GATE_ANNOTATION: &str =
     "#[expect(clippy::too_many_lines, reason = \"one line for each field\")]\n";
 
-/// The one row the annotation probe must report.
+/// The row the one finding of the annotation probe stands on.
 ///
-/// The bare function opens the probe library, so its `pub fn` line is row 1.
-/// The annotated function holds the same 300 body lines under it, and a run
-/// that reported it as well would name row 304.
-const RUST_LENGTH_ANNOTATION_ROWS: &[&str] = &["src/lib.rs:1"];
+/// The bare function opens the probe library with no head above it, so its
+/// `pub fn` line is row 1. The annotated function holds the same body under
+/// it, and a run that reported it as well would name the row directly under
+/// [`BARE_LONG_FUNCTION_LINES`] plus its own annotation line.
+const RUST_BARE_LONG_FUNCTION_ROW: usize = 1;
 
 /// Acceptance: the shipped Rust complexity tool rule drops a long function
 /// that carries the length-gate annotation, and keeps the bare one beside it,
@@ -224,7 +251,7 @@ fn the_shipped_rust_complexity_tool_rule_answers_the_length_gate_annotation() {
 
     assert_eq!(
         reported,
-        sorted_names(&expected_script_findings(RUST_LENGTH_ANNOTATION_ROWS)),
+        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_BARE_LONG_FUNCTION_ROW)]),
         "the annotation is the author's answer to the data carve-out, so the annotated \
          function must stay silent and the bare one must report"
     );
@@ -241,12 +268,18 @@ const RUST_PROBE_INTEGRATION_TEST_PATH: &str = "tests/it.rs";
 /// is the mark `cognitive-complexity` states for its test carve-out.
 const RUST_TEST_ATTRIBUTE: &str = "#[test]\n";
 
-/// Both rows the test-carve-out probe must report.
-///
-/// The attribute stands on row 1, so the `pub fn` line of the test function is
-/// row 2. The helper holds the same 300 body lines under it, so its `pub fn`
-/// line is row 304.
-const RUST_TEST_CARVE_OUT_ROWS: &[&str] = &["tests/it.rs:2", "tests/it.rs:304"];
+/// How many lines [`RUST_TEST_ATTRIBUTE`] runs above the `pub fn` line it
+/// marks.
+const RUST_TEST_ATTRIBUTE_LINES: usize = 1;
+
+/// The row the test function of the test-carve-out probe stands on. The
+/// attribute stands above it.
+const RUST_TEST_FUNCTION_ROW: usize = RUST_TEST_ATTRIBUTE_LINES + 1;
+
+/// The row the helper beside that test function stands on. The test function
+/// runs [`RUST_TEST_ATTRIBUTE_LINES`] plus [`BARE_LONG_FUNCTION_LINES`] lines,
+/// and the helper opens on the next one.
+const RUST_TEST_HELPER_ROW: usize = RUST_TEST_ATTRIBUTE_LINES + BARE_LONG_FUNCTION_LINES + 1;
 
 /// Acceptance: the shipped Rust complexity tool rule REPORTS a long test
 /// function, and the helper beside it, through the real clippy pipeline.
@@ -278,7 +311,10 @@ fn the_shipped_rust_complexity_tool_rule_reports_a_test_function_and_its_helper(
 
     assert_eq!(
         reported,
-        sorted_names(&expected_script_findings(RUST_TEST_CARVE_OUT_ROWS)),
+        sorted_names(&[
+            probe_row(RUST_PROBE_INTEGRATION_TEST_PATH, RUST_TEST_FUNCTION_ROW),
+            probe_row(RUST_PROBE_INTEGRATION_TEST_PATH, RUST_TEST_HELPER_ROW),
+        ]),
         "`--all-targets` puts the test target in front of the gates, and no clippy key \
          reads `#[test]`, so the test function and the helper beside it both report"
     );
@@ -311,12 +347,15 @@ const RUST_GENERATED_BARE_PATH: &str = "src/bare.rs";
 /// stands inside the probe repository.
 const RUST_GENERATED_ANNOTATED_PATH: &str = "src/annotated.rs";
 
-/// The one row the generated-code probe must report.
-///
-/// The head runs two lines, so the `pub fn` line of each module file is row 3.
-/// The annotated module holds the same bytes, and a run that reported it as
-/// well would name `src/annotated.rs:3`.
-const RUST_GENERATED_ROWS: &[&str] = &["src/bare.rs:3"];
+/// How many lines [`RUST_GENERATED_HEAD`] runs above the `pub fn` line under
+/// it.
+const RUST_GENERATED_HEAD_LINES: usize = 2;
+
+/// The row the one finding of the generated-code probe stands on. The head
+/// stands above the `pub fn` line of each module file, and the two module
+/// files hold the same bytes, so a run that reported the annotated one as well
+/// would name the same row of [`RUST_GENERATED_ANNOTATED_PATH`].
+const RUST_GENERATED_FUNCTION_ROW: usize = RUST_GENERATED_HEAD_LINES + 1;
 
 /// Acceptance: the shipped Rust complexity tool rule REPORTS a checked-in
 /// generated file, and drops the one whose module declaration carries the
@@ -345,7 +384,10 @@ fn the_shipped_rust_complexity_tool_rule_reports_a_generated_file() {
 
     assert_eq!(
         reported,
-        sorted_names(&expected_script_findings(RUST_GENERATED_ROWS)),
+        sorted_names(&[probe_row(
+            RUST_GENERATED_BARE_PATH,
+            RUST_GENERATED_FUNCTION_ROW,
+        )]),
         "clippy reads no generated-file header, so the bare module reports; the annotation \
          on the other module's declaration is what silences it"
     );
@@ -392,6 +434,128 @@ const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
 #[test]
 fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile() {
     verify_shipped_run_breaks(&RUST_COMPLEXITY_UNCOMPILABLE_PROBE);
+}
+
+/// A cargo manifest that holds one clippy lint at deny level.
+///
+/// `[lints.clippy]` is one of the three shapes that raise a lint to deny; the
+/// other two are a crate-level `#![deny(...)]` and `RUSTFLAGS="-D warnings"`.
+/// Each makes cargo exit nonzero for a workspace clippy DID lint.
+const DENY_LEVEL_PACKAGE_MANIFEST: &str = concat!(
+    "[package]\nname = \"deny-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[lints.clippy]\nunwrap_used = \"deny\"\n",
+    "\n[workspace]\n",
+);
+
+/// The line the deny-level probe writes above its long function: one `unwrap`
+/// the manifest of that probe denies.
+const DENY_LEVEL_UNWRAP_LINE: &str = "pub fn first() -> i32 { Some(1).unwrap() }\n";
+
+/// How many lines [`DENY_LEVEL_UNWRAP_LINE`] runs above the `pub fn` line
+/// under it.
+const DENY_LEVEL_UNWRAP_LINES: usize = 1;
+
+/// The row the one finding of the deny-level probe stands on. The denied line
+/// stands above the long function.
+const RUST_DENY_LEVEL_ROW: usize = DENY_LEVEL_UNWRAP_LINES + 1;
+
+/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
+/// stands a clippy lint at deny level, through the real clippy pipeline.
+///
+/// `cargo clippy` exits nonzero for two different reasons. The tool could not
+/// lint the workspace, and the tool linted the workspace correctly while a lint
+/// stands at deny level. A gate that reads the status alone cannot tell the two
+/// apart, and it throws away every finding of the second one.
+///
+/// Measured with clippy 0.1.97 over this probe: cargo exits 101, writes
+/// `error: could not compile` to stderr, and writes
+/// `clippy::too_many_lines src/lib.rs:2 this function has too many lines
+/// (300/250)` into the report. So the script must test the REPORT beside the
+/// status, which is what `builtin/validators/README.md` states for a status
+/// two shapes share.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_level_lint() {
+    let source = long_rust_function(DENY_LEVEL_UNWRAP_LINE, "long_defaults");
+
+    let reported =
+        rust_complexity_findings_under(DENY_LEVEL_PACKAGE_MANIFEST, &[(COMPLEX_LIB_PATH, &source)]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_DENY_LEVEL_ROW)]),
+        "a lint at deny level makes cargo exit nonzero for a workspace it DID lint, so the \
+         run must keep the finding the report holds"
+    );
+}
+
+/// The status a shell answers for a command it could not run.
+const COMMAND_NOT_FOUND_STATUS: i32 = 127;
+
+/// The mode that makes a file executable for its owner and readable for every
+/// other user.
+#[cfg(unix)]
+const EXECUTABLE_MODE: u32 = 0o755;
+
+/// The name the script calls the report filter by.
+const FILTER_BINARY_NAME: &str = "jq";
+
+/// The line the script writes when the filter could not read the report.
+const FILTER_BROKEN_LINE: &str = "complexity-rust: jq could not read the clippy report";
+
+/// `PATH` with `dir` in front of it, so a binary standing in `dir` answers
+/// before the one this machine installed.
+#[cfg(unix)]
+fn path_led_by(dir: &Path) -> std::ffi::OsString {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let entries = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&existing));
+    std::env::join_paths(entries).expect("lead PATH with the probe directory")
+}
+
+/// Acceptance: the shipped Rust complexity tool rule BREAKS when the filter
+/// cannot read the clippy report, through the real clippy pipeline.
+///
+/// The filter step once ended in a pipe to `sort -u`, and the script writes
+/// `set -e` with no `pipefail`. A shell pipeline takes the status of its last
+/// command, so that shape answered exit 0 for every failure of the filter.
+/// Measured over this probe package, which gives one finding: with the filter
+/// replaced by a command that exits [`COMMAND_NOT_FOUND_STATUS`], the pipe
+/// shape wrote 0 findings and exited 0, and the engine read a dirty tree as
+/// clean.
+///
+/// The probe leads `PATH` with a directory holding such a command, so the
+/// SHIPPED script runs its own filter step and finds it broken.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_complexity_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
+    use std::os::unix::fs::PermissionsExt;
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
+
+    let loader = builtin_loader();
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
+    let stubs = tempfile::tempdir().unwrap();
+    let stub = stubs.path().join(FILTER_BINARY_NAME);
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\nexit {COMMAND_NOT_FOUND_STATUS}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
+    let staged = [
+        (RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST),
+        (COMPLEX_LIB_PATH, COMPLEX_LIB_RS),
+    ];
+    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+    let _path = EnvVarGuard::set("PATH", path_led_by(stubs.path()));
+
+    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+        .expect_err("a filter that cannot read the report must break the run");
+
+    let detail = failure.to_string();
+    assert!(
+        detail.contains(FILTER_BROKEN_LINE),
+        "the run must break with '{FILTER_BROKEN_LINE}'; got '{detail}'"
+    );
 }
 
 /// The materialized name of the `complexity-typescript` fail fixture.
