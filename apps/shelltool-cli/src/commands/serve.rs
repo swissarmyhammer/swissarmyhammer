@@ -6,6 +6,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use anyhow::Context;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParams,
     ServerCapabilities, ServerInfo, Tool,
@@ -45,7 +46,7 @@ impl ShellToolServer {
             Arc::new(ChatModelConfig::default()),
         );
         Ok(Self {
-            tool: ShellExecuteTool::new()?,
+            tool: ShellExecuteTool::new().context("creating the shell tool")?,
             context,
         })
     }
@@ -114,16 +115,21 @@ impl ServerHandler for ShellToolServer {
 ///
 /// # Errors
 ///
-/// Returns an error string if the server fails to start or encounters a fatal error.
-pub async fn run_serve() -> Result<(), String> {
+/// Reports an error when the server fails to start or reaches a fatal error.
+/// Each step names what it was doing, and the chain keeps the original cause,
+/// so the caller can render the whole chain with `{e:#}`.
+pub async fn run_serve() -> anyhow::Result<()> {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
 
-    let server = ShellToolServer::new().map_err(|e| e.to_string())?;
+    let server = ShellToolServer::new().context("creating the shell tool server")?;
     let running = serve_server(server, stdio())
         .await
-        .map_err(|e| e.to_string())?;
-    running.waiting().await.map_err(|e| e.to_string())?;
+        .context("starting MCP stdio server")?;
+    running
+        .waiting()
+        .await
+        .context("MCP server terminated unexpectedly")?;
     Ok(())
 }
 

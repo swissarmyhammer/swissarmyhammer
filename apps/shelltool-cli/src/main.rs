@@ -102,7 +102,10 @@ async fn dispatch(matches: &clap::ArgMatches, schema: &serde_json::Value) -> i32
         Some(("serve", _)) => match commands::serve::run_serve().await {
             Ok(()) => 0,
             Err(e) => {
-                error!("Error: {}", e);
+                // `{e:#}` renders the whole `anyhow` context chain, so the
+                // operation that failed and its original cause both reach the
+                // user. Plain `{e}` would report the outermost context alone.
+                error!("Error: {e:#}");
                 1
             }
         },

@@ -246,8 +246,59 @@ comments:
     - evidence: 6 files — apps/shelltool-cli/Cargo.toml, apps/shelltool-cli/src/commands/doctor.rs, apps/shelltool-cli/src/commands/registry.rs, apps/shelltool-cli/src/commands/serve.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs, Cargo.lock. All 18 findings of 2026-08-12 06:12 are now `- [x]`, and all 25 findings of the card stand checked. `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'`: 2755 run, 2755 passed, 0 failed, 0 skipped. `cargo test -p swissarmyhammer-tools --lib mcp::tools::shell::`: 191 passed. `cargo test -p shelltool-cli`: 44 passed. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo machete apps/shelltool-cli/Cargo.toml`: 0 unused. `sah tool code_context duplication find --files .../shell/state.rs`: no pair. `clippy::excessive_nesting` at threshold 6: no line of state.rs. `cargo doc -p swissarmyhammer-tools --no-deps`: no warning in the changed files.
     - next: /review
   timestamp: 2026-08-12T11:53:55.592036+00:00
+- actor: claude-code
+  id: 01kzty4qxdnbsx89ystspm3pzs
+  text: |
+    ### review — findings
+    - evidence: `review sha 111c5a390` (HEAD~1..HEAD at run time) — engine counts: 6 findings, 6 confirmed, 7 refuted, 8 attempted, 0 failed. 5 findings dropped under the skill rule that bars findings asking to change test code that already existed: `apps/shelltool-cli/src/commands/doctor.rs:181` (CwdGuard, inside `mod tests`, last written by 4c5ca4c28), and `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:704,764,810,944` (all inside `mod tests`, which starts at line 599; blame gives 4c5ca4c28 and 787262c4f, both before this commit). 1 finding recorded: `apps/shelltool-cli/src/commands/serve.rs:48`.
+    - next: add `.context("failed to initialize shell state")` to the `?` on `ShellExecuteTool::new()` in `ShellToolServer::new`, then re-review.
+  timestamp: 2026-08-12T12:11:21.389775+00:00
+- actor: claude-code
+  id: 01kzty5qb989vaj4448k2thqqh
+  text: |-
+    ### finish iteration 4 — findings
+    - implement: changed — 6 files. All 18 findings of the 2026-08-12 06:12 section are checked. Four unused dependencies deleted from apps/shelltool-cli/Cargo.toml; Debug impls and doc comments in doctor.rs, registry.rs, serve.rs; a `thiserror` enum `ShellStateError` of eight variants replaces seven `anyhow::Result` returns in shell/state.rs; `complete_command` and `timeout_command` merged into `finish_command`; one `parse_log_entry` now serves both `get_lines` and grep.
+    - test: green — cargo nextest run --workspace, 14144 run, 14144 passed, 0 failed, 0 skipped. cargo fmt --check clean. cargo clippy --workspace --all-targets -- -D warnings clean.
+    - commit: 111c5a390
+    - review: findings — 1 recorded of 6: apps/shelltool-cli/src/commands/serve.rs:48. 5 dropped under the test-refactor exception.
+    - guardrail: no finding repeats across the four ledger entries. The count falls each pass: 6, then 1, then 18, now 1.
+  timestamp: 2026-08-12T12:11:53.577456+00:00
+- actor: claude-code
+  id: 01kztygarzpxx552xznpdgq2tk
+  text: |-
+    Worked the open finding of 2026-08-12 07:00, word for word:
+
+    "`apps/shelltool-cli/src/commands/serve.rs:48` — The `?` operator on I/O-heavy call `ShellExecuteTool::new()` lacks `.context()` in application code returning `anyhow::Result`. Per the rule, every `?` on I/O or external calls must provide context about what operation was attempted, so the user sees "could not create shell state" instead of a bare "shell directory ... could not be created". Replace line 48 with: `tool: ShellExecuteTool::new().context("failed to initialize shell state")?`."
+
+    Rules preloaded with `dump validators` over `apps/shelltool-cli/src/commands/serve.rs` — 54 rules over the extension `rs`. The rule the finding cites is `rust/error-handling`: "Applications: use `anyhow::Result<T>`. Every `?` on I/O or external calls must have `.context("what we were doing")`. A bare "No such file or directory" without context is a blocker."
+
+    `shelltool-cli` declares one `[[bin]]` target and no lib target, so the application row of that rule holds for it.
+
+    **The cause reaches four `?` in the file, not one.** The named line is one. `run_serve` holds three more. Each stood as `.map_err(|e| e.to_string())?` on an external call: `ShellToolServer::new()`, `serve_server(server, stdio()).await` and `running.waiting().await`. `.map_err(|e| e.to_string())` is not `.context()`. It gives the bare message of the cause with no word about the operation, which is the shape the rule names a blocker, and it flattens the chain, which the same rule bars ("`Error::source()` chains must exist for wrapped errors — don't flatten the chain").
+
+    So `run_serve` answers `anyhow::Result<()>` now, and each of its three `?` carries a `.context()`. The sibling `apps/code-context-cli/src/commands/serve.rs::run_serve` already answers `anyhow::Result<()>` and already names the same two calls "starting MCP stdio server" and "MCP server terminated unexpectedly". This file takes those words, so the two CLIs read alike.
+
+    **Why the context text differs from the text the finding proposes.** `ShellExecuteTool::new()` already attaches `.context(SHELL_STATE_INIT_FAILED)`, and that constant holds "failed to initialize shell state" (`crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:88`, applied at :184). The proposed text is that same text. Written as proposed, the chain would read "failed to initialize shell state: failed to initialize shell state: could not create directory ...", and the added line would say nothing new.
+
+    The rule asks each `?` to name what IT was doing. Each level now names its own operation, and no level repeats another:
+    - serve.rs:49 — `.context("creating the shell tool")`
+    - serve.rs:125 — `.context("creating the shell tool server")`
+
+    The chain a user sees: "creating the shell tool server: creating the shell tool: failed to initialize shell state: <the io failure and its path>". Every word of the finding's stated purpose stands — the user sees the operation before the bare io message.
+
+    **One caller line changed with it.** `apps/shelltool-cli/src/main.rs` rendered the `serve` error with `error!("Error: {}", e)`. Plain `{}` on an `anyhow::Error` reports the outermost context alone and drops every cause below it, so the context this finding asks for would never reach the user. That arm renders `{e:#}` now, which is what `apps/code-context-cli/src/main.rs` already does. The other arms of `dispatch` carry other error types and stay as they were.
+
+    **No new test.** The new context stands on error paths a test cannot reach. `ShellState::new` falls back to a temp directory, so the error needs BOTH the working directory and the temp directory to be unwritable. The comment of 2026-08-12 11:00 records the measurement: forcing that with `TMPDIR` broke 14 sibling tests under `cargo test`, because `TMPDIR` is process state. The two `?` inside `run_serve` sit behind real stdio, and the module comment of the test module already states why no unit test drives them. The three tests of the module cover the success path, and the compiler covers the signature over the one caller.
+  timestamp: 2026-08-12T12:17:41.151014+00:00
+- actor: claude-code
+  id: 01kztygjtqd00284q603e0at7h
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — apps/shelltool-cli/src/commands/serve.rs, apps/shelltool-cli/src/main.rs. The finding of 2026-08-12 07:00 (serve.rs:48) is now `- [x]`, and all 26 findings of the card stand checked. Every `?` of serve.rs carries a `.context()` now: :49 "creating the shell tool", :125 "creating the shell tool server", :128 "starting MCP stdio server", :132 "MCP server terminated unexpectedly". `run_serve` answers `anyhow::Result<()>` in place of `Result<(), String>`. `cargo nextest run -p shelltool-cli`: 44 run, 44 passed, 0 failed, 0 skipped. `cargo test -p shelltool-cli`: 38 + 6 passed. `cargo fmt --all --check` clean. `cargo clippy -p shelltool-cli --all-targets -- -D warnings` clean. `cargo doc -p shelltool-cli --no-deps` adds no warning.
+    - next: /review
+  timestamp: 2026-08-12T12:17:49.399213+00:00
 position_column: doing
-position_ordinal: '8580'
+position_ordinal: '8280'
 title: missing-docs-rust breaks the run for a workspace clippy linted, when a lint stands at deny level
 ---
 `missing-docs-rust` tests the STATUS of `cargo clippy` alone: it writes `set -e` and lets cargo's exit status be the script's. `cargo clippy` gives one status to a run it could not make and to a run it made from end to end while a lint stands at deny level, so the second shape breaks the run and every `missing_docs` finding it holds is thrown away.
@@ -301,3 +352,7 @@ Two sibling rules already make that test over the same cargo report, and each st
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:357` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs. Return Result<(Vec<GrepResult>, usize), ShellStateError> instead.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:404` — Unexplained literal `3` in `splitn(3, ':')` encodes the log field count (session_id:cmd_id:line_count:text) after stripping the session prefix — a structural constant of the format. Define `const LOG_FIELD_COUNT_AFTER_SESSION_ID: usize = 3;` and use it on line 404 (and line 405, which also checks against `3`).
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:405` — Unexplained literal `3` in the condition `if parts.len() != 3` validates the log field count, but the constant is hardcoded without a name. Use the same named constant (e.g., `LOG_FIELD_COUNT_AFTER_SESSION_ID`) defined for line 404 in this condition.
+
+## Review Findings (2026-08-12 07:00)
+
+- [x] `apps/shelltool-cli/src/commands/serve.rs:48` — The `?` operator on I/O-heavy call `ShellExecuteTool::new()` lacks `.context()` in application code returning `anyhow::Result`. Per the rule, every `?` on I/O or external calls must provide context about what operation was attempted, so the user sees "could not create shell state" instead of a bare "shell directory ... could not be created". Replace line 48 with: `tool: ShellExecuteTool::new().context("failed to initialize shell state")?`.
