@@ -802,19 +802,25 @@ fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_deny_level_
     );
 }
 
-/// The status a shell answers for a command it could not run.
-const COMMAND_NOT_FOUND_STATUS: i32 = 127;
-
-/// The mode that makes a file executable for its owner and readable for every
-/// other user.
-#[cfg(unix)]
-const EXECUTABLE_MODE: u32 = 0o755;
-
-/// The name the script calls the report filter by.
-const FILTER_BINARY_NAME: &str = "jq";
-
 /// The line the script writes when the filter could not read the report.
 const FILTER_BROKEN_LINE: &str = "complexity-rust: jq could not read the clippy report";
+
+/// What the one error of a filter that cannot read the report must name.
+const RUST_COMPLEXITY_FILTER_BROKEN_ERROR: &[&str] = &[FILTER_BROKEN_LINE];
+
+/// The healthy probe package, read with a filter that cannot run.
+const RUST_COMPLEXITY_FILTER_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_COMPLEXITY_RULE,
+        expected: RUST_COMPLEXITY_FILTER_BROKEN_ERROR,
+    },
+    staged: &[
+        (RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST),
+        (COMPLEX_LIB_PATH, COMPLEX_LIB_RS),
+    ],
+    reason: "a filter that cannot read the report must break the run",
+};
 
 /// Acceptance: the shipped Rust complexity tool rule BREAKS when the filter
 /// cannot read the clippy report, through the real clippy pipeline.
@@ -833,32 +839,5 @@ const FILTER_BROKEN_LINE: &str = "complexity-rust: jq could not read the clippy 
 #[test]
 #[serial_test::serial(env)]
 fn the_shipped_rust_complexity_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
-    use std::os::unix::fs::PermissionsExt;
-    use swissarmyhammer_common::test_utils::PathGuard;
-
-    let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let stubs = tempfile::tempdir().unwrap();
-    let stub = stubs.path().join(FILTER_BINARY_NAME);
-    std::fs::write(
-        &stub,
-        format!("#!/bin/sh\nexit {COMMAND_NOT_FOUND_STATUS}\n"),
-    )
-    .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
-    let staged = [
-        (RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST),
-        (COMPLEX_LIB_PATH, COMPLEX_LIB_RS),
-    ];
-    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-    let _path = PathGuard::prepend(stubs.path());
-
-    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
-        .expect_err("a filter that cannot read the report must break the run");
-
-    let detail = failure.to_string();
-    assert!(
-        detail.contains(FILTER_BROKEN_LINE),
-        "the run must break with '{FILTER_BROKEN_LINE}'; got '{detail}'"
-    );
+    verify_shipped_tree_breaks_without(&RUST_COMPLEXITY_FILTER_BROKEN_PROBE, FILTER_BINARY_NAME);
 }

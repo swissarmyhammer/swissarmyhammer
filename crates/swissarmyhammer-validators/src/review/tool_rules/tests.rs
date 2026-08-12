@@ -131,6 +131,12 @@ const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
 /// acceptance test drives end to end.
 const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 
+/// The shipped dead-code tool rule for Rust. `cargo check` gives one exit
+/// status to a run it could not make and to a run it made from end to end, so
+/// six more acceptance tests drive this rule over the shapes that tell those
+/// two apart.
+const RUST_DEAD_CODE_RULE: &str = "dead-code-rust";
+
 /// Every shipped dead-code tool rule, with the project type it serves.
 ///
 /// Each supersedes the `dead-code` prompt rule for its language. Three of
@@ -140,7 +146,7 @@ const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 /// scaffolding, is an annotation contract: staged code carries the
 /// language's own suppression marker with a reason, or it is dead.
 const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
-    ("rust", "dead-code-rust", SUPERSEDES_DEAD_CODE),
+    ("rust", RUST_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("go", "unused-code-go", SUPERSEDES_DEAD_CODE),
     ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
     ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),

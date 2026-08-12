@@ -1,7 +1,9 @@
 //! Acceptance tests for the shipped unused-dependency tool rules.
 //!
-//! One test holds the roster to its fixture pair. The test under it drives
-//! Rust through the real tool.
+//! One test holds the roster to its fixture pair. The tests under it drive
+//! Rust through the real tool: one holds the finding it reports, and two hold
+//! it to breaking rather than answering zero for a manifest machete could not
+//! read.
 
 use super::*;
 
@@ -80,6 +82,7 @@ fn manifests_work(path: &str, content: &str) -> WorkList {
 /// instead would leave the test asserting nothing, and a test that cannot
 /// fail is not a gate.
 #[test]
+#[serial_test::serial(env)]
 fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -118,4 +121,98 @@ fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
         RUST_UNUSED_DEPENDENCIES_RULE,
         "unused dependency `serde`",
     );
+}
+
+/// A manifest that declares a package and does not parse as TOML: the
+/// `[dependencies` table header ends with no closing bracket.
+///
+/// The script finds this file the way it finds every manifest, by the
+/// `[package]` table on its first line, and machete then cannot read it.
+const UNPARSABLE_MANIFEST: &str = concat!(
+    "[package]\nname = \"unparsable-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[dependencies\nserde = \"1\"\n",
+);
+
+/// The line the script writes when machete could not read a manifest.
+const MACHETE_UNREADABLE_LINE: &str =
+    "unused-dependencies-rust: cargo machete could not read Cargo.toml";
+
+/// What the one error of a manifest machete cannot read must name: the
+/// script's own line, and machete's own words beside it.
+const MACHETE_UNREADABLE_ERROR: &[&str] = &[MACHETE_UNREADABLE_LINE, "error when handling"];
+
+/// The `unused-dependencies-rust` probe over a manifest machete cannot read.
+const UNPARSABLE_MANIFEST_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_UNUSED_DEPENDENCIES_RULE,
+        expected: MACHETE_UNREADABLE_ERROR,
+    },
+    staged: &[
+        (UNUSED_DEPENDENCY_MANIFEST_PATH, UNPARSABLE_MANIFEST),
+        (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
+    ],
+    reason: "a manifest machete could not read must break the run, because the dependencies \
+             it declares were never measured",
+};
+
+/// Acceptance: the shipped Rust unused-dependency tool rule BREAKS on a
+/// manifest machete cannot read, through the real `cargo machete` pipeline.
+///
+/// Machete answers this shape at exit 0 and writes `didn't find any unused
+/// dependencies` to stdout, the same sentence a clean package gets, with
+/// `error when handling <path>` on stderr. An earlier shape of this script
+/// ended each manifest in a pipe, so it read that stdout as a measured run and
+/// reported nothing. Measured with machete 0.9.2 over this probe: the pipe
+/// shape wrote 0 findings and exited 0; the script tests the status and stderr
+/// of each run, and exits 1 with a line that names the manifest.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read() {
+    verify_shipped_tree_breaks(&UNPARSABLE_MANIFEST_PROBE);
+}
+
+/// The name the script calls machete by, which cargo resolves on `PATH`.
+const MACHETE_BINARY_NAME: &str = "cargo-machete";
+
+/// The line the script writes when machete answered a status neither a clean
+/// run nor a run with findings answers with.
+const MACHETE_STATUS_LINE: &str = "unused-dependencies-rust: cargo machete exited 127";
+
+/// What the one error of a machete that could not run must name.
+const MACHETE_STATUS_ERROR: &[&str] = &[MACHETE_STATUS_LINE];
+
+/// The healthy probe package, read with a machete that cannot run.
+const MACHETE_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_UNUSED_DEPENDENCIES_RULE,
+        expected: MACHETE_STATUS_ERROR,
+    },
+    staged: &[
+        (
+            UNUSED_DEPENDENCY_MANIFEST_PATH,
+            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        ),
+        (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
+    ],
+    reason: "a machete that could not run must break the run",
+};
+
+/// Acceptance: the shipped Rust unused-dependency tool rule BREAKS when
+/// machete cannot run at all.
+///
+/// Machete keeps one status for findings and another for a failure: it exits 1
+/// when it found unused dependencies, 0 when it found none, and 2 when it
+/// could not walk the path it was given. The script accepts the first two and
+/// breaks on every other status, so a machete a machine cannot run reaches the
+/// review as an error rather than as a clean tree. Measured over this probe
+/// package, which gives one finding, with machete replaced by a command that
+/// exits 127: the pipe shape wrote 0 findings and exited 0; the shipped shape
+/// writes no finding, that line, and exit 1.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_unused_dependency_tool_rule_breaks_when_machete_cannot_run() {
+    verify_shipped_tree_breaks_without(&MACHETE_BROKEN_PROBE, MACHETE_BINARY_NAME);
 }

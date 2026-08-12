@@ -24,6 +24,7 @@ mod complexity_rust;
 mod complexity_swift;
 mod complexity_typescript;
 mod dead_code;
+mod dead_code_rust;
 mod duplication;
 mod magic_numbers;
 mod missing_docs;
@@ -783,6 +784,198 @@ fn sorted_names(names: &[String]) -> Vec<String> {
     let mut sorted = names.to_vec();
     sorted.sort();
     sorted
+}
+
+/// A whole probe repository, and what the shipped script of one rule must
+/// answer over it.
+///
+/// A `workspace`-scope script loads a project rather than a file list, so a
+/// probe of such a rule stages a whole package — the manifest, the sources,
+/// and the build script where the shape needs one — and the tool reads what it
+/// finds there. One shape carries both answers a run can give, because the
+/// staging is the same for both and only the answer differs:
+/// [`verify_shipped_tree_breaks`] holds a run to no finding and to an error
+/// that names what broke, and [`verify_shipped_tree_reports`] holds a run to
+/// exactly the findings the probe names.
+struct ShippedStagedTree {
+    /// The run the staged tree must produce. What one entry of its `expected`
+    /// is stands with the function that drives the probe: one fragment of the
+    /// error detail for [`verify_shipped_tree_breaks`], and one `path:line`
+    /// entry for [`verify_shipped_tree_reports`].
+    run: ShippedRun,
+
+    /// Each file of the probe repository, with the bytes it holds. The
+    /// work-list names every one of them.
+    staged: &'static [(&'static str, &'static str)],
+
+    /// Why the run answers what the probe names, for the failure message.
+    reason: &'static str,
+}
+
+/// Drives the shipped script of `probe` over the tree it stages, with `extra`
+/// staged beside it, and answers what that run reported.
+///
+/// The work-list names the probe's own files and never `extra`, because a file
+/// staged to shape the RUN is not a file the change touched.
+fn drive_shipped_staged_tree_with(
+    probe: &ShippedStagedTree,
+    extra: &[(&str, &str)],
+) -> Result<Vec<String>, ScriptFailure> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
+    let staged: Vec<(&str, &str)> = probe
+        .staged
+        .iter()
+        .copied()
+        .chain(extra.iter().copied())
+        .collect();
+
+    shipped_script_findings(&loader, probe.run.rule, &staged, &paths)
+}
+
+/// Drives the shipped script of `probe` over the tree it stages, and answers
+/// what that run reported.
+fn drive_shipped_staged_tree(probe: &ShippedStagedTree) -> Result<Vec<String>, ScriptFailure> {
+    drive_shipped_staged_tree_with(probe, &[])
+}
+
+/// Holds the run of `probe` to breaking with an error that names every
+/// fragment the probe expects.
+///
+/// A run that reports no finding and exits 0 over a tree the tool never judged
+/// reads exactly like a clean tree, so a broken run must state what broke.
+fn verify_shipped_tree_breaks(probe: &ShippedStagedTree) {
+    let failure = drive_shipped_staged_tree(probe).expect_err(probe.reason);
+
+    assert_shipped_failure_names(&failure, probe.run.expected);
+}
+
+/// Holds `failure` to naming every fragment `expected` carries.
+fn assert_shipped_failure_names(failure: &ScriptFailure, expected: &[&str]) {
+    let detail = failure.to_string();
+    for fragment in expected {
+        assert!(
+            detail.contains(fragment),
+            "the run must break with '{fragment}'; got '{detail}'"
+        );
+    }
+}
+
+/// Holds the run of `probe` to reporting exactly the `path:line` entries the
+/// probe names, and to exiting 0.
+///
+/// This is the control half of [`verify_shipped_tree_breaks`]: a gate that
+/// broke every run it could not read at a glance would pass that assertion and
+/// throw away the findings of a run the tool DID make.
+fn verify_shipped_tree_reports(probe: &ShippedStagedTree) {
+    let reported = drive_shipped_staged_tree(probe)
+        .expect("the shipped script must judge the probe package and exit 0");
+
+    assert_eq!(
+        sorted_names(&reported),
+        sorted_names(&expected_script_findings(probe.run.expected)),
+        "{}",
+        probe.reason
+    );
+}
+
+/// The status a shell answers for a command it could not run.
+const COMMAND_NOT_FOUND_STATUS: i32 = 127;
+
+/// The mode that makes a file executable for its owner and readable for every
+/// other user.
+#[cfg(unix)]
+const EXECUTABLE_MODE: u32 = 0o755;
+
+/// The name the shipped scripts call the report filter by.
+const FILTER_BINARY_NAME: &str = "jq";
+
+/// The file a probe stages to make the stubbed command break for its own run
+/// alone.
+const BROKEN_COMMAND_MARKER: &str = ".sah-broken-command";
+
+/// The one directory every stubbed command of this test binary stands in.
+///
+/// The directory outlives each test that leads `PATH` with it, on purpose. A
+/// run that read the stubbed `PATH` before that test finished still has to find
+/// a command there, and a directory removed under such a run makes the shell
+/// answer `No such file or directory` for a tool the machine has. Measured with
+/// a directory of its own for each stub: `complexity-rust` broke that way in
+/// the whole-suite run, on `.tmp06q4QT/jq: No such file or directory`.
+#[cfg(unix)]
+fn stub_directory() -> &'static Path {
+    static STUBS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+
+    STUBS
+        .get_or_init(|| tempfile::tempdir().expect("make the directory the stubs stand in"))
+        .path()
+}
+
+/// The path of `binary` on this machine, or a panic naming it.
+///
+/// The stub built by [`verify_shipped_tree_breaks_without`] hands every other
+/// run through to this path, so it is resolved BEFORE the stub leads `PATH`.
+#[cfg(unix)]
+fn resolved_binary(binary: &str) -> String {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v \"$1\"")
+        .arg("sh")
+        .arg(binary)
+        .output()
+        .unwrap_or_else(|error| panic!("ask the shell where `{binary}` stands: {error}"));
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert!(
+        !path.is_empty(),
+        "`{binary}` must stand on PATH for this probe to stub it"
+    );
+    path
+}
+
+/// Holds the run of `probe` to breaking when the command `binary` cannot run,
+/// with an error that names every fragment the probe expects.
+///
+/// A step that ends in a pipe takes the status of the last command of that
+/// pipe, so a step whose own tool broke reads as a step that found nothing.
+/// The probe leads `PATH` with a directory holding a command of that name which
+/// answers nothing and exits [`COMMAND_NOT_FOUND_STATUS`], so the SHIPPED
+/// script runs its own step and finds it broken.
+///
+/// `PATH` is process state, and every other test of this binary drives a
+/// shipped script through the same commands. So the stub breaks for ONE run:
+/// it exits nonzero only when [`BROKEN_COMMAND_MARKER`] stands in the working
+/// directory, which this probe alone stages, and it hands every other run
+/// through to the real binary. Measured with the plain stub instead: the whole
+/// tool-rule suite reported 8 failures, among them four `complexity-go` tests
+/// whose fixture pair broke on `exit status: 127` and three `complexity-rust`
+/// tests whose fixtures broke on `jq could not read the clippy report`.
+///
+/// The caller still stands under `#[serial_test::serial(env)]`, because the
+/// `PATH` it leads is process state whatever the stub then does.
+#[cfg(unix)]
+fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use swissarmyhammer_common::test_utils::PathGuard;
+
+    let real = resolved_binary(binary);
+    let stubs = stub_directory();
+    let stub = stubs.join(binary);
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nif [ -e \"./{BROKEN_COMMAND_MARKER}\" ]; then\n  \
+             exit {COMMAND_NOT_FOUND_STATUS}\nfi\nexec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
+    let _path = PathGuard::prepend(stubs);
+
+    let failure = drive_shipped_staged_tree_with(probe, &[(BROKEN_COMMAND_MARKER, "")])
+        .expect_err(probe.reason);
+
+    assert_shipped_failure_names(&failure, probe.run.expected);
 }
 
 /// Drives the shipped script of `probe` two times over the same probe
