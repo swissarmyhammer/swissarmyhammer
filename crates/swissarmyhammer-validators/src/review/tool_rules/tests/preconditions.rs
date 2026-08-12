@@ -82,9 +82,9 @@ fn missing_label(check_command: &str) -> String {
 ///
 /// The runnable install commands and the advisory `doctor.fix_hint` are
 /// separate lines. A hint is prose a person reads — `dead-code-swift`
-/// states `brew install peripheryapp/periphery/periphery, and run the
-/// review from the directory holding Package.swift` — so a reader who
-/// pastes what follows `run:` into a shell must never get a hint.
+/// states `brew install periphery, and run the review from the directory
+/// holding Package.swift` — so a reader who pastes what follows `run:`
+/// into a shell must never get a hint.
 fn precondition_report(rule_name: &str, spec: &ToolSpec, detail: &str) -> String {
     let check_command = spec
         .doctor
