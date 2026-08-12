@@ -82,7 +82,6 @@ fn manifests_work(path: &str, content: &str) -> WorkList {
 /// instead would leave the test asserting nothing, and a test that cannot
 /// fail is not a gate.
 #[test]
-#[serial_test::serial(env)]
 fn the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency() {
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -167,7 +166,6 @@ const UNPARSABLE_MANIFEST_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// shape wrote 0 findings and exited 0; the script tests the status and stderr
 /// of each run, and exits 1 with a line that names the manifest.
 #[test]
-#[serial_test::serial(env)]
 fn the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read() {
     verify_shipped_tree_breaks(&UNPARSABLE_MANIFEST_PROBE);
 }
@@ -210,6 +208,11 @@ const MACHETE_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// package, which gives one finding, with machete replaced by a command that
 /// exits 127: the pipe shape wrote 0 findings and exited 0; the shipped shape
 /// writes no finding, that line, and exit 1.
+///
+/// This is the one test of the module that writes process state, so it is the
+/// one that stands under `#[serial_test::serial(env)]`. The two tests above it
+/// read the tool a stubbed `PATH` hands them, because that stub breaks only for
+/// a run whose working directory holds the marker file this probe stages.
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]

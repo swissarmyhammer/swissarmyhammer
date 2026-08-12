@@ -70,6 +70,79 @@ comments:
     - evidence: 7 files — builtin/validators/code-hygiene/rules/dead-code-rust.md, builtin/validators/manifests/rules/unused-dependencies-rust.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs, .../tests/shipped.rs, .../tests/shipped/dead_code_rust.rs (new), .../tests/shipped/complexity_rust.rs, .../tests/shipped/unused_dependencies.rs. `cargo test -p swissarmyhammer-validators`: 679 passed, 1 failed — `the_swift_package_root_restores_the_directory_before_it_removes_it`, which fails the same way on the unchanged tree (^fpg9823). `cargo fmt --check` and `cargo clippy --all-targets`: clean.
     - next: /review
   timestamp: 2026-08-12T07:58:44.275489+00:00
+- actor: claude-code
+  id: 01kztgafw0vm4xy2599p5w2ypr
+  text: |-
+    ### commit — changed
+    - evidence: f495f760c fix(validators): exit nonzero from dead-code-rust and unused-dependencies-rust on a crate that does not compile (^y4xyw1g)
+    - next: /review
+  timestamp: 2026-08-12T08:09:49.696387+00:00
+- actor: claude-code
+  id: 01kztgv9jnsdb3jra8pebaj1ts
+  text: |
+    ### review — findings
+    - evidence: 2 findings (2 confirmed, 6 refuted, 8 attempted) over `review sha HEAD~1..HEAD` (f495f760c) — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:85, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:170
+    - next: remove the unnecessary `#[serial_test::serial(env)]` markers this commit added; task stays in `review`
+  timestamp: 2026-08-12T08:19:00.309616+00:00
+- actor: claude-code
+  id: 01kztgvxhmsjhcwans3chje62c
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 7 files (dead-code-rust.md, unused-dependencies-rust.md, 5 test files)
+    - test: red — cargo nextest run -E 'rdeps(swissarmyhammer-validators)', 3443 run, 3439 passed, 4 failed. All 4 reproduce on the unchanged tree with the diff stashed, and all 4 are already carded on ^bh5ncd0. This change caused none of them. fmt and clippy clean.
+    - commit: f495f760c932e27ff9557218fa0fc43f696abebb
+    - review: findings — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:85, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:170
+  timestamp: 2026-08-12T08:19:20.756162+00:00
+- actor: claude-code
+  id: 01kzth1pvyzvdgf5kmc50n2a1c
+  text: |-
+    Research for the two open findings.
+
+    `#[serial_test::serial(env)]` puts a test in the `env` exclusion group. It earns its place only when the test writes process state, or when it reads process state another `env` test writes. Read every marker in the commit against that:
+
+    | file:test | writes process state | keeps the marker |
+    |---|---|---|
+    | `unused_dependencies.rs:86` reports an unused dependency | none | no |
+    | `unused_dependencies.rs:171` breaks on a manifest it cannot read | none | no |
+    | `unused_dependencies.rs:216` breaks when machete cannot run | `PathGuard::prepend` | yes |
+    | `complexity_rust.rs:786` measures a workspace beside deny-level flags | `EnvVarGuard::set(RUSTFLAGS)` | yes |
+    | `complexity_rust.rs:841` breaks when the filter cannot read the report | `PathGuard::prepend` | yes |
+    | `dead_code_rust.rs` six tests | one prepends `PATH`; the other five run `cargo check` | yes — see below |
+
+    The two flagged tests cannot read either kind of state:
+
+    - The `PATH` stub `verify_shipped_tree_breaks_without` writes execs the real binary unless `.sah-broken-command` stands in the working directory. `run_script_findings` gives each probe its OWN temporary directory as the child's working directory (`run_shell(script, Some(dir), args)`), and neither flagged probe stages that file. So a stubbed `PATH` hands both of them the real tool.
+    - `RUSTFLAGS` is the other process state an `env` test writes. Both flagged tests drive `cargo-machete`, which parses with `syn` and never invokes the compiler, so `RUSTFLAGS` cannot reach them.
+
+    `dead_code_rust.rs` keeps its six markers: each of those tests runs `cargo check`, and `RUSTFLAGS="-D warnings"` set by `complexity_rust.rs:786` would raise their `dead_code` findings to level `error` and make cargo exit 101. Its module docstring names only the `PATH` stub as the reason, which the marker-file guard has since answered; the compiler flag is the reason that stands.
+  timestamp: 2026-08-12T08:22:30.526210+00:00
+- actor: claude-code
+  id: 01kzth802qw1yg895v5xnr7ctr
+  text: |-
+    Both findings answered in `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs`.
+
+    - Removed `#[serial_test::serial(env)]` from `the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency`.
+    - Removed `#[serial_test::serial(env)]` from `the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read`.
+    - Kept it on `the_shipped_rust_unused_dependency_tool_rule_breaks_when_machete_cannot_run`, the third marker the commit added and the one test of the module that writes process state. Its docstring now states why it alone carries the marker, so the next author does not put the marker back on its neighbours.
+
+    Measured after the change, with the two tests running in parallel again:
+
+    | run | result |
+    |---|---|
+    | `cargo nextest run -p swissarmyhammer-validators -E 'test(/tool_rules::tests::shipped/)'` | 116 run, 116 passed, 0 failed |
+    | the same filter narrowed to `unused_dependencies` + `complexity_rust` + `dead_code_rust`, five times over | 24 run, 24 passed, each time |
+    | `cargo fmt --check` | clean |
+    | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+
+    Five runs, because the shape the marker guarded against is a race: the `cargo-machete` stub and the two tests now run at the same time. They pass every time, which is what the code says they must — the stub execs the real binary unless `.sah-broken-command` stands in the child's working directory, and each probe gets a temporary directory of its own.
+  timestamp: 2026-08-12T08:25:56.567093+00:00
+- actor: claude-code
+  id: 01kzth85q3ngsvefp3qpw6vsrw
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs. `cargo nextest run -p swissarmyhammer-validators -E 'test(/tool_rules::tests::shipped/)'`: 116 run, 116 passed, 0 failed. The narrowed filter, five runs: 24 passed each time. `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean. Both review findings checked.
+    - next: /review
+  timestamp: 2026-08-12T08:26:02.339985+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Three Rust tool rules answer zero and exit 0 for a crate that does not compile
@@ -113,3 +186,8 @@ Measured over the same probe crate: it reports no finding and exits 101, with ca
 - State the measurement in each rule body.
 
 #tool-validators #objectivity
+
+## Review Findings (2026-08-12 03:10)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:85` — The `#[serial_test::serial(env)]` marker was added to `the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency()`, but this test does not call `verify_shipped_tree_breaks_without()` or any other function that modifies the `PATH` environment variable. The marker should only be on tests that modify process environment state (per the docstring at shipped.rs:11-16, which explains this is a guard against one test's PATH stub interfering with another's). Adding it here serializes a test unnecessarily. Remove the `#[serial_test::serial(env)]` attribute from line 85. Only the test at line 216 (which calls `verify_shipped_tree_breaks_without()`) should bear this marker.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/unused_dependencies.rs:170` — The `#[serial_test::serial(env)]` marker was added to `the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read()`, but this test calls `verify_shipped_tree_breaks()` (line 172), not `verify_shipped_tree_breaks_without()`. The former does not modify PATH, so the serial marker is unnecessary. The marker should only be on tests that actually modify process environment state. Remove the `#[serial_test::serial(env)]` attribute from line 170.
