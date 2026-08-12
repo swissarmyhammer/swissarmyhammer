@@ -1,12 +1,13 @@
-//! Enforces that the builtin `shell` skill tells the agent four facts about
+//! Enforces that the builtin `shell` skill tells the agent five facts about
 //! `execute command`:
 //!
 //! 1. The op blocks until the command exits (or the timeout kills it).
 //! 2. Do not pipe to `tail`, `head`, or `grep` — read the stored output later
 //!    with `get lines` or `grep history`.
 //! 3. A command the timeout kills stores no output at all.
-//! 4. This shell does not search files. `grep files` does, and `rg` is the
-//!    fallback — never `grep -r`.
+//! 4. This shell does not search files. The file search tools do, and `rg` is
+//!    the fallback.
+//! 5. This shell does not edit files. The file editing tools do.
 //!
 //! The shell tool keeps every command's full output. An agent that writes
 //! `cmd 2>&1 | tail -60` throws away output the tool already holds. The old
@@ -26,8 +27,12 @@
 //! the output-side filter could not drop a line until the scan had already
 //! paid to read it.
 //!
+//! Fact 5 is the same gap on the write side. Facts 2 through 4 are all about
+//! reading, so they leave the agent free to reach for `sed -i`, `>`, or a
+//! heredoc to change a file. Agents did exactly that for single-file edits.
+//!
 //! Failing this test means the skill body drifted back to guidance that does
-//! not state all four facts.
+//! not state all five facts.
 
 mod common;
 use common::rendered_builtin_instructions;
@@ -47,15 +52,20 @@ const TIMEOUT_MARKER: &str = "no output is stored";
 /// The weak bullet this guidance replaced.
 const OLD_WEAK_BULLET: &str = "skip `| tail`";
 
-/// Names the tool that searches files. The no-pipe rule above is about
-/// discarding captured output; it does not say which tool searches files. An
-/// agent obeyed the letter of it and still ran `grep -rn ... --include=* .`,
-/// which held a core for 22 minutes because `grep -r` reads `.gitignore`d
-/// build directories.
-const GREP_FILES_MARKER: &str = "grep files";
+/// Sends file search off the shell. The no-pipe rule above is about discarding
+/// captured output, so it does not say which tool searches files. An agent
+/// obeyed the letter of it and still ran `grep -rn ... --include=* .`, which
+/// held a core for 22 minutes because `grep -r` reads `.gitignore`d build
+/// directories.
+const NO_GREP_SEARCH_MARKER: &str = "Do not use grep to search files";
 
 /// Names the shell fallback. `rg` honors `.gitignore`; `grep -r` does not.
-const RG_NOT_GREP_MARKER: &str = "never `grep -r`";
+const RG_MARKER: &str = "use `rg`";
+
+/// Sends file edits off the shell. The rules above are all about reading, so
+/// none of them stop an agent from reaching for `sed -i` or `>` to change a
+/// file. Agents did that for single-file edits.
+const NO_SHELL_EDIT_MARKER: &str = "Do not use shell to edit files";
 
 #[test]
 fn shell_output_guidance_states_blocking_and_no_tail() {
@@ -88,15 +98,21 @@ fn shell_output_guidance_states_blocking_and_no_tail() {
         "builtin skill 'shell' must drop the weak bullet '{OLD_WEAK_BULLET}'"
     );
     assert!(
-        body.contains(GREP_FILES_MARKER),
-        "builtin skill 'shell' must send file search to the `files` op \
-         '{GREP_FILES_MARKER}'; the no-pipe rule alone does not say which \
-         tool searches files"
+        body.contains(NO_GREP_SEARCH_MARKER),
+        "builtin skill 'shell' must send file search off the shell \
+         ('{NO_GREP_SEARCH_MARKER}'); the no-pipe rule alone does not say \
+         which tool searches files"
     );
     assert!(
-        body.contains(RG_NOT_GREP_MARKER),
+        body.contains(RG_MARKER),
         "builtin skill 'shell' must state the shell fallback \
-         ('{RG_NOT_GREP_MARKER}'); `grep -r` scans `.gitignore`d build \
-         directories and does not finish"
+         ('{RG_MARKER}'); `grep -r` scans `.gitignore`d build directories and \
+         does not finish"
+    );
+    assert!(
+        body.contains(NO_SHELL_EDIT_MARKER),
+        "builtin skill 'shell' must send file edits off the shell \
+         ('{NO_SHELL_EDIT_MARKER}'); the read-side rules above say nothing \
+         about which tool changes a file"
     );
 }
