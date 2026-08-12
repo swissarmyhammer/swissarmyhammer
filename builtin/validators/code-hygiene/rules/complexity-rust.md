@@ -30,6 +30,17 @@ tool:
            | (.code.code // "")
            | select(. == "" or test("^E[0-9]+$"))' "$work/clippy.json" \
       > "$work/rustc-errors.txt" || filtered=$?
+    jq -r 'select(.reason == "compiler-message")
+           | .message
+           | select(.level == "error")
+           | "an error"' "$work/clippy.json" \
+      > "$work/errors.txt" || filtered=$?
+    jq -s -r '[.[] | select(.reason == "compiler-artifact")
+                   | select(.target.kind | index("custom-build"))
+                   | .package_id]
+              - [.[] | select(.reason == "build-script-executed") | .package_id]
+              | .[]' "$work/clippy.json" \
+      > "$work/unrun-build-scripts.txt" || filtered=$?
     jq -c 'select(.reason == "compiler-message")
            | .message
            | select(.code.code == "clippy::excessive_nesting"
@@ -50,6 +61,14 @@ tool:
     fi
     if [ -s "$work/rustc-errors.txt" ]; then
       printf 'complexity-rust: cargo clippy could not lint the workspace\n' >&2
+      exit 1
+    fi
+    if [ -s "$work/unrun-build-scripts.txt" ]; then
+      printf 'complexity-rust: a build script did not run, so clippy did not lint every crate\n' >&2
+      exit 1
+    fi
+    if [ "$status" -ne 0 ] && [ ! -s "$work/errors.txt" ]; then
+      printf 'complexity-rust: cargo stopped the build and wrote no compiler error\n' >&2
       exit 1
     fi
     sort -u "$work/findings.json"
@@ -190,29 +209,32 @@ hint as the fix; the install lifecycle never runs it.
 
 ## A workspace the tool cannot lint
 
-`cargo clippy` exits nonzero for three different reasons, and one status carries
-all three:
+`cargo clippy` exits nonzero for four different reasons, and one status carries
+all four:
 
 - cargo could not start a run at all.
 - cargo made a run, and a crate failed its type check. Clippy runs the four
   lints AFTER that type check, so it never linted that crate.
+- cargo made a run, and the BUILD SCRIPT of a crate broke. cargo runs a build
+  script before it compiles the crate that script serves, so clippy never
+  linted that crate. This repository holds eight build scripts.
 - cargo made a run, clippy linted every crate, and a lint stands at deny level.
 
-The first two are broken runs. The third is a MEASURED run, and the findings it
-holds must stand. `builtin/validators/README.md` states the answer for this
+The first three are broken runs. The fourth is a MEASURED run, and the findings
+it holds must stand. `builtin/validators/README.md` states the answer for this
 shape: "One status can carry both a measured run and a broken run. The status of
 a failure is then the same as the status of a finding. The script must then test
 the REPORT beside the status, and accept the shared status only for the report
 shape a measured run writes." The three shipped swiftlint rules make the same
 test.
 
-The FILTERED findings answer none of the three. One member that compiles fills
+The FILTERED findings answer none of the four. One member that compiles fills
 that file while another member never reached the lints, so a workspace with a
 broken member reads as a clean tree. The script therefore reads the RAW report,
-which carries what the filter drops. Two entries of it answer the question.
+which carries what the filter drops. Three entries of it answer the question.
 
 **`{"reason":"build-finished"}`.** cargo writes this entry for every run it
-made, and no entry at all for a run it could not make. Measured over the 15
+made, and no entry at all for a run it could not make. Measured over the 19
 shapes below: a healthy run writes `{"reason":"build-finished","success":true}`;
 every nonzero shape cargo made writes
 `{"reason":"build-finished","success":false}`, the three deny-level shapes
@@ -229,12 +251,47 @@ as `clippy::unwrap_used` or `unused_variables`. Measured: no error-level message
 of any deny-level shape carries a rustc code or an empty code, and no
 error-level message of any healthy shape stands at all.
 
-The script breaks the run in two places, and writes its own line for each one:
+**A build script cargo compiled and never ran.** cargo writes one
+`compiler-artifact` entry whose `target.kind` holds `custom-build` for every
+build script it COMPILED, and one `build-script-executed` entry for every build
+script it RAN. A build script that breaks leaves the first entry standing and
+the second one out. Measured over one package that holds a build script which
+breaks: the whole report ran 1133 bytes, and it held one `build-finished` entry
+with `success: false`, one `custom-build` artifact, no `build-script-executed`
+entry and NO `compiler-message` at all. The control, the same package under
+`fn main() {}`, ran 7489 bytes and held one `build-script-executed` entry beside
+its artifact. So
+the two entries state which build scripts ran, and cargo writes no compiler
+error for this failure at all.
+
+The pair reads a cached run the same way. Measured over one package that holds
+a build script beside a path dependency that holds another: the first run wrote
+two `custom-build` artifacts and two `build-script-executed` entries, and a
+second run over a warm target directory, whose artifacts arrived `fresh: true`,
+wrote the same two entries. Over this repository the run wrote 149 `custom-build`
+artifacts and 149 `build-script-executed` entries, so no build script stands
+unrun.
+
+The script breaks the run in four places, and writes its own line for each one:
 
 - the status is nonzero and the raw report holds no `build-finished` entry —
   `complexity-rust: cargo could not run clippy over the workspace`;
 - the raw report holds an error-level message with a rustc code or with no code
-  — `complexity-rust: cargo clippy could not lint the workspace`.
+  — `complexity-rust: cargo clippy could not lint the workspace`;
+- the raw report holds a `custom-build` artifact whose package writes no
+  `build-script-executed` entry —
+  `complexity-rust: a build script did not run, so clippy did not lint every crate`;
+- the status is nonzero and the raw report holds no error-level message at all
+  — `complexity-rust: cargo stopped the build and wrote no compiler error`.
+
+The last two both answer a build script that breaks, and the build-script test
+stands first because it names the cause. The two are not one test. Measured
+with the build-script test taken out of the script: the fourth test broke the
+one-package shape and the two-member shape, and the two-member shape BESIDE a
+lint at deny level still wrote `good/src/lib.rs:2` and exited 0, because the
+denied lint fills the report with an error-level message. Measured with the
+fourth test taken out: the build-script test broke all three. So each test
+answers a shape the other one lets through.
 
 Every other run writes the findings it holds and exits 0. cargo's own stderr
 reaches the diagnosing agent beside the rule's line.
@@ -260,9 +317,14 @@ counts as 300 against the gate of 250.
 | a `Cargo.toml` that does not parse | 101 | none, 0 bytes | none | 0 findings, exit 1 |
 | a target directory cargo cannot write | 101 | none, 0 bytes | none | 0 findings, exit 1 |
 | `jq` replaced by a command that exits 127 | 0 | `success: true` | none | 0 findings, exit 1 |
+| a package whose build script breaks | 101 | `success: false` | none | 0 findings, exit 1 |
+| a package whose build script runs, one finding | 0 | `success: true` | none | 1 finding, exit 0 |
+| a workspace of two members, one whose build script breaks and one that gives a finding | 101 | `success: false` | none | 0 findings, exit 1 |
+| the same workspace beside `[workspace.lints.clippy] unwrap_used = "deny"` | 101 | `success: false` | `clippy::unwrap_used` | 0 findings, exit 1 |
 
 cargo writes `error: could not compile` to stderr for every nonzero row it
-reached, the deny-level rows included, so stderr tells a reader nothing the raw
+reached, the deny-level rows included, and `error: failed to run custom build
+command` for the build-script rows, so stderr tells a reader nothing the raw
 report does not. Under `RUSTFLAGS="-D warnings"` the four lints arrive at level
 `error` rather than `warning`; the filter selects on the lint CODE, so the
 findings stand either way.
@@ -277,9 +339,21 @@ The same earlier gate broke the two clean deny-level rows: a workspace clippy
 linted from end to end, holding a lint at deny level and no finding of the four
 gates, wrote the broken-run line and exited 1.
 
-Five acceptance tests hold the script to this table:
+The three build-script rows that break are the shape the eight build scripts of
+this repository make reach it. Measured over each of them with the earlier gate,
+which read the compiler messages alone: the one-package row wrote 0 findings and
+exited 0 while its control wrote `src/lib.rs:1`; the two-member row wrote
+`good/src/lib.rs:1` alone; and the two-member row beside the denied lint wrote
+`good/src/lib.rs:2` alone. In each of the three the long function of the crate
+that never reached the lints was read as clean.
+
+Nine acceptance tests hold the script to this table:
 `the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile`,
 `the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_member_it_cannot_compile`,
+`the_shipped_rust_complexity_tool_rule_breaks_on_a_build_script_that_breaks`,
+`the_shipped_rust_complexity_tool_rule_measures_a_package_beside_a_build_script_that_runs`,
+`the_shipped_rust_complexity_tool_rule_breaks_on_a_member_build_script_that_breaks`,
+`the_shipped_rust_complexity_tool_rule_breaks_on_a_broken_build_script_beside_a_denied_lint`,
 `the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_level_lint`,
 `the_shipped_rust_complexity_tool_rule_measures_a_clean_workspace_beside_a_deny_level_lint`
 and
@@ -295,8 +369,9 @@ exited 0, and the engine read the whole tree as clean, the function of 302
 lines included.
 
 Each step therefore writes to a file and tests its own status. The script calls
-`jq` three times — one call for the `build-finished` entry, one for the rustc
-error codes, and one for the findings — and each call carries the same test: a
+`jq` five times — one call for the `build-finished` entry, one for the rustc
+error codes, one for the error-level messages, one for the build scripts that
+never ran, and one for the findings — and each call carries the same test: a
 status other than 0 writes `complexity-rust: jq could not read the clippy
 report` to stderr and exits 1.
 Measured over the healthy package, which gives one finding, with `jq` replaced

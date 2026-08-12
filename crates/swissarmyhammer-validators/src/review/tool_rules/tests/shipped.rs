@@ -7,7 +7,8 @@
 //! with no file beside the same run measured with the files — and the helpers
 //! that drive each shape.
 //!
-//! The tests themselves stand one module per rule family, so each module
+//! The tests themselves stand one module per rule family, and the complexity
+//! family stands one module for each language it drives, so each module
 //! stays small enough for a reviewer, and for the review engine, to read
 //! whole. `scope_roster`, `temp_directory` and `zero_argument` are the three
 //! modules that are not a rule family: each reads the shipped script of EVERY
@@ -17,6 +18,11 @@
 
 mod commented_code;
 mod complexity;
+mod complexity_go;
+mod complexity_python;
+mod complexity_rust;
+mod complexity_swift;
+mod complexity_typescript;
 mod dead_code;
 mod duplication;
 mod magic_numbers;
