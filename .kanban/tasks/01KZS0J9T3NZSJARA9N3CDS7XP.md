@@ -161,8 +161,24 @@ comments:
       690/690 validators tests pass, 503/503 mirdan tests pass, fmt and clippy clean
     - next: /review
   timestamp: 2026-08-12T11:24:15.467093+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kztw0gmbmyax7pmncbq80fkj
+  text: |-
+    ### review — clean
+    - evidence: `review sha 9546522c8~1..9546522c8` — 0 findings, 0 confirmed, 0 refuted, 8 validators attempted, 0 failed, 0 skipped
+    - next: task moved to done
+  timestamp: 2026-08-12T11:34:05.707391+00:00
+- actor: claude-code
+  id: 01kztw12eyxea482g91f9t2yx3
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files (tests/shipped/zero_argument.rs, doctor.rs, builtin/validators/README.md). All four card items done, with the measurements re-taken under bash rather than copied. The roster moved as the card warned: 14 `scope: files` rules, not 16, and 7 prefix lines, not 5, each of them `set -e`. Two corrections to the card's own numbers: under bash an invalid `set -X` does NOT stop the script (that was the /bin/sh answer), and `set -o rm` as a script's first line lets the lines under it run. One item beyond the card: `set -n` is newly rejected, because above the guard it makes the shell read the whole script and run none of it, so the rule answers every review with no finding. The `$` and backslash marks were made exact ($( and line-end only), never broader.
+    - test: green — cargo nextest run --workspace, 14138 passed, 0 failed, 0 skipped. fmt and clippy clean. mirdan checked, since it include_str!s the README.
+    - commit: 9546522c8
+    - review: clean — 0 findings over 9546522c8~1..9546522c8, task moved to done
+  timestamp: 2026-08-12T11:34:23.966102+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffed80
 title: The zero-argument coverage guard reads a shell prologue line wrong in two ways
 ---
 Split out of ^6585731. That card asked for a zero-argument guard on each

@@ -3,6 +3,7 @@
 //! Creates a minimal rmcp server hosting only the shell tool, suitable
 //! for AI coding agents that need a persistent shell with history and search.
 
+use std::fmt;
 use std::sync::Arc;
 
 use rmcp::model::{
@@ -47,6 +48,18 @@ impl ShellToolServer {
             tool: ShellExecuteTool::new()?,
             context,
         })
+    }
+}
+
+impl fmt::Debug for ShellToolServer {
+    /// Names the wrapped tool and marks the rest elided. `ToolContext` is a
+    /// dependency-injection record of handles — a tool registry, an MCP peer,
+    /// git operations — and carries no `Debug` of its own, so it cannot be
+    /// rendered here.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellToolServer")
+            .field("tool", &self.tool)
+            .finish_non_exhaustive()
     }
 }
 
@@ -138,6 +151,20 @@ mod tests {
     async fn test_new_constructs() {
         let server = ShellToolServer::new();
         assert!(server.is_ok(), "construction failed: {:?}", server.err());
+    }
+
+    /// `ShellToolServer` is public, so it renders through `Debug` for any
+    /// downstream caller that logs it or asserts on it. The wrapped
+    /// `ToolContext` carries no `Debug`, so the rendering names the tool and
+    /// marks the rest elided.
+    #[tokio::test]
+    async fn shell_tool_server_renders_through_debug() {
+        let server = ShellToolServer::new().expect("shell state");
+        let rendered = format!("{server:?}");
+        assert!(
+            rendered.contains("ShellToolServer"),
+            "Debug output: {rendered}"
+        );
     }
 
     /// `get_info` must report the server name as `"shelltool"` and the

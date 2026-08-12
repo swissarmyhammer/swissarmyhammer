@@ -44,8 +44,11 @@ const SKILL_NAME: &str = "shell";
 pub struct ShelltoolInstall;
 
 impl ToolInstall for ShelltoolInstall {
+    /// The MCP server name `init` writes into each agent's config, matching
+    /// the binary name and the identity `commands/serve.rs` advertises.
     const SERVER_NAME: &'static str = "shelltool";
 
+    /// Selects the builtin skills `init` deploys — the single `shell` skill.
     fn skills() -> Selector {
         Selector::Single(SKILL_NAME.to_string())
     }

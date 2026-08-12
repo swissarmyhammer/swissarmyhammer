@@ -161,8 +161,93 @@ comments:
     - evidence: `cargo fmt --check` clean. `cargo build --workspace --all-targets` clean, no warnings (87s). `cargo clippy --workspace --all-targets -- -D warnings` clean, no warnings (38s). `cargo nextest run --workspace` — 14138 tests run: 14138 passed, 0 failed, 0 skipped (run twice for confirmation; timing-only "slow"/"leaky" flags on unrelated `swissarmyhammer-validators` fixture tests were non-reproducible between runs and did not affect the passed count on either run).
     - next: ready for review.
   timestamp: 2026-08-12T11:10:40.208761+00:00
+- actor: claude-code
+  id: 01kztvvjw0q1d32wqqftwnydsg
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (50c09f86d) — engine returned 26 findings, 26 confirmed, 8 refuted, 16 attempted, 0 failed. 18 findings recorded: apps/shelltool-cli/Cargo.toml:20, :36, :38, :40; apps/shelltool-cli/src/commands/doctor.rs:16; apps/shelltool-cli/src/commands/registry.rs:47, :49; apps/shelltool-cli/src/commands/serve.rs:25; crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:130, :162, :221, :261, :272, :336, :339, :357, :404, :405.
+    - dropped 8 findings under the review skill's blanket test-refactor exception, each asking to extract named constants from test code that already existed and that this commit did not touch: state.rs:581, :820 (both inside `mod tests`, which this commit changed only in one doc comment) and tests/integration/file_size_limits.rs:258, :477, :564, :584, :625, :630 (this commit changed only line 410 of that file, `ShellExecuteTool::new().expect(...)`).
+    - the description held leaked tool markup from an earlier pass (`</description>` and a `<parameter name="tags">` line after the `#tool-validators #objectivity` line). It is removed. Every prior `## Review Findings` section stands verbatim, and all 7 prior items stay `- [x]`.
+    - next: /implement — task stays in review until every item is checked and a fresh review is clean.
+  timestamp: 2026-08-12T11:31:24.160865+00:00
+- actor: claude-code
+  id: 01kztvwjpc1pgf69p6jewaweq6
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 10 files. `ShellExecuteTool::new()` answers `anyhow::Result<Self>`; `impl Default` removed; every caller handles the failure. The 2026-08-12 05:26 finding is checked, and all 7 findings of the first two passes stand checked.
+    - test: green — cargo nextest run --workspace, 14138 run, 14138 passed, 0 failed, 0 skipped (two consecutive runs). cargo fmt --check clean. cargo build --workspace --all-targets clean. cargo clippy --workspace --all-targets -- -D warnings clean.
+    - commit: 50c09f86d
+    - review: findings — 18 recorded of 26: apps/shelltool-cli/Cargo.toml:20, :36, :38, :40; apps/shelltool-cli/src/commands/doctor.rs:16; apps/shelltool-cli/src/commands/registry.rs:47, :49; apps/shelltool-cli/src/commands/serve.rs:25; crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:130, :162, :221, :261, :272, :336, :339, :357, :404, :405. 8 dropped under the test-refactor exception.
+    - guardrail: no finding repeats across the three ledger entries. Every pass reports on the file the last pass changed.
+  timestamp: 2026-08-12T11:31:56.748748+00:00
+- actor: claude-code
+  id: 01kztw5bpd044xj50vpvk62hj8
+  text: |-
+    ### ralph instruction cleared from another session — 2026-08-12 11:40
+
+    The ralph instruction "Finish task ^btphzkn — loop until it lands in done" (session 01KZTM2FN6X3Z1YP79F12DRRZN) was cleared from a DIFFERENT session (01KZTC42SWN21TG7ERHHCXPJ38), which was finishing ^wwb6hk7, ^07pmgmx and ^3cds7xp.
+
+    **Why.** The ralph Stop hook resolves by session id, and on a miss it falls back to the newest active instruction in `.ralph/`. The other session's own instruction was already cleared, so every one of its stop attempts fell through to this card's instruction and incremented ITS counter — the loop reached iteration 3 of 50 without this card advancing at all. Left alone, the two sessions would have burned this loop's whole budget against each other.
+
+    **Nothing of this card's work was touched.** No file, no commit, no column, no finding. The card stays in `doing` with the 19 unchecked items of `## Review Findings (2026-08-12 06:12)` intact, and its uncommitted work under `apps/shelltool-cli/` and `crates/swissarmyhammer-tools/src/mcp/tools/shell/` is untouched.
+
+    **To resume**: run `/finish btphzkn` again. It picks up from the open findings.
+  timestamp: 2026-08-12T11:36:44.493883+00:00
+- actor: claude-code
+  id: 01kztw9w0cn6w72qwazyvmgvec
+  text: |-
+    Picked up again for the 18 open findings of 2026-08-12 06:12. Research, before any edit.
+
+    Rules preloaded with `dump validators` over `apps/shelltool-cli/Cargo.toml` and `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs` — 55 rules over the two extensions `rs` and `toml`.
+
+    The four causes, and what each one reaches in the WHOLE file:
+
+    1. `apps/shelltool-cli/Cargo.toml` — four dependencies no source file of the package names. Measured with `rg` over `apps/shelltool-cli/**/*.rs`: `swissarmyhammer-shell`, `serde`, `serde_yaml_ng` and `dirs` appear nowhere. The one hit for `swissarmyhammer_shell` is inside a `tracing_subscriber::EnvFilter` STRING in `logging.rs`, which machete's `syn` parse does not read as a crate reference. The rule states one other exemption, `[package.metadata.cargo-machete] ignored` with a comment; deletion is the answer where the build stands without them.
+
+    2. Missing documentation. `registry.rs` — `SERVER_NAME` and `skills()` carry no doc comment while their sibling `register_components` does. `doctor.rs::ShelltoolDoctor` and `serve.rs::ShellToolServer` implement no `Debug`. `ShelltoolDoctor` holds `Vec<Check>`, and `Check` derives `Debug`, so a derive answers it. `ShellToolServer` holds a `ToolContext`, which derives `Clone` alone over ten fields carrying `ToolHandlers`, `GitOperations`, `PlanSender`, `Peer` and the tool registry — deriving `Debug` there is a refactor of another crate's public type that no finding asks for, so the answer is the manual impl the doctor.rs finding names in as many words ("or manually implement Debug if needed").
+
+    3. Six `anyhow::Result` returns on public library functions of `state.rs`. The cause reaches the whole file, so the count is SEVEN public functions, not six: `new`, `new_in_dir`, `with_dir`, `append_lines`, `kill_process`, `get_lines`, `grep` — the finding at :162 names `new_in_dir` and leaves `with_dir` (:167) and `get_lines` (:316) unnamed. The private `new_with_preferred` feeds three of them and moves with them. `swissarmyhammer-tools` is a library crate other crates depend on, so `rust/error-handling` states the library rule for it. `thiserror` is already a dependency, and `review/validators.rs::ValidatorOpError` is the prevailing shape: `#[derive(Debug, thiserror::Error)]`, one `#[error("...")]` per variant, a named `path`/`source` pair for an io failure.
+
+    Blast radius, measured with `rg`: `ShellState::new` and `with_dir` have exactly two call sites outside the file, both in `shell/mod.rs`. Every op call site (`kill_process/mod.rs`, `get_lines/mod.rs`, `grep_history/mod.rs`, `execute_command/mod.rs`) reads the error through `Display` in a `match` arm or drops it with `.ok()`, so a typed error reaches each one unchanged. `anyhow::Context` accepts any `std::error::Error + Send + Sync`, so `mod.rs:184` compiles as written.
+
+    4. The four structural findings of `state.rs`. `timeout_command` and `complete_command` differ only by the status and the exit code, which is one function with two arguments. The two over-nested blocks stand in `get_lines`, seven levels deep: impl, fn, `for`, `if let Some(rest)`, `if let Some((..))`, `if let Ok(..)`, `if line_num >= start`. `complexity-rust` states `excessive-nesting-threshold = 6` and the item overhead `D + 2 > T` for an `impl` method. The two `3` literals stand in `parse_grep_log_line`, which parses the same log format `get_lines` parses by hand — so one shared parser answers the nesting finding, the two literals and the `reuse` rule at one time.
+
+    Message text is a contract the `public-output-contract` rule holds: `unknown command ID {}`, `no running process for command ID {}`, `command record not found for ID {}` and `invalid regex pattern: {}` each stay word for word, because `state.rs` tests and MCP responses read them.
+  timestamp: 2026-08-12T11:39:12.268483+00:00
+- actor: claude-code
+  id: 01kztx4hp66gtb022fpjhh9fv9
+  text: |-
+    Worked the 18 findings of 2026-08-12 06:12. Each cause is now gone from the WHOLE file, not from the named line alone.
+
+    **The four unused dependencies.** `swissarmyhammer-shell`, `serde`, `serde_yaml_ng` and `dirs` are deleted from `apps/shelltool-cli/Cargo.toml`. Deletion rather than the `ignored` list, because `cargo check -p shelltool-cli --all-targets` stands without them — the build script, the binary and the tests all compile. Measured with machete 0.9.2: the manifest at HEAD reports findings, and the manifest as it stands now reports "didn't find any unused dependencies". `Cargo.lock` drops four lines with them.
+
+    **The four missing-documentation items.** `ShelltoolDoctor` derives `Debug`; its one field is `Vec<Check>`, and `Check` derives `Debug`. `ShellToolServer` gets a hand-written `Debug` that names the tool and closes with `finish_non_exhaustive`. A derive is not available there: the wrapped `ToolContext` derives `Clone` alone over ten fields carrying `ToolHandlers`, `GitOperations`, `PlanSender`, `Peer` and the tool registry, and deriving `Debug` on another crate's public type is a refactor no finding asks for. The doctor.rs finding names the alternative in as many words — "or manually implement Debug if needed". `SERVER_NAME` and `skills()` each carry a doc comment now, so every item of the `ToolInstall` impl carries one.
+
+    **The seven `anyhow::Result` returns.** `ShellStateError` is a `thiserror` enum of eight variants, shaped after `review/validators.rs::ValidatorOpError`, which is the prevailing shape of this crate. Four variants carry an io failure with the path it targeted and keep the io error as `source`, so the chain stays whole: `CreateDir`, `OpenFile`, `WriteFile`, `ReadLog`. Four name a failure the caller can act on: `UnknownCommand`, `NoRunningProcess`, `MissingRecord`, `InvalidPattern`.
+
+    The finding named six functions. The cause reached seven: `new`, `new_in_dir`, `with_dir`, `append_lines`, `kill_process`, `get_lines`, `grep`. `with_dir` (:167) and `get_lines` (:316) went unnamed and are converted too, and the private `new_with_preferred` moves with them. No `anyhow` stands in the file now.
+
+    Every message a caller reads stays word for word — `unknown command ID {}`, `no running process for command ID {}`, `command record not found for ID {}`, `invalid regex pattern: {}` — because the MCP ops render the error through `Display` and `public-output-contract` holds that text. Three new tests match on the variant rather than on the string, which is the thing the rule exists to buy.
+
+    **The near-duplicate.** `complete_command` and `timeout_command` are each one call into a new private `finish_command(cmd_id, status, exit_code)` now. That helper drops the process registration, writes the status and the exit code, and stamps both clocks. Measured after the change: `sah tool code_context duplication find --files crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs` reports nothing.
+
+    **The two over-nested blocks and the two `3` literals are one fix.** `get_lines` parsed the log format by hand at seven levels, and `parse_grep_log_line` parsed the same format beside it with `splitn(3)`. There is one parser now, `parse_log_entry`, returning a private `LogEntry` that borrows the line. `get_lines` reads it with a `let ... else { continue }` and two flat guards, so its deepest block is level 4 against the gate of 6; `grep` reads it in its sink closure the same way. The count is `LOG_FIELD_COUNT_AFTER_SESSION_ID`, the name the finding states.
+
+    Measured after the change, with `CLIPPY_CONF_DIR` holding `excessive-nesting-threshold = 6`: `clippy::excessive_nesting` names no line of `state.rs`. `-W missing_docs` over both packages names no line of the changed files.
+
+    TDD: five tests written first, each failing for the missing feature. The three variant tests failed with `cannot find type 'ShellStateError' in this scope`; the two `Debug` tests failed with `doesn't implement std::fmt::Debug`, and rustc named the two structs. The sixth test, `a_line_holding_colons_reads_back_whole`, is the guard over the refactor rather than a new feature: it feeds one line whose text holds three colons through both readers and holds each to the whole text, so the shared parser cannot start splitting the text field.
+
+    Note for the next agent on the reuse that made this work: `get_lines` used the prefix `session_id:cmd_id:` and `grep` used `session_id:`. The shared parser takes the session prefix alone and returns the command id, so `get_lines` filters on the id itself. The two readers still differ in one place on purpose — `grep` reads lines the searcher hands over with their newline, so it trims the end; `get_lines` reads lines `BufRead::lines` already stripped, so it keeps the text as stored. Trimming in the parser would have taken trailing spaces off stored output.
+  timestamp: 2026-08-12T11:53:46.438742+00:00
+- actor: claude-code
+  id: 01kztx4tm8evyhcp6ahfjcs9ew
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — apps/shelltool-cli/Cargo.toml, apps/shelltool-cli/src/commands/doctor.rs, apps/shelltool-cli/src/commands/registry.rs, apps/shelltool-cli/src/commands/serve.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs, Cargo.lock. All 18 findings of 2026-08-12 06:12 are now `- [x]`, and all 25 findings of the card stand checked. `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'`: 2755 run, 2755 passed, 0 failed, 0 skipped. `cargo test -p swissarmyhammer-tools --lib mcp::tools::shell::`: 191 passed. `cargo test -p shelltool-cli`: 44 passed. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo machete apps/shelltool-cli/Cargo.toml`: 0 unused. `sah tool code_context duplication find --files .../shell/state.rs`: no pair. `clippy::excessive_nesting` at threshold 6: no line of state.rs. `cargo doc -p swissarmyhammer-tools --no-deps`: no warning in the changed files.
+    - next: /review
+  timestamp: 2026-08-12T11:53:55.592036+00:00
 position_column: doing
-position_ordinal: '8380'
+position_ordinal: '8580'
 title: missing-docs-rust breaks the run for a workspace clippy linted, when a lint stands at deny level
 ---
 `missing-docs-rust` tests the STATUS of `cargo clippy` alone: it writes `set -e` and lets cargo's exit status be the script's. `cargo clippy` gives one status to a run it could not make and to a run it made from end to end while a lint stands at deny level, so the second shape breaks the run and every `missing_docs` finding it holds is thrown away.
@@ -181,8 +266,7 @@ exit=101
 
 Two sibling rules already make that test over the same cargo report, and each states its measurement in a table: `complexity-rust` ("A workspace the tool cannot lint") and `dead-code-rust` ("A workspace the tool cannot check"). Give `missing-docs-rust` the same four tests — `build-finished` present, no rustc error code, every compiled build script ran, and no nonzero status with no compiler error at all — and hold each with an acceptance test beside `the_shipped_rust_missing_docs_tool_rule_breaks_on_a_crate_that_does_not_compile`. `ShippedStagedTree`, `verify_shipped_tree_breaks` and `verify_shipped_tree_reports` in `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs` carry the shapes.
 
-#tool-validators #objectivity</description>
-<parameter name="tags">["tool-validators", "objectivity"]
+#tool-validators #objectivity
 
 ## Review Findings (2026-08-12 04:46)
 
@@ -196,3 +280,24 @@ Two sibling rules already make that test over the same cargo report, and each st
 ## Review Findings (2026-08-12 05:26)
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181` — ShellExecuteTool::new() uses .expect() which panics on filesystem errors when initializing ShellState. This violates the rule that panics are for bugs only — creating ShellState can fail on expected failure modes like missing directories or permission issues, not internal invariant violations. Return Result<Self, E> from ShellExecuteTool::new() instead of panicking, allowing callers to handle initialization failures gracefully.
+
+## Review Findings (2026-08-12 06:12)
+
+- [x] `apps/shelltool-cli/Cargo.toml:20` — unused dependency `swissarmyhammer-shell`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `apps/shelltool-cli/Cargo.toml:36` — unused dependency `serde`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `apps/shelltool-cli/Cargo.toml:38` — unused dependency `serde_yaml_ng`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `apps/shelltool-cli/Cargo.toml:40` — unused dependency `dirs`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why.
+- [x] `apps/shelltool-cli/src/commands/doctor.rs:16` — Public type `ShelltoolDoctor` does not implement `Debug`. The documentation rule requires all public types with non-empty representation to implement Debug. Add `#[derive(Debug)]` to the struct definition at line 16, or manually implement Debug if needed.
+- [x] `apps/shelltool-cli/src/commands/registry.rs:47` — Public associated constant `SERVER_NAME` lacks a doc comment. The rule requires all public items to have documentation. Add a doc comment above line 47, e.g.: `/// The MCP server name for this tool.`.
+- [x] `apps/shelltool-cli/src/commands/registry.rs:49` — Public trait method `skills()` does not have a doc comment, while its counterpart `register_components()` at line 58 does. All public items must have doc comments for consistency and API clarity. Add a doc comment above line 49 explaining what the method returns, e.g.: `/// Returns the selector for builtin skills deployed by this tool.`.
+- [x] `apps/shelltool-cli/src/commands/serve.rs:25` — Public type `ShellToolServer` does not implement `Debug`. The documentation rule requires all public types with non-empty representation to implement Debug so downstream crates can use it if needed. Add `Debug` to the derive macro: `#[derive(Clone, Debug)]` at line 25.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:130` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs to enable caller pattern matching. Define a typed error enum using thiserror (e.g., pub enum ShellStateError) and return Result<Self, ShellStateError> instead.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:162` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs. Return Result<Self, ShellStateError> instead.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:221` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs. Return Result<(), ShellStateError> instead.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:261` — fn `timeout_command` is a near-duplicate of `complete_command` at crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:250 (84 tokens, 96% alike).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:272` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs. Return Result<CommandRecord, ShellStateError> instead.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:336` — this block is too nested.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:339` — this block is too nested.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:357` — Public library function returns anyhow::Result instead of typed error enum; library crates must use thiserror for public APIs. Return Result<(Vec<GrepResult>, usize), ShellStateError> instead.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:404` — Unexplained literal `3` in `splitn(3, ':')` encodes the log field count (session_id:cmd_id:line_count:text) after stripping the session prefix — a structural constant of the format. Define `const LOG_FIELD_COUNT_AFTER_SESSION_ID: usize = 3;` and use it on line 404 (and line 405, which also checks against `3`).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs:405` — Unexplained literal `3` in the condition `if parts.len() != 3` validates the log field count, but the constant is hardcoded without a name. Use the same named constant (e.g., `LOG_FIELD_COUNT_AFTER_SESSION_ID`) defined for line 404 in this condition.

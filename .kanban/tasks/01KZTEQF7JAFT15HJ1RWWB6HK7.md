@@ -156,6 +156,27 @@ comments:
 
     This card's own work drew ZERO findings and is complete and green. All three blockers came from other cards' work that a parallel shell folded into commit 59bd9ae5c. A person must correct the three rules before this card can close.
   timestamp: 2026-08-12T10:28:37.102343+00:00
+- actor: claude-code
+  id: 01kztwqe7dzjydsvksahpwjvvk
+  text: |-
+    ### The three blocking rules are corrected — 4e41d04ab
+
+    The user made the call: correct the rule prose in `builtin/`.
+
+    **`builtin/validators/duplication/rules/duplication.md`** — finding 1. The dispatch-forced delegation shim carve-out ALREADY covered `init`/`deinit` word for word; the probe's measurement overrode it. Added: the body decides, never the measurement. A trait- or interface-required pair carries its signature and its doc comment into the token count and the similarity score, the declaration forces those bytes, and no edit removes them while the contract stands. The 303/304-byte `init`/`deinit` pair is now stated in the rule as the SHAPE of the carve-out, not an exception to it.
+
+    **`builtin/validators/completeness/rules/invariant-propagation.md`** — findings 2 and 3, which came from one rule and one defect. A `clone-siblings` row is a candidate; two gates now stand before a finding:
+    1. Read the sibling and confirm the treatment is ABSENT, quoting the absent line. Check the age against the range under review.
+    2. Confirm the sibling ADMITS the treatment, reading what it declares about itself — front matter, declared scope, the assertion its shared helper opens with.
+
+    Two matching exceptions were added, the second naming the `scope: workspace` against `scope: files` case directly.
+
+    **Verification.** `cargo nextest run -p swissarmyhammer-validators` green with the edits in place. 4 `mirdan` clone tests failed in the batch run; they were proved network flakes, passing both with the edits stashed and with the edits in place when run isolated (60s timeouts against 2.4s passes).
+
+    **This card can now be re-reviewed.** Its own work drew zero findings and is green. A fresh `/review wwb6hk7` over 59bd9ae5c should return clean and move it to done.
+
+    Follow-up carded: ^q2cncse — a recorded finding must name the validator set and the rule that produced it. Attributing these three took four searches and one attribution was never proved, only inferred.
+  timestamp: 2026-08-12T11:46:36.909326+00:00
 position_column: review
 position_ordinal: '8480'
 title: Delete the two -parsed tool rules that shell out to sah itself

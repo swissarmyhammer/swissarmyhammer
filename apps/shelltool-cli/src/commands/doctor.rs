@@ -13,6 +13,7 @@ use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
 
 /// Shelltool diagnostic runner.
+#[derive(Debug)]
 pub struct ShelltoolDoctor {
     checks: Vec<Check>,
 }
@@ -245,6 +246,17 @@ mod tests {
     fn test_default() {
         let doctor = ShelltoolDoctor::default();
         assert!(doctor.checks().is_empty());
+    }
+
+    /// `ShelltoolDoctor` is public, so it renders through `Debug` for any
+    /// downstream caller that logs it or asserts on it.
+    #[test]
+    fn shelltool_doctor_renders_through_debug() {
+        let doctor = ShelltoolDoctor::new();
+        assert!(
+            format!("{doctor:?}").contains("ShelltoolDoctor"),
+            "Debug output: {doctor:?}"
+        );
     }
 
     /// `check_git_repository` walks ancestors from process-global CWD via
