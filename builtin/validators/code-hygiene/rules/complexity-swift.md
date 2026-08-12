@@ -53,6 +53,10 @@ tool:
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
+    if grep -qF 'Could not read contents of' "$work/lint.err"; then
+      printf '%s\n' 'complexity-swift: swiftlint could not read the contents of a file this run names' >&2
+      exit 1
+    fi
     measured=0
     if [ "$status" -eq 0 ]; then
       measured=1
@@ -145,6 +149,40 @@ review where it was, and a wrong finding is a requirement to change correct code
 260 code lines carrying 52 comment-only lines and 52 blank lines, swiftlint
 reports 262 — the code lines exactly, because the count covers the body and not
 the signature line.
+
+## What each gate reaches, and what neither reaches
+
+Each gate reads a set of declarations. Neither gate reads a computed variable.
+Measured with swiftlint 0.65.0, over one body of 300 code lines and one body of
+cyclomatic complexity 16 in each shape:
+
+| the declaration | `function_body_length` | `cyclomatic_complexity` |
+|---|---|---|
+| `func` | reports | reports |
+| `init` | reports | reports |
+| `deinit` | reports | silent |
+| `subscript` | reports | silent |
+| the `get` accessor of a `subscript` | reports | silent |
+| a computed `var` | silent | silent |
+| the `get` accessor of a computed `var` | silent | silent |
+| a `static var` | silent | silent |
+| a closure held in a `let` | silent | silent |
+
+`function_body_length` names the declaration in its message: `Function body`,
+`Initializer body`, `Deinitializer body`, `Subscript body` and `Accessor body`.
+
+A SwiftUI `body` is a computed variable. Measured over a `body` that holds 300
+`Text` rows in a `VStack`: the run reports nothing. The acceptance test
+`the_shipped_swift_complexity_tool_rule_reads_no_computed_property_body` holds
+that gap, beside one function of 300 body lines that reports.
+
+`function-length` states "All Function Types: Methods, closures, lambdas,
+standalone functions", so the prompt rule measures a closure and this rule does
+not. swiftlint holds `closure_body_length` for a closure, and the child
+configuration does not name that rule. The rule takes that under-count, for the
+reason the section "Why `ignores_case_statements` is on" states: a missed
+finding leaves the review where it was, and a wrong finding is a requirement to
+change correct code.
 
 ## Each rule has one gate, and swiftlint then exits 2
 
@@ -357,6 +395,70 @@ that behaviour.
 the report into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
 every way the script leaves: a clean run, a finding, and a failure.
 
+## A file swiftlint cannot decode
+
+swiftlint reads a source file as UTF-8 and as nothing else. A file that holds
+other bytes — a Swift file a person saved in Latin-1, or a binary file under a
+`.swift` name — makes swiftlint write ``Could not read contents of `<path>` ``
+to stderr. swiftlint then lints no line of that file.
+
+The `[ ! -r "$file" ]` guard admits the file, because the file IS readable. The
+DECODE is what fails, and the status does not state it. Measured with swiftlint
+0.65.0 over one file that holds `let name = "café"` in Latin-1, above one
+function of cyclomatic complexity 16:
+
+| the run | status | stdout | stderr |
+|---|---|---|---|
+| the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
+| the Latin-1 file beside one file that holds a finding | 2 | 1 entry | `Could not read contents of` |
+
+Row 1 is the status and the report of a clean file, so the earlier script
+reported 0 findings and exited 0, and the engine read a file swiftlint never
+read as a clean tree. Row 2 passes the report test of the section above, so the
+status and the report tell the two apart in neither row.
+
+The script therefore tests STDERR for `Could not read contents of`, before it
+reads the status. It writes `complexity-swift: swiftlint could not read the
+contents of a file this run names` and exits 1. swiftlint's own message stands
+above that line, and it names the path. The acceptance test
+`the_shipped_swift_complexity_tool_rule_breaks_on_a_file_it_cannot_decode`
+holds that behaviour.
+
+## A file that does not parse
+
+swiftlint states no parse failure. It parses with recovery, and it lints the
+declarations it recovered. So the script has no signal to read for this shape,
+and the rule states the gap rather than a test it cannot make.
+
+Measured with swiftlint 0.65.0, over one file that holds one function of
+cyclomatic complexity 16 under a broken head line:
+
+| the head line | findings |
+|---|---|
+| `@@@` | 1 |
+| `(((` | 1 |
+| `]]]` | 1 |
+| `((( ]]]` | 1 |
+| `class {` | 1 |
+| `#if` | 1 |
+| `this is not swift` | 1 |
+| `@@@ this is not swift ((( ]]]` | 0 |
+
+The same measurement over one file whose function body never closes: the run
+reports the finding. Over one file that holds `}` above the function, and over
+one file that holds `{` under it: the run reports the finding.
+
+The last row of the table is the shape the parser recovers nothing from.
+swiftlint writes an empty array to stdout, writes 0 bytes to stderr, and exits
+0. That is the answer of a clean file, and no swiftlint flag states the
+difference. `swiftc -parse` does state it — measured, it exits 1 for that file
+and 0 for the plain one — and this rule does not run it, for two measured
+reasons. `swiftc -parse` also exits 1 for the file whose body never closes,
+which swiftlint measured correctly, so a `swiftc` gate would trade a true
+finding for the shape. And `swiftc` is a Swift toolchain, which
+`doctor.check_command` does not name and which a Homebrew swiftlint does not
+bring.
+
 ## A run answers for the files it is given, and for no other
 
 `swiftlint lint` with no path argument walks the whole tree under the working
@@ -382,9 +484,160 @@ cannot make `check_command` pass. The `doctor.fix_hint` states
 `brew install swiftlint` instead. `sah doctor` shows that hint as the fix; the
 install lifecycle never runs it.
 
-## How to exempt one function
+## The annotation an author writes
 
-Selection in the filter is attribution, not exemption: to exempt one function,
-write `// swiftlint:disable:next cyclomatic_complexity` — or the matching rule
-name — above it in the code. To exempt a whole directory, add it to the
-`excluded:` list of the project's own `.swiftlint.yml`.
+Selection in the filter is attribution, not exemption. To exempt one
+declaration, write `// swiftlint:disable:next <rule>` on the line DIRECTLY
+above it, and name the rule the finding names:
+
+    // swiftlint:disable:next function_body_length  one line for each field
+    init() {
+
+Measured with swiftlint 0.65.0, over one function that scores 16 against the
+gate of 15. Each of these spellings gives no finding:
+
+- `// swiftlint:disable:next cyclomatic_complexity` on the line above the
+  `func` line.
+- `//swiftlint:disable:next cyclomatic_complexity` with no space after the
+  `//`.
+- `// swiftlint:disable:next cyclomatic_complexity - flat dispatch` and
+  `// swiftlint:disable:next cyclomatic_complexity flat dispatch table`, each
+  with a reason after the rule name.
+- `// swiftlint:disable:next cyclomatic_complexity function_body_length`, which
+  names the two rules of this gate.
+- `// swiftlint:disable:next all`.
+- `// swiftlint:disable cyclomatic_complexity`, which runs to the end of the
+  file or to the matching `// swiftlint:enable`.
+- `// swiftlint:disable:this cyclomatic_complexity` on the `func` line itself.
+- `// swiftlint:disable:previous cyclomatic_complexity` on the line UNDER the
+  `func` line.
+- a doc line above the directive.
+
+Each of these spellings gives one finding:
+
+- the directive with a blank line between it and the `func` line.
+- the directive with a doc line between it and the `func` line.
+- `// SwiftLint:disable:next cyclomatic_complexity` with capital letters.
+- `/* swiftlint:disable:next cyclomatic_complexity */` as a block comment.
+- `// swiftlint:disable:previous cyclomatic_complexity` on the line ABOVE the
+  `func` line, which names the line above the comment.
+- `// swiftlint:disable:next function_body_length` above a function the
+  COMPLEXITY gate reports, and the same directive with a reason after it. A
+  rule name the directive does not hold is not silenced.
+- `// swiftlint:disable:next not_a_rule`, and the directive with no rule name
+  at all.
+- `// noqa: cyclomatic_complexity`.
+
+The directive holds no marker that expires. swiftlint states
+`superfluous_disable_command` for that, and `only_rules` in the child
+configuration leaves that rule out of every run of this gate. So a directive
+stands until an author takes it away.
+
+The first fix a finding asks for is still to split the declaration. The
+directive is the second fix, and the text beside it states why.
+
+To exempt a whole directory, add it to the `excluded:` list of the project's
+own `.swiftlint.yml`. The section "Generated code" above states that list.
+
+## The carve-outs the two prompt rules state
+
+`cognitive-complexity` exempts a test, generated code and macro expansions, and
+a long flat list of simple cases. `function-length` exempts a test, generated
+code, a function that is mostly configuration or data, and an initialization
+function that sets many fields.
+
+The run reproduces generated code, through the project's own `excluded:` list.
+The run reproduces a flat list of `case` arms, through
+`ignores_case_statements`. The author answers every other one with the
+directive above.
+
+Neither swiftlint rule holds an option for any of them. `swiftlint rules
+cyclomatic_complexity` names `warning`, `error` and `ignores_case_statements`.
+`swiftlint rules function_body_length` names `warning` and `error`. No option
+of either rule reads a declaration name, a superclass, a file header or a data
+line.
+
+### A test, which the run does not drop
+
+Both prompt rules exempt a test, and `cognitive-complexity` names the
+DEFINITION as the mark: "Identify a test from its attribute or framework naming
+convention at the **definition**, never from the file name. A complex helper
+named `build_request` in a file called `foo_test.rs` is still a complex
+function and is still listed."
+
+Swift states that convention in XCTest: a test is a method whose name starts
+with `test`, in a class that subclasses `XCTestCase`. swiftlint reads neither
+mark for these two rules.
+
+Measured with swiftlint 0.65.0 over one file that holds a `func testEndToEnd()`
+of 300 body lines inside an `XCTestCase` subclass, beside a `func
+buildRequest()` of cyclomatic complexity 16: the run reports both. The
+acceptance test
+`the_shipped_swift_complexity_tool_rule_reports_a_test_method_and_its_helper`
+holds both rows.
+
+The one alternative is the `excluded:` list, which reads the PATH. That reads
+the file name, which is the mark the prompt rule forbids, and it silences the
+helper beside the test as well. That trades a true finding for the carve-out,
+which is the trade `complexity-python` refuses for a test path.
+
+So a complex test method REPORTS, and the author answers it. The first answer
+is to move the table walk out of the test. The second answer is
+`// swiftlint:disable:next function_body_length` above the method: measured,
+the same method then reported nothing.
+
+### Configuration, data and an initializer, which the run does not drop
+
+`function-length` exempts "Functions that are mostly configuration/data (e.g.,
+builder patterns with many options)" and "Initialization functions that set
+many fields". `function_body_length` counts a data line like a code line.
+
+Measured with swiftlint 0.65.0, at the gate of 250:
+
+| the shape | the message |
+|---|---|
+| an `init` that sets 260 fields | `Initializer body should span 250 lines or less ... currently spans 260 lines` |
+| a builder of 300 `.opt(n)` lines | `Function body ... currently spans 301 lines` |
+| a dictionary of 300 entries in a `func` | `Function body ... currently spans 302 lines` |
+
+So a data function and a long initializer REPORT, and the author answers them.
+The first answer is to move the data out of the declaration — a `let` table, a
+default value for each field, a smaller builder. The second answer is
+`// swiftlint:disable:next function_body_length` above the declaration, with
+the reason beside it. The acceptance test
+`the_shipped_swift_complexity_tool_rule_answers_the_length_gate_annotation`
+holds one annotated initializer beside one bare one, and holds the run to
+reporting the bare one alone.
+
+### A flat list of simple cases, which the run drops for a `switch` alone
+
+`cognitive-complexity` exempts "Configuration parsing with many options, where
+the score comes from a long flat list of simple cases rather than from
+nesting". `ignores_case_statements: true` reproduces that carve-out for a
+`switch`, and the section "Why `ignores_case_statements` is on" above states
+the measurement: 21 of 23 findings over 893 files disappear, and each of the 21
+is a flat dispatch table.
+
+A flat `if` chain is the other shape of the same list, and no option drops it.
+Measured over one function of 16 flat `if` statements: the run reports it at
+the gate of 15. The author answers that one with
+`// swiftlint:disable:next cyclomatic_complexity`, or with a `switch`, which
+the option then drops. The acceptance test
+`the_shipped_swift_complexity_tool_rule_answers_the_complexity_gate_annotation`
+holds one annotated function beside one bare one.
+
+### Generated code, which the run drops
+
+The section "Generated code, which the project's own `excluded:` list carves
+out" above states this carve-out and its measurement. The project names the
+directory its generator writes into, in the `excluded:` list of its own
+`.swiftlint.yml`, and the script names that file as the PARENT of its own
+configuration.
+
+An author cannot answer this carve-out with the directive. The generator writes
+the file again, and the directive goes away each time. That is why the run
+makes the test and the author does not.
+
+`cognitive-complexity` also exempts a macro expansion. swiftlint reads the
+source text and it makes no build, so it measures the macro use and never the
+expansion. No expansion reaches either gate.

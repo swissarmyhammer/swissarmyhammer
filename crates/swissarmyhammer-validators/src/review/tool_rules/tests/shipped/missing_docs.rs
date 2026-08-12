@@ -528,7 +528,7 @@ const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Go file the parser cannot read",
     path: GO_UNPARSABLE_PATH,
-    source: Some(GO_UNPARSABLE_SOURCE),
+    source: Some(GO_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 
@@ -764,7 +764,7 @@ const PYTHON_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_UNPARSABLE_PATH,
-    source: Some(PYTHON_UNPARSABLE_SOURCE),
+    source: Some(PYTHON_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 
@@ -1099,7 +1099,7 @@ const RUST_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Rust crate the compiler cannot build",
     path: RUST_UNCOMPILABLE_PATH,
-    source: Some(RUST_UNCOMPILABLE_SOURCE),
+    source: Some(RUST_UNCOMPILABLE_SOURCE.as_bytes()),
     support: RUST_UNCOMPILABLE_SUPPORT_FILES,
 };
 
@@ -1353,7 +1353,7 @@ const SWIFT_VERSION_MISMATCH_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "undocumented public declarations beside a project version mismatch",
     path: SWIFT_ORDINARY_POSITION.path,
-    source: Some(SWIFT_STAGED_DECLARATIONS),
+    source: Some(SWIFT_STAGED_DECLARATIONS.as_bytes()),
     support: SWIFT_VERSION_MISMATCH_SUPPORT_FILES,
 };
 

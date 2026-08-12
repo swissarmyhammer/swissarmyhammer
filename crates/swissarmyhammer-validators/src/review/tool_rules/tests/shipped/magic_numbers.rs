@@ -601,7 +601,7 @@ const SWIFT_MAGIC_NUMBERS_VERSION_MISMATCH_PROBE: ShippedNamedPath = ShippedName
     prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
     change_purpose: "one unnamed literal beside a project version mismatch",
     path: SWIFT_ORDINARY_POSITION.path,
-    source: Some(SWIFT_MAGIC_NUMBERS_STAGED),
+    source: Some(SWIFT_MAGIC_NUMBERS_STAGED.as_bytes()),
     support: SWIFT_VERSION_MISMATCH_SUPPORT_FILES,
 };
 

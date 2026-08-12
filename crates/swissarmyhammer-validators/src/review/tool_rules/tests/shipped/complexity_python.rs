@@ -288,7 +288,7 @@ const PYTHON_COMPLEXITY_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_COMPLEXITY_UNPARSABLE_PATH,
-    source: Some(PYTHON_COMPLEXITY_UNPARSABLE_SOURCE),
+    source: Some(PYTHON_COMPLEXITY_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 

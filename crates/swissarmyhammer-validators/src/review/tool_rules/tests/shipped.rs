@@ -169,13 +169,23 @@ const NO_SUPPORT_FIXTURES: &[(&str, &str)] = &[];
 /// reads the files it is given, so the staged files are the whole repository.
 const NO_SUPPORT_FILES: &[(&str, &str)] = &[];
 
+/// Writes `bytes` into `repo` at `path`, making the directory of the file
+/// first.
+///
+/// The content is a byte slice rather than text, because a probe of a file the
+/// tool cannot DECODE stages bytes that are not UTF-8, and no `&str` holds
+/// those.
+fn stage_probe_bytes(repo: &Path, path: &str, bytes: &[u8]) {
+    let file = repo.join(path);
+    std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
+    std::fs::write(&file, bytes).unwrap();
+}
+
 /// Writes each `(path, bytes)` pair of `files` into `repo`, making the
 /// directory of each one first.
 fn stage_probe_files<'a>(repo: &Path, files: impl IntoIterator<Item = (&'a str, &'a str)>) {
     for (path, content) in files {
-        let file = repo.join(path);
-        std::fs::create_dir_all(file.parent().expect("a staged path has a parent")).unwrap();
-        std::fs::write(&file, content).unwrap();
+        stage_probe_bytes(repo, path, content.as_bytes());
     }
 }
 
@@ -454,7 +464,11 @@ struct ShippedNamedPath {
     /// free for the support files to make a directory of it. The work-list
     /// names the path either way, so the run reads the same file list, and the
     /// tool is the only thing that sees the difference.
-    source: Option<&'static str>,
+    ///
+    /// The type is a byte slice rather than text, because a probe of a file
+    /// the tool cannot DECODE stages bytes that are not UTF-8, and no `&str`
+    /// holds those.
+    source: Option<&'static [u8]>,
 
     /// Each file staged beside `path` that the work-list does NOT name.
     ///
@@ -476,15 +490,20 @@ fn drive_shipped_named_path(probe: &ShippedNamedPath) -> (tempfile::TempDir, Too
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let repo = tempfile::tempdir().unwrap();
-    let content = probe.source.unwrap_or_default();
-    stage_probe_files(repo.path(), probe.source.map(|bytes| (probe.path, bytes)));
+    let content = probe
+        .source
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    if let Some(bytes) = probe.source {
+        stage_probe_bytes(repo.path(), probe.path, bytes);
+    }
     stage_probe_files(repo.path(), probe.support.iter().copied());
     let repo_root = probe_repository_root(&repo);
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
         [probe.prompt_rule.to_string(), probe.run.rule.to_string()],
-        [(probe.path, content)],
+        [(probe.path, content.as_ref())],
     );
     let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
     let run = required_run(&plan, probe.run.rule);

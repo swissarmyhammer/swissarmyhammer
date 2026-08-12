@@ -382,7 +382,7 @@ const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
     change_purpose: "a Rust workspace the compiler refuses",
     path: COMPLEX_LIB_PATH,
-    source: Some(RUST_COMPLEXITY_UNCOMPILABLE_SOURCE),
+    source: Some(RUST_COMPLEXITY_UNCOMPILABLE_SOURCE.as_bytes()),
     support: RUST_PROBE_SUPPORT_FILES,
 };
 

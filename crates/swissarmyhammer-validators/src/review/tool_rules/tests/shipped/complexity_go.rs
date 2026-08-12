@@ -295,7 +295,7 @@ const GO_COMPLEXITY_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
     change_purpose: "a Go file the parser cannot read",
     path: GO_COMPLEXITY_UNPARSABLE_PATH,
-    source: Some(GO_COMPLEXITY_UNPARSABLE_SOURCE),
+    source: Some(GO_COMPLEXITY_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 
