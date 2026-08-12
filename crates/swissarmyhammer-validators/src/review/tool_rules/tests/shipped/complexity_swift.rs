@@ -401,6 +401,102 @@ fn the_shipped_swift_complexity_tool_rule_breaks_on_a_file_it_cannot_decode() {
     verify_shipped_run_breaks(&SWIFT_COMPLEXITY_UNDECODABLE_PROBE);
 }
 
+/// The position of the file whose NAME holds the words of swiftlint's decode
+/// message, under the directory the project excludes.
+///
+/// The name ends in `.swift`, so the rule's own file pattern claims it and the
+/// run carries it. The project excludes the directory, so swiftlint reads no
+/// file and writes the path into a message of its own.
+const SWIFT_DECODE_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
+    path: "Generated/Could not read contents of.swift",
+    head: SWIFT_NO_HEAD,
+}];
+
+/// The `complexity-swift` probe over a file whose name holds the words of
+/// swiftlint's decode message.
+const SWIFT_COMPLEXITY_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's decode message",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_DECODE_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project excludes the file, so the run reports nothing and breaks nothing, \
+             whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's decode message, through the
+/// real swiftlint pipeline.
+///
+/// The script tests stderr for the message swiftlint writes when it cannot
+/// decode a file. swiftlint writes the PATH of a file into stderr as well, so a
+/// test that read all of stderr answered the file NAME.
+///
+/// Measured with swiftlint 0.65.0 over this probe: swiftlint writes
+/// `Error: No lintable files found at paths: 'Generated/Could not read contents
+/// of.swift'` to stderr, writes 0 bytes to stdout, and exits 1. A test spelled
+/// `grep -qF 'Could not read contents of'` matched that path echo, and the
+/// script then wrote its own tool-error line and exited 1 over a run that
+/// measured correctly. The same run over `Generated/Staged.swift`, with the
+/// same exclude list, reports no finding and exits 0.
+///
+/// swiftlint writes its own decode message at the START of a line, and it
+/// writes the path echo after `Error: `. Measured, a pattern anchored on the
+/// start of the line matches the decode message and does not match the path
+/// echo, so the script anchors the test that way.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_measures_a_file_named_for_the_decode_message() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_DECODE_NAME_PROBE);
+}
+
+/// The position of the file whose NAME holds the words of swiftlint's
+/// configuration message, under the directory the project excludes.
+const SWIFT_CONFIG_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
+    path: "Generated/Could not read configuration.swift",
+    head: SWIFT_NO_HEAD,
+}];
+
+/// The `complexity-swift` probe over a file whose name holds the words of
+/// swiftlint's configuration message.
+const SWIFT_COMPLEXITY_CONFIG_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_COMPLEXITY_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's configuration message",
+    declarations: SWIFT_COMPLEXITY_STAGED,
+    staged: SWIFT_CONFIG_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project configuration is readable, so the run keeps the project exclude list \
+             and reports nothing, whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift complexity tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's configuration message,
+/// through the real swiftlint pipeline.
+///
+/// The same cause reaches the earlier stderr test, and it makes a WRONG FINDING
+/// rather than a break. Measured with swiftlint 0.65.0 over this probe: a test
+/// spelled `grep -qF 'Could not read configuration'` matched the path echo, so
+/// the script wrote `swiftlint cannot read .swiftlint.yml beside this rule`,
+/// ran swiftlint a second time with no project configuration, and reported 1
+/// finding on a file the project excludes.
+///
+/// The project configuration of this probe is the one every Swift probe of this
+/// module stages, and swiftlint reads it without trouble, so the run must keep
+/// the project's `excluded:` list and report nothing.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_measures_a_file_named_for_the_configuration_message() {
+    verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_CONFIG_NAME_PROBE);
+}
+
 /// The `complexity-swift` probe over a directory that holds no Swift file.
 ///
 /// The probe writes no file at the path, and the one staged file under that
