@@ -472,8 +472,28 @@ comments:
     - verification: `get task` shows zero `- [ ]` items in the whole description. Checked/total went 37/52 (15 open) to 37/37 (0 open). `progress` went 0.7115 to 1.0.
     - next: card has no open findings. Ready for the review gate.
   timestamp: 2026-08-12T06:54:18.419392+00:00
-position_column: review
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01kztccss9jddjrfr0q328cva1
+  text: |
+    ### review — clean
+    - scope: `review sha 7d06f3225~1..7d06f3225`
+    - evidence: run COMPLETE — 8 tasks attempted, 0 failed, 0 skipped. `skipped_files` empty: no file exceeded the per-file prompt cap, so every validator read every file in the commit.
+    - engine counts: 11 findings, 11 confirmed, 4 refuted. All 11 land in `apps/swissarmyhammer-cli/tests/integration/comprehensive_cli_mcp_integrations.rs` and all 11 ask to add `.context()` to a bare `?` on a line this commit did not write. `git blame 7d06f3225` puts each line in an earlier commit: 18 → `d0e19df80f`; 37, 39, 166, 206, 244, 275, 299 → `3eeb1d566d`; 143, 149 → `1971f17060`; 171 → `20e4a9c554`. Each is therefore dropped under the skill's blanket test-refactor exception, which forbids asking to change test code that already existed. Zero findings remain to record.
+    - the 2 NEW findings of the 22:09 pass are closed by this commit; every prior checklist item on the card is checked.
+    - next: none. Task moved to `done`.
+  timestamp: 2026-08-12T07:01:11.081290+00:00
+- actor: claude-code
+  id: 01kztcdrm0de3y9bm66gychjz5
+  text: |-
+    ### finish iteration 9 — done
+    - implement: changed — kanban only. Moved the 15 pre-existing CLI findings to card ^y29z8p3 by user decision. No source file changed
+    - test: not run — the change was to the board only
+    - commit: 88d98c8ab
+    - review: clean — scope 7d06f3225~1..7d06f3225. 8 tasks attempted, 0 failed, 0 skipped, no file over the cap. The engine returned 11 findings, all in comprehensive_cli_mcp_integrations.rs, and git blame put every one in an older commit, so all 11 dropped under the test-refactor exception. Zero recordable findings, 37 of 37 items checked
+    - CLOSED. The card is in `done`. 9 commits, ffaffc3cd through 88d98c8ab. The inline-on-edit diagnostics feature is gone: no fold_in_diagnostics call site, no inline_diagnostics module, no mutated_paths side-channel on ToolContext. A re-introduction is now a build error. The diagnostics MCP tool is untouched and stays the on-demand path.
+  timestamp: 2026-08-12T07:01:42.656864+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd380
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
 ---
 ## Problem
