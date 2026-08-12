@@ -64,7 +64,7 @@ tool:
       exit 1
     fi
     sort -u "$work/findings.json"
-    mkdir -p "$work/modules"
+    mkdir -p "$work/modules" "$work/paths"
     find . -name target -prune -o -name .git -prune -o -name '*.rs' -print |
       while IFS= read -r file; do
         base="${file##*/}"
@@ -79,16 +79,191 @@ tool:
         case "${dir#"$crate"/}" in tests | tests/* | benches | benches/* | examples | examples/* | src/bin | src/bin/*) continue ;; esac
         key="$(printf '%s' "$crate" | tr -c 'A-Za-z0-9' '_')"
         if [ ! -f "$work/modules/$key" ]; then
-          {
-            grep -rhoE '\bmod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$crate" --include='*.rs' --exclude-dir=target 2>/dev/null | awk '{print $2}'
-            grep -rhoE '#\[path[[:space:]]*=[[:space:]]*"[^"]*"' "$crate" --include='*.rs' --exclude-dir=target 2>/dev/null | sed -e 's/.*"\(.*\)"/\1/' -e 's#.*/##' -e 's/\.rs$//'
-          } | sort -u >"$work/modules/$key"
+          find "$crate" -name target -prune -o -name .git -prune -o -name '*.rs' \
+            -exec awk '
+              function emit(nm,   segs, s) {
+                if (nstack == 0) { print "s " nm; return }
+                segs = ""
+                for (s = 1; s <= nstack; s++) segs = segs stack[s] "/"
+                print "p " pfx stem "/" segs nm ".rs"
+                print "p " pfx stem "/" segs nm "/mod.rs"
+                print "p " pfx segs nm ".rs"
+                print "p " pfx segs nm "/mod.rs"
+              }
+              function stems(t, pat,   v) {
+                while (match(t, pat)) {
+                  v = substr(t, RSTART, RLENGTH)
+                  t = substr(t, RSTART + RLENGTH)
+                  sub(/^[^"]*"/, "", v)
+                  sub(/"$/, "", v)
+                  sub(/.*\//, "", v)
+                  sub(/\.rs$/, "", v)
+                  if (v != "") print "s " v
+                }
+              }
+              function scan(t,   j, m, ch, nm) {
+                j = 1
+                m = length(t)
+                while (j <= m) {
+                  if (match(substr(t, j), /^[^{};m]+/)) { j += RLENGTH; continue }
+                  ch = substr(t, j, 1)
+                  if (ch == "{") {
+                    depth++
+                    if (pend != "") { nstack++; stack[nstack] = pend; opened[nstack] = depth; pend = "" }
+                    j++
+                    continue
+                  }
+                  if (ch == "}") {
+                    if (nstack > 0 && opened[nstack] == depth) nstack--
+                    depth--
+                    j++
+                    continue
+                  }
+                  if (ch == ";") { pend = ""; j++; continue }
+                  if ((j == 1 || substr(t, j - 1, 1) !~ /[A-Za-z0-9_]/) &&
+                      match(substr(t, j), /^mod[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                    nm = substr(t, j, RLENGTH)
+                    sub(/^mod[ \t]+/, "", nm)
+                    emit(nm)
+                    pend = nm
+                    j += RLENGTH
+                    continue
+                  }
+                  j++
+                }
+              }
+              BEGIN {
+                quote = sprintf("%c", 39)
+                path_pattern = "#\\[[ \t]*path[ \t]*=[ \t]*\"[^\"]*\""
+                include_pattern = "include![ \t]*\\([ \t]*\"[^\"]*\""
+                plain_pattern = "^[^\"" quote "/rb]+"
+              }
+              FNR == 1 {
+                instr = 0
+                inraw = 0
+                inblk = 0
+                rawh = 0
+                hashes = ""
+                depth = 0
+                nstack = 0
+                pend = ""
+                name = FILENAME
+                sub(/^\.\//, "", name)
+                stem = name
+                sub(/^.*\//, "", stem)
+                sub(/\.rs$/, "", stem)
+                pfx = name
+                if (pfx ~ /\//) { sub(/\/[^\/]*$/, "", pfx); pfx = pfx "/" } else pfx = ""
+              }
+              {
+                line = $0
+                code = ""
+                bare = ""
+                cont = (instr || inraw)
+                i = 1
+                n = length(line)
+                while (i <= n) {
+                  if (inblk) {
+                    if (substr(line, i, 2) == "*/") { inblk = 0; i += 2; continue }
+                    if (match(substr(line, i), /^[^*]+/)) i += RLENGTH; else i++
+                    continue
+                  }
+                  if (inraw) {
+                    c = substr(line, i, 1)
+                    if (c == "\"" && substr(line, i + 1, rawh) == hashes) {
+                      inraw = 0
+                      if (!cont) code = code substr(line, i, 1 + rawh)
+                      i += 1 + rawh
+                      cont = 0
+                      continue
+                    }
+                    if (match(substr(line, i), /^[^"]+/)) {
+                      if (!cont) code = code substr(line, i, RLENGTH)
+                      i += RLENGTH
+                    } else i++
+                    continue
+                  }
+                  if (instr) {
+                    c = substr(line, i, 1)
+                    if (c == "\\") {
+                      if (!cont) code = code substr(line, i, 2)
+                      i += 2
+                      continue
+                    }
+                    if (c == "\"") {
+                      instr = 0
+                      if (!cont) code = code c
+                      i++
+                      cont = 0
+                      continue
+                    }
+                    if (match(substr(line, i), /^[^"\\]+/)) {
+                      if (!cont) code = code substr(line, i, RLENGTH)
+                      i += RLENGTH
+                    } else i++
+                    continue
+                  }
+                  if (match(substr(line, i), plain_pattern)) {
+                    code = code substr(line, i, RLENGTH)
+                    bare = bare substr(line, i, RLENGTH)
+                    i += RLENGTH
+                    continue
+                  }
+                  c = substr(line, i, 1)
+                  two = substr(line, i, 2)
+                  if (two == "//") break
+                  if (two == "/*") { inblk = 1; i += 2; continue }
+                  if (c == "\"") { instr = 1; code = code c; i++; continue }
+                  if (c == quote) {
+                    if (substr(line, i + 1, 1) == "\\") {
+                      k = i + 3
+                      while (k <= n && substr(line, k, 1) != quote) k++
+                      i = k + 1
+                      continue
+                    }
+                    if (substr(line, i + 2, 1) == quote) { i += 3; continue }
+                    code = code c
+                    bare = bare c
+                    i++
+                    continue
+                  }
+                  if (i == 1 || substr(line, i - 1, 1) !~ /[A-Za-z0-9_]/) {
+                    k = i
+                    if (c == "b") k++
+                    if (substr(line, k, 1) == "r") {
+                      k++
+                      h = 0
+                      while (substr(line, k, 1) == "#") { h++; k++ }
+                      if (substr(line, k, 1) == "\"") {
+                        inraw = 1
+                        rawh = h
+                        hashes = ""
+                        while (length(hashes) < h) hashes = hashes "#"
+                        code = code substr(line, i, k - i + 1)
+                        i = k + 1
+                        continue
+                      }
+                    }
+                  }
+                  code = code c
+                  bare = bare c
+                  i++
+                }
+                scan(bare)
+                stems(code, path_pattern)
+                stems(code, include_pattern)
+              }
+            ' {} + >"$work/index"
+          awk '$1 == "s" { print substr($0, 3) }' "$work/index" | sort -u >"$work/modules/$key"
+          awk '$1 == "p" { print substr($0, 3) }' "$work/index" | sort -u >"$work/paths/$key"
         fi
         grep -qxF "${base%.rs}" "$work/modules/$key" && continue
-        printf '%s:1: orphan module: no `mod %s;` declaration in this crate names this file, so nothing compiles it\n' "${file#./}" "${base%.rs}"
+        grep -qxF "${file#./}" "$work/paths/$key" && continue
+        grep -qE '^[[:space:]]*//[/!]?[[:space:]]*sah:ignore[[:space:]]+orphan-module[[:space:]]+[^[:space:]]' "$file" && continue
+        printf '%s:1: orphan module: no `mod %s;`, `#[path]` or `include!` in this crate names this file, so nothing compiles it — name it, delete it, or write `// sah:ignore orphan-module <reason>` in it\n' "${file#./}" "${base%.rs}"
       done
   doctor:
-    check_command: "which cargo jq find grep sed awk sort tr mktemp mkdir"
+    check_command: "which cargo jq find grep awk sort tr mktemp mkdir"
     check_version_command: "cargo --version"
     fix_hint: "rustup toolchain install stable"
 ---
@@ -139,20 +314,99 @@ Measured on this workspace: `cargo check --workspace --all-targets` reports
 
 The compiler cannot report a file it never reads. A `.rs` file no `mod`
 declaration names is not part of any crate, so `cargo check` is silent about it
-however dead it is. The second half of the script closes that hole with `grep`.
+however dead it is. The second half of the script closes that hole with an
+`awk` index of every name the crate declares.
 
 A file is exempt when it is a crate root or a module root by name — `lib.rs`,
 `main.rs`, `mod.rs`, `build.rs` — or when it sits in a directory cargo compiles
 file by file: `tests/`, `benches/`, `examples/`, and `src/bin/`, where every
 file is its own target root. Everything else must be named by a
-`mod <stem>;` declaration, or by a `#[path = "..."]` attribute, somewhere in its
-own crate. The crate is the nearest ancestor directory holding a `Cargo.toml`,
-so a `mod` declaration in a sibling crate does not excuse a file.
+`mod <stem>;` declaration, by a `#[path = "..."]` attribute, or by an
+`include!("...")`, somewhere in its own crate. The crate is the nearest ancestor
+directory holding a `Cargo.toml`, so a `mod` declaration in a sibling crate does
+not excuse a file.
 
-The index of module names is built one time for each crate rather than one
-time for each file, and it stands under `modules/` in the one temporary
-directory the script makes. That is what keeps the scan at **6.7 s** over this
-whole workspace.
+### `include!` compiles a file no declaration names
+
+`include!("foo.rs")` pastes a file into the module that holds the macro. That
+file is compiled, and no `mod` declaration and no `#[path]` attribute anywhere
+names it. The line this rule writes claims that nothing compiles the file, and
+for such a file the claim is false. Measured over a probe package holding
+`include!("generated.rs")` beside `src/generated.rs`, against the earlier index:
+the run reported `src/generated.rs:1` for a file the compiler reads. The index
+now reads the string of each `include!` the same way it reads the string of each
+`#[path]`, and the run over that probe reports nothing.
+
+### The index reads the code, never a comment and never a string
+
+The earlier index came from
+`grep -rhoE '\bmod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*'`, which matched the word
+wherever it stood. A `mod` inside a comment and a `mod` inside a string literal
+each entered the index, and each excused a real orphan. Both are silent
+failures: the scan reports nothing and the dead file stays.
+
+One `awk` pass now lexes each `.rs` file of the crate. It drops a `//` comment
+and a `/* */` block, and it keeps the body of a string literal out of the text
+the `mod` scan reads — an ordinary string, a raw string of any hash count, and a
+string that runs over several lines alike. A character literal is read as one,
+so a `'{'` does not move the brace depth. The `#[path]` and `include!` scans read
+the text WITH its strings, because the payload of each of those IS a string.
+
+Measured over three probe packages that name the orphan in a line comment, in a
+block comment at column zero, and in a `pub const` string: the earlier index
+reported 0 findings for each, and this index reports the orphan.
+
+### A nested declaration names a file under its own module directory
+
+A `mod x;` inside an inline module does not name `x.rs` beside the file. It
+names `<owner>/<inline module>/x.rs`, because an inline module adds its own name
+to the module directory. The earlier index held bare stems, so a `mod orphan;`
+inside a `#[cfg(test)] mod tests` excused every `orphan.rs` of the crate.
+Measured over a probe package holding `src/orphan.rs` beside the
+`src/tests/orphan.rs` that declaration really names: the earlier index reported
+0 findings, and the real orphan went missing.
+
+A declaration at the TOP LEVEL of a file still enters the index as a bare stem,
+which is the coarse shape this rule shipped with. A NESTED declaration enters it
+as a resolved PATH instead. The path is written two ways, because whether a file
+is a crate root is cargo's decision and not a fact the file name carries:
+`<dir>/<stem>/<segments>/x.rs` for a file that is a module of its own, and
+`<dir>/<segments>/x.rs` for a file that is a target root, each beside its
+`mod.rs` form. A file any of those four names is exempt, so the scan never
+accuses a file a plausible resolution names.
+
+This needs no `cfg(test)` test of its own. The nesting is what moves the
+directory, and `#[cfg(test)] mod tests` is one inline module among many.
+
+### The marker, for what the scan cannot read
+
+A crate can compile a file through a `mod` name a macro builds, through an
+`include!` whose path is an expression such as
+`include!(concat!(env!("OUT_DIR"), "/gen.rs"))`, or through a build script. The
+scan reads none of those. `builtin/validators/README.md` states the answer for
+that residue: "An exemption a person would argue for in prose must become an
+inline suppression the tool reads."
+
+Write the marker in the file itself, on a comment line:
+
+    // sah:ignore orphan-module <reason>
+
+The reason is required, and it names what compiles the file. Measured over two
+probe packages: the marker beside a reason reports nothing, and the same marker
+with nothing after it reports the orphan, because a claim with no subject
+suppresses nothing. A `///` and a `//!` carry the marker too, so a file that
+opens with documentation needs no comment of another shape.
+
+Naming the file is still the fix. The marker is the claim that something the
+scan cannot read already names it.
+
+### What the scan costs, and what it reports
+
+The index is built one time for each crate rather than one time for each file,
+and it stands under `modules/` and `paths/` in the one temporary directory the
+script makes. Measured over this whole workspace, 1219 `.rs` files, as the
+lowest of three runs of each: the `awk` index takes **11.3 s** against **7.9 s**
+for the earlier `grep` index.
 
 Measured on this workspace when the rule shipped: **5** orphan files, every one
 hand-checked and every one real — `crates/swissarmyhammer/src/security.rs`
@@ -160,11 +414,19 @@ hand-checked and every one real — `crates/swissarmyhammer/src/security.rs`
 `crates/markdowndown/src/fetch.rs`,
 `crates/swissarmyhammer-common/src/sample_avp_test.rs`, and
 `crates/swissarmyhammer-tools/src/mcp/notifications.rs` (an empty file). No
-false positive. Each of the five has since gone, and the run over this
-workspace reports **0** orphan files today.
+false positive. Each of the five has since gone, and both indexes report **0**
+orphan files over this workspace today, so the `awk` index adds no false
+positive here.
 
-To exempt an orphan file, name it — that is the fix. There is no suppression for
-a file nothing compiles, because there is nothing to suppress it in.
+Seven acceptance tests hold this half to the measurements above:
+`the_shipped_rust_dead_code_tool_rule_reports_a_file_no_declaration_names`,
+`the_shipped_rust_dead_code_tool_rule_keeps_a_file_an_include_compiles`,
+`the_shipped_rust_dead_code_tool_rule_reads_the_orphan_marker`,
+`the_shipped_rust_dead_code_tool_rule_reports_an_orphan_whose_marker_states_no_reason`,
+`the_shipped_rust_dead_code_tool_rule_reads_no_module_declaration_from_a_comment`,
+`the_shipped_rust_dead_code_tool_rule_reads_no_module_declaration_from_a_string_literal`
+and
+`the_shipped_rust_dead_code_tool_rule_reads_a_nested_module_declaration_as_its_own_file`.
 
 ## A workspace the tool cannot check
 

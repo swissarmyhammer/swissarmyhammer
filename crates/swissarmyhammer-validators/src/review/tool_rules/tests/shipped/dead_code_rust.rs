@@ -1,19 +1,25 @@
 //! Acceptance tests for the shipped `dead-code-rust` tool rule.
 //!
 //! Each test drives the SHIPPED script over a probe cargo package and reads
-//! what the real `cargo check` answered.
+//! what that run answered.
 //!
 //! The module stands beside `dead_code`, which holds the whole family to its
 //! fixture pair, because `cargo check` gives one exit status to a run it could
 //! not make and to a run it made from end to end. The shapes that tell those
 //! two apart are cargo's own, so they are measured for Rust alone.
 //!
+//! The tests fall in two halves, the way the script does. The first six drive
+//! the `cargo check` half. The seven under them drive the ORPHAN-MODULE half,
+//! which reads the tree itself and reports a file no declaration of its crate
+//! names.
+//!
 //! Every test here stands under `#[serial_test::serial(env)]`. One of them
 //! leads `PATH` with a command that answers nothing, and `PATH` is process
 //! state: a probe that read that stubbed `PATH` would answer for another run's
-//! staging. Measured over the six: run together without the marker, the two
-//! probes that hold a MEASURED run reported nothing, because their own `jq`
-//! was the stub the sixth test had put on `PATH`.
+//! staging. Measured over the six this module shipped with: run together
+//! without the marker, the two probes that hold a MEASURED run reported
+//! nothing, because their own `jq` was the stub the sixth test had put on
+//! `PATH`.
 
 use super::*;
 
@@ -348,4 +354,301 @@ const RUST_FILTER_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
 #[serial_test::serial(env)]
 fn the_shipped_rust_dead_code_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
     verify_shipped_tree_breaks_without(&RUST_FILTER_BROKEN_PROBE, FILTER_BINARY_NAME);
+}
+
+/// What a probe of the orphan-module half reports when nothing names the file
+/// it stages at [`RUST_ORPHAN_PATH`].
+const RUST_ORPHAN_REPORTS: &[&str] = &["src/orphan.rs:1"];
+
+/// What a probe reports when every file it stages is compiled.
+const RUST_NO_REPORTS: &[&str] = &[];
+
+/// Where a probe stages the file no `mod` declaration names.
+const RUST_ORPHAN_PATH: &str = "src/orphan.rs";
+
+/// A file that carries an inner documentation comment and nothing else, so a
+/// probe measures the SCAN rather than any diagnostic the file could raise.
+const RUST_ORPHAN_FILE: &str = "//! A file the probe crate names nowhere.\n";
+
+/// A crate root that names no module at all.
+const RUST_BARE_LIB: &str = "//! A probe crate whose root names no module.\n";
+
+/// A probe package that stages one file no declaration names.
+///
+/// This is the control of every probe under it: each of those stages the same
+/// orphan file beside a crate root that names it in one shape or another, so a
+/// scan that stopped reporting altogether would pass them all and break this
+/// one.
+const RUST_ORPHAN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_ORPHAN_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_BARE_LIB),
+        (RUST_ORPHAN_PATH, RUST_ORPHAN_FILE),
+    ],
+    reason: "a file no declaration of the crate names is an orphan",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule REPORTS a file that no
+/// declaration of its crate names.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reports_a_file_no_declaration_names() {
+    verify_shipped_tree_reports(&RUST_ORPHAN_PROBE);
+}
+
+/// Where a probe stages the file its crate root compiles through `include!`.
+const RUST_INCLUDED_PATH: &str = "src/generated.rs";
+
+/// A crate root that compiles the file beside it through `include!`, which
+/// names that file by no `mod` declaration and by no `#[path]` attribute.
+const RUST_INCLUDE_LIB: &str = concat!(
+    "//! A probe crate that compiles the file beside it through `include!`.\n",
+    "\n",
+    "include!(\"generated.rs\");\n",
+);
+
+/// The file `include!` compiles into the crate root.
+const RUST_INCLUDED_FILE: &str = concat!(
+    "/// An item the crate root compiles through `include!`.\n",
+    "pub fn generated() -> i32 {\n",
+    "    1\n",
+    "}\n",
+);
+
+/// A probe package that compiles a file through `include!`.
+const RUST_INCLUDE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_NO_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_INCLUDE_LIB),
+        (RUST_INCLUDED_PATH, RUST_INCLUDED_FILE),
+    ],
+    reason: "`include!` compiles the file it names, so that file is no orphan",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule KEEPS a file its crate
+/// compiles through `include!`.
+///
+/// The claim the orphan line makes is that nothing compiles the file. An
+/// `include!` compiles it, so the claim is false for such a file and the scan
+/// must stay silent. Measured over this probe against the earlier index, which
+/// read `mod` declarations and `#[path]` attributes alone: the run reported
+/// `src/generated.rs:1` for a file the compiler reads.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_keeps_a_file_an_include_compiles() {
+    verify_shipped_tree_reports(&RUST_INCLUDE_PROBE);
+}
+
+/// An orphan file carrying the whole-file suppression marker with a reason.
+const RUST_MARKED_ORPHAN_FILE: &str = concat!(
+    "// sah:ignore orphan-module the build script of the consumer crate reads this file\n",
+    "//! A file the probe crate names nowhere.\n",
+);
+
+/// A probe package whose orphan file carries the suppression marker.
+const RUST_MARKED_ORPHAN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_NO_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_BARE_LIB),
+        (RUST_ORPHAN_PATH, RUST_MARKED_ORPHAN_FILE),
+    ],
+    reason: "the marker beside a reason states that something the scan cannot read \
+             compiles the file",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule READS the whole-file
+/// suppression marker.
+///
+/// A crate can compile a file through a `mod` name a macro builds, through an
+/// `include!` whose path is an expression, or through a build script. The scan
+/// reads none of those, so the exemption a person would argue for in prose
+/// becomes a marker the scan reads, which is what
+/// `builtin/validators/README.md` asks of every tool rule.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reads_the_orphan_marker() {
+    verify_shipped_tree_reports(&RUST_MARKED_ORPHAN_PROBE);
+}
+
+/// An orphan file carrying the suppression marker with no reason after it.
+const RUST_REASONLESS_ORPHAN_FILE: &str = concat!(
+    "// sah:ignore orphan-module\n",
+    "//! A file the probe crate names nowhere.\n",
+);
+
+/// A probe package whose orphan file carries a marker that states no reason.
+const RUST_REASONLESS_ORPHAN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_ORPHAN_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_BARE_LIB),
+        (RUST_ORPHAN_PATH, RUST_REASONLESS_ORPHAN_FILE),
+    ],
+    reason: "a marker that states no reason names nothing, so it suppresses nothing",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule REPORTS an orphan whose
+/// marker states no reason.
+///
+/// The reason is the whole content of the marker: it names what compiles the
+/// file. A marker with no reason is a claim with no subject, so it leaves the
+/// finding standing.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reports_an_orphan_whose_marker_states_no_reason() {
+    verify_shipped_tree_reports(&RUST_REASONLESS_ORPHAN_PROBE);
+}
+
+/// A crate root that names the orphan file in comments alone — one line
+/// comment, and one block comment holding the declaration at column zero.
+const RUST_COMMENTED_MOD_LIB: &str = concat!(
+    "//! A probe crate that names the orphan in comments alone.\n",
+    "\n",
+    "// mod orphan;\n",
+    "/*\n",
+    "mod orphan;\n",
+    "*/\n",
+);
+
+/// A probe package whose only `mod` declaration stands in a comment.
+const RUST_COMMENTED_MOD_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_ORPHAN_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_COMMENTED_MOD_LIB),
+        (RUST_ORPHAN_PATH, RUST_ORPHAN_FILE),
+    ],
+    reason: "a comment compiles nothing, so a `mod` declaration inside one names no file",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule READS no `mod` declaration
+/// out of a comment.
+///
+/// The earlier index came from `grep -rhoE '\bmod[[:space:]]+[A-Za-z_]...'`,
+/// which matched the word wherever it stood. Measured over this probe against
+/// that index: the run reported 0 findings, so a commented-out declaration hid
+/// a real orphan. A block comment hides it the same way, and the declaration
+/// stands at column zero inside one here, where no anchor can reach it.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reads_no_module_declaration_from_a_comment() {
+    verify_shipped_tree_reports(&RUST_COMMENTED_MOD_PROBE);
+}
+
+/// A crate root that holds the text of a module declaration in a string
+/// literal, which declares nothing.
+const RUST_STRING_MOD_LIB: &str = concat!(
+    "//! A probe crate that holds a module declaration in a string.\n",
+    "\n",
+    "/// The text of a module declaration, which declares no module.\n",
+    "pub const DECLARATION: &str = \"mod orphan;\";\n",
+);
+
+/// A probe package whose only `mod` text stands inside a string literal.
+const RUST_STRING_MOD_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_ORPHAN_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_STRING_MOD_LIB),
+        (RUST_ORPHAN_PATH, RUST_ORPHAN_FILE),
+    ],
+    reason: "a string literal is data, so a `mod` declaration inside one names no file",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule READS no `mod` declaration
+/// out of a string literal.
+///
+/// This crate holds many such strings: every probe of this very file stages a
+/// crate root as a Rust string. Measured over this probe against the earlier
+/// index: the run reported 0 findings.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reads_no_module_declaration_from_a_string_literal() {
+    verify_shipped_tree_reports(&RUST_STRING_MOD_PROBE);
+}
+
+/// Where a probe stages the file its inline test module really names.
+const RUST_TEST_MODULE_PATH: &str = "src/tests/orphan.rs";
+
+/// A crate root whose inline `#[cfg(test)]` module names a module of its own.
+///
+/// The nested declaration names `src/tests/orphan.rs`, never `src/orphan.rs`,
+/// because an inline module adds its own name to the module directory.
+const RUST_TEST_MODULE_LIB: &str = concat!(
+    "//! A probe crate whose inline test module names a module of its own.\n",
+    "\n",
+    "#[cfg(test)]\n",
+    "mod tests {\n",
+    "    mod orphan;\n",
+    "}\n",
+);
+
+/// The module the inline test module of the probe names.
+const RUST_TEST_MODULE_FILE: &str = concat!(
+    "//! The module the inline test module of the probe names.\n",
+    "\n",
+    "#[test]\n",
+    "fn probe() {}\n",
+);
+
+/// A probe package whose inline test module names one file, beside an orphan
+/// of the same stem.
+const RUST_TEST_MODULE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_DEAD_CODE_RULE,
+        expected: RUST_ORPHAN_REPORTS,
+    },
+    staged: &[
+        (RUST_DEAD_CODE_MANIFEST_PATH, RUST_DEAD_CODE_MANIFEST),
+        (RUST_DEAD_CODE_LIB_PATH, RUST_TEST_MODULE_LIB),
+        (RUST_TEST_MODULE_PATH, RUST_TEST_MODULE_FILE),
+        (RUST_ORPHAN_PATH, RUST_ORPHAN_FILE),
+    ],
+    reason: "a nested declaration names the file under its own module directory, so it \
+             excuses that file and no other",
+};
+
+/// Acceptance: the shipped Rust dead-code tool rule reads a NESTED `mod`
+/// declaration as the file it really names.
+///
+/// The earlier index held bare stems, so a `mod orphan;` inside
+/// `#[cfg(test)] mod tests` excused every `orphan.rs` of the crate. Measured
+/// over this probe against that index: the run reported 0 findings, and the
+/// real orphan at `src/orphan.rs` went missing.
+///
+/// The probe measures the other direction in the same run: `src/tests/orphan.rs`
+/// is the file the nested declaration names, and it must stay out of the
+/// report.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_dead_code_tool_rule_reads_a_nested_module_declaration_as_its_own_file() {
+    verify_shipped_tree_reports(&RUST_TEST_MODULE_PROBE);
 }
