@@ -93,6 +93,92 @@ comments:
     - evidence: 9 files — new `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/{args,prompts,cascade,atomic,test_support}.rs`; edited `mcp/tools/files/edit/mod.rs`, `mcp/tools/files/shared_utils.rs`, `mcp/tools/files/write/mod.rs`, `mcp/server.rs`. All 6 review findings checked off. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14097 run, 14093 passed, 4 pre-existing failures (review_e2e x3, review_progress_stdio_test x1, all on the review engine's own fixture repo). `sah tool code_context duplication find` over every touched file reports nothing. `cargo clippy -W missing_docs` reports nothing in any touched file. 100 of 100 `files::edit::` tests preserved.
     - next: /review — re-run so the `duplication` validator can read `files/edit/` now that no file is over the 262144-byte cap
   timestamp: 2026-08-11T22:51:54.288725+00:00
+- actor: claude-code
+  id: 01kzsmh0x3jz2r8cw4j3kyfz2n
+  text: |
+    ### review — findings
+    - scope: review sha a1f694cbd~1..a1f694cbd
+    - evidence: 10 findings, 10 confirmed, 6 refuted — crates/swissarmyhammer-tools/src/mcp/server.rs:1, :205, :3082, :3327, :3356; crates/swissarmyhammer-tools/src/mcp/tools/files/edit/args.rs:497; crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:39, :75, :129; crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:176
+    - cap: the edit/mod.rs split worked — args.rs 22637 B, atomic.rs 23344 B, cascade.rs 50002 B, mod.rs 47974 B, prompts.rs 19085 B, test_support.rs 2326 B, all under the cap, and all were reviewed (findings landed in args.rs and atomic.rs). server.rs is now the over-cap file at 361775 rendered bytes; duplication skipped it.
+    - run completeness: INCOMPLETE — 12 of 40 review tasks failed, 1 file skipped for the cap.
+    - next: fix the 10 findings, split server.rs under the cap, then re-review.
+  timestamp: 2026-08-12T00:04:03.619433+00:00
+- actor: claude-code
+  id: 01kzsmj3g6akey9myv3hemmw1f
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 9 files; closed all 6 prior findings. Split files/edit/mod.rs into args/prompts/cascade/atomic/test_support, extracted McpServer::init_builtin_library, de-duplicated path validation in shared_utils.rs, named TEMP_FILE_SUFFIX, documented execute_write and the McpServer fields
+    - test: green — cargo nextest run --workspace --no-fail-fast, 14097 run, 14093 passed. Total count held at 14097, so no test was lost in the split. Same 4 pre-existing failures
+    - commit: a1f694cbd
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/server.rs:1, server.rs:205, server.rs:3082, server.rs:3327, server.rs:3356, crates/swissarmyhammer-tools/src/mcp/tools/files/edit/args.rs:497, edit/atomic.rs:39, edit/atomic.rs:75, edit/atomic.rs:129, crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:176
+    - note: the edit/ split worked — all six edit/ files are under the 262144-byte cap and the duplication validator read them. But the cap problem moved: server.rs is now over the cap at 361775 bytes and was skipped. This run also did NOT complete — 12 of 40 review tasks failed, worse than the 3 of 32 last round.
+  timestamp: 2026-08-12T00:04:39.046086+00:00
+- actor: claude-code
+  id: 01kzsnbf8pkn9bc51pqpzj51j9
+  text: |
+    Split of `mcp/server.rs` landed (finding `server.rs:1`). The file is gone; `mcp/server/` replaces it with nine modules, one per concern:
+
+    - `mod.rs` (27 KB) — `McpServer`, construction, registry wiring, tool dispatch
+    - `code_context.rs` (48 KB) — leader election, LSP supervisor, indexing workers, diagnostics fan-out
+    - `profiles.rs` (25 KB) — validator / agent-tools server clones, serve-time native deny
+    - `handler.rs` (19 KB) — the `ServerHandler` impl and its request helpers
+    - `file_watch.rs` (14 KB) — prompt-directory watching
+    - `prompts.rs` (10 KB) — reload and the content signature
+    - `instructions.rs` (6 KB) — instructions, capabilities, implementation identity
+    - `retry.rs` (6 KB) — the backoff retry helper
+    - `agent_identity.rs` (5 KB) — the kanban actor for a connecting client
+
+    Largest file is now 48332 bytes against 133 KB before, so every file is far under the 262144-byte review cap.
+
+    Verified mechanically, not by eye:
+    - Content: stripped of leading whitespace and blank lines, the multiset of lines in the nine new files equals the multiset in `HEAD:server.rs` plus exactly the scaffolding I added — nine copies of the `use` block, the module docs, eight `#[cfg(test)] mod tests` wrappers and seven extra `impl McpServer` wrappers. No production line was lost.
+    - Tests: `cargo nextest list` reports 41 tests under `mcp::server::`, and the sorted name list is byte-identical to the 41 `fn test_*` names in `HEAD:server.rs`.
+
+    Public API is unchanged — `pub use server::McpServer` in `mcp/mod.rs` still resolves, and `build_instructions_with_health` is re-exported from `server/mod.rs` so its `pub(crate)` path is the same.
+
+    One thing worth recording for the next agent: the first pass of the extraction silently duplicated four line ranges, because two adjacent test blocks shared a `// ---` section-header comment and both ranges claimed it. The line-multiset diff above is what caught it — a `cargo build` would not have, since the duplicated lines were comments. Use that diff on any future split.
+  timestamp: 2026-08-12T00:18:30.294468+00:00
+- actor: claude-code
+  id: 01kzsp3tn42ghqz83hw7hs955p
+  text: |
+    All 10 review findings closed. Finding by finding.
+
+    **1. `server.rs:1` — over the review prompt cap.** Split into nine modules under `mcp/server/`. Recorded in full in the comment above. Largest file is now 47342 bytes; every file is far under the 262144-byte cap. All 41 tests preserved, names byte-identical.
+
+    **2. `server.rs:205` — hardcoded exponential backoff multiplier (2).** Named `BACKOFF_MULTIPLIER` in `server/retry.rs`. Then swept the whole split tree for the same cause — every `from_secs`/`from_millis`/`worker_threads`/`shutdown_timeout` literal. The two production ones were already named (`REELECTION_POLL_INTERVAL`, `LSP_HEALTH_CHECK_INTERVAL`); the four unnamed ones were all in `file_watch.rs` tests and findings 4 and 5 name two of them.
+
+    **3. `server.rs:3082` — test body has no assertion and explicitly accepts any outcome.** `test_execute_tool_with_non_object_args` now asserts the real behaviour: `execute_tool` substitutes an empty map, `files` receives it, and `files` reports the missing `op`. Proved it can fail — swapped the expected substring for a sentinel and the test went RED with the real message in the failure output, then swapped it back.
+
+    Also swept for the same cause across every test in the split tree. One more test had no assertion: `test_stop_file_watching_is_safe_without_start`, a "does not panic" test. It now asserts what shutdown actually does with no watcher started — the stop flag latches and the watcher stays inactive.
+
+    **4 and 5. `server.rs:3327` and `:3356` — hardcoded worker thread count and shutdown timeout.** Named `TEARDOWN_WORKER_THREADS` and `TEARDOWN_SHUTDOWN_TIMEOUT`, each with a comment saying why that value. Removed the cause from the rest of the file too: `MAX_SHUTDOWN_ELAPSED` (the 1 s promptness bound, which was written out twice) and `INFLIGHT_WORK_PAUSE`.
+
+    **6. `edit/args.rs:497` — test has no assertion.** `normalize_no_find_or_replace_or_edits_errors` now asserts the message names the missing edits, matching the pattern the other error tests use. Swept the rest of `files/`: this was the only real test with no assertion; the other unasserted functions the scan reported are helpers and trait impls.
+
+    **7. `edit/atomic.rs:39` — LineEnding reimplemented locally.** The enum and its `detect` were character-for-character the copy in `swissarmyhammer-hashline` (whose own module doc says it was ported by copy). The local enum is gone; the file imports `swissarmyhammer_hashline::LineEnding` and `edit/mod.rs` does too.
+
+    The finding's literal fix does not compile: `impl LineEnding { ... }` on a type from another crate is E0210, "cannot define inherent impl for a foreign type" — rust-analyzer reported it the moment I made the import. The extension is therefore a local trait, `LineEndingName`, carrying the one method `as_str`. That is the same thing the finding asks for — the enum reused, only the display name added in a local impl block — in the form Rust allows. Not recorded as a blocker: the finding's intent is satisfiable, only its exact syntax is not.
+
+    **8. `edit/atomic.rs:75` — EditFileTool should implement Clone.** `#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]`. `Copy` and `Eq` are free on a unit struct. Removed the cause from the whole file: `EditResult`, the other public type, gained `PartialEq, Eq` (its fields are `usize` and `String`).
+
+    **9. `edit/atomic.rs:129` — no non-UTF-8 round-trip test.** Wrote the test the finding specifies. **It failed**, and it found a real bug: `encoding_rs` ships no UTF-16 encoder — `Encoding::encode` answers UTF-8 bytes for `UTF_16LE`/`UTF_16BE` — so editing a UTF-16LE file silently rewrote it as UTF-8 and dropped its BOM. The module doc claimed "The original encoding is preserved". It was not, and nothing measured it.
+
+    Fixed rather than documented around, because a test that asserts the broken behaviour would freeze the bug. `EditFileTool::encode_for` now encodes UTF-16LE and UTF-16BE itself, each prefixed with its byte-order mark. The mark is not decoration here: `read_with_encoding_detection` recognises an encoding by BOM alone, so a UTF-16 file written without one comes back as UTF-8 mojibake on the next read. Every other encoding still goes through `encoding_rs` unchanged. RED before, GREEN after.
+
+    **10. `write/mod.rs:176` — '10 MiB' hardcoded in the error message.** The message now divides `MAX_FILE_SIZE` by a named `BYTES_PER_MIB`, which `MAX_FILE_SIZE` is also defined in terms of. The finding's fix spells the divisor `(1024 * 1024)` inline; naming it keeps the message site free of an unnamed literal while giving the same single source of truth.
+
+    Verification:
+    - `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - `cargo nextest run --workspace --no-fail-fast` → 14098 run, 14094 passed. The total rose from 14097 by exactly one, the new round-trip test, so the server split lost nothing. The 4 failures are the same `review_e2e` x3 and `review_progress_stdio_test` x1 this card's two earlier implement steps already reproduced on clean HEAD with the change stashed.
+    - `sah tool code_context duplication find` over all 16 touched files reports nothing.
+  timestamp: 2026-08-12T00:31:48.388932+00:00
+- actor: claude-code
+  id: 01kzsp43nsevy1wqr80x44jcts
+  text: |-
+    ### implement — changed
+    - evidence: 15 files — deleted `crates/swissarmyhammer-tools/src/mcp/server.rs`; new `crates/swissarmyhammer-tools/src/mcp/server/{mod,instructions,retry,code_context,profiles,prompts,file_watch,agent_identity,handler}.rs`; edited `mcp/tools/files/edit/args.rs`, `mcp/tools/files/edit/atomic.rs`, `mcp/tools/files/edit/mod.rs`, `mcp/tools/files/write/mod.rs`. All 10 review findings checked off. `cargo fmt --all` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo nextest run --workspace --no-fail-fast` → 14098 run, 14094 passed, 4 pre-existing failures (review_e2e x3, review_progress_stdio_test x1). Total rose from 14097 by exactly the one test the findings asked for, so the split lost no test; the 41 `mcp::server::` test names are byte-identical to the 41 in `HEAD:server.rs`. Largest server file 47342 bytes against 133 KB before. `sah tool code_context duplication find` over all 16 touched files reports nothing.
+    - next: /review — re-run so `duplication` can read `mcp/server/` now that no file is over the 262144-byte cap
+  timestamp: 2026-08-12T00:31:57.625830+00:00
 position_column: doing
 position_ordinal: '8580'
 title: Remove inline-on-edit LSP diagnostics from the file mutation path
@@ -171,3 +257,21 @@ Remove the inline-on-edit diagnostics feature completely.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/shared_utils.rs:691` — FilePathValidator::validate_path duplicates path validation logic already in validate_file_path. The method checks path length (lines 652-664) and resolves relative paths (lines 669-677) before calling validate_file_path, which repeats the same checks (path length at lines 243-254, path resolution at lines 256-265). This causes redundant validation steps and reconversion of the path to string and back. Refactor validate_file_path to accept an already-resolved PathBuf directly (as an internal overload), eliminating the need to convert back to string and re-resolve. Or move the common validation (length check, empty check) into a shared helper so both functions call it once instead of duplicating the logic.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:102` — Repeated literal `.tmp.` used in two places: temp file naming (line 102) and test cleanup search (line 359). Should be a named constant so changes propagate to both locations. Define `const TEMP_FILE_SUFFIX: &str = ".tmp.";` at module level and reference it in both the format string at line 102 and the filter at line 359.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:216` — Public function `execute_write` has minimal documentation (one brief sentence) that fails to document errors, argument structure, or context meaning. The rule requires that 'Panics, errors, and safety requirements' be documented; this function returns `Result<CallToolResult, McpError>` but provides no explanation of what errors can occur, under what conditions, or what they mean. Callers cannot learn from the doc comment what the `arguments` JSON parameter should contain, what `context` is for, or what errors to expect. Expand the doc comment to include: (1) detailed description of the operation, (2) `# Arguments` section explaining what fields must be in the `arguments` Map and what `context` provides, (3) `# Returns` section describing the `CallToolResult` structure, and (4) `# Errors` section listing what `McpError` variants can be returned (e.g., invalid path, permission denied, content too large) and when they occur.
+
+## Review Findings (2026-08-11 17:58)
+
+> ⚠️ 12/40 review tasks failed — results are INCOMPLETE.
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-tools/src/mcp/server.rs` — 361775 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:1` — This file exceeds the review prompt cap — 361775 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:205` — Hardcoded exponential backoff multiplier (2) should be a named constant. The factor used to increase retry backoff delays is a configurable value that should be explicit. Define a constant like `const BACKOFF_MULTIPLIER: u64 = 2;` at the top of the function or module, or add a comment explaining why 2.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:3082` — Test body has no assertion and explicitly accepts any outcome. The comment states 'It's OK if it returns Err or Ok with is_error=true' without verifying which behavior should occur or what error type/message is appropriate. The test merely calls the function and discards the result without verifying correctness. Add assertions verifying the expected behavior when `execute_tool` receives non-object arguments. Should it error? Should it use an empty map? Verify the actual behavior rather than accepting any outcome.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:3327` — Hardcoded worker thread count (2) for the test runtime is unexplained. The choice of 2 threads is arbitrary and should be named to clarify test setup intent. Define a constant like `const TEST_RUNTIME_WORKER_THREADS: usize = 2;` or add a comment explaining why 2 worker threads are needed for this test.
+- [x] `crates/swissarmyhammer-tools/src/mcp/server.rs:3356` — Hardcoded shutdown timeout (10 seconds) lacks explanation. The 10-second limit is an arbitrary threshold that configures test timing behavior. Define a constant like `const TEST_SHUTDOWN_TIMEOUT_SECS: u64 = 10;` or add a comment explaining why 10 seconds is the intended timeout bound for detecting regression stalls.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/args.rs:497` — Test has no assertion and is incomplete compared to identical error-condition tests in the same file. All other error tests (lines 508–602) explicitly assert on error message content with `assert!(format!("{{err:?}}").contains(...))`, but this test formats the error and discards it without any assertion. Add an assertion to verify the error message content, matching the pattern used in other error tests. Example: `assert!(format!("{err:?}").contains("no edits provided"));`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:39` — LineEnding enum is reimplemented locally instead of being imported from swissarmyhammer-hashline, where an identical or near-identical enum already exists. Duplicate enum definitions create maintenance burden: a bug fix or enhancement to line ending handling must be made twice, and they diverge over time. Import LineEnding from swissarmyhammer-hashline rather than redefining it locally. Add only the local extension method as_str() via a local impl block: `use swissarmyhammer_hashline::LineEnding;` followed by `impl LineEnding { pub(super) fn as_str(...) { ... } }`. This reuses the enum and its existing tests in hashline while adding the display-name variant needed by this tool.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:75` — Public struct EditFileTool should implement Clone — the rule requires all public types to implement all applicable traits, and Clone is universally applicable. Add Clone to the derive macro: `#[derive(Default, Debug, Clone)]`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/edit/atomic.rs:129` — The read_with_encoding_detection() and write_with_encoding() functions form a paired encode/decode operation. Tests verify reading a UTF-8 file (line 414–430) and writing with an unsupported encoding to trigger an error (line 588–597), and edit_file_atomic() indirectly tests writing via the atomic edit workflow. However, no test round-trips a non-UTF-8 encoding: creating a file with a specific non-UTF-8 encoding, editing it via edit_file_atomic(), reading it back, and verifying the encoding is preserved and correctly detected. The capability to handle arbitrary encodings exists (via encoding_rs), but the round-trip with a non-UTF-8 variant is unproven, leaving the preservation guarantee untested. Add a test like `test_edit_file_atomic_preserves_non_utf8_encoding()` that: (1) creates a temporary file with UTF-16LE content and BOM, (2) calls edit_file_atomic() to edit it, (3) reads it back with read_with_encoding_detection(), and (4) asserts the detected encoding is UTF-16LE, confirming the encoding is preserved through the edit cycle.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:176` — Configuration value '10 MiB' hardcoded in error message duplicates MAX_FILE_SIZE constant defined at line 19, creating maintenance drift risk if the limit is ever changed. Compute the size from MAX_FILE_SIZE: `format!("content exceeds maximum size limit of {} MiB", MAX_FILE_SIZE / (1024 * 1024))`.

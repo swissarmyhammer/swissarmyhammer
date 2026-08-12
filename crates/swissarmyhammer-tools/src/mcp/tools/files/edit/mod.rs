@@ -37,12 +37,12 @@ use swissarmyhammer_operations::{Operation, ParamMeta};
 use tracing::{debug, info};
 
 use args::{first_present, EDIT_FILE_PARAMS, FILE_PATH_ALIASES, FIND_ALIASES, REPLACE_ALIASES};
-use atomic::LineEnding;
 use cascade::{apply_all_pairs, ApplyOutcome};
 use prompts::{
     render_already_applied_prompt, render_ambiguity_prompt, render_consumed_target_prompt,
     render_near_miss_prompt,
 };
+use swissarmyhammer_hashline::LineEnding;
 
 /// Operation metadata for editing files
 #[derive(Debug, Default)]

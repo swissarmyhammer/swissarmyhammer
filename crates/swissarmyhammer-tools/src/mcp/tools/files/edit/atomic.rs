@@ -9,15 +9,22 @@
 //! edit changes the file and downstream staleness checks must see that.
 
 use crate::mcp::tools::files::shared_utils::TEMP_FILE_SUFFIX;
-use encoding_rs::{Encoding, UTF_8};
+use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8};
 use rmcp::ErrorData as McpError;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use swissarmyhammer_hashline::LineEnding;
 use tracing::{debug, info};
 
+/// Byte-order mark that marks a file as UTF-16 little-endian.
+const UTF_16LE_BOM: [u8; 2] = [0xFF, 0xFE];
+
+/// Byte-order mark that marks a file as UTF-16 big-endian.
+const UTF_16BE_BOM: [u8; 2] = [0xFE, 0xFF];
+
 /// Result information for edit operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditResult {
     /// Number of bytes written to the file
     pub bytes_written: usize,
@@ -35,33 +42,19 @@ struct EditValidation {
     pub old_string_count: usize,
 }
 
-/// Line ending types detected in files
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LineEnding {
-    Lf,    // Unix: \n
-    CrLf,  // Windows: \r\n
-    Cr,    // Classic Mac: \r
-    Mixed, // Multiple types found
+/// The name an `edit` result reports a [`LineEnding`] under.
+///
+/// The enum itself and its detection live in `swissarmyhammer-hashline`, which
+/// spells a line ending as the terminator it writes. The `edit` result names the
+/// convention instead, so the name is added here as an extension rather than as
+/// a second copy of the enum.
+pub(super) trait LineEndingName {
+    /// The convention's name: `LF`, `CRLF`, `CR`, or `Mixed`.
+    fn as_str(&self) -> &'static str;
 }
 
-impl LineEnding {
-    /// Detect the primary line ending type in content
-    pub(super) fn detect(content: &str) -> Self {
-        let crlf_count = content.matches("\r\n").count();
-        let lf_count = content.matches('\n').count() - crlf_count; // Exclude CRLF \n
-        let cr_count = content.matches('\r').count() - crlf_count; // Exclude CRLF \r
-
-        match (lf_count > 0, crlf_count > 0, cr_count > 0) {
-            (false, false, false) => LineEnding::Lf, // Default for empty/no line endings
-            (true, false, false) => LineEnding::Lf,
-            (false, true, false) => LineEnding::CrLf,
-            (false, false, true) => LineEnding::Cr,
-            _ => LineEnding::Mixed,
-        }
-    }
-
-    /// Get the string representation
-    pub(super) fn as_str(&self) -> &'static str {
+impl LineEndingName for LineEnding {
+    fn as_str(&self) -> &'static str {
         match self {
             LineEnding::Lf => "LF",
             LineEnding::CrLf => "CRLF",
@@ -72,7 +65,7 @@ impl LineEnding {
 }
 
 /// Tool for performing precise string replacements in existing files
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditFileTool;
 
 impl EditFileTool {
@@ -306,6 +299,46 @@ impl EditFileTool {
         })
     }
 
+    /// Encode `content` for `encoding`, ready to write.
+    ///
+    /// `encoding_rs` ships no UTF-16 encoder — `Encoding::encode` answers UTF-8
+    /// bytes for `UTF_16LE` and `UTF_16BE` — so those two are encoded here, each
+    /// prefixed with its byte-order mark. The mark is not decoration for UTF-16:
+    /// [`read_with_encoding_detection`](Self::read_with_encoding_detection)
+    /// recognizes an encoding by its BOM alone, so a UTF-16 file written without
+    /// one would come back as UTF-8 mojibake on the next read. Every other
+    /// encoding round-trips through `encoding_rs` unchanged.
+    fn encode_for(content: &str, encoding: &'static Encoding) -> Result<Vec<u8>, McpError> {
+        if encoding == UTF_16LE || encoding == UTF_16BE {
+            let little_endian = encoding == UTF_16LE;
+            let bom = if little_endian {
+                UTF_16LE_BOM
+            } else {
+                UTF_16BE_BOM
+            };
+            let mut bytes = Vec::with_capacity(bom.len() + content.len() * 2);
+            bytes.extend_from_slice(&bom);
+            for unit in content.encode_utf16() {
+                let unit_bytes = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                bytes.extend_from_slice(&unit_bytes);
+            }
+            return Ok(bytes);
+        }
+
+        let (bytes, _, had_errors) = encoding.encode(content);
+        if had_errors {
+            return Err(McpError::internal_error(
+                format!("failed to encode content with encoding {}", encoding.name()),
+                None,
+            ));
+        }
+        Ok(bytes.into_owned())
+    }
+
     /// Writes content to file with specified encoding
     ///
     /// Preserves the original encoding of the file and handles BOM appropriately.
@@ -318,14 +351,7 @@ impl EditFileTool {
         use crate::mcp::tools::files::shared_utils::handle_file_error;
 
         // Encode content back to bytes using the detected encoding
-        let (bytes, _, had_errors) = encoding.encode(content);
-
-        if had_errors {
-            return Err(McpError::internal_error(
-                format!("failed to encode content with encoding {}", encoding.name()),
-                None,
-            ));
-        }
+        let bytes = Self::encode_for(content, encoding)?;
 
         // Write bytes to file
         let file = fs::File::create(file_path)
@@ -581,6 +607,44 @@ mod tests {
             .unwrap_err();
         // The missing parent surfaces as a NotFound, mapped to "File not found".
         assert!(format!("{err:?}").contains("file not found"));
+    }
+
+    /// An edit of a non-UTF-8 file round-trips its encoding: the file is written
+    /// back in the encoding it was read in, so a later read detects the same one.
+    ///
+    /// Reading and writing are inverse operations here, and only the UTF-8 half
+    /// was proven. UTF-16LE is the variant that exercises the whole path —
+    /// a BOM to detect, a multi-byte unit to decode, and an encoder that is not
+    /// simply the identity.
+    #[test]
+    fn test_edit_file_atomic_preserves_non_utf8_encoding() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("utf16le.txt");
+
+        // A UTF-16LE BOM followed by "hello world" in UTF-16LE.
+        let mut original = vec![0xFFu8, 0xFE];
+        for unit in "hello world".encode_utf16() {
+            original.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(&file, &original).unwrap();
+
+        let tool = EditFileTool::new();
+        tool.edit_file_atomic(
+            temp_dir.path(),
+            &file.to_string_lossy(),
+            "world",
+            "there",
+            false,
+        )
+        .unwrap();
+
+        let (content, encoding) = tool.read_with_encoding_detection(&file).unwrap();
+        assert_eq!(content, "hello there", "the edit must apply to the content");
+        assert_eq!(
+            encoding.name(),
+            "UTF-16LE",
+            "an edit must write the file back in the encoding it was read in"
+        );
     }
 
     /// `write_with_encoding` rejects content the target encoding cannot represent

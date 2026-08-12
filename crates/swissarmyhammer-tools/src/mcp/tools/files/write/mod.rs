@@ -12,11 +12,16 @@ use std::path::Path;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
 
+/// Bytes in one mebibyte, the unit the size limit is stated and reported in.
+const BYTES_PER_MIB: usize = 1024 * 1024;
+
 /// Maximum size, in bytes, of content a single `write` accepts (10 MiB).
 ///
 /// Lifted to module scope so the size-limit test can assert against the same
 /// value the production path enforces, rather than re-deriving the literal.
-pub(crate) const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MiB
+/// The rejection message divides this by [`BYTES_PER_MIB`] rather than naming a
+/// size of its own, so the limit and the message it reports cannot drift apart.
+pub(crate) const MAX_FILE_SIZE: usize = 10 * BYTES_PER_MIB;
 
 /// Rate-limit token cost charged per `write` call.
 ///
@@ -173,7 +178,10 @@ fn validate_and_resolve_path(
 
     if request.content.len() > MAX_FILE_SIZE {
         return Err(McpError::invalid_request(
-            "content exceeds maximum size limit of 10 MiB".to_string(),
+            format!(
+                "content exceeds maximum size limit of {} MiB",
+                MAX_FILE_SIZE / BYTES_PER_MIB
+            ),
             None,
         ));
     }

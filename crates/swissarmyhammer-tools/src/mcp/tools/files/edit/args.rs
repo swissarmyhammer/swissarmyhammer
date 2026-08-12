@@ -495,8 +495,15 @@ mod tests {
 
     #[test]
     fn normalize_no_find_or_replace_or_edits_errors() {
+        // A path alone is not an edit: the file is named but nothing says what
+        // to change, so the error must say the edits are missing rather than
+        // complain about the path.
         let err = normalize_edit_args(&args(serde_json::json!({ "file_path": "/x" }))).unwrap_err();
-        let _ = format!("{err:?}");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("no edits provided"),
+            "a call carrying only a path must report the missing edits: {msg}"
+        );
     }
 
     // =====================================================================
