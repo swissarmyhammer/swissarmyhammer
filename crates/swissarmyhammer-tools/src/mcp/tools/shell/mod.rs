@@ -861,6 +861,10 @@ mod tests {
     /// command, and `store_command_output` runs solely in
     /// `finalize_completed`, so `get lines` on a timed-out command returns
     /// nothing.
+    ///
+    /// The text must also send file search and file edits off the shell:
+    /// this tool is not the file search tool (`rg` is the shell fallback),
+    /// and it is not the file editing tool.
     #[test]
     fn shell_description_states_blocking_and_no_tail() {
         let tool = ShellExecuteTool::new_isolated();
@@ -871,8 +875,9 @@ mod tests {
             "get lines",
             "grep history",
             "no output is stored",
-            "grep files",
-            "never `grep -r`",
+            "Do not use grep to search files",
+            "use `rg`",
+            "Do not use shell to edit files",
         ] {
             assert!(
                 description.contains(marker),
