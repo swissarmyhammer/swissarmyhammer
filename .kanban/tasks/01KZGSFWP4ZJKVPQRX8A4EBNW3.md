@@ -692,6 +692,23 @@ comments:
 
     Commits: `68092a2ff`, `bc83a4dd5`, `4ac042a8b`, `62a73bae5`, `68c12d51c`, `615593ecb`, `087d052b4`. Nothing pushed.
   timestamp: 2026-08-09T16:30:16.493790+00:00
+- actor: claude-code
+  id: 01kztetpvxvjjdm437xqq22bbb
+  text: |-
+    ## SUPERSEDED — 2026-08-12
+
+    The STANDING ORDER in this card is no longer live. Do not act on it.
+
+    This card built `duplication-parsed`. That rule spawned bash, which ran the
+    `sah` binary again, to reach `find_duplicates_in` — a function already linked
+    into the calling process and already called in-process by the `duplicates`
+    probe. ^wwb6hk7 deletes the rule and the whole self-shell contract with it.
+
+    The `duplication`, `rust` and `swift` prompt rules decide again, and the
+    `duplicates` probe supplies their machine facts. That reverses this card's
+    "supersede the prompt rules" order deliberately, with the user's decision on
+    record.
+  timestamp: 2026-08-12T07:43:43.997128+00:00
 depends_on:
 - 01KZFHBM7MWFYAMK3SQADF0D7H
 position_column: done
