@@ -111,7 +111,7 @@ async fn test_files_read_tool_integration() {
 async fn review_exposed_as_sah_tool_category() {
     let (_temp, context) = setup_isolated_context().await;
 
-    let registry = context.get_tool_registry_arc();
+    let registry = context.tool_registry_arc();
     let registry = registry.read().await;
 
     let categories = registry.get_cli_categories();

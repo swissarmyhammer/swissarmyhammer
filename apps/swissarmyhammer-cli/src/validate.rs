@@ -316,7 +316,7 @@ impl Validator {
             }
         };
 
-        let tool_registry = cli_tool_context.get_tool_registry_arc();
+        let tool_registry = cli_tool_context.tool_registry_arc();
         let cli_builder = CliBuilder::new(tool_registry.clone());
 
         let validation_stats = cli_builder.get_validation_stats();

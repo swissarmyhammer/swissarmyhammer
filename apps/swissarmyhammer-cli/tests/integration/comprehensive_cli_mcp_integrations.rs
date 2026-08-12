@@ -3,7 +3,7 @@
 //! Extended integration tests that verify thorough CLI-MCP communication,
 //! tool coverage, error handling, and response formatting.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::json;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
 
@@ -18,7 +18,7 @@ async fn create_test_context_with_git() -> Result<(tempfile::TempDir, CliToolCon
     setup_git_repo(&temp_path)?;
     let context = CliToolContext::new_isolated(&temp_path)
         .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .context("creating isolated CLI tool context")?;
 
     // Initialize kanban board (required before adding tasks)
     let init_args = context.create_arguments(vec![
@@ -39,7 +39,7 @@ async fn create_test_context() -> Result<(tempfile::TempDir, CliToolContext)> {
     setup_git_repo(&temp_path)?;
     let context = CliToolContext::new_isolated(&temp_path)
         .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .context("creating isolated CLI tool context")?;
     Ok((temp, context))
 }
 
@@ -150,7 +150,7 @@ pub fn test_function() -> String { "test".to_string() }"#,
 
     let context = CliToolContext::new_isolated(&temp_path)
         .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .context("creating isolated CLI tool context")?;
 
     // Test correct argument types
     let valid_args = create_kanban_add_task_args(&context, "String Title", "String content");
@@ -213,7 +213,7 @@ async fn test_concurrent_tool_execution() -> Result<()> {
     for i in 0..3 {
         let context_clone = CliToolContext::new_isolated(&temp_path)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .context("creating isolated CLI tool context")?;
         let handle = tokio::spawn(async move {
             let args = create_kanban_add_task_args(
                 &context_clone,
@@ -278,7 +278,7 @@ async fn test_tool_context_configurations() -> Result<()> {
     // Test with another context using the same directory
     let context2 = CliToolContext::new_isolated(&temp_path)
         .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .context("creating isolated CLI tool context")?;
 
     // Both should work independently
     let args1 = create_kanban_add_task_args(&context1, "Context 1 Task", "From context 1");

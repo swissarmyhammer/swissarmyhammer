@@ -26,6 +26,14 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Infix that marks the temporary file an atomic write stages beside its
+/// target, as `<target><TEMP_FILE_SUFFIX><unique>`.
+///
+/// `write` and `edit` both stage through a temp file and rename it onto the
+/// target, and each cleans its own debris up. Naming the infix once keeps the
+/// writers and the cleanup scans reading the same convention.
+pub(crate) const TEMP_FILE_SUFFIX: &str = ".tmp.";
+
 /// Deserialize an optional `usize` that may arrive as a JSON number OR a
 /// string-encoded number.
 ///
@@ -93,16 +101,15 @@ pub fn whole_file_hash(content: &str) -> String {
 /// freshness-guard re-base — return a plain success response and never carry the
 /// envelope.
 ///
-/// The envelope rides on BOTH surfaces, mirroring the inline-diagnostics
-/// fold-in convention so the model sees it regardless of how the host renders
-/// tool results:
+/// The envelope rides on BOTH surfaces, so the model sees it regardless of how
+/// the host renders tool results:
 ///
 /// * `structured_content.mutation` — an object carrying `tagged_content`
 ///   (the post-mutation file re-tagged with [`swissarmyhammer_hashline::tag`],
 ///   so fresh `N:HH` anchors are immediately available), `mutated_paths` (the
-///   absolute paths changed, surfaced to the model — distinct from the typed
-///   `record_mutated_path` diagnostics side-channel), plus any operation-specific
-///   `extra` fields (e.g. an edit's `bytes_written` / `replacements_made`).
+///   absolute paths changed, surfaced to the model), plus any
+///   operation-specific `extra` fields (e.g. an edit's `bytes_written` /
+///   `replacements_made`).
 /// * An appended text block carrying the `#hash:<token>` line and the same
 ///   tagged content, for hosts that only forward result text.
 ///
@@ -240,8 +247,27 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
         ));
     }
 
-    // Check path length to prevent system issues
-    const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
+    check_path_length(path)?;
+    canonicalize_resolved(resolve_against_base(base_dir, path))
+}
+
+/// Maximum length, in bytes, of a path this tool surface accepts — the Unix
+/// `PATH_MAX` standard.
+///
+/// A longer path already fails at the syscall boundary, so the gate turns an
+/// opaque OS error into a message that names the limit.
+const MAX_PATH_LENGTH: usize = 4096;
+
+/// Reject a path longer than [`MAX_PATH_LENGTH`].
+///
+/// Every entry point that accepts a path string owes this gate, so it lives
+/// here once rather than being restated per entry point.
+///
+/// # Errors
+///
+/// Returns [`McpError::invalid_request`] naming the path's length and the
+/// limit when `path` is longer than [`MAX_PATH_LENGTH`].
+fn check_path_length(path: &str) -> Result<(), McpError> {
     if path.len() > MAX_PATH_LENGTH {
         return Err(McpError::invalid_request(
             format!(
@@ -253,19 +279,39 @@ pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpErr
             None,
         ));
     }
+    Ok(())
+}
 
+/// Resolve `path` to an absolute path: an absolute input is taken as-is, a
+/// relative one resolves against `base_dir`.
+///
+/// `base_dir` is the session working directory. Resolution never falls back to
+/// the process CWD — see the module and `ToolContext::session_root` docs for
+/// why.
+fn resolve_against_base(base_dir: &Path, path: &str) -> PathBuf {
     let path_buf = PathBuf::from(path);
-
-    // Resolve relative paths against the session working directory before
-    // canonicalization. Never fall back to the process CWD — see the module
-    // and `ToolContext::session_root` docs for why.
-    let resolved_path = if path_buf.is_absolute() {
+    if path_buf.is_absolute() {
         path_buf
     } else {
         base_dir.join(path_buf)
-    };
+    }
+}
 
-    // Canonicalize path to resolve symlinks and relative components
+/// Canonicalize an already-resolved absolute path, resolving symlinks and
+/// relative components.
+///
+/// Takes the resolved [`PathBuf`] rather than a string so a caller that has
+/// already resolved a path neither converts it back to a string nor resolves
+/// it a second time.
+///
+/// # Errors
+///
+/// Returns [`McpError::invalid_request`] describing the specific failure:
+/// a parent directory that does not exist, permission denied, an invalid path
+/// format, or any other canonicalization failure. A path that does not exist
+/// *yet* is NOT an error when its parent does — the resolved path is returned
+/// so `write` can create it.
+fn canonicalize_resolved(resolved_path: PathBuf) -> Result<PathBuf, McpError> {
     match resolved_path.canonicalize() {
         Ok(canonical_path) => Ok(canonical_path),
         Err(e) => {
@@ -627,12 +673,15 @@ impl FilePathValidator {
     /// Validates a path (absolute or relative) with comprehensive security checks
     ///
     /// This method performs all security validations including:
-    /// 1. Path resolution (relative paths resolved against current working directory)
-    /// 2. Path format validation
-    /// 3. Dangerous pattern detection
-    /// 4. Unicode normalization
-    /// 5. Workspace boundary enforcement
-    /// 6. Symlink security validation
+    /// 1. Path length enforcement, via [`check_path_length`]
+    /// 2. Dangerous pattern detection
+    /// 3. Path resolution (relative paths resolved against the session working
+    ///    directory), via [`resolve_against_base`]
+    /// 4. Symlink security validation
+    /// 5. Path format validation and canonicalization, via
+    ///    [`canonicalize_resolved`]
+    /// 6. Unicode normalization
+    /// 7. Workspace boundary enforcement
     ///
     /// # Arguments
     ///
@@ -651,33 +700,17 @@ impl FilePathValidator {
     /// - Safe from known path traversal attacks
     pub fn validate_path(&self, path: &str) -> Result<PathBuf, McpError> {
         // Step 0: Check path length to prevent system issues
-        const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
-        if path.len() > MAX_PATH_LENGTH {
-            return Err(McpError::invalid_request(
-                format!(
-                    "path too long ({} characters, maximum {}): {}",
-                    path.len(),
-                    MAX_PATH_LENGTH,
-                    path
-                ),
-                None,
-            ));
-        }
+        check_path_length(path)?;
 
         // Step 1: Check for blocked patterns early
         self.check_blocked_patterns(path)?;
 
-        // Step 1: Resolve path (absolute or relative) to absolute path
-        let path_buf = PathBuf::from(path);
-        let resolved_path = if path_buf.is_absolute() {
-            path_buf
-        } else {
-            // Resolve relative path against the session working directory, never
-            // the process CWD (which is `/` for the bundled GUI app).
-            self.base_dir.join(path_buf)
-        };
+        // Step 2: Resolve path (absolute or relative) to absolute path. A
+        // relative path resolves against the session working directory, never
+        // the process CWD (which is `/` for the bundled GUI app).
+        let resolved_path = resolve_against_base(&self.base_dir, path);
 
-        // Step 2: Symlink validation BEFORE canonicalization
+        // Step 3: Symlink validation BEFORE canonicalization
         if resolved_path.is_symlink() && !self.allow_symlinks {
             return Err(McpError::invalid_request(
                 format!("symlinks are not allowed: {}", resolved_path.display()),
@@ -685,13 +718,12 @@ impl FilePathValidator {
             ));
         }
 
-        // Step 3: Basic validation (reuse existing function which may canonicalize).
-        // resolved_path is already absolute here, so the base dir is unused, but
-        // pass it through for consistency.
-        let mut validated_path =
-            validate_file_path(&self.base_dir, &resolved_path.to_string_lossy())?;
+        // Step 4: Canonicalize the already-resolved path. Passing the resolved
+        // `PathBuf` straight in means the length gate, the resolution, and the
+        // string round-trip each happen exactly once for this call.
+        let mut validated_path = canonicalize_resolved(resolved_path.clone())?;
 
-        // Step 4: Unicode normalization if enabled
+        // Step 5: Unicode normalization if enabled
         if self.normalize_unicode {
             // Convert to string and back to handle Unicode normalization
             let path_str = validated_path.to_string_lossy();
@@ -699,12 +731,12 @@ impl FilePathValidator {
             validated_path = PathBuf::from(normalized);
         }
 
-        // Step 5: Workspace boundary validation
+        // Step 6: Workspace boundary validation
         if let Some(ref workspace_root) = self.workspace_root {
             self.ensure_workspace_boundary(&validated_path, workspace_root)?;
         }
 
-        // Step 6: Final symlink resolution with boundary check if symlinks are allowed
+        // Step 7: Final symlink resolution with boundary check if symlinks are allowed
         if self.allow_symlinks && resolved_path.is_symlink() {
             validated_path = self.resolve_symlink_securely(&validated_path)?;
         }

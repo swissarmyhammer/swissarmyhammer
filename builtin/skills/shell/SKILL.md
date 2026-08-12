@@ -20,19 +20,15 @@ Virtual shell with persistent history, process management, and searchable output
 is no partial or streaming result. When the command exits, the response shows
 the last lines of the output, and the full output stays in the history.
 
-Do not pipe to `tail`, `head`, or `grep`. The shell keeps the full output
-already, and a pipeline throws it away. Run the bare command. Then read the
-output with `get lines`, or search it with `grep history`. You can search the
-same output many times without a re-run.
-
 When the timeout kills the command, no output is stored. `get lines` and
 `grep history` find nothing for that command. Raise `timeout` and run the
 command again.
 
-| Instead of | Run | Then |
-|------------|-----|------|
-| `cargo build 2>&1 \| tail -60` | `cargo build` | `get lines` on the last lines |
-| `cargo test 2>&1 \| grep error` | `cargo test` | `grep history` for `error` |
+## Rules
+
+- Do not pipe to `tail`, `head`, or `grep`. Read output with `get lines` or `grep history`.
+- Do not use grep to search files. Use your file search tools. If you must, use `rg`.
+- Do not use shell to edit files. Use your file editing tools.
 
 ## Operations
 

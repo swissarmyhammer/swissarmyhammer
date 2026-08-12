@@ -4,6 +4,7 @@
 //! with atomic operations, comprehensive security validation, and proper error handling.
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
+use crate::mcp::tools::files::shared_utils::TEMP_FILE_SUFFIX;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
@@ -11,11 +12,16 @@ use std::path::Path;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
 
+/// Bytes in one mebibyte, the unit the size limit is stated and reported in.
+const BYTES_PER_MIB: usize = 1024 * 1024;
+
 /// Maximum size, in bytes, of content a single `write` accepts (10 MiB).
 ///
 /// Lifted to module scope so the size-limit test can assert against the same
 /// value the production path enforces, rather than re-deriving the literal.
-pub(crate) const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MiB
+/// The rejection message divides this by [`BYTES_PER_MIB`] rather than naming a
+/// size of its own, so the limit and the message it reports cannot drift apart.
+pub(crate) const MAX_FILE_SIZE: usize = 10 * BYTES_PER_MIB;
 
 /// Rate-limit token cost charged per `write` call.
 ///
@@ -99,7 +105,7 @@ impl WriteFileTool {
         }
 
         // Create temporary file with unique name in same directory as target
-        let temp_file_name = format!("{}.tmp.{}", file_path.display(), Ulid::new());
+        let temp_file_name = format!("{}{TEMP_FILE_SUFFIX}{}", file_path.display(), Ulid::new());
         let temp_path = Path::new(&temp_file_name);
 
         debug!(target_path = %file_path.display(), temp_path = %temp_path.display(), content_length = content.len(), "Starting atomic write operation");
@@ -172,7 +178,10 @@ fn validate_and_resolve_path(
 
     if request.content.len() > MAX_FILE_SIZE {
         return Err(McpError::invalid_request(
-            "content exceeds maximum size limit of 10 MiB".to_string(),
+            format!(
+                "content exceeds maximum size limit of {} MiB",
+                MAX_FILE_SIZE / BYTES_PER_MIB
+            ),
             None,
         ));
     }
@@ -212,7 +221,52 @@ fn prepare_write_target(path: &Path) -> Result<(), McpError> {
     check_file_permissions(path, FileOperation::Write)
 }
 
-/// Execute a file write operation
+/// Execute a file write operation: replace the whole content of one file,
+/// creating it and any missing parent directory first.
+///
+/// The write is atomic — the content is staged in a temporary file beside the
+/// target and renamed onto it, so a failure leaves the target untouched. A
+/// write always clobbers an existing target; there is no freshness check, and
+/// source control is the recovery path. Lost-update protection lives in the
+/// line-anchored `edit files` operation instead.
+///
+/// # Arguments
+///
+/// * `arguments` — the tool call's JSON object. Two string members, both
+///   required:
+///   * `file_path` (aliases `path`, `absolute_path`) — the target. An absolute
+///     path is written as given; a relative path resolves against the session
+///     working directory, never the process CWD.
+///   * `content` — the complete new content of the file. Up to
+///     [`MAX_FILE_SIZE`] bytes.
+/// * `context` — the shared tool state. Supplies the session working directory
+///   that a relative `file_path` resolves against.
+///
+/// # Returns
+///
+/// A [`CallToolResult`] with `is_error: false`, whose first content block is
+/// the plain text `"OK"`. Its `structured_content` carries the mutation
+/// envelope under `mutation`: `tagged_content` (the content just written,
+/// re-tagged with hashline anchors so the caller can chain an edit without
+/// re-reading), `mutated_paths` (the one resolved target path), and
+/// `bytes_written`. An appended text block repeats `tagged_content`.
+///
+/// # Errors
+///
+/// Returns [`McpError`] — never a successful result — for each of:
+///
+/// * `invalid_params` when `arguments` is missing `file_path` or `content`, or
+///   either is not a string.
+/// * `invalid_request` when `file_path` is empty or whitespace only, when it
+///   holds a `..` component (path traversal), or when `content` exceeds
+///   [`MAX_FILE_SIZE`].
+/// * `invalid_request` when the rate limit for the `"file_write"` bucket is
+///   exhausted.
+/// * `invalid_request` when the target is not writable — a read-only file, a
+///   directory in the target's place, or a parent directory that cannot be
+///   created.
+/// * `internal_error` when staging or renaming the temporary file fails. The
+///   temporary file is removed and the target is left byte-identical.
 pub async fn execute_write(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -238,14 +292,6 @@ pub async fn execute_write(
 
     // Perform atomic write operation
     let bytes_written = WriteFileTool::write_file_atomic(&validated_path, &request.content).await?;
-
-    // Record the mutated path on the typed side-channel so the dispatch
-    // chokepoint can fold inline diagnostics into this result (no content
-    // parsing). This is DISTINCT from the `mutated_paths` carried in the result
-    // body below — the side-channel drives inline diagnostics; the body surfaces
-    // the paths to the model. Keep both. `validated_path` is already the absolute
-    // path that was written.
-    context.record_mutated_path(validated_path.clone());
 
     let success_message = "OK".to_string();
 
@@ -358,13 +404,13 @@ mod tests {
         (call_result, temp_dir, test_file, context)
     }
 
-    /// Assert no leftover `*.tmp.*` files remain in `parent_dir` — the atomic
+    /// Assert no leftover temp-staged files remain in `parent_dir` — the atomic
     /// write must clean up its temporary file on success and on every failure.
     fn assert_no_temp_files_remain(parent_dir: &Path) {
         let temp_files: Vec<_> = fs::read_dir(parent_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .filter(|e| e.file_name().to_string_lossy().contains(TEMP_FILE_SUFFIX))
             .collect();
         assert!(
             temp_files.is_empty(),

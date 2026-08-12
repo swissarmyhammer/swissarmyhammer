@@ -63,7 +63,7 @@ impl CliExecutor {
         let cli_tool_context = CliToolContext::new_with_work_dir(working_dir)
             .await
             .map_err(|e| Box::<dyn Error + Send + Sync>::from(e.to_string()))?;
-        let tool_registry = cli_tool_context.get_tool_registry_arc();
+        let tool_registry = cli_tool_context.tool_registry_arc();
 
         Ok(Self {
             cli_tool_context: Arc::new(cli_tool_context),

@@ -143,14 +143,14 @@ clobbers the target — new or existing — with no freshness check and no token
 Whole-file replacement is the whole point of `write`, and source control is the
 recovery path. The lost-update guard idea applies to `edit`, not `write`:
 line-anchored `edit files` carries per-line staleness via hashline. Removing the
-guard does not weaken the closed-write-surface / inline-diagnostics goal — those
-flow from the write going through the instrumented tool at all, regardless of any
-hash check, and a successful overwrite still carries the normal mutation envelope.
+guard does not weaken the closed-write-surface goal — that flows from the write
+going through the instrumented tool at all, regardless of any hash check, and a
+successful overwrite still carries the normal mutation envelope.
 
 **All mutating ops — shared result contract.** Extend `EditResult` (and write
 results) with `tagged_content` (re-tagged view of the changed file, so the model chains
-edits without re-reading) and `mutated_paths` (drives inline diagnostics via the shared
-core). Keep `bytes_written` / `replacements_made` / `encoding_detected` /
+edits without re-reading) and `mutated_paths` (the absolute paths changed, surfaced to
+the model). Keep `bytes_written` / `replacements_made` / `encoding_detected` /
 `line_endings_preserved`.
 
 **Consolidation.** Delete `read_file.rs` / `glob_files.rs` / `grep_files.rs` and their
@@ -227,12 +227,12 @@ than clobbered. Free when a hash was carried, inert otherwise.
 Reject no-ops (`old == new`). If `new_string` is present and `old_string` absent, the
 edit was likely already applied — say so rather than erroring.
 
-## Diagnostics in the result
+## Diagnostics in the result — withdrawn
 
-After a successful mutating edit, the op declares `mutated_paths` and folds in
-diagnostics via the shared core (edited file + broken dependents, generous settle,
-sharp output — see the diagnostics doc). The edit op is the primary trigger and
-delivery surface for diagnostics.
+The edit op once folded a diagnostics report into its own result. That path was
+removed: it made every edit wait on the LSP for a report the model had not asked
+for. The `diagnostics` tool is the one way to get diagnostics. See the diagnostics
+doc for the record of the withdrawn design.
 
 ## Crate structure
 
@@ -250,11 +250,10 @@ The matching engine is a pure module/crate (`swissarmyhammer-edit-match`), no IO
 `files` op wraps it with the encoding/atomic-write/dispatch it already owns.
 
 Path selection stays in the tool layer: the `diagnostics` tool resolves
-`working`/`sha` via git and dependents via code-context; `files edit` asks the core
-for its mutated path plus dependents.
+`working`/`sha` via git and dependents via code-context.
 
 Dependencies, no cycles:
-- `files` op → matching engine + `swissarmyhammer-diagnostics`
+- `files` op → matching engine
 - `diagnostics` op → `swissarmyhammer-diagnostics` + git + code-context
 - `swissarmyhammer-diagnostics` → `swissarmyhammer-lsp` (shared client)
 - `swissarmyhammer-code-context` → `swissarmyhammer-lsp` (same client)
@@ -265,7 +264,7 @@ siblings. code-context is a tool-layer dependency only.
 ## What "best" means here
 
 Exact-match tools make a near-miss a hard failure; the ladder + candidates +
-structured failure + staleness + inline diagnostics *remove* the retry loop instead.
+structured failure + staleness *remove* the retry loop instead.
 On a slow local model that's the only metric that matters: never send the model back
 for a turn the tool could resolve itself.
 

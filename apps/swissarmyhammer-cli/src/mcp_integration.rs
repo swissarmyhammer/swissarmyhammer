@@ -5,6 +5,7 @@
 //!
 //! sah rule ignore test_rule_with_allow
 
+use anyhow::Context;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
@@ -49,8 +50,14 @@ impl std::fmt::Debug for CliToolContext {
 
 impl CliToolContext {
     /// Create a new CLI tool context with all necessary storage backends
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let current_dir = std::env::current_dir()?;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process working directory cannot be read, or
+    /// when [`Self::new_with_work_dir`] fails to start the MCP server.
+    pub async fn new() -> anyhow::Result<Self> {
+        let current_dir =
+            std::env::current_dir().context("failed to read the current working directory")?;
         Self::new_with_work_dir(&current_dir).await
     }
 
@@ -58,13 +65,20 @@ impl CliToolContext {
     ///
     /// Creates an in-process `McpServer` (the full tool union is registered)
     /// using only the provided working directory. Safe for parallel test execution.
-    pub async fn new_isolated(
-        working_dir: &std::path::Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the in-process `McpServer` cannot be created for
+    /// `working_dir`, or when loading its prompt library fails.
+    pub async fn new_isolated(working_dir: &std::path::Path) -> anyhow::Result<Self> {
         let mcp_server =
             McpServer::new_with_work_dir(TemplateLibrary::default(), working_dir.to_path_buf())
-                .await?;
-        mcp_server.initialize().await?;
+                .await
+                .context("failed to create the in-process MCP server")?;
+        mcp_server
+            .initialize()
+            .await
+            .context("failed to initialize the in-process MCP server")?;
         let server_arc = Arc::new(mcp_server);
 
         let tool_registry = Self::create_tool_registry().await;
@@ -83,16 +97,16 @@ impl CliToolContext {
     ///
     /// * `working_dir` - The working directory for tool operations
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// Result containing the initialized CliToolContext or an error
-    pub async fn new_with_work_dir(
-        working_dir: &std::path::Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Returns an error when the MCP HTTP server backing the context cannot be
+    /// started for `working_dir`.
+    pub async fn new_with_work_dir(working_dir: &std::path::Path) -> anyhow::Result<Self> {
         // The server creates its own tool_context, which resolves the chat model
         // configuration from the project config files.
-        let mcp_server_handle =
-            Self::initialize_mcp_server(Some(working_dir.to_path_buf())).await?;
+        let mcp_server_handle = Self::initialize_mcp_server(Some(working_dir.to_path_buf()))
+            .await
+            .context("failed to initialize MCP server")?;
 
         let tool_registry = Self::create_tool_registry().await;
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
@@ -109,19 +123,22 @@ impl CliToolContext {
     /// The server registers the full tool union; each tool carries a structural
     /// category consumed by the serve boundary, so no host-conditional
     /// registration happens here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the HTTP listener cannot be bound, or when the
+    /// server fails to register its tools.
     async fn initialize_mcp_server(
         working_dir: Option<std::path::PathBuf>,
-    ) -> Result<
-        swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
-        Box<dyn std::error::Error>,
-    > {
+    ) -> anyhow::Result<swissarmyhammer_tools::mcp::unified_server::McpServerHandle> {
         tracing::info!("Starting MCP HTTP server for CLI tool context");
 
         std::env::set_var("SAH_CLI_MODE", "1");
 
         let mcp_server_handle =
             start_mcp_server_with_options(McpServerMode::Http { port: None }, None, working_dir)
-                .await?;
+                .await
+                .context("failed to start the MCP HTTP server")?;
 
         tracing::info!(
             "MCP HTTP server ready on port {:?}",
@@ -206,8 +223,8 @@ impl CliToolContext {
             .await
     }
 
-    /// Get an Arc to the tool registry for dynamic CLI generation
-    pub fn get_tool_registry_arc(&self) -> Arc<RwLock<ToolRegistry>> {
+    /// The shared tool registry that drives dynamic CLI generation
+    pub fn tool_registry_arc(&self) -> Arc<RwLock<ToolRegistry>> {
         self.tool_registry.clone()
     }
 
@@ -225,6 +242,7 @@ impl CliToolContext {
 
 /// Utilities for formatting MCP responses for CLI display
 pub mod response_formatting {
+    use anyhow::Context;
     use rmcp::model::{CallToolResult, RawContent};
     use serde_json::Value;
 
@@ -299,9 +317,15 @@ pub mod response_formatting {
     }
 
     /// Extract JSON data from CallToolResult
-    pub fn extract_json_data(result: &CallToolResult) -> Result<Value, Box<dyn std::error::Error>> {
-        let text = extract_text_content(result).ok_or("No text content found in result")?;
-        Ok(serde_json::from_str(&text)?)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the result carries no text content, or when that
+    /// text does not parse as JSON.
+    pub fn extract_json_data(result: &CallToolResult) -> anyhow::Result<Value> {
+        let text = extract_text_content(result)
+            .ok_or_else(|| anyhow::anyhow!("no text content found in result"))?;
+        serde_json::from_str(&text).context("failed to parse tool result text as JSON")
     }
 }
 
@@ -487,7 +511,7 @@ mod tests {
             .await
             .expect("mcp server");
         let server_names: BTreeSet<String> = server
-            .get_tool_registry()
+            .tool_registry()
             .read()
             .await
             .list_tool_names()
@@ -547,7 +571,7 @@ mod tests {
         let context = CliToolContext::new()
             .await
             .expect("Failed to create CliToolContext");
-        let tool_registry_arc = context.get_tool_registry_arc();
+        let tool_registry_arc = context.tool_registry_arc();
 
         // Create CLI builder and validate all tools
         let cli_builder = CliBuilder::new(tool_registry_arc);

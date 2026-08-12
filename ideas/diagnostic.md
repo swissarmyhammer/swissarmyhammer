@@ -1,5 +1,19 @@
 # Diagnostics: Check-on-Save for Agents
 
+## Status: inline-on-edit was built and then removed
+
+The `diagnostics` tool is the shipped path. Ask for diagnostics and you get them.
+
+Inline-on-edit — folding a report into the `files` write/edit result — shipped and
+was taken out again. It made every edit wait for the LSP: a blast-radius lookup,
+then a serial sync and pull for the edited file and each dependent, then a settle
+window. The edit itself was already done; the model paid seconds to learn nothing
+new. It was meant to save review passes and did not.
+
+The sections below describe the design as it was written. Read them as the record
+of that design, not as a description of what runs today. Where a section states
+that diagnostics ride on the write op's result, that part is gone.
+
 ## Concept
 
 An editor syncs the buffer on change and surfaces diagnostics on save. An agent
@@ -98,7 +112,9 @@ dispatch, schema, and grammar as every other op — no bespoke schema or grammar
 
 The reactive paths below are not operations — they ride the same service.
 
-## Diagnostics in the write op's result (no hook)
+## Diagnostics in the write op's result (no hook) — withdrawn
+
+This section is the record of the design that was removed. It no longer runs.
 
 When a write op mutates a file, it returns diagnostics in its own result, the same
 way it already returns the path and byte count. No seam, no config; the model sees
@@ -132,10 +148,10 @@ process: file change → debounce → LSP client → diagnostics. Whether the re
 reaches the *model* depends on who owns the loop (MCP can't make a foreign model act
 out of turn):
 
-- **Own the loop (llama-agent).** The write op's result feeds straight back; also
-  forwarded as an ACP `session/update` to the editor gutter. Complete.
-- **Foreign host, edit via your tool.** Same mechanism — diagnostics are in the op
-  result regardless of host. Model-facing.
+- **Own the loop (llama-agent).** Forwarded as an ACP `session/update` to the editor
+  gutter.
+- **Any host, edit via your tool.** The model calls `diagnostics` when it wants a
+  report. The edit itself carries none, so nothing waits on the LSP.
 - **Foreign host, native edit.** The ceiling. Your tool never runs; the watcher still
   detects and can emit `notifications/message`, but that's host/human-facing and
   can't wake an idle model.
@@ -165,8 +181,7 @@ least as reliable as the tool it displaces.
 
 - **Tool result** — `check working` / `check file` return the structured report.
   Works in every host. The floor.
-- **Inline on edit** — the write op's own result (above). The primary model-facing
-  channel; bounded by settle, `pending` on timeout.
+- **Inline on edit** — removed. The write op's result carries no diagnostics.
 - **Push notification** — watcher → `notifications/message`. Host-facing; whether it
   renders as UI is up to the host. A courtesy, not load-bearing.
 - **ACP session update** — llama-agent injects into model context *and* forwards to
@@ -192,16 +207,16 @@ warnings, short settle, capped, all detected languages. No persistence. The
 ## Crate
 
 `swissarmyhammer-diagnostics` — settle/debounce, report types, config — on the shared
-client in `swissarmyhammer-lsp` (owns no client of its own). It's a crate because it
-has two consumers, the `diagnostics` tool and the `files` edit op, and belongs to
-neither. Layout and dependency directions are in the file-edit-tools doc.
+client in `swissarmyhammer-lsp` (owns no client of its own). Its consumers are the
+`diagnostics` tool and the watcher. Layout and dependency directions are in the
+file-edit-tools doc.
 
-The tool and inline-on-edit ship in `swissarmyhammer-tools`; watcher-push and ACP
-forwarding are llama-agent extras.
+The tool ships in `swissarmyhammer-tools`; watcher-push and ACP forwarding are
+llama-agent extras.
 
 ## Testing
 
 - **Mapping**: `lsp_types::Diagnostic` → report record. Model-free.
 - **Settle**: scripted revision stream → only the settled set; timeout → `pending`.
 - **Integration**: rust-analyzer on a fixture crate with a known error; assert the
-  report and the inline-on-edit attachment. Gated on the binary being present.
+  report. Gated on the binary being present.
