@@ -217,7 +217,7 @@ all four:
   lints AFTER that type check, so it never linted that crate.
 - cargo made a run, and the BUILD SCRIPT of a crate broke. cargo runs a build
   script before it compiles the crate that script serves, so clippy never
-  linted that crate. This repository holds eight build scripts.
+  linted that crate. This repository holds fifteen build scripts.
 - cargo made a run, clippy linted every crate, and a lint stands at deny level.
 
 The first three are broken runs. The fourth is a MEASURED run, and the findings
@@ -339,13 +339,13 @@ The same earlier gate broke the two clean deny-level rows: a workspace clippy
 linted from end to end, holding a lint at deny level and no finding of the four
 gates, wrote the broken-run line and exited 1.
 
-The three build-script rows that break are the shape the eight build scripts of
-this repository make reach it. Measured over each of them with the earlier gate,
-which read the compiler messages alone: the one-package row wrote 0 findings and
-exited 0 while its control wrote `src/lib.rs:1`; the two-member row wrote
-`good/src/lib.rs:1` alone; and the two-member row beside the denied lint wrote
-`good/src/lib.rs:2` alone. In each of the three the long function of the crate
-that never reached the lints was read as clean.
+The three build-script rows that break are the shape the fifteen build scripts
+of this repository make reach it. Measured over each of them with the earlier
+gate, which read the compiler messages alone: the one-package row wrote 0
+findings and exited 0 while its control wrote `src/lib.rs:1`; the two-member row
+wrote `good/src/lib.rs:1` alone; and the two-member row beside the denied lint
+wrote `good/src/lib.rs:2` alone. In each of the three the long function of the
+crate that never reached the lints was read as clean.
 
 Nine acceptance tests hold the script to this table:
 `the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile`,
