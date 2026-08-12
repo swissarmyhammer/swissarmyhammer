@@ -30,10 +30,16 @@ use tokio::sync::Mutex;
 ///
 /// # Returns
 ///
-/// Exit code: 0 on success, 1 when the tool returns an `McpError` or a result
-/// flagged `is_error`.
+/// Exit code: 0 on success, 1 when the shell state cannot be created, when the
+/// tool returns an `McpError`, or when a result is flagged `is_error`.
 pub async fn run_operation(arguments: Map<String, Value>) -> i32 {
-    let tool = ShellExecuteTool::new();
+    let tool = match ShellExecuteTool::new() {
+        Ok(tool) => tool,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
     let context = ToolContext::new(
         Arc::new(ToolHandlers::new()),
         Arc::new(Mutex::new(None)),
@@ -73,7 +79,7 @@ mod tests {
     /// (per-op `x-operation-schemas` + flat properties), so these tests use
     /// `schema_full()` rather than the slim wire schema.
     fn shell_schema() -> Value {
-        ShellExecuteTool::new().schema_full()
+        ShellExecuteTool::new().expect("shell state").schema_full()
     }
 
     /// Parse an argv slice through the schema-built tree and extract the args.

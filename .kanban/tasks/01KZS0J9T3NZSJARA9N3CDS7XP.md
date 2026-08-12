@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffd380
+position_column: doing
+position_ordinal: '8480'
 title: The zero-argument coverage guard reads a shell prologue line wrong in two ways
 ---
 Split out of ^6585731. That card asked for a zero-argument guard on each

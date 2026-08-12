@@ -407,7 +407,7 @@ fn register_shell_tool(registry: &mut ToolRegistry) {
 
     let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
     let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
-    registry.register(ShellExecuteTool::new());
+    registry.register(ShellExecuteTool::new().expect("shell state"));
 }
 
 /// Regression guard: `register_shell_tool` — the isolated-CWD helper this

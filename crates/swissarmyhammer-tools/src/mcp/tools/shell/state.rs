@@ -124,8 +124,9 @@ impl ShellState {
     /// The not-writable fallback matters for GUI launches: a bundled macOS app
     /// opened from Finder runs with CWD = `/`, which is a read-only system
     /// volume, so `create_dir_all("/.shell")` fails with EROFS. Falling back
-    /// here keeps that from aborting the whole app via
-    /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new)'s `expect`.
+    /// here keeps the app running, and
+    /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new) reports what is
+    /// left over as an error rather than a panic.
     pub fn new() -> anyhow::Result<Self> {
         let preferred = std::env::current_dir()
             .ok()
@@ -455,9 +456,10 @@ mod tests {
     /// the preferred `.shell` location cannot be created. A bundled macOS GUI
     /// app launched from Finder runs with CWD = `/` (a read-only system
     /// volume), so `create_dir_all("/.shell")` fails with EROFS. Before this
-    /// fallback, that error propagated through `ShellExecuteTool::new()`'s
-    /// `expect("Failed to initialize shell state")` and aborted the whole app
-    /// on launch (panic in `did_finish_launching`).
+    /// fallback, that error reached `ShellExecuteTool::new()`, which panicked
+    /// on it and aborted the whole app on launch (panic in
+    /// `did_finish_launching`). That constructor now reports the error
+    /// instead, and this fallback keeps it from arising at all.
     #[cfg(unix)]
     #[test]
     fn falls_back_to_temp_when_preferred_dir_is_read_only() {

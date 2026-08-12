@@ -15,29 +15,53 @@
 //! Both are declared here as one [`ToolInstall`] impl; mirdan owns the profile
 //! construction and the install/uninstall sequencing shared with the other tool
 //! CLIs.
+//!
+//! The impl is written out rather than declared through
+//! `mirdan::declare_tool_install!`. That macro takes each component as one
+//! expression of the component's own type, and [`ShellExecuteTool::new`]
+//! answers a `Result`, because the shell state it opens reads the filesystem.
 
 use mirdan::install::Selector;
+use mirdan::tool_install::ToolInstall;
+use swissarmyhammer_common::lifecycle::InitRegistry;
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
 
 /// The builtin skill shelltool deploys.
 const SKILL_NAME: &str = "shell";
 
-mirdan::declare_tool_install! {
-    /// shelltool's install identity, applied by `shelltool init` /
-    /// `shelltool deinit`.
+/// shelltool's install identity, applied by `shelltool init` /
+/// `shelltool deinit`.
+///
+/// The server name matches the binary and the identity `commands/serve.rs`
+/// advertises. The single builtin `shell` skill deploys at every scope,
+/// including `User` — a global install lands it in the global store
+/// (`~/.skills` + the agent's global skill dir), so `init user` is a full
+/// configuration. [`ShellExecuteTool`] is the only genuine lifecycle
+/// component, for its `Bash` denial and `.shell/config.yaml`; it is built
+/// *without* `with_mcp_server` because the profile owns the MCP
+/// registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShelltoolInstall;
+
+impl ToolInstall for ShelltoolInstall {
+    const SERVER_NAME: &'static str = "shelltool";
+
+    fn skills() -> Selector {
+        Selector::Single(SKILL_NAME.to_string())
+    }
+
+    /// Registers the one lifecycle component, [`ShellExecuteTool`].
     ///
-    /// The server name matches the binary and the identity `commands/serve.rs`
-    /// advertises. The single builtin `shell` skill deploys at every scope,
-    /// including `User` — a global install lands it in the global store
-    /// (`~/.skills` + the agent's global skill dir), so `init user` is a full
-    /// configuration. [`ShellExecuteTool`] is the only genuine lifecycle
-    /// component, for its `Bash` denial and `.shell/config.yaml`; it is built
-    /// *without* `with_mcp_server` because the profile owns the MCP
-    /// registration.
-    ShelltoolInstall {
-        server: "shelltool",
-        skills: Selector::Single(SKILL_NAME.to_string()),
-        components: [ShellExecuteTool::new()],
+    /// A tool whose shell state cannot be created is reported through
+    /// `tracing::error!` and left out, so an install that can still write the
+    /// profile writes it.
+    fn register_components(registry: &mut InitRegistry) {
+        match ShellExecuteTool::new() {
+            Ok(tool) => registry.register(tool),
+            Err(error) => {
+                tracing::error!(%error, "shell tool lifecycle component not registered")
+            }
+        }
     }
 }
 

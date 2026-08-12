@@ -116,9 +116,24 @@ impl ShelltoolDoctor {
 
     /// Run ShellExecuteTool health checks via the Doctorable trait.
     ///
-    /// Converts each HealthCheck from the tool into a Check for the doctor runner.
+    /// Converts each HealthCheck from the tool into a Check for the doctor
+    /// runner. A tool whose shell state cannot be created reports one Error
+    /// check of its own, which is the answer a doctor exists to give.
     fn check_shell_tool_health(&mut self) {
-        let tool = ShellExecuteTool::new();
+        let tool = match ShellExecuteTool::new() {
+            Ok(tool) => tool,
+            Err(e) => {
+                self.add_check(Check {
+                    name: "Shell state".to_string(),
+                    status: CheckStatus::Error,
+                    message: e.to_string(),
+                    fix: Some(
+                        "Run shelltool from a writable directory, or set TMPDIR to one".to_string(),
+                    ),
+                });
+                return;
+            }
+        };
         let health_checks = tool.run_health_checks();
 
         for health_check in health_checks {

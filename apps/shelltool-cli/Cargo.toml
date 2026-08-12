@@ -25,6 +25,7 @@ swissarmyhammer-doctor = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 mirdan = { workspace = true }
 
+anyhow = { workspace = true }
 rmcp = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

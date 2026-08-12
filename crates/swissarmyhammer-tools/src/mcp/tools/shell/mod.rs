@@ -60,6 +60,7 @@ pub use infrastructure::{
 
 use crate::mcp::lifecycle_utils::applier_error;
 use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -161,15 +162,6 @@ pub struct ShellExecuteTool {
     mcp_server: Option<(String, mirdan::mcp_config::McpServerEntry)>,
 }
 
-impl Default for ShellExecuteTool {
-    /// Builds the tool with [`ShellExecuteTool::new`], so the default keeps its
-    /// state in a shell directory under the current directory and registers no
-    /// MCP server entry.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ShellExecuteTool {
     /// Creates a new instance of the `ShellExecuteTool`.
     ///
@@ -177,12 +169,23 @@ impl ShellExecuteTool {
     /// the current directory, falling back to a temp directory when that
     /// location is not writable. Command output is appended to a log file
     /// there, so `get lines` and `grep history` can read it back later.
-    pub fn new() -> Self {
-        let state = ShellState::new().expect(SHELL_STATE_INIT_FAILED);
-        Self {
+    ///
+    /// The tool has no [`Default`], because a constructor that reads the
+    /// filesystem cannot answer `Self` on its own.
+    ///
+    /// # Errors
+    ///
+    /// Reports a shell state it could not initialize, when neither the shell
+    /// directory under the current directory nor the temp fallback can be
+    /// created — a read-only or missing location, or a permission the process
+    /// does not hold. That is an expected failure of the environment rather
+    /// than a broken invariant, so the caller decides what to do about it.
+    pub fn new() -> anyhow::Result<Self> {
+        let state = ShellState::new().context(SHELL_STATE_INIT_FAILED)?;
+        Ok(Self {
             state: Arc::new(Mutex::new(state)),
             mcp_server: None,
-        }
+        })
     }
 
     /// Attach an MCP server entry the tool registers per scope during
@@ -750,6 +753,11 @@ use crate::mcp::tool_registry::ToolRegistry;
 ///
 /// * `registry` - The tool registry to register shell tools with
 ///
+/// A shell tool whose state cannot be created — see
+/// [`ShellExecuteTool::new`] — is reported through `tracing::error!` and left
+/// out of the registry, so one unwritable directory costs the server its
+/// shell tool rather than the whole registration.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -760,7 +768,10 @@ use crate::mcp::tool_registry::ToolRegistry;
 /// register_shell_tools(&mut registry);
 /// ```
 pub fn register_shell_tools(registry: &mut ToolRegistry) {
-    registry.register(ShellExecuteTool::new());
+    match ShellExecuteTool::new() {
+        Ok(tool) => registry.register(tool),
+        Err(error) => tracing::error!(%error, "shell tool not registered"),
+    }
 }
 
 /// Test-only variant that uses isolated temp dirs instead of CWD.
@@ -776,6 +787,39 @@ mod tests {
 
     // Import test helpers
     use test_helpers::execute_op;
+
+    // =====================================================================
+    // Construction tests
+    // =====================================================================
+
+    /// `ShellExecuteTool::new` answers a `Result` its caller reads.
+    ///
+    /// The constructor opens a shell state, which reads the filesystem, and a
+    /// directory it cannot create — a read-only working directory, a temp
+    /// location the process cannot write — is a failure of the environment
+    /// rather than a broken invariant. The binding names the answer's type, so
+    /// a constructor that panicked on that failure instead of reporting it
+    /// would not compile here. `ShellState`'s own read-only case is measured in
+    /// `state.rs`, by `falls_back_to_temp_when_preferred_dir_is_read_only`.
+    ///
+    /// The working directory is a temp directory for the run, because the
+    /// state lands under it and the crate directory keeps no `.shell`.
+    #[test]
+    #[serial(cwd)]
+    fn new_answers_a_result_the_caller_reads() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let _cwd = CurrentDirGuard::new(tmp.path()).expect("chdir into temp dir");
+
+        let created: anyhow::Result<ShellExecuteTool> = ShellExecuteTool::new();
+
+        assert!(
+            created.is_ok(),
+            "a writable working directory must build the tool: {:?}",
+            created.err()
+        );
+    }
 
     // =====================================================================
     // Registration tests

@@ -63,8 +63,24 @@ comments:
     - evidence: 4 files — crates/swissarmyhammer-validators/src/validators/loader.rs, crates/swissarmyhammer-validators/src/builtin/mod.rs, crates/swissarmyhammer-validators/src/review/scope/fixtures.rs, crates/swissarmyhammer-validators/src/review/drive.rs. `cargo nextest run -p swissarmyhammer-validators`: 690 passed, 0 failed. `cargo fmt --all --check` clean; `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-12T10:48:16.891652+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kztt5y4zvxnj27q1w8vgdrn6
+  text: |-
+    ### review — clean
+    - evidence: review sha bf29737e7~1..bf29737e7 — 0 findings, 0 confirmed, 0 refuted, 16 validator pairs attempted, 0 failed, 0 files skipped. No prior Review Findings section on the card.
+    - next: card moves to done.
+  timestamp: 2026-08-12T11:02:06.239091+00:00
+- actor: claude-code
+  id: 01kztt6mgqrd6mtmfkrdtchsk9
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files (validators/loader.rs, builtin/mod.rs, review/scope/fixtures.rs, review/drive.rs). Root cause is one step past the card's guess: `load_builtins` DOES resolve this repository's builtin/validators/. The break is name shadowing — `fixture_dirs()` mapped over a `BTreeMap` keyed by set name, and `load_all` loads ~/.validators after the builtins, so a user set named `code-hygiene` replaced the builtin one and its fixtures/ root vanished. This machine's ~/.validators holds a copy of every builtin set name, so every builtin fixture root was lost. Both prior tests ran under a temp HOME where nothing shadows, which is exactly why the gap sat between them. A second latent bug fell out and is fixed: `retain_rulesets` also narrowed the roots, breaking `review --validators <subset>`.
+    - test: green — cargo nextest run --workspace, 14138 passed, 0 failed, 0 skipped. fmt and clippy clean. The acceptance test was watched RED first, reproducing the card's measurement exactly.
+    - commit: bf29737e7
+    - review: clean — 0 findings over bf29737e7~1..bf29737e7, task moved to done
+  timestamp: 2026-08-12T11:02:29.143805+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffec80
 title: validator-fixture exclusion does not fire at runtime for the builtin layer
 ---
 ^4cc5y9b added an exclusion that takes a changed file under a loaded validator set's `fixtures/` directory out of the review work-list, and reports it in `skipped_files` with the reason "validator fixture". The card closed with a clean review.

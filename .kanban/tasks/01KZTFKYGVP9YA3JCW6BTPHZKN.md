@@ -82,8 +82,87 @@ comments:
     - evidence: 2 files — crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs. All 6 review findings are now `- [x]`. `cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-tools`: 2202 run, 2202 passed, 0 failed, 0 skipped. `cargo fmt --check` clean. `cargo clippy -p swissarmyhammer-tools -p swissarmyhammer-validators --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-12T10:21:09.481028+00:00
+- actor: claude-code
+  id: 01kztrg0wgz1gk290xa399v7s7
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (bf0cd8d34) — engine returned 3 findings, 3 confirmed, 1 refuted, 8 attempted. 1 finding recorded: crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181.
+    - dropped 2 findings under the review skill's blanket test-refactor exception, each asking to restructure test code that already existed: shell/mod.rs:217 (`new_isolated` is `#[cfg(test)]`, unchanged by this commit, called by 22 existing tests) and tool_rules/tests/shipped.rs:922 (deduplicate the `resolved_binary` test helper, unchanged by this commit).
+    - next: /implement — task stays in review until every item is checked and a fresh review is clean.
+  timestamp: 2026-08-12T10:32:39.568812+00:00
+- actor: claude-code
+  id: 01kztrgn660h56pehga8a1p11d
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 2 files (crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs). All six findings of iteration 1 are checked.
+    - test: green — cargo nextest run -E 'rdeps(swissarmyhammer-validators) | rdeps(swissarmyhammer-tools)', 3437 run, 3437 passed, 0 failed, 0 skipped. cargo fmt --check clean. cargo clippy --workspace --all-targets -- -D warnings clean.
+    - commit: bf0cd8d34
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181 (1 recorded of 3; 2 dropped under the test-refactor exception)
+  timestamp: 2026-08-12T10:33:00.358998+00:00
+- actor: claude-code
+  id: 01kzts19h1s6z5z8v5wwsnb0kr
+  text: |-
+    Picked up again for the open finding of 2026-08-12 05:26: `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181` — `ShellExecuteTool::new()` calls `.expect()`, which panics on a filesystem failure that is an expected failure mode.
+
+    Research, before any edit.
+
+    The whole file holds two `.expect` calls outside `mod tests`: `new()` at the line the finding names, and `new_isolated()` (`#[cfg(test)]`). The review of iteration 2 already read `new_isolated` and dropped it under the review skill's written test-refactor exception ("`new_isolated` is `#[cfg(test)]`, unchanged by this commit, called by 22 existing tests"). A panic there is a test failure, which is the correct signal for test-only code, so the cause the finding names does not stand in it. Every other `.expect`/`.unwrap` of the file stands inside `mod tests`.
+
+    `ShellState::new()` already returns `anyhow::Result<Self>` and already falls back to a temp directory when the preferred `.shell` location is not writable, so the remaining failure is "no directory anywhere can be created". `ShellState::new` is the public API of the same module and returns `anyhow`, so `anyhow::Result` is the prevailing shape for this constructor and no error type is converted back and forth.
+
+    The blast radius of `new() -> anyhow::Result<Self>`:
+
+    - `apps/shelltool-cli/src/commands/ops.rs::run_operation` — returns `i32`; reports the error and answers 1.
+    - `apps/shelltool-cli/src/commands/doctor.rs::check_shell_tool_health` — returns `()`; adds an Error check, which is what a doctor is for.
+    - `apps/shelltool-cli/src/commands/serve.rs::ShellToolServer::new` — becomes fallible; `run_serve` already returns `Result<(), String>`.
+    - `apps/shelltool-cli/src/main.rs` — builds the schema; reports and exits 1.
+    - `apps/shelltool-cli/src/commands/registry.rs` — `mirdan::declare_tool_install!` puts the component expression inside `ToolInstall::register_components`, which returns `()` for three CLIs. The macro takes only an infallible expression, so this file states the `ToolInstall` impl by hand and reports a tool it cannot build.
+    - `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs::register_shell_tools` — returns `()`, and four public functions stand between it and any caller that could carry an error (`register_all_tools`, `create_agent_tools_server`, `collect_all_health_checks`, `create_fully_registered_tool_registry`). Re-signing all four is a refactor the card does not ask for, so this function reports the failure through `tracing::error!` and registers no shell tool.
+
+    `impl Default for ShellExecuteTool` calls `new()`, so it goes: a fallible constructor has no `Default`. `clippy::new_without_default` only asks for one where `new()` answers `Self`. The same holds for `Default for ShellToolServer`.
+
+    Two doc comments in `state.rs` name `ShellExecuteTool::new()`'s `expect` and need to name the new answer instead.
+  timestamp: 2026-08-12T10:42:05.473404+00:00
+- actor: claude-code
+  id: 01kztt2enqkez9bc8a7x0q2k8h
+  text: |-
+    Worked the open finding.
+
+    `ShellExecuteTool::new()` answers `anyhow::Result<Self>` now. It carries the `ShellState::new()` error with `.context(SHELL_STATE_INIT_FAILED)`, so the message the constant holds still reaches the caller. `impl Default for ShellExecuteTool` is gone: a constructor that reads the filesystem cannot answer `Self`, and `clippy::new_without_default` only asks for a `Default` where `new()` does. The same holds for `ShellToolServer`, whose `new()` is fallible now and whose `Default` is gone with the test that measured it.
+
+    Each caller handles the failure where it stands:
+
+    - `register_shell_tools` reports through `tracing::error!` and registers no shell tool. Four public functions stand between it and any caller that could carry an error — `register_all_tools`, `create_agent_tools_server`, `collect_all_health_checks`, `create_fully_registered_tool_registry` — and re-signing all four is a refactor the card does not ask for. One unwritable directory now costs the server its shell tool instead of the whole process.
+    - `ShelltoolInstall` states its `ToolInstall` impl by hand and reports the same way. `mirdan::declare_tool_install!` takes each component as one expression of the component's own type, so a `Result` cannot stand there. The module doc states why this one CLI does not use the macro.
+    - `run_operation` reports and answers exit code 1. `check_shell_tool_health` adds one Error check with a fix hint, which is what a doctor exists to give. `ShellToolServer::new` is fallible and `run_serve` maps it. `main` reports and exits 1.
+    - `shelltool-cli` gains `anyhow`, which `code-context-cli` already carries.
+
+    TDD: `new_answers_a_result_the_caller_reads` was written first and failed to compile — `no method named 'err' found for struct ShellExecuteTool` — which is the missing feature, then passed.
+
+    What did not work, for the next agent: the first test forced a real failure by pointing `TMPDIR` at a regular file beside a read-only working directory, so both the preferred `.shell` and the temp fallback failed. It measured the error, and it broke 14 sibling tests under `cargo test`: `TMPDIR` is process state, `#[serial(env)]` only holds against tests that carry the same marker, and every sibling reaching `new_isolated()` reads `std::env::temp_dir()`. Under `cargo nextest` each test owns a process and the leak cannot happen, but `cargo test` must stay green too, so the test now names the answer's type in a binding and measures the writable case. `ShellState`'s read-only case already stands measured in `state.rs`, by `falls_back_to_temp_when_preferred_dir_is_read_only`, with no env at all.
+
+    Two doc comments in `state.rs` named the old `expect` and now name the new answer.
+
+    `new_isolated()` keeps its `expect`: it is `#[cfg(test)]`, a panic there is a test failure, which is the signal test-only code gives, and the review of iteration 2 already dropped that line under the written test-refactor exception.
+
+    `cargo doc -p swissarmyhammer-tools --no-deps` reported one new warning for a doc link to the private `SHELL_STATE_INIT_FAILED`; the doc states the failure in prose instead, and the warning is gone.
+  timestamp: 2026-08-12T11:00:12.087305+00:00
+- actor: claude-code
+  id: 01kztt2qrgh10mapbqh88zvsnz
+  text: |-
+    ### implement — changed
+    - evidence: 10 files — crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs, crates/swissarmyhammer-tools/src/mcp/tools/shell/state.rs, crates/swissarmyhammer-tools/tests/integration/file_size_limits.rs, apps/shelltool-cli/Cargo.toml, apps/shelltool-cli/src/main.rs, apps/shelltool-cli/src/commands/ops.rs, apps/shelltool-cli/src/commands/doctor.rs, apps/shelltool-cli/src/commands/serve.rs, apps/shelltool-cli/src/commands/registry.rs, Cargo.lock. The finding of 2026-08-12 05:26 (shell/mod.rs:181) is now `- [x]`, and all 7 findings of the card are checked. `cargo nextest run -E 'rdeps(swissarmyhammer-tools)'`: 2749 run, 2749 passed, 0 failed, 0 skipped. `cargo nextest run -p swissarmyhammer-tools -p shelltool-cli`: 1557 run, 1557 passed. `cargo nextest run -p shelltool-cli`: 42 passed. `cargo test -p swissarmyhammer-tools --lib mcp::tools::shell::`: 187 passed. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo doc -p swissarmyhammer-tools --no-deps` adds no warning.
+    - next: /review
+  timestamp: 2026-08-12T11:00:21.392944+00:00
+- actor: claude-code
+  id: 01kzttnm2gzwwbf09vs16zk2p1
+  text: |-
+    ### test — green
+    - evidence: `cargo fmt --check` clean. `cargo build --workspace --all-targets` clean, no warnings (87s). `cargo clippy --workspace --all-targets -- -D warnings` clean, no warnings (38s). `cargo nextest run --workspace` — 14138 tests run: 14138 passed, 0 failed, 0 skipped (run twice for confirmation; timing-only "slow"/"leaky" flags on unrelated `swissarmyhammer-validators` fixture tests were non-reproducible between runs and did not affect the passed count on either run).
+    - next: ready for review.
+  timestamp: 2026-08-12T11:10:40.208761+00:00
 position_column: doing
-position_ordinal: '8280'
+position_ordinal: '8380'
 title: missing-docs-rust breaks the run for a workspace clippy linted, when a lint stands at deny level
 ---
 `missing-docs-rust` tests the STATUS of `cargo clippy` alone: it writes `set -e` and lets cargo's exit status be the script's. `cargo clippy` gives one status to a run it could not make and to a run it made from end to end while a lint stands at deny level, so the second shape breaks the run and every `missing_docs` finding it holds is thrown away.
@@ -113,3 +192,7 @@ Two sibling rules already make that test over the same cargo report, and each st
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514` — fn `deinit` is a near-duplicate of `init` at crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:468 (208 tokens, 95% alike).
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:567` — Error message starts with uppercase 'F' in 'Failed to remove {}/ directory'. Error messages should be lowercase except for acronyms, CamelCase identifiers, or proper nouns. Change 'Failed to remove {}/ directory' to 'failed to remove {}/ directory'.
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:970` — Unquoted variable in generated shell script allows command injection if binary path contains spaces or special shell characters. Quote the variable in the shell script: change `exec {real} "$@"` to `exec "{real}" "$@"` to ensure safe shell execution regardless of path content.
+
+## Review Findings (2026-08-12 05:26)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181` — ShellExecuteTool::new() uses .expect() which panics on filesystem errors when initializing ShellState. This violates the rule that panics are for bugs only — creating ShellState can fail on expected failure modes like missing directories or permission issues, not internal invariant violations. Return Result<Self, E> from ShellExecuteTool::new() instead of panicking, allowing callers to handle initialization failures gracefully.

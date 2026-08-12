@@ -49,15 +49,21 @@ async fn main() {
         banner::print_banner();
     }
 
-    // The op subcommand tree is built in-process from the shell tool's FULL
-    // schema (per-op `x-operation-schemas` + flat properties), not the slim
-    // wire form — that's what the shared `cli_gen` generator consumes.
-    let schema = ShellExecuteTool::new().schema_full();
-
     // `--debug` is a global flag declared on the lifecycle root; pull it off the
     // raw args before clap so tracing is configured before dispatch.
     let debug = args.iter().any(|a| a == "--debug" || a == "-d");
     logging::init_tracing(debug);
+
+    // The op subcommand tree is built in-process from the shell tool's FULL
+    // schema (per-op `x-operation-schemas` + flat properties), not the slim
+    // wire form — that's what the shared `cli_gen` generator consumes.
+    let schema = match ShellExecuteTool::new() {
+        Ok(tool) => tool.schema_full(),
+        Err(e) => {
+            error!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let cmd = build_cli(&schema);
     let matches = cmd.get_matches();
@@ -228,7 +234,7 @@ mod tests {
     /// Parse an argv slice through the runtime command tree built by
     /// [`build_cli`] from the shell tool's full schema.
     fn matches_from(argv: &[&str]) -> (serde_json::Value, clap::ArgMatches) {
-        let schema = ShellExecuteTool::new().schema_full();
+        let schema = ShellExecuteTool::new().expect("shell state").schema_full();
         let matches = build_cli(&schema)
             .try_get_matches_from(argv)
             .expect("argv should parse against the runtime command tree");
