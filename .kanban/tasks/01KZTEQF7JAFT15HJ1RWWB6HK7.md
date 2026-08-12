@@ -177,8 +177,26 @@ comments:
 
     Follow-up carded: ^q2cncse — a recorded finding must name the validator set and the rule that produced it. Attributing these three took four searches and one attribution was never proved, only inferred.
   timestamp: 2026-08-12T11:46:36.909326+00:00
-position_column: review
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kztxza5ffxfq8jk2v853a76x
+  text: |
+    ### review — clean
+    - evidence: `review sha 59bd9ae5c~1..59bd9ae5c` — 0 findings, 0 confirmed, 0 refuted, 40 pairs attempted, 0 failed, 0 skipped. None of the three findings of 2026-08-12 05:01 came back. The re-review ran with commit 4e41d04ab in HEAD, which corrected `duplication.md` and `invariant-propagation.md`.
+    - next: none. The three prior boxes are checked as resolved-by-rule-correction. Task moves to done.
+  timestamp: 2026-08-12T12:08:23.471742+00:00
+- actor: claude-code
+  id: 01kzty08dfqckydfekvz0vhjxx
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: n/a. This card's own work was complete and green after iteration 1; it was blocked only by three findings that no edit could satisfy.
+    - rule correction: 4e41d04ab — duplication.md and invariant-propagation.md, per the user's decision to correct the prose in builtin/.
+    - test: green — cargo nextest run -p swissarmyhammer-validators with the corrections in place. 4 mirdan clone tests failed in the batch and were proved network flakes: they pass with the edits stashed AND with the edits in place when run isolated, 2.4s against 60s timeouts.
+    - review: clean — 0 findings over 59bd9ae5c~1..59bd9ae5c, 40 pairs attempted, 0 failed. None of the three prior findings reproduced. Task moved to done.
+
+    Closing note. The card was stuck for one round on three findings, and none of the three came from its own work — a parallel shell had folded ^btphzkn and a shell/mod.rs fix into the same commit. Two rule corrections cleared all three. The follow-up ^q2cncse exists because attributing them to their rules took four searches and one attribution was never proved.
+  timestamp: 2026-08-12T12:08:54.447792+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffee80
 title: Delete the two -parsed tool rules that shell out to sah itself
 ---
 `duplication-parsed` and `no-commented-code-parsed` are the only two tool rules
@@ -250,9 +268,9 @@ stay. They are user-facing MCP and CLI ops with their own consumers, and
 
 ## Review Findings (2026-08-12 05:01)
 
-- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514` — fn `deinit` is a near-duplicate of `init` at crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:468 (208 tokens, 95% alike).
-- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:881` — The test was updated to verify new guidance markers ("Do not use grep to search files", "use `rg`", "Do not use shell to edit files") in the shell tool description. Per the comment at lines 865-870, this guidance is duplicated in both the tool description and the shell skill description by design. The parallel test in swissarmyhammer-skills that verifies the skill description was left unchanged, breaking parity between the two tests that should enforce the same invariant. Update shell_output_guidance_states_blocking_and_no_tail in swissarmyhammer-skills to also assert the presence of the three new guidance markers, maintaining parity with this updated test.
-- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs_rust.rs:713` — Every language's missing-docs tool tests include a 'reads_only_the_files_it_is_given' test that verifies the tool respects file arguments and does not walk the repository by default — but Rust's tests omit this pattern entirely. Add `the_shipped_rust_missing_docs_tool_rule_reads_only_the_files_it_is_given()` test (with its supporting probe and staged files constants) to verify that `cargo clippy` with no file argument does not read the entire repository, matching the pattern from all other languages.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514` — fn `deinit` is a near-duplicate of `init` at crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:468 (208 tokens, 95% alike).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:881` — The test was updated to verify new guidance markers ("Do not use grep to search files", "use `rg`", "Do not use shell to edit files") in the shell tool description. Per the comment at lines 865-870, this guidance is duplicated in both the tool description and the shell skill description by design. The parallel test in swissarmyhammer-skills that verifies the skill description was left unchanged, breaking parity between the two tests that should enforce the same invariant. Update shell_output_guidance_states_blocking_and_no_tail in swissarmyhammer-skills to also assert the presence of the three new guidance markers, maintaining parity with this updated test.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs_rust.rs:713` — Every language's missing-docs tool tests include a 'reads_only_the_files_it_is_given' test that verifies the tool respects file arguments and does not walk the repository by default — but Rust's tests omit this pattern entirely. Add `the_shipped_rust_missing_docs_tool_rule_reads_only_the_files_it_is_given()` test (with its supporting probe and staged files constants) to verify that `cargo clippy` with no file argument does not read the entire repository, matching the pattern from all other languages.
 
 ## BLOCKER — the three findings above conflict with the code (2026-08-12)
 
@@ -300,3 +318,28 @@ The finding also asks the test to hold `cargo clippy` to NOT reading the whole
 repository. `missing-docs-rust.md` states the opposite, and
 `the_shipped_rust_missing_docs_tool_rule_reports_every_workspace_member` holds
 the run to all three members of a probe workspace.
+
+## Resolution of the 2026-08-12 05:01 findings (2026-08-12 06:56)
+
+The three boxes above are checked as resolved-by-rule-correction. Commit
+4e41d04ab corrected the two rules that raised them, and 4e41d04ab is an
+ancestor of HEAD:
+
+- `builtin/validators/duplication/rules/duplication.md` — the carve-out for a
+  dispatch-forced delegation shim now states that the body decides, and that
+  the measurement of the probe cannot overturn it. A trait-required pair
+  carries its signature and its doc comment into the token count and the
+  similarity score.
+- `builtin/validators/completeness/rules/invariant-propagation.md` — a row of
+  clone siblings is a candidate only. Two gates now stand before a finding:
+  read the sibling and confirm the treatment is absent, quoting the absent
+  line; then confirm the sibling admits the treatment by reading what it
+  declares about itself.
+
+A re-review of the same range with the corrected rules raised none of the
+three again.
+
+## Review Findings (2026-08-12 06:56)
+
+No findings. Scope: `59bd9ae5c~1..59bd9ae5c`. 40 validator and file pairs ran,
+0 failed, 0 skipped, 0 findings.
