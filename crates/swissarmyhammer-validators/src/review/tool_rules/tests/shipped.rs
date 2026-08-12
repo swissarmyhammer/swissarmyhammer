@@ -967,7 +967,7 @@ fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
         &stub,
         format!(
             "#!/bin/sh\nif [ -e \"./{BROKEN_COMMAND_MARKER}\" ]; then\n  \
-             exit {COMMAND_NOT_FOUND_STATUS}\nfi\nexec {real} \"$@\"\n"
+             exit {COMMAND_NOT_FOUND_STATUS}\nfi\nexec \"{real}\" \"$@\"\n"
         ),
     )
     .unwrap();

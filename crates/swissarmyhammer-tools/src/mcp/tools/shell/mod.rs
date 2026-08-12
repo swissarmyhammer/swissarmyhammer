@@ -84,7 +84,7 @@ const SHELL_CONFIG_FILE: &str = "config.yaml";
 const OP_KEY: &str = "op";
 
 /// Message reported when the shell state cannot open its log directory.
-const SHELL_STATE_INIT_FAILED: &str = "Failed to initialize shell state";
+const SHELL_STATE_INIT_FAILED: &str = "failed to initialize shell state";
 
 /// Name of the host's native tool that this tool supersedes. `init` denies it
 /// per agent, `deinit` allows it again, and the tool category names it.
@@ -232,7 +232,7 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
         Err(e) => {
             return vec![HealthCheck::error(
                 BUILTIN_CONFIG_CHECK,
-                format!("Builtin shell config failed to parse: {}", e),
+                format!("builtin shell config failed to parse: {}", e),
                 Some(format!(
                     "This is a binary bug — rebuild swissarmyhammer with a valid builtin/shell/{}",
                     SHELL_CONFIG_FILE
@@ -259,7 +259,7 @@ fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
         ),
         Err(e) => HealthCheck::error(
             REGEX_PATTERNS_CHECK,
-            format!("Pattern '{}' failed to compile: {}", e.pattern, e.source),
+            format!("pattern '{}' failed to compile: {}", e.pattern, e.source),
             Some(format!(
                 "Fix the invalid regex pattern '{}' in the shell config (reason: {})",
                 e.pattern, e.reason
@@ -430,6 +430,107 @@ impl Doctorable for ShellExecuteTool {
     }
 }
 
+/// The direction one lifecycle run takes.
+///
+/// `init` and `deinit` walk the same three steps over the same scope, in the
+/// same order, and each step differs only in which mirdan call it makes. This
+/// names that difference so one function runs both directions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LifecycleDirection {
+    /// Registers the MCP server entry, denies `Bash`, and writes the project
+    /// config.
+    Install,
+    /// Unregisters the MCP server entry, allows `Bash` again, and removes the
+    /// project config.
+    Remove,
+}
+
+impl LifecycleDirection {
+    /// The message a run reports when no step failed.
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Install => "Shell tool initialized (MCP + Bash deny + config)",
+            Self::Remove => "Shell tool deinitialized",
+        }
+    }
+
+    /// Whether a failed step ends the run.
+    ///
+    /// An install stops, because each step stands on the one before it. A
+    /// removal carries on, so it takes away everything it still can.
+    fn stops_at_first_error(self) -> bool {
+        matches!(self, Self::Install)
+    }
+}
+
+/// Runs one direction of the shell tool's lifecycle over `scope`.
+///
+/// The three steps — the MCP server entry, the `Bash` permission, and the
+/// tool's own `.shell/` config — are the same for both directions, so `init`
+/// and `deinit` differ only in the `direction` they hand in.
+///
+/// A step answers `None` when it succeeded and `Some(message)` when it failed.
+/// Each failure becomes an error result, and a run with no failed step ends
+/// with the direction's own success message.
+fn run_lifecycle(
+    tool: &ShellExecuteTool,
+    direction: LifecycleDirection,
+    scope: &swissarmyhammer_common::lifecycle::InitScope,
+    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+    use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
+
+    let mcp_server = || -> Option<String> {
+        let (name, entry) = tool.mcp_server.as_ref()?;
+        applier_error(&match direction {
+            LifecycleDirection::Install => {
+                mirdan::install::register_mcp_server(*scope, name, entry, reporter)
+            }
+            LifecycleDirection::Remove => {
+                mirdan::install::unregister_mcp_server(*scope, name, reporter)
+            }
+        })
+    };
+
+    let bash_permission = || -> Option<String> {
+        applier_error(&match direction {
+            LifecycleDirection::Install => {
+                mirdan::install::deny_tool(*scope, BASH_TOOL_NAME, reporter)
+            }
+            LifecycleDirection::Remove => {
+                mirdan::install::allow_tool(*scope, BASH_TOOL_NAME, reporter)
+            }
+        })
+    };
+
+    let project_config = || -> Option<String> {
+        if !matches!(scope, InitScope::Project | InitScope::Local) {
+            return None;
+        }
+        match direction {
+            LifecycleDirection::Install => ensure_project_config(reporter).err(),
+            LifecycleDirection::Remove => remove_shell_dir(reporter),
+        }
+    };
+
+    let component_name = <ShellExecuteTool as crate::mcp::tool_registry::McpTool>::name(tool);
+    let mut results = Vec::new();
+    for step in [
+        &mcp_server as &dyn Fn() -> Option<String>,
+        &bash_permission,
+        &project_config,
+    ] {
+        if let Some(err) = step() {
+            results.push(InitResult::error(component_name, err));
+            if direction.stops_at_first_error() {
+                return results;
+            }
+        }
+    }
+    results.push(InitResult::ok(component_name, direction.success_message()));
+    results
+}
+
 impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// Returns the display name for this component in lifecycle output.
     fn name(&self) -> &str {
@@ -470,36 +571,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
-        let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
-        let mut results = Vec::new();
-
-        if let Some((name, entry)) = &self.mcp_server {
-            let mcp = mirdan::install::register_mcp_server(*scope, name, entry, reporter);
-            if let Some(err) = applier_error(&mcp) {
-                results.push(InitResult::error(component_name, err));
-                return results;
-            }
-        }
-
-        let deny = mirdan::install::deny_tool(*scope, BASH_TOOL_NAME, reporter);
-        if let Some(err) = applier_error(&deny) {
-            results.push(InitResult::error(component_name, err));
-            return results;
-        }
-
-        if matches!(scope, InitScope::Project | InitScope::Local) {
-            if let Err(err) = ensure_project_config(reporter) {
-                results.push(InitResult::error(component_name, err));
-                return results;
-            }
-        }
-
-        results.push(InitResult::ok(
-            component_name,
-            "Shell tool initialized (MCP + Bash deny + config)",
-        ));
-        results
+        run_lifecycle(self, LifecycleDirection::Install, scope, reporter)
     }
 
     /// Deinitialize the shell tool, mirroring [`Self::init`] by delegating to
@@ -516,30 +588,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
-        let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
-        let mut results = Vec::new();
-
-        if let Some((name, _entry)) = &self.mcp_server {
-            let mcp = mirdan::install::unregister_mcp_server(*scope, name, reporter);
-            if let Some(err) = applier_error(&mcp) {
-                results.push(InitResult::error(component_name, err));
-            }
-        }
-
-        let allow = mirdan::install::allow_tool(*scope, BASH_TOOL_NAME, reporter);
-        if let Some(err) = applier_error(&allow) {
-            results.push(InitResult::error(component_name, err));
-        }
-
-        if matches!(scope, InitScope::Project | InitScope::Local) {
-            if let Some(err) = remove_shell_dir(reporter) {
-                results.push(InitResult::error(component_name, err));
-            }
-        }
-
-        results.push(InitResult::ok(component_name, "Shell tool deinitialized"));
-        results
+        run_lifecycle(self, LifecycleDirection::Remove, scope, reporter)
     }
 }
 
@@ -564,7 +613,7 @@ fn remove_shell_dir(
             None
         }
         Err(e) => Some(format!(
-            "Failed to remove {}/ directory: {}",
+            "failed to remove {}/ directory: {}",
             ShellConfig::DIR_NAME,
             e
         )),

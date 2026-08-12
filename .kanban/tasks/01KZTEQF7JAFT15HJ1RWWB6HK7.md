@@ -20,8 +20,65 @@ comments:
 
     `rg -l '^tool:' builtin/validators` reports 27 rules today, so 25 after the two deletions.
   timestamp: 2026-08-12T09:19:03.974907+00:00
+- actor: claude-code
+  id: 01kztp48rggjewft6ee2rv1zds
+  text: |-
+    Implementation landed. Every item of the card is in the tree.
+
+    Deleted, all 10: the two rule files, the four fixtures, the two acceptance tests under `apps/swissarmyhammer-cli/tests/`, and the two shipped-test modules. `builtin/validators/duplication/fixtures/` is now empty and gone, which matches every other prompt-only set.
+
+    Edited, the 9 the card names plus 5 the deletion forced:
+
+    - `shipped.rs` — `mod commented_code;` and `mod duplication;` removed.
+    - `builtin/mod.rs` — `CODE_HYGIENE_COMMENTED_CODE_TOOL_RULES` and its three uses (roster chain, count, supersedes chain) removed, `COMMENTED_CODE_TOOL_RULE` and `test_commented_code_tool_rule_matches_exactly_the_extensions_the_op_covers` removed, the duplication roster count 4 → 3.
+    - `mirdan/src/builtin_validators.rs` — the two fixture names out of `CODE_HYGIENE_FIXTURES`.
+    - `apps/swissarmyhammer-cli/Cargo.toml` — the `swissarmyhammer-sem` dev-dep and its comment.
+    - `duplication/VALIDATOR.md` — "Which tools this set uses" now states that the prompt rules decide and the `duplicates` probe supplies the machine facts. "The comparison is our own" described the deleted rule, so it is gone. The `cpd-core` and `jscpd` verdicts stay; the one sentence of the jscpd verdict that named the deleted rule as the test-code exclusion now names the reader.
+    - `code-hygiene/VALIDATOR.md` — the commented-out-code section now states no tool rule. The `ruff ERA001` verdict stays, on its measured ground: it reports each line on its own and states no block-length option, so it cannot express the prompt rule's "more than 5 lines" gate, and it answers for Python alone.
+    - `code-hygiene/rules/no-commented-code.md` — the fallback framing is gone; the rule always runs.
+    - `builtin/validators/README.md` — the `SAH_BIN` paragraph and the plain-text-op note deleted.
+    - `doctor.rs` — `SAH_BINARY_ENV`, `SAH_BINARY_NAME`, `sah_binary()`, `is_sah_binary()`, the `command.env(...)` line, the three tests, their two constants, and the now-unused `EnvVarGuard` import.
+
+    Forced by the deletion, and not on the card:
+
+    - `shipped/missing_docs.rs` — the two rules out of `SHIPPED_RULES_THAT_READ_A_GO_FILE`, 27 entries to 25.
+    - `code-hygiene/rules/missing-docs-go.md` — "27 shipped rules match a `.go` file" to 25, twice.
+    - `shipped/zero_argument.rs` — `FILES_SCOPE_RULE_COUNT` 16 → 14. Both deleted rules stated `scope: files`. The measurement in its doc is re-taken over the 14 shipped scripts: 7 write the guard on the first line, 7 write it under `set -e`.
+    - `shipped/scope_roster.rs` — `SHIPPED_TOOL_RULE_COUNT` 27 → 25. `WORKSPACE_SCOPE_RULE_COUNT` stays 11.
+    - `code_context/execute.rs` and `sem/.../commented_code.rs` — doc comments that named a deleted rule as the reader of an op. The ops stay; only the sentence changed.
+
+    Discovery worth keeping: `mirdan`'s retired-validator prune works at SET granularity. It cannot remove a retired RULE FILE from a set that still ships, so a store an earlier `sah init` wrote keeps both deleted rules and doctor still reports them degraded. Card ^w6ypb8b carries that gap.
+
+    Note on the tree: a parallel shell committed the whole working tree, this change included, into 59bd9ae5c. The diff is in HEAD rather than uncommitted.
+  timestamp: 2026-08-12T09:51:17.264960+00:00
+- actor: claude-code
+  id: 01kztp4fx6ads65882gzcf0as1
+  text: |-
+    ### implement — changed
+    - evidence: 10 files deleted, 14 files edited. `rg -c 'SAH_BIN' builtin/` reports 0 matches. `rg -l '^tool:' builtin/validators | wc -l` reports 25, and each of the 25 names an external tool. `cargo nextest run --workspace` reports 14136 tests run: 14136 passed, 0 skipped. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. `sah doctor` over the shipped set (run with `$HOME` pointed at an empty directory, so no store shadows the embed) lists no tool rule for duplication and none for commented code; every remaining tool rule reports `tool present; fixtures pass`.
+    - next: /review
+  timestamp: 2026-08-12T09:51:24.582907+00:00
+- actor: claude-code
+  id: 01kztqpgvhsg5pfh190q33a83m
+  text: |
+    ### review — findings
+    - scope: review sha HEAD~1..HEAD (59bd9ae5c), which carries the work of ^wwb6hk7 and ^btphzkn plus a stale-assertion fix in shell/mod.rs
+    - counts: 3 findings, 3 confirmed, 0 refuted, 40 attempted
+    - evidence: crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514, crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:881, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs_rust.rs:713
+    - by card: ^wwb6hk7 (delete the two -parsed tool rules and SAH_BIN) drew zero findings. Finding 3 belongs to ^btphzkn (missing-docs-rust). Findings 1 and 2 belong to the shell/mod.rs stale-assertion fix.
+    - next: task stays in review. The implementer acts on the three checklist items.
+  timestamp: 2026-08-12T10:18:43.953581+00:00
+- actor: claude-code
+  id: 01kztqqwh6y5m8sq76w537xtzw
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 24 files. 10 deleted (2 rules, 4 fixtures, 2 CLI tests, 2 shipped test modules), 14 edited. All four done-when conditions measured: 0 SAH_BIN matches under builtin/, 25 tool rules all external, suite green, doctor reports no degraded rule for duplication or commented code (measured with a clean store; the installed-store prune is carded on ^w6ypb8b).
+    - test: green — cargo nextest run --workspace, 14136 passed, 0 failed, 0 skipped. fmt and clippy clean. This card's VALIDATOR.md rewrite fixed the four failures carded on ^bh5ncd0; ^neb2era is fixed by a stale-assertion fix bundled into the same commit.
+    - commit: 59bd9ae5c — committed by a parallel shell, which folded this card's work together with ^btphzkn and a shell/mod.rs stale-assertion fix under a message naming ^btphzkn only.
+    - review: findings — crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514, crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:881, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs_rust.rs:713. None of the three come from this card's own work.
+  timestamp: 2026-08-12T10:19:28.678954+00:00
 position_column: doing
-position_ordinal: '8280'
+position_ordinal: '8380'
 title: Delete the two -parsed tool rules that shell out to sah itself
 ---
 `duplication-parsed` and `no-commented-code-parsed` are the only two tool rules
@@ -90,3 +147,9 @@ stay. They are user-facing MCP and CLI ops with their own consumers, and
   tools.
 - `cargo nextest run --workspace` is green.
 - `sah doctor` reports no degraded tool rule for duplication or commented code. #tool-validators #objectivity
+
+## Review Findings (2026-08-12 05:01)
+
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:514` — fn `deinit` is a near-duplicate of `init` at crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:468 (208 tokens, 95% alike).
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:881` — The test was updated to verify new guidance markers ("Do not use grep to search files", "use `rg`", "Do not use shell to edit files") in the shell tool description. Per the comment at lines 865-870, this guidance is duplicated in both the tool description and the shell skill description by design. The parallel test in swissarmyhammer-skills that verifies the skill description was left unchanged, breaking parity between the two tests that should enforce the same invariant. Update shell_output_guidance_states_blocking_and_no_tail in swissarmyhammer-skills to also assert the presence of the three new guidance markers, maintaining parity with this updated test.
+- [ ] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs_rust.rs:713` — Every language's missing-docs tool tests include a 'reads_only_the_files_it_is_given' test that verifies the tool respects file arguments and does not walk the repository by default — but Rust's tests omit this pattern entirely. Add `the_shipped_rust_missing_docs_tool_rule_reads_only_the_files_it_is_given()` test (with its supporting probe and staged files constants) to verify that `cargo clippy` with no file argument does not read the entire repository, matching the pattern from all other languages.
