@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use agent_client_protocol::DynConnectTo;
 use serde_json::json;
+use swissarmyhammer_common::test_utils::EnvVarGuard;
 // The ONE shared review test seam, consumed via the validators crate's
 // `test-support` feature instead of per-file copies: the scripted ACP agent
 // harness, the throwaway git repo, the on-disk index builder + row seeders, and
@@ -239,6 +240,45 @@ pub fn seed_on_disk_index(root: &Path) {
 
     // item 4: `orphan_never_called` is intentionally absent from lsp_symbols /
     // lsp_call_edges → `callers` returns no rows → a real dead-code signal.
+}
+
+/// Force every review tool rule's doctor check to fail for the guard's
+/// lifetime, so the review engine always falls back to its scripted-agent +
+/// `duplicates` probe path — the path this fixture is built to exercise —
+/// regardless of whether the host machine happens to carry a working `sah`
+/// on `PATH`.
+///
+/// `duplication-parsed` (`builtin/validators/duplication/rules/duplication-parsed.md`,
+/// matching every `.rs` file among others) resolves `$SAH_BIN` as: an
+/// existing `SAH_BIN` in the environment, then `current_exe()` when its file
+/// stem is `sah`, then the bare name via `PATH`. On a machine that carries a
+/// working `sah` on `PATH` — the ordinary state of a dev or CI machine that
+/// has ever run `cargo install --path apps/swissarmyhammer-cli`, or that
+/// dogfoods `sah` for its own tooling — that tool rule goes healthy and
+/// SUPERSEDES the scripted `duplication` prompt rule this fixture drives.
+/// Item 1's planted duplicate spans `FILE_PAYMENTS` (written into the diff)
+/// and `FILE_EXISTING` (seeded only into the on-disk index above, never
+/// written to disk), which is exactly the cross-file-against-existing-code
+/// scenario a tool rule scoped to "the files handed to it" can never see —
+/// so a healthy `duplication-parsed` silently answers "no duplicate" and
+/// `CLAIM_DUP` never appears, though nothing in this fixture's own script or
+/// index rows changed. Forcing `SAH_BIN` to a path that cannot exist keeps
+/// every tool rule's doctor check failing, so the fixture's outcome depends
+/// only on its own scripted agent and seeded index rows, never on the host's
+/// `PATH`.
+///
+/// Bind the return value in every test that calls [`seed_on_disk_index`], the
+/// same way `_home`/`_cwd` are bound — the guard restores `SAH_BIN` on drop,
+/// so it must live at least as long as the review op it protects:
+///
+/// ```ignore
+/// let _sah_bin = isolate_review_tool_rules();
+/// ```
+pub fn isolate_review_tool_rules() -> EnvVarGuard {
+    EnvVarGuard::set(
+        "SAH_BIN",
+        "/nonexistent/sah-binary-forced-missing-for-hermetic-review-tests",
+    )
 }
 
 // ---------------------------------------------------------------------------
