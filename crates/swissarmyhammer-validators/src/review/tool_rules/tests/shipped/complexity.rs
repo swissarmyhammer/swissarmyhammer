@@ -400,12 +400,13 @@ const RUST_COMPLEXITY_UNCOMPILABLE_SOURCE: &str = concat!(
     "pub fn broken() -> i32 { \"not an integer\" }\n",
 );
 
+/// The line the script writes when clippy read the workspace but never linted
+/// part of it.
+const RUST_UNLINTABLE_LINE: &str = "complexity-rust: cargo clippy could not lint the workspace";
+
 /// What the one error of a workspace cargo cannot lint must name: the script's
 /// own line, and cargo's own words beside it.
-const RUST_COMPLEXITY_UNCOMPILABLE_ERROR: &[&str] = &[
-    "complexity-rust: cargo clippy could not lint the workspace",
-    "could not compile",
-];
+const RUST_COMPLEXITY_UNCOMPILABLE_ERROR: &[&str] = &[RUST_UNLINTABLE_LINE, "could not compile"];
 
 /// The `complexity-rust` probe over a workspace that does not compile.
 const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
@@ -434,6 +435,77 @@ const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
 #[test]
 fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile() {
     verify_shipped_run_breaks(&RUST_COMPLEXITY_UNCOMPILABLE_PROBE);
+}
+
+/// The root manifest of a probe workspace that holds two members.
+const RUST_TWO_MEMBER_ROOT_MANIFEST: &str =
+    "[workspace]\nmembers = [\"good\", \"bad\"]\nresolver = \"2\"\n";
+
+/// The manifest of the member that compiles.
+const RUST_GOOD_MEMBER_MANIFEST: &str =
+    "[package]\nname = \"good\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+
+/// Where the manifest of the member that compiles stands.
+const RUST_GOOD_MEMBER_MANIFEST_PATH: &str = "good/Cargo.toml";
+
+/// Where the library of the member that compiles stands.
+const RUST_GOOD_MEMBER_LIB_PATH: &str = "good/src/lib.rs";
+
+/// The manifest of the member the compiler refuses.
+const RUST_BAD_MEMBER_MANIFEST: &str =
+    "[package]\nname = \"bad\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+
+/// Where the manifest of the member the compiler refuses stands.
+const RUST_BAD_MEMBER_MANIFEST_PATH: &str = "bad/Cargo.toml";
+
+/// Where the library of the member the compiler refuses stands.
+const RUST_BAD_MEMBER_LIB_PATH: &str = "bad/src/lib.rs";
+
+/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace
+/// whose MEMBER cannot compile, even when another member fills the findings
+/// file, through the real clippy pipeline.
+///
+/// This rule states `scope: workspace`, and a real repository holds many
+/// members. A gate that reads the filtered findings file cannot see the member
+/// that failed: the member that compiles writes a finding, the file is not
+/// empty, and the status test never runs. Measured over this shape with clippy
+/// 0.1.97: cargo exits 101, the earlier gate wrote `good/src/lib.rs:1` alone
+/// and exited 0, and the long function of `bad/src/lib.rs` was read as clean.
+///
+/// The RAW report holds what the filtered file drops. A member that fails its
+/// type check writes a rustc error code, `E0308` here, and clippy runs the four
+/// lints only after that type check. So the script tests the raw report for a
+/// rustc error code, and the member that compiles cannot hide the member that
+/// does not.
+///
+/// Both members hold the same long function, so the member that compiles is the
+/// one that fills the findings file.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_member_it_cannot_compile() {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
+    let good = long_rust_function("", "fold_grid");
+    let bad = format!(
+        "{RUST_COMPLEXITY_UNCOMPILABLE_SOURCE}{}",
+        long_rust_function("", "fold_grid")
+    );
+    let staged = [
+        (RUST_PROBE_MANIFEST_PATH, RUST_TWO_MEMBER_ROOT_MANIFEST),
+        (RUST_GOOD_MEMBER_MANIFEST_PATH, RUST_GOOD_MEMBER_MANIFEST),
+        (RUST_GOOD_MEMBER_LIB_PATH, good.as_str()),
+        (RUST_BAD_MEMBER_MANIFEST_PATH, RUST_BAD_MEMBER_MANIFEST),
+        (RUST_BAD_MEMBER_LIB_PATH, bad.as_str()),
+    ];
+    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+
+    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+        .expect_err("a workspace member the compiler refuses must break the run");
+
+    let detail = failure.to_string();
+    assert!(
+        detail.contains(RUST_UNLINTABLE_LINE),
+        "the run must break with '{RUST_UNLINTABLE_LINE}'; got '{detail}'"
+    );
 }
 
 /// A cargo manifest that holds one clippy lint at deny level.
@@ -488,6 +560,84 @@ fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_leve
     );
 }
 
+/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
+/// stands a clippy lint at deny level and holds NO finding of the four gates,
+/// through the real clippy pipeline.
+///
+/// This is the clean half of the deny-level shape, and a gate that reads the
+/// findings file answers it wrong. cargo exits 101 for the denied lint, the
+/// findings file is empty because the workspace is clean at the four gates, and
+/// a gate that reads that file calls the run broken. Measured over this probe:
+/// the earlier gate wrote `complexity-rust: cargo clippy could not lint the
+/// workspace` and exited 1, for a workspace clippy linted from end to end.
+///
+/// The correct answer is no finding at exit 0, and this test holds the script
+/// to it.
+#[test]
+fn the_shipped_rust_complexity_tool_rule_measures_a_clean_workspace_beside_a_deny_level_lint() {
+    let reported = rust_complexity_findings_under(
+        DENY_LEVEL_PACKAGE_MANIFEST,
+        &[(COMPLEX_LIB_PATH, DENY_LEVEL_UNWRAP_LINE)],
+    );
+
+    assert!(
+        reported.is_empty(),
+        "a workspace clippy linted from end to end is clean at the four gates, whatever \
+         status a denied lint gives it; got {reported:?}"
+    );
+}
+
+/// The variable a project raises every warning to an error with.
+const RUST_FLAGS_ENV: &str = "RUSTFLAGS";
+
+/// The flag that raises every rustc warning to an error.
+const DENY_EVERY_WARNING_FLAG: &str = "-D warnings";
+
+/// The line the deny-flags probe writes above its long function: one variable
+/// nothing reads, which `unused_variables` reports.
+const UNUSED_VARIABLE_LINE: &str = "pub fn first() -> i32 { let unused = 1; 2 }\n";
+
+/// How many lines [`UNUSED_VARIABLE_LINE`] runs above the `pub fn` line under
+/// it.
+const UNUSED_VARIABLE_LINES: usize = 1;
+
+/// The row the one finding of the deny-flags probe stands on. The line that
+/// holds the unused variable stands above the long function.
+const RUST_DENY_FLAGS_ROW: usize = UNUSED_VARIABLE_LINES + 1;
+
+/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
+/// raises every warning to an error through `RUSTFLAGS`, through the real
+/// clippy pipeline.
+///
+/// `RUSTFLAGS="-D warnings"` is the third shape that makes cargo exit nonzero
+/// for a workspace clippy DID lint, beside a crate-level `#![deny(...)]` and a
+/// `[lints.clippy]` table. Measured with clippy 0.1.97 over this probe: cargo
+/// exits 101, the raw report holds the error code `unused_variables`, and the
+/// four gates arrive at level `error` rather than `warning`.
+///
+/// The filter selects on the lint CODE, so the finding stands at either level,
+/// and the run must keep it.
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_deny_level_flags() {
+    use swissarmyhammer_common::test_utils::EnvVarGuard;
+
+    let source = format!(
+        "{UNUSED_VARIABLE_LINE}{}",
+        long_rust_function("", "long_defaults")
+    );
+    let _flags = EnvVarGuard::set(RUST_FLAGS_ENV, DENY_EVERY_WARNING_FLAG);
+
+    let reported = rust_complexity_findings(&[(COMPLEX_LIB_PATH, &source)]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_DENY_FLAGS_ROW)]),
+        "`RUSTFLAGS=\"-D warnings\"` raises the four gates to level `error` and makes cargo \
+         exit nonzero, and the run must keep the finding the report holds"
+    );
+}
+
 /// The status a shell answers for a command it could not run.
 const COMMAND_NOT_FOUND_STATUS: i32 = 127;
 
@@ -501,15 +651,6 @@ const FILTER_BINARY_NAME: &str = "jq";
 
 /// The line the script writes when the filter could not read the report.
 const FILTER_BROKEN_LINE: &str = "complexity-rust: jq could not read the clippy report";
-
-/// `PATH` with `dir` in front of it, so a binary standing in `dir` answers
-/// before the one this machine installed.
-#[cfg(unix)]
-fn path_led_by(dir: &Path) -> std::ffi::OsString {
-    let existing = std::env::var_os("PATH").unwrap_or_default();
-    let entries = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&existing));
-    std::env::join_paths(entries).expect("lead PATH with the probe directory")
-}
 
 /// Acceptance: the shipped Rust complexity tool rule BREAKS when the filter
 /// cannot read the clippy report, through the real clippy pipeline.
@@ -529,7 +670,7 @@ fn path_led_by(dir: &Path) -> std::ffi::OsString {
 #[serial_test::serial(env)]
 fn the_shipped_rust_complexity_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
     use std::os::unix::fs::PermissionsExt;
-    use swissarmyhammer_common::test_utils::EnvVarGuard;
+    use swissarmyhammer_common::test_utils::PathGuard;
 
     let loader = builtin_loader();
     require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
@@ -546,7 +687,7 @@ fn the_shipped_rust_complexity_tool_rule_breaks_when_the_filter_cannot_read_the_
         (COMPLEX_LIB_PATH, COMPLEX_LIB_RS),
     ];
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-    let _path = EnvVarGuard::set("PATH", path_led_by(stubs.path()));
+    let _path = PathGuard::prepend(stubs.path());
 
     let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
         .expect_err("a filter that cannot read the report must break the run");

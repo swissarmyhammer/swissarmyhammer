@@ -22,6 +22,14 @@ tool:
       -W clippy::too_many_arguments -W clippy::type_complexity \
       > "$work/clippy.json" || status=$?
     filtered=0
+    jq -r 'select(.reason == "build-finished") | "ran"' "$work/clippy.json" \
+      > "$work/ran.txt" || filtered=$?
+    jq -r 'select(.reason == "compiler-message")
+           | .message
+           | select(.level == "error")
+           | (.code.code // "")
+           | select(. == "" or test("^E[0-9]+$"))' "$work/clippy.json" \
+      > "$work/rustc-errors.txt" || filtered=$?
     jq -c 'select(.reason == "compiler-message")
            | .message
            | select(.code.code == "clippy::excessive_nesting"
@@ -36,7 +44,11 @@ tool:
       printf 'complexity-rust: jq could not read the clippy report\n' >&2
       exit 1
     fi
-    if [ "$status" -ne 0 ] && [ ! -s "$work/findings.json" ]; then
+    if [ "$status" -ne 0 ] && [ ! -s "$work/ran.txt" ]; then
+      printf 'complexity-rust: cargo could not run clippy over the workspace\n' >&2
+      exit 1
+    fi
+    if [ -s "$work/rustc-errors.txt" ]; then
       printf 'complexity-rust: cargo clippy could not lint the workspace\n' >&2
       exit 1
     fi
@@ -178,56 +190,100 @@ hint as the fix; the install lifecycle never runs it.
 
 ## A workspace the tool cannot lint
 
-`cargo clippy` exits nonzero for two different reasons, and one status carries
-both. The tool could not lint the workspace, and the tool linted the workspace
-correctly while a lint stands at deny level. So the script tests the REPORT
-beside the status, which is what `builtin/validators/README.md` asks of a
-script whose tool shares one status between a measured run and a broken one.
-The three shipped swiftlint rules make the same test.
+`cargo clippy` exits nonzero for three different reasons, and one status carries
+all three:
 
-The report of this rule is the list of findings the filter step writes. A
-nonzero status beside a report that holds one finding or more is a MEASURED
-run, and the script writes those findings and exits 0. A nonzero status beside
-an empty report is a BROKEN run, and the script writes
-`complexity-rust: cargo clippy could not lint the workspace` to stderr and
-exits 1, so the engine reads a broken run rather than a clean tree. cargo's own
-stderr reaches the diagnosing agent beside that line.
+- cargo could not start a run at all.
+- cargo made a run, and a crate failed its type check. Clippy runs the four
+  lints AFTER that type check, so it never linted that crate.
+- cargo made a run, clippy linted every crate, and a lint stands at deny level.
 
-Every shape below was measured with clippy 0.1.97 and cargo 1.97.1, over one
-package that holds a function of 302 lines against the gate of 250.
+The first two are broken runs. The third is a MEASURED run, and the findings it
+holds must stand. `builtin/validators/README.md` states the answer for this
+shape: "One status can carry both a measured run and a broken run. The status of
+a failure is then the same as the status of a finding. The script must then test
+the REPORT beside the status, and accept the shared status only for the report
+shape a measured run writes." The three shipped swiftlint rules make the same
+test.
 
-| the shape | status | the report | the run answers |
-|---|---|---|---|
-| the package alone | 0 | 1 finding | 1 finding, exit 0 |
-| `#![deny(clippy::unwrap_used)]` beside one `unwrap` | 101 | 1 finding | 1 finding, exit 0 |
-| `[lints.clippy] unwrap_used = "deny"` beside one `unwrap` | 101 | 1 finding | 1 finding, exit 0 |
-| `RUSTFLAGS="-D warnings"` beside one `unused_variables` | 101 | 1 finding | 1 finding, exit 0 |
-| `pub fn broken() -> i32 { "not an integer" }` beside it | 101 | empty | 0 findings, exit 1 |
-| a directory that holds no `Cargo.toml` | 101 | empty | 0 findings, exit 1 |
-| a `Cargo.toml` that does not parse | 101 | empty | 0 findings, exit 1 |
-| a target directory cargo cannot write | 101 | empty | 0 findings, exit 1 |
+The FILTERED findings answer none of the three. One member that compiles fills
+that file while another member never reached the lints, so a workspace with a
+broken member reads as a clean tree. The script therefore reads the RAW report,
+which carries what the filter drops. Two entries of it answer the question.
 
-cargo writes `error: could not compile` to stderr for each of the first four
-nonzero rows alike, so stderr tells a reader nothing the report does not.
-Under `RUSTFLAGS="-D warnings"` the four lints arrive at level `error` rather
-than `warning`; the filter selects on the lint CODE, so the findings stand
-either way.
+**`{"reason":"build-finished"}`.** cargo writes this entry for every run it
+made, and no entry at all for a run it could not make. Measured over the 15
+shapes below: a healthy run writes `{"reason":"build-finished","success":true}`;
+every nonzero shape cargo made writes
+`{"reason":"build-finished","success":false}`, the three deny-level shapes
+included; a directory with no `Cargo.toml`, a `Cargo.toml` that does not parse
+and a target directory cargo cannot write each write 0 bytes and no entry. So
+the PRESENCE of the entry states that cargo ran, and the `success` field states
+nothing the exit status does not.
 
-A workspace that fails to compile writes its own errors into the report as
-`compiler-message` entries, so the report is not empty of MESSAGES. It is empty
-of the four lints this rule owns, because clippy runs those lints after the
-type check the workspace failed. The acceptance test
-`the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile`
-holds the script to exit 1 there, and
-`the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_level_lint`
-holds it to keeping the finding beside a deny-level lint.
+**A rustc error code.** A crate that fails its type check writes a
+`compiler-message` at level `error` whose code is a rustc code such as `E0308`,
+and a crate that fails to parse writes one with NO code. A lint at deny level
+writes a `compiler-message` at level `error` whose code is the LINT name, such
+as `clippy::unwrap_used` or `unused_variables`. Measured: no error-level message
+of any deny-level shape carries a rustc code or an empty code, and no
+error-level message of any healthy shape stands at all.
 
-A nonzero status beside a report of no finding is answered as a broken run even
-when the workspace compiled. A workspace that fails its build at a deny-level
-lint and holds no finding of these four gates therefore reports a tool error,
-and the author reads cargo's own stderr beside the rule's line. That is the
-same trade the three swiftlint rules make: the shared status is accepted only
-for the report shape a measured run writes.
+The script breaks the run in two places, and writes its own line for each one:
+
+- the status is nonzero and the raw report holds no `build-finished` entry —
+  `complexity-rust: cargo could not run clippy over the workspace`;
+- the raw report holds an error-level message with a rustc code or with no code
+  — `complexity-rust: cargo clippy could not lint the workspace`.
+
+Every other run writes the findings it holds and exits 0. cargo's own stderr
+reaches the diagnosing agent beside the rule's line.
+
+Every shape below was measured with clippy 0.1.97 and cargo 1.97.1. Each package
+that holds a finding holds one function whose body runs 300 lines, which clippy
+counts as 300 against the gate of 250.
+
+| the shape | status | `build-finished` | error codes | the run answers |
+|---|---|---|---|---|
+| a healthy package, one finding | 0 | `success: true` | none | 1 finding, exit 0 |
+| a healthy package, no finding | 0 | `success: true` | none | 0 findings, exit 0 |
+| `#![deny(clippy::unwrap_used)]` beside one `unwrap`, one finding | 101 | `success: false` | `clippy::unwrap_used` | 1 finding, exit 0 |
+| `[lints.clippy] unwrap_used = "deny"` beside one `unwrap`, one finding | 101 | `success: false` | `clippy::unwrap_used` | 1 finding, exit 0 |
+| `#![deny(clippy::unwrap_used)]` beside one `unwrap`, no finding | 101 | `success: false` | `clippy::unwrap_used` | 0 findings, exit 0 |
+| `[lints.clippy] unwrap_used = "deny"` beside one `unwrap`, no finding | 101 | `success: false` | `clippy::unwrap_used` | 0 findings, exit 0 |
+| `RUSTFLAGS="-D warnings"` beside one `unused_variables`, one finding | 101 | `success: false` | `unused_variables` | 1 finding, exit 0 |
+| `RUSTFLAGS="-D warnings"` beside one `unused_variables`, no finding | 101 | `success: false` | `unused_variables` | 0 findings, exit 0 |
+| a package that does not compile: `pub fn broken() -> i32 { "not an integer" }` | 101 | `success: false` | `E0308` | 0 findings, exit 1 |
+| a package that does not parse: `pub fn broken( {` | 101 | `success: false` | no code | 0 findings, exit 1 |
+| a workspace of two members, one that does not compile and one that gives a finding | 101 | `success: false` | `E0308` | 0 findings, exit 1 |
+| a directory that holds no `Cargo.toml` | 101 | none, 0 bytes | none | 0 findings, exit 1 |
+| a `Cargo.toml` that does not parse | 101 | none, 0 bytes | none | 0 findings, exit 1 |
+| a target directory cargo cannot write | 101 | none, 0 bytes | none | 0 findings, exit 1 |
+| `jq` replaced by a command that exits 127 | 0 | `success: true` | none | 0 findings, exit 1 |
+
+cargo writes `error: could not compile` to stderr for every nonzero row it
+reached, the deny-level rows included, so stderr tells a reader nothing the raw
+report does not. Under `RUSTFLAGS="-D warnings"` the four lints arrive at level
+`error` rather than `warning`; the filter selects on the lint CODE, so the
+findings stand either way.
+
+The two-member row is the shape the `scope: workspace` of this rule makes reach
+a real repository, and this repository holds more than 20 members. Measured over
+that row with the earlier gate, which read the FILTERED findings file: the
+member `good` wrote `good/src/lib.rs:1`, that file was not empty, the status
+test never ran, and the long function of `bad/src/lib.rs` was read as clean.
+
+The same earlier gate broke the two clean deny-level rows: a workspace clippy
+linted from end to end, holding a lint at deny level and no finding of the four
+gates, wrote the broken-run line and exited 1.
+
+Five acceptance tests hold the script to this table:
+`the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile`,
+`the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_member_it_cannot_compile`,
+`the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_level_lint`,
+`the_shipped_rust_complexity_tool_rule_measures_a_clean_workspace_beside_a_deny_level_lint`
+and
+`the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_deny_level_flags`.
 
 ## The status of each step
 
@@ -238,9 +294,11 @@ Measured over the package that does not compile: the pipe wrote 0 findings and
 exited 0, and the engine read the whole tree as clean, the function of 302
 lines included.
 
-Each step therefore writes to a file and tests its own status. The filter step
-carries the same test as the cargo step: a status other than 0 writes
-`complexity-rust: jq could not read the clippy report` to stderr and exits 1.
+Each step therefore writes to a file and tests its own status. The script calls
+`jq` three times — one call for the `build-finished` entry, one for the rustc
+error codes, and one for the findings — and each call carries the same test: a
+status other than 0 writes `complexity-rust: jq could not read the clippy
+report` to stderr and exits 1.
 Measured over the healthy package, which gives one finding, with `jq` replaced
 by a command that exits 127: the pipe shape wrote 0 findings and exited 0; the
 shipped shape writes 0 findings, that line, and exit 1. The acceptance test
