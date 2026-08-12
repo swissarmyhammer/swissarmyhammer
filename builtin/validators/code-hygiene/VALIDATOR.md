@@ -171,8 +171,9 @@ prompt rules:
   `sonarjs/cognitive-complexity` at `15` and `max-lines-per-function` at `250`
   with blank lines and comments skipped. The config wraps both rules to keep
   the test carve-out that the two prompt rules state.
-- `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
-  with `ignores_case_statements` on, and `function_body_length` at `250`.
+ - `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
+   with `ignores_case_statements` on, and `function_body_length` and
+   `closure_body_length` each at `250`.
 
 Two languages name one tool for each gate, so each takes one rule for each:
 

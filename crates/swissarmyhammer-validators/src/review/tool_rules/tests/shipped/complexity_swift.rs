@@ -72,6 +72,18 @@ fn long_swift_initializer(head: &str, name: &str) -> String {
     )
 }
 
+/// A Swift `struct` named `name` holding one computed `var` whose body runs
+/// [`LONG_BODY_LINES`] lines and holds no closure.
+///
+/// The body is a run of statements rather than a stack of view rows, so
+/// neither the length gate nor the closure gate reaches it.
+fn long_swift_computed_variable(name: &str) -> String {
+    format!(
+        "struct {name} {{\n    var total: Int {{\n{}    }}\n}}\n",
+        LONG_BODY_LINE.repeat(LONG_BODY_LINES)
+    )
+}
+
 /// A Swift `func` named `name` whose cyclomatic complexity is 16, with `head`
 /// written above its `func` line.
 fn branchy_swift_function(head: &str, name: &str) -> String {
@@ -740,13 +752,81 @@ const SWIFT_VIEW_ROW_LINE: &str = "            Text(\"row\")\n";
 /// and of the struct, and one blank line.
 const SWIFT_VIEW_TAIL: &str = "        }\n    }\n}\n\n";
 
-/// How many lines [`SWIFT_VIEW_TAIL`] runs.
-const SWIFT_VIEW_TAIL_LINES: usize = 4;
+/// The row the stack of the long SwiftUI view stands on, which is the row
+/// `closure_body_length` reports.
+///
+/// The finding anchors on the opening line of the closure itself, and the
+/// `VStack {` line is the last line of [`SWIFT_VIEW_HEAD`].
+const SWIFT_VIEW_STACK_ROW: usize = SWIFT_VIEW_HEAD_LINES;
 
-/// The row the long function beside the view stands on, which is the one row
-/// the run reports.
-const SWIFT_VIEW_FUNCTION_ROW: usize =
-    SWIFT_VIEW_HEAD_LINES + LONG_BODY_LINES + SWIFT_VIEW_TAIL_LINES + 1;
+/// What stands above the rows of the short SwiftUI view, which follows the
+/// long one in the same file: the `View` conformance, the `body` property, and
+/// the stack that holds the rows.
+const SWIFT_SHORT_VIEW_HEAD: &str = concat!(
+    "struct Card: View {\n",
+    "    var body: some View {\n",
+    "        VStack {\n",
+);
+
+/// What stands under the rows of the short SwiftUI view: the closing brace of
+/// the stack, of the property and of the struct.
+const SWIFT_SHORT_VIEW_TAIL: &str = "        }\n    }\n}\n";
+
+/// How many rows the short SwiftUI view holds.
+///
+/// The closure gate is 250, so a stack of 200 rows stays under it. The long
+/// view beside it holds [`LONG_BODY_LINES`] rows and runs over.
+const SHORT_CLOSURE_LINES: usize = 200;
+
+/// Acceptance: the shipped Swift complexity tool rule reports a long trailing
+/// closure, through the real swiftlint pipeline.
+///
+/// `function-length`, one of the two prompt rules this rule supersedes, states
+/// "All Function Types: Methods, closures, lambdas, standalone functions", and
+/// `function_body_length` reads no closure at all. `closure_body_length` at
+/// 250 is what carries that half of the prompt rule.
+///
+/// The gate does not fire on an idiomatic trailing closure. Measured with
+/// swiftlint 0.65.0 over 894 `.swift` files — Alamofire, swift-nio and vapor at
+/// HEAD — `closure_body_length` at 250 reports ONE closure, against 148 at
+/// swiftlint's own default warning of 30.
+///
+/// Both views hold the same rows and differ only in how many, so the count is
+/// the one difference between the view that reports and the view that stays
+/// silent.
+#[test]
+fn the_shipped_swift_complexity_tool_rule_reports_a_long_trailing_closure() {
+    let source = format!(
+        "{SWIFT_VIEW_HEAD}{}{SWIFT_VIEW_TAIL}{SWIFT_SHORT_VIEW_HEAD}{}{SWIFT_SHORT_VIEW_TAIL}",
+        SWIFT_VIEW_ROW_LINE.repeat(LONG_BODY_LINES),
+        SWIFT_VIEW_ROW_LINE.repeat(SHORT_CLOSURE_LINES),
+    );
+
+    let reported = swift_complexity_findings(&[(SWIFT_VIEW_FILE_PATH, &source)]);
+
+    assert_eq!(
+        reported,
+        sorted_names(&[swift_probe_row(SWIFT_VIEW_FILE_PATH, SWIFT_VIEW_STACK_ROW)]),
+        "the closure gate reads the trailing closure of a SwiftUI body, so the long \
+         stack reports and the short one beside it stays silent"
+    );
+}
+
+/// Where the probe computed-variable file stands inside the probe repository.
+const SWIFT_COMPUTED_VARIABLE_FILE_PATH: &str = "Sources/Totals.swift";
+
+/// How many lines stand above the body of the computed variable: the `struct`
+/// line and the `var` line.
+const SWIFT_COMPUTED_VARIABLE_HEAD_LINES: usize = 2;
+
+/// How many lines stand under that body: the closing brace of the variable and
+/// the closing brace of the struct.
+const SWIFT_COMPUTED_VARIABLE_TAIL_LINES: usize = 2;
+
+/// The row the long function beside the computed variable stands on, which is
+/// the one row the run reports.
+const SWIFT_COMPUTED_VARIABLE_FUNCTION_ROW: usize =
+    SWIFT_COMPUTED_VARIABLE_HEAD_LINES + LONG_BODY_LINES + SWIFT_COMPUTED_VARIABLE_TAIL_LINES + 1;
 
 /// Acceptance: the shipped Swift complexity tool rule reads no computed
 /// property body, through the real swiftlint pipeline.
@@ -756,31 +836,37 @@ const SWIFT_VIEW_FUNCTION_ROW: usize =
 /// VARIABLE. Measured with swiftlint 0.65.0 over one body of 300 lines in each
 /// shape: the `func`, the `init`, the `deinit`, the `subscript` and the
 /// subscript `get` each reported; the computed `var`, the same `var` written
-/// with an explicit `get`, the `static var` and the closure each reported
-/// nothing.
+/// with an explicit `get`, and the `static var` each reported nothing.
 ///
-/// A SwiftUI `body` is a computed variable, so a `body` of any length reaches
-/// neither gate. The long function beside it holds the same 300 body lines, so
-/// the shape of the declaration is the one difference between the two.
+/// `closure_body_length` reaches a closure INSIDE such a variable — the
+/// acceptance test
+/// `the_shipped_swift_complexity_tool_rule_reports_a_long_trailing_closure`
+/// holds a SwiftUI `body` whose `VStack` reports. A body of straight
+/// statements holds no closure, so it is the shape neither gate reaches.
+/// Measured with swiftlint 0.65.0 over this probe: the computed variable of
+/// 300 statement lines reports nothing.
+///
+/// The long function beside it holds the same 300 body lines, so the shape of
+/// the declaration is the one difference between the two.
 ///
 /// This test holds that gap measured rather than left to be discovered.
 #[test]
 fn the_shipped_swift_complexity_tool_rule_reads_no_computed_property_body() {
     let source = format!(
-        "{SWIFT_VIEW_HEAD}{}{SWIFT_VIEW_TAIL}{}",
-        SWIFT_VIEW_ROW_LINE.repeat(LONG_BODY_LINES),
+        "{}{}",
+        long_swift_computed_variable("Totals"),
         long_swift_function("", "longFunction")
     );
 
-    let reported = swift_complexity_findings(&[(SWIFT_VIEW_FILE_PATH, &source)]);
+    let reported = swift_complexity_findings(&[(SWIFT_COMPUTED_VARIABLE_FILE_PATH, &source)]);
 
     assert_eq!(
         reported,
         sorted_names(&[swift_probe_row(
-            SWIFT_VIEW_FILE_PATH,
-            SWIFT_VIEW_FUNCTION_ROW
+            SWIFT_COMPUTED_VARIABLE_FILE_PATH,
+            SWIFT_COMPUTED_VARIABLE_FUNCTION_ROW
         )]),
-        "the length gate reads no computed property body, so the SwiftUI view stays \
-         silent and the function beside it reports"
+        "neither gate reads a computed property body that holds no closure, so the \
+         computed variable stays silent and the function beside it reports"
     );
 }

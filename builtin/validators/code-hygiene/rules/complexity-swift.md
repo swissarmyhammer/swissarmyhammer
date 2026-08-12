@@ -25,9 +25,11 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     printf '%s\n' 'only_rules:' '  - cyclomatic_complexity' '  - function_body_length' \
+      '  - closure_body_length' \
       'cyclomatic_complexity:' '  warning: 15' '  error: 15' \
       '  ignores_case_statements: true' \
-      'function_body_length:' '  warning: 250' '  error: 250' > "$work/swiftlint.yml"
+      'function_body_length:' '  warning: 250' '  error: 250' \
+      'closure_body_length:' '  warning: 250' '  error: 250' > "$work/swiftlint.yml"
     status=0
     lint() {
       parent="$1"
@@ -72,7 +74,8 @@ tool:
       exit 1
     fi
     jq -c '.[] | select(.rule_id == "cyclomatic_complexity"
-                        or .rule_id == "function_body_length")
+                        or .rule_id == "function_body_length"
+                        or .rule_id == "closure_body_length")
            | {file: .file, line: .line, message: .reason}' "$work/report.json"
   doctor:
     check_command: "which swiftlint jq grep mktemp"
@@ -82,17 +85,21 @@ tool:
 
 # Complexity and Length — Swift
 
-`swiftlint` decides both gates in one run. Two rules carry it:
+`swiftlint` decides both gates in one run. Three rules carry it:
 
 - `cyclomatic_complexity` — a function with too many decision points.
 - `function_body_length` — a function that runs too long.
+- `closure_body_length` — a closure that runs too long.
 
 One run answers two prompt rules, so this rule names both in `supersedes`.
+`function-length` states "All Function Types: Methods, closures, lambdas,
+standalone functions", so its one gate takes two swiftlint rules: one reads a
+declaration, and one reads a closure.
 
 Swiftlint's whole metrics group is `cyclomatic_complexity`,
 `function_body_length`, `closure_body_length`, `nesting`, `file_length`,
 `type_body_length` and `line_length`. It has no cognitive-complexity rule, so
-the two named above are the pair that answers the two prompt gates.
+the three named above are the set that answers the two prompt gates.
 
 ## What the complexity gate measures, and what goes with it
 
@@ -148,45 +155,95 @@ review where it was, and a wrong finding is a requirement to change correct code
 `function-length` prompt rule's definition word for word. Measured on a probe of
 260 code lines carrying 52 comment-only lines and 52 blank lines, swiftlint
 reports 262 — the code lines exactly, because the count covers the body and not
-the signature line.
+the signature line. `closure_body_length` writes the same words, so the two
+rules of this gate count the same lines.
 
 ## What each gate reaches, and what neither reaches
 
-Each gate reads a set of declarations. Neither gate reads a computed variable.
-Measured with swiftlint 0.65.0, over one body of 300 code lines and one body of
-cyclomatic complexity 16 in each shape:
+Each gate reads a set of declarations. No gate reads a computed variable whose
+body holds no closure. Measured with swiftlint 0.65.0, over one body of 300
+code lines and one body of cyclomatic complexity 16 in each shape:
 
-| the declaration | `function_body_length` | `cyclomatic_complexity` |
-|---|---|---|
-| `func` | reports | reports |
-| `init` | reports | reports |
-| `deinit` | reports | silent |
-| `subscript` | reports | silent |
-| the `get` accessor of a `subscript` | reports | silent |
-| a computed `var` | silent | silent |
-| the `get` accessor of a computed `var` | silent | silent |
-| a `static var` | silent | silent |
-| a closure held in a `let` | silent | silent |
+| the declaration | `function_body_length` | `cyclomatic_complexity` | `closure_body_length` |
+|---|---|---|---|
+| `func` | reports | reports | silent |
+| `init` | reports | reports | silent |
+| `deinit` | reports | silent | silent |
+| `subscript` | reports | silent | silent |
+| the `get` accessor of a `subscript` | reports | silent | silent |
+| a computed `var` | silent | silent | silent |
+| the `get` accessor of a computed `var` | silent | silent | silent |
+| a `static var` | silent | silent | silent |
+| a closure held in a `let` | silent | silent | reports |
+| a trailing closure inside a computed `var` | silent | silent | reports |
 
 `function_body_length` names the declaration in its message: `Function body`,
 `Initializer body`, `Deinitializer body`, `Subscript body` and `Accessor body`.
+`closure_body_length` names `Closure body`, and it anchors the finding on the
+opening line of the closure rather than on the declaration that holds it.
 
-A SwiftUI `body` is a computed variable. Measured over a `body` that holds 300
-`Text` rows in a `VStack`: the run reports nothing. The acceptance test
-`the_shipped_swift_complexity_tool_rule_reads_no_computed_property_body` holds
-that gap, beside one function of 300 body lines that reports.
+The last column is LENGTH alone. `cyclomatic_complexity` reads no closure, and
+swiftlint holds no closure complexity rule, so a closure of cyclomatic
+complexity 16 in a `let` and the same closure inside a computed `var` each
+report nothing. Superseding therefore drops the complexity gate for a closure,
+and that is the trade this rule makes.
+
+### Why the closure gate stands at 250
 
 `function-length` states "All Function Types: Methods, closures, lambdas,
-standalone functions", so the prompt rule measures a closure and this rule does
-not. swiftlint holds `closure_body_length` for a closure, and the child
-configuration does not name that rule. The rule takes that under-count, for the
-reason the section "Why `ignores_case_statements` is on" states: a missed
-finding leaves the review where it was, and a wrong finding is a requirement to
-change correct code.
+standalone functions", so the prompt rule measures a closure and
+`function_body_length` does not. `closure_body_length` at the same 250 is what
+carries that half of the prompt rule.
+
+swiftlint's own default for that rule is `warning: 30` and `error: 100`, which
+is not the 250 the prompt rule states, so the number was measured before it was
+taken. The corpus is the one the section "Why `ignores_case_statements` is on"
+above uses — Alamofire, swift-nio and vapor at HEAD, 894 `.swift` files, none of
+which carries a `.swiftlint.yml` of its own:
+
+| `warning` | findings |
+|---|---|
+| 20 | 316 |
+| 30 | 148 |
+| 40 | 76 |
+| 50 | 41 |
+| 100 | 3 |
+| 150 | 2 |
+| 200 | 2 |
+| 250 | 1 |
+| 300 | 0 |
+
+At 250 the whole corpus reports ONE closure:
+`NIOCoreBenchmarks/Benchmarks.swift` holds a `let benchmarks: @Sendable () ->
+Void` registration block of 259 lines. The other two rules of this gate report 3
+findings over the same 894 files, so the closure rule adds 1 finding to 3.
+
+The shape to read is the trailing closure, because a rule that reported every
+one of those would make a suppression mandatory on code the prompt rule calls
+correct. It does not. Measured with swiftlint 0.65.0 at the gate of 250:
+
+| the shape | `closure_body_length` |
+|---|---|
+| a SwiftUI `body` of 200 `Text` rows in one `VStack` | silent |
+| a SwiftUI `body` of 300 `Text` rows in one `VStack` | reports, 300 lines |
+| a SwiftUI `body` of three `VStack` of 100 rows inside a `Group` | reports the outer `Group`, 306 lines |
+| a `func testEndToEnd()` holding one `measure { }` of 300 lines | reports, beside `function_body_length` |
+| a computed `var` of 300 statement lines, no closure | silent |
+
+Row 3 is the count a nested closure carries: the outer closure counts every
+line under it, the inner ones included. Row 4 is one defect reported twice,
+because the method and its trailing closure each run past 250; the answer to
+both is the same split.
+
+The acceptance test
+`the_shipped_swift_complexity_tool_rule_reports_a_long_trailing_closure` holds
+rows 1 and 2. The acceptance test
+`the_shipped_swift_complexity_tool_rule_reads_no_computed_property_body` holds
+row 5, beside one function of 300 body lines that reports.
 
 ## Each rule has one gate, and swiftlint then exits 2
 
-The child states `error:` at the same number as `warning:` for each of the two
+The child states `error:` at the same number as `warning:` for each of the three
 rules, so each rule holds ONE gate. Measured with swiftlint 0.65.0 over a body
 of 150 code lines and a body of 300 code lines:
 
@@ -283,8 +340,8 @@ shape, and `missing-docs-swift` states each measurement behind it.
   holds no file aborts swiftlint. The parent gives the run the project's
   `excluded:` list.
 - The CHILD is the file the script writes into a temporary directory. It states
-  `only_rules` and every option of each of the two rules, so the rule owns what
-  it measures.
+  `only_rules` and every option of each of the three rules, so the rule owns
+  what it measures.
 
 `--force-exclude` makes swiftlint apply the `excluded:` list to a file named as
 a command-line argument. `--no-cache` keeps swiftlint from writing a cache
@@ -429,12 +486,13 @@ holds that behaviour.
 
 ## The rule owns its own gates
 
-A project configuration can state options for either rule. The child's block for
-a rule replaces the parent's block whole, so the project cannot change the gate
-this rule measures against. `swiftlint rules cyclomatic_complexity` names
-`warning`, `error` and `ignores_case_statements`, and
-`swiftlint rules function_body_length` names `warning` and `error`. The child
-states each of the five.
+A project configuration can state options for any of the three rules. The
+child's block for a rule replaces the parent's block whole, so the project
+cannot change the gate this rule measures against.
+`swiftlint rules cyclomatic_complexity` names `warning`, `error` and
+`ignores_case_statements`, `swiftlint rules function_body_length` names
+`warning` and `error`, and `swiftlint rules closure_body_length` names `warning`
+and `error`. The child states each of the seven.
 
 Measured against a project configuration that states `disabled_rules:
 [cyclomatic_complexity, function_body_length]` and `cyclomatic_complexity:
@@ -613,6 +671,17 @@ The directive holds no marker that expires. swiftlint states
 configuration leaves that rule out of every run of this gate. So a directive
 stands until an author takes it away.
 
+A `closure_body_length` finding names the line of the closure, so its directive
+stands directly above the OPENING line of the closure rather than above the
+declaration that holds it. Measured with swiftlint 0.65.0 over one
+`let run: () -> Void = { }` of 300 body lines:
+`// swiftlint:disable:next closure_body_length  the registration table` above
+the `let` line gives no finding, and
+`// swiftlint:disable:next function_body_length` in the same place gives one,
+because that directive names another rule. Measured over a SwiftUI `body` of
+300 `Text` rows in a `VStack`: the directive above the `VStack {` line gives no
+finding, and the same directive above the `var body` line gives one.
+
 The first fix a finding asks for is still to split the declaration. The
 directive is the second fix, and the text beside it states why.
 
@@ -631,11 +700,12 @@ The run reproduces a flat list of `case` arms, through
 `ignores_case_statements`. The author answers every other one with the
 directive above.
 
-Neither swiftlint rule holds an option for any of them. `swiftlint rules
-cyclomatic_complexity` names `warning`, `error` and `ignores_case_statements`.
-`swiftlint rules function_body_length` names `warning` and `error`. No option
-of either rule reads a declaration name, a superclass, a file header or a data
-line.
+No swiftlint rule of this gate holds an option for any of them. `swiftlint
+rules cyclomatic_complexity` names `warning`, `error` and
+`ignores_case_statements`. `swiftlint rules function_body_length` and
+`swiftlint rules closure_body_length` each name `warning` and `error`. No
+option of the three reads a declaration name, a superclass, a file header or a
+data line.
 
 ### A test, which the run does not drop
 
