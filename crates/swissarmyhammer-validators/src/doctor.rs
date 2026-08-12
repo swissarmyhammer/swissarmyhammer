@@ -705,6 +705,13 @@ fn fix_hint_fix(rule: &ToolRuleStatus) -> Option<String> {
 /// [`shell_command`], the same builder every other caller in the workspace
 /// spawns a shell with. What this runner adds is its own: the tool-rule
 /// contract's `"$@"`.
+///
+/// THE SHELL IS BASH, and never `sh`. Every rule script is written against
+/// bash, and every measurement a tool-rule test states is taken with bash. The
+/// two shells are not the same reader: `sh` reads a script in POSIX mode,
+/// where a failed special builtin stops the whole run, and bash carries on
+/// past it. `Shell::Bash` below is therefore part of the contract, not a
+/// default.
 pub(crate) fn run_shell(
     script: &str,
     cwd: Option<&Path>,

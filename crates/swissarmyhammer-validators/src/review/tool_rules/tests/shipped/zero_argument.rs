@@ -31,6 +31,15 @@
 //!
 //! This module reads the SHIPPED script of each rule instead, so the contract
 //! is held for the rules that ship today and for the rules that ship next.
+//!
+//! EVERY MEASUREMENT THIS MODULE STATES WAS TAKEN WITH THE SHELL THE RULES
+//! RUN. [`crate::doctor::run_shell`] spawns `bash -c <script> bash
+//! <argument>...`, so each shape below was run that way, with the bash of the
+//! machine that wrote this file: 3.2.57(1)-release. The name of the shell is
+//! part of the measurement. `/bin/sh` is the same binary here, and it reads a
+//! script in POSIX mode, where a `set` line that names no shell option stops
+//! the whole run: measured, `set -y` above the guard exits 2 under `sh`, and
+//! under `bash` writes `set: -y: invalid option` to stderr and carries on.
 
 use super::*;
 
@@ -49,26 +58,81 @@ const SHELL_COMMENT: &str = "#";
 /// The word a shell option line opens with.
 const SHELL_OPTION_HEAD: &str = "set";
 
-/// What a shell option opens with. `set -e` sets an option, and `set +e`
-/// clears it.
+/// What a shell option word opens with. `set -e` sets an option, and
+/// `set +e` clears it. A mark with no letter under it is a word of its own
+/// that sets nothing: measured, `set -` and `set +` each exit 0, write
+/// nothing, and let the tool line run.
 const SHELL_OPTION_MARKS: [char; 2] = ['-', '+'];
 
 /// The word that ends the options of a `set` line. Each word under it
 /// becomes a positional parameter, which is the thing `$#` counts.
 const SHELL_OPTION_END: &str = "--";
 
-/// The letter a long shell option ends with. `set -o pipefail` and
-/// `set -euo pipefail` each write the name of the option as a word of its
-/// own, so the word under such an option is a name and not an option.
+/// The letter that takes the name of a long shell option out of the word
+/// under it. `set -o pipefail` and `set -euo pipefail` each write the name of
+/// the option as a word of its own, so the word under such an option is a
+/// name and not an option.
+///
+/// The letter takes its name wherever it stands in the word. Measured:
+/// `set -oe pipefail` sets pipefail and errexit, and `set -oo pipefail
+/// errexit` sets pipefail and errexit as well, so a word holds one name for
+/// each `o` it writes.
 const SHELL_LONG_OPTION: char = 'o';
+
+/// Every letter a short shell option word can hold beside
+/// [`SHELL_LONG_OPTION`].
+///
+/// Measured over the 52 ASCII letters: `set -X` sets a shell option for 23 of
+/// them, and writes `set: -X: invalid option` with a usage line to stderr for
+/// the other 29. A letter outside this list therefore sets nothing, and the
+/// script runs on with the option its author asked for unset.
+///
+/// Two of the 23 are not here. [`SHELL_LONG_OPTION`] is one, because it takes
+/// a name rather than setting an option of its own. `n` is the other: it is
+/// noexec, and measured over a run of 1 argument the shell then reads the
+/// whole script and runs none of it, so the tool line never runs and the rule
+/// answers every review with no finding.
+const SHELL_SHORT_OPTION_LETTERS: [char; 21] = [
+    'a', 'b', 'e', 'f', 'h', 'i', 'k', 'm', 'p', 'r', 't', 'u', 'v', 'x', 'B', 'C', 'E', 'H', 'I',
+    'P', 'T',
+];
+
+/// The quotation marks a shell removes from a word before it reads the word.
+///
+/// The scripts stand in the YAML front matter of a rule file, where a quoted
+/// word is usual. Measured: `set -o "pipefail"` and `set -o 'pipefail'` each
+/// name the same option `set -o pipefail` names. A word that opens a
+/// quotation and never closes it is a syntax error instead: measured,
+/// `set -o "pipefail` above the guard makes the run exit 2, and the tool line
+/// never runs.
+const SHELL_QUOTES: [char; 2] = ['"', '\''];
+
+/// The word each prologue line that is no `set` line opens with.
+///
+/// Each of the 10 names a shell builtin that starts no tool, makes no
+/// directory, writes no positional parameter and exits nowhere. Measured over
+/// the lines of [`LINES_THAT_RUN_NOTHING`] these words open: each run with no
+/// argument exits 0 and writes nothing to stdout or stderr, and each run with
+/// one argument reaches the tool line.
+///
+/// `shift` is not here, and it never can be: it rewrites the positional
+/// parameters `$#` counts, so the guard under it reads a `$#` the script made
+/// for itself.
+const SHELL_SETUP_HEADS: [&str; 10] = [
+    ":", "alias", "export", "hash", "readonly", "shopt", "trap", "true", "umask", "unset",
+];
 
 /// Every name a long shell option takes.
 ///
-/// The list is the answer `sh -c 'set -o'` gave on the machine that wrote
-/// this file, where `/bin/sh` is bash 3.2.57(1)-release in `sh` mode. A word
-/// outside the list names no shell option, so the shell reads it as an error
-/// or as a positional parameter. Measured: `set -o rm` writes
-/// "set: rm: invalid option name" and exits 1.
+/// The list is the answer `set -o` gave under the bash the rules run with. A
+/// word outside the list names no shell option, so [`SHELL_LONG_OPTION`] sets
+/// nothing and the line does not do what its author wrote.
+///
+/// Measured as the FIRST LINE OF A SCRIPT, which is the shape the rules
+/// write: `set -o rm` writes `bash: line 0: set: rm: invalid option name` to
+/// stderr, writes nothing to stdout, sets no shell option, and lets every
+/// line under it run, so the whole run exits 0. The `sh -c 'set -o rm'` form
+/// exits 1 instead, and no rule runs that form.
 const SHELL_LONG_OPTION_NAMES: &[&str] = &[
     "allexport",
     "braceexpand",
@@ -99,15 +163,28 @@ const SHELL_LONG_OPTION_NAMES: &[&str] = &[
     "xtrace",
 ];
 
-/// What a line writes to run a second command, to read the answer of one, to
-/// read or write a file, or to join the line under it.
+/// What a word writes to run a second command, to read the answer of one, or
+/// to read or write a file.
 ///
-/// A mark with space around it meets the `-` or `+` test, so only a mark
-/// glued to a word reaches this list. Measured in `/bin/sh`: `set -e>gm.txt`
-/// exits 0 and cuts an 11-byte file to 0 bytes; `set -e<missing.txt` exits 1;
-/// and `set -e\` joins the line under it, so the run exits 2 with a syntax
-/// error.
-const SHELL_COMMAND_MARKS: [char; 8] = [';', '&', '|', '$', '`', '>', '<', '\\'];
+/// Measured: `set -e>gm.txt` exits 0 and cuts an 11-byte file to 0 bytes, and
+/// `set -e<missing.txt` writes `bash: missing.txt: No such file or directory`
+/// to stderr and leaves the `set` unrun.
+const SHELL_COMMAND_MARKS: [char; 6] = [';', '&', '|', '`', '>', '<'];
+
+/// What a word writes to run a command and read its answer.
+///
+/// `$` on its own is no mark. `$name` and `${name}` read a shell variable and
+/// run nothing, and no word an expansion splits into can hold a mark of its
+/// own, so `export PATH="$HOME/.local/bin:$PATH"` starts no command. `$(` is
+/// the one spelling of `$` that starts one.
+const SHELL_COMMAND_SUBSTITUTION: &str = "$(";
+
+/// What a line writes to join the line under it.
+///
+/// Measured: `set -e\` above the guard joins the guard line to it, and the
+/// run exits 2 with a syntax error. A backslash anywhere else quotes the
+/// character under it and joins nothing, so `IFS=$'\n'` runs nothing at all.
+const SHELL_LINE_JOIN: char = '\\';
 
 /// How many shipped rules state `scope: files`.
 ///
@@ -127,73 +204,155 @@ pub(super) fn required_files_scope_rules(loader: &ValidatorLoader) -> Vec<Shippe
     })
 }
 
-/// Whether `line` sets shell options and does nothing else.
+/// The words of `line` the shell runs, with a trailing comment dropped.
 ///
-/// The line opens with `set` and it names one option or more. Each word
-/// under `set` opens with `-` or `+`, or it is the name a long option takes,
-/// or it opens a comment. A `#` word and every word under it are a comment,
-/// so `set -e # keep going` sets a shell option and runs nothing.
+/// A `#` word and every word under it are a comment, so `set -e # keep going`
+/// sets a shell option and runs nothing. A blank line and a line that is a
+/// comment whole give no word at all.
 ///
-/// Four shapes of a `set` line answer false. A line that holds `--` writes
-/// the positional parameters, which is the thing `$#` counts, so the guard
-/// under it reads a `$#` the script made for itself. A line that holds a
-/// command mark runs a second command, reads or writes a file, or joins the
-/// line under it. A line whose long option takes a word that names no shell
-/// option breaks, because the shell reads that word as an error or as a
-/// positional parameter. A line that names no option writes the answer of the
-/// shell to the report: `set` alone writes every shell variable, and `set -o`
-/// alone writes every shell option.
-fn sets_shell_options_only(line: &str) -> bool {
-    let mut words = line.split_whitespace();
-    if words.next() != Some(SHELL_OPTION_HEAD) {
-        return false;
-    }
-
-    let mut named_an_option = false;
-    let mut takes_a_name = false;
-    for word in words {
-        if word.starts_with(SHELL_COMMENT) {
-            break;
-        }
-        if word == SHELL_OPTION_END || word.contains(SHELL_COMMAND_MARKS) {
-            return false;
-        }
-        if takes_a_name {
-            if !SHELL_LONG_OPTION_NAMES.contains(&word) {
-                return false;
-            }
-            takes_a_name = false;
-            continue;
-        }
-        if !word.starts_with(SHELL_OPTION_MARKS) {
-            return false;
-        }
-        takes_a_name = word.ends_with(SHELL_LONG_OPTION);
-        named_an_option = true;
-    }
-
-    named_an_option && !takes_a_name
+/// `split_whitespace` reads a line the same with or without an indent, so the
+/// answer agrees with the shipped path, which trims every line before the
+/// guard reads it.
+fn words_that_run(line: &str) -> Vec<&str> {
+    line.split_whitespace()
+        .take_while(|word| !word.starts_with(SHELL_COMMENT))
+        .collect()
 }
 
-/// Whether every line of `lines` runs nothing.
+/// Whether `word` runs a second command, reads the answer of one, or reads or
+/// writes a file.
+fn runs_a_command(word: &str) -> bool {
+    word.contains(SHELL_COMMAND_MARKS) || word.contains(SHELL_COMMAND_SUBSTITUTION)
+}
+
+/// Whether the last word of `words` joins the line under it, so the two run
+/// as one command.
+fn joins_the_line_under_it(words: &[&str]) -> bool {
+    words
+        .last()
+        .is_some_and(|word| word.ends_with(SHELL_LINE_JOIN))
+}
+
+/// `word` with the quotation marks the shell removes before it reads the
+/// word, or `None` when the word opens a quotation it never closes.
+fn shell_word_value(word: &str) -> Option<&str> {
+    for quote in SHELL_QUOTES {
+        if let Some(inner) = word.strip_prefix(quote) {
+            return inner.strip_suffix(quote);
+        }
+    }
+    Some(word)
+}
+
+/// Whether `letter` names a shell option a short option word can hold.
+fn sets_a_shell_option(letter: char) -> bool {
+    letter == SHELL_LONG_OPTION || SHELL_SHORT_OPTION_LETTERS.contains(&letter)
+}
+
+/// Whether `word` is the name a long shell option takes.
+fn names_a_long_option(word: &str) -> bool {
+    shell_word_value(word).is_some_and(|name| SHELL_LONG_OPTION_NAMES.contains(&name))
+}
+
+/// Whether `word` writes a shell variable, as `LC_ALL=C` does.
 ///
-/// Each line is trimmed first, because `trimmed_script_lines` trims every
-/// line before the shipped guard reads it. The two answers therefore agree
-/// for a line a test writes with its own indent.
+/// The name stands before the first `=`, and a shell reads a name of ASCII
+/// letters, digits and `_` that opens with a letter or `_`. A word with no
+/// `=`, and a word whose name is empty, writes no variable.
+fn writes_a_variable(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut letters = name.chars();
+    letters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && letters.all(|letter| letter.is_ascii_alphanumeric() || letter == '_')
+}
+
+/// Whether the words under `set` name shell options and nothing else.
 ///
-/// A blank line and a comment run nothing at all. A shell option line sets
-/// shell options: it starts no tool, makes no directory, writes no
-/// positional parameter, and exits nowhere. Every other line can run
-/// something, so a guard under it is not the first answer the script gives.
+/// Each word opens with `-` or `+` and holds shell option letters, or it is
+/// the name a long option under it takes. [`SHELL_LONG_OPTION`] takes its
+/// name out of the WORD UNDER the one that writes it, wherever the letter
+/// stands in that word, so a word owes one name for each `o` it writes.
+///
+/// Four shapes answer false. A word that reads `--` opens the positional
+/// parameters, which is the thing `$#` counts, so the guard under it reads a
+/// `$#` the script made for itself. A word that holds a letter outside
+/// [`SHELL_SHORT_OPTION_LETTERS`] sets nothing and writes a usage error. A
+/// name outside [`SHELL_LONG_OPTION_NAMES`], and a name whose quotation never
+/// closes, set nothing either. And a `set` line that writes the answer of the
+/// shell to the report answers false as well: `set` with no word under it
+/// writes every shell variable, and a line that owes a name and never takes
+/// one writes every shell option.
+fn sets_shell_options_only(words: &[&str]) -> bool {
+    let mut wrote_an_option_word = false;
+    let mut names_owed: usize = 0;
+
+    for word in words {
+        if names_owed > 0 {
+            if !names_a_long_option(word) {
+                return false;
+            }
+            names_owed -= 1;
+            continue;
+        }
+        if *word == SHELL_OPTION_END {
+            return false;
+        }
+        let Some(letters) = word.strip_prefix(SHELL_OPTION_MARKS) else {
+            return false;
+        };
+        if !letters.chars().all(sets_a_shell_option) {
+            return false;
+        }
+        names_owed += letters.matches(SHELL_LONG_OPTION).count();
+        wrote_an_option_word = true;
+    }
+
+    wrote_an_option_word && names_owed == 0
+}
+
+/// Whether `line` starts no tool.
+///
+/// A blank line and a comment run nothing at all. A `set` line sets shell
+/// options. Every other line that answers true opens with one of
+/// [`SHELL_SETUP_HEADS`], or it writes shell variables and nothing else. None
+/// of those starts a tool, makes a directory, writes a positional parameter,
+/// or exits, so a guard under one of them still gives the first answer of the
+/// script.
+///
+/// A line that holds a command mark answers false wherever the mark stands,
+/// and so does a line that joins the line under it. A variable a line writes
+/// IN FRONT OF a command runs that command, so every word of a line that
+/// opens with an assignment must be an assignment too: `LC_ALL=C` runs
+/// nothing and `LC_ALL=C tool "$@"` starts the tool.
 ///
 /// The same test holds the guard at the TOP LEVEL of the script. A subshell
 /// opens with `(`, the body of a function opens with a `name() {` line, and a
-/// heredoc opens with a `<<` line. None of the three runs nothing, so a guard
-/// under any of them answers false.
+/// heredoc opens with a `<<` line. None of the three heads reaches this test,
+/// so a guard under any of them answers false.
+fn starts_no_tool(line: &str) -> bool {
+    let words = words_that_run(line);
+    let Some((head, arguments)) = words.split_first() else {
+        return true;
+    };
+    if joins_the_line_under_it(&words) || words.iter().any(|word| runs_a_command(word)) {
+        return false;
+    }
+    if *head == SHELL_OPTION_HEAD {
+        return sets_shell_options_only(arguments);
+    }
+    if writes_a_variable(head) {
+        return arguments.iter().all(|word| writes_a_variable(word));
+    }
+    SHELL_SETUP_HEADS.contains(head)
+}
+
+/// Whether every line of `lines` runs nothing.
 fn nothing_runs_before(lines: &[&str]) -> bool {
-    lines.iter().map(|line| line.trim()).all(|line| {
-        line.is_empty() || line.starts_with(SHELL_COMMENT) || sets_shell_options_only(line)
-    })
+    lines.iter().all(|line| starts_no_tool(line))
 }
 
 /// Whether `script` holds the guard the contract states, where the contract
@@ -225,8 +384,23 @@ fn answers_a_run_with_no_file(script: &str) -> bool {
 /// states the same contract for a line the test writes.
 ///
 /// A `#` word closes a `set` line, so `set -e # keep going` sets a shell
-/// option and runs nothing. Measured in `/bin/sh`: that line above the guard
-/// exits 0 and the tool line never runs.
+/// option and runs nothing. Measured: that line above the guard exits 0 and
+/// the tool line never runs.
+///
+/// `set -` and `set +` write a mark with no letter under it. Measured: each
+/// exits 0, writes nothing to stdout or stderr, and lets the tool line run.
+///
+/// A cluster takes one name for each `o` it writes, and it takes that name
+/// out of the word under it wherever the `o` stands. Measured:
+/// `set -oe pipefail` and `set -oo pipefail errexit` each set every option
+/// they name. A quotation around a name is removed before the shell reads
+/// the name, and the scripts stand in YAML front matter where a quoted word
+/// is usual.
+///
+/// The 16 lines under the `set` lines are the other prologue a rule author
+/// writes: a locale, a `PATH`, a `umask`, a `trap`. Measured, each of the 16
+/// with no argument exits 0 and writes nothing to stdout or stderr, and each
+/// with one argument reaches the tool line.
 const LINES_THAT_RUN_NOTHING: &[&str] = &[
     "",
     "   ",
@@ -235,34 +409,87 @@ const LINES_THAT_RUN_NOTHING: &[&str] = &[
     "set -e",
     "set +e",
     "set -x",
+    "set -",
+    "set +",
     "set -o pipefail",
     "set -euo pipefail",
+    "set -eou pipefail",
     "set -e -o pipefail",
+    "set -oe pipefail",
+    "set -oo pipefail errexit",
+    "set -o pipefail -o errexit",
+    r#"set -o "pipefail""#,
+    "set -o 'pipefail'",
+    r#"set -euo "pipefail""#,
     "set -e # keep going",
     "set -o pipefail # keep going",
+    r#"set -o "pipefail" # keep going"#,
+    "export LC_ALL=C",
+    "export FOO=bar",
+    r#"export PATH="$HOME/.local/bin:$PATH""#,
+    "export LC_ALL=C LANG=C",
+    "LC_ALL=C",
+    r#"PATH="/usr/bin:$PATH""#,
+    "readonly LIMIT=15",
+    r#"IFS=$'\n'"#,
+    "unset FOO",
+    "umask 022",
+    "shopt -s nullglob",
+    "hash -r",
+    "alias ll=ls",
+    "trap 'exit 1' INT",
+    ":",
+    "true",
 ];
 
-/// Lines that run something, or that write the positional parameters `$#`
-/// counts.
+/// Lines the guard cannot stand under.
+///
+/// A line reaches this list for one of four measured reasons: it runs
+/// something, it writes the positional parameters `$#` counts, it stops the
+/// script from answering at all, or it sets none of the options it names.
 ///
 /// `set` alone writes every shell variable, and `set -o` alone writes every
-/// shell option. A `set --` line and a `set a b` line write the positional
-/// parameters, so the guard under one of them reads a `$#` the script made
-/// for itself. A `set` line that holds a command mark runs a second command,
-/// and the mark reaches the name of a long option as well: `set -o $(tool)`
-/// runs a tool for the name it gives `-o`.
+/// shell option. A cluster that writes `o` takes its name out of the word
+/// under it wherever the `o` stands, so `set -oe`, `set -ox`, `set -eo` and
+/// `set -oo pipefail` each fall one name short: measured, each writes the
+/// 27-line shell option table to stdout, and the stdout of a rule script is
+/// its finding list. `set -o -e` falls short the same way, because `-e` is
+/// no name.
+///
+/// A `set --` line and a `set a b` line write the positional parameters, so
+/// the guard under one of them reads a `$#` the script made for itself. A
+/// `set` line that holds a command mark runs a second command, and the mark
+/// reaches the name of a long option as well: `set -o $(tool)` runs a tool
+/// for the name it gives `-o`.
+///
+/// A letter that names no shell option and a name outside
+/// [`SHELL_LONG_OPTION_NAMES`] set nothing. Measured: `set -y` and `set -q`
+/// each write `set: -X: invalid option` and a usage line to stderr, and
+/// `set -o rm` writes `set: rm: invalid option name`. The run carries on with
+/// the option its author asked for unset. `set -n` is noexec, and it is
+/// worse: measured over a run of 1 argument, the shell reads the whole script
+/// and runs none of it, so the tool line never runs and the rule answers
+/// every review with no finding.
+///
+/// A quotation a word never closes is a syntax error. Measured:
+/// `set -o "pipefail` above the guard makes the run exit 2, and the tool line
+/// never runs.
 ///
 /// A redirection mark and a line-continuation backslash break the run as
-/// well. Measured in `/bin/sh`: `set -e>out.txt` exits 0 and cuts an 11-byte
-/// file to 0 bytes; `set -e<in.txt` exits 1 when the file is absent, and the
-/// guard never runs; a line that ends with a backslash joins the next line,
-/// and the run exits 2 with a syntax error. `set -o >x` writes the 27 shell
-/// options into the file `x`, and `set -o rm` names no shell option and
-/// exits 1.
+/// well. Measured: `set -e>out.txt` exits 0 and cuts an 11-byte file to 0
+/// bytes; `set -e<in.txt` with the file absent writes
+/// `bash: in.txt: No such file or directory` to stderr and leaves errexit
+/// off, so the `set` never runs; a line that ends with a backslash joins the
+/// next line, and the run exits 2 with a syntax error. `set -o >x` writes the
+/// 27 shell options into the file `x`.
+///
+/// A variable a line writes in front of a command runs that command with the
+/// variable set, so `LC_ALL=C tool "$@"` starts the tool. `shift` rewrites
+/// the positional parameters `$#` counts.
 ///
 /// A subshell opens with `(`, a function body opens with a `name() {` line,
-/// and a heredoc opens with a `<<` line. Measured in `/bin/sh`: the guard
-/// inside each of the three lets the tool line run.
+/// and a heredoc opens with a `<<` line. Measured: the guard inside each of
+/// the three lets the tool line run.
 const LINES_THAT_RUN: &[&str] = &[
     "set",
     "set -o",
@@ -284,6 +511,19 @@ const LINES_THAT_RUN: &[&str] = &[
     "set -o pipefail\\",
     "set -x\\",
     "set -o rm",
+    "set -oe",
+    "set -ox",
+    "set -eo",
+    "set -oo pipefail",
+    "set -o -e",
+    "set -y",
+    "set -q",
+    "set -n",
+    r#"set -o "pipefail"#,
+    "shift",
+    r#"LC_ALL=C tool "$@""#,
+    "export FOO=$(tool)",
+    r#"umask 022; tool "$@""#,
     "(",
     "lint() {",
     "cat <<'EOF'",
@@ -300,18 +540,28 @@ const LINES_THAT_RUN: &[&str] = &[
 /// because a guard the contract cannot read is a guard the coverage test
 /// cannot hold.
 ///
-/// Each shape was run in `/bin/sh` with no argument. The guard under
-/// `mktemp -d` left 1 directory behind; the same script with the trap above
-/// the guard left 0. The guard under the first tool call answered after `wc`
-/// read the file. The guard under an earlier `exit 0` never ran, and the
-/// script reached no tool for 1 argument. The guard in a subshell, the guard
-/// in a function body and the guard in a heredoc each let the tool line run.
-/// The guard under `set -- $(find . -name '*.sh')` read a `$#` the script
-/// wrote for itself: the tool line ran over the files the script found, and
-/// the argument the run gave it reached no tool.
+/// Each shape was run with no argument. The guard under `mktemp -d` left 1
+/// directory behind; the same script with the trap above the guard left 0.
+/// The guard under the first tool call answered after `wc` read the file. The
+/// guard under an earlier `exit 0` never ran, and the script reached no tool
+/// for 1 argument. The guard in a subshell, the guard in a function body and
+/// the guard in a heredoc each let the tool line run. The guard under
+/// `set -- $(find . -name '*.sh')` read a `$#` the script wrote for itself:
+/// the tool line ran over the files the script found, and the argument the
+/// run gave it reached no tool. The guard under `LC_ALL=C tool "$@"` answered
+/// after that tool ran, because a variable a line writes in front of a
+/// command runs the command.
 const SCRIPTS_THAT_MISS_THE_GUARD: &[&str] = &[
     r#"
       work="$(mktemp -d)"
+      if [ "$#" -eq 0 ]; then
+        exit 0
+      fi
+      tool "$@"
+    "#,
+    r#"
+      export LC_ALL=C
+      LC_ALL=C tool "$@"
       if [ "$#" -eq 0 ]; then
         exit 0
       fi
@@ -371,8 +621,8 @@ const SCRIPTS_THAT_MISS_THE_GUARD: &[&str] = &[
 
 /// Whole scripts that meet the contract.
 ///
-/// Each was run in `/bin/sh`. With no argument, each exits 0 and the tool
-/// line never runs. With 1 argument, each reaches the tool line.
+/// With no argument, each exits 0 and the tool line never runs. With 1
+/// argument, each reaches the tool line.
 const SCRIPTS_THAT_HOLD_THE_GUARD: &[&str] = &[
     r#"
       if [ "$#" -eq 0 ]; then
@@ -388,7 +638,7 @@ const SCRIPTS_THAT_HOLD_THE_GUARD: &[&str] = &[
       tool "$@"
     "#,
     r#"
-      #!/bin/sh
+      #!/bin/bash
       # read the files the review gives
 
       set -euo pipefail
@@ -404,6 +654,16 @@ const SCRIPTS_THAT_HOLD_THE_GUARD: &[&str] = &[
       fi
       tool "$@"
     "#,
+    r#"
+      export LC_ALL=C
+      export PATH="$HOME/.local/bin:$PATH"
+      umask 022
+      set -eou pipefail
+      if [ "$#" -eq 0 ]; then
+        exit 0
+      fi
+      tool "$@"
+    "#,
 ];
 
 /// How many scripts of `SCRIPTS_THAT_MISS_THE_GUARD` hold the three lines of
@@ -412,7 +672,7 @@ const SCRIPTS_THAT_HOLD_THE_GUARD: &[&str] = &[
 /// A guard that reads the TEXT alone accepts every one of them, because the
 /// text is correct in each and the PLACE is not. The last script of the list
 /// writes another shape, so the text test rejects that one as well.
-const SCRIPTS_WITH_THE_TEXT_AND_THE_WRONG_PLACE: usize = 7;
+const SCRIPTS_WITH_THE_TEXT_AND_THE_WRONG_PLACE: usize = 8;
 
 /// The line kinds that stand over the guard, and the line kinds that do not.
 ///
@@ -421,7 +681,7 @@ const SCRIPTS_WITH_THE_TEXT_AND_THE_WRONG_PLACE: usize = 7;
 /// each shape a shipped script can write, so a wrong answer breaks a test
 /// here rather than a rule that ships.
 #[test]
-fn a_comment_a_blank_line_and_a_shell_option_line_are_the_lines_that_run_nothing() {
+fn a_comment_a_blank_line_and_a_prologue_line_are_the_lines_that_run_nothing() {
     for line in LINES_THAT_RUN_NOTHING {
         assert!(
             nothing_runs_before(&[line]),
@@ -433,8 +693,9 @@ fn a_comment_a_blank_line_and_a_shell_option_line_are_the_lines_that_run_nothing
     for line in LINES_THAT_RUN {
         assert!(
             !nothing_runs_before(&[line]),
-            "`{line}` runs something, or it writes the positional parameters `$#` \
-             counts, so the guard under it answers too late"
+            "`{line}` runs something, writes the positional parameters `$#` counts, \
+             stops the script from answering, or sets none of the options it names, \
+             so the guard under it is not the first answer the script gives"
         );
     }
 }
