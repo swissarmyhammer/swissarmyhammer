@@ -137,6 +137,12 @@ const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 /// two apart.
 const RUST_DEAD_CODE_RULE: &str = "dead-code-rust";
 
+/// The shipped dead-code tool rule for Swift. It builds the package's TEST
+/// targets, so the test targets count as callers, and it keeps them out of the
+/// report with `--report-exclude` over the paths the package manifest names.
+/// One more acceptance test drives that split end to end.
+const SWIFT_DEAD_CODE_RULE: &str = "dead-code-swift";
+
 /// Every shipped dead-code tool rule, with the project type it serves.
 ///
 /// Each supersedes the `dead-code` prompt rule for its language. Three of
@@ -151,7 +157,7 @@ const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
     ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
     ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
-    ("swift", "dead-code-swift", SUPERSEDES_DEAD_CODE),
+    ("swift", SWIFT_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
 ];
 
 /// The prompt rule every shipped magic-numbers tool rule supersedes.

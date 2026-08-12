@@ -7,10 +7,11 @@
 //! with no file beside the same run measured with the files — and the helpers
 //! that drive each shape.
 //!
-//! The tests themselves stand one module per rule family. A family whose Rust
-//! rule reads the cargo report stands one module more, named for that
-//! language, because the shapes cargo answers with are measured for Rust
-//! alone; the complexity family stands one module for each language it drives.
+//! The tests themselves stand one module per rule family. A family whose rule
+//! for one language answers shapes the other languages cannot show stands one
+//! module more, named for that language — the Rust dead-code rule reads the
+//! cargo report, and the Swift one builds the package's test targets; the
+//! complexity family stands one module for each language it drives.
 //! Each module then stays small enough for a reviewer, and for the review
 //! engine, to read whole. `scope_roster`, `temp_directory` and `zero_argument`
 //! are the three
@@ -27,6 +28,7 @@ mod complexity_swift;
 mod complexity_typescript;
 mod dead_code;
 mod dead_code_rust;
+mod dead_code_swift;
 mod magic_numbers;
 mod missing_docs;
 mod missing_docs_rust;
