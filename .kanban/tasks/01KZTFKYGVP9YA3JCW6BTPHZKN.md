@@ -297,8 +297,24 @@ comments:
     - evidence: 2 files — apps/shelltool-cli/src/commands/serve.rs, apps/shelltool-cli/src/main.rs. The finding of 2026-08-12 07:00 (serve.rs:48) is now `- [x]`, and all 26 findings of the card stand checked. Every `?` of serve.rs carries a `.context()` now: :49 "creating the shell tool", :125 "creating the shell tool server", :128 "starting MCP stdio server", :132 "MCP server terminated unexpectedly". `run_serve` answers `anyhow::Result<()>` in place of `Result<(), String>`. `cargo nextest run -p shelltool-cli`: 44 run, 44 passed, 0 failed, 0 skipped. `cargo test -p shelltool-cli`: 38 + 6 passed. `cargo fmt --all --check` clean. `cargo clippy -p shelltool-cli --all-targets -- -D warnings` clean. `cargo doc -p shelltool-cli --no-deps` adds no warning.
     - next: /review
   timestamp: 2026-08-12T12:17:49.399213+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kztyytdpga68gpwapsgef76y
+  text: |-
+    ### review — clean
+    - evidence: `review sha 360382fc7^..360382fc7` — 0 findings, 0 confirmed, 0 refuted, 8 validators attempted, 0 failed, 0 skipped. All 26 prior findings checked.
+    - next: task moved to done.
+  timestamp: 2026-08-12T12:25:35.926109+00:00
+- actor: claude-code
+  id: 01kztyzefqyrxsazhmrg6f0mw1
+  text: |-
+    ### finish iteration 5 — clean
+    - implement: changed — 2 files (apps/shelltool-cli/src/commands/serve.rs, apps/shelltool-cli/src/main.rs). The 2026-08-12 07:00 finding is checked. All 26 findings of the card stand checked.
+    - test: green — cargo nextest run --workspace, 14144 run, 14144 passed, 0 failed, 0 skipped. cargo fmt --check clean. cargo clippy --workspace --all-targets -- -D warnings clean.
+    - commit: 360382fc7
+    - review: clean — 0 findings, 8 validators attempted, 0 failed, 0 skipped on 360382fc7^..360382fc7. Task moved to done.
+  timestamp: 2026-08-12T12:25:56.471338+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffef80
 title: missing-docs-rust breaks the run for a workspace clippy linted, when a lint stands at deny level
 ---
 `missing-docs-rust` tests the STATUS of `cargo clippy` alone: it writes `set -e` and lets cargo's exit status be the script's. `cargo clippy` gives one status to a run it could not make and to a run it made from end to end while a lint stands at deny level, so the second shape breaks the run and every `missing_docs` finding it holds is thrown away.
