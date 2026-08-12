@@ -1,8 +1,68 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffd480
+comments:
+- actor: claude-code
+  id: 01kzw3m8q1btsf18vxg3dcqazm
+  text: |-
+    Picked up. Re-took every measurement with the installed swiftlint 0.65.0 (/opt/homebrew/bin/swiftlint) against the SHIPPED script bodies, extracted from the two rule files.
+
+    Defect 1, the undecodable file. One file that holds `let name = "café"` in Latin-1 above each rule's staged declarations. BOTH rows are status 0 for these two rules, and not the 0/2 pair the card states for `complexity-swift`: the child of `magic-numbers-swift` states `severity: warning` and the child of `missing-docs-swift` states `warning: [open, public]` with no `error:` list, so no finding of either rule reaches error severity and swiftlint never exits 2.
+
+    magic-numbers-swift:
+    | the run | status | stdout | stderr |
+    | the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
+    | the Latin-1 file beside one file that holds a finding | 0 | 1 entry, 392 bytes | `Could not read contents of` |
+
+    missing-docs-swift:
+    | the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
+    | the Latin-1 file beside one file that holds a finding | 0 | 2 entries, 740 bytes | `Could not read contents of` |
+
+    So for these two rules the status is 0 in EVERY row. The status test and the report test both read the run as healthy, and only stderr tells the two apart.
+
+    Defect 2, the unanchored greps. One file under `Generated/` holding each rule's staged declarations, beside a project `.swiftlint.yml` that states `excluded: [Generated]`. The file NAME is the one difference:
+
+    | the file name | shipped magic | anchored magic | shipped docs | anchored docs |
+    | `Plain.swift` | 0 findings, exit 0 | 0, exit 0 | 0, exit 0 | 0, exit 0 |
+    | `Could not read configuration.swift` | 1 WRONG finding, exit 0 | 0, exit 0 | 2 WRONG findings, exit 0 | 0, exit 0 |
+    | `Could not read contents of.swift` | 0, exit 0 | 0, exit 0 | 0, exit 0 | 0, exit 0 |
+    | `No lintable files found.swift` | 0, exit 0 | 0, exit 0 | 0, exit 0 | 0, exit 0 |
+
+    Each `Could not read configuration.swift` row wrote the rule's own line `swiftlint cannot read .swiftlint.yml beside this rule`, dropped the project configuration, ran swiftlint a second time, and reported a file the project excludes.
+
+    Row 3 does not move today because neither script holds a decode test yet. Measured with the decode test added UNANCHORED (`grep -qF 'Could not read contents of'`): row 3 exits 1 with the rule's own decode line over a run that measured correctly. With `grep -qE '^Could not read contents of `'` the same run reports 0 findings and exits 0.
+
+    Each anchored test still fires in the true direction. Measured for both rules: the Latin-1 file alone and the Latin-1 file beside one healthy file each exit 1 with the decode line; a project file that states `child_config: other.yml` and a project file of bytes that are not YAML each write the configuration line and report the staged declarations (1 for magic, 2 for docs); one healthy file reports its findings and exits 0; one file under `Generated/` beside `excluded: [Generated]` reports nothing and exits 0.
+  timestamp: 2026-08-12T23:06:27.425843+00:00
+- actor: claude-code
+  id: 01kzw46pf63d1xpf7ycw999nty
+  text: |-
+    Implementation landed. Both defects are corrected in both sibling rules, each behaviour change watched RED first against the shipped bytes.
+
+    The RED steps, in order:
+    1. The six new acceptance tests were added first, against the untouched shipped scripts. 4 went RED: both `..._breaks_on_a_file_it_cannot_decode` (no error at all, the run read the Latin-1 file as clean) and both `..._measures_a_file_named_for_the_configuration_message` (`left: ["Generated/Could not read configuration.swift"]` for magic, the same path twice for docs — the WRONG FINDING on a file the project excludes).
+    2. The decode test was then added to each script written UNANCHORED. Both decode-break tests went GREEN, and both `..._measures_a_file_named_for_the_decode_message` went RED — the false fire the anchor exists to stop.
+    3. All three greps were anchored in each script. All six GREEN.
+
+    The three anchored greps each script now spells, the same three `complexity-swift` spells:
+    - `grep -qE '^Could not read configuration:'`
+    - `grep -qE '^Could not read contents of `'`
+    - `grep -qE '^Error: No lintable files found at paths:'`
+
+    Each rule body gained two sections in the sibling's table style, holding the measurements I took with swiftlint 0.65.0: "Each stderr test reads swiftlint's own message, and not a file name" and "A file swiftlint cannot decode". The prose that named the unanchored strings was corrected to the anchored spellings in the configuration section and in the status-table section.
+
+    One measured difference from the card, stated on each rule body: both rows of the decode table are status 0 for these two rules, where `complexity-swift` measures 0 and 2. The child of `magic-numbers-swift` states `severity: warning` and the child of `missing-docs-swift` states `warning: [open, public]` with no `error:` list, so no finding of either rule reaches error severity and swiftlint never exits 2 for one. The report of row 2 is 1 entry in 392 bytes for magic and 2 entries in 740 bytes for docs.
+
+    `SWIFT_DECODE_NAME_POSITION_ONLY` and `SWIFT_CONFIG_NAME_POSITION_ONLY` moved from `complexity_swift.rs` up into `shipped.rs`, beside every other shared `SWIFT_*` staged position, because all three swiftlint rule modules now stage those two names. No third copy was written.
+
+    Verification: `cargo nextest run -p swissarmyhammer-validators` — 696 tests run, 696 passed, 0 skipped. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    ### implement — changed
+    - evidence: 6 files — builtin/validators/code-hygiene/rules/magic-numbers-swift.md, builtin/validators/code-hygiene/rules/missing-docs-swift.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/complexity_swift.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/magic_numbers.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
+    - next: /review
+  timestamp: 2026-08-12T23:16:31.334855+00:00
+position_column: doing
+position_ordinal: '8280'
 title: magic-numbers-swift and missing-docs-swift read a file swiftlint cannot decode as a clean file
 ---
 swiftlint reads a source file as UTF-8 alone. A file that holds other bytes — a Swift file a person saved in Latin-1, or a binary file under a `.swift` name — makes swiftlint write ``Could not read contents of `<path>` `` to stderr. swiftlint then lints no line of that file.

@@ -1203,6 +1203,142 @@ fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
 }
 
+/// Where the Swift file swiftlint cannot decode stands inside the probe
+/// repository.
+const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+
+/// A Swift file written in Latin-1 rather than in UTF-8.
+///
+/// The byte `0xE9` is `é` in Latin-1, and it is not a UTF-8 sequence.
+/// swiftlint reads a file as UTF-8 and nothing else, so it cannot decode this
+/// one. The staged declarations stand under the string, so a run that DID read
+/// the file reports them.
+const SWIFT_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
+public struct StagedThing {\n\
+public var value: Int = 0\n\
+}\n";
+
+/// What the one error of a file swiftlint cannot decode must name: the rule's
+/// own line, and swiftlint's own message, which carries the path.
+const SWIFT_UNDECODABLE_ERROR: &[&str] = &[
+    "missing-docs-swift: swiftlint could not read the contents of a file this run names",
+    "Could not read contents of",
+    "Latin1.swift",
+];
+
+/// The `missing-docs-swift` probe over a Swift file swiftlint cannot decode.
+const SWIFT_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_UNDECODABLE_ERROR,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a Swift file that is not UTF-8",
+    path: SWIFT_UNDECODABLE_PATH,
+    source: Some(SWIFT_UNDECODABLE_SOURCE),
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a Swift file
+/// swiftlint cannot decode, through the real swiftlint pipeline.
+///
+/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
+/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
+/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
+/// an empty JSON array to stdout, and exits 0 — the status and the report of a
+/// clean file. So the script read a file swiftlint never read as a clean file,
+/// and the undocumented public declarations reached the engine as a clean tree.
+///
+/// Measured over the same file beside one file that holds a finding: swiftlint
+/// writes the same stderr line, writes 2 entries in 740 bytes, and exits 0 as
+/// well. The child states `warning: [open, public]` and no `error:` list, so no
+/// finding of this rule reaches error severity and swiftlint never exits 2.
+/// Every row of the measurement is therefore the status and the report of a
+/// healthy run, and only stderr tells the two apart.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_decode() {
+    verify_shipped_run_breaks(&SWIFT_UNDECODABLE_PROBE);
+}
+
+/// The `missing-docs-swift` probe over a file whose name holds the words of
+/// swiftlint's decode message.
+const SWIFT_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's decode message",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_DECODE_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project excludes the file, so the run reports nothing and breaks nothing, \
+             whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's decode message, through the
+/// real swiftlint pipeline.
+///
+/// The script tests stderr for the message swiftlint writes when it cannot
+/// decode a file. swiftlint writes the PATH of a file into stderr as well, so a
+/// test that read all of stderr answered the file NAME.
+///
+/// Measured with swiftlint 0.65.0 over this probe: swiftlint writes
+/// `Error: No lintable files found at paths: 'Generated/Could not read contents
+/// of.swift'` to stderr, writes 0 bytes to stdout, and exits 1. A test spelled
+/// `grep -qF 'Could not read contents of'` matched that path echo, and the
+/// script then wrote its own tool-error line and exited 1 over a run that
+/// measured correctly. The same run over `Generated/Plain.swift`, with the same
+/// exclude list, reports no finding and exits 0.
+///
+/// swiftlint writes its own decode message at the START of a line, and it
+/// writes the path echo after `Error: `. Measured, a pattern anchored on the
+/// start of the line matches the decode message and does not match the path
+/// echo, so the script anchors the test that way.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_decode_message() {
+    verify_shipped_staged_positions_report(&SWIFT_DECODE_NAME_PROBE);
+}
+
+/// The `missing-docs-swift` probe over a file whose name holds the words of
+/// swiftlint's configuration message.
+const SWIFT_CONFIG_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's configuration message",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_CONFIG_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project configuration is readable, so the run keeps the project exclude list \
+             and reports nothing, whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's configuration message,
+/// through the real swiftlint pipeline.
+///
+/// The same cause reaches the configuration test, and there it makes a WRONG
+/// FINDING rather than a break. Measured with swiftlint 0.65.0 over this probe:
+/// a test spelled `grep -qF 'Could not read configuration'` matched the path
+/// echo, so the script wrote `swiftlint cannot read .swiftlint.yml beside this
+/// rule`, ran swiftlint a second time with no project configuration, and
+/// reported 2 findings on a file the project excludes.
+///
+/// The project configuration of this probe is the one every Swift probe of this
+/// module stages, and swiftlint reads it without trouble, so the run must keep
+/// the project's `excluded:` list and report nothing.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_configuration_message() {
+    verify_shipped_staged_positions_report(&SWIFT_CONFIG_NAME_PROBE);
+}
+
 /// The `missing-docs-swift` probe over a directory that holds no Swift file.
 ///
 /// The probe writes no file at the path, and the one staged file under that

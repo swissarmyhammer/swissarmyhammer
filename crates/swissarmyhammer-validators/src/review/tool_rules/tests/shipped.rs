@@ -1213,6 +1213,30 @@ const SWIFT_EXCLUDED_POSITION_ONLY: &[ShippedStagedFile] = &[SWIFT_GENERATED_POS
 /// The ordinary position alone, for a probe that stages no excluded file.
 const SWIFT_ORDINARY_POSITION_ONLY: &[ShippedStagedFile] = &[SWIFT_ORDINARY_POSITION];
 
+/// The position of the file whose NAME holds the words of swiftlint's decode
+/// message, under the directory the project excludes.
+///
+/// The name ends in `.swift`, so the rule's own file pattern claims it and the
+/// run carries it. The project excludes the directory, so swiftlint reads no
+/// file and writes the path into a message of its own. Each of the three
+/// shipped swiftlint rules tests stderr for the decode message, so each is
+/// measured over this name.
+const SWIFT_DECODE_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
+    path: "Generated/Could not read contents of.swift",
+    head: SWIFT_NO_HEAD,
+}];
+
+/// The position of the file whose NAME holds the words of swiftlint's
+/// configuration message, under the directory the project excludes.
+///
+/// The same cause reaches the configuration test, and there it makes a WRONG
+/// FINDING rather than a break: the script drops the project configuration and
+/// runs swiftlint a second time without the `excluded:` list.
+const SWIFT_CONFIG_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
+    path: "Generated/Could not read configuration.swift",
+    head: SWIFT_NO_HEAD,
+}];
+
 /// Where the directory that holds no Swift file stands inside a Swift probe
 /// repository.
 ///

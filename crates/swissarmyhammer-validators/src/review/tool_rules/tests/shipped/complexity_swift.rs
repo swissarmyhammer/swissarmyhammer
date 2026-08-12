@@ -401,17 +401,6 @@ fn the_shipped_swift_complexity_tool_rule_breaks_on_a_file_it_cannot_decode() {
     verify_shipped_run_breaks(&SWIFT_COMPLEXITY_UNDECODABLE_PROBE);
 }
 
-/// The position of the file whose NAME holds the words of swiftlint's decode
-/// message, under the directory the project excludes.
-///
-/// The name ends in `.swift`, so the rule's own file pattern claims it and the
-/// run carries it. The project excludes the directory, so swiftlint reads no
-/// file and writes the path into a message of its own.
-const SWIFT_DECODE_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
-    path: "Generated/Could not read contents of.swift",
-    head: SWIFT_NO_HEAD,
-}];
-
 /// The `complexity-swift` probe over a file whose name holds the words of
 /// swiftlint's decode message.
 const SWIFT_COMPLEXITY_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
@@ -453,13 +442,6 @@ const SWIFT_COMPLEXITY_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStaged
 fn the_shipped_swift_complexity_tool_rule_measures_a_file_named_for_the_decode_message() {
     verify_shipped_staged_positions_report(&SWIFT_COMPLEXITY_DECODE_NAME_PROBE);
 }
-
-/// The position of the file whose NAME holds the words of swiftlint's
-/// configuration message, under the directory the project excludes.
-const SWIFT_CONFIG_NAME_POSITION_ONLY: &[ShippedStagedFile] = &[ShippedStagedFile {
-    path: "Generated/Could not read configuration.swift",
-    head: SWIFT_NO_HEAD,
-}];
 
 /// The `complexity-swift` probe over a file whose name holds the words of
 /// swiftlint's configuration message.
