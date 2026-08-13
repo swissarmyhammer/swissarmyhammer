@@ -1,8 +1,81 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffd280
+comments:
+- actor: claude-code
+  id: 01kzw71cm0r7m7dqahv9gwn0mf
+  text: |-
+    Research done. Re-measured with swiftlint 0.65.0 at two fixture roots whose absolute paths differ by exactly 3 characters (length 132 and 135).
+
+    Result — the entry count holds at every row, and only the byte count moves:
+
+    | row | entries | bytes @132 | bytes @135 | table states |
+    |---|---|---|---|---|
+    | magic-numbers: `return status == 404` | 1 | 381 | 384 | 385 |
+    | magic-numbers: + `warning_threshold: 1` | 2 | 604 | 607 | 608 |
+    | missing-docs: 2 undocumented public items | 2 | 718 | 724 | 726 |
+    | missing-docs: + `warning_threshold: 1` | 3 | 941 | 947 | 949 |
+    | missing-docs: `public func oops( {` | 1 | 360 | 363 | 364 |
+    | complexity: the probe file | 1 | 409 | 412 | 413 |
+    | an empty array | 0 | 5 | 5 | 5 |
+
+    Each byte delta is exactly 3 for each entry that carries a path. The 3-entry threshold row moved 6, not 9, because the `warning_threshold` entry carries an empty `file` field and so no path. That confirms the cause precisely.
+
+    `an empty array, 5 bytes` and `0 bytes` are path-INDEPENDENT — measured 5 bytes (`[\n\n]\n`) at both roots. They reproduce, and they carry the distinction the script's status gate depends on. They stay.
+
+    Survey of every byte count standing in the Swift rule bodies today (the tree moved under this card, so the card's quoted numbers are stale):
+    - magic-numbers-swift.md: `1 entry, 385 bytes`; `2 entries, 608 bytes`; `1 entry, 392 bytes` (Latin-1 table)
+    - missing-docs-swift.md: `2 entries, 726 bytes`; `3 entries, 949 bytes`; `1 entry, 364 bytes`; `2 entries, 740 bytes` (Latin-1 table)
+    - complexity-swift.md: `1 entry in 413 bytes` (prose); `1 entry, 413 bytes` (table)
+    - dead-code-swift.md: NO byte count and no entry count at all. Clean, nothing to do.
+
+    Acceptance tests with the same defect:
+    - tests/shipped/magic_numbers.rs: `writes 1 entry in 392 bytes`
+    - tests/shipped/missing_docs.rs: `writes 2 entries in 740 bytes`
+
+    Answer picked: DROP the byte count and keep the entry count.
+    - The entry count is what the script actually gates on (`jq -e 'type == "array" and length > 0'`). The byte count gates nothing.
+    - Stating the path cannot work: each measurement runs inside a `mktemp -d` directory that differs on every run and every machine, so a recorded path makes the number checkable only in a directory that no longer exists.
+    - Marking the count path-dependent keeps a number a later reader still cannot check — it documents the defect instead of removing it.
+    - complexity-swift.md already carries a row reading `1 entry` with no byte count (the Latin-1 row), so dropping makes the files self-consistent.
+  timestamp: 2026-08-13T00:06:03.136422+00:00
+- actor: claude-code
+  id: 01kzw7a6sfh0pqdqfq96f9ehhj
+  text: |-
+    Implementation landed. Answer taken: DROP the byte count and keep the entry count.
+
+    Every path-dependent byte count is gone from the Swift rule bodies and the shipped Swift tests. Survey after the change: the only byte counts that stand are 45 counts of `0 bytes` and 10 counts of `5 bytes`, and each was measured identical at both fixture roots, so each reproduces.
+
+    Rows changed (all of them, not only the rows the card quoted):
+    - magic-numbers-swift.md: `1 entry, 385 bytes` -> `1 entry`; `2 entries, 608 bytes` -> `2 entries`; `1 entry, 392 bytes` -> `1 entry` (Latin-1 table)
+    - missing-docs-swift.md: `2 entries, 726 bytes` -> `2 entries`; `3 entries, 949 bytes` -> `3 entries`; `1 entry, 364 bytes` -> `1 entry`; `2 entries, 740 bytes` -> `2 entries` (Latin-1 table)
+    - complexity-swift.md: `stdout carries 1 entry in 413 bytes` -> `stdout carries 1 entry` (prose); `1 entry, 413 bytes` -> `1 entry` (table)
+    - magic_numbers.rs: `writes 1 entry in 392 bytes` -> `writes 1 entry`
+    - missing_docs.rs: `writes 2 entries in 740 bytes` -> `writes 2 entries`
+
+    To remove the CAUSE and not only the rows, each of the three status tables now carries a paragraph that states why the row holds an entry count and no byte count. Four earlier commits re-measured these tables today; without that paragraph the next re-measurement puts the byte counts back. Each Latin-1 decode table carries a one-sentence cross-reference to it.
+
+    `0 bytes` and `an empty array, 5 bytes` stay. Both were measured identical at both roots, and both carry the distinction the script's status gate depends on — a JSON array of one entry or more against no output at all.
+
+    dead-code-swift.md needed no change: it carries no byte count and no entry count.
+
+    Out of scope and left alone: complexity-rust.md (1133/7489 bytes) and missing_docs_rust.rs (1124 bytes). Those are cargo reports under a different rule, and three other cards moved complexity-rust today.
+
+    Verification:
+    - cargo nextest run -p swissarmyhammer-validators: 698 tests run, 698 passed, 0 skipped
+    - cargo fmt --check: exit 0
+    - cargo clippy --workspace --all-targets -- -D warnings: exit 0
+    - Nothing staged.
+  timestamp: 2026-08-13T00:10:52.079191+00:00
+- actor: claude-code
+  id: 01kzw7acrmwz69jwqrsnmdkrxc
+  text: |-
+    ### implement — changed
+    - evidence: 5 files — builtin/validators/code-hygiene/rules/magic-numbers-swift.md, builtin/validators/code-hygiene/rules/missing-docs-swift.md, builtin/validators/code-hygiene/rules/complexity-swift.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/magic_numbers.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs. 698/698 tests pass, fmt clean, clippy clean.
+    - next: /review
+  timestamp: 2026-08-13T00:10:58.196543+00:00
+position_column: doing
+position_ordinal: '8280'
 title: Swift rule status tables state stdout byte counts that move with the path length
 ---
 The status tables of the three shipped swiftlint rules state a byte count

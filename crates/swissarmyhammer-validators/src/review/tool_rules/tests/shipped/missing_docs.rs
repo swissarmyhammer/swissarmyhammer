@@ -1251,7 +1251,7 @@ const SWIFT_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
 /// and the undocumented public declarations reached the engine as a clean tree.
 ///
 /// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes 2 entries in 740 bytes, and exits 0 as
+/// writes the same stderr line, writes 2 entries, and exits 0 as
 /// well. The child states `warning: [open, public]` and no `error:` list, so no
 /// finding of this rule reaches error severity and swiftlint never exits 2.
 /// Every row of the measurement is therefore the status and the report of a

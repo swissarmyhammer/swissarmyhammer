@@ -263,7 +263,7 @@ swiftlint exits 2 when it reports a finding of error severity, and 0 when it
 reports none. Row 1 therefore makes every finding of this rule an exit of 2, so
 the script accepts status 2 beside status 0. Measured over one file holding one
 function of cyclomatic complexity 16: the run reports 1 finding of error
-severity, swiftlint exits 2, and stdout carries 1 entry in 413 bytes.
+severity, swiftlint exits 2, and stdout carries 1 entry.
 
 ## What the script accepts at status 2
 
@@ -283,11 +283,20 @@ measured against the child configuration this script writes:
 | what the run is | status | stdout |
 |---|---|---|
 | a file that holds no function over a gate | 0 | an empty array, 5 bytes |
-| the probe file | 2 | 1 entry, 413 bytes |
+| the probe file | 2 | 1 entry |
 | the probe file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
 | the probe file beside a project `excluded:` that covers it | 1 | 0 bytes |
 | a path that holds no file | 1 | 0 bytes |
 | the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
+
+Each row that measured states the number of ENTRIES, and no number of bytes.
+The JSON reporter writes the absolute path of the file into each entry, so the
+byte count of a report that holds an entry moves with the length of that path.
+A later run from a different directory gives a different byte count for the same
+run, and a byte count in this table would then read as false. The entry count
+does not move with the path, and the entry count is what the script reads. A
+report of 0 bytes, and an empty array of 5 bytes, carry no path, so those two
+counts do not move.
 
 So the script accepts status 0, and it accepts status 2 only when the report
 holds a JSON array of one entry or more. At each other status, and at status 2

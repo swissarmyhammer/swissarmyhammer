@@ -298,16 +298,25 @@ child configuration this script writes:
 | what the run is | status | stdout |
 |---|---|---|
 | a file whose every public item carries a doc comment | 0 | an empty array, 5 bytes |
-| one file that holds 2 undocumented public items | 0 | 2 entries, 726 bytes |
-| the same file beside `warning_threshold: 1` | 2 | 3 entries, 949 bytes |
+| one file that holds 2 undocumented public items | 0 | 2 entries |
+| the same file beside `warning_threshold: 1` | 2 | 3 entries |
 | the same file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
 | the same file beside a project `excluded:` that covers it | 1 | 0 bytes |
-| one file whose only line is `public func oops( {` | 0 | 1 entry, 364 bytes |
+| one file whose only line is `public func oops( {` | 0 | 1 entry |
 | a path that holds no file | 1 | 0 bytes |
 | the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
 | a `--config` path that holds no file | 134 | 0 bytes |
 | a project configuration that holds `child_config:` | 134 | 0 bytes |
 | a command-line option that does not exist | 64 | 0 bytes |
+
+Each row that measured states the number of ENTRIES, and no number of bytes.
+The JSON reporter writes the absolute path of the file into each entry, so the
+byte count of a report that holds an entry moves with the length of that path.
+A later run from a different directory gives a different byte count for the same
+run, and a byte count in this table would then read as false. The entry count
+does not move with the path, and the entry count is what the script reads. A
+report of 0 bytes, and an empty array of 5 bytes, carry no path, so those two
+counts do not move.
 
 The two runs of status 2 differ in the report. The threshold run wrote 3
 entries. The version run wrote 0 bytes and linted no file: swiftlint compares
@@ -512,9 +521,12 @@ undocumented `public struct` and one undocumented stored property:
 | the run | status | stdout | stderr |
 |---|---|---|---|
 | the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
-| the Latin-1 file beside one file that holds a finding | 0 | 2 entries, 740 bytes | `Could not read contents of` |
+| the Latin-1 file beside one file that holds a finding | 0 | 2 entries | `Could not read contents of` |
 
-Each row carries the status and the report of a healthy run. The child states
+Each row states the number of entries and no number of bytes, for the reason
+the section "A project warning threshold, and what the script accepts at status
+2" above states. Each row carries the status and the report of a healthy run.
+The child states
 `warning: [open, public]` and no `error:` list, so no finding of this rule
 reaches error severity and swiftlint exits 0 for a file that holds one, which
 is the row of the status table above. So neither the status nor the report

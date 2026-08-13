@@ -707,7 +707,7 @@ const SWIFT_MAGIC_NUMBERS_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath
 /// and the unnamed literal reached the engine as a clean tree.
 ///
 /// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes 1 entry in 392 bytes, and exits 0 as
+/// writes the same stderr line, writes 1 entry, and exits 0 as
 /// well. The child states `severity: warning`, so no finding of this rule
 /// reaches error severity and swiftlint never exits 2. Every row of the
 /// measurement is therefore the status and the report of a healthy run, and
