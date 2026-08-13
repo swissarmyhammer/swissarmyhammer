@@ -113,9 +113,6 @@ swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"
 # shipped-rule acceptance tests plan through — consumed via the validators
 # crate's `test-support` feature, never copied per-file.
 swissarmyhammer-validators = { workspace = true, features = ["test-support"] }
-# The grammar roster the `duplication-parsed` acceptance test holds the shipped
-# rule's `match` list against.
-swissarmyhammer-sem = { workspace = true }
 tracing-test = { workspace = true }
 
 nix = { workspace = true }

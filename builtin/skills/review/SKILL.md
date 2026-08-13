@@ -36,7 +36,7 @@ $ARGUMENTS
 
 The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
 
-- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
+- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Each item reads ``- [ ] `file:line` `set/rule` — claim. suggestion.``, so the item names the validator set and the rule that produced it and the reader opens that rule without searching. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
 - `counts` — `{ findings, confirmed, refuted }`. Use it for the summary.
 
 | Op | Scope | When |

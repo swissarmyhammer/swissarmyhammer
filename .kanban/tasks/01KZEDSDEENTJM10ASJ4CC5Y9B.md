@@ -76,8 +76,24 @@ comments:
     - the card's own tests stay GREEN, run again by name: `a_changed_builtin_fixture_leaves_the_scope_and_source_stays`, `a_scope_with_no_fixture_under_any_set_keeps_every_file`, `review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_source`. The two tests the edits touch elsewhere also pass: `no_rule_matches_a_shipped_fixture_template` and `retain_rulesets_keeps_only_the_named_subset`.
     - next: ready for /review.
   timestamp: 2026-08-10T19:31:52.067014+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzpk1nraj5rysax454t6mgg0
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 87a8c3da7). Counts: 0 findings, 0 confirmed, 2 refuted, 16 tasks attempted, 0 failed, 0 skipped, `skipped_files` empty. All 5 source files of the commit stayed in the work-list. The 3 findings of the pass of 2026-08-10 14:14 are correct in the code. `cargo clippy -p swissarmyhammer-validators --all-targets` gives no warning.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-10T19:40:28.810873+00:00
+- actor: claude-code
+  id: 01kzpk2c9r12e11qc28fzb92y8
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 5 files. One `repo_root()` helper now lives in `review/test_support.rs` and both copies are deleted. `retain_rulesets` takes `&[&str]`, and the one production caller borrows the request's owned names first. `ValidatorDiagnostics`, `DirectoryInfo` and `LoadFailure` derive `PartialEq`/`Eq` — the third one was found by a sweep of the file, not by the finding.
+    - test: `cargo nextest run --workspace --no-fail-fast` 14034 run, 14030 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set
+    - commit: 87a8c3da7
+    - review: clean — 0 findings, 16 tasks attempted, 0 failed, `skipped_files` empty, 5 of 5 source files reviewed. The fixture exclusion did not narrow this review.
+  timestamp: 2026-08-10T19:40:51.896249+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd980
 title: 'review scope: exclude validator-set fixture files from review pairs and tool runs'
 ---
 The review engine reviews validator fixture files as ordinary changed source, so every missing-docs tool rule fires on the fail fixture built to make it fire. This blocked ^f0wna3d: six eslint findings asked to document `missing-docs-typescript.fail.ts`, and documenting it breaks the fixture contract in `builtin/validators/README.md` (the fail fixture must hold undocumented items). Every future fixture edit re-raises the same findings.
@@ -116,3 +132,25 @@ Dropped by the written exception in the review skill (do not refactor tests that
 - `scope/tests.rs:1018` — asks to deduplicate `validator_sized` against `validator_over`. Both were there before.
 - `scope/tests.rs:1091` and `scope/tests.rs:1161` — ask to name the literal 25 across test functions that were there before.
 - `tool_rules/tests/shipped.rs:206` — asks to deduplicate `dead_code_work` against `complexity_work`. The commit changes only the import lines, 8 and 11.
+
+## Review Findings (2026-08-10 14:33)
+
+Scope: `review sha HEAD~1..HEAD`, commit 87a8c3da7. Engine counts: 0 findings, 0 confirmed, 2 refuted, 16 tasks attempted, 0 failed, 0 skipped.
+
+No new finding. The engine confirmed no candidate. It refuted the two candidates it raised.
+
+Scope check — the fixture exclusion did NOT narrow this review. `skipped_files` is empty, and `skipped` is 0. The commit touches 7 files. Two are `.kanban/` bookkeeping files that `.reviewignore` removes. The engine kept all 5 source files in the work-list:
+- `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op.rs`
+- `crates/swissarmyhammer-validators/src/lib.rs`
+- `crates/swissarmyhammer-validators/src/review/scope/fixtures.rs`
+- `crates/swissarmyhammer-validators/src/review/test_support.rs`
+- `crates/swissarmyhammer-validators/src/validators/loader.rs`
+
+The module `review/scope/fixtures.rs` is source code. It is not a file in a validator set `fixtures/` directory, so the exclusion does not apply to it.
+
+The 3 findings of the pass of 2026-08-10 14:14 are correct in the code:
+- `fixtures.rs:151` — corrected. One `repo_root()` is now in `review/test_support.rs`, with a doc comment. The copy in `fixtures.rs` and the copy in `lib.rs` are deleted. The two files import the one helper.
+- `loader.rs:510` — corrected. `retain_rulesets` takes `&[&str]`. The comparison is `*n == name`. The caller in `review_op.rs` makes a `Vec<&str>` from the request.
+- `loader.rs:613` — corrected. `LoadFailure`, `DirectoryInfo`, and `ValidatorDiagnostics` each derive `PartialEq` and `Eq`.
+
+`cargo clippy -p swissarmyhammer-validators --all-targets` gives no warning.

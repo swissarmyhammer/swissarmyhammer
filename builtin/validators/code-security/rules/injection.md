@@ -39,8 +39,43 @@ Examine the file content for these vulnerability patterns:
 - Deserialization of untrusted data using unsafe methods
 - Example: `pickle.loads(user_data)`, `yaml.load(user_input)` without safe loader
 
+## Before you report
+
+A matched pattern is a candidate, not a finding. One gate stands between them.
+Pass it, or stay silent.
+
+**Quote the sink from the file.** Open the line you are about to name. Copy the
+interpolation as it stands on disk — every quote character, every escape
+character, in order — into the finding. A finding you cannot quote is a finding
+you did not verify.
+
+**Then read the quoted text for the treatment you are about to ask for.** The
+treatment lives inside the string literal, so a safe sink and an unsafe one have
+the same shape. Read the characters, not the shape:
+
+- `format!("exec {real} \"$@\"")` interpolates the path bare. Report it.
+- `format!("exec \"{real}\" \"$@\"")` interpolates the path inside double
+  quotes. The treatment is present. Stay silent.
+
+The same reading decides every other sink. A `?` or `$1` placeholder is not
+concatenation. `html.escape(value)` inside the template is the escape this rule
+asks for. `safe_load` is not `load`.
+
+Report only what the quoted text lacks. A finding that asks for a treatment the
+line already holds cannot be satisfied by any edit.
+
+Measured on 2026-08-12, on one review. A finding named
+`verify_shipped_tree_breaks_without` in
+`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs` for
+command injection, and asked that `exec {real} "$@"` become `exec "{real}"
+"$@"`. That line already read `exec \"{real}\" \"$@\"` — commit `bf0cd8d34`
+quoted it earlier the same day. The rule reported the fix as the defect.
+
 ## Exceptions (Don't Flag)
 
+- **Treatment already present**: The quoted line carries the escaping, quoting,
+  or placeholder this rule asks for. Read the line to answer this; the shape of
+  the sink cannot.
 - **Parameterized queries**: Properly using prepared statements with placeholders (`?`, `$1`, `:name`)
 - **Sanitized inputs**: Using validation libraries like `validator.js`, `bleach`, `html.escape()`
 - **Escaped output**: Using framework-provided escaping functions

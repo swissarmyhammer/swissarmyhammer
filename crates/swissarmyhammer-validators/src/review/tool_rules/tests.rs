@@ -131,6 +131,18 @@ const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
 /// acceptance test drives end to end.
 const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 
+/// The shipped dead-code tool rule for Rust. `cargo check` gives one exit
+/// status to a run it could not make and to a run it made from end to end, so
+/// six more acceptance tests drive this rule over the shapes that tell those
+/// two apart.
+const RUST_DEAD_CODE_RULE: &str = "dead-code-rust";
+
+/// The shipped dead-code tool rule for Swift. It builds the package's TEST
+/// targets, so the test targets count as callers, and it keeps them out of the
+/// report with `--report-exclude` over the paths the package manifest names.
+/// One more acceptance test drives that split end to end.
+const SWIFT_DEAD_CODE_RULE: &str = "dead-code-swift";
+
 /// Every shipped dead-code tool rule, with the project type it serves.
 ///
 /// Each supersedes the `dead-code` prompt rule for its language. Three of
@@ -140,12 +152,12 @@ const PYTHON_DEAD_CODE_RULE: &str = "dead-code-python";
 /// scaffolding, is an annotation contract: staged code carries the
 /// language's own suppression marker with a reason, or it is dead.
 const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
-    ("rust", "dead-code-rust", SUPERSEDES_DEAD_CODE),
+    ("rust", RUST_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("go", "unused-code-go", SUPERSEDES_DEAD_CODE),
     ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
     ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
-    ("swift", "dead-code-swift", SUPERSEDES_DEAD_CODE),
+    ("swift", SWIFT_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
 ];
 
 /// The prompt rule every shipped magic-numbers tool rule supersedes.
@@ -220,8 +232,12 @@ const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
 /// holds the run to breaking on a file it cannot read.
 const SWIFT_COMPLEXITY_RULE: &str = "complexity-swift";
 
-/// The shipped complexity tool rule for Python. A second acceptance test
-/// holds its script to reading only the files it is given.
+/// The shipped complexity tool rule for Python. It carries the test carve-out
+/// the prompt rule states, and it carries neither of the other two, so five
+/// acceptance tests drive it end to end: one holds its script to reading only
+/// the files it is given, one holds the test carve-out, one holds the
+/// generated file it still reports, and two hold it to breaking on a file the
+/// tool cannot read.
 const PYTHON_COMPLEXITY_RULE: &str = "complexity-python";
 
 /// The shipped function-length tool rule for Python. A second acceptance

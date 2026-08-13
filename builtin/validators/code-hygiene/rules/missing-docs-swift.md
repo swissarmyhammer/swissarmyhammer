@@ -47,11 +47,15 @@ tool:
       project=".swiftlint.yml"
     fi
     lint "$project" "$@"
-    if [ -n "$project" ] && grep -qF 'Could not read configuration' "$work/lint.err"; then
+    if [ -n "$project" ] && grep -qE '^Could not read configuration:' "$work/lint.err"; then
       printf '%s\n' 'missing-docs-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
+    if grep -qE '^Could not read contents of `' "$work/lint.err"; then
+      printf '%s\n' 'missing-docs-swift: swiftlint could not read the contents of a file this run names' >&2
+      exit 1
+    fi
     measured=0
     if [ "$status" -eq 0 ]; then
       measured=1
@@ -61,7 +65,7 @@ tool:
       measured=1
     fi
     if [ "$measured" -eq 0 ]; then
-      if grep -qF 'No lintable files found' "$work/lint.err"; then
+      if grep -qE '^Error: No lintable files found at paths:' "$work/lint.err"; then
         exit 0
       fi
       exit 1
@@ -167,6 +171,64 @@ writes swiftlint's own message to stderr. The acceptance test
 `the_shipped_swift_missing_docs_tool_rule_answers_zero_when_the_project_excludes_every_file`
 holds that behaviour.
 
+## Each stderr test reads swiftlint's own message, and not a file name
+
+The script makes three tests on stderr: one for a project configuration
+swiftlint cannot read, one for a file swiftlint cannot decode, and one for a run
+that found no file to lint. swiftlint writes the PATH of a file into stderr as
+well, so a test that reads ALL of stderr answers the file NAME.
+
+swiftlint writes each message of its own at the START of a line, and it writes
+the path echo after `Error: `. Each of the three tests is therefore anchored on
+the start of a line:
+
+| what the script tests | the line swiftlint writes |
+|---|---|
+| `^Could not read configuration:` | `Could not read configuration: file Configuration.swift, line 278` |
+| ``^Could not read contents of ` `` | ``Could not read contents of `<path>` `` |
+| `^Error: No lintable files found at paths:` | `Error: No lintable files found at paths: '<path>'` |
+
+Measured with swiftlint 0.65.0, over one file that holds one undocumented
+`public struct` and one undocumented stored property under `Generated/`,
+beside a project `.swiftlint.yml` that states
+`excluded: [Generated]`. The file NAME is the one difference between the rows,
+and the unanchored script is the same script with each of the three tests
+written as a plain `grep -qF`:
+
+| the file name | the unanchored script | the anchored script |
+|---|---|---|
+| `Plain.swift` | 0 findings, exit 0 | 0 findings, exit 0 |
+| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0 |
+| `Could not read configuration.swift` | 2 findings on a file the project excludes | 0 findings, exit 0 |
+| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0 |
+
+Row 2 broke a run that measured correctly. Row 3 made a WRONG FINDING: the
+script dropped the project configuration, ran swiftlint a second time without
+it, and reported a file the project excludes. Row 4 moved nothing, because the
+decode test stands above that test, and each other broken shape this rule
+measures — a version mismatch and a configuration abort — writes no path into
+stderr. The anchor holds that test on swiftlint's own message as well.
+
+Each anchored test was measured in both directions. These runs still make a
+test fire:
+
+| the run | findings | exit | the rule's own line |
+|---|---|---|---|
+| the Latin-1 file alone | 0 | 1 | the decode line |
+| the Latin-1 file beside one healthy file | 0 | 1 | the decode line |
+| a project file that states `child_config: other.yml` | 2 findings | 0 | the configuration line |
+| a project file of bytes that are not YAML | 2 findings | 0 | the configuration line |
+| one file under `Generated/` beside `excluded: [Generated]` | 0 | 0 | none |
+
+One healthy file that holds a finding makes no test fire: the run reports
+2 findings and exits 0.
+
+The acceptance tests
+`the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_decode_message`
+and
+`the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_configuration_message`
+hold rows 2 and 3 of the file-name table to no finding and no tool error.
+
 ## A project configuration swiftlint cannot read beside this rule
 
 swiftlint reads the two `--config` paths as one hierarchy, and two shapes of
@@ -178,14 +240,16 @@ the project file stop it. Measured over one file that holds an undocumented
 | `child_config: other.yml` | aborts, exit 134, `There's an ambiguity in the child / parent configuration tree` |
 | bytes that are not YAML | aborts, exit 134, `Cannot parse YAML file` |
 
-Each abort writes `Could not read configuration` to stderr, and leaves stdout
-empty. The script read that as a broken tool and exited 1. Both shapes are
-configurations swiftlint reads on its own, so a project switched the gate off
-without meaning to.
+Each abort writes `Could not read configuration: file Configuration.swift, line
+278` to stderr, and leaves stdout empty. The script read that as a broken tool
+and exited 1. Both shapes are configurations swiftlint reads on its own, so a
+project switched the gate off without meaning to.
 
-The script now tests stderr for `Could not read configuration`, and it then
-runs a second time with its own configuration alone. It writes one line to
-stderr that names what it dropped. The project's `excluded:` list is not read
+The script tests stderr for `Could not read configuration:` at the start of a
+line, and it then runs a second time with its own configuration alone. The
+section "Each stderr test reads swiftlint's own message, and not a file name"
+above states why the test is anchored. The script writes one line to stderr that
+names what it dropped. The project's `excluded:` list is not read
 for that second run. Measured over one file under `Generated/` that holds the
 same declarations, beside a project file that states `child_config: other.yml`
 and `excluded: [Generated]`: the run reports 2 findings and exits 0.
@@ -234,16 +298,25 @@ child configuration this script writes:
 | what the run is | status | stdout |
 |---|---|---|
 | a file whose every public item carries a doc comment | 0 | an empty array, 5 bytes |
-| one file that holds 2 undocumented public items | 0 | 2 entries, 726 bytes |
-| the same file beside `warning_threshold: 1` | 2 | 3 entries, 949 bytes |
+| one file that holds 2 undocumented public items | 0 | 2 entries |
+| the same file beside `warning_threshold: 1` | 2 | 3 entries |
 | the same file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
 | the same file beside a project `excluded:` that covers it | 1 | 0 bytes |
-| one file whose only line is `public func oops( {` | 0 | 1 entry, 364 bytes |
+| one file whose only line is `public func oops( {` | 0 | 1 entry |
 | a path that holds no file | 1 | 0 bytes |
 | the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
 | a `--config` path that holds no file | 134 | 0 bytes |
 | a project configuration that holds `child_config:` | 134 | 0 bytes |
 | a command-line option that does not exist | 64 | 0 bytes |
+
+Each row that measured states the number of ENTRIES, and no number of bytes.
+The JSON reporter writes the absolute path of the file into each entry, so the
+byte count of a report that holds an entry moves with the length of that path.
+A later run from a different directory gives a different byte count for the same
+run, and a byte count in this table would then read as false. The entry count
+does not move with the path, and the entry count is what the script reads. A
+report of 0 bytes, and an empty array of 5 bytes, carry no path, so those two
+counts do not move.
 
 The two runs of status 2 differ in the report. The threshold run wrote 3
 entries. The version run wrote 0 bytes and linted no file: swiftlint compares
@@ -259,8 +332,10 @@ from a run that broke. The two paragraphs below state each test and its limit.
 So the script accepts status 0, and it accepts status 2 only when the report
 holds a JSON array of one entry or more. At each other status, and at status 2
 with a report of 0 bytes, the script makes one more test, on stderr. Stderr
-that holds `No lintable files found` exits 0 with no finding, and each other
-shape exits 1. That branch is how the project's `excluded:` list reaches a
+that holds `Error: No lintable files found at paths:` at the start of a line
+exits 0 with no finding, and each other shape exits 1. The section "Each stderr
+test reads swiftlint's own message, and not a file name" above states why the
+test is anchored. That branch is how the project's `excluded:` list reaches a
 clean answer, and the section "A run whose every file the project excludes"
 above states it. Measured with a project `.swiftlint.yml` that states
 `excluded: [src]`, over one file under `src/` that holds an undocumented
@@ -270,7 +345,8 @@ bytes to stdout, and exits 1; the script reports no finding and exits 0.
 
 The stderr string names the path, and it does not name the reason. Measured
 against the child configuration this script writes, 4 shapes each wrote 0
-bytes at status 1 with the string `No lintable files found`: a project
+bytes at status 1 with the line `Error: No lintable files found at paths:`: a
+project
 `excluded: [src]` list over `src/Docs.swift`; the directory `hollow`, which
 holds no Swift file; the path `src/Absent.swift`, which holds no file; the
 file `src/Notes.txt`, whose name does not end in `.swift`. The script reports
@@ -429,6 +505,53 @@ no filter can drop one.
 `mktemp -d` makes the working directory the script writes the configuration and
 the report into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
 every way the script leaves: a clean run, a finding, and a failure.
+
+## A file swiftlint cannot decode
+
+swiftlint reads a source file as UTF-8 and as nothing else. A file that holds
+other bytes — a Swift file a person saved in Latin-1, or a binary file under a
+`.swift` name — makes swiftlint write ``Could not read contents of `<path>` ``
+to stderr. swiftlint then lints no line of that file.
+
+The `[ ! -r "$file" ]` guard admits the file, because the file IS readable. The
+DECODE is what fails, and the status does not state it. Measured with swiftlint
+0.65.0 over one file that holds `let name = "café"` in Latin-1, above one
+undocumented `public struct` and one undocumented stored property:
+
+| the run | status | stdout | stderr |
+|---|---|---|---|
+| the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
+| the Latin-1 file beside one file that holds a finding | 0 | 2 entries | `Could not read contents of` |
+
+Each row states the number of entries and no number of bytes, for the reason
+the section "A project warning threshold, and what the script accepts at status
+2" above states. Each row carries the status and the report of a healthy run.
+The child states
+`warning: [open, public]` and no `error:` list, so no finding of this rule
+reaches error severity and swiftlint exits 0 for a file that holds one, which
+is the row of the status table above. So neither the status nor the report
+tells a file swiftlint never read from a clean file, and
+the earlier script reported 0 findings and exited 0 for row 1: the engine read
+a file swiftlint never read as a clean tree.
+
+The script therefore tests STDERR, before it reads the status. It writes
+`missing-docs-swift: swiftlint could not read the contents of a file this run
+names` and exits 1. swiftlint's own message stands above that line, and it
+names the path. The acceptance test
+`the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_decode`
+holds that behaviour.
+
+The test is anchored on the start of a line, because swiftlint writes a path
+into stderr as well. Measured with swiftlint 0.65.0 over one file named
+`Could not read contents of.swift` under `Generated/`, beside a project
+`.swiftlint.yml` that states `excluded: [Generated]`: swiftlint writes
+`Error: No lintable files found at paths: 'Generated/Could not read contents
+of.swift'`, and a test spelled `grep -qF 'Could not read contents of'` matched
+that path echo. The script then wrote its tool-error line and exited 1 over a
+run that measured correctly. Measured, ``^Could not read contents of ` ``
+matches the decode message and does not match the path echo, and the same run
+reports no finding and exits 0. The section "Each stderr test reads swiftlint's
+own message, and not a file name" above states each row of that measurement.
 
 ## A run answers for the files it is given, and for no other
 

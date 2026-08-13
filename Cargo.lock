@@ -7313,16 +7313,14 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 name = "shelltool-cli"
 version = "0.17.0"
 dependencies = [
+ "anyhow",
  "clap",
  "clap-markdown",
  "clap_complete",
  "clap_mangen",
- "dirs",
  "mirdan",
  "rmcp",
- "serde",
  "serde_json",
- "serde_yaml_ng",
  "serial_test",
  "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
@@ -7330,7 +7328,6 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
  "swissarmyhammer-operations",
- "swissarmyhammer-shell",
  "swissarmyhammer-tools",
  "tempfile",
  "tokio",
@@ -7817,7 +7814,6 @@ dependencies = [
  "swissarmyhammer-lsp",
  "swissarmyhammer-operations",
  "swissarmyhammer-project-detection",
- "swissarmyhammer-sem",
  "swissarmyhammer-skills",
  "swissarmyhammer-statusline",
  "swissarmyhammer-templating",

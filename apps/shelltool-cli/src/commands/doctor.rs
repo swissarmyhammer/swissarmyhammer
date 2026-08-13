@@ -13,6 +13,7 @@ use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
 
 /// Shelltool diagnostic runner.
+#[derive(Debug)]
 pub struct ShelltoolDoctor {
     checks: Vec<Check>,
 }
@@ -116,9 +117,24 @@ impl ShelltoolDoctor {
 
     /// Run ShellExecuteTool health checks via the Doctorable trait.
     ///
-    /// Converts each HealthCheck from the tool into a Check for the doctor runner.
+    /// Converts each HealthCheck from the tool into a Check for the doctor
+    /// runner. A tool whose shell state cannot be created reports one Error
+    /// check of its own, which is the answer a doctor exists to give.
     fn check_shell_tool_health(&mut self) {
-        let tool = ShellExecuteTool::new();
+        let tool = match ShellExecuteTool::new() {
+            Ok(tool) => tool,
+            Err(e) => {
+                self.add_check(Check {
+                    name: "Shell state".to_string(),
+                    status: CheckStatus::Error,
+                    message: e.to_string(),
+                    fix: Some(
+                        "Run shelltool from a writable directory, or set TMPDIR to one".to_string(),
+                    ),
+                });
+                return;
+            }
+        };
         let health_checks = tool.run_health_checks();
 
         for health_check in health_checks {
@@ -230,6 +246,17 @@ mod tests {
     fn test_default() {
         let doctor = ShelltoolDoctor::default();
         assert!(doctor.checks().is_empty());
+    }
+
+    /// `ShelltoolDoctor` is public, so it renders through `Debug` for any
+    /// downstream caller that logs it or asserts on it.
+    #[test]
+    fn shelltool_doctor_renders_through_debug() {
+        let doctor = ShelltoolDoctor::new();
+        assert!(
+            format!("{doctor:?}").contains("ShelltoolDoctor"),
+            "Debug output: {doctor:?}"
+        );
     }
 
     /// `check_git_repository` walks ancestors from process-global CWD via

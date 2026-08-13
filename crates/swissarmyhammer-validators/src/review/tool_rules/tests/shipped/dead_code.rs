@@ -15,6 +15,7 @@ use super::*;
 /// replaces the prompt rule's judgment, and without it the tool would
 /// report staged work as dead.
 #[test]
+#[serial_test::serial(cwd)]
 fn every_shipped_dead_code_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(SHIPPED_DEAD_CODE_RULES, DEAD_CODE_PROMPT_RULE);
 }

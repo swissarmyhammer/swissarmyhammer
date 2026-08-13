@@ -1,6 +1,14 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kzteqyvr32krxk791hs24w1d
+  text: |-
+    Archived. The `duplication-parsed` rule is removed — see ^wwb6hk7.
+
+    The stale measurement goes away with the rule file that states it.
+  timestamp: 2026-08-12T07:42:13.880219+00:00
 position_column: todo
 position_ordinal: ffca80
 title: 'duplication-parsed states a stale measurement: 416 findings over 1183 files, against 403 over 1191'

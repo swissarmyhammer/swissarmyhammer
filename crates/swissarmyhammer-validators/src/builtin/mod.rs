@@ -51,16 +51,29 @@ pub fn load_builtins(loader: &mut ValidatorLoader) {
         }
     }
 
-    // Load RuleSets from builtin/validators directory
-    // The path is relative to the crate root where Cargo.toml is located
-    let builtin_validators_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators");
-
     if let Err(e) =
-        loader.load_rulesets_directory(&builtin_validators_path, ValidatorSource::Builtin)
+        loader.load_rulesets_directory(&builtin_validators_dir(), ValidatorSource::Builtin)
     {
         tracing::error!("Failed to load builtin RuleSets: {}", e);
     }
+}
+
+/// The directory the BUILTIN validator sets are loaded from at runtime, and so
+/// the root every builtin `fixtures/` directory stands under.
+///
+/// It is `<repository>/builtin/validators`, resolved from `CARGO_MANIFEST_DIR`
+/// at COMPILE time — an absolute path into the source checkout this engine was
+/// built from, not a copy beside the binary and not a `sah init` snapshot under
+/// the user's home. Two consequences are worth stating, because the review
+/// scope stage compares changed files against this root
+/// ([`ValidatorLoader::fixture_dirs`](crate::validators::ValidatorLoader::fixture_dirs)):
+///
+/// - Reviewing THIS repository, a changed `builtin/validators/*/fixtures/*`
+///   file resolves under this root, so it is excluded as fixture data.
+/// - Reviewing any other repository, no file of it can stand under this root,
+///   so the builtin roots exclude nothing there.
+pub fn builtin_validators_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators")
 }
 
 /// Get all builtin YAML includes as (name, content) tuples.
@@ -303,11 +316,6 @@ mod tests {
         ("function-length-go", &["function-length"]),
     ];
 
-    /// The commented-out-code tool rules `code-hygiene` carries. One rule reads
-    /// eleven languages, because the verdict is a re-parse with the file's own
-    /// grammar rather than a language-specific linter.
-    const CODE_HYGIENE_COMMENTED_CODE_TOOL_RULES: &[&str] = &["no-commented-code-parsed"];
-
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
     /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
     /// `complexity` for `cognitive-complexity` (the rest are in-file
@@ -344,16 +352,14 @@ mod tests {
                 CODE_HYGIENE_COMPLEXITY_TOOL_RULES
                     .iter()
                     .map(|(name, _)| name),
-            )
-            .chain(CODE_HYGIENE_COMMENTED_CODE_TOOL_RULES.iter());
+            );
         assert_eq!(
             ruleset.rules.len(),
             CODE_HYGIENE_PROMPT_RULES.len()
                 + CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.len()
                 + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len()
                 + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len()
-                + CODE_HYGIENE_COMPLEXITY_TOOL_RULES.len()
-                + CODE_HYGIENE_COMMENTED_CODE_TOOL_RULES.len(),
+                + CODE_HYGIENE_COMPLEXITY_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
         for expected in expected_rules {
@@ -385,11 +391,6 @@ mod tests {
                 CODE_HYGIENE_COMPLEXITY_TOOL_RULES
                     .iter()
                     .map(|(name, superseded)| (name, *superseded)),
-            )
-            .chain(
-                CODE_HYGIENE_COMMENTED_CODE_TOOL_RULES
-                    .iter()
-                    .map(|name| (name, ["no-commented-code"].as_slice())),
             );
         for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset
@@ -407,61 +408,6 @@ mod tests {
                 "{tool_rule_name} must supersede {superseded:?}"
             );
         }
-    }
-
-    /// The one tool rule whose `match` must list exactly the extensions its op
-    /// can decide.
-    const COMMENTED_CODE_TOOL_RULE: &str = "no-commented-code-parsed";
-
-    /// The `no-commented-code-parsed` rule matches exactly the extensions the
-    /// re-parse op covers — no more, and no fewer.
-    ///
-    /// The two lists have one source of truth, `COMMENT_SPECS` in
-    /// `swissarmyhammer-sem`, and this test is what keeps the rule file honest
-    /// against it. A language added to the op but left out of the `match`
-    /// silently keeps the prompt rule for its files; a language listed in the
-    /// `match` but absent from the op suppresses the prompt rule for files the
-    /// op then says nothing about, which is the worse of the two.
-    #[test]
-    fn test_commented_code_tool_rule_matches_exactly_the_extensions_the_op_covers() {
-        use swissarmyhammer_sem::parser::plugins::code::commented_code_extensions;
-
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-        let ruleset = loader
-            .get_ruleset("code-hygiene")
-            .expect("code-hygiene should be loaded");
-        let rule = ruleset
-            .rules
-            .iter()
-            .find(|rule| rule.name == COMMENTED_CODE_TOOL_RULE)
-            .unwrap_or_else(|| panic!("{COMMENTED_CODE_TOOL_RULE} should be loaded"));
-        let criteria = rule
-            .match_criteria
-            .as_ref()
-            .unwrap_or_else(|| panic!("{COMMENTED_CODE_TOOL_RULE} must narrow its set's match"));
-
-        let mut matched: Vec<String> = criteria
-            .files
-            .iter()
-            .map(|pattern| {
-                pattern
-                    .strip_prefix("**/*")
-                    .unwrap_or_else(|| panic!("every pattern must be `**/*<ext>`, got `{pattern}`"))
-                    .to_string()
-            })
-            .collect();
-        let mut covered: Vec<String> = commented_code_extensions()
-            .iter()
-            .map(|extension| (*extension).to_string())
-            .collect();
-        matched.sort();
-        covered.sort();
-
-        assert_eq!(
-            matched, covered,
-            "the rule's `match` and the op's coverage must name the same extensions"
-        );
     }
 
     // ========================================================================
@@ -641,8 +587,8 @@ mod tests {
             .get_ruleset("duplication")
             .expect("duplication should still load unchanged");
         assert_eq!(duplication.manifest.probes, vec!["duplicates".to_string()]);
-        // `duplication`, `rust`, `swift` and the `duplication-parsed` tool rule.
-        assert_eq!(duplication.rules.len(), 4);
+        // `duplication`, `rust` and `swift`.
+        assert_eq!(duplication.rules.len(), 3);
     }
 
     /// Every probe the `completeness` ruleset declares, beside the rule that

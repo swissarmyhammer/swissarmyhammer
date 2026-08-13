@@ -727,6 +727,21 @@ comments:
 
     Test count moved 13917 → 13923 across the card.
   timestamp: 2026-08-09T03:32:02.269705+00:00
+- actor: claude-code
+  id: 01kztetkq1ebknr9ajr57r059c
+  text: |-
+    ## SUPERSEDED — 2026-08-12
+
+    The STANDING ORDER in this card is no longer live. Do not act on it.
+
+    This card built `no-commented-code-parsed`. That rule spawned bash, which ran
+    the `sah` binary again, to reach a function already linked into the calling
+    process. ^wwb6hk7 deletes the rule and the whole self-shell contract with it.
+
+    The `no-commented-code` prompt rule decides again. That reverses this card's
+    "supersede the prompt rule" order deliberately, with the user's decision on
+    record.
+  timestamp: 2026-08-12T07:43:40.769520+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffffcf80
 title: 'no-commented-code: ruff ERA tool rule for Python + a comment-reparse tree-sitter probe'

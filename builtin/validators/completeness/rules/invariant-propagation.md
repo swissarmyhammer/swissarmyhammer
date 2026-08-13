@@ -62,6 +62,33 @@ The reproduction in an issue exercises ONE path. Making that path work while the
 parallel paths still assume the old behaviour yields a fix that passes the
 obvious test and fails on the next input the same change should have covered.
 
+## Before you report
+
+A probe row, and a pattern you noticed across sibling files, are both
+candidates. Two gates stand between a candidate and a finding. Pass both, or
+stay silent.
+
+1. **Read the sibling and confirm the treatment is ABSENT.** Open the file and
+   look for the treatment you are about to ask for. A sibling that already
+   holds it is not a missed site. Quote the absent line in the finding — a
+   finding you cannot quote is a finding you did not verify. Check the age too:
+   `git log -1 <file>` against the range under review tells you whether the
+   sibling already satisfied the rule before this change, in which case the
+   change never owed it anything.
+
+2. **Confirm the sibling ADMITS the treatment.** A near-copy is no promise that
+   the same requirement is valid there. Read what the sibling declares about
+   itself — its front matter, its declared scope, its type, the assertion its
+   shared helper opens with — and check the treatment is legal under that
+   declaration. Where the sibling's own declaration makes the treatment
+   impossible, the difference IS the contract, not a gap.
+
+Both gates failed on 2026-08-12, on one review. One finding asked a test to
+assert three markers it already asserted, in a file last changed before the
+range. Another asked a `scope: workspace` rule to carry a test whose helper
+opens by asserting `scope: files`; the two requirements cannot both be correct.
+Neither finding could be satisfied by any edit.
+
 ## What to Report
 
 Name the token/flag/case and list the site that changed plus the sibling site(s)
@@ -83,3 +110,8 @@ the near-copy it left alone, and that copy's line.
   intentional and explained.
 - A shared helper already centralizes the handling and the change went there, so
   all callers inherit it.
+- The sibling already holds the treatment. Read the file to answer this; the
+  shape of the row cannot.
+- The sibling declares a precondition the treatment cannot meet. A rule that
+  states `scope: workspace` cannot carry a test whose helper opens by asserting
+  `scope: files`. The declaration wins, and there is nothing to report.

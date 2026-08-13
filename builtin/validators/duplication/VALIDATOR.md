@@ -26,22 +26,8 @@ become a shared function instead of N copies a human must keep in lockstep.
 
 ## Which tools this set uses
 
-The `duplication-parsed` tool rule decides the near-duplicate case, and it
-supersedes `duplication`, `rust` and `swift` for every language the grammar
-roster parses. The `duplicates` probe supplies the machine facts for the rest —
-the languages the roster does not parse.
-
-### The comparison is our own
-
-The rule walks the named definitions the tree-sitter parse reports — every
-function, every method, every type — normalizes each one, and pairs two
-definitions by the length of the longest subsequence their normalized streams
-share. A function normalizes its body positionally, so a renamed variable and a
-substituted constant both fall out; a type normalizes its member types and
-drops the member names.
-
-Reading definitions rather than a window is what makes the exemptions possible:
-the same parse that finds a copy decides which definitions are test code.
+No tool decides this set. The `duplication`, `rust` and `swift` prompt rules
+decide, and the `duplicates` probe supplies the machine facts they read.
 
 ### `cpd-core` — embedded, then removed
 
@@ -70,14 +56,12 @@ those findings are noise.
 
 A tool rule that ran `jscpd` as a command could not remove them. It scopes its
 input only by path glob, and 4857 clone instances sit in inline test modules
-inside files that also hold production code. No path glob can reach those. The
-rule this set ships compares tree-sitter definitions instead, so the exclusion
-is the parse rather than the path.
+inside files that also hold production code. No path glob can reach those. A
+reader can, because the `#[cfg(test)]` module a block sits in stands in the
+same file the reader has open.
 
-### What the probe still answers
+### What the probe answers
 
-The tool rule reads only the languages the grammar roster parses. For every
-other language the `duplication` prompt rule keeps running, and the
-`duplicates` probe is the machine fact it reads. Cosine similarity is what the
-probe measures; the tool rule needs none, because a renamed identifier falls
-out of its normalization before the two definitions are compared.
+The `duplicates` probe is the machine fact the prompt rules read. Cosine
+similarity is what it measures, and it names the verbatim and near-verbatim
+blocks it matched, both against the existing index and across the changed set.

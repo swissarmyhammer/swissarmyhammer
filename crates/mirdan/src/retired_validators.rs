@@ -1,27 +1,47 @@
-//! Snapshot of builtin validator sets that have been retired (merged away or
+//! Snapshot of builtin validator content that has been retired (merged away or
 //! deleted) from `builtin/validators/`, retained ONLY so a validators refresh
-//! can detect and prune a retired set from the deployed store
+//! can detect and prune the retired content from the deployed store
 //! (`~/.validators/` global or `./.validators/` project) when the user never
 //! touched it.
+//!
+//! Retirement happens at two grains, and each has its own table and its own
+//! prune:
+//!
+//! - A whole SET leaves the builtin lineup — [`RETIRED_VALIDATOR_SETS`] and
+//!   [`prune_unmodified_retired_sets`], which remove the set directory.
+//! - A single RULE FILE is deleted from a set that still ships —
+//!   [`RETIRED_VALIDATOR_FILES`] and [`prune_unmodified_retired_files`], which
+//!   remove that one file and nothing else around it.
 //!
 //! This module is deliberately isolated from `builtin/validators/` (the active
 //! validator source tree): its snapshot files live under
 //! `crates/mirdan/retired-validators/`, a sibling directory neither the
 //! `swissarmyhammer-validators` RuleSet loader nor mirdan's own
-//! `builtin_validators` build-time embed ever scans. A retired set must never
+//! `builtin_validators` build-time embed ever scans. Retired content must never
 //! reappear as a loadable or installable validator — only as a fact this
-//! module compares the deployed store against.
+//! module compares the deployed store against. Every snapshot file here is
+//! byte-frozen for the same reason: editing one breaks the comparison below,
+//! and the prune it drives silently stops firing.
 //!
 //! # Reference-copy policy
 //!
 //! [`install::install_profile_validators`](crate::install) owns builtin-owned
 //! files: every embedded *active* file is overwritten on each install/refresh.
-//! A *retired* set is different — nothing re-materializes it — so the only
-//! honest outcome for a retired set the user left untouched is deletion, and
-//! the only honest outcome for one the user edited is to leave it alone
-//! entirely. [`prune_unmodified_retired_sets`] is that comparison: exact
-//! byte-for-byte match against the snapshot removes the set directory; any
-//! difference (edited content, added file, removed file) leaves it in place.
+//! *Retired* content is different — nothing re-materializes it — so the only
+//! honest outcome for retired content the user left untouched is deletion, and
+//! the only honest outcome for content the user edited is to leave it alone
+//! entirely.
+//!
+//! Both prunes are that same comparison, differing only in what they compare
+//! and what they remove:
+//!
+//! - [`prune_unmodified_retired_sets`] compares the whole set directory. An
+//!   exact byte-for-byte match removes the directory; any difference (edited
+//!   content, an added file, a removed file) leaves it in place.
+//! - [`prune_unmodified_retired_files`] compares one file. An exact
+//!   byte-for-byte match removes that file; any difference leaves it in place.
+//!   Nothing else in the surrounding set is read or touched, because that set
+//!   still ships and the installer still owns it.
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +65,24 @@ pub struct RetiredSet {
     pub name: &'static str,
     /// Every file the set shipped, relative to the set directory.
     pub files: &'static [RetiredFile],
+}
+
+/// A retired rule file inside a builtin validator set that still ships.
+///
+/// This is the file-level counterpart of [`RetiredSet`]. The set itself is
+/// still part of the builtin lineup, so the installer keeps refreshing it and
+/// never removes it; only one rule inside it was deleted, and nothing on the
+/// install path takes that one file back out of a deployed store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredSetFile {
+    /// The still-shipping set's directory name (e.g. `"duplication"`).
+    pub set_name: &'static str,
+    /// Path relative to the set directory (e.g.
+    /// `"rules/duplication-parsed.md"`).
+    pub relative_path: &'static str,
+    /// The exact byte content shipped for this file before the rule was
+    /// retired.
+    pub content: &'static str,
 }
 
 /// The nine single-rule builtin validator sets merged into `code-security` and
@@ -179,6 +217,70 @@ pub static RETIRED_VALIDATOR_SETS: &[RetiredSet] = &[
     },
 ];
 
+/// The retired rule files, and their fixtures, whose sets still ship.
+///
+/// `duplication-parsed` and `no-commented-code-parsed` were deleted from
+/// `builtin/validators/` while `duplication` and `code-hygiene` stayed in the
+/// builtin lineup. A store an earlier install wrote still holds both rule
+/// files; the validator loader reads them at user or project precedence, so
+/// each keeps running, and `sah doctor` keeps reporting it as a tool rule
+/// whose tool it can no longer reach.
+///
+/// The same deletion took each rule's pass and fail fixtures with it, and a
+/// deployed store holds those too. They raise no doctor row, because doctor
+/// reaches a fixture only through the rule that names it and no rule names
+/// these any more — which is precisely why nothing else would ever remove
+/// them.
+///
+/// `duplication/fixtures/` held nothing but this pair, so pruning both leaves
+/// that directory behind empty, where `code-hygiene/fixtures/` keeps the many
+/// fixtures it still ships. The difference costs nothing. A set's layout
+/// contract is `VALIDATOR.md` plus `rules/`, which `fixtures/` is no part of,
+/// and every reader of a fixtures directory resolves a file some rule named,
+/// so an empty directory and an absent one answer alike.
+pub static RETIRED_VALIDATOR_FILES: &[RetiredSetFile] = &[
+    RetiredSetFile {
+        set_name: "duplication",
+        relative_path: "rules/duplication-parsed.md",
+        content: include_str!("../retired-validators/duplication/rules/duplication-parsed.md"),
+    },
+    RetiredSetFile {
+        set_name: "code-hygiene",
+        relative_path: "rules/no-commented-code-parsed.md",
+        content: include_str!(
+            "../retired-validators/code-hygiene/rules/no-commented-code-parsed.md"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "code-hygiene",
+        relative_path: "fixtures/no-commented-code-parsed.fail.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/code-hygiene/fixtures/no-commented-code-parsed.fail.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "code-hygiene",
+        relative_path: "fixtures/no-commented-code-parsed.pass.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/code-hygiene/fixtures/no-commented-code-parsed.pass.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "duplication",
+        relative_path: "fixtures/duplication-parsed.fail.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/duplication/fixtures/duplication-parsed.fail.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "duplication",
+        relative_path: "fixtures/duplication-parsed.pass.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/duplication/fixtures/duplication-parsed.pass.rs.tmpl"
+        ),
+    },
+];
+
 /// Remove every retired builtin validator set under `store_root` whose deployed
 /// files are byte-identical to what was shipped before it was retired.
 ///
@@ -199,6 +301,33 @@ pub fn prune_unmodified_retired_sets(store_root: &Path) -> Vec<String> {
         if deployed_set_matches_snapshot(&set_dir, set) && store::remove_if_exists(&set_dir).is_ok()
         {
             removed.push(set.name.to_string());
+        }
+    }
+    removed
+}
+
+/// Remove every retired rule file under `store_root` whose deployed bytes are
+/// identical to what was shipped before the rule was retired.
+///
+/// A file that was never deployed is a no-op. A file whose deployed bytes
+/// differ in any way from the snapshot is left untouched: that difference is
+/// the user's own work. Only the named file is ever removed — the set around
+/// it still ships, so every sibling in it stays where the installer put it.
+///
+/// Returns the `<set>/<relative path>` of each file actually removed.
+pub fn prune_unmodified_retired_files(store_root: &Path) -> Vec<String> {
+    let mut removed = Vec::new();
+    for file in RETIRED_VALIDATOR_FILES {
+        let deployed = store_root.join(file.set_name).join(file.relative_path);
+        if !deployed.is_file() {
+            continue;
+        }
+        let matches_snapshot = matches!(
+            std::fs::read_to_string(&deployed),
+            Ok(content) if content == file.content
+        );
+        if matches_snapshot && store::remove_if_exists(&deployed).is_ok() {
+            removed.push(format!("{}/{}", file.set_name, file.relative_path));
         }
     }
     removed
@@ -240,6 +369,10 @@ fn collect_relative_files(dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A tool rule ships one fixture its tool must report and one its tool must
+    /// pass, so retiring a tool rule retires exactly two fixtures with it.
+    const FIXTURES_PER_TOOL_RULE: usize = 2;
 
     #[test]
     fn test_retired_sets_are_the_nine_merged_names() {
@@ -368,5 +501,213 @@ mod tests {
 
         assert!(removed.is_empty());
         assert!(user_set.is_dir(), "a non-retired set must never be touched");
+    }
+
+    #[test]
+    fn test_retired_files_are_the_two_parsed_rules_and_their_four_fixtures() {
+        let names: Vec<String> = RETIRED_VALIDATOR_FILES
+            .iter()
+            .map(|f| format!("{}/{}", f.set_name, f.relative_path))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "duplication/rules/duplication-parsed.md".to_string(),
+                "code-hygiene/rules/no-commented-code-parsed.md".to_string(),
+                "code-hygiene/fixtures/no-commented-code-parsed.fail.rs.tmpl".to_string(),
+                "code-hygiene/fixtures/no-commented-code-parsed.pass.rs.tmpl".to_string(),
+                "duplication/fixtures/duplication-parsed.fail.rs.tmpl".to_string(),
+                "duplication/fixtures/duplication-parsed.pass.rs.tmpl".to_string(),
+            ]
+        );
+    }
+
+    /// A retired tool rule and its fixtures retire together. A fixture left
+    /// behind is inert — no rule names it, so `sah doctor` never reads it and
+    /// never reports it — which is exactly why it would sit in every deployed
+    /// store forever unless this table names it.
+    #[test]
+    fn test_every_retired_tool_rule_has_its_fixtures_retired_with_it() {
+        for rule in RETIRED_VALIDATOR_FILES {
+            let Some(stem) = rule
+                .relative_path
+                .strip_prefix("rules/")
+                .and_then(|name| name.strip_suffix(".md"))
+            else {
+                continue;
+            };
+            let fixture_prefix = format!("fixtures/{stem}.");
+            let fixture_count = RETIRED_VALIDATOR_FILES
+                .iter()
+                .filter(|file| {
+                    file.set_name == rule.set_name
+                        && file.relative_path.starts_with(&fixture_prefix)
+                })
+                .count();
+            assert_eq!(
+                fixture_count, FIXTURES_PER_TOOL_RULE,
+                "retired tool rule {}/{} must retire its pass and fail fixtures with it",
+                rule.set_name, rule.relative_path
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_retired_file_snapshot_is_non_empty() {
+        for file in RETIRED_VALIDATOR_FILES {
+            assert!(
+                !file.content.is_empty(),
+                "{}/{} should not be empty",
+                file.set_name,
+                file.relative_path
+            );
+        }
+    }
+
+    /// A retired file's own set must still be a current builtin. If the whole
+    /// set has gone, the entry belongs in [`RETIRED_VALIDATOR_SETS`] instead —
+    /// this table only removes a file from a directory the installer still
+    /// owns and refreshes.
+    #[test]
+    fn test_every_retired_file_names_a_set_that_still_ships() {
+        let sets = crate::builtin_validators::builtin_validators_by_set();
+        for file in RETIRED_VALIDATOR_FILES {
+            assert!(
+                sets.contains_key(file.set_name),
+                "{} no longer ships as a builtin set; retire the whole set instead",
+                file.set_name
+            );
+        }
+    }
+
+    /// A retired file must not also be a shipped builtin. Were it both, the
+    /// prune would delete a file the installer re-materializes on the same
+    /// run, and the snapshot would be a claim about content that still ships.
+    #[test]
+    fn test_no_retired_file_is_still_shipped_by_a_builtin_set() {
+        let shipped: Vec<&str> = crate::builtin_validators::get_builtin_validators()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        for file in RETIRED_VALIDATOR_FILES {
+            let embedded_name = format!("{}/{}", file.set_name, file.relative_path);
+            assert!(
+                !shipped.contains(&embedded_name.as_str()),
+                "{embedded_name} still ships as a builtin: pruning it would delete a file the \
+                 installer just wrote"
+            );
+        }
+    }
+
+    /// Write one retired rule file's shipped snapshot verbatim under
+    /// `root/<set>/<relative path>`, and return where it landed.
+    fn deploy_file_snapshot(root: &Path, file: &RetiredSetFile) -> PathBuf {
+        let dest = root.join(file.set_name).join(file.relative_path);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, file.content).unwrap();
+        dest
+    }
+
+    #[test]
+    fn prune_removes_an_unmodified_retired_file() {
+        let store = tempdir().unwrap();
+        let file = &RETIRED_VALIDATOR_FILES[0];
+        let deployed = deploy_file_snapshot(store.path(), file);
+
+        let removed = prune_unmodified_retired_files(store.path());
+
+        assert_eq!(
+            removed,
+            vec![format!("{}/{}", file.set_name, file.relative_path)]
+        );
+        assert!(
+            !deployed.exists(),
+            "an unmodified retired rule file must be removed"
+        );
+    }
+
+    #[test]
+    fn prune_leaves_a_user_modified_retired_file_untouched() {
+        let store = tempdir().unwrap();
+        let file = &RETIRED_VALIDATOR_FILES[0];
+        let deployed = deploy_file_snapshot(store.path(), file);
+        std::fs::write(&deployed, "USER EDITED THIS FILE").unwrap();
+
+        let removed = prune_unmodified_retired_files(store.path());
+
+        assert!(
+            removed.is_empty(),
+            "a user-modified retired rule file must never be pruned"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&deployed).unwrap(),
+            "USER EDITED THIS FILE",
+            "the user's edit must be preserved exactly"
+        );
+    }
+
+    #[test]
+    fn prune_removes_every_unmodified_retired_file_at_once() {
+        let store = tempdir().unwrap();
+        for file in RETIRED_VALIDATOR_FILES {
+            deploy_file_snapshot(store.path(), file);
+        }
+
+        let removed = prune_unmodified_retired_files(store.path());
+
+        assert_eq!(removed.len(), RETIRED_VALIDATOR_FILES.len());
+        for file in RETIRED_VALIDATOR_FILES {
+            assert!(
+                !store
+                    .path()
+                    .join(file.set_name)
+                    .join(file.relative_path)
+                    .exists(),
+                "{}/{} must be removed",
+                file.set_name,
+                file.relative_path
+            );
+        }
+    }
+
+    #[test]
+    fn prune_is_a_no_op_when_no_retired_file_is_deployed() {
+        let store = tempdir().unwrap();
+        let removed = prune_unmodified_retired_files(store.path());
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn prune_removes_only_the_named_file_from_a_still_shipping_set() {
+        let store = tempdir().unwrap();
+        let file = &RETIRED_VALIDATOR_FILES[0];
+        let deployed = deploy_file_snapshot(store.path(), file);
+
+        let set_dir = store.path().join(file.set_name);
+        let manifest = set_dir.join("VALIDATOR.md");
+        std::fs::write(&manifest, "SHIPPED MANIFEST").unwrap();
+        let sibling = set_dir.join("rules/a-rule-that-still-ships.md");
+        std::fs::write(&sibling, "SHIPPED RULE").unwrap();
+
+        prune_unmodified_retired_files(store.path());
+
+        assert!(
+            !deployed.exists(),
+            "the retired rule file must be removed, or \"only\" proves nothing"
+        );
+        assert!(
+            set_dir.is_dir(),
+            "the still-shipping set directory must survive"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&manifest).unwrap(),
+            "SHIPPED MANIFEST",
+            "the set manifest must never be touched"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sibling).unwrap(),
+            "SHIPPED RULE",
+            "a sibling rule must never be touched"
+        );
     }
 }

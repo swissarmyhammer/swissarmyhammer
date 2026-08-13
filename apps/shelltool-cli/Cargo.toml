@@ -17,7 +17,6 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-tools = { workspace = true }
-swissarmyhammer-shell = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
@@ -25,6 +24,7 @@ swissarmyhammer-doctor = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 mirdan = { workspace = true }
 
+anyhow = { workspace = true }
 rmcp = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
@@ -32,11 +32,8 @@ swissarmyhammer-cli-completions = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
-dirs = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

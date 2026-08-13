@@ -26,9 +26,25 @@ tool:
       echo "swift build wrote no index store under .build: periphery has nothing to read" >&2
       exit 1
     fi
+    manifest=$(swift package describe --type json)
+    if [ -z "$manifest" ]; then
+      echo "dead-code-swift: swift package describe wrote no manifest, so the run cannot tell a test target from a product target" >&2
+      exit 1
+    fi
+    if ! test_paths=$(printf '%s\n' "$manifest" | jq -r '.targets[] | select(.type == "test") | .path'); then
+      echo "dead-code-swift: jq could not read the package manifest, so the run cannot tell a test target from a product target" >&2
+      exit 1
+    fi
+    report_filter=()
+    while IFS= read -r test_path; do
+      if [ -n "$test_path" ]; then
+        report_filter+=(--report-exclude "$test_path/**")
+      fi
+    done <<< "$test_paths"
     periphery scan --quiet --format json --skip-build --index-store-path "$store" \
       --retain-public --retain-objc-accessible --retain-swift-ui-previews \
-      --retain-codable-properties --disable-update-check --relative-results |
+      --retain-codable-properties --disable-update-check --relative-results \
+      "${report_filter[@]}" |
       jq -c '.[]
              | select(.kind != "var.parameter")
              | (.location | split(":")) as $at
@@ -102,9 +118,46 @@ property an encoder reads by reflection all have callers no index can see.
 `swift build` alone does not compile the test targets, so every internal helper
 that only a test uses looks dead. Measured on Alamofire: `RequestTaskMap.isEmpty`
 is reported without `--build-tests` and not reported with it, because a test is
-its only caller. `--build-tests` also brings the test-support code itself under
-the gate, which is where 52 of the 74 findings sit — a long file of `AFError`
-convenience properties no test ever calls.
+its only caller.
+
+## The test targets are indexed, and never reported
+
+`--build-tests` also brings the test-support code itself under the gate, and
+`dead-code`, the prompt rule this one supersedes, exempts "test functions and
+test-only helpers". So the run has to hold two things at once: the test targets
+stay in the INDEX, where they count as callers, and they stay out of the REPORT.
+
+`--report-exclude` is that split, and periphery states it in those words —
+"Source file globs to exclude from the results. Note that this option is purely
+cosmetic, these files will still be indexed."
+
+The script asks `swift package describe --type json` which targets are of type
+`test` and writes one `--report-exclude <path>/**` for each. The manifest is
+where the paths come from, so the split reads a fact of the package rather than
+the `Tests/` naming convention: Alamofire declares one test target at `Tests`,
+swift-nio declares fifteen at `Tests/<Name>`.
+
+Measured over `Alamofire` at `0455bfb` with periphery 3.8.0, built with
+`swift build --build-tests`, each run minus `var.parameter`:
+
+| Run | Findings | Where they stand |
+|---|---|---|
+| no report filter | 74 | 22 in `Source/`, 52 in `Tests/` |
+| `--report-exclude Tests/**` | 22 | every one in `Source/` |
+| `--exclude-tests` instead | 25 | every one in `Source/` |
+
+The 52 are test-only helpers word for word: 30 of them stand in one file of
+`AFError` convenience properties no test ever calls. The 22 the filter keeps are
+the same 22 the unfiltered run reported in `Source/`, declaration for
+declaration, so the filter drops findings and changes no analysis.
+
+`--exclude-tests` answers another question. It takes the test targets out of the
+INDEX, so the tests stop being callers, and the run then reports three
+declarations a test does call: `RequestTaskMap.isEmpty`,
+`OfflineRetrier.init(monitor:maximumWait:isOfflineError:)` and
+`RequestInterceptor.retryRequired`. Those three are the whole reason the run
+builds the tests, so the flag that reads like the shorter spelling of this
+carve-out is the one flag that breaks it.
 
 Of the 22 findings in `Source/`, the ones hand-checked are real:
 `Protected.around(_:)`, `Protected.withState(perform:)` and

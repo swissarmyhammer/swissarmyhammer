@@ -24,6 +24,80 @@ pub const DEFAULT_GREP_LIMIT: usize = 10;
 /// start. Stored output lines are numbered from 1.
 pub const DEFAULT_START_LINE: usize = 1;
 
+/// Number of `:`-separated fields one log entry carries after its session-id
+/// prefix. [`ShellState::append_lines`] writes
+/// `session_id:cmd_id:line_number:text`, so stripping the session id leaves
+/// the command id, the line number, and the text — and the text itself may
+/// hold any number of further colons.
+const LOG_FIELD_COUNT_AFTER_SESSION_ID: usize = 3;
+
+/// Failure of a [`ShellState`] operation.
+///
+/// Each variant names one failure a caller can act on, so a caller matches on
+/// the cause rather than reading a message. Every variant that wraps an
+/// underlying failure keeps it as its `source`, so the chain stays whole.
+#[derive(Debug, thiserror::Error)]
+pub enum ShellStateError {
+    /// The shell directory could not be created.
+    #[error("shell directory {path} could not be created: {source}")]
+    CreateDir {
+        /// The directory the creation targeted.
+        path: PathBuf,
+        /// The io error the creation returned.
+        source: std::io::Error,
+    },
+    /// A file of the shell directory could not be opened.
+    #[error("shell file {path} could not be opened: {source}")]
+    OpenFile {
+        /// The file path the open targeted.
+        path: PathBuf,
+        /// The io error the open returned.
+        source: std::io::Error,
+    },
+    /// A file of the shell directory could not be written.
+    #[error("shell file {path} could not be written: {source}")]
+    WriteFile {
+        /// The file path the write targeted.
+        path: PathBuf,
+        /// The io error the write returned.
+        source: std::io::Error,
+    },
+    /// The output log could not be read.
+    #[error("shell log {path} could not be read: {source}")]
+    ReadLog {
+        /// The log path the read targeted.
+        path: PathBuf,
+        /// The io error the read returned.
+        source: std::io::Error,
+    },
+    /// No command record carries the id the caller named.
+    #[error("unknown command ID {cmd_id}")]
+    UnknownCommand {
+        /// The command id the caller named.
+        cmd_id: usize,
+    },
+    /// No process is registered for the id the caller named, so there is
+    /// nothing to signal.
+    #[error("no running process for command ID {cmd_id}")]
+    NoRunningProcess {
+        /// The command id the caller named.
+        cmd_id: usize,
+    },
+    /// A process was registered for the id, but no command record stands
+    /// beside it.
+    #[error("command record not found for ID {cmd_id}")]
+    MissingRecord {
+        /// The command id the caller named.
+        cmd_id: usize,
+    },
+    /// The caller's search pattern is not a valid regular expression.
+    #[error("invalid regex pattern: {source}")]
+    InvalidPattern {
+        /// The error the regex compiler returned.
+        source: grep::regex::Error,
+    },
+}
+
 /// Command execution status
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandStatus {
@@ -124,9 +198,15 @@ impl ShellState {
     /// The not-writable fallback matters for GUI launches: a bundled macOS app
     /// opened from Finder runs with CWD = `/`, which is a read-only system
     /// volume, so `create_dir_all("/.shell")` fails with EROFS. Falling back
-    /// here keeps that from aborting the whole app via
-    /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new)'s `expect`.
-    pub fn new() -> anyhow::Result<Self> {
+    /// here keeps the app running, and
+    /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new) reports what is
+    /// left over as an error rather than a panic.
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::CreateDir`], [`ShellStateError::OpenFile`]
+    /// or [`ShellStateError::WriteFile`] when the temp fallback fails as well.
+    pub fn new() -> Result<Self, ShellStateError> {
         let preferred = std::env::current_dir()
             .ok()
             .map(|cwd| cwd.join(ShellConfig::DIR_NAME));
@@ -136,7 +216,7 @@ impl ShellState {
     /// Build a `ShellState`, preferring `preferred` (e.g. `<cwd>/.shell`) but
     /// falling back to a unique temp directory when it is `None` or cannot be
     /// created (missing, read-only, or otherwise unwritable).
-    fn new_with_preferred(preferred: Option<impl AsRef<Path>>) -> anyhow::Result<Self> {
+    fn new_with_preferred(preferred: Option<impl AsRef<Path>>) -> Result<Self, ShellStateError> {
         if let Some(dir) = preferred {
             let dir = dir.as_ref();
             match Self::with_dir(dir) {
@@ -158,20 +238,39 @@ impl ShellState {
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
     /// This avoids relying on the process-wide CWD, which is important for tests.
-    pub fn new_in_dir(shell_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Reports the same failures [`ShellState::with_dir`] reports.
+    pub fn new_in_dir(shell_dir: impl AsRef<Path>) -> Result<Self, ShellStateError> {
         Self::with_dir(shell_dir)
     }
 
     /// Create a new ShellState rooted at the given directory.
-    pub fn with_dir(shell_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::CreateDir`] when the directory cannot be
+    /// created, [`ShellStateError::WriteFile`] when its `.gitignore` cannot be
+    /// written, and [`ShellStateError::OpenFile`] when the log file cannot be
+    /// opened.
+    pub fn with_dir(shell_dir: impl AsRef<Path>) -> Result<Self, ShellStateError> {
         let shell_dir = shell_dir.as_ref();
         let session_id = ulid::Ulid::new().to_string();
-        fs::create_dir_all(shell_dir)?;
+        fs::create_dir_all(shell_dir).map_err(|source| ShellStateError::CreateDir {
+            path: shell_dir.to_path_buf(),
+            source,
+        })?;
 
         // Write .gitignore if it doesn't exist yet
         let gitignore_path = shell_dir.join(".gitignore");
         if !gitignore_path.exists() {
-            fs::write(&gitignore_path, ShellConfig::GITIGNORE_CONTENT)?;
+            fs::write(&gitignore_path, ShellConfig::GITIGNORE_CONTENT).map_err(|source| {
+                ShellStateError::WriteFile {
+                    path: gitignore_path.clone(),
+                    source,
+                }
+            })?;
         }
 
         let log_path = shell_dir.join("log");
@@ -179,7 +278,11 @@ impl ShellState {
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&log_path)?;
+            .open(&log_path)
+            .map_err(|source| ShellStateError::OpenFile {
+                path: log_path.clone(),
+                source,
+            })?;
 
         Ok(Self {
             session_id,
@@ -217,29 +320,49 @@ impl ShellState {
     /// Note: This performs blocking file I/O (log file append). This is acceptable because
     /// the shell tool is single-user and log writes are small and fast. The outer async mutex
     /// is held during this call, but concurrent shell operations are not expected.
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::UnknownCommand`] when no record carries
+    /// `cmd_id`, [`ShellStateError::OpenFile`] when the log cannot be opened
+    /// for appending, and [`ShellStateError::WriteFile`] when a line cannot be
+    /// written.
     pub async fn append_lines(
         &mut self,
         cmd_id: usize,
         lines: &[impl AsRef<str>],
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ShellStateError> {
+        let log_path = &self.log_path;
+        let session_id = &self.session_id;
         let record = self
             .commands
             .iter_mut()
             .find(|r| r.id == cmd_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown command ID {}", cmd_id))?;
+            .ok_or(ShellStateError::UnknownCommand { cmd_id })?;
 
-        let mut log_file = OpenOptions::new().append(true).open(&self.log_path)?;
+        let mut log_file = OpenOptions::new()
+            .append(true)
+            .open(log_path)
+            .map_err(|source| ShellStateError::OpenFile {
+                path: log_path.clone(),
+                source,
+            })?;
 
         for line in lines {
             record.line_count += 1;
             let log_line = format!(
                 "{}:{}:{}:{}\n",
-                self.session_id,
+                session_id,
                 cmd_id,
                 record.line_count,
                 line.as_ref()
             );
-            log_file.write_all(log_line.as_bytes())?;
+            log_file.write_all(log_line.as_bytes()).map_err(|source| {
+                ShellStateError::WriteFile {
+                    path: log_path.clone(),
+                    source,
+                }
+            })?;
         }
 
         Ok(())
@@ -247,33 +370,43 @@ impl ShellState {
 
     /// Mark a command as completed with exit code.
     pub async fn complete_command(&mut self, cmd_id: usize, exit_code: Option<i32>) {
+        self.finish_command(cmd_id, CommandStatus::Completed, exit_code);
+    }
+
+    /// Mark a command as timed out. A timeout reports no exit code of its own,
+    /// so the record carries the "no exit code" value [`CommandRecord`]
+    /// documents.
+    pub async fn timeout_command(&mut self, cmd_id: usize) {
+        self.finish_command(cmd_id, CommandStatus::TimedOut, Some(-1));
+    }
+
+    /// Move one command record to a terminal state: drop the process
+    /// registration, write the status and the exit code, and stamp both
+    /// clocks. A `cmd_id` no record carries changes nothing, which is what
+    /// every caller of this helper already reported.
+    fn finish_command(&mut self, cmd_id: usize, status: CommandStatus, exit_code: Option<i32>) {
         self.processes.remove(&cmd_id);
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
-            record.status = CommandStatus::Completed;
+            record.status = status;
             record.exit_code = exit_code;
             record.completed_at = Some(Instant::now());
             record.completed_at_wall = Some(Local::now());
         }
     }
 
-    /// Mark a command as timed out.
-    pub async fn timeout_command(&mut self, cmd_id: usize) {
-        self.processes.remove(&cmd_id);
-        if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
-            record.status = CommandStatus::TimedOut;
-            record.exit_code = Some(-1);
-            record.completed_at = Some(Instant::now());
-            record.completed_at_wall = Some(Local::now());
-        }
-    }
-
     /// Kill a running command by PID. Returns the command record if found.
-    pub async fn kill_process(&mut self, cmd_id: usize) -> anyhow::Result<CommandRecord> {
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::NoRunningProcess`] when no PID is registered
+    /// for `cmd_id`, and [`ShellStateError::MissingRecord`] when a PID was
+    /// registered but no command record stands beside it.
+    pub async fn kill_process(&mut self, cmd_id: usize) -> Result<CommandRecord, ShellStateError> {
         let pid = self
             .processes
             .get(&cmd_id)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("no running process for command ID {}", cmd_id))?;
+            .ok_or(ShellStateError::NoRunningProcess { cmd_id })?;
 
         // Send SIGKILL to the process group
         #[cfg(unix)]
@@ -296,7 +429,7 @@ impl ShellState {
             record.completed_at_wall = Some(Local::now());
             Ok(record.clone())
         } else {
-            anyhow::bail!("command record not found for ID {}", cmd_id)
+            Err(ShellStateError::MissingRecord { cmd_id })
         }
     }
 
@@ -312,34 +445,45 @@ impl ShellState {
     ///
     /// Note: This performs blocking file I/O. Acceptable for single-user shell tool
     /// where log reads are fast and infrequent.
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::OpenFile`] when the log cannot be opened and
+    /// [`ShellStateError::ReadLog`] when a line cannot be read back.
     pub fn get_lines(
         &self,
         cmd_id: usize,
         start: Option<usize>,
         end: Option<usize>,
-    ) -> anyhow::Result<Vec<(usize, String)>> {
+    ) -> Result<Vec<(usize, String)>, ShellStateError> {
         let start = start.unwrap_or(DEFAULT_START_LINE);
         let end = end.unwrap_or(usize::MAX);
-        let prefix = format!("{}:{}:", self.session_id, cmd_id);
+        let session_prefix = format!("{}:", self.session_id);
 
-        let file = std::fs::File::open(&self.log_path)?;
+        let file =
+            std::fs::File::open(&self.log_path).map_err(|source| ShellStateError::OpenFile {
+                path: self.log_path.clone(),
+                source,
+            })?;
         let reader = BufReader::new(file);
         let mut results = Vec::new();
 
         for line in reader.lines() {
-            let line = line?;
-            if let Some(rest) = line.strip_prefix(&prefix) {
-                // Parse line_number:text
-                if let Some((line_num_str, text)) = rest.split_once(':') {
-                    if let Ok(line_num) = line_num_str.parse::<usize>() {
-                        if line_num >= start && line_num <= end {
-                            results.push((line_num, text.to_string()));
-                        }
-                        if line_num > end {
-                            break;
-                        }
-                    }
-                }
+            let line = line.map_err(|source| ShellStateError::ReadLog {
+                path: self.log_path.clone(),
+                source,
+            })?;
+            let Some(entry) = parse_log_entry(&line, &session_prefix) else {
+                continue;
+            };
+            if entry.command_id != cmd_id {
+                continue;
+            }
+            if entry.line_number > end {
+                break;
+            }
+            if entry.line_number >= start {
+                results.push((entry.line_number, entry.text.to_string()));
             }
         }
 
@@ -353,15 +497,21 @@ impl ShellState {
     /// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
     /// (default [`DEFAULT_GREP_LIMIT`]) but `total_match_count` reflects all
     /// matches found.
+    ///
+    /// # Errors
+    ///
+    /// Reports [`ShellStateError::InvalidPattern`] when `pattern` is not a
+    /// valid regular expression, and [`ShellStateError::ReadLog`] when the log
+    /// cannot be searched.
     pub fn grep(
         &self,
         pattern: &str,
         command_id: Option<usize>,
         limit: Option<usize>,
-    ) -> anyhow::Result<(Vec<GrepResult>, usize)> {
+    ) -> Result<(Vec<GrepResult>, usize), ShellStateError> {
         let limit = limit.unwrap_or(DEFAULT_GREP_LIMIT);
         let matcher = RegexMatcher::new_line_matcher(pattern)
-            .map_err(|e| anyhow::anyhow!("invalid regex pattern: {}", e))?;
+            .map_err(|source| ShellStateError::InvalidPattern { source })?;
 
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(0))
@@ -372,47 +522,64 @@ impl ShellState {
         let mut total_matches: usize = 0;
         let session_prefix = format!("{}:", self.session_id);
 
-        searcher.search_path(
-            &matcher,
-            &self.log_path,
-            UTF8(|_line_num, line| {
-                if let Some(entry) = parse_grep_log_line(line, &session_prefix, command_id) {
+        searcher
+            .search_path(
+                &matcher,
+                &self.log_path,
+                UTF8(|_line_num, line| {
+                    let Some(entry) = parse_log_entry(line, &session_prefix) else {
+                        return Ok(true);
+                    };
+                    if command_id.is_some_and(|wanted| wanted != entry.command_id) {
+                        return Ok(true);
+                    }
                     total_matches += 1;
                     if results.len() < limit {
-                        results.push(entry);
+                        results.push(GrepResult {
+                            command_id: entry.command_id,
+                            line_number: entry.line_number,
+                            text: entry.text.trim_end().to_string(),
+                        });
                     }
-                }
-                Ok(true)
-            }),
-        )?;
+                    Ok(true)
+                }),
+            )
+            .map_err(|source| ShellStateError::ReadLog {
+                path: self.log_path.clone(),
+                source,
+            })?;
 
         Ok((results, total_matches))
     }
 }
 
-/// Parse one `session_id:cmd_id:line_num:text` log entry into a [`GrepResult`].
+/// One log entry, parsed and borrowing the line it came from.
+struct LogEntry<'a> {
+    /// Id of the command whose output holds the line.
+    command_id: usize,
+    /// Position of the line within that command's output.
+    line_number: usize,
+    /// The line text, exactly as it was stored.
+    text: &'a str,
+}
+
+/// Parse one `session_id:cmd_id:line_number:text` entry
+/// [`ShellState::append_lines`] wrote.
 ///
-/// Returns `None` when the line does not belong to this session, when the
-/// command_id filter rejects it, or when any required field fails to parse.
-fn parse_grep_log_line(
-    line: &str,
-    session_prefix: &str,
-    cmd_id_filter: Option<usize>,
-) -> Option<GrepResult> {
+/// `get lines` and `grep history` read the same log, so both read it through
+/// this one parser. Returns `None` when the line belongs to another session,
+/// when it carries too few fields, or when either numeric field fails to
+/// parse.
+fn parse_log_entry<'a>(line: &'a str, session_prefix: &str) -> Option<LogEntry<'a>> {
     let rest = line.strip_prefix(session_prefix)?;
-    let parts: Vec<&str> = rest.splitn(3, ':').collect();
-    if parts.len() != 3 {
+    let parts: Vec<&str> = rest.splitn(LOG_FIELD_COUNT_AFTER_SESSION_ID, ':').collect();
+    if parts.len() != LOG_FIELD_COUNT_AFTER_SESSION_ID {
         return None;
     }
-    let command_id = parts[0].parse::<usize>().ok()?;
-    if cmd_id_filter.is_some() && cmd_id_filter != Some(command_id) {
-        return None;
-    }
-    let line_number = parts[1].parse::<usize>().ok()?;
-    Some(GrepResult {
-        command_id,
-        line_number,
-        text: parts[2].trim_end().to_string(),
+    Some(LogEntry {
+        command_id: parts[0].parse().ok()?,
+        line_number: parts[1].parse().ok()?,
+        text: parts[2],
     })
 }
 
@@ -455,9 +622,10 @@ mod tests {
     /// the preferred `.shell` location cannot be created. A bundled macOS GUI
     /// app launched from Finder runs with CWD = `/` (a read-only system
     /// volume), so `create_dir_all("/.shell")` fails with EROFS. Before this
-    /// fallback, that error propagated through `ShellExecuteTool::new()`'s
-    /// `expect("Failed to initialize shell state")` and aborted the whole app
-    /// on launch (panic in `did_finish_launching`).
+    /// fallback, that error reached `ShellExecuteTool::new()`, which panicked
+    /// on it and aborted the whole app on launch (panic in
+    /// `did_finish_launching`). That constructor now reports the error
+    /// instead, and this fallback keeps it from arising at all.
     #[cfg(unix)]
     #[test]
     fn falls_back_to_temp_when_preferred_dir_is_read_only() {
@@ -890,6 +1058,88 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], (1, "one".to_string()));
         assert_eq!(result[1], (2, "two".to_string()));
+    }
+
+    /// A caller must be able to tell one failure from another. That is what a
+    /// typed error buys over `anyhow`, and the match arm is the proof.
+    #[tokio::test]
+    #[serial]
+    async fn append_lines_reports_an_unknown_command_by_variant() {
+        let (mut state, _tmp) = create_test_state();
+        let error = state
+            .append_lines(999, &["nope".to_string()])
+            .await
+            .expect_err("append_lines to an unknown id must fail");
+
+        assert!(
+            matches!(error, ShellStateError::UnknownCommand { cmd_id: 999 }),
+            "expected UnknownCommand, got {error:?}"
+        );
+        assert_eq!(error.to_string(), "unknown command ID 999");
+    }
+
+    /// The same proof for the kill path: the caller reads the variant, not a
+    /// string.
+    #[tokio::test]
+    #[serial]
+    async fn kill_process_reports_a_missing_process_by_variant() {
+        let (mut state, _tmp) = create_test_state();
+        let id = state.start_command("never registered");
+        let error = state
+            .kill_process(id)
+            .await
+            .expect_err("kill_process with no registered PID must fail");
+
+        assert!(
+            matches!(error, ShellStateError::NoRunningProcess { cmd_id } if cmd_id == id),
+            "expected NoRunningProcess, got {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("no running process for command ID {id}")
+        );
+    }
+
+    /// And for the grep path, whose failure is a caller's pattern rather than
+    /// the filesystem.
+    #[tokio::test]
+    #[serial]
+    async fn grep_reports_an_invalid_pattern_by_variant() {
+        let (state, _tmp) = create_test_state();
+        let error = state
+            .grep("[unclosed", None, None)
+            .expect_err("an unclosed class must fail");
+
+        assert!(
+            matches!(error, ShellStateError::InvalidPattern { .. }),
+            "expected InvalidPattern, got {error:?}"
+        );
+        assert!(
+            error.to_string().starts_with("invalid regex pattern: "),
+            "message: {error}"
+        );
+    }
+
+    /// A log entry carries exactly [`LOG_FIELD_COUNT_AFTER_SESSION_ID`] fields
+    /// after the session id, and the last field is the whole line text. So a
+    /// line whose own text holds colons reads back whole. `get lines` and
+    /// `grep history` share one parser, and one line proves both.
+    #[tokio::test]
+    #[serial]
+    async fn a_line_holding_colons_reads_back_whole() {
+        let (mut state, _tmp) = create_test_state();
+        let id = state.start_command("echo timestamps");
+        let text = "12:34:56 ERROR host:port is down";
+        state.append_lines(id, &[text]).await.expect("append_lines");
+
+        let lines = state.get_lines(id, None, None).expect("get_lines");
+        assert_eq!(lines, vec![(1, text.to_string())]);
+
+        let (results, total) = state.grep("ERROR", None, None).expect("grep");
+        assert_eq!(total, 1);
+        assert_eq!(results[0].text, text);
+        assert_eq!(results[0].command_id, id);
+        assert_eq!(results[0].line_number, 1);
     }
 
     #[tokio::test]

@@ -3,6 +3,9 @@
 //! One test holds the whole roster to its fixture pair and to the prompt rule
 //! it supersedes. The tests under it drive one language each through its real
 //! tool, so each measures the shipped script rather than a copy.
+//!
+//! The Rust rule stands in `missing_docs_rust`, because the shapes `cargo
+//! clippy` answers a broken run with are cargo's own.
 
 use super::*;
 
@@ -14,50 +17,9 @@ use super::*;
 /// [`verify_shipped_tool_rules_pass_fixtures`] carries the rest of the
 /// contract, including what a machine without the tool proves.
 #[test]
+#[serial_test::serial(cwd)]
 fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(SHIPPED_MISSING_DOCS_RULES, MISSING_DOCS_PROMPT_RULE);
-}
-
-/// Acceptance: the shipped Rust tool rule reports an undocumented public
-/// item on a real cargo workspace, through the real clippy pipeline.
-///
-/// No LLM reads the pair: the rule plans healthy, so the `missing-docs`
-/// prompt rule is suppressed for the file, and the finding comes from the
-/// script's stdout — [`execute_tool_runs`] never reaches an agent.
-#[test]
-fn the_shipped_rust_tool_rule_reports_an_undocumented_public_item() {
-    let repo = tempfile::tempdir().unwrap();
-    std::fs::write(
-        repo.path().join("Cargo.toml"),
-        UNDOCUMENTED_PACKAGE_MANIFEST,
-    )
-    .unwrap();
-    std::fs::create_dir_all(repo.path().join("src")).unwrap();
-    std::fs::write(repo.path().join(UNDOCUMENTED_LIB_PATH), UNDOCUMENTED_LIB_RS).unwrap();
-    let loader = builtin_loader();
-    let project_types = ["rust"];
-    require_tool_installed(&loader, &project_types, RUST_MISSING_DOCS_RULE);
-    let work = code_hygiene_work(&[UNDOCUMENTED_LIB_PATH]);
-
-    let plan = plan_tool_rules(&work, &loader, &project_types, None);
-
-    let run = required_run(&plan, RUST_MISSING_DOCS_RULE);
-    assert_eq!(run.files(), [UNDOCUMENTED_LIB_PATH.to_string()]);
-    assert!(
-        plan.suppression()
-            .suppressed_rules(CODE_HYGIENE_SET, UNDOCUMENTED_LIB_PATH)
-            .contains(MISSING_DOCS_PROMPT_RULE),
-        "a healthy tool rule must suppress the prompt rule, so no LLM reads the pair"
-    );
-
-    verify_run_reports_one_finding(
-        run,
-        repo.path(),
-        UNDOCUMENTED_LIB_PATH,
-        CODE_HYGIENE_SET,
-        RUST_MISSING_DOCS_RULE,
-        "missing documentation",
-    );
 }
 
 /// The materialized name of the `missing-docs-dart` fail fixture.
@@ -453,7 +415,6 @@ const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
     "code-hygiene/missing-docs",
     "code-hygiene/missing-docs-go",
     "code-hygiene/no-commented-code",
-    "code-hygiene/no-commented-code-parsed",
     "code-hygiene/unused-code-go",
     "code-security/command-safety",
     "code-security/injection",
@@ -463,7 +424,6 @@ const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
     "completeness/inverse-operation-coverage",
     "completeness/public-output-contract",
     "duplication/duplication",
-    "duplication/duplication-parsed",
     "duplication/rust",
     "duplication/swift",
     "reuse/reuse",
@@ -528,7 +488,7 @@ const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Go file the parser cannot read",
     path: GO_UNPARSABLE_PATH,
-    source: Some(GO_UNPARSABLE_SOURCE),
+    source: Some(GO_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 
@@ -764,7 +724,7 @@ const PYTHON_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_UNPARSABLE_PATH,
-    source: Some(PYTHON_UNPARSABLE_SOURCE),
+    source: Some(PYTHON_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 
@@ -870,251 +830,6 @@ const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_EMPTY_RUN_PROBE);
-}
-
-/// The manifest of the root package of the Rust workspace probe.
-///
-/// It names `shared` as a dependency AND as a build-dependency, so cargo
-/// compiles `shared` two times and clippy writes its finding two times.
-/// `lonely` is a member no package depends on, so cargo builds it only when
-/// the command selects the whole workspace.
-const RUST_WORKSPACE_ROOT_MANIFEST: &str = concat!(
-    "[package]\nname = \"workspace-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-    "\n[dependencies]\nshared = { path = \"shared\" }\n",
-    "\n[build-dependencies]\nshared = { path = \"shared\" }\n",
-    "\n[workspace]\nmembers = [\"shared\", \"lonely\"]\n",
-);
-
-/// The build script of the Rust workspace probe. It carries a crate comment,
-/// because `missing_docs` asks each compiled target for one.
-const RUST_WORKSPACE_BUILD_RS: &str =
-    "//! The build script of the workspace probe.\n\nfn main() {}\n";
-
-/// The manifest of the `shared` member of the Rust workspace probe.
-const RUST_WORKSPACE_SHARED_MANIFEST: &str =
-    "[package]\nname = \"shared\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
-
-/// The manifest of the `lonely` member of the Rust workspace probe.
-const RUST_WORKSPACE_LONELY_MANIFEST: &str =
-    "[package]\nname = \"lonely\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
-
-/// Every file of the Rust workspace probe the work-list does not name.
-const RUST_WORKSPACE_SUPPORT_FILES: &[(&str, &str)] = &[
-    ("Cargo.toml", RUST_WORKSPACE_ROOT_MANIFEST),
-    ("build.rs", RUST_WORKSPACE_BUILD_RS),
-    ("shared/Cargo.toml", RUST_WORKSPACE_SHARED_MANIFEST),
-    ("lonely/Cargo.toml", RUST_WORKSPACE_LONELY_MANIFEST),
-];
-
-/// The library of the root package of the Rust workspace probe.
-const RUST_WORKSPACE_ROOT_LIB_PATH: &str = "src/lib.rs";
-
-/// The library of the `shared` member, the one cargo compiles two times.
-const RUST_WORKSPACE_SHARED_LIB_PATH: &str = "shared/src/lib.rs";
-
-/// The library of the `lonely` member, the one no package depends on.
-const RUST_WORKSPACE_LONELY_LIB_PATH: &str = "lonely/src/lib.rs";
-
-/// The one undocumented declaration every library of the Rust workspace probe
-/// holds.
-const RUST_WORKSPACE_DECLARATIONS: &str = "pub struct Undocumented;\n";
-
-/// The three libraries of the Rust workspace probe. Each carries a crate
-/// comment of its own, so the only undocumented item is the shared
-/// declaration.
-const RUST_WORKSPACE_STAGED_FILES: &[ShippedStagedFile] = &[
-    ShippedStagedFile {
-        path: RUST_WORKSPACE_ROOT_LIB_PATH,
-        head: &["//! The root package of the workspace probe.\n\n"],
-    },
-    ShippedStagedFile {
-        path: RUST_WORKSPACE_SHARED_LIB_PATH,
-        head: &["//! The shared member of the workspace probe.\n\n"],
-    },
-    ShippedStagedFile {
-        path: RUST_WORKSPACE_LONELY_LIB_PATH,
-        head: &["//! The lonely member of the workspace probe.\n\n"],
-    },
-];
-
-/// Each library of the Rust workspace probe, one time, in the order `sort -u`
-/// leaves them.
-///
-/// `lonely/src/lib.rs` is what `--workspace` buys: cargo builds no member
-/// nothing depends on, so a command without the flag never reads it.
-/// `shared/src/lib.rs` standing one time is what `sort -u` buys: cargo
-/// compiles that member two times, and clippy writes its finding two times.
-const RUST_WORKSPACE_REPORTS: &[&str] = &[
-    RUST_WORKSPACE_LONELY_LIB_PATH,
-    RUST_WORKSPACE_SHARED_LIB_PATH,
-    RUST_WORKSPACE_ROOT_LIB_PATH,
-];
-
-/// The three libraries of the Rust workspace probe, and what the real clippy
-/// pipeline must report over them.
-const RUST_MISSING_DOCS_WORKSPACE_PROBE: ShippedStagedPositions = ShippedStagedPositions {
-    run: ShippedRun {
-        project_types: &["rust"],
-        rule: RUST_MISSING_DOCS_RULE,
-        expected: RUST_WORKSPACE_REPORTS,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "one undocumented public struct in each package of a workspace",
-    declarations: RUST_WORKSPACE_DECLARATIONS,
-    staged: RUST_WORKSPACE_STAGED_FILES,
-    support: RUST_WORKSPACE_SUPPORT_FILES,
-    reason: "the rule declares `scope: workspace`, so the run reads every member one time: the \
-             member no package depends on reports, and the member cargo compiles two times \
-             reports one finding and not two",
-};
-
-/// Acceptance: the shipped Rust missing-docs tool rule reports every member of
-/// a workspace, one time each, through the real clippy pipeline.
-///
-/// Two parts of the command are load-bearing here, and the probe holds both.
-/// `--workspace` selects every member; without it cargo builds the package the
-/// working directory names and the packages that package depends on, so
-/// `lonely/src/lib.rs` stays unread. `sort -u` collapses the repeat; without it
-/// `shared/src/lib.rs` arrives two times, because the root package names that
-/// member as a dependency and as a build-dependency and cargo therefore
-/// compiles it two times.
-#[test]
-fn the_shipped_rust_missing_docs_tool_rule_reports_every_workspace_member() {
-    verify_shipped_staged_positions_report(&RUST_MISSING_DOCS_WORKSPACE_PROBE);
-}
-
-/// The manifest of the generated-code probe crate.
-const RUST_GENERATED_MANIFEST: &str = concat!(
-    "[package]\nname = \"generated-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-    "\n[workspace]\n",
-);
-
-/// The build script of the generated-code probe crate. It writes one
-/// undocumented public struct and one undocumented public function into
-/// `OUT_DIR`, which is a directory under `target/` that no author edits.
-const RUST_GENERATED_BUILD_RS: &str = r#"//! The build script of the generated-code probe.
-
-use std::io::Write;
-
-fn main() {
-    let out = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
-    let generated = std::path::Path::new(&out).join("generated.rs");
-    let mut file = std::fs::File::create(generated).expect("create the generated file");
-    writeln!(file, "pub struct GeneratedUndocumented;").expect("write the generated struct");
-    writeln!(file, "pub fn generated_undocumented() {{}}").expect("write the generated function");
-}
-"#;
-
-/// The library of the generated-code probe crate. It reads the generated file
-/// with an `include!`, which is how a crate takes code out of `OUT_DIR`, and it
-/// holds one undocumented item of its own.
-const RUST_GENERATED_LIB_RS: &str = concat!(
-    "//! A probe crate for the generated-code step of the shipped Rust rule.\n",
-    "\n",
-    "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\n",
-    "\n",
-    "pub struct HandWritten;\n",
-);
-
-/// Every file of the generated-code probe crate.
-const RUST_GENERATED_PROBE_FILES: &[(&str, &str)] = &[
-    ("Cargo.toml", RUST_GENERATED_MANIFEST),
-    ("build.rs", RUST_GENERATED_BUILD_RS),
-    ("src/lib.rs", RUST_GENERATED_LIB_RS),
-];
-
-/// What the shipped script must name over the generated-code probe: the
-/// hand-written item, and no generated one.
-const RUST_GENERATED_REPORTS: &[&str] = &["src/lib.rs:5"];
-
-/// Acceptance: the shipped Rust missing-docs tool rule names no generated file,
-/// through the real clippy pipeline.
-///
-/// Cargo writes generated code under `OUT_DIR`, and clippy reports an item
-/// there with the absolute path of a file the author cannot edit. The
-/// `select(.file | startswith("/") | not)` step drops it. Measured over this
-/// probe without the step: 3 findings, two of them at an absolute path under
-/// `target/`.
-///
-/// The script's OWN findings are what this test reads, because the engine keeps
-/// only the findings in the changed files and would drop a generated one on its
-/// own. The step is what makes the script's answer equal the rule's answer.
-#[test]
-fn the_shipped_rust_missing_docs_tool_rule_names_no_generated_file() {
-    let loader = builtin_loader();
-    let project_types = ["rust"];
-    require_tool_installed(&loader, &project_types, RUST_MISSING_DOCS_RULE);
-
-    let reported = shipped_script_findings(
-        &loader,
-        RUST_MISSING_DOCS_RULE,
-        RUST_GENERATED_PROBE_FILES,
-        &[],
-    )
-    .expect("the shipped script must judge the probe crate and exit 0");
-
-    assert_eq!(
-        reported,
-        expected_script_findings(RUST_GENERATED_REPORTS),
-        "the script must name the hand-written item and no file under `target/`"
-    );
-}
-
-/// The manifest of the probe crate cargo cannot compile.
-const RUST_UNCOMPILABLE_MANIFEST: &str = concat!(
-    "[package]\nname = \"uncompilable-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-    "\n[workspace]\n",
-);
-
-/// Every file of the uncompilable probe crate the work-list does not name.
-const RUST_UNCOMPILABLE_SUPPORT_FILES: &[(&str, &str)] =
-    &[("Cargo.toml", RUST_UNCOMPILABLE_MANIFEST)];
-
-/// A Rust library that does not compile: the struct declaration ends with no
-/// semicolon.
-const RUST_UNCOMPILABLE_SOURCE: &str = concat!(
-    "//! A probe crate the compiler cannot build.\n",
-    "\n",
-    "pub struct Undocumented\n",
-);
-
-/// Where the library that does not compile stands inside the probe repository.
-const RUST_UNCOMPILABLE_PATH: &str = "src/lib.rs";
-
-/// What cargo puts at the front of the failure it writes for a crate it cannot
-/// compile. The run's error detail must carry it, so the agent reading the
-/// error learns what broke.
-const RUST_CANNOT_COMPILE_MESSAGE: &str = "could not compile";
-
-/// What the one error of a crate cargo cannot compile must name.
-const RUST_UNCOMPILABLE_ERROR: &[&str] = &[RUST_CANNOT_COMPILE_MESSAGE, "uncompilable-probe"];
-
-/// The `missing-docs-rust` probe over a crate cargo cannot compile.
-const RUST_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: &["rust"],
-        rule: RUST_MISSING_DOCS_RULE,
-        expected: RUST_UNCOMPILABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Rust crate the compiler cannot build",
-    path: RUST_UNCOMPILABLE_PATH,
-    source: Some(RUST_UNCOMPILABLE_SOURCE),
-    support: RUST_UNCOMPILABLE_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Rust missing-docs tool rule BREAKS on a crate cargo
-/// cannot compile, through the real clippy pipeline.
-///
-/// `cargo clippy` exits 101 for such a crate and writes no `missing_docs`
-/// diagnostic for it. A shell pipeline takes the exit status of its LAST
-/// command, so the earlier pipe — which ended in `jq` — exited 0 and reported
-/// nothing, a run answering zero for a reason other than a clean crate. The
-/// script writes cargo's report to a file, and `set -e` makes cargo's own exit
-/// status the exit status of the script.
-#[test]
-fn the_shipped_rust_missing_docs_tool_rule_breaks_on_a_crate_that_does_not_compile() {
-    verify_shipped_run_breaks(&RUST_UNCOMPILABLE_PROBE);
 }
 
 /// The materialized name of the `missing-docs-swift` fail fixture.
@@ -1353,7 +1068,7 @@ const SWIFT_VERSION_MISMATCH_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: MISSING_DOCS_PROMPT_RULE,
     change_purpose: "undocumented public declarations beside a project version mismatch",
     path: SWIFT_ORDINARY_POSITION.path,
-    source: Some(SWIFT_STAGED_DECLARATIONS),
+    source: Some(SWIFT_STAGED_DECLARATIONS.as_bytes()),
     support: SWIFT_VERSION_MISMATCH_SUPPORT_FILES,
 };
 
@@ -1486,6 +1201,142 @@ const SWIFT_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
+}
+
+/// Where the Swift file swiftlint cannot decode stands inside the probe
+/// repository.
+const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+
+/// A Swift file written in Latin-1 rather than in UTF-8.
+///
+/// The byte `0xE9` is `é` in Latin-1, and it is not a UTF-8 sequence.
+/// swiftlint reads a file as UTF-8 and nothing else, so it cannot decode this
+/// one. The staged declarations stand under the string, so a run that DID read
+/// the file reports them.
+const SWIFT_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
+public struct StagedThing {\n\
+public var value: Int = 0\n\
+}\n";
+
+/// What the one error of a file swiftlint cannot decode must name: the rule's
+/// own line, and swiftlint's own message, which carries the path.
+const SWIFT_UNDECODABLE_ERROR: &[&str] = &[
+    "missing-docs-swift: swiftlint could not read the contents of a file this run names",
+    "Could not read contents of",
+    "Latin1.swift",
+];
+
+/// The `missing-docs-swift` probe over a Swift file swiftlint cannot decode.
+const SWIFT_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: SWIFT_UNDECODABLE_ERROR,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a Swift file that is not UTF-8",
+    path: SWIFT_UNDECODABLE_PATH,
+    source: Some(SWIFT_UNDECODABLE_SOURCE),
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a Swift file
+/// swiftlint cannot decode, through the real swiftlint pipeline.
+///
+/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
+/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
+/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
+/// an empty JSON array to stdout, and exits 0 — the status and the report of a
+/// clean file. So the script read a file swiftlint never read as a clean file,
+/// and the undocumented public declarations reached the engine as a clean tree.
+///
+/// Measured over the same file beside one file that holds a finding: swiftlint
+/// writes the same stderr line, writes 2 entries, and exits 0 as
+/// well. The child states `warning: [open, public]` and no `error:` list, so no
+/// finding of this rule reaches error severity and swiftlint never exits 2.
+/// Every row of the measurement is therefore the status and the report of a
+/// healthy run, and only stderr tells the two apart.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_decode() {
+    verify_shipped_run_breaks(&SWIFT_UNDECODABLE_PROBE);
+}
+
+/// The `missing-docs-swift` probe over a file whose name holds the words of
+/// swiftlint's decode message.
+const SWIFT_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's decode message",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_DECODE_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project excludes the file, so the run reports nothing and breaks nothing, \
+             whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's decode message, through the
+/// real swiftlint pipeline.
+///
+/// The script tests stderr for the message swiftlint writes when it cannot
+/// decode a file. swiftlint writes the PATH of a file into stderr as well, so a
+/// test that read all of stderr answered the file NAME.
+///
+/// Measured with swiftlint 0.65.0 over this probe: swiftlint writes
+/// `Error: No lintable files found at paths: 'Generated/Could not read contents
+/// of.swift'` to stderr, writes 0 bytes to stdout, and exits 1. A test spelled
+/// `grep -qF 'Could not read contents of'` matched that path echo, and the
+/// script then wrote its own tool-error line and exited 1 over a run that
+/// measured correctly. The same run over `Generated/Plain.swift`, with the same
+/// exclude list, reports no finding and exits 0.
+///
+/// swiftlint writes its own decode message at the START of a line, and it
+/// writes the path echo after `Error: `. Measured, a pattern anchored on the
+/// start of the line matches the decode message and does not match the path
+/// echo, so the script anchors the test that way.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_decode_message() {
+    verify_shipped_staged_positions_report(&SWIFT_DECODE_NAME_PROBE);
+}
+
+/// The `missing-docs-swift` probe over a file whose name holds the words of
+/// swiftlint's configuration message.
+const SWIFT_CONFIG_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        expected: NO_STAGED_REPORTS,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a file whose name holds the words of swiftlint's configuration message",
+    declarations: SWIFT_STAGED_DECLARATIONS,
+    staged: SWIFT_CONFIG_NAME_POSITION_ONLY,
+    support: SWIFT_EXCLUDING_SUPPORT_FILES,
+    reason: "the project configuration is readable, so the run keeps the project exclude list \
+             and reports nothing, whatever the file is named",
+};
+
+/// Acceptance: the shipped Swift missing-docs tool rule MEASURES a run over a
+/// file whose name holds the words of swiftlint's configuration message,
+/// through the real swiftlint pipeline.
+///
+/// The same cause reaches the configuration test, and there it makes a WRONG
+/// FINDING rather than a break. Measured with swiftlint 0.65.0 over this probe:
+/// a test spelled `grep -qF 'Could not read configuration'` matched the path
+/// echo, so the script wrote `swiftlint cannot read .swiftlint.yml beside this
+/// rule`, ran swiftlint a second time with no project configuration, and
+/// reported 2 findings on a file the project excludes.
+///
+/// The project configuration of this probe is the one every Swift probe of this
+/// module stages, and swiftlint reads it without trouble, so the run must keep
+/// the project's `excluded:` list and report nothing.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_configuration_message() {
+    verify_shipped_staged_positions_report(&SWIFT_CONFIG_NAME_PROBE);
 }
 
 /// The `missing-docs-swift` probe over a directory that holds no Swift file.

@@ -234,8 +234,8 @@ fn spec_for_language(language: &str) -> Option<&'static CommentSpec> {
 /// Every file extension a comment-block verdict covers, dotted and lowercase.
 ///
 /// The extensions of the languages [`COMMENT_SPECS`] holds a row for, in roster
-/// order. The `no-commented-code-parsed` tool rule lists exactly these, and a
-/// test holds the two lists to each other.
+/// order. A caller that routes a path to the verdict reads this list to learn
+/// which paths the verdict can answer for.
 pub fn commented_code_extensions() -> Vec<&'static str> {
     COMMENT_SPECS
         .iter()

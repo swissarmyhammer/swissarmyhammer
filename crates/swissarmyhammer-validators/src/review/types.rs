@@ -37,10 +37,18 @@ pub struct Finding {
     #[serde(default)]
     pub validator: String,
 
-    /// Which specific rule inside the validator fired, when known.
+    /// Which specific rule inside the validator fired.
     ///
-    /// Optional traceability: agents cite it when they can, but a finding is
-    /// still valid without it.
+    /// The engine resolves this authoritatively against the validator's loaded
+    /// rule roster (see `fleet::resolve_rule`), so a value here always names a
+    /// rule that really exists in the set — never whatever spelling the agent
+    /// happened to emit. `None` means the agent named no rule the roster knows
+    /// and the shard held more than one rule, so the engine could not attribute
+    /// the finding; it renders as [`UNATTRIBUTED_RULE`].
+    ///
+    /// Optional in the agent's emitted JSON: a real agent routinely omits it,
+    /// and defaulting keeps that from failing to parse and silently dropping the
+    /// whole batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<String>,
 
@@ -61,6 +69,33 @@ pub struct Finding {
     /// The fix, when the agent can offer one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
+}
+
+/// The rule name a finding carries when the engine could not attribute it.
+///
+/// Reached only when the agent named no rule its validator's roster knows AND
+/// the shard it reviewed under held more than one rule, so no single rule can be
+/// named without guessing. The finding is still reported — dropping a real
+/// defect over missing metadata is worse than reporting it unattributed — and
+/// the set beside it still tells the reader which validator to open.
+pub const UNATTRIBUTED_RULE: &str = "unattributed";
+
+/// The separator between the set name and the rule name in an attribution.
+const ATTRIBUTION_SEPARATOR: char = '/';
+
+impl Finding {
+    /// The finding's `set/rule` attribution — which validator set and which of
+    /// its rules produced it.
+    ///
+    /// The ONE place that spelling lives, so the checklist item a review writes
+    /// onto a kanban task and any other reader of a finding name the pair the
+    /// same way. Falls back to [`UNATTRIBUTED_RULE`] for the rule the engine
+    /// could not attribute, so the attribution is never empty and never half a
+    /// pair.
+    pub fn attribution(&self) -> String {
+        let rule = self.rule.as_deref().unwrap_or(UNATTRIBUTED_RULE);
+        format!("{}{ATTRIBUTION_SEPARATOR}{rule}", self.validator)
+    }
 }
 
 /// Which verify layer reached a verdict on a [`VerifiedFinding`].
@@ -322,6 +357,23 @@ mod tests {
             evidence: "`find_duplicates`: 0.94 match at `foo.rs:42`".to_string(),
             suggestion: suggestion.map(String::from),
         }
+    }
+
+    #[test]
+    fn attribution_names_the_set_and_the_rule() {
+        let finding = sample_finding(Some("no-copy-paste"), None);
+        assert_eq!(finding.attribution(), "deduplicate/no-copy-paste");
+    }
+
+    #[test]
+    fn attribution_falls_back_to_the_unattributed_rule_name() {
+        // The engine could attribute no rule, so the pair is still whole: the
+        // set the reader must open, and an explicit marker for the rule.
+        let finding = sample_finding(None, None);
+        assert_eq!(
+            finding.attribution(),
+            format!("deduplicate/{UNATTRIBUTED_RULE}")
+        );
     }
 
     #[test]

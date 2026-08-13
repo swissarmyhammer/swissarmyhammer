@@ -3,8 +3,10 @@
 //! Creates a minimal rmcp server hosting only the shell tool, suitable
 //! for AI coding agents that need a persistent shell with history and search.
 
+use std::fmt;
 use std::sync::Arc;
 
+use anyhow::Context;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParams,
     ServerCapabilities, ServerInfo, Tool,
@@ -29,22 +31,36 @@ pub struct ShellToolServer {
 
 impl ShellToolServer {
     /// Create a new `ShellToolServer` with a fresh shell state.
-    pub fn new() -> Self {
+    ///
+    /// The server has no [`Default`], because the shell state it wraps reads
+    /// the filesystem and can fail.
+    ///
+    /// # Errors
+    ///
+    /// Reports the error [`ShellExecuteTool::new`] gives when no directory the
+    /// shell state can open is writable.
+    pub fn new() -> anyhow::Result<Self> {
         let context = ToolContext::new(
             Arc::new(ToolHandlers::new()),
             Arc::new(Mutex::new(None)),
             Arc::new(ChatModelConfig::default()),
         );
-        Self {
-            tool: ShellExecuteTool::new(),
+        Ok(Self {
+            tool: ShellExecuteTool::new().context("creating the shell tool")?,
             context,
-        }
+        })
     }
 }
 
-impl Default for ShellToolServer {
-    fn default() -> Self {
-        Self::new()
+impl fmt::Debug for ShellToolServer {
+    /// Names the wrapped tool and marks the rest elided. `ToolContext` is a
+    /// dependency-injection record of handles — a tool registry, an MCP peer,
+    /// git operations — and carries no `Debug` of its own, so it cannot be
+    /// rendered here.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellToolServer")
+            .field("tool", &self.tool)
+            .finish_non_exhaustive()
     }
 }
 
@@ -99,16 +115,21 @@ impl ServerHandler for ShellToolServer {
 ///
 /// # Errors
 ///
-/// Returns an error string if the server fails to start or encounters a fatal error.
-pub async fn run_serve() -> Result<(), String> {
+/// Reports an error when the server fails to start or reaches a fatal error.
+/// Each step names what it was doing, and the chain keeps the original cause,
+/// so the caller can render the whole chain with `{e:#}`.
+pub async fn run_serve() -> anyhow::Result<()> {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
 
-    let server = ShellToolServer::new();
+    let server = ShellToolServer::new().context("creating the shell tool server")?;
     let running = serve_server(server, stdio())
         .await
-        .map_err(|e| e.to_string())?;
-    running.waiting().await.map_err(|e| e.to_string())?;
+        .context("starting MCP stdio server")?;
+    running
+        .waiting()
+        .await
+        .context("MCP server terminated unexpectedly")?;
     Ok(())
 }
 
@@ -119,7 +140,7 @@ mod tests {
     //! Covers the self-contained handler entry points that do not require
     //! a live rmcp transport:
     //!
-    //! - [`ShellToolServer::new`] and [`ShellToolServer::default`] smoke tests
+    //! - [`ShellToolServer::new`] smoke test
     //! - [`ServerHandler::get_info`] metadata assertions
     //!
     //! The `ServerHandler::list_tools` and `ServerHandler::call_tool` methods
@@ -131,24 +152,32 @@ mod tests {
     //! `run_serve`, which blocks on real stdio I/O.
     use super::*;
 
-    /// `ShellToolServer::new` must construct without panicking.
+    /// `ShellToolServer::new` must construct in a writable directory.
     #[tokio::test]
-    async fn test_new_does_not_panic() {
-        let _server = ShellToolServer::new();
+    async fn test_new_constructs() {
+        let server = ShellToolServer::new();
+        assert!(server.is_ok(), "construction failed: {:?}", server.err());
     }
 
-    /// `ShellToolServer::default` must delegate to `new` and construct
-    /// without panicking.
+    /// `ShellToolServer` is public, so it renders through `Debug` for any
+    /// downstream caller that logs it or asserts on it. The wrapped
+    /// `ToolContext` carries no `Debug`, so the rendering names the tool and
+    /// marks the rest elided.
     #[tokio::test]
-    async fn test_default_does_not_panic() {
-        let _server = ShellToolServer::default();
+    async fn shell_tool_server_renders_through_debug() {
+        let server = ShellToolServer::new().expect("shell state");
+        let rendered = format!("{server:?}");
+        assert!(
+            rendered.contains("ShellToolServer"),
+            "Debug output: {rendered}"
+        );
     }
 
     /// `get_info` must report the server name as `"shelltool"` and the
     /// version from `CARGO_PKG_VERSION`, with the tools capability enabled.
     #[tokio::test]
     async fn test_get_info_reports_shelltool_identity() {
-        let server = ShellToolServer::new();
+        let server = ShellToolServer::new().expect("shell state");
         let info = server.get_info();
 
         assert_eq!(info.server_info.name, "shelltool");

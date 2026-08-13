@@ -10,18 +10,43 @@ supersedes: cognitive-complexity
 tool:
   scope: files
   run: |
+    set -e
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
+    findings=""
     for file in "$@"; do
+      if [ ! -r "$file" ]; then
+        printf 'complexity-go: gocognit could not read %s\n' "$file" >&2
+        exit 1
+      fi
       if sed -n '/^package[[:space:]]/q;p' "$file" | grep -qE '^// Code generated .* DO NOT EDIT\.$'; then
         continue
       fi
-      gocognit -over 15 -json "$file"
-    done |
-      jq -c '(. // [])[]
-             | {file: .Pos.Filename, line: .Pos.Line,
-                message: "cognitive complexity \(.Complexity) of func \(.FuncName) is over the gate of 15"}'
+      status=0
+      report="$(gocognit -over 15 -json "$file")" || status=$?
+      measured=0
+      if [ "$status" -eq 0 ] && [ "$report" = "null" ]; then
+        measured=1
+      elif [ "$status" -eq 1 ] &&
+        printf '%s\n' "$report" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1
+      then
+        measured=1
+      fi
+      if [ "$measured" -eq 0 ]; then
+        printf 'complexity-go: gocognit could not read %s\n' "$file" >&2
+        exit 1
+      fi
+      found="$(printf '%s\n' "$report" |
+        jq -c '(. // [])[]
+               | {file: .Pos.Filename, line: .Pos.Line,
+                  message: "cognitive complexity \(.Complexity) of func \(.FuncName) is over the gate of 15"}')"
+      if [ -n "$found" ]; then
+        findings="$findings$found
+    "
+      fi
+    done
+    printf '%s' "$findings"
   doctor:
     check_command: "which gocognit go jq sed grep"
     check_version_command: "go version -m \"$(command -v gocognit)\" | awk '$1 == \"mod\" { print $2, $3 }'"
@@ -64,10 +89,11 @@ The scope is `files` because `gocognit` reads the paths it is given, one
 function at a time, and needs neither a `go.mod` nor a loaded package.
 
 `-json` prints `null`, not an empty array, when nothing is over the gate, so the
-pipe starts with `(. // [])[]`.
+`jq` filter starts with `(. // [])[]`.
 
-`-over 15` also exits 1 whenever it printed something. The pipe ends in `jq`,
-which exits 0, so a run with findings is not read as a broken script.
+`-over 15` also exits 1 whenever it printed something. The script reads that
+status as a finding rather than as a break, and the section "A file the tool
+cannot read" below states how it tells the two apart.
 
 `gocognit` carries no version flag. `go version -m` reads the module path and
 version out of the installed binary instead, and the `awk` keeps the one `mod`
@@ -175,8 +201,8 @@ reported nothing.
 
 `gocognit` holds no default target. Measured with gocognit v1.2.1, given no
 path: 52 lines of usage text on stderr, nothing on stdout, and exit 2. Three
-runs each gave the same 52 lines. The pipe ends in `jq`, which exits 0, so that
-refusal reaches the engine as a clean tree.
+runs each gave the same 52 lines. So a run that reached the tool with no path
+would answer that refusal and judge no file.
 
 The script therefore counts its arguments one time, at its head, and a count of
 zero exits 0 with no finding. That count is the guard the `run` key of
@@ -209,11 +235,68 @@ guard, which named `complexity-go` on the run that measured it. So the loop
 takes the second count away, and the one count that is left stands where the
 contract puts it.
 
-The loop reports in the order of its arguments. The one call over every file
-reported in sorted order. Measured over two ordinary files: both shapes report
-the same 2 findings.
+The loop reports in the order of its arguments. The one call sorted its report
+by COMPLEXITY, highest first. Measured with gocognit v1.2.1 over three ordinary
+files, given in the argument order `zzz.go` (complexity 28), `mmm.go` (36),
+`aaa.go` (21): the one call reported `mmm.go`, then `zzz.go`, then `aaa.go`,
+which is the complexity and not the name; the name order is `aaa.go`, `mmm.go`,
+`zzz.go`. The loop reported `zzz.go`, then `mmm.go`, then `aaa.go`, which is the
+argument order. Measured over two ordinary files: both shapes report the same 2
+findings.
 
 The acceptance test
 `the_shipped_go_complexity_tool_rule_reads_only_the_files_it_is_given` holds two
 halves: the run with no argument reports nothing, and the run over the two
 staged files reports 2.
+
+## A file the tool cannot read
+
+`gocognit` keeps ONE exit status for a finding and for a failure. Measured with
+gocognit v1.2.1, one file at each run:
+
+| the file | stdout | stderr | exit |
+|---|---|---|---|
+| one function over the gate | a JSON array of one entry | nothing | 1 |
+| no function over the gate | `null` | nothing | 0 |
+| a path that holds no file | nothing | `gocognit: open ...: no such file or directory` | 1 |
+| a syntax error | nothing | `gocognit: ...:5:12: expected '}', found 'EOF'` | 1 |
+| an empty `.go` file | nothing | `gocognit: ...:1:1: expected 'package', found 'EOF'` | 1 |
+
+The status alone therefore cannot tell a finding from a failure. The `run` key
+of `builtin/validators/README.md` states the answer for a shared status: test
+the REPORT beside the status, and accept the shared status only for the report
+shape a measured run writes. So the script calls a run measured under two
+shapes alone — status 0 with the report `null`, and status 1 with a report that
+is a JSON array of one entry or more. Every other answer writes
+`complexity-go: gocognit could not read <path>` to stderr and exits 1, so the
+engine reads a broken run rather than a clean file.
+
+A path the script cannot read never reaches `gocognit`. The `[ ! -r "$file" ]`
+test names that path and exits 1, and it also keeps the `sed` error of the same
+path off stderr.
+
+The script holds each finding in `findings` and writes them all at the end, so
+a run that breaks writes NO finding, whatever the position of the bad file.
+
+Measured over one ordinary Go file of cognitive complexity 21 beside one bad
+file, with the bad file first and with the bad file last. The one-call shape and
+the loop shape are the two earlier shapes of this script:
+
+| the second file | one call | loop | this script |
+|---|---|---|---|
+| a path that holds no file | 0 findings, exit 0 | 1 finding, exit 0 | 0 findings, exit 1 |
+| a syntax error | 0 findings, exit 0 | 1 finding, exit 0 | 0 findings, exit 1 |
+| an empty `.go` file | 0 findings, exit 0 | 1 finding, exit 0 | 0 findings, exit 1 |
+
+The one call lost the findings of every file of the run, because `gocognit`
+writes one report for the whole run and writes 0 bytes when one file breaks.
+Measured over the ordinary file beside the file with the syntax error, in each
+order: the tool wrote 0 bytes to stdout. The loop lost the findings of the bad
+file alone. Both shapes answered exit 0, and the engine read each of those runs
+as a clean file. This script answers exit 1 and names the file.
+
+Two acceptance tests hold the two causes apart:
+`the_shipped_go_complexity_tool_rule_breaks_on_a_file_it_cannot_read` stages no
+file at the named path, and
+`the_shipped_go_complexity_tool_rule_breaks_on_a_file_it_cannot_parse` stages a
+file whose function body never closes.

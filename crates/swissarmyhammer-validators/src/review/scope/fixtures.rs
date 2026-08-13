@@ -14,6 +14,14 @@
 //! them leaves the work-list. A fixture is therefore not test code excluded by a
 //! glob — it is data the store itself declares, and `sah doctor` remains its
 //! gate: doctor runs every tool rule against these files on each health check.
+//!
+//! The three layers resolve to three different roots, and the BUILTIN one is
+//! the root a reader has to know to read a finding here. It is
+//! [`crate::builtin::builtin_validators_dir`] — `<repository>/builtin/validators`,
+//! resolved at compile time from the checkout the engine was built from — so a
+//! changed `builtin/validators/*/fixtures/*` file of THIS repository is what
+//! the containment test matches against it. The other two roots are
+//! `<home>/.validators` and `<repository under review>/.validators`.
 
 use std::path::{Path, PathBuf};
 

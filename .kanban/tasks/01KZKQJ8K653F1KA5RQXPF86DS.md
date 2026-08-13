@@ -137,8 +137,25 @@ comments:
     - commands: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo nextest run --workspace`.
     - next: `/review`. The card stays in `doing`.
   timestamp: 2026-08-10T16:13:29.544373+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01kzp7fvg4gkhzxm96ttvpkrye
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (8262b0228) — 0 findings, 0 confirmed, 0 refuted, 8 validators attempted, 0 failed. The two findings of 2026-08-10 10:47 are addressed: `definition_spec` and `test_spec` read the `LANGUAGE_SPECS` roster of 16 rows and keep the `NO_DEFINITION_SPEC` and `NO_TEST_SPEC` fallbacks. All 14 old `definition_spec` arms and 11 old `test_spec` arms map to the same specs. `cargo test -p swissarmyhammer-sem --lib parser::plugins::code::duplication` gives 35 passed, 0 failed. `cargo clippy -p swissarmyhammer-sem --lib --all-features` gives no warning.
+    - next: none — the card moves to done.
+  timestamp: 2026-08-10T16:18:30.532458+00:00
+- actor: claude-code
+  id: 01kzp7gk9vra2ds83253cqz8k2
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file; the two `match`-as-table lookups become one `LANGUAGE_SPECS` roster of 16 rows, so one row carries both the `DefinitionSpec` and the `TestSpec` and the two halves cannot drift; `is_identifier_kind` becomes `IDENTIFIER_KINDS` plus `IDENTIFIER_KIND_ENDINGS`; new guard test `each_language_of_the_roster_is_named_one_time`, RED proved with a second `rust` row
+    - test: `cargo nextest run --workspace` 14027 run, 14023 passed, 0 skipped; the 4 failures are the known ^bh5ncd0 set
+    - measured: duplication stays at 406 over 1189 files, and the report is the same line for line
+    - commit: 8262b0228
+    - review: clean — 0 findings, 8 validators attempted, 0 failed; the reviewer mapped each old match arm to a new row and found the same spec for every one
+  timestamp: 2026-08-10T16:18:54.907522+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd780
 title: duplication test exclusion misses a test attribute that carries arguments
 ---
 Found while measuring `^80nbway`.

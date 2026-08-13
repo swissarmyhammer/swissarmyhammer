@@ -4,7 +4,6 @@
 //! JSON configuration files (e.g. `.mcp.json`, `.cursor/mcp.json`).
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,6 +18,11 @@ use crate::registry::RegistryError;
 /// [`ServersKey`] and [`ToolName`] are the same code twice, so the macro is
 /// their single source. A copy of these six impl blocks for each type could
 /// drift; one expansion cannot.
+///
+/// The macro is the crate's single source for this shape, not this module's:
+/// `install::profile` imports it to name its own string parameters. It lives
+/// here because the two types below are its first users. Every path it
+/// expands to is absolute, so it needs nothing imported at the call site.
 macro_rules! string_newtype {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -37,8 +41,8 @@ macro_rules! string_newtype {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.write_str(&self.0)
             }
         }
@@ -62,6 +66,10 @@ macro_rules! string_newtype {
         }
     };
 }
+
+// The macro is declared above, so it is in scope for the rest of this module.
+// This re-export is what makes it reachable by path from another module.
+pub(crate) use string_newtype;
 
 string_newtype! {
     /// The JSON object key an agent config stores its MCP servers under, such

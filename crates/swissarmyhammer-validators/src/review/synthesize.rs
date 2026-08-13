@@ -24,7 +24,9 @@
 //!    surviving concern is its own checklist item).
 //! 5. **Renders** the dated GFM section in the exact shape the review skill
 //!    already writes onto kanban tasks (`builtin/skills/review/SKILL.md` step 8),
-//!    so the existing task-history parsing keeps working.
+//!    so the existing task-history parsing keeps working. Every item names its
+//!    validator set and rule beside the `file:line`, so the reader of a card can
+//!    open the rule that produced a finding without searching for it.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -492,10 +494,18 @@ fn dedup_exact(findings: impl Iterator<Item = VerifiedFinding>) -> Vec<VerifiedF
 
 /// Render one finding as a GFM checklist item.
 ///
-/// The shape matches the review skill verbatim: `` - [ ] `file:line` — claim.
-/// suggestion. `` — the claim (what + why it matters) followed by the suggestion
-/// when the agent offered one, each terminated as a sentence. A finding with no
-/// suggestion renders the claim alone.
+/// The shape is `` - [ ] `file:line` `set/rule` — claim. suggestion. `` — the
+/// location, then the [attribution](Finding::attribution) beside it, then the
+/// claim (what + why it matters) followed by the suggestion when the agent
+/// offered one, each terminated as a sentence. A finding with no suggestion
+/// renders the claim alone.
+///
+/// The attribution is not decoration. An implementer who picks up a card with
+/// open findings has to read the rule that produced each one — to fix it, and to
+/// judge whether the rule measures the right thing — and without the set and the
+/// rule on the item that means inferring the rule from the claim's wording and
+/// searching the validator store for it. Naming the pair here turns that search
+/// into opening one file.
 fn render_item(finding: &Finding) -> String {
     let mut body = sentence(&finding.claim);
     if let Some(suggestion) = &finding.suggestion {
@@ -505,7 +515,13 @@ fn render_item(finding: &Finding) -> String {
             body.push_str(&sentence(suggestion));
         }
     }
-    format!("- [ ] `{}:{}` — {}", finding.file, finding.line, body)
+    format!(
+        "- [ ] `{}:{}` `{}` — {}",
+        finding.file,
+        finding.line,
+        finding.attribution(),
+        body
+    )
 }
 
 /// One path's worth of skips, folded from the per-(validator, file)
@@ -1655,9 +1671,9 @@ mod tests {
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
 
-- [ ] `path/to/file.rs:10` — What's wrong and suggested fix.
-- [ ] `path/to/file.rs:42` — What's wrong. Why it matters. Suggested fix.
-- [ ] `path/to/file.rs:88` — Minor issue.
+- [ ] `path/to/file.rs:10` `perf/unattributed` — What's wrong and suggested fix.
+- [ ] `path/to/file.rs:42` `dead-code/no-unused` — What's wrong. Why it matters. Suggested fix.
+- [ ] `path/to/file.rs:88` `style/unattributed` — Minor issue.
 ";
         assert_eq!(report.markdown, expected);
     }

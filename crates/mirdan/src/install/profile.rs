@@ -20,7 +20,7 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
-use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
+use crate::mcp_config::{self, string_newtype, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -31,7 +31,105 @@ use super::applier::{
 };
 use super::deploy::{deploy_agent_to_agents_at, deploy_skill_to_agents_at};
 use super::uninstall::{uninstall_agent_at, uninstall_skill_at};
-use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted};
+use super::{
+    copy_dir_recursive, remove_empty_dirs_up_to, rooted, temp_dir_error, temp_subdir_error,
+};
+
+// ── Parameter newtypes ───────────────────────────────────────────────────────
+//
+// Several helpers below carry two or three strings that mean entirely
+// different things. Spelled `&str` they are interchangeable, so a caller can
+// hand them over in the wrong order and the compiler stays silent. Each one
+// gets its own type through the crate's `string_newtype!` macro — the same
+// macro, and the same reason, as `ServersKey` and `ToolName`. An MCP server
+// name is already `ToolName`, so these do not restate it.
+//
+// A helper that carries one of these strings alone takes the same type, so one
+// concept keeps one spelling across the file. `InitResult::ok` takes the
+// component name and the message as two adjacent strings, so every component
+// name this file reports under crosses that boundary as a `ComponentName`.
+
+string_newtype! {
+    /// The store name of one builtin profile item, such as `commit`.
+    ItemName
+}
+
+string_newtype! {
+    /// The rendered body of one builtin item's manifest, staged as that file's
+    /// contents.
+    ManifestContent
+}
+
+string_newtype! {
+    /// The manifest file name one builtin item is staged under, such as
+    /// `SKILL.md`. Carries `ProfileItemKind::file_name` into the staging call.
+    ManifestFilename
+}
+
+string_newtype! {
+    /// The verb one reporter action is announced with, such as `Registered`.
+    ActionVerb
+}
+
+string_newtype! {
+    /// The preposition joining a reporter action to the agent it names, such
+    /// as `for` in `sah MCP server for Claude Code`.
+    Preposition
+}
+
+string_newtype! {
+    /// The component name one step reports its [`InitResult`] under, such as
+    /// `profile-skills`.
+    ComponentName
+}
+
+string_newtype! {
+    /// The label naming one family of builtin items in reporter text, such as
+    /// `skill`. The deinit counterpart of `ProfileItemKind::label`.
+    ItemKind
+}
+
+// ── Shared literals ──────────────────────────────────────────────────────────
+//
+// Each literal below is read at two or more sites that must agree, or is the
+// sibling of such a literal in one expression. One constant is the single
+// source of each one, so a change to the text reaches every site.
+//
+// The component names are `pub(crate)` because the tests that pin each
+// reported row name the same constant the reporting code does, the way
+// `APPLIER_COMPONENT` already is. A test that spells the name itself is a
+// second source of that text.
+
+/// The component name the skill step of a profile reports under.
+pub(crate) const PROFILE_SKILLS_COMPONENT: &str = "profile-skills";
+
+/// The component name the agent step of a profile reports under.
+pub(crate) const PROFILE_AGENTS_COMPONENT: &str = "profile-agents";
+
+/// The component name the validator step of a profile reports under.
+pub(crate) const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";
+
+/// The reporter label for one builtin skill.
+const SKILL_ITEM_LABEL: &str = "skill";
+
+/// The reporter label for one builtin agent.
+const AGENT_ITEM_LABEL: &str = "agent";
+
+/// The file name of the discovery README at each builtin store root. The
+/// install writes this file and the deinit removes it, so the two must agree.
+const STORE_README_FILE_NAME: &str = "README.md";
+
+/// The reporter verb for content this installer wrote.
+const VERB_DEPLOYED: &str = "Deployed";
+
+/// The reporter verb for content this installer removed.
+const VERB_REMOVED: &str = "Removed";
+
+/// The reporter verb for a settings fragment this installer merged.
+const VERB_INSTALLED: &str = "Installed";
+
+/// The reporter verb for an MCP server this installer registered.
+const VERB_REGISTERED: &str = "Registered";
 
 /// Selects which builtin items (skills, agents, or validator sets) a profile
 /// installs.
@@ -236,10 +334,13 @@ fn render_metadata_values(
 /// store has been populated so the README never creates an empty store dir.
 fn write_store_readme_for(store_root: &Path, content: &str, reporter: &dyn InitReporter) {
     let result = std::fs::create_dir_all(store_root)
-        .and_then(|()| std::fs::write(store_root.join("README.md"), content));
+        .and_then(|()| std::fs::write(store_root.join(STORE_README_FILE_NAME), content));
     if let Err(e) = result {
         reporter.emit(&InitEvent::Warning {
-            message: format!("failed to write {}/README.md: {e}", store_root.display()),
+            message: format!(
+                "failed to write {}/{STORE_README_FILE_NAME}: {e}",
+                store_root.display()
+            ),
         });
     }
 }
@@ -251,11 +352,14 @@ fn write_store_readme_for(store_root: &Path, content: &str, reporter: &dyn InitR
 /// builtin items. The store directory itself is removed only when nothing else
 /// remains, so any user-authored items keep the directory (and are untouched).
 fn prune_store_readme(store_root: &Path, reporter: &dyn InitReporter) {
-    match std::fs::remove_file(store_root.join("README.md")) {
+    match std::fs::remove_file(store_root.join(STORE_README_FILE_NAME)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => reporter.emit(&InitEvent::Warning {
-            message: format!("failed to remove {}/README.md: {e}", store_root.display()),
+            message: format!(
+                "failed to remove {}/{STORE_README_FILE_NAME}: {e}",
+                store_root.display()
+            ),
         }),
     }
     if let Ok(mut entries) = std::fs::read_dir(store_root) {
@@ -301,7 +405,7 @@ fn install_profile_skills(
             is_skill: true,
             store_dir: store::skill_store_dir,
             readme: include_str!("../../../../builtin/skills/README.md"),
-            label: "skill",
+            label: SKILL_ITEM_LABEL,
         },
         |library, ctx, _name, skill| {
             let (instructions, metadata) = render_profile_skill(library, ctx, skill);
@@ -331,7 +435,7 @@ fn install_profile_agents(
             is_skill: false,
             store_dir: store::agent_store_dir,
             readme: include_str!("../../../../builtin/agents/README.md"),
-            label: "agent",
+            label: AGENT_ITEM_LABEL,
         },
         render_profile_agent,
         |_agent| None,
@@ -394,9 +498,9 @@ fn install_profile_items<T>(
         let item = &builtins[&name];
         let content = render(&library, &ctx, &name, item);
         let deployed = stage_and_deploy_rendered(
-            &name,
-            &content,
-            kind.file_name,
+            ItemName::from(name),
+            ManifestContent::from(content),
+            ManifestFilename::from(kind.file_name),
             extra_files(item).unwrap_or(&empty_files),
             scope,
             root,
@@ -417,11 +521,25 @@ fn install_profile_items<T>(
 
     if !targets.is_empty() {
         reporter.emit(&InitEvent::Action {
-            verb: "Deployed".to_string(),
+            verb: VERB_DEPLOYED.to_string(),
             message: format!("{} {}(s) to {}", count, kind.label, targets.join(", ")),
         });
     }
     Ok(targets)
+}
+
+/// Report what a retired-content prune removed, naming the grain it removed.
+///
+/// Silent when the prune removed nothing, which is the ordinary case: a store
+/// written by a current binary holds no retired content at all.
+fn report_pruned(reporter: &dyn InitReporter, grain: &str, pruned: &[String]) {
+    if pruned.is_empty() {
+        return;
+    }
+    reporter.emit(&InitEvent::Action {
+        verb: VERB_REMOVED.to_string(),
+        message: format!("{grain}: {}", pruned.join(", ")),
+    });
 }
 
 /// Materialize the profile's selected builtin validator sets onto disk through
@@ -460,19 +578,28 @@ fn install_profile_validators(
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
 
-    // A set merged or deleted out of the current builtin lineup (e.g. the nine
-    // single-rule sets folded into code-security/code-hygiene) never
-    // re-materializes, so a stale copy the user never touched would otherwise
-    // sit in the store forever. Prune it here, on every refresh, before
-    // installing the currently-selected sets; a user-modified copy of the same
-    // name is left untouched (see `retired_validators`).
-    let pruned = crate::retired_validators::prune_unmodified_retired_sets(&target_root);
-    if !pruned.is_empty() {
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!("retired validator set(s): {}", pruned.join(", ")),
-        });
-    }
+    // Retired builtin content never re-materializes, so a stale copy the user
+    // never touched would otherwise sit in the store forever. Prune it here, on
+    // every refresh, before installing the currently-selected sets; a
+    // user-modified copy is left untouched (see `retired_validators`).
+    //
+    // Two grains, because retirement happens at two grains: a whole set merged
+    // or deleted out of the lineup (the nine single-rule sets folded into
+    // code-security/code-hygiene), and single files deleted from a set that
+    // still ships (`duplication-parsed`, `no-commented-code-parsed`, and the
+    // four fixtures those two rules used). The second is invisible to the
+    // first: the set directory around the stale file is refreshed on every
+    // install, so nothing ever removes the file.
+    report_pruned(
+        reporter,
+        "retired validator set(s)",
+        &crate::retired_validators::prune_unmodified_retired_sets(&target_root),
+    );
+    report_pruned(
+        reporter,
+        "retired validator file(s)",
+        &crate::retired_validators::prune_unmodified_retired_files(&target_root),
+    );
 
     let selected = selected_names(selector, sets.keys().map(|name| name.to_string()));
     let mut materialized: Vec<String> = Vec::new();
@@ -501,7 +628,7 @@ fn install_profile_validators(
 
     if !materialized.is_empty() {
         reporter.emit(&InitEvent::Action {
-            verb: "Deployed".to_string(),
+            verb: VERB_DEPLOYED.to_string(),
             message: format!(
                 "{} validator set(s) to {}",
                 materialized.len(),
@@ -523,8 +650,7 @@ fn stage_validator_set(
     set: &str,
     files: &[(&'static str, &'static str)],
 ) -> Result<tempfile::TempDir, RegistryError> {
-    let staged = tempfile::tempdir()
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let staged = tempfile::tempdir().map_err(temp_dir_error)?;
     let set_prefix = format!("{set}/");
     for (embedded_name, content) in files {
         // Embedded names are set-prefixed (e.g. `dead-code/rules/x.md`); strip
@@ -622,23 +748,24 @@ fn remove_builtin_file_and_cleanup(
 ///
 /// `is_skill` selects the skill store/dirs vs. the agent store/dirs.
 fn stage_and_deploy_rendered(
-    name: &str,
-    content: &str,
-    file_name: &str,
+    name: ItemName,
+    content: ManifestContent,
+    file_name: ManifestFilename,
     extra_files: &std::collections::HashMap<String, String>,
     scope: InitScope,
     root: Option<&Path>,
     is_skill: bool,
 ) -> Result<Vec<String>, RegistryError> {
-    if !store::is_safe_name(name) {
-        return Err(RegistryError::Validation(format!("unsafe name: {name:?}")));
+    if !store::is_safe_name(name.as_str()) {
+        return Err(RegistryError::Validation(format!(
+            "unsafe name: {:?}",
+            name.as_str()
+        )));
     }
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
-    let item_dir = temp_dir.path().join(name);
-    std::fs::create_dir_all(&item_dir)
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
-    std::fs::write(item_dir.join(file_name), content)
+    let temp_dir = tempfile::tempdir().map_err(temp_dir_error)?;
+    let item_dir = temp_dir.path().join(name.as_str());
+    std::fs::create_dir_all(&item_dir).map_err(|e| temp_subdir_error("item", e))?;
+    std::fs::write(item_dir.join(file_name.as_str()), content.as_str())
         .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
 
     for (rel_path, file_content) in extra_files {
@@ -660,9 +787,9 @@ fn stage_and_deploy_rendered(
 
     let global = scope_is_global(scope);
     if is_skill {
-        deploy_skill_to_agents_at(name, &item_dir, None, global, root)
+        deploy_skill_to_agents_at(name.as_str(), &item_dir, None, global, root)
     } else {
-        deploy_agent_to_agents_at(name, &item_dir, None, global, root)
+        deploy_agent_to_agents_at(name.as_str(), &item_dir, None, global, root)
     }
 }
 
@@ -749,10 +876,14 @@ fn apply_profile_settings_fragment(
     reporter: &dyn InitReporter,
     fragment: &SettingsFragment,
 ) -> Vec<InitResult> {
-    let component = fragment.component;
+    let component = ComponentName::new(fragment.component);
     let subject = fragment.subject;
     let apply_at = fragment.apply_at;
-    let verb = if install { "Installed" } else { "Removed" };
+    let verb = if install {
+        VERB_INSTALLED
+    } else {
+        VERB_REMOVED
+    };
     for_each_detected_agent(
         scope,
         reporter,
@@ -773,7 +904,7 @@ fn apply_profile_settings_fragment(
         },
         |changed| {
             InitResult::ok(
-                component,
+                component.as_str(),
                 format!("{verb} {subject} for {changed} agent(s)"),
             )
         },
@@ -838,19 +969,28 @@ pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Bash", "Edit", "Read", "Wri
 /// without clobbering unrelated keys.
 pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
     serde_json::json!({
-        "permissions": {
-            "deny": SUPERSEDED_NATIVE_DENY_TOOLS,
+        POINTER_KEY_PERMISSIONS: {
+            POINTER_KEY_DENY: SUPERSEDED_NATIVE_DENY_TOOLS,
         }
     })
 }
 
-/// JSON pointer for the `permissions.deny` array (Claude Code shape).
-const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
-
-/// Object keys used to read the canonical fragment's parts back out (kept in one
-/// place so the pointer strings and these accessors can never drift).
+/// The `permissions` object key of the Claude Code settings shape.
 const POINTER_KEY_PERMISSIONS: &str = "permissions";
+
+/// The `deny` array key inside [`POINTER_KEY_PERMISSIONS`].
 const POINTER_KEY_DENY: &str = "deny";
+
+/// JSON pointer for the `permissions.deny` array (Claude Code shape).
+///
+/// Built from [`POINTER_KEY_PERMISSIONS`] and [`POINTER_KEY_DENY`] instead of
+/// spelled out, because a pointer that restates the keys is a second source of
+/// them: a change to either key would leave the pointer addressing the old
+/// path while the fragment carries the new one. A `const` cannot join other
+/// `const` strings, so this is a function.
+fn permissions_deny_pointer() -> String {
+    format!("/{POINTER_KEY_PERMISSIONS}/{POINTER_KEY_DENY}")
+}
 
 /// Merge the edit-redirect fragment into the settings file at `path`, or strip
 /// it when `install` is false.
@@ -872,15 +1012,18 @@ pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool,
     let fragment = desired_edit_redirect_fragment();
     let deny_entries = fragment[POINTER_KEY_PERMISSIONS][POINTER_KEY_DENY]
         .as_array()
-        .expect("fragment permissions.deny is an array");
+        .unwrap_or_else(|| {
+            panic!("fragment {POINTER_KEY_PERMISSIONS}.{POINTER_KEY_DENY} is an array")
+        });
 
+    let pointer = permissions_deny_pointer();
     let mut settings = settings::read_json(path)?;
     let mut changed = false;
     for entry in deny_entries {
         let one = if install {
-            settings::ensure_array_contains(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+            settings::ensure_array_contains(&mut settings, &pointer, entry)
         } else {
-            settings::remove_from_array(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+            settings::remove_from_array(&mut settings, &pointer, entry)
         };
         changed |= one;
     }
@@ -915,7 +1058,9 @@ fn install_profile_mcp(
     };
     match root {
         None => register_mcp_server(scope, &server.name, &entry, reporter),
-        Some(root) => register_mcp_server_at(root, &server.name, &entry, scope, reporter),
+        Some(root) => {
+            register_mcp_server_at(root, &ToolName::new(&server.name), &entry, scope, reporter)
+        }
     }
 }
 
@@ -946,7 +1091,7 @@ fn resolve_agent_mcp_config<'a>(
 /// global MCP config. Agents without an MCP config for the scope are skipped.
 fn register_mcp_server_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     entry: &McpServerEntry,
     scope: InitScope,
     reporter: &dyn InitReporter,
@@ -956,13 +1101,13 @@ fn register_mcp_server_at(
         server_name,
         scope,
         reporter,
-        "Registered",
-        "for",
+        ActionVerb::new(VERB_REGISTERED),
+        Preposition::new("for"),
         |mcp_cfg, config_path| {
             mcp_config::register_mcp_server(
                 config_path,
                 &ServersKey::new(&mcp_cfg.servers_key),
-                &ToolName::new(server_name),
+                server_name,
                 entry,
                 &mcp_cfg.entry_extras,
             )?;
@@ -974,7 +1119,7 @@ fn register_mcp_server_at(
 /// Root-explicit MCP unregistration mirroring [`register_mcp_server_at`].
 fn unregister_mcp_server_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     scope: InitScope,
     reporter: &dyn InitReporter,
 ) -> Vec<InitResult> {
@@ -983,13 +1128,13 @@ fn unregister_mcp_server_at(
         server_name,
         scope,
         reporter,
-        "Removed",
-        "from",
+        ActionVerb::new(VERB_REMOVED),
+        Preposition::new("from"),
         |mcp_cfg, config_path| {
             mcp_config::unregister_mcp_server(
                 config_path,
                 &ServersKey::new(&mcp_cfg.servers_key),
-                &ToolName::new(server_name),
+                server_name,
             )
         },
     )
@@ -1003,13 +1148,14 @@ fn unregister_mcp_server_at(
 #[allow(clippy::too_many_arguments)]
 fn apply_mcp_operation_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     scope: InitScope,
     reporter: &dyn InitReporter,
-    verb: &str,
-    preposition: &str,
+    verb: ActionVerb,
+    preposition: Preposition,
     operation: impl Fn(&agents::McpConfigDef, &Path) -> Result<bool, RegistryError>,
 ) -> Vec<InitResult> {
+    let component = ComponentName::new(APPLIER_COMPONENT);
     for_each_detected_agent(
         scope,
         reporter,
@@ -1018,13 +1164,13 @@ fn apply_mcp_operation_at(
                 return Ok(None);
             };
             Ok(operation(mcp_cfg, &config_path)?.then(|| AgentAction {
-                verb: verb.to_string(),
+                verb: verb.as_str().to_string(),
                 message: format!("{server_name} MCP server {preposition} {}", agent.name),
             }))
         },
         |changed| {
             InitResult::ok(
-                APPLIER_COMPONENT,
+                component.as_str(),
                 format!("{verb} applied to {changed} agent(s)"),
             )
         },
@@ -1071,25 +1217,35 @@ pub fn init_profile(
     if let Some(ref selector) = profile.skills {
         run_install_step(
             &mut results,
-            "profile-skills",
+            ComponentName::new(PROFILE_SKILLS_COMPONENT),
             install_profile_skills(selector, scope, root, reporter),
-            |targets| format!("Deployed skills to {}", targets.join(", ")),
+            |targets| {
+                format!(
+                    "{VERB_DEPLOYED} {SKILL_ITEM_LABEL}s to {}",
+                    targets.join(", ")
+                )
+            },
         );
     }
 
     if let Some(ref selector) = profile.agents {
         run_install_step(
             &mut results,
-            "profile-agents",
+            ComponentName::new(PROFILE_AGENTS_COMPONENT),
             install_profile_agents(selector, scope, root, reporter),
-            |targets| format!("Deployed agents to {}", targets.join(", ")),
+            |targets| {
+                format!(
+                    "{VERB_DEPLOYED} {AGENT_ITEM_LABEL}s to {}",
+                    targets.join(", ")
+                )
+            },
         );
     }
 
     if let Some(ref selector) = profile.validators {
         run_install_step(
             &mut results,
-            "profile-validators",
+            ComponentName::new(PROFILE_VALIDATORS_COMPONENT),
             install_profile_validators(selector, scope, root, reporter),
             |sets| format!("Materialized validator set(s): {}", sets.join(", ")),
         );
@@ -1151,8 +1307,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_skill_names(selector),
-            "profile-skills",
-            "skill",
+            ComponentName::new(PROFILE_SKILLS_COMPONENT),
+            ItemKind::new(SKILL_ITEM_LABEL),
             store::skill_store_dir,
             |name| uninstall_skill_at(name, None, global, root),
             global,
@@ -1165,8 +1321,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_agent_names(selector),
-            "profile-agents",
-            "agent",
+            ComponentName::new(PROFILE_AGENTS_COMPONENT),
+            ItemKind::new(AGENT_ITEM_LABEL),
             store::agent_store_dir,
             |name| uninstall_agent_at(name, None, global, root).map(|_| ()),
             global,
@@ -1178,9 +1334,10 @@ pub fn deinit_profile(
     if let Some(ref selector) = profile.validators {
         let removed = deinit_profile_validators(selector, scope, root, reporter);
         if !removed.is_empty() {
+            let component = ComponentName::new(PROFILE_VALIDATORS_COMPONENT);
             results.push(InitResult::ok(
-                "profile-validators",
-                format!("Removed {} validator set(s)", removed.len()),
+                component.as_str(),
+                format!("{VERB_REMOVED} {} validator set(s)", removed.len()),
             ));
         }
         prune_store_readme_at(store::validators_store_dir, global, root, reporter);
@@ -1217,16 +1374,16 @@ pub fn deinit_profile(
 /// steps of [`init_profile`].
 fn run_install_step(
     results: &mut Vec<InitResult>,
-    component: &str,
+    component: ComponentName,
     outcome: Result<Vec<String>, RegistryError>,
     success_message: impl Fn(&[String]) -> String,
 ) {
     match outcome {
         Ok(items) if !items.is_empty() => {
-            results.push(InitResult::ok(component, success_message(&items)))
+            results.push(InitResult::ok(component.as_str(), success_message(&items)))
         }
         Ok(_) => {}
-        Err(e) => results.push(InitResult::error(component, e.to_string())),
+        Err(e) => results.push(InitResult::error(component.as_str(), e.to_string())),
     }
 }
 
@@ -1240,7 +1397,7 @@ fn deinit_profile_mcp(
 ) -> Vec<InitResult> {
     match root {
         None => unregister_mcp_server(scope, &server.name, reporter),
-        Some(root) => unregister_mcp_server_at(root, &server.name, scope, reporter),
+        Some(root) => unregister_mcp_server_at(root, &ToolName::new(&server.name), scope, reporter),
     }
 }
 
@@ -1253,8 +1410,8 @@ fn deinit_profile_mcp(
 fn run_deinit_step(
     results: &mut Vec<InitResult>,
     names: &[String],
-    component: &str,
-    kind: &str,
+    component: ComponentName,
+    kind: ItemKind,
     store_dir: fn(bool) -> PathBuf,
     uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
     global: bool,
@@ -1280,8 +1437,8 @@ fn run_deinit_step(
 /// [`deinit_profile`]: the two differ only in the uninstall call and labels.
 fn deinit_profile_items(
     names: &[String],
-    component: &str,
-    kind: &str,
+    component: ComponentName,
+    kind: ItemKind,
     uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
     reporter: &dyn InitReporter,
 ) -> Option<InitResult> {
@@ -1292,8 +1449,12 @@ fn deinit_profile_items(
             });
         }
     }
-    (!names.is_empty())
-        .then(|| InitResult::ok(component, format!("Removed {} {kind}(s)", names.len())))
+    (!names.is_empty()).then(|| {
+        InitResult::ok(
+            component.as_str(),
+            format!("{VERB_REMOVED} {} {kind}(s)", names.len()),
+        )
+    })
 }
 
 /// Prune the builtin discovery README (and the store dir when empty) at the

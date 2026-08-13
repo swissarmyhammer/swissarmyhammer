@@ -46,32 +46,38 @@ matcher — a tool rule is a rule with more keys.
 
 A tool rule binds one tool to one language. Example:
 
-    # rules/complexity-python.md
+    # rules/function-length-python.md
     ---
-    name: complexity-python
-    description: Python functions stay under the complexity gate — checked by ruff, not by prompt.
+    name: function-length-python
+    description: Python functions stay under the length gate — checked by ruff, not by prompt.
     match:
       files:
         - "**/*.py"
       project_types:
         - python
-    supersedes: cognitive-complexity
+    supersedes: function-length
     tool:
       scope: files
       run: |
-        ruff check --isolated --no-cache --config "lint.mccabe.max-complexity=15" --select C901 --output-format json "$@" |
+        if [ "$#" -eq 0 ]; then
+          exit 0
+        fi
+        ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json "$@" |
           jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
       doctor:
         check_command: "which ruff jq"
         check_version_command: "ruff --version"
       install:
-        commands: ["uv tool install ruff==0.14.5", "pipx install ruff==0.14.5"]
+        commands:
+          - "uv tool install ruff==0.14.5"
+          - "pipx install ruff==0.14.5"
     ---
 
-That is the frontmatter of `rules/complexity-python.md`, all 22 lines of it,
-and its `run` is one pipe. A rule whose tool needs several steps writes a
-script rather than one pipe; `rules/missing-docs-python.md` is one of those,
-and its script is 51 lines.
+That is the frontmatter of `rules/function-length-python.md`, all 25 lines of
+it, and its `run` is the zero-argument guard this contract states plus one
+pipe. A rule whose tool needs several steps writes a script rather than one
+pipe; `rules/missing-docs-python.md` is one of those, and its script is 51
+lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
@@ -131,29 +137,53 @@ The `tool` block keys:
           exit 0
         fi
 
-    Write them above every line that runs. Only a comment, a blank line and
-    a shell option line stand over them. A shell option line opens with
-    `set` and it names one option or more, such as `set -e`, `set +e` or
-    `set -euo pipefail`. Each word under `set` opens with `-` or `+`, or it
-    is the name a long option takes, or it opens a comment. A `#` word and
-    every word under it are a comment, so `set -e # keep going` stands over
-    the guard. An option cluster that ends with `o` takes a name. The name
-    stands only under such a cluster, and it must be the name of a shell
-    option, so `set -euo`, `set -o rm`, `set -e pipefail` and `set pipefail`
-    do not stand over the guard. Three other `set` lines do not stand over
-    the guard: `set` alone writes every shell variable, `set -o` alone
-    writes every shell option, and a `set --` line writes the positional
-    parameters that `$#` counts. A `set` line that holds `;`, `&`, `|`, `$`,
-    a backtick, `>` or `<` runs a second command, or it reads or writes a
-    file. A `set` line that ends with a backslash joins the line under it.
-    None of those lines stands over the guard. A guard under the first
-    `mktemp -d` leaves a directory behind; a guard under the first tool call
-    answers after the tool read the tree; and a guard in a subshell, in the
-    body of a function or in a heredoc never runs. This text and this place
-    ARE the contract: a coverage guard reads the shipped script of each
-    `files`-scope rule and holds it to both. Another shape with the same
-    behaviour, such as `[ "$#" -eq 0 ] && exit 0`, does not meet the
-    contract.
+    Write them above every line that runs. Four kinds of line stand over
+    them: a comment, a blank line, a shell option line and a shell setup
+    line.
+
+    A shell option line opens with `set` and it names one option or more,
+    such as `set -e`, `set +e` or `set -euo pipefail`. Each word under `set`
+    opens with `-` or `+` and holds shell option letters, or it is the name a
+    long option takes, or it opens a comment. A `#` word and every word under
+    it are a comment, so `set -e # keep going` stands over the guard. The
+    letter `o` takes the name of a long option out of the WORD UNDER the one
+    that writes it, wherever `o` stands in its own word, so a word takes one
+    name for each `o` it writes. `set -o pipefail`, `set -euo pipefail` and
+    `set -oe pipefail` therefore stand over the guard, and `set -oe`,
+    `set -eo` and `set -euo` do not, because each of the three owes a name it
+    never takes and the shell then writes the whole option table to stdout. A
+    name can wear quotation marks, so `set -o "pipefail"` stands over the
+    guard. A name that names no shell option does not, so `set -o rm`,
+    `set -e pipefail` and `set pipefail` do not. A letter that names no shell
+    option does not either, so `set -y` and `set -q` do not; and `set -n` does
+    not, because it stops the shell from running any line at all. Three other
+    `set` lines do not stand over the guard: `set` alone writes every shell
+    variable, `set -o` alone writes every shell option, and a `set --` line
+    writes the positional parameters that `$#` counts.
+
+    A shell setup line opens with `:`, `alias`, `export`, `hash`, `readonly`,
+    `shopt`, `trap`, `true`, `umask` or `unset`, or it writes shell variables
+    and nothing else. `export LC_ALL=C`, `export PATH="$HOME/.local/bin:$PATH"`,
+    `umask 022` and `trap 'exit 1' INT` each stand over the guard. `shift`
+    does not, because it rewrites the positional parameters that `$#` counts.
+    A variable a line writes IN FRONT OF a command runs that command, so
+    `LC_ALL=C tool "$@"` does not stand over the guard either.
+
+    A line that holds `;`, `&`, `|`, a backtick, `>`, `<` or `$(` runs a
+    second command, or it reads or writes a file. A line that ends with a
+    backslash joins the line under it. None of those lines stands over the
+    guard. A guard under the first `mktemp -d` leaves a directory behind; a
+    guard under the first tool call answers after the tool read the tree; and
+    a guard in a subshell, in the body of a function or in a heredoc never
+    runs. This text and this place ARE the contract: a coverage guard reads
+    the shipped script of each `files`-scope rule and holds it to both.
+    Another shape with the same behaviour, such as `[ "$#" -eq 0 ] && exit 0`,
+    does not meet the contract.
+
+    The shell is bash. `sah` runs every rule script with `bash -c`, and every
+    measurement above was taken with bash. `sh` reads a script in POSIX mode,
+    where a failed `set` line stops the whole run, so a shape measured under
+    `sh` can answer another way.
   - A script that makes a temporary directory removes it. Write
     `work="$(mktemp -d)"`, then `trap 'rm -rf "$work"' EXIT` on the line
     directly under it. No line stands between the two, so no statement
@@ -190,19 +220,6 @@ The `tool` block keys:
   states `fix_hint: "rustup component add clippy"` and doctor reports that as
   the fix. A fix hint is text for a person. The install lifecycle never runs
   it, and it never enters `install.commands`.
-
-Every script runs with `SAH_BIN` in its environment, naming the `sah` binary
-the engine is running inside. A rule whose tool IS sah — the review engine
-calling one of its own ops — writes `"$SAH_BIN"` and never a bare `sah`, so it
-can never reach an older copy that happens to sit first on `PATH`. The engine
-resolves the value in three steps: an `SAH_BIN` already in the environment,
-then `std::env::current_exe()` when its file stem is `sah`, then the bare name.
-Such a rule declares no install commands — there is no package to pin, and a
-review is already running inside the tool — so its `doctor.fix_hint` names what
-a person does when `check_command` still fails.
-
-`sah tool` renders a JSON result as YAML, which this contract cannot read, so
-an op a tool rule calls returns PLAIN TEXT: the finding lines and nothing else.
 
 The script's contract is its stdout. One finding per line, in either shape:
 

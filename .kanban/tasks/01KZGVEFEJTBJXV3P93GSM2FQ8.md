@@ -15,8 +15,8 @@ comments:
 
     Nothing is left to do here. Close it.
   timestamp: 2026-08-08T23:25:24.841579+00:00
-position_column: todo
-position_ordinal: ffa980
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffd080
 title: split code_context/mod.rs — over the review per-file cap, 9 validators cannot review it
 ---
 `crates/swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs` renders at 293953 bytes, over the 262144-byte per-file review cap. Every review that touches the file skips it and reports: "not reviewed by: code-hygiene, code-security, completeness, duplication, magic-numbers, naming, reuse, rust, test-integrity (split the file)". Raised as a CONFIRMED finding on the ^adf0d7h review (2026-08-08).

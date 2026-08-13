@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope};
 use swissarmyhammer_common::reporter::InitReporter;
 
+use super::applier::APPLIER_COMPONENT;
+use super::profile::{
+    PROFILE_AGENTS_COMPONENT, PROFILE_SKILLS_COMPONENT, PROFILE_VALIDATORS_COMPONENT,
+};
 use super::*;
 use serial_test::serial;
 use swissarmyhammer_common::reporter::NullReporter;
@@ -417,6 +421,138 @@ fn with_registry_helpers_aggregate_profile_then_registry() {
     assert!(
         recorded < first_profile,
         "registry deinit must run before profile teardown: {deinit_results:?}"
+    );
+}
+
+/// `init_profile` reports each builtin family with the deploy verb, the family
+/// it deployed, and the agents it deployed to.
+///
+/// These are the install counterparts of the teardown rows below, and nothing
+/// else in the suite reads either message, so a change to the deploy verb or to
+/// the family named in it is invisible without this test.
+#[test]
+#[serial]
+fn init_profile_reports_each_family_deployed_to_its_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&project).unwrap();
+    let config_path = write_profile_agents_config(&project);
+    let _mirdan = MirdanConfigGuard::set(&config_path);
+
+    let profile = sample_profile();
+    let reporter = NullReporter;
+
+    let results = init_profile(&profile, InitScope::Project, None, &reporter);
+    let message_of = |component: &str| {
+        results
+            .iter()
+            .find(|result| result.name == component)
+            .unwrap_or_else(|| panic!("{component} result must be present: {results:?}"))
+            .message
+            .clone()
+    };
+    assert_eq!(
+        message_of(PROFILE_SKILLS_COMPONENT),
+        "Deployed skills to fake-agent"
+    );
+    assert_eq!(
+        message_of(PROFILE_AGENTS_COMPONENT),
+        "Deployed agents to fake-agent"
+    );
+}
+
+/// `deinit_profile` reports each builtin family under its own component name
+/// and its own item-kind label: the skill teardown under `profile-skills`
+/// naming `skill`, the agent teardown under `profile-agents` naming `agent`.
+///
+/// The component and the kind are two separate values handed to the same call.
+/// Exchanging them, or handing one family the other's pair, changes exactly
+/// these two rows.
+#[test]
+#[serial]
+fn deinit_profile_reports_each_family_under_its_own_component_and_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&project).unwrap();
+    let config_path = write_profile_agents_config(&project);
+    let _mirdan = MirdanConfigGuard::set(&config_path);
+
+    let profile = sample_profile();
+    let reporter = NullReporter;
+    init_profile(&profile, InitScope::Project, None, &reporter);
+
+    let results = deinit_profile(&profile, InitScope::Project, None, &reporter);
+    let message_of = |component: &str| {
+        results
+            .iter()
+            .find(|result| result.name == component)
+            .unwrap_or_else(|| panic!("{component} result must be present: {results:?}"))
+            .message
+            .clone()
+    };
+    assert_eq!(message_of(PROFILE_SKILLS_COMPONENT), "Removed 1 skill(s)");
+    assert_eq!(message_of(PROFILE_AGENTS_COMPONENT), "Removed 1 agent(s)");
+}
+
+/// The root-explicit MCP applier reports its own verb: `Registered` when
+/// `init_profile` registers the server, `Removed` when `deinit_profile`
+/// unregisters it.
+///
+/// The verb and the preposition are two separate values handed to the same
+/// call. Exchanging them puts the preposition in this summary row.
+#[test]
+#[serial]
+fn profile_mcp_root_explicit_reports_its_own_verb() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::new(cwd_dir.path()).unwrap();
+    let config_path = write_profile_agents_config(&root);
+    let _mirdan = MirdanConfigGuard::set(&config_path);
+
+    let profile = sample_profile();
+    let reporter = NullReporter;
+
+    let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+    assert!(
+        results.iter().any(|result| result.name == APPLIER_COMPONENT
+            && result.message == "Registered applied to 1 agent(s)"),
+        "MCP registration must report the Registered verb: {results:?}"
+    );
+
+    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+    assert!(
+        results.iter().any(|result| result.name == APPLIER_COMPONENT
+            && result.message == "Removed applied to 1 agent(s)"),
+        "MCP unregistration must report the Removed verb: {results:?}"
+    );
+}
+
+/// `deinit_profile` reports the validator teardown under its own component
+/// name, `profile-validators` — the same name `init_profile` reports the
+/// validator install under.
+///
+/// The component name and the message are two strings handed to the same
+/// call. Exchanging them, or naming a different component, changes this row.
+#[test]
+fn deinit_profile_reports_validators_under_the_validators_component() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let profile = Profile {
+        validators: Some(Selector::Single("code-hygiene".to_string())),
+        ..Profile::default()
+    };
+    let reporter = NullReporter;
+
+    init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+
+    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+    assert!(
+        results
+            .iter()
+            .any(|result| result.name == PROFILE_VALIDATORS_COMPONENT
+                && result.message == "Removed 1 validator set(s)"),
+        "validator teardown must report under {PROFILE_VALIDATORS_COMPONENT}: {results:?}"
     );
 }
 

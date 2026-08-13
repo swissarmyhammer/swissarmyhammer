@@ -9,6 +9,7 @@ match:
 tool:
   scope: workspace
   run: |
+    set -e
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     find . -name target -prune -o -name .git -prune -o -name node_modules -prune -o -name '*.toml' -print |
@@ -30,19 +31,30 @@ tool:
           cp "$manifest" "$copy/Cargo.toml"
           scan="$copy/Cargo.toml"
         fi
-        cargo machete "$scan" |
-          awk '/^cargo-machete found/ {listing = 1; next}
-               listing && /^[[:space:]]*$/ {listing = 0; next}
-               listing && /^[[:space:]]/ {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; next}
-               listing && !/ -- / {listing = 0}' |
+        status=0
+        cargo-machete "$scan" > "$work/machete.txt" 2> "$work/machete.err" || status=$?
+        if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+          cat "$work/machete.err" >&2
+          printf 'unused-dependencies-rust: cargo machete exited %s over %s\n' "$status" "$manifest" >&2
+          exit 1
+        fi
+        if grep -q '^error when handling ' "$work/machete.err"; then
+          cat "$work/machete.err" >&2
+          printf 'unused-dependencies-rust: cargo machete could not read %s\n' "$manifest" >&2
+          exit 1
+        fi
+        awk '/^cargo-machete found/ {listing = 1; next}
+             listing && /^[[:space:]]*$/ {listing = 0; next}
+             listing && /^[[:space:]]/ {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; next}
+             listing && !/ -- / {listing = 0}' "$work/machete.txt" |
           while IFS= read -r dependency; do
             line="$(grep -nE "^[[:space:]]*\"?${dependency}\"?[[:space:]]*[=.]|^\[[a-z-]*dependencies\.${dependency}\]" "$manifest" | head -1 | cut -d: -f1)"
             printf '%s:%s: unused dependency `%s`: no source file of this package names it; delete it, or list it under `[package.metadata.cargo-machete] ignored` with a comment saying why\n' "$manifest" "${line:-1}" "$dependency"
           done
       done
   doctor:
-    check_command: "which cargo cargo-machete find grep awk mktemp head cut sort tr"
-    check_version_command: "cargo machete --version"
+    check_command: "which cargo cargo-machete find grep awk mktemp head cut sort tr mkdir cp cat"
+    check_version_command: "cargo-machete --version"
   install:
     commands: ["cargo install cargo-machete@0.9.2 --locked"]
 ---
@@ -95,7 +107,7 @@ also lets it write to `Cargo.lock`. The earlier verdict recorded in
 `code-hygiene`'s `VALIDATOR.md` measured that mode and found it reports
 `tauri-build` unused for `kanban-app` and for `mirdan-app`, whose build scripts
 both call `tauri_build::build()`. The default mode does not: neither app
-appears anywhere in this workspace's 141 findings.
+appears anywhere in this workspace's findings.
 
 The default mode's own weak spot is the mirror image — a dependency renamed in
 the manifest, or one that exists only to turn a feature on, is named by no
@@ -106,11 +118,11 @@ measurement below says how often it comes up.
 
 | Tree | Findings | Time |
 |---|---|---|
-| this workspace, 64 package manifests | **141** across 40 packages | 2.5 s |
+| this workspace, 63 package manifests | **126** across 37 packages | 2 s |
 | `BurntSushi/ripgrep` at HEAD | **1** | under 1 s |
 | `tokio-rs/tracing` at HEAD | **6** | under 1 s |
 
-Twelve of this workspace's 141 were hand-checked and every one is real:
+Twelve of this workspace's findings were hand-checked and every one is real:
 `swissarmyhammer-common`'s `indicatif`, named only inside a doc comment;
 `swissarmyhammer-validators`' `chrono` and `sha2`, whose only textual hits are
 the word "sync**hrono**us"; `swissarmyhammer`'s `serde`, `tokio`, `toml` and
@@ -140,7 +152,7 @@ The script's unit of work is one package manifest, discovered as a `*.toml`
 file declaring a `[package]` table. That definition, rather than the name
 `Cargo.toml`, is what lets the doctor fixtures be manifests: this workspace
 holds no `*.toml` outside a `Cargo.toml` that declares a package, so the two
-definitions pick out the same 64 files here.
+definitions pick out the same 63 files here.
 
 Machete reads only a file literally named `Cargo.toml` — measured: handed
 `./renamed.toml`, a copy of a manifest that reports one unused dependency, it
@@ -171,9 +183,85 @@ manifest whose key is the dependency. Both spellings resolve —
 find still reports, on line 1.
 
 One machete process runs for each manifest rather than one for the whole tree,
-which costs 2.5 s over this workspace against 0.8 s for a single whole-tree
+which costs 2 s over this workspace against 0.8 s for a single whole-tree
 run. That buys the uniform per-manifest path above, and it is well under the
 6.7 s the `dead-code-rust` orphan scan already spends on the same tree.
 
-The pipe ends in a `while` loop, so machete's exit 1 on findings is not read as
-a broken script.
+## The script names the binary, not the cargo subcommand
+
+`cargo machete <path>` rewrites its own argument list when the environment
+carries `CARGO_PKG_NAME`, and cargo exports that name to every process it runs —
+a build script, a `cargo run` binary, and every test binary. The subcommand name
+then arrives as a PATH of its own. Measured with machete 0.9.2 over one probe
+package that declares an unused `serde`:
+
+| the command | environment | the paths machete read | status |
+|---|---|---|---|
+| `cargo machete ./Cargo.toml` | a plain shell | `./Cargo.toml` | 1, one finding |
+| `cargo machete ./Cargo.toml` | `CARGO_PKG_NAME` set | `machete,./Cargo.toml` | 2, one finding and an error |
+| `cargo-machete ./Cargo.toml` | either | `./Cargo.toml` | 1, one finding |
+| `cargo machete --version` | `CARGO_PKG_NAME` set | `machete,--version` | 2, no version |
+| `cargo-machete --version` | either | — | 0, `0.9.2` |
+
+The second row is the shape a status gate has to answer for: machete wrote the
+findings of the real path to stdout and then failed on the phantom path
+`machete`, so the status says broken while the report says measured. The binary
+carries no such ambiguity, so the script runs `cargo-machete` and
+`doctor.check_version_command` reads `cargo-machete --version`. `check_command`
+already asked `which` for that same name.
+
+The row was found by the acceptance tests of this rule, which run inside a cargo
+test binary and therefore carry `CARGO_PKG_NAME`.
+
+## A manifest the tool could not read
+
+Machete keeps one status for findings and another for a failure, and it also
+answers a per-manifest failure at the status of a CLEAN run. Measured with
+machete 0.9.2:
+
+| the shape | status | stdout | stderr |
+|---|---|---|---|
+| one unused dependency | 1 | `cargo-machete found the following unused dependencies` | `Analyzing…`, `Done!` |
+| no unused dependency | 0 | `didn't find any unused dependencies` | the same |
+| a path that holds no file | 2 | nothing | `Error: Errors when walking over directories` |
+| a manifest that does not parse as TOML | 0 | `didn't find any unused dependencies` | `error when handling <path>: TOML parse error` |
+| a workspace member detached from its root | 0 | the same sentence | `error when handling <path>: can't load root workspace` |
+| the bare name `Cargo.toml` | 0 | the same sentence | `error when handling Cargo.toml: can't load root workspace at :` |
+
+The first two rows are measured runs, and the four under them are broken runs.
+Status alone cannot tell them apart, because three of the four broken shapes
+exit 0 and write the sentence a clean package writes. So the script makes two
+tests for each manifest, and `builtin/validators/README.md` states both: "Where
+the tool has a failure status of its own, run it into a file, test the status
+against the findings status, and exit nonzero yourself", and "A failure status
+and a clean answer can share a report... The script must then test STDERR".
+
+- a status that is neither 0 nor 1 —
+  `unused-dependencies-rust: cargo machete exited <status> over <manifest>`;
+- an `error when handling ` line on stderr —
+  `unused-dependencies-rust: cargo machete could not read <manifest>`.
+
+Machete's own stderr is written beside each line, so the diagnosing agent reads
+what machete said. `set -e` makes the `exit 1` inside the manifest loop the exit
+status of the whole script: the loop stands in a pipeline, so it runs in a
+subshell, and without `set -e` its exit would end the subshell alone.
+
+An earlier shape of this script ended each manifest in a pipe, which took the
+status of its LAST command and dropped machete's own. Measured over a manifest
+that does not parse as TOML: that shape reported nothing and exited 0, and the
+review read the package as clean; the shipped shape reports nothing and exits 1.
+Measured over the same probe package with machete replaced by a command that
+exits 127: the pipe shape wrote 0 findings and exited 0; the shipped shape exits
+1 and names the status. The two acceptance tests
+`the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read`
+and `the_shipped_rust_unused_dependency_tool_rule_breaks_when_machete_cannot_run`
+hold both answers.
+
+Machete's exit 1 on findings is the status of a MEASURED run, and the script
+takes it as one. The acceptance test
+`the_shipped_rust_unused_dependency_tool_rule_reports_an_unused_dependency`
+holds that half: a package with one unused dependency reports it and the run
+does not break.
+
+Measured over this whole workspace, the shipped script and the earlier pipe
+answer alike: the same 126 findings across 37 packages, exit 0, in 2 s.
