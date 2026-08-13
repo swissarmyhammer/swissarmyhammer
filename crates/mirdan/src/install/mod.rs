@@ -66,6 +66,17 @@ fn safe_dir_name(name: &str) -> Result<String, RegistryError> {
     Ok(sanitized)
 }
 
+/// Build the standard `Validation` error for a temp directory that could not
+/// be created.
+///
+/// Staging writes a tree into a temp directory at several call sites, and each
+/// site fails in the same way. The message is written here one time, so a
+/// change to the wording reaches every site. This is the same shape as the
+/// `not_found_error` helper of [`uninstall`].
+pub(crate) fn temp_dir_error(e: std::io::Error) -> RegistryError {
+    RegistryError::Validation(format!("failed to create temp dir: {e}"))
+}
+
 /// Resolve a project-scope relative path against an explicit `root`.
 ///
 /// Returns `path` unchanged in global scope (its paths are already absolute) or

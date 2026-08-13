@@ -301,6 +301,219 @@ comments:
     - evidence: 3 files — crates/mirdan/src/install/profile.rs, crates/mirdan/src/install/profile_tests.rs, crates/mirdan/src/mcp_config.rs. All 3 review findings are `- [x]`. Functions in profile.rs with two or more same-typed parameters: 4 before (the 3 named plus `deinit_profile_items`), 0 after. `cargo nextest run -p mirdan` 518 passed / 0 failed / 0 skipped; `cargo nextest run --workspace` 14178 passed / 0 failed / 0 skipped; fmt and clippy clean.
     - next: /review
   timestamp: 2026-08-13T13:09:00.106757+00:00
+- actor: claude-code
+  id: 01kzxmgb1jdzgfc0gg1e3zqnqq
+  text: |-
+    ### review — findings
+    - evidence: 2 findings (2 confirmed, 4 refuted, 8 attempted) — crates/mirdan/src/install/profile.rs:603, crates/mirdan/src/install/profile.rs:1173. Scope `f1601a77d~1..f1601a77d`.
+    - prior round: all 3 findings checked; the `string_newtype!` sweep removed the transposition cause from the whole file.
+    - premise check: both new findings read at the named lines and confirmed. 0 findings dropped for a false premise.
+    - next: fix both findings; task stays in review.
+  timestamp: 2026-08-13T13:20:38.962163+00:00
+- actor: claude-code
+  id: 01kzxmhh63jtfe69v6pd0x6b2r
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 3 files. All three prior findings worked and checked. mirdan's existing `string_newtype!` macro was used rather than a new mechanism; its own doc comment names this exact problem. Two supporting changes made it reusable: `pub(crate) use`, and a `Display` impl expanding to fully-qualified `::std::fmt` paths instead of leaning on the caller module's `use std::fmt` (which broke the first build with 21 errors).
+    - One deliberate deviation from the finding text: finding 2 asked for a new `ServerName`, but `ToolName` already is that type from the same macro and the function was already calling `ToolName::new` inside its closure. A second type for one concept is the drift the macro exists to prevent, so `server_name` takes `&ToolName`.
+    - The whole file was swept rather than the three named lines: a script over every signature counted 4 such functions before and 0 after. The fourth, `deinit_profile_items`, carries the same component/kind pair and no finding named it. Functions with a lone `&str` were left alone, since one parameter cannot be transposed; struct fields were left alone because a Rust struct literal must spell each field name.
+    - Two slots had no test pinning them. Both were written and passing BEFORE any production edit, then proved load-bearing by mutating the old `&str` call sites — transposing "profile-skills" with "skill" fails, transposing "Registered" with "for" fails. Behaviour is byte-identical throughout.
+    - test: green — 518 mirdan tests, 14178 workspace tests, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: f1601a77d
+    - review: findings — crates/mirdan/src/install/profile.rs:603, crates/mirdan/src/install/profile.rs:1173. 0 dropped for a false premise; the reviewer read both named lines and both premises hold.
+
+    The second finding is a genuine miss from the sweep, not a false positive: `"profile-validators"` is wrapped as `ComponentName::new` at 1173 but stands as a bare `&str` at 1263, while the adjacent agents branch wraps its own. One concept, two spellings — exactly the drift the newtype was introduced to stop.
+  timestamp: 2026-08-13T13:21:18.019777+00:00
+- actor: claude-code
+  id: 01kzxnjdebmkdbn4pwv5dk7vvs
+  text: |-
+    Both findings of the 2026-08-13 09:11 round are worked. Each one is now `- [x]`.
+
+    ## The premises hold — nothing was dropped
+
+    Each named line was read before any edit. `"failed to create temp dir: {e}"`
+    was at 603, 716 and 719. `"profile-validators"` was at 1173 inside
+    `ComponentName::new` and at 1263 as a bare `&str` inside `InitResult::ok`,
+    while the two sibling branches wrapped their own. Both premises are true, so
+    neither finding was recorded as a conflict.
+
+    ## Finding 1 — the idiom mirdan already has for a shared error message
+
+    mirdan does not name an error message with a `const &str`. It builds the whole
+    error in one small private function: `not_found_error(description, global)` in
+    `crates/mirdan/src/install/uninstall.rs` is the existing example. The fix
+    follows that shape rather than the constant the finding sketched, because a
+    constant still leaves each site to spell its own `format!` and its own
+    `RegistryError::Validation` wrapper.
+
+    `crates/mirdan/src/install/mod.rs` — the file whose own module doc says it
+    "holds the shared path and filesystem helpers" — now holds:
+
+        pub(crate) fn temp_dir_error(e: std::io::Error) -> RegistryError
+
+    The message text is byte-identical to what each site produced.
+
+    The literal was at a FOURTH site the finding did not name:
+    `crates/mirdan/src/install/deploy.rs:180`, inside `stage_and_deploy_skill`. A
+    helper private to profile.rs would have left that copy behind, and the
+    finding's own reason is "so error text changes in one place". All four sites
+    now call the helper.
+
+    ## Finding 2 — `ComponentName` at every `InitResult` in the file
+
+    The three repeated component literals each got a constant:
+    `PROFILE_SKILLS_COMPONENT`, `PROFILE_AGENTS_COMPONENT` and
+    `PROFILE_VALIDATORS_COMPONENT`. This matches the `APPLIER_COMPONENT` constant
+    that `install/applier.rs` already declares. Line 1263 is wrapped in
+    `ComponentName::new`, as the finding asks.
+
+    The file's own comment block carried the carve-out that let the drift in:
+    "The types name what crosses a call boundary; a literal handed straight to
+    `InitResult::ok` crosses none." That sentence is wrong, and it is deleted.
+    `InitResult::ok(name, message)` takes two adjacent strings, so it IS a
+    boundary a caller can cross in the wrong order. The comment now states the
+    rule the finding set: every component name this file reports under crosses
+    that boundary as a `ComponentName`.
+  timestamp: 2026-08-13T13:39:15.531888+00:00
+- actor: claude-code
+  id: 01kzxnk3kxshsbb2hppkjkyd10
+  text: |-
+    ## The whole-file sweep, measured
+
+    Finding 2 was a miss from the previous round's sweep, so this round's sweep was
+    run with a script rather than by eye. A script over `profile.rs` counts every
+    quoted literal outside a comment and groups them.
+
+    ### Cause A — a message literal repeated across call sites: 10 found, 10 fixed
+
+    | literal | sites | fix |
+    |---|---|---|
+    | `failed to create temp dir: {e}` | 3 in profile.rs + 1 in deploy.rs | `temp_dir_error` helper |
+    | `profile-skills` | 2 | `PROFILE_SKILLS_COMPONENT` |
+    | `profile-agents` | 2 | `PROFILE_AGENTS_COMPONENT` |
+    | `profile-validators` | 2 | `PROFILE_VALIDATORS_COMPONENT` |
+    | `skill` | 2 (install label, deinit label) | `SKILL_ITEM_LABEL` |
+    | `agent` | 2 (install label, deinit label) | `AGENT_ITEM_LABEL` |
+    | `README.md` | 4 (2 `join`, 2 inside a message) | `STORE_README_FILE_NAME` |
+    | `Deployed` | 2 reporter verbs | `VERB_DEPLOYED` |
+    | `Removed` | 3 reporter verbs | `VERB_REMOVED` |
+    | `permissions` / `deny` | 2 each | the `POINTER_KEY_*` constants that already existed |
+
+    The last row is the one worth naming: `POINTER_KEY_PERMISSIONS` and
+    `POINTER_KEY_DENY` were declared with the comment "kept in one place so the
+    pointer strings and these accessors can never drift", and the `json!` literal
+    of `desired_edit_redirect_fragment` restated both. The comment was not true.
+    It is now.
+
+    `VERB_INSTALLED` and `VERB_REGISTERED` appear once each. They are declared
+    because each is the sibling of a repeated verb in one expression
+    (`if install { VERB_INSTALLED } else { VERB_REMOVED }`).
+
+    Three repeated literals stay, and the reason is that the two sites are not one
+    concept:
+
+    - `", "` (5 sites) is a join separator, not a message. No two sites must agree.
+    - `"command"` (2 sites) is the VALUE of the statusline `type` at one site and
+      the KEY of the statusline command at the other.
+    - `"agent"` (2 sites) is the reporter label constant at one site and a Liquid
+      template variable name at the other.
+
+    After the fix the script reports only those three.
+
+    ### Cause B — a concept that is a newtype at one site and a bare `&str` at another: 3 found, 3 fixed
+
+    The concept is the component name, and the boundary is `InitResult::ok`, which
+    takes the component and the message as two adjacent strings.
+
+    1. `InitResult::ok("profile-validators", …)` in `deinit_profile` — the finding.
+    2. `InitResult::ok(component, …)` in `apply_profile_settings_fragment`, where
+       `component` was `SettingsFragment::component`, a bare `&'static str`.
+    3. `InitResult::ok(APPLIER_COMPONENT, …)` in `apply_mcp_operation_at`.
+
+    Two of the three were misses the finding did not name. All six
+    `InitResult::ok`/`InitResult::error` calls of the file now pass
+    `component.as_str()` from a `ComponentName`.
+
+    ### Where the line is drawn, and why it is not a judgment call
+
+    A parameter that is alone in its type at a call keeps `&str`: `names: &[String]`
+    in `run_deinit_step`, `name: &str` in `render_profile_agent`, `set: &str` in
+    `stage_validator_set`, `grain: &str` in `report_pruned`. Nothing can be
+    exchanged with a lone parameter. This is the same line the previous round drew
+    and the reviewer accepted; finding 2 fired precisely because `InitResult::ok`
+    is NOT that case.
+
+    A `&'static str` field of a `const` struct also keeps its type:
+    `ProfileItemKind::label`, `SettingsFragment::component`, `SettingsFragment::subject`.
+    `string_newtype!` wraps `String`, which has no `const` constructor, so a newtype
+    there cannot be a `const` at all — the const tables would have to become
+    functions or `LazyLock` statics. The constants above give those fields their
+    single source of text, which is what the finding asked for; the type cannot
+    follow without restructuring the tables. A struct literal must also spell each
+    field name, so no value can reach the wrong field.
+  timestamp: 2026-08-13T13:39:38.237452+00:00
+- actor: claude-code
+  id: 01kzxnknk72nzy7rs4cwhb0m4e
+  text: |-
+    ## The new test, and the proof it is load-bearing
+
+    `InitResult::ok("profile-validators", …)` had no test. Nothing asserted that
+    the validator teardown reports under that component name, so the edit could
+    have named any component and stayed green. One test was written FIRST, run
+    against the unchanged code, and then proved load-bearing by mutation:
+
+    - `deinit_profile_reports_validators_under_the_validators_component` —
+      installs one validator set into an explicit root, deinits it, and asserts a
+      row named `profile-validators` carrying `Removed 1 validator set(s)`.
+
+    It passed against the unchanged code. The old bare literal at 1263 was then
+    mutated to `"profile-skills"`, and the test FAILED:
+
+        validator teardown must report under profile-validators:
+        [InitResult { name: "profile-skills", status: Ok, message: "Removed 1 validator set(s)" }]
+
+    The mutation was reverted with `git checkout` before the refactor started.
+
+    The rest of the change is text-identical by construction and already pinned:
+
+    - `init_profile_writes_store_readme_and_deinit_removes_it` pins `README.md` at
+      both the write site and the prune site, which is exactly what
+      `STORE_README_FILE_NAME` now feeds.
+    - `profile_mcp_root_explicit_reports_its_own_verb` pins `Registered` and
+      `Removed`, the two `ActionVerb` sites.
+    - `deinit_profile_reports_each_family_under_its_own_component_and_kind` pins
+      `profile-skills`/`skill` and `profile-agents`/`agent`.
+    - `init_profile_installs_edit_redirect_and_deinit_removes` reads the deny array
+      back out of a real settings file, so the `json!` key change is covered.
+
+    Every reporter string, every `InitResult` name and message, and every error
+    message is byte-identical to before.
+
+    ## Green
+
+    - `cargo nextest run -p mirdan` — 519 passed, 0 failed, 0 skipped (518 before,
+      plus the one new test).
+    - `cargo nextest run --workspace` — 14179 passed, 0 failed, 0 skipped.
+    - `cargo fmt --check` clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    Blast radius: `temp_dir_error` is new and `pub(crate)`, so it has no prior
+    caller. Every function whose body changed is private to `install::profile`
+    except `stage_and_deploy_skill`, whose signature and behaviour are unchanged.
+    The workspace run and workspace clippy confirm no dependent moved.
+
+    `git status` lists exactly four files: `install/profile.rs`,
+    `install/profile_tests.rs`, `install/deploy.rs` and `install/mod.rs`. The four
+    byte-frozen snapshots under `crates/mirdan/retired-validators/` are unmodified,
+    and the real `~/.validators/` was never written.
+  timestamp: 2026-08-13T13:39:56.647312+00:00
+- actor: claude-code
+  id: 01kzxnky2pcncc201ymw53tsf5
+  text: |-
+    ### implement — changed
+    - evidence: 4 files — crates/mirdan/src/install/profile.rs, crates/mirdan/src/install/mod.rs, crates/mirdan/src/install/deploy.rs, crates/mirdan/src/install/profile_tests.rs. Both findings of the 09:11 round are `- [x]`. Whole-file sweep: cause A (a message literal repeated across call sites) 10 found / 10 fixed; cause B (a concept that is a newtype at one site and a bare &str at another) 3 found / 3 fixed, 2 of them misses the finding did not name. `cargo nextest run -p mirdan` 519 passed / 0 failed / 0 skipped; `cargo nextest run --workspace` 14179 passed / 0 failed / 0 skipped; fmt and clippy clean.
+    - next: /review
+  timestamp: 2026-08-13T13:40:05.334060+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Prune the four retired tool-rule fixtures from a deployed validator store
@@ -357,3 +570,20 @@ The engine raised no finding against the four byte-frozen fixture snapshots
 under `crates/mirdan/retired-validators/*/fixtures/`. Those files must stay
 byte-identical to the git blobs from `59bd9ae5c~1`, or the exact-match prune
 stops firing.
+
+## Review Findings (2026-08-13 09:11)
+
+- [x] `crates/mirdan/src/install/profile.rs:603` — Error message 'failed to create temp dir: {e}' appears at lines 603, 716, and 719; extract to a named constant so error text changes in one place. Define `const TEMP_DIR_CREATION_ERROR: &str = "failed to create temp dir";` and use `format!("{}: {e}", TEMP_DIR_CREATION_ERROR)` at all three call sites.
+- [x] `crates/mirdan/src/install/profile.rs:1173` — Configuration value 'profile-validators' appears at both line 1173 and line 1263; extract to a named constant so changes propagate to both places. Define `const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";` and use it at both call sites; also wrap the line 1263 usage in ComponentName::new() for consistency with skills and agents.
+
+Scope of this pass: `f1601a77d~1..f1601a77d`, a re-review of the three findings
+above. All three prior findings are checked. The commit gives the named
+functions distinct `string_newtype!` types, so the transposition cause is
+removed from the whole file.
+
+Both new findings were verified against the named lines before they were
+recorded. The duplicated temp-dir message is present at 603, 716, and 719.
+`"profile-validators"` is present at 1173 inside `ComponentName::new` and at
+1263 as a bare `&str` inside `InitResult::ok`. No finding was dropped for a
+false premise. Neither finding names test code that already existed, so the
+existing-tests exception does not apply.

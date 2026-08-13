@@ -31,7 +31,7 @@ use super::applier::{
 };
 use super::deploy::{deploy_agent_to_agents_at, deploy_skill_to_agents_at};
 use super::uninstall::{uninstall_agent_at, uninstall_skill_at};
-use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted};
+use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted, temp_dir_error};
 
 // ── Parameter newtypes ───────────────────────────────────────────────────────
 //
@@ -43,8 +43,9 @@ use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted};
 // name is already `ToolName`, so these do not restate it.
 //
 // A helper that carries one of these strings alone takes the same type, so one
-// concept keeps one spelling across the file. The types name what crosses a
-// call boundary; a literal handed straight to `InitResult::ok` crosses none.
+// concept keeps one spelling across the file. `InitResult::ok` takes the
+// component name and the message as two adjacent strings, so every component
+// name this file reports under crosses that boundary as a `ComponentName`.
 
 string_newtype! {
     /// The store name of one builtin profile item, such as `commit`.
@@ -85,6 +86,43 @@ string_newtype! {
     /// `skill`. The deinit counterpart of `ProfileItemKind::label`.
     ItemKind
 }
+
+// ── Shared literals ──────────────────────────────────────────────────────────
+//
+// Each literal below is read at two or more sites that must agree, or is the
+// sibling of such a literal in one expression. One constant is the single
+// source of each one, so a change to the text reaches every site.
+
+/// The component name the skill step of a profile reports under.
+const PROFILE_SKILLS_COMPONENT: &str = "profile-skills";
+
+/// The component name the agent step of a profile reports under.
+const PROFILE_AGENTS_COMPONENT: &str = "profile-agents";
+
+/// The component name the validator step of a profile reports under.
+const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";
+
+/// The reporter label for one builtin skill.
+const SKILL_ITEM_LABEL: &str = "skill";
+
+/// The reporter label for one builtin agent.
+const AGENT_ITEM_LABEL: &str = "agent";
+
+/// The file name of the discovery README at each builtin store root. The
+/// install writes this file and the deinit removes it, so the two must agree.
+const STORE_README_FILE_NAME: &str = "README.md";
+
+/// The reporter verb for content this installer wrote.
+const VERB_DEPLOYED: &str = "Deployed";
+
+/// The reporter verb for content this installer removed.
+const VERB_REMOVED: &str = "Removed";
+
+/// The reporter verb for a settings fragment this installer merged.
+const VERB_INSTALLED: &str = "Installed";
+
+/// The reporter verb for an MCP server this installer registered.
+const VERB_REGISTERED: &str = "Registered";
 
 /// Selects which builtin items (skills, agents, or validator sets) a profile
 /// installs.
@@ -289,10 +327,13 @@ fn render_metadata_values(
 /// store has been populated so the README never creates an empty store dir.
 fn write_store_readme_for(store_root: &Path, content: &str, reporter: &dyn InitReporter) {
     let result = std::fs::create_dir_all(store_root)
-        .and_then(|()| std::fs::write(store_root.join("README.md"), content));
+        .and_then(|()| std::fs::write(store_root.join(STORE_README_FILE_NAME), content));
     if let Err(e) = result {
         reporter.emit(&InitEvent::Warning {
-            message: format!("failed to write {}/README.md: {e}", store_root.display()),
+            message: format!(
+                "failed to write {}/{STORE_README_FILE_NAME}: {e}",
+                store_root.display()
+            ),
         });
     }
 }
@@ -304,11 +345,14 @@ fn write_store_readme_for(store_root: &Path, content: &str, reporter: &dyn InitR
 /// builtin items. The store directory itself is removed only when nothing else
 /// remains, so any user-authored items keep the directory (and are untouched).
 fn prune_store_readme(store_root: &Path, reporter: &dyn InitReporter) {
-    match std::fs::remove_file(store_root.join("README.md")) {
+    match std::fs::remove_file(store_root.join(STORE_README_FILE_NAME)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => reporter.emit(&InitEvent::Warning {
-            message: format!("failed to remove {}/README.md: {e}", store_root.display()),
+            message: format!(
+                "failed to remove {}/{STORE_README_FILE_NAME}: {e}",
+                store_root.display()
+            ),
         }),
     }
     if let Ok(mut entries) = std::fs::read_dir(store_root) {
@@ -354,7 +398,7 @@ fn install_profile_skills(
             is_skill: true,
             store_dir: store::skill_store_dir,
             readme: include_str!("../../../../builtin/skills/README.md"),
-            label: "skill",
+            label: SKILL_ITEM_LABEL,
         },
         |library, ctx, _name, skill| {
             let (instructions, metadata) = render_profile_skill(library, ctx, skill);
@@ -384,7 +428,7 @@ fn install_profile_agents(
             is_skill: false,
             store_dir: store::agent_store_dir,
             readme: include_str!("../../../../builtin/agents/README.md"),
-            label: "agent",
+            label: AGENT_ITEM_LABEL,
         },
         render_profile_agent,
         |_agent| None,
@@ -470,7 +514,7 @@ fn install_profile_items<T>(
 
     if !targets.is_empty() {
         reporter.emit(&InitEvent::Action {
-            verb: "Deployed".to_string(),
+            verb: VERB_DEPLOYED.to_string(),
             message: format!("{} {}(s) to {}", count, kind.label, targets.join(", ")),
         });
     }
@@ -486,7 +530,7 @@ fn report_pruned(reporter: &dyn InitReporter, grain: &str, pruned: &[String]) {
         return;
     }
     reporter.emit(&InitEvent::Action {
-        verb: "Removed".to_string(),
+        verb: VERB_REMOVED.to_string(),
         message: format!("{grain}: {}", pruned.join(", ")),
     });
 }
@@ -577,7 +621,7 @@ fn install_profile_validators(
 
     if !materialized.is_empty() {
         reporter.emit(&InitEvent::Action {
-            verb: "Deployed".to_string(),
+            verb: VERB_DEPLOYED.to_string(),
             message: format!(
                 "{} validator set(s) to {}",
                 materialized.len(),
@@ -599,8 +643,7 @@ fn stage_validator_set(
     set: &str,
     files: &[(&'static str, &'static str)],
 ) -> Result<tempfile::TempDir, RegistryError> {
-    let staged = tempfile::tempdir()
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let staged = tempfile::tempdir().map_err(temp_dir_error)?;
     let set_prefix = format!("{set}/");
     for (embedded_name, content) in files {
         // Embedded names are set-prefixed (e.g. `dead-code/rules/x.md`); strip
@@ -712,11 +755,9 @@ fn stage_and_deploy_rendered(
             name.as_str()
         )));
     }
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let temp_dir = tempfile::tempdir().map_err(temp_dir_error)?;
     let item_dir = temp_dir.path().join(name.as_str());
-    std::fs::create_dir_all(&item_dir)
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    std::fs::create_dir_all(&item_dir).map_err(temp_dir_error)?;
     std::fs::write(item_dir.join(file_name.as_str()), content.as_str())
         .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
 
@@ -828,10 +869,14 @@ fn apply_profile_settings_fragment(
     reporter: &dyn InitReporter,
     fragment: &SettingsFragment,
 ) -> Vec<InitResult> {
-    let component = fragment.component;
+    let component = ComponentName::new(fragment.component);
     let subject = fragment.subject;
     let apply_at = fragment.apply_at;
-    let verb = if install { "Installed" } else { "Removed" };
+    let verb = if install {
+        VERB_INSTALLED
+    } else {
+        VERB_REMOVED
+    };
     for_each_detected_agent(
         scope,
         reporter,
@@ -852,7 +897,7 @@ fn apply_profile_settings_fragment(
         },
         |changed| {
             InitResult::ok(
-                component,
+                component.as_str(),
                 format!("{verb} {subject} for {changed} agent(s)"),
             )
         },
@@ -917,8 +962,8 @@ pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Bash", "Edit", "Read", "Wri
 /// without clobbering unrelated keys.
 pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
     serde_json::json!({
-        "permissions": {
-            "deny": SUPERSEDED_NATIVE_DENY_TOOLS,
+        POINTER_KEY_PERMISSIONS: {
+            POINTER_KEY_DENY: SUPERSEDED_NATIVE_DENY_TOOLS,
         }
     })
 }
@@ -1037,7 +1082,7 @@ fn register_mcp_server_at(
         server_name,
         scope,
         reporter,
-        ActionVerb::new("Registered"),
+        ActionVerb::new(VERB_REGISTERED),
         Preposition::new("for"),
         |mcp_cfg, config_path| {
             mcp_config::register_mcp_server(
@@ -1064,7 +1109,7 @@ fn unregister_mcp_server_at(
         server_name,
         scope,
         reporter,
-        ActionVerb::new("Removed"),
+        ActionVerb::new(VERB_REMOVED),
         Preposition::new("from"),
         |mcp_cfg, config_path| {
             mcp_config::unregister_mcp_server(
@@ -1091,6 +1136,7 @@ fn apply_mcp_operation_at(
     preposition: Preposition,
     operation: impl Fn(&agents::McpConfigDef, &Path) -> Result<bool, RegistryError>,
 ) -> Vec<InitResult> {
+    let component = ComponentName::new(APPLIER_COMPONENT);
     for_each_detected_agent(
         scope,
         reporter,
@@ -1105,7 +1151,7 @@ fn apply_mcp_operation_at(
         },
         |changed| {
             InitResult::ok(
-                APPLIER_COMPONENT,
+                component.as_str(),
                 format!("{verb} applied to {changed} agent(s)"),
             )
         },
@@ -1152,7 +1198,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.skills {
         run_install_step(
             &mut results,
-            ComponentName::new("profile-skills"),
+            ComponentName::new(PROFILE_SKILLS_COMPONENT),
             install_profile_skills(selector, scope, root, reporter),
             |targets| format!("Deployed skills to {}", targets.join(", ")),
         );
@@ -1161,7 +1207,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.agents {
         run_install_step(
             &mut results,
-            ComponentName::new("profile-agents"),
+            ComponentName::new(PROFILE_AGENTS_COMPONENT),
             install_profile_agents(selector, scope, root, reporter),
             |targets| format!("Deployed agents to {}", targets.join(", ")),
         );
@@ -1170,7 +1216,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.validators {
         run_install_step(
             &mut results,
-            ComponentName::new("profile-validators"),
+            ComponentName::new(PROFILE_VALIDATORS_COMPONENT),
             install_profile_validators(selector, scope, root, reporter),
             |sets| format!("Materialized validator set(s): {}", sets.join(", ")),
         );
@@ -1232,8 +1278,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_skill_names(selector),
-            ComponentName::new("profile-skills"),
-            ItemKind::new("skill"),
+            ComponentName::new(PROFILE_SKILLS_COMPONENT),
+            ItemKind::new(SKILL_ITEM_LABEL),
             store::skill_store_dir,
             |name| uninstall_skill_at(name, None, global, root),
             global,
@@ -1246,8 +1292,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_agent_names(selector),
-            ComponentName::new("profile-agents"),
-            ItemKind::new("agent"),
+            ComponentName::new(PROFILE_AGENTS_COMPONENT),
+            ItemKind::new(AGENT_ITEM_LABEL),
             store::agent_store_dir,
             |name| uninstall_agent_at(name, None, global, root).map(|_| ()),
             global,
@@ -1259,8 +1305,9 @@ pub fn deinit_profile(
     if let Some(ref selector) = profile.validators {
         let removed = deinit_profile_validators(selector, scope, root, reporter);
         if !removed.is_empty() {
+            let component = ComponentName::new(PROFILE_VALIDATORS_COMPONENT);
             results.push(InitResult::ok(
-                "profile-validators",
+                component.as_str(),
                 format!("Removed {} validator set(s)", removed.len()),
             ));
         }

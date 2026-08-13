@@ -11,7 +11,7 @@ use crate::mcp_config::{self, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::store;
 
-use super::{copy_dir_recursive, rooted, sanitize_dir_name, validators_dir};
+use super::{copy_dir_recursive, rooted, sanitize_dir_name, temp_dir_error, validators_dir};
 
 /// Deploy a skill to the central store, then symlink into each agent's skill directory.
 ///
@@ -176,8 +176,7 @@ pub fn stage_and_deploy_skill(
         )));
     }
 
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let temp_dir = tempfile::tempdir().map_err(temp_dir_error)?;
     let skill_dir = temp_dir.path().join(name);
     std::fs::create_dir_all(&skill_dir)
         .map_err(|e| RegistryError::Validation(format!("failed to create temp skill dir: {e}")))?;

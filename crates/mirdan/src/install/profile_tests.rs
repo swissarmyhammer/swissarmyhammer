@@ -488,6 +488,34 @@ fn profile_mcp_root_explicit_reports_its_own_verb() {
     );
 }
 
+/// `deinit_profile` reports the validator teardown under its own component
+/// name, `profile-validators` — the same name `init_profile` reports the
+/// validator install under.
+///
+/// The component name and the message are two strings handed to the same
+/// call. Exchanging them, or naming a different component, changes this row.
+#[test]
+fn deinit_profile_reports_validators_under_the_validators_component() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let profile = Profile {
+        validators: Some(Selector::Single("code-hygiene".to_string())),
+        ..Profile::default()
+    };
+    let reporter = NullReporter;
+
+    init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+
+    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+    assert!(
+        results
+            .iter()
+            .any(|result| result.name == "profile-validators"
+                && result.message == "Removed 1 validator set(s)"),
+        "validator teardown must report under profile-validators: {results:?}"
+    );
+}
+
 /// A profile with no skills/agents/mcp_server is a clean no-op.
 #[test]
 #[serial]
