@@ -20,7 +20,7 @@ use swissarmyhammer_skills::SkillResolver;
 use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
-use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
+use crate::mcp_config::{self, string_newtype, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -32,6 +32,59 @@ use super::applier::{
 use super::deploy::{deploy_agent_to_agents_at, deploy_skill_to_agents_at};
 use super::uninstall::{uninstall_agent_at, uninstall_skill_at};
 use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted};
+
+// ── Parameter newtypes ───────────────────────────────────────────────────────
+//
+// Several helpers below carry two or three strings that mean entirely
+// different things. Spelled `&str` they are interchangeable, so a caller can
+// hand them over in the wrong order and the compiler stays silent. Each one
+// gets its own type through the crate's `string_newtype!` macro — the same
+// macro, and the same reason, as `ServersKey` and `ToolName`. An MCP server
+// name is already `ToolName`, so these do not restate it.
+//
+// A helper that carries one of these strings alone takes the same type, so one
+// concept keeps one spelling across the file. The types name what crosses a
+// call boundary; a literal handed straight to `InitResult::ok` crosses none.
+
+string_newtype! {
+    /// The store name of one builtin profile item, such as `commit`.
+    ItemName
+}
+
+string_newtype! {
+    /// The rendered body of one builtin item's manifest, staged as that file's
+    /// contents.
+    ManifestContent
+}
+
+string_newtype! {
+    /// The manifest file name one builtin item is staged under, such as
+    /// `SKILL.md`. Carries `ProfileItemKind::file_name` into the staging call.
+    ManifestFilename
+}
+
+string_newtype! {
+    /// The verb one reporter action is announced with, such as `Registered`.
+    ActionVerb
+}
+
+string_newtype! {
+    /// The preposition joining a reporter action to the agent it names, such
+    /// as `for` in `sah MCP server for Claude Code`.
+    Preposition
+}
+
+string_newtype! {
+    /// The component name one step reports its [`InitResult`] under, such as
+    /// `profile-skills`.
+    ComponentName
+}
+
+string_newtype! {
+    /// The label naming one family of builtin items in reporter text, such as
+    /// `skill`. The deinit counterpart of `ProfileItemKind::label`.
+    ItemKind
+}
 
 /// Selects which builtin items (skills, agents, or validator sets) a profile
 /// installs.
@@ -394,9 +447,9 @@ fn install_profile_items<T>(
         let item = &builtins[&name];
         let content = render(&library, &ctx, &name, item);
         let deployed = stage_and_deploy_rendered(
-            &name,
-            &content,
-            kind.file_name,
+            ItemName::from(name),
+            ManifestContent::from(content),
+            ManifestFilename::from(kind.file_name),
             extra_files(item).unwrap_or(&empty_files),
             scope,
             root,
@@ -645,23 +698,26 @@ fn remove_builtin_file_and_cleanup(
 ///
 /// `is_skill` selects the skill store/dirs vs. the agent store/dirs.
 fn stage_and_deploy_rendered(
-    name: &str,
-    content: &str,
-    file_name: &str,
+    name: ItemName,
+    content: ManifestContent,
+    file_name: ManifestFilename,
     extra_files: &std::collections::HashMap<String, String>,
     scope: InitScope,
     root: Option<&Path>,
     is_skill: bool,
 ) -> Result<Vec<String>, RegistryError> {
-    if !store::is_safe_name(name) {
-        return Err(RegistryError::Validation(format!("unsafe name: {name:?}")));
+    if !store::is_safe_name(name.as_str()) {
+        return Err(RegistryError::Validation(format!(
+            "unsafe name: {:?}",
+            name.as_str()
+        )));
     }
     let temp_dir = tempfile::tempdir()
         .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
-    let item_dir = temp_dir.path().join(name);
+    let item_dir = temp_dir.path().join(name.as_str());
     std::fs::create_dir_all(&item_dir)
         .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
-    std::fs::write(item_dir.join(file_name), content)
+    std::fs::write(item_dir.join(file_name.as_str()), content.as_str())
         .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
 
     for (rel_path, file_content) in extra_files {
@@ -683,9 +739,9 @@ fn stage_and_deploy_rendered(
 
     let global = scope_is_global(scope);
     if is_skill {
-        deploy_skill_to_agents_at(name, &item_dir, None, global, root)
+        deploy_skill_to_agents_at(name.as_str(), &item_dir, None, global, root)
     } else {
-        deploy_agent_to_agents_at(name, &item_dir, None, global, root)
+        deploy_agent_to_agents_at(name.as_str(), &item_dir, None, global, root)
     }
 }
 
@@ -938,7 +994,9 @@ fn install_profile_mcp(
     };
     match root {
         None => register_mcp_server(scope, &server.name, &entry, reporter),
-        Some(root) => register_mcp_server_at(root, &server.name, &entry, scope, reporter),
+        Some(root) => {
+            register_mcp_server_at(root, &ToolName::new(&server.name), &entry, scope, reporter)
+        }
     }
 }
 
@@ -969,7 +1027,7 @@ fn resolve_agent_mcp_config<'a>(
 /// global MCP config. Agents without an MCP config for the scope are skipped.
 fn register_mcp_server_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     entry: &McpServerEntry,
     scope: InitScope,
     reporter: &dyn InitReporter,
@@ -979,13 +1037,13 @@ fn register_mcp_server_at(
         server_name,
         scope,
         reporter,
-        "Registered",
-        "for",
+        ActionVerb::new("Registered"),
+        Preposition::new("for"),
         |mcp_cfg, config_path| {
             mcp_config::register_mcp_server(
                 config_path,
                 &ServersKey::new(&mcp_cfg.servers_key),
-                &ToolName::new(server_name),
+                server_name,
                 entry,
                 &mcp_cfg.entry_extras,
             )?;
@@ -997,7 +1055,7 @@ fn register_mcp_server_at(
 /// Root-explicit MCP unregistration mirroring [`register_mcp_server_at`].
 fn unregister_mcp_server_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     scope: InitScope,
     reporter: &dyn InitReporter,
 ) -> Vec<InitResult> {
@@ -1006,13 +1064,13 @@ fn unregister_mcp_server_at(
         server_name,
         scope,
         reporter,
-        "Removed",
-        "from",
+        ActionVerb::new("Removed"),
+        Preposition::new("from"),
         |mcp_cfg, config_path| {
             mcp_config::unregister_mcp_server(
                 config_path,
                 &ServersKey::new(&mcp_cfg.servers_key),
-                &ToolName::new(server_name),
+                server_name,
             )
         },
     )
@@ -1026,11 +1084,11 @@ fn unregister_mcp_server_at(
 #[allow(clippy::too_many_arguments)]
 fn apply_mcp_operation_at(
     root: &Path,
-    server_name: &str,
+    server_name: &ToolName,
     scope: InitScope,
     reporter: &dyn InitReporter,
-    verb: &str,
-    preposition: &str,
+    verb: ActionVerb,
+    preposition: Preposition,
     operation: impl Fn(&agents::McpConfigDef, &Path) -> Result<bool, RegistryError>,
 ) -> Vec<InitResult> {
     for_each_detected_agent(
@@ -1041,7 +1099,7 @@ fn apply_mcp_operation_at(
                 return Ok(None);
             };
             Ok(operation(mcp_cfg, &config_path)?.then(|| AgentAction {
-                verb: verb.to_string(),
+                verb: verb.as_str().to_string(),
                 message: format!("{server_name} MCP server {preposition} {}", agent.name),
             }))
         },
@@ -1094,7 +1152,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.skills {
         run_install_step(
             &mut results,
-            "profile-skills",
+            ComponentName::new("profile-skills"),
             install_profile_skills(selector, scope, root, reporter),
             |targets| format!("Deployed skills to {}", targets.join(", ")),
         );
@@ -1103,7 +1161,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.agents {
         run_install_step(
             &mut results,
-            "profile-agents",
+            ComponentName::new("profile-agents"),
             install_profile_agents(selector, scope, root, reporter),
             |targets| format!("Deployed agents to {}", targets.join(", ")),
         );
@@ -1112,7 +1170,7 @@ pub fn init_profile(
     if let Some(ref selector) = profile.validators {
         run_install_step(
             &mut results,
-            "profile-validators",
+            ComponentName::new("profile-validators"),
             install_profile_validators(selector, scope, root, reporter),
             |sets| format!("Materialized validator set(s): {}", sets.join(", ")),
         );
@@ -1174,8 +1232,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_skill_names(selector),
-            "profile-skills",
-            "skill",
+            ComponentName::new("profile-skills"),
+            ItemKind::new("skill"),
             store::skill_store_dir,
             |name| uninstall_skill_at(name, None, global, root),
             global,
@@ -1188,8 +1246,8 @@ pub fn deinit_profile(
         run_deinit_step(
             &mut results,
             &resolved_agent_names(selector),
-            "profile-agents",
-            "agent",
+            ComponentName::new("profile-agents"),
+            ItemKind::new("agent"),
             store::agent_store_dir,
             |name| uninstall_agent_at(name, None, global, root).map(|_| ()),
             global,
@@ -1240,16 +1298,16 @@ pub fn deinit_profile(
 /// steps of [`init_profile`].
 fn run_install_step(
     results: &mut Vec<InitResult>,
-    component: &str,
+    component: ComponentName,
     outcome: Result<Vec<String>, RegistryError>,
     success_message: impl Fn(&[String]) -> String,
 ) {
     match outcome {
         Ok(items) if !items.is_empty() => {
-            results.push(InitResult::ok(component, success_message(&items)))
+            results.push(InitResult::ok(component.as_str(), success_message(&items)))
         }
         Ok(_) => {}
-        Err(e) => results.push(InitResult::error(component, e.to_string())),
+        Err(e) => results.push(InitResult::error(component.as_str(), e.to_string())),
     }
 }
 
@@ -1263,7 +1321,7 @@ fn deinit_profile_mcp(
 ) -> Vec<InitResult> {
     match root {
         None => unregister_mcp_server(scope, &server.name, reporter),
-        Some(root) => unregister_mcp_server_at(root, &server.name, scope, reporter),
+        Some(root) => unregister_mcp_server_at(root, &ToolName::new(&server.name), scope, reporter),
     }
 }
 
@@ -1276,8 +1334,8 @@ fn deinit_profile_mcp(
 fn run_deinit_step(
     results: &mut Vec<InitResult>,
     names: &[String],
-    component: &str,
-    kind: &str,
+    component: ComponentName,
+    kind: ItemKind,
     store_dir: fn(bool) -> PathBuf,
     uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
     global: bool,
@@ -1303,8 +1361,8 @@ fn run_deinit_step(
 /// [`deinit_profile`]: the two differ only in the uninstall call and labels.
 fn deinit_profile_items(
     names: &[String],
-    component: &str,
-    kind: &str,
+    component: ComponentName,
+    kind: ItemKind,
     uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
     reporter: &dyn InitReporter,
 ) -> Option<InitResult> {
@@ -1315,8 +1373,12 @@ fn deinit_profile_items(
             });
         }
     }
-    (!names.is_empty())
-        .then(|| InitResult::ok(component, format!("Removed {} {kind}(s)", names.len())))
+    (!names.is_empty()).then(|| {
+        InitResult::ok(
+            component.as_str(),
+            format!("Removed {} {kind}(s)", names.len()),
+        )
+    })
 }
 
 /// Prune the builtin discovery README (and the store dir when empty) at the
