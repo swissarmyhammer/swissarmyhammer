@@ -331,6 +331,150 @@ fn init_profile_refresh_prunes_unmodified_retired_rule_file_but_keeps_user_modif
     );
 }
 
+/// The retired tool-rule FIXTURES: the `RETIRED_VALIDATOR_FILES` entries that
+/// sit under a set's `fixtures/` directory rather than its `rules/` directory.
+fn retired_fixture_files() -> Vec<&'static crate::retired_validators::RetiredSetFile> {
+    crate::retired_validators::RETIRED_VALIDATOR_FILES
+        .iter()
+        .filter(|file| file.relative_path.starts_with("fixtures/"))
+        .collect()
+}
+
+/// Write each retired file's shipped snapshot under `validators_root`,
+/// reproducing the store an earlier install wrote before the content was
+/// retired. Returns where each landed, in the order given.
+fn deploy_retired_files(
+    validators_root: &std::path::Path,
+    files: &[&crate::retired_validators::RetiredSetFile],
+) -> Vec<PathBuf> {
+    files
+        .iter()
+        .map(|file| {
+            let dest = validators_root.join(file.set_name).join(file.relative_path);
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, file.content).unwrap();
+            dest
+        })
+        .collect()
+}
+
+/// The four tool-rule fixtures deleted alongside `duplication-parsed` and
+/// `no-commented-code-parsed`: a pass and a fail fixture for each rule.
+const RETIRED_FIXTURE_COUNT: usize = 4;
+
+/// The retired fixture a user is made to edit, so the refresh must leave it.
+const USER_EDITED_FIXTURE: &str = "fixtures/duplication-parsed.fail.rs.tmpl";
+
+/// What that user wrote over their copy.
+const USER_EDITED_FIXTURE_BODY: &str = "// USER EDITED THIS FIXTURE\n";
+
+/// A refresh (re-running `init_profile`) prunes every one of the four retired
+/// tool-rule FIXTURES out of a store that still holds them.
+///
+/// They raise no `sah doctor` row — doctor reads a fixture only through the
+/// rule that names it, and no rule names these any more — so nothing but this
+/// prune ever takes them back out.
+#[test]
+#[serial(cwd)]
+fn init_profile_refresh_prunes_all_four_unmodified_retired_fixtures() {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let reporter = NullReporter;
+    let validators_root = env.home_path().join(".validators");
+
+    let fixtures = retired_fixture_files();
+    assert_eq!(
+        fixtures.len(),
+        RETIRED_FIXTURE_COUNT,
+        "all four retired tool-rule fixtures must be registered for pruning, got: {:?}",
+        fixtures
+            .iter()
+            .map(|f| format!("{}/{}", f.set_name, f.relative_path))
+            .collect::<Vec<_>>()
+    );
+    let deployed = deploy_retired_files(&validators_root, &fixtures);
+
+    // Run the refresh.
+    let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+        "refresh must not error: {results:?}"
+    );
+
+    for path in &deployed {
+        assert!(
+            !path.exists(),
+            "an unmodified retired fixture must be pruned by refresh: {}",
+            path.display()
+        );
+    }
+
+    // The same refresh still deployed a still-shipping fixture beside them,
+    // so the prune removed the retired four and not the directory they sat in.
+    assert!(
+        validators_root
+            .join("code-hygiene/fixtures/missing-docs-rust.fail.rs.tmpl")
+            .is_file(),
+        "a still-shipping fixture must be deployed by the same refresh"
+    );
+}
+
+/// A refresh leaves a retired tool-rule fixture the user edited exactly as the
+/// user left it, and prunes the three they never touched.
+#[test]
+#[serial(cwd)]
+fn init_profile_refresh_keeps_a_user_modified_retired_fixture() {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let reporter = NullReporter;
+    let validators_root = env.home_path().join(".validators");
+
+    let fixtures = retired_fixture_files();
+    let deployed = deploy_retired_files(&validators_root, &fixtures);
+
+    // The user edited their copy of one of the four.
+    let (edited, untouched): (Vec<_>, Vec<_>) = fixtures
+        .iter()
+        .zip(deployed)
+        .partition(|(file, _)| file.relative_path == USER_EDITED_FIXTURE);
+    assert_eq!(
+        edited.len(),
+        1,
+        "{USER_EDITED_FIXTURE} must name exactly one retired fixture"
+    );
+    let edited_path = &edited[0].1;
+    std::fs::write(edited_path, USER_EDITED_FIXTURE_BODY).unwrap();
+
+    // Run the refresh.
+    let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+        "refresh must not error: {results:?}"
+    );
+
+    assert!(
+        edited_path.exists(),
+        "a user-modified retired fixture must never be pruned: {}",
+        edited_path.display()
+    );
+    assert_eq!(
+        std::fs::read_to_string(edited_path).unwrap(),
+        USER_EDITED_FIXTURE_BODY,
+        "the user's edit to a retired fixture must be preserved exactly"
+    );
+
+    // The other three are gone, or "keeps that one" proves nothing.
+    for (_, path) in &untouched {
+        assert!(
+            !path.exists(),
+            "an unmodified retired fixture must still be pruned: {}",
+            path.display()
+        );
+    }
+}
+
 /// `init_profile` drops the builtin discovery `README.md` at the store root,
 /// it is not mistaken for a validator set, and `deinit_profile` removes it.
 #[test]

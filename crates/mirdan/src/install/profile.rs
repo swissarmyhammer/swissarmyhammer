@@ -481,10 +481,11 @@ fn install_profile_validators(
     //
     // Two grains, because retirement happens at two grains: a whole set merged
     // or deleted out of the lineup (the nine single-rule sets folded into
-    // code-security/code-hygiene), and one rule file deleted from a set that
-    // still ships (`duplication-parsed`, `no-commented-code-parsed`). The
-    // second is invisible to the first: the set directory around the stale rule
-    // is refreshed on every install, so nothing ever removes the rule.
+    // code-security/code-hygiene), and single files deleted from a set that
+    // still ships (`duplication-parsed`, `no-commented-code-parsed`, and the
+    // four fixtures those two rules used). The second is invisible to the
+    // first: the set directory around the stale file is refreshed on every
+    // install, so nothing ever removes the file.
     report_pruned(
         reporter,
         "retired validator set(s)",
@@ -492,7 +493,7 @@ fn install_profile_validators(
     );
     report_pruned(
         reporter,
-        "retired validator rule(s)",
+        "retired validator file(s)",
         &crate::retired_validators::prune_unmodified_retired_files(&target_root),
     );
 

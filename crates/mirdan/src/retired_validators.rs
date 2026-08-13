@@ -217,7 +217,7 @@ pub static RETIRED_VALIDATOR_SETS: &[RetiredSet] = &[
     },
 ];
 
-/// The retired rule files whose sets still ship.
+/// The retired rule files, and their fixtures, whose sets still ship.
 ///
 /// `duplication-parsed` and `no-commented-code-parsed` were deleted from
 /// `builtin/validators/` while `duplication` and `code-hygiene` stayed in the
@@ -225,6 +225,19 @@ pub static RETIRED_VALIDATOR_SETS: &[RetiredSet] = &[
 /// files; the validator loader reads them at user or project precedence, so
 /// each keeps running, and `sah doctor` keeps reporting it as a tool rule
 /// whose tool it can no longer reach.
+///
+/// The same deletion took each rule's pass and fail fixtures with it, and a
+/// deployed store holds those too. They raise no doctor row, because doctor
+/// reaches a fixture only through the rule that names it and no rule names
+/// these any more — which is precisely why nothing else would ever remove
+/// them.
+///
+/// `duplication/fixtures/` held nothing but this pair, so pruning both leaves
+/// that directory behind empty, where `code-hygiene/fixtures/` keeps the many
+/// fixtures it still ships. The difference costs nothing. A set's layout
+/// contract is `VALIDATOR.md` plus `rules/`, which `fixtures/` is no part of,
+/// and every reader of a fixtures directory resolves a file some rule named,
+/// so an empty directory and an absent one answer alike.
 pub static RETIRED_VALIDATOR_FILES: &[RetiredSetFile] = &[
     RetiredSetFile {
         set_name: "duplication",
@@ -236,6 +249,34 @@ pub static RETIRED_VALIDATOR_FILES: &[RetiredSetFile] = &[
         relative_path: "rules/no-commented-code-parsed.md",
         content: include_str!(
             "../retired-validators/code-hygiene/rules/no-commented-code-parsed.md"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "code-hygiene",
+        relative_path: "fixtures/no-commented-code-parsed.fail.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/code-hygiene/fixtures/no-commented-code-parsed.fail.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "code-hygiene",
+        relative_path: "fixtures/no-commented-code-parsed.pass.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/code-hygiene/fixtures/no-commented-code-parsed.pass.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "duplication",
+        relative_path: "fixtures/duplication-parsed.fail.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/duplication/fixtures/duplication-parsed.fail.rs.tmpl"
+        ),
+    },
+    RetiredSetFile {
+        set_name: "duplication",
+        relative_path: "fixtures/duplication-parsed.pass.rs.tmpl",
+        content: include_str!(
+            "../retired-validators/duplication/fixtures/duplication-parsed.pass.rs.tmpl"
         ),
     },
 ];
@@ -328,6 +369,10 @@ fn collect_relative_files(dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A tool rule ships one fixture its tool must report and one its tool must
+    /// pass, so retiring a tool rule retires exactly two fixtures with it.
+    const FIXTURES_PER_TOOL_RULE: usize = 2;
 
     #[test]
     fn test_retired_sets_are_the_nine_merged_names() {
@@ -459,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_retired_files_are_the_two_parsed_rules() {
+    fn test_retired_files_are_the_two_parsed_rules_and_their_four_fixtures() {
         let names: Vec<String> = RETIRED_VALIDATOR_FILES
             .iter()
             .map(|f| format!("{}/{}", f.set_name, f.relative_path))
@@ -469,8 +514,42 @@ mod tests {
             vec![
                 "duplication/rules/duplication-parsed.md".to_string(),
                 "code-hygiene/rules/no-commented-code-parsed.md".to_string(),
+                "code-hygiene/fixtures/no-commented-code-parsed.fail.rs.tmpl".to_string(),
+                "code-hygiene/fixtures/no-commented-code-parsed.pass.rs.tmpl".to_string(),
+                "duplication/fixtures/duplication-parsed.fail.rs.tmpl".to_string(),
+                "duplication/fixtures/duplication-parsed.pass.rs.tmpl".to_string(),
             ]
         );
+    }
+
+    /// A retired tool rule and its fixtures retire together. A fixture left
+    /// behind is inert — no rule names it, so `sah doctor` never reads it and
+    /// never reports it — which is exactly why it would sit in every deployed
+    /// store forever unless this table names it.
+    #[test]
+    fn test_every_retired_tool_rule_has_its_fixtures_retired_with_it() {
+        for rule in RETIRED_VALIDATOR_FILES {
+            let Some(stem) = rule
+                .relative_path
+                .strip_prefix("rules/")
+                .and_then(|name| name.strip_suffix(".md"))
+            else {
+                continue;
+            };
+            let fixture_prefix = format!("fixtures/{stem}.");
+            let fixture_count = RETIRED_VALIDATOR_FILES
+                .iter()
+                .filter(|file| {
+                    file.set_name == rule.set_name
+                        && file.relative_path.starts_with(&fixture_prefix)
+                })
+                .count();
+            assert_eq!(
+                fixture_count, FIXTURES_PER_TOOL_RULE,
+                "retired tool rule {}/{} must retire its pass and fail fixtures with it",
+                rule.set_name, rule.relative_path
+            );
+        }
     }
 
     #[test]
