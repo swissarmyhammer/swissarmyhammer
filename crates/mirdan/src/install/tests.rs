@@ -256,6 +256,81 @@ fn init_profile_refresh_prunes_unmodified_retired_set_but_keeps_user_modified_co
     );
 }
 
+/// A refresh (re-running `init_profile`) prunes a retired RULE FILE out of a
+/// set that still ships when the deployed bytes are identical to what was
+/// shipped before the rule was retired, but leaves a user-modified copy of
+/// another retired rule file alone.
+#[test]
+#[serial(cwd)]
+fn init_profile_refresh_prunes_unmodified_retired_rule_file_but_keeps_user_modified_copy() {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let reporter = NullReporter;
+    let validators_root = env.home_path().join(".validators");
+
+    let retired = crate::retired_validators::RETIRED_VALIDATOR_FILES;
+    let unmodified = retired
+        .iter()
+        .find(|f| f.relative_path == "rules/duplication-parsed.md")
+        .expect("duplication-parsed is a retired rule file");
+    let modified = retired
+        .iter()
+        .find(|f| f.relative_path == "rules/no-commented-code-parsed.md")
+        .expect("no-commented-code-parsed is a retired rule file");
+
+    // Deploy both rule files exactly as they shipped, simulating a store an
+    // earlier install wrote before the two rules were deleted.
+    for file in [unmodified, modified] {
+        let dest = validators_root.join(file.set_name).join(file.relative_path);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, file.content).unwrap();
+    }
+
+    // The user edited their copy of one of the two.
+    let modified_path = validators_root
+        .join(modified.set_name)
+        .join(modified.relative_path);
+    std::fs::write(&modified_path, "USER MODIFIED THIS RULE").unwrap();
+
+    // Run the refresh.
+    let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+        "refresh must not error: {results:?}"
+    );
+
+    // The unmodified retired rule file is gone.
+    let unmodified_path = validators_root
+        .join(unmodified.set_name)
+        .join(unmodified.relative_path);
+    assert!(
+        !unmodified_path.exists(),
+        "an unmodified retired rule file must be pruned by refresh"
+    );
+
+    // The user-modified retired rule file survives, edit intact.
+    assert_eq!(
+        std::fs::read_to_string(&modified_path).unwrap(),
+        "USER MODIFIED THIS RULE",
+        "the user's edit to a retired rule file must be preserved exactly"
+    );
+
+    // Both sets still ship, and the same refresh deployed them as usual.
+    assert!(
+        validators_root
+            .join("duplication/rules/duplication.md")
+            .is_file(),
+        "the still-shipping duplication rule must be deployed by the same refresh"
+    );
+    assert!(
+        validators_root
+            .join("code-hygiene/rules/no-commented-code.md")
+            .is_file(),
+        "the still-shipping no-commented-code rule must be deployed by the same refresh"
+    );
+}
+
 /// `init_profile` drops the builtin discovery `README.md` at the store root,
 /// it is not mistaken for a validator set, and `deinit_profile` removes it.
 #[test]

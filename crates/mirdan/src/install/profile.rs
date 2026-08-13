@@ -424,6 +424,20 @@ fn install_profile_items<T>(
     Ok(targets)
 }
 
+/// Report what a retired-content prune removed, naming the grain it removed.
+///
+/// Silent when the prune removed nothing, which is the ordinary case: a store
+/// written by a current binary holds no retired content at all.
+fn report_pruned(reporter: &dyn InitReporter, grain: &str, pruned: &[String]) {
+    if pruned.is_empty() {
+        return;
+    }
+    reporter.emit(&InitEvent::Action {
+        verb: "Removed".to_string(),
+        message: format!("{grain}: {}", pruned.join(", ")),
+    });
+}
+
 /// Materialize the profile's selected builtin validator sets onto disk through
 /// the shared mirdan store mechanism.
 ///
@@ -460,19 +474,27 @@ fn install_profile_validators(
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
 
-    // A set merged or deleted out of the current builtin lineup (e.g. the nine
-    // single-rule sets folded into code-security/code-hygiene) never
-    // re-materializes, so a stale copy the user never touched would otherwise
-    // sit in the store forever. Prune it here, on every refresh, before
-    // installing the currently-selected sets; a user-modified copy of the same
-    // name is left untouched (see `retired_validators`).
-    let pruned = crate::retired_validators::prune_unmodified_retired_sets(&target_root);
-    if !pruned.is_empty() {
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!("retired validator set(s): {}", pruned.join(", ")),
-        });
-    }
+    // Retired builtin content never re-materializes, so a stale copy the user
+    // never touched would otherwise sit in the store forever. Prune it here, on
+    // every refresh, before installing the currently-selected sets; a
+    // user-modified copy is left untouched (see `retired_validators`).
+    //
+    // Two grains, because retirement happens at two grains: a whole set merged
+    // or deleted out of the lineup (the nine single-rule sets folded into
+    // code-security/code-hygiene), and one rule file deleted from a set that
+    // still ships (`duplication-parsed`, `no-commented-code-parsed`). The
+    // second is invisible to the first: the set directory around the stale rule
+    // is refreshed on every install, so nothing ever removes the rule.
+    report_pruned(
+        reporter,
+        "retired validator set(s)",
+        &crate::retired_validators::prune_unmodified_retired_sets(&target_root),
+    );
+    report_pruned(
+        reporter,
+        "retired validator rule(s)",
+        &crate::retired_validators::prune_unmodified_retired_files(&target_root),
+    );
 
     let selected = selected_names(selector, sets.keys().map(|name| name.to_string()));
     let mut materialized: Vec<String> = Vec::new();
