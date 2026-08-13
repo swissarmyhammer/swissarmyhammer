@@ -514,6 +514,330 @@ comments:
     - evidence: 4 files — crates/mirdan/src/install/profile.rs, crates/mirdan/src/install/mod.rs, crates/mirdan/src/install/deploy.rs, crates/mirdan/src/install/profile_tests.rs. Both findings of the 09:11 round are `- [x]`. Whole-file sweep: cause A (a message literal repeated across call sites) 10 found / 10 fixed; cause B (a concept that is a newtype at one site and a bare &str at another) 3 found / 3 fixed, 2 of them misses the finding did not name. `cargo nextest run -p mirdan` 519 passed / 0 failed / 0 skipped; `cargo nextest run --workspace` 14179 passed / 0 failed / 0 skipped; fmt and clippy clean.
     - next: /review
   timestamp: 2026-08-13T13:40:05.334060+00:00
+- actor: claude-code
+  id: 01kzxpngz44sz2h6xrhsx25hpa
+  text: |-
+    ### review — findings
+    - evidence: 4 findings — crates/mirdan/src/install/profile.rs:760, crates/mirdan/src/install/profile.rs:1212, crates/mirdan/src/install/profile.rs:1311, crates/mirdan/src/install/profile_tests.rs:513
+    - scope: c9674d01f~1..c9674d01f (round 3). All 5 prior findings checked.
+    - dropped: 1 under the existing-tests exception (profile_tests.rs:453, pre-existing test). 0 dropped for a false premise.
+    - convergence: the file is churning, not converging. Each round's fix is the only source of the next round's findings. temp_dir_error and all four VERB_* constants were added by c9674d01f itself, and all 4 findings sit on lines this commit wrote. Counts per round: 3, 2, 4 — not falling.
+    - next: fix the 4 findings, and remove each cause from the whole file (line 1203 spells the same bare verb as 1212). A human should decide whether string-literal hygiene in profile.rs still belongs to this card, whose stated Done-when is the four fixture snapshots.
+  timestamp: 2026-08-13T13:58:26.020112+00:00
+- actor: claude-code
+  id: 01kzxprkkd29yprmjvqybjpt2h
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 4 files. Both round-2 findings worked. `temp_dir_error` in install/mod.rs follows mirdan's existing idiom (a small private function building the whole error, as `not_found_error` does) rather than a const; a fourth site in deploy.rs that no finding named also calls it. Three component constants replace the scattered literals. A comment in profile.rs had LICENSED the drift — claiming a literal handed straight to `InitResult::ok` crosses no call boundary, which is wrong because that function takes two adjacent strings — and it is deleted.
+    - Scripted sweep: 10 repeated literals fixed, 3 newtype inconsistencies fixed, of which the findings named one. Three repeats deliberately kept, because the two sites are not one concept.
+    - test: green — 519 mirdan, 14179 workspace, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: c9674d01f
+    - review: findings — profile.rs:760, profile.rs:1212, profile.rs:1311, profile_tests.rs:513. 0 dropped for a false premise; 1 dropped under the existing-tests exception.
+
+    **CONVERGENCE JUDGEMENT — the file is churning, not converging.** Recorded because it governs whether this card may continue.
+
+    Counts across rounds: 3, 2, 4. Every one of this round's four findings is a NEW cause that commit c9674d01f itself created — `temp_dir_error` and the four `VERB_*` constants did not exist before it. The loop is mechanical: each fix introduces a new named spelling of a concept, and each new name creates fresh sites where the same concept is still spelled bare. The rule firing is identical every round ("named here, literal there"); only the abstraction it measures against is new. The fix is the finding generator.
+
+    Two further facts:
+    1. **Round 2's fix produced a REGRESSION.** Extracting the shared `temp_dir_error` to satisfy a round-2 finding put a factually wrong message on a subdirectory failure at profile.rs:760 — `create_dir_all(&item_dir)` now reports "failed to create temp dir". Obeying the previous round made one site worse. This is a real defect and is fixed first, whatever else happens.
+    2. **The author's detector is weaker than the reviewer's.** The round-3 sweep matched whole-literal equality, so it structurally cannot see a repeat that is a TOKEN INSIDE a larger format string — `"Deployed agents to {}"` against `VERB_DEPLOYED`. The next identical sweep would miss the same class again. That asymmetry, not the rule, is why the rounds do not close.
+
+    **Scope note.** The card's own Done-when is the four byte-frozen fixture snapshots plus the guard test, and that has been satisfied since round 1. All three review rounds have been string-literal hygiene in `profile.rs` and its neighbours — files this card never names. What is looping is unrelated work that the reviewed commit range happened to include.
+
+    **Decision for round 4**: fix the regression, fix the three remaining findings, and correct the DETECTOR to compare constant values as substrings so the author's sweep matches the reviewer's before the commit rather than after. If round 5 still produces findings, this card stops and goes to a person, per the finish skill's guardrail.
+  timestamp: 2026-08-13T14:00:07.021300+00:00
+- actor: claude-code
+  id: 01kzxq7z50bcsjzcd5185m478y
+  text: |-
+    ## Round 4 research — the substring sweep the previous rounds could not run
+
+    Built the detector the round-3 comment said was missing: it extracts every
+    `const NAME: &str = "VALUE"` in a file, scans every string literal and format
+    string with a Rust-aware tokenizer that skips comments, and matches each const
+    VALUE as a **substring**, not by equality.
+
+    Ran on `crates/mirdan/src/install/profile.rs`: 13 consts, **18 raw substring
+    sites**. The four findings named 3 of them.
+
+    Also ran it across `profile.rs + mod.rs + deploy.rs + applier.rs` together (57
+    sites). That cross-file run is noise and is discarded on a structural ground,
+    not a judgment: every const in `profile.rs` is private to that module, so no
+    literal in another file can be a second spelling of it. The sweep is scoped to
+    the file that declares the const.
+
+    ### The 18 sites, classified
+
+    Genuine — the const's own concept spelled bare (7):
+
+    | line | const | literal |
+    |---|---|---|
+    | 1203 | VERB_DEPLOYED | `"Deployed skills to {}"` |
+    | 1203 | SKILL_ITEM_LABEL | `"Deployed skills to {}"` |
+    | 1212 | VERB_DEPLOYED | `"Deployed agents to {}"` (finding 2) |
+    | 1212 | AGENT_ITEM_LABEL | `"Deployed agents to {}"` |
+    | 1311 | VERB_REMOVED | `"Removed {} validator set(s)"` (finding 3) |
+    | 1426 | VERB_REMOVED | `"Removed {} {kind}(s)"` |
+    | 513 (profile_tests.rs) | PROFILE_VALIDATORS_COMPONENT | `"profile-validators"` (finding 4) |
+
+    Four of these seven no finding named: 1203 twice, 1212's label, and 1426.
+    Line 1426 is the one no round has mentioned at all.
+
+    Collisions — a different concept that happens to contain the same letters (11).
+    Substituting the const at any of these would make the code WRONG, so each is
+    recorded with its reason:
+
+    - **901, 1155** — `"{verb} applied to {changed} agent(s)"` and
+      `"{verb} {subject} for {changed} agent(s)"`. Here `agent` means a *detected
+      coding agent* (Claude Code, Cursor). `AGENT_ITEM_LABEL` is documented as "the
+      reporter label for one builtin agent". Two different nouns.
+    - **280** — `skill_ctx.set("agent", ...)`. A Liquid template variable name, read
+      by `_partials/delegate-to-subagent`. Renaming it would break the partials.
+    - **289, 455** — `"skill template rendering failed…"`, `"agent template
+      rendering failed…"`. English words in a `tracing::warn!`, not the reporter
+      label.
+    - **400, 430, 617** — `include_str!("../../../../builtin/…/README.md")`.
+      Structural, not a choice: `include_str!` takes a literal token and cannot take
+      a `const`. These are compile-time SOURCE paths; `STORE_README_FILE_NAME` is
+      the name written into the deployed store.
+    - **999** — `.expect("fragment permissions.deny is an array")`. Prose describing
+      a JSON shape in a panic message for an internal invariant, not a key used for
+      lookup. `.expect` takes `&str`; building it from the pointer keys would force
+      an allocating `unwrap_or_else(|| panic!(…))`.
+
+    ### Finding 1 is a real regression — premise confirmed at the source
+
+    - `profile.rs:758` is `tempfile::tempdir().map_err(temp_dir_error)` — true.
+    - `profile.rs:760` is `create_dir_all(&item_dir).map_err(temp_dir_error)` — the
+      temp dir already succeeded one line above, so "failed to create temp dir" is
+      factually wrong.
+    - `deploy.rs:181` is the same subdirectory failure and says "failed to create
+      temp skill dir".
+    - `profile.rs:646` and `deploy.rs:179` are real `tempdir()` calls and are correct.
+
+    So the message belongs to two distinct failures at 5 call sites: 3 temp-dir, 2
+    subdirectory.
+
+    ### Coverage gaps found
+
+    - `"Deployed skills to {}"` and `"Deployed agents to {}"` have **no test at
+      all**. `rg` over every mirdan test file finds no assertion on either.
+    - The subdirectory-creation failure at `profile.rs:760` is **unreachable from a
+      test**: the function creates its own `tempfile::tempdir()` internally, so no
+      test can make the following `create_dir_all` fail. That unreachability is
+      exactly why the wrong message survived a round.
+
+    ### Test-file scope
+
+    `c9674d01f` added exactly one test to `profile_tests.rs`
+    (`deinit_profile_reports_validators_under_the_validators_component`, lines
+    505-520). Finding 4 reaches that test and nothing else in the file; every other
+    test there predates the commit and is covered by the existing-tests exception,
+    including line 453 which the reviewer already dropped.
+
+    `PROFILE_VALIDATORS_COMPONENT` is currently private to `profile.rs`, so the test
+    cannot name it without widening visibility. The precedent is exact:
+    `APPLIER_COMPONENT` is `pub(crate)` in `applier.rs` and imported by
+    `profile_tests.rs:6`.
+  timestamp: 2026-08-13T14:08:30.368291+00:00
+- actor: claude-code
+  id: 01kzy0689jasvany3rk1esapvc
+  text: |-
+    ## Round 4 — judgement of the inherited uncommitted work
+
+    A previous agent died mid-run. Its work was read with `git diff` and judged
+    before anything was added. Two of the four findings were done, two were not.
+
+    ### What was correct and kept
+
+    - **Finding 1.** `temp_subdir_error(what, e)` in `install/mod.rs` beside
+      `temp_dir_error`. `profile.rs` passes `"item"`, `deploy.rs` passes `"skill"`.
+      Each site now reports the directory that actually failed, and the repeated
+      literal round 2 removed is not back: one function holds the text, and the
+      noun is an argument, so no site can report a subdirectory failure without
+      naming it. It takes one `&str` plus an `io::Error`, so it carries no
+      transposition hazard.
+    - **Finding 4.** `profile_tests.rs` names `PROFILE_VALIDATORS_COMPONENT`. The
+      three component constants became `pub(crate)`, matching `APPLIER_COMPONENT`.
+
+    ### What was missing
+
+    - **Findings 2 and 3 were NOT done.** `"Deployed agents to {}"` and
+      `"Removed {} validator set(s)"` were untouched. The agent had written a
+      characterization test for the deploy messages and stopped before the fix.
+
+    ### What did not pin the behaviour — stated plainly
+
+    `test_temp_dir_errors_name_the_directory_that_failed` (install/tests.rs) does
+    NOT pin finding 1's fix. It asserts the two helpers' messages, not which helper
+    the call site reaches for. Measured, not assumed: reverting `profile.rs` to
+    `.map_err(temp_dir_error)` leaves **521/521 green**.
+
+    The failure is unreachable from a test. `stage_and_deploy_rendered` creates its
+    own `tempfile::tempdir()` and then `create_dir_all` inside it, so no caller can
+    make the second call fail; the item names come from `include_dir!` and are
+    fixed. That unreachability is exactly why the wrong message survived round 3.
+    The test is kept because it does pin the message contract both sites share, but
+    it is not a regression guard for the call site, and it is not presented as one.
+  timestamp: 2026-08-13T16:44:51.378511+00:00
+- actor: claude-code
+  id: 01kzy0701akb6faf0zvn1pk8qr
+  text: |-
+    ## The substring detector — the thing this round was for
+
+    Rounds 2 and 3 swept with WHOLE-LITERAL EQUALITY. That cannot see a repeat
+    that is a token INSIDE a larger format string, which is precisely findings 2
+    and 3. The detector is now written and run: it strips comments with a
+    Rust-aware walk, collects every `const NAME: &str = "VALUE"`, and matches each
+    VALUE as a **substring** of every string literal and format string.
+    Cross-file matches count only for `pub`/`pub(crate)` constants, because a
+    private constant cannot be a second spelling of a literal in another file.
+
+    ### Counts
+
+    `crates/mirdan/src/install/profile.rs`: **22 sites before, 12 after.**
+    `profile_tests.rs`, `deploy.rs`, `mod.rs`, `applier.rs`, `install/tests.rs`:
+    **0 sites each.**
+
+    The four findings named **3** of the 22. Seven more were genuine and unnamed:
+
+    | line | constant | literal | named by a finding |
+    |---|---|---|---|
+    | 1219 | VERB_DEPLOYED | `"Deployed skills to {}"` | no |
+    | 1219 | SKILL_ITEM_LABEL | `"Deployed skills to {}"` | no |
+    | 1228 | VERB_DEPLOYED | `"Deployed agents to {}"` | **yes (2)** |
+    | 1228 | AGENT_ITEM_LABEL | `"Deployed agents to {}"` | no |
+    | 1330 | VERB_REMOVED | `"Removed {} validator set(s)"` | **yes (3)** |
+    | 1445 | VERB_REMOVED | `"Removed {} {kind}(s)"` | no |
+    | 979 | POINTER_KEY_PERMISSIONS | `"/permissions/deny"` | no |
+    | 979 | POINTER_KEY_DENY | `"/permissions/deny"` | no |
+    | 1006 | POINTER_KEY_PERMISSIONS | `"fragment permissions.deny is an array"` | no |
+    | 1006 | POINTER_KEY_DENY | `"fragment permissions.deny is an array"` | no |
+    | tests:513 | PROFILE_VALIDATORS_COMPONENT | `"profile-validators"` | **yes (4)** |
+    | tests:493-494 | PROFILE_SKILLS/AGENTS_COMPONENT | `"profile-skills"`, `"profile-agents"` | no |
+
+    **No, it did not find nothing beyond the four.** It found 10 more, and every
+    one is fixed. Three of them (`979` twice, `1006` twice) were a defect no round
+    had seen: `const PERMISSIONS_DENY_POINTER = "/permissions/deny"` restated both
+    key constants, while the doc comment above them claimed "kept in one place so
+    the pointer strings and these accessors can never drift". That claim was false.
+    The pointer is now `permissions_deny_pointer()`, built from the two keys.
+
+    ### The test that separates genuine from collision
+
+    **Must a change to the constant's value reach this literal for the program to
+    stay correct?** Yes → genuine. No → the two are different concepts that share
+    letters. This is a structural question, not a preference.
+
+    The 12 remaining sites all answer no, and substituting the constant at any of
+    them would make the code **wrong**:
+
+    - **104, 107** — `"profile-skills"` contains `"skill"`. The component name is a
+      stable reporter row identity; renaming the item label must not rename the row
+      users and tests match on. Two independent decisions.
+    - **287** — `skill_ctx.set("agent", ...)` is a Liquid variable name read by
+      `_partials/delegate-to-subagent`. Substituting would break the partials.
+    - **296, 462** — `"skill template rendering failed…"` is English prose in a
+      `tracing::warn!`, not a reporter label.
+    - **407, 437, 624** — `include_str!("../../../../builtin/skills/README.md")`.
+      Structural: `include_str!` takes a literal token and cannot take a `const`.
+      These are compile-time repo source paths, not the deployed file name.
+    - **908, 1174** — `"{verb} applied to {changed} agent(s)"`. Here `agent` means
+      a **detected coding agent** (Claude Code, Cursor). `AGENT_ITEM_LABEL` is the
+      reporter label for one **builtin agent**. Two different nouns.
+
+    ### Abstractions: the count
+
+    **0 new names.** Every fix used a constant that already existed
+    (`VERB_DEPLOYED`, `VERB_REMOVED`, `SKILL_ITEM_LABEL`, `AGENT_ITEM_LABEL`,
+    `PROFILE_*_COMPONENT`, `POINTER_KEY_*`). The one shape change is a rename in
+    place: `const PERMISSIONS_DENY_POINTER` became `fn permissions_deny_pointer()`,
+    because a `const` cannot join other `const` strings. One name out, one name in,
+    10 sites removed. The trade that generated rounds 2 and 3 was not repeated.
+
+    `temp_subdir_error` (1 new name, 2 sites) was inherited from the dead run and
+    is finding 1's own prescription, kept for that reason.
+  timestamp: 2026-08-13T16:45:15.690620+00:00
+- actor: claude-code
+  id: 01kzy07sp2x529k61h99zzbphs
+  text: |-
+    ## Mutation proof — every changed site is pinned, with one stated exception
+
+    Behaviour is byte-identical by design, so the guard is a characterization test.
+    Each was run against the unchanged code first, then the constant it feeds was
+    mutated to prove the test fails. Every mutation was reverted from a saved copy,
+    and the final `rg` confirms the file is back.
+
+    | mutation | result |
+    |---|---|
+    | `create_dir_all(&item_dir)` back to `temp_dir_error` | **521/521 PASS — not pinned** (see the judgement comment) |
+    | `VERB_DEPLOYED` → `"Installed!!"` | FAIL: left `"Installed!! skills to fake-agent"`, right `"Deployed skills to fake-agent"` |
+    | `SKILL_ITEM_LABEL` → `"recipe"` + `VERB_REMOVED` → `"Deleted"` | 4 FAIL: `"Deleted 1 recipe(s)"` vs `"Removed 1 skill(s)"`, `"Deployed recipes to fake-agent"`, `"Deleted 1 validator set(s)"`, `"Deleted applied to 1 agent(s)"` |
+    | `permissions_deny_pointer` loses its leading `/` | 2 FAIL: `apply_edit_redirect_at_removes_cleanly`, `init_profile_installs_edit_redirect_and_deinit_removes` |
+    | `POINTER_KEY_DENY` → `"denied"` | 5 FAIL across `edit_redirect_tests` and `profile_tests` |
+
+    The last two matter most: they prove the derived pointer is covered end to end
+    through a real settings file, so no unit test of the helper was needed.
+
+    ### Where the line is drawn in test code, and why it is not a preference
+
+    `init_profile_reports_each_family_deployed_to_its_targets` uses the constant as
+    the **lookup key** (`message_of(PROFILE_SKILLS_COMPONENT)`) and the bare literal
+    as the **asserted value** (`"Deployed skills to fake-agent"`). Building the
+    expected string from `VERB_DEPLOYED` and `SKILL_ITEM_LABEL` would make the
+    assertion tautological — it would pass for any verb. The `VERB_*` constants stay
+    private to `profile.rs` for exactly that reason, so a test cannot name them.
+    The component constants are `pub(crate)` because a lookup key is an identity,
+    not the value under test.
+
+    `profile_tests.rs:493-494` were fixed even though a reviewer dropped the same
+    lines once under the existing-tests exception. They are not pre-existing test
+    code: `git log -L` shows commit `f1601a77d` wrote them, for this card, in round
+    2. Finding 4's cause is a test spelling a component name bare where the constant
+    exists; removing that cause from the whole file reaches these two lines.
+
+    `init_profile_installs_edit_redirect_and_deinit_removes` keeps
+    `settings["permissions"]["deny"]` as bare literals. That is the external Claude
+    Code schema being verified, and `POINTER_KEY_*` are private to `profile.rs`,
+    so the constants are not visible there and spelling them out is what makes the
+    test a real pin.
+
+    ## Green
+
+    - `cargo nextest run -p mirdan` — **521 passed, 0 failed, 0 skipped** (519 at
+      round 3, plus 2 new tests).
+    - `cargo nextest run --workspace` — **14181 passed, 0 failed, 0 skipped**.
+    - `cargo fmt --check` clean. It was NOT clean on the first try — rustfmt
+      reflowed the two deploy closures; `cargo fmt` was run and the diff is in the
+      change.
+    - `cargo clippy --workspace --all-targets -- -D warnings` clean (exit 0).
+
+    Blast radius: `permissions_deny_pointer` is private to `install::profile` and
+    `temp_subdir_error` is new, so neither has an outside caller. Every message and
+    every error string is byte-identical, proved by the characterization tests.
+
+    `git status` lists exactly five files, all under `crates/mirdan/src/install/`.
+    The four byte-frozen snapshots under `crates/mirdan/retired-validators/` are
+    unmodified (`git status` on that path returns 0 lines). The real
+    `~/.validators/` and the real `$HOME` were never written; all work ran in the
+    repo and a scratchpad.
+
+    ## Discovered, out of scope, carded
+
+    `crates/mirdan/src/strategy/mod.rs:35` declares its OWN
+    `const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny"`. One external
+    contract with two sources in one crate. It is a different module that no finding
+    names, and the per-file detector cannot see it, so it is card `^hfx8vw7` rather
+    than more churn on this one.
+  timestamp: 2026-08-13T16:45:41.954535+00:00
+- actor: claude-code
+  id: 01kzy083wzqryrqp1gy7xdrbmc
+  text: |-
+    ### implement — changed
+    - evidence: 5 files — crates/mirdan/src/install/profile.rs, crates/mirdan/src/install/profile_tests.rs, crates/mirdan/src/install/mod.rs, crates/mirdan/src/install/deploy.rs, crates/mirdan/src/install/tests.rs. All 4 findings of the 09:41 round are `- [x]`. Substring detector (const VALUE as a SUBSTRING of every literal, not equality): profile.rs 22 sites before / 12 after, all 12 collisions with a structural reason each; profile_tests.rs, deploy.rs, mod.rs, applier.rs, install/tests.rs 0 each. The findings named 3 of the 22; 10 more were genuine and unnamed, all fixed. 0 new abstractions — every fix used an existing constant, and `const PERMISSIONS_DENY_POINTER` became `fn permissions_deny_pointer()` (1 name out, 1 in, 10 sites removed). `cargo nextest run -p mirdan` 521 passed / 0 failed / 0 skipped; `cargo nextest run --workspace` 14181 passed / 0 failed / 0 skipped; fmt and clippy clean.
+    - caveat: finding 1's call-site choice is NOT pinned by a test — reverting it leaves 521/521 green, because the failure is unreachable (the function makes its own tempdir and the item names are fixed by `include_dir!`). Stated, not hidden.
+    - discovered: `^hfx8vw7` — strategy/mod.rs holds a second source of the permissions.deny pointer.
+    - next: /review
+  timestamp: 2026-08-13T16:45:52.415464+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Prune the four retired tool-rule fixtures from a deployed validator store
@@ -587,3 +911,38 @@ recorded. The duplicated temp-dir message is present at 603, 716, and 719.
 1263 as a bare `&str` inside `InitResult::ok`. No finding was dropped for a
 false premise. Neither finding names test code that already existed, so the
 existing-tests exception does not apply.
+
+## Review Findings (2026-08-13 09:41)
+
+- [x] `crates/mirdan/src/install/profile.rs:760` — Error message at line 760 was changed to use the generic temp_dir_error helper, which produces 'failed to create temp dir', but this error occurs when creating a subdirectory (item_dir), not the temp directory itself created at line 758. This produces a misleading error message that is inconsistent with the pattern at deploy.rs:182, which uses a specific error message 'failed to create temp skill dir' for the same type of subdirectory-creation error. Use a specific error message for the subdirectory creation, such as `format!("failed to create temp item dir: {e}")` to match the pattern at deploy.rs:182, rather than the generic temp_dir_error which is misleading for this context.
+- [x] `crates/mirdan/src/install/profile.rs:1212` — Closure hardcodes 'Deployed' verb in format string instead of using the constant VERB_DEPLOYED. The same verb is used at lines 517 and 624, which both correctly use the VERB_DEPLOYED constant. This is inconsistent; the closure should construct its message using the constant to ensure the verb value is centralized. Change line 1212 from `|targets| format!("Deployed agents to {}", ...)` to `|targets| format!("{} agents to {}", VERB_DEPLOYED, ...)`.
+- [x] `crates/mirdan/src/install/profile.rs:1311` — Message hardcodes 'Removed' verb instead of using the constant VERB_REMOVED. Within the same InitResult::ok call (lines 1308-1312), the component name parameter uses ComponentName::new(PROFILE_VALIDATORS_COMPONENT) constant (line 1308, changed in c9674d01), but the message still hardcodes the verb. This is inconsistent; if component names use constants, verbs in messages should too. Change line 1311 from `format!("Removed {} validator set(s)", removed.len())` to `format!("{} {} validator set(s)", VERB_REMOVED, removed.len())`.
+- [x] `crates/mirdan/src/install/profile_tests.rs:513` — New test hardcodes the string 'profile-validators' instead of using the constant PROFILE_VALIDATORS_COMPONENT that was added in this same change. Similar tests in the same file use constants (e.g. line 478 uses APPLIER_COMPONENT), establishing a pattern this new test breaks. Change line 513 from `result.name == "profile-validators"` to `result.name == PROFILE_VALIDATORS_COMPONENT`.
+
+Scope of this pass: `c9674d01f~1..c9674d01f`, the third round on this card. All
+five prior findings are checked.
+
+Every premise was read at the named line before the finding was recorded. Line
+760 does call `temp_dir_error` on `create_dir_all(&item_dir)`, and 758 is the
+real `tempfile::tempdir()`; `deploy.rs:181` does say "failed to create temp
+skill dir". `VERB_DEPLOYED` is defined at profile.rs:116 and used at 517 and
+624, and line 1212 does spell "Deployed" as a bare literal. `VERB_REMOVED` is
+defined at 119, and line 1311 does spell "Removed" as a bare literal.
+Line 513 does compare against the bare literal `"profile-validators"`. No
+finding was dropped for a false premise.
+
+One finding was dropped under the review skill's existing-tests exception: the
+engine also named `crates/mirdan/src/install/profile_tests.rs:453`
+(`message_of("profile-skills")`). That line is not in this commit's diff, so it
+is test code that already existed, and the finding asks only to restyle it. It
+is not an action item. The finding at line 513 is NOT dropped, because that
+test is new in this commit.
+
+Line 1212 is one example of its cause, not the whole of it. Line 1203 spells
+the same verb as a bare literal in `format!("Deployed skills to {}", ...)`.
+Remove the cause from the whole file, not only the named line.
+
+Origin of this round: `temp_dir_error` and all four `VERB_*` constants were
+added by this same commit, `c9674d01f`. Each of these four findings is on a
+line this commit itself wrote or changed. They are not the round-2 findings
+left unfixed.

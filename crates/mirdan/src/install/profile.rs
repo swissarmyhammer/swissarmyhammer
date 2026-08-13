@@ -31,7 +31,9 @@ use super::applier::{
 };
 use super::deploy::{deploy_agent_to_agents_at, deploy_skill_to_agents_at};
 use super::uninstall::{uninstall_agent_at, uninstall_skill_at};
-use super::{copy_dir_recursive, remove_empty_dirs_up_to, rooted, temp_dir_error};
+use super::{
+    copy_dir_recursive, remove_empty_dirs_up_to, rooted, temp_dir_error, temp_subdir_error,
+};
 
 // ── Parameter newtypes ───────────────────────────────────────────────────────
 //
@@ -92,15 +94,20 @@ string_newtype! {
 // Each literal below is read at two or more sites that must agree, or is the
 // sibling of such a literal in one expression. One constant is the single
 // source of each one, so a change to the text reaches every site.
+//
+// The component names are `pub(crate)` because the tests that pin each
+// reported row name the same constant the reporting code does, the way
+// `APPLIER_COMPONENT` already is. A test that spells the name itself is a
+// second source of that text.
 
 /// The component name the skill step of a profile reports under.
-const PROFILE_SKILLS_COMPONENT: &str = "profile-skills";
+pub(crate) const PROFILE_SKILLS_COMPONENT: &str = "profile-skills";
 
 /// The component name the agent step of a profile reports under.
-const PROFILE_AGENTS_COMPONENT: &str = "profile-agents";
+pub(crate) const PROFILE_AGENTS_COMPONENT: &str = "profile-agents";
 
 /// The component name the validator step of a profile reports under.
-const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";
+pub(crate) const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";
 
 /// The reporter label for one builtin skill.
 const SKILL_ITEM_LABEL: &str = "skill";
@@ -757,7 +764,7 @@ fn stage_and_deploy_rendered(
     }
     let temp_dir = tempfile::tempdir().map_err(temp_dir_error)?;
     let item_dir = temp_dir.path().join(name.as_str());
-    std::fs::create_dir_all(&item_dir).map_err(temp_dir_error)?;
+    std::fs::create_dir_all(&item_dir).map_err(|e| temp_subdir_error("item", e))?;
     std::fs::write(item_dir.join(file_name.as_str()), content.as_str())
         .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
 
@@ -968,13 +975,22 @@ pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
     })
 }
 
-/// JSON pointer for the `permissions.deny` array (Claude Code shape).
-const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
-
-/// Object keys used to read the canonical fragment's parts back out (kept in one
-/// place so the pointer strings and these accessors can never drift).
+/// The `permissions` object key of the Claude Code settings shape.
 const POINTER_KEY_PERMISSIONS: &str = "permissions";
+
+/// The `deny` array key inside [`POINTER_KEY_PERMISSIONS`].
 const POINTER_KEY_DENY: &str = "deny";
+
+/// JSON pointer for the `permissions.deny` array (Claude Code shape).
+///
+/// Built from [`POINTER_KEY_PERMISSIONS`] and [`POINTER_KEY_DENY`] instead of
+/// spelled out, because a pointer that restates the keys is a second source of
+/// them: a change to either key would leave the pointer addressing the old
+/// path while the fragment carries the new one. A `const` cannot join other
+/// `const` strings, so this is a function.
+fn permissions_deny_pointer() -> String {
+    format!("/{POINTER_KEY_PERMISSIONS}/{POINTER_KEY_DENY}")
+}
 
 /// Merge the edit-redirect fragment into the settings file at `path`, or strip
 /// it when `install` is false.
@@ -996,15 +1012,18 @@ pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool,
     let fragment = desired_edit_redirect_fragment();
     let deny_entries = fragment[POINTER_KEY_PERMISSIONS][POINTER_KEY_DENY]
         .as_array()
-        .expect("fragment permissions.deny is an array");
+        .unwrap_or_else(|| {
+            panic!("fragment {POINTER_KEY_PERMISSIONS}.{POINTER_KEY_DENY} is an array")
+        });
 
+    let pointer = permissions_deny_pointer();
     let mut settings = settings::read_json(path)?;
     let mut changed = false;
     for entry in deny_entries {
         let one = if install {
-            settings::ensure_array_contains(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+            settings::ensure_array_contains(&mut settings, &pointer, entry)
         } else {
-            settings::remove_from_array(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+            settings::remove_from_array(&mut settings, &pointer, entry)
         };
         changed |= one;
     }
@@ -1200,7 +1219,12 @@ pub fn init_profile(
             &mut results,
             ComponentName::new(PROFILE_SKILLS_COMPONENT),
             install_profile_skills(selector, scope, root, reporter),
-            |targets| format!("Deployed skills to {}", targets.join(", ")),
+            |targets| {
+                format!(
+                    "{VERB_DEPLOYED} {SKILL_ITEM_LABEL}s to {}",
+                    targets.join(", ")
+                )
+            },
         );
     }
 
@@ -1209,7 +1233,12 @@ pub fn init_profile(
             &mut results,
             ComponentName::new(PROFILE_AGENTS_COMPONENT),
             install_profile_agents(selector, scope, root, reporter),
-            |targets| format!("Deployed agents to {}", targets.join(", ")),
+            |targets| {
+                format!(
+                    "{VERB_DEPLOYED} {AGENT_ITEM_LABEL}s to {}",
+                    targets.join(", ")
+                )
+            },
         );
     }
 
@@ -1308,7 +1337,7 @@ pub fn deinit_profile(
             let component = ComponentName::new(PROFILE_VALIDATORS_COMPONENT);
             results.push(InitResult::ok(
                 component.as_str(),
-                format!("Removed {} validator set(s)", removed.len()),
+                format!("{VERB_REMOVED} {} validator set(s)", removed.len()),
             ));
         }
         prune_store_readme_at(store::validators_store_dir, global, root, reporter);
@@ -1423,7 +1452,7 @@ fn deinit_profile_items(
     (!names.is_empty()).then(|| {
         InitResult::ok(
             component.as_str(),
-            format!("Removed {} {kind}(s)", names.len()),
+            format!("{VERB_REMOVED} {} {kind}(s)", names.len()),
         )
     })
 }

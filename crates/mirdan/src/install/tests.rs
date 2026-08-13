@@ -2371,6 +2371,32 @@ fn test_safe_dir_name_rejects_traversal_and_accepts_nested() {
     );
 }
 
+/// The two temp-directory error helpers each name the directory that actually
+/// failed.
+///
+/// Staging creates a temp directory and then one directory per item inside it.
+/// These are two different failures: the second happens only after the first
+/// succeeded, so reporting it as "failed to create temp dir" names a directory
+/// that was created. [`temp_subdir_error`] takes the noun, so no call site can
+/// report a subdirectory failure without saying which directory it was.
+#[test]
+fn test_temp_dir_errors_name_the_directory_that_failed() {
+    let denied = || std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+
+    assert_eq!(
+        temp_dir_error(denied()).to_string(),
+        "validation error: failed to create temp dir: denied"
+    );
+    assert_eq!(
+        temp_subdir_error("item", denied()).to_string(),
+        "validation error: failed to create temp item dir: denied"
+    );
+    assert_eq!(
+        temp_subdir_error("skill", denied()).to_string(),
+        "validation error: failed to create temp skill dir: denied"
+    );
+}
+
 /// A `..`-carrying skill name must not escape the skill store: the uninstall
 /// rejects it with a Validation error and the sibling directory survives.
 #[test]

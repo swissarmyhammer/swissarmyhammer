@@ -73,8 +73,24 @@ fn safe_dir_name(name: &str) -> Result<String, RegistryError> {
 /// site fails in the same way. The message is written here one time, so a
 /// change to the wording reaches every site. This is the same shape as the
 /// `not_found_error` helper of [`uninstall`].
+///
+/// Use [`temp_subdir_error`] for a directory created *inside* the temp
+/// directory. That failure happens only after this one has already succeeded,
+/// so reporting it with this message names a directory that was created.
 pub(crate) fn temp_dir_error(e: std::io::Error) -> RegistryError {
     RegistryError::Validation(format!("failed to create temp dir: {e}"))
+}
+
+/// Build the standard `Validation` error for a directory inside a temp
+/// directory that could not be created, naming it with `what`.
+///
+/// Staging creates the temp directory and then one directory per staged item
+/// inside it. `what` is the noun that directory holds (`skill`, `item`), so the
+/// message stays true of the directory that actually failed. Taking the noun as
+/// an argument is what keeps the two failures apart: a call site cannot report
+/// a subdirectory failure without saying which directory it was.
+pub(crate) fn temp_subdir_error(what: &str, e: std::io::Error) -> RegistryError {
+    RegistryError::Validation(format!("failed to create temp {what} dir: {e}"))
 }
 
 /// Resolve a project-scope relative path against an explicit `root`.

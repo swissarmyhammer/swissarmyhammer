@@ -4,6 +4,9 @@ use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope};
 use swissarmyhammer_common::reporter::InitReporter;
 
 use super::applier::APPLIER_COMPONENT;
+use super::profile::{
+    PROFILE_AGENTS_COMPONENT, PROFILE_SKILLS_COMPONENT, PROFILE_VALIDATORS_COMPONENT,
+};
 use super::*;
 use serial_test::serial;
 use swissarmyhammer_common::reporter::NullReporter;
@@ -421,6 +424,43 @@ fn with_registry_helpers_aggregate_profile_then_registry() {
     );
 }
 
+/// `init_profile` reports each builtin family with the deploy verb, the family
+/// it deployed, and the agents it deployed to.
+///
+/// These are the install counterparts of the teardown rows below, and nothing
+/// else in the suite reads either message, so a change to the deploy verb or to
+/// the family named in it is invisible without this test.
+#[test]
+#[serial]
+fn init_profile_reports_each_family_deployed_to_its_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&project).unwrap();
+    let config_path = write_profile_agents_config(&project);
+    let _mirdan = MirdanConfigGuard::set(&config_path);
+
+    let profile = sample_profile();
+    let reporter = NullReporter;
+
+    let results = init_profile(&profile, InitScope::Project, None, &reporter);
+    let message_of = |component: &str| {
+        results
+            .iter()
+            .find(|result| result.name == component)
+            .unwrap_or_else(|| panic!("{component} result must be present: {results:?}"))
+            .message
+            .clone()
+    };
+    assert_eq!(
+        message_of(PROFILE_SKILLS_COMPONENT),
+        "Deployed skills to fake-agent"
+    );
+    assert_eq!(
+        message_of(PROFILE_AGENTS_COMPONENT),
+        "Deployed agents to fake-agent"
+    );
+}
+
 /// `deinit_profile` reports each builtin family under its own component name
 /// and its own item-kind label: the skill teardown under `profile-skills`
 /// naming `skill`, the agent teardown under `profile-agents` naming `agent`.
@@ -450,8 +490,8 @@ fn deinit_profile_reports_each_family_under_its_own_component_and_kind() {
             .message
             .clone()
     };
-    assert_eq!(message_of("profile-skills"), "Removed 1 skill(s)");
-    assert_eq!(message_of("profile-agents"), "Removed 1 agent(s)");
+    assert_eq!(message_of(PROFILE_SKILLS_COMPONENT), "Removed 1 skill(s)");
+    assert_eq!(message_of(PROFILE_AGENTS_COMPONENT), "Removed 1 agent(s)");
 }
 
 /// The root-explicit MCP applier reports its own verb: `Registered` when
@@ -510,9 +550,9 @@ fn deinit_profile_reports_validators_under_the_validators_component() {
     assert!(
         results
             .iter()
-            .any(|result| result.name == "profile-validators"
+            .any(|result| result.name == PROFILE_VALIDATORS_COMPONENT
                 && result.message == "Removed 1 validator set(s)"),
-        "validator teardown must report under profile-validators: {results:?}"
+        "validator teardown must report under {PROFILE_VALIDATORS_COMPONENT}: {results:?}"
     );
 }
 
