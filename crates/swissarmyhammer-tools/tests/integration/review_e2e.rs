@@ -359,3 +359,103 @@ async fn review_e2e_report_lands_on_a_kanban_task_in_the_dated_gfm_format() {
         "refuted findings must not land on the task: {stored}"
     );
 }
+
+/// The `set/rule` attribution on one checklist item — the second backtick span
+/// of `` - [ ] `file:line` `set/rule` — claim ``.
+///
+/// Reads the rendered item rather than the engine's structs on purpose: the
+/// item text IS what an implementer picking up the card gets, so this is the
+/// same parse a reader performs by eye.
+fn attribution_of(item: &str) -> &str {
+    item.split('`')
+        .skip(1)
+        .step_by(2)
+        .nth(1)
+        .unwrap_or_else(|| panic!("a checklist item must carry a second code span: {item}"))
+}
+
+/// Attribution write-path contract: EVERY finding a review writes onto a kanban
+/// task names the validator set and the rule that produced it, and both names
+/// exist in the roster the run loaded.
+///
+/// This is the gap the checklist used to leave open. An item naming only a
+/// `file:line` tells an implementer nothing about which rule to read — neither
+/// to fix the finding nor to judge whether the rule measures the right thing —
+/// so the rule had to be inferred from the claim's wording and hunted for in the
+/// validator store. Naming the pair turns that hunt into opening one file, and
+/// checking the names against the real loaded roster is what keeps them
+/// openable: a spelling the roster does not carry is not a document anyone can
+/// find.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_e2e_every_task_finding_names_a_roster_set_and_rule() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    plant_diff(&repo);
+    seed_on_disk_index(repo.path());
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let parsed = run_review_op(&repo, working_args()).await;
+    let markdown = parsed["markdown"]
+        .as_str()
+        .expect("markdown string")
+        .to_string();
+
+    // Every checklist item must come from a real validator, so no file may have
+    // dropped out of scope: an over-cap skip is the engine's own finding, and it
+    // is attributed to the engine rather than to any loaded set.
+    assert_eq!(
+        parsed["counts"]["skipped"],
+        json!(0),
+        "precondition: every finding comes from a loaded validator: {parsed}"
+    );
+
+    // Write the report onto a real file-backed board, exactly as the review
+    // skill does, and read back what an implementer would open.
+    let ctx = KanbanContext::new(repo.path().join(".kanban"));
+    InitBoard::new("Review E2E")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .expect("init board");
+    let added = AddTask::new("Review of working")
+        .with_description(format!("Scope: working\n\n{markdown}"))
+        .execute(&ctx)
+        .await
+        .into_result()
+        .expect("add tracking task");
+    let task = GetTask::new(added["id"].as_str().expect("new task id").to_string())
+        .execute(&ctx)
+        .await
+        .into_result()
+        .expect("get tracking task");
+    let stored = task["description"].as_str().expect("task description");
+
+    // The roster the run itself loaded — same call, same workspace root.
+    let loader =
+        swissarmyhammer_validators::load_rules(Some(repo.path())).expect("load the roster");
+
+    let items: Vec<&str> = stored
+        .lines()
+        .filter(|line| line.starts_with("- [ ] "))
+        .collect();
+    assert!(
+        !items.is_empty(),
+        "precondition: the task carries findings to attribute: {stored}"
+    );
+
+    for item in items {
+        let attribution = attribution_of(item);
+        let (set, rule) = attribution
+            .split_once('/')
+            .unwrap_or_else(|| panic!("an item must name `set/rule`: {item}"));
+        let ruleset = loader
+            .get_ruleset(set)
+            .unwrap_or_else(|| panic!("`{set}` must be a loaded validator set: {item}"));
+        assert!(
+            ruleset.rules.iter().any(|loaded| loaded.name == rule),
+            "`{rule}` must be a rule of the `{set}` set, so the reader can open it: {item}"
+        );
+    }
+}

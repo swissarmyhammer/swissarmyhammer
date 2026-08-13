@@ -635,6 +635,7 @@ fn plan_fan_out(
             plan.push(ValidatorTask {
                 validator: task_validator,
                 ruleset: task_ruleset,
+                roster: ruleset.rules.iter().map(|rule| rule.name.clone()).collect(),
             });
         }
     }
@@ -754,6 +755,7 @@ async fn collect_fan_out(
             change_purpose: work.change_purpose(),
             validator: &task.validator,
             ruleset: &task.ruleset,
+            roster: &task.roster,
             files: &files,
         };
         let name = ctx.name();
@@ -807,6 +809,11 @@ async fn collect_fan_out(
 struct ValidatorTask {
     validator: ValidatorWork,
     ruleset: RuleSet,
+    /// Every rule name the validator's loaded set carries, tool and superseded
+    /// rules included — the roster [`resolve_rule`] pins a cited name to. Wider
+    /// than `ruleset.rules` on purpose: a rule a healthy tool rule superseded
+    /// left the shard but is still a real rule document a reader can open.
+    roster: Vec<String>,
 }
 
 /// A submitted [`ValidatorTask`]: its context plus the in-flight receiver.
@@ -833,6 +840,9 @@ struct TaskContext<'a> {
     validator: &'a ValidatorWork,
     /// The task's rule set, already filtered of tool and suppressed rules.
     ruleset: &'a RuleSet,
+    /// Every rule name the validator's loaded set carries — see
+    /// [`ValidatorTask::roster`].
+    roster: &'a [String],
     /// The validator's files, as every log line and progress event names them.
     files: &'a [String],
 }
@@ -1193,7 +1203,12 @@ fn collect_task(
 /// at all, which is exactly what earns it a re-ask.
 fn parse_task_response(content: &str, ctx: &TaskContext<'_>) -> Option<Vec<Finding>> {
     match parse_findings_repaired(content) {
-        Ok(parsed) => Some(tag_findings(parsed, ctx.name())),
+        Ok(parsed) => Some(tag_findings(
+            parsed,
+            ctx.name(),
+            &ctx.ruleset.rules,
+            ctx.roster,
+        )),
         Err(err) => {
             tracing::warn!(
                 validator = %ctx.name(),
@@ -1206,13 +1221,125 @@ fn parse_task_response(content: &str, ctx: &TaskContext<'_>) -> Option<Vec<Findi
     }
 }
 
-/// Tag every finding with its source `validator` name, overriding whatever the
-/// agent emitted so the validator attribution is always authoritative.
-fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
+/// Tag every finding with its authoritative `validator`/`rule` attribution,
+/// overriding whatever the agent emitted.
+///
+/// Neither half of the attribution is the agent's to decide. The validator is
+/// the shard's, flatly. The rule is whatever [`resolve_rule`] can pin the
+/// agent's citation to in `roster` — the validator's whole loaded rule list —
+/// so a report never names a rule the roster does not carry. `shown` is the
+/// shard's own prompt-rule list, the closed set the agent actually read.
+fn tag_findings(
+    mut findings: Vec<Finding>,
+    validator: &str,
+    shown: &[Rule],
+    roster: &[String],
+) -> Vec<Finding> {
     for finding in &mut findings {
         finding.validator = validator.to_string();
+        let resolved = resolve_rule(finding.rule.as_deref(), shown, roster);
+        if resolved.is_none() {
+            tracing::warn!(
+                validator = %validator,
+                cited = ?finding.rule,
+                file = %finding.file,
+                "fleet: no roster rule matches the finding's cited rule; reporting it unattributed"
+            );
+        }
+        finding.rule = resolved;
     }
     findings
+}
+
+/// Pin the rule name an agent cited to a rule the validator really carries.
+///
+/// An implementer acting on a finding has to open the rule that produced it, so
+/// the name in the report must be a roster name — never the spelling a model
+/// happened to invent. The rungs, each reached only when the one above returns
+/// nothing:
+///
+/// 1. `cited` already names a roster rule.
+/// 2. `cited` names one after [`normalized_rule_name`] flattens case and
+///    separators (a model writes "Magic Numbers" for `magic-numbers`).
+/// 3. Exactly one roster name wraps, or is wrapped by, the normalized `cited`
+///    (a model writes "no-magic-numbers" for `magic-numbers`). Several
+///    candidates means the citation does not identify a rule, so nothing is
+///    returned rather than one picked at random.
+/// 4. `shown` held exactly one rule, so that rule is the only one the agent
+///    could have fired — certainty, not inference.
+///
+/// `None` means the finding cannot be attributed to one rule; it is still
+/// reported, marked [`UNATTRIBUTED_RULE`](crate::review::types::UNATTRIBUTED_RULE).
+/// Dropping a real defect over missing metadata would be worse: the whole batch
+/// once degraded to zero findings for exactly that kind of strictness.
+fn resolve_rule(cited: Option<&str>, shown: &[Rule], roster: &[String]) -> Option<String> {
+    let sole_shown = || match shown {
+        [only] => Some(only.name.clone()),
+        _ => None,
+    };
+    let Some(cited) = cited.map(str::trim).filter(|cited| !cited.is_empty()) else {
+        return sole_shown();
+    };
+
+    if let Some(exact) = roster.iter().find(|name| name.as_str() == cited) {
+        return Some(exact.clone());
+    }
+
+    let normalized = normalized_rule_name(cited);
+    if let Some(name) = roster
+        .iter()
+        .find(|name| normalized_rule_name(name) == normalized)
+    {
+        return Some(name.clone());
+    }
+
+    let cited_words = rule_name_words(&normalized);
+    let mut wrapping = roster.iter().filter(|name| {
+        let normalized_name = normalized_rule_name(name);
+        let words = rule_name_words(&normalized_name);
+        contains_run(&cited_words, &words) || contains_run(&words, &cited_words)
+    });
+    match (wrapping.next(), wrapping.next()) {
+        (Some(only), None) => Some(only.clone()),
+        _ => sole_shown(),
+    }
+}
+
+/// Split a [`normalized_rule_name`] into its `-` separated words.
+fn rule_name_words(normalized: &str) -> Vec<&str> {
+    normalized
+        .split('-')
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// Whether `needle`'s words appear in `haystack` as one unbroken run.
+///
+/// Whole words, never raw substrings: `r` sits inside `numbers` as text but
+/// names no part of `magic-numbers`, and attributing a finding to a rule on
+/// that evidence is a guess. `magic-numbers` inside `no-magic-numbers` is a
+/// real citation of the same rule.
+fn contains_run(haystack: &[&str], needle: &[&str]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+/// Flatten a rule name to its comparable form: lower case, every run of
+/// non-alphanumeric characters collapsed to one `-`, and no leading or trailing
+/// `-`. `Magic Numbers`, `magic_numbers`, and `magic-numbers` all reduce to the
+/// same string.
+fn normalized_rule_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch.is_alphanumeric() {
+            true => out.extend(ch.to_lowercase()),
+            false if !out.ends_with('-') => out.push('-'),
+            false => {}
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 /// The sentence the prime turn ends with: an explicit completed-turn handoff so
@@ -1282,7 +1409,9 @@ Each finding is one object with these fields:
 
 - `file`: the path of the file the finding is about.
 - `line`: the 1-based line number the finding points at.
-- `rule`: which rule of this validator fired.
+- `rule`: which rule of this validator fired — copy one of the `### Rule:` \
+names listed above, spelled exactly as it appears there. A name that is not \
+one of them cannot be traced back to a rule.
 - `claim`: what is wrong AND why it matters — one concern per finding.
 - `evidence`: the proof the issue is real — cite the injected probe result \
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.

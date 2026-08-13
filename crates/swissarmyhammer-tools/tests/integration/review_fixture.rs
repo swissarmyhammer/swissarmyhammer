@@ -279,52 +279,47 @@ fn verify(claim: &str, verdict: &str) -> Rule {
     )
 }
 
+/// One planted finding as the scripted agent emits it.
+///
+/// `rule` is spelled exactly as the emitting validator's loaded roster spells
+/// it, because that is what a real agent echoes: the fan-out prompt lists the
+/// validator's rules by name and the output contract asks which one fired.
+pub struct Planted<'a> {
+    /// The file the finding is about.
+    pub file: &'a str,
+    /// The 1-based line the finding points at.
+    pub line: u32,
+    /// The severity the agent labels it with — parsed and dropped, since review
+    /// is binary pass/fail.
+    pub severity: &'a str,
+    /// The unique claim string, the key the verify rules match on.
+    pub claim: &'a str,
+    /// The rule of the emitting validator that produced it.
+    pub rule: &'a str,
+}
+
 /// One finding JSON object as an agent would emit it. `validator` is overwritten
 /// by the engine, but must be present to deserialize. Built through `serde_json`
-/// so any `"`/`\` in an interpolated field is escaped correctly — the single
-/// object template shared by [`finding`] and [`two_findings`].
-fn finding_obj(file: &str, line: u32, severity: &str, claim: &str) -> serde_json::Value {
+/// so any `"`/`\` in an interpolated field is escaped correctly.
+fn finding_obj(planted: &Planted<'_>) -> serde_json::Value {
     json!({
-        "file": file,
-        "line": line,
+        "file": planted.file,
+        "line": planted.line,
         "validator": "agent-tagged",
-        "rule": "r",
-        "severity": severity,
-        "claim": claim,
+        "rule": planted.rule,
+        "severity": planted.severity,
+        "claim": planted.claim,
         "evidence": "per probe evidence",
         "suggestion": "fix it",
     })
 }
 
-/// A findings JSON array (fenced) with one finding.
-fn finding(file: &str, line: u32, severity: &str, claim: &str) -> String {
-    let array = json!([finding_obj(file, line, severity, claim)]);
-    format!("```json\n{array}\n```")
-}
-
-/// Two findings in one array (for a validator that flags two files in one batch).
-fn two_findings(a: (&str, u32, &str, &str), b: (&str, u32, &str, &str)) -> String {
-    let array = json!([
-        finding_obj(a.0, a.1, a.2, a.3),
-        finding_obj(b.0, b.1, b.2, b.3),
-    ]);
-    format!("```json\n{array}\n```")
-}
-
-/// Three findings in one array — for `code-hygiene`, which now bundles the
-/// data-driven and dead-code rules into one validator, so its one fan-out task
-/// (one prompt, one response) must emit the data-driven finding AND both
-/// dead-code findings (the real orphan plus the guard red herring) together.
-fn three_findings(
-    a: (&str, u32, &str, &str),
-    b: (&str, u32, &str, &str),
-    c: (&str, u32, &str, &str),
-) -> String {
-    let array = json!([
-        finding_obj(a.0, a.1, a.2, a.3),
-        finding_obj(b.0, b.1, b.2, b.3),
-        finding_obj(c.0, c.1, c.2, c.3),
-    ]);
+/// A fenced findings JSON array carrying every planted finding one validator's
+/// single fan-out task emits — one for most validators, several for the ones
+/// that flag more than one file (or rule) in the same batch.
+fn findings(planted: &[Planted<'_>]) -> String {
+    let array: Vec<serde_json::Value> = planted.iter().map(finding_obj).collect();
+    let array = serde_json::Value::Array(array);
     format!("```json\n{array}\n```")
 }
 
@@ -375,36 +370,84 @@ fn fanout_rules() -> Vec<Rule> {
         fanout(
             "duplication",
             FILE_PAYMENTS,
-            &finding(FILE_PAYMENTS, 8, "blocker", CLAIM_DUP),
+            &findings(&[Planted {
+                file: FILE_PAYMENTS,
+                line: 8,
+                severity: "blocker",
+                claim: CLAIM_DUP,
+                rule: "duplication",
+            }]),
         ),
         fanout(
             "reuse",
             FILE_REUSE,
-            &finding(FILE_REUSE, 3, "warning", CLAIM_REUSE),
+            &findings(&[Planted {
+                file: FILE_REUSE,
+                line: 3,
+                severity: "warning",
+                claim: CLAIM_REUSE,
+                rule: "reuse",
+            }]),
         ),
         fanout(
             "code-security",
             FILE_PAYMENTS,
-            &finding(FILE_PAYMENTS, 5, "blocker", CLAIM_SECRET),
+            &findings(&[Planted {
+                file: FILE_PAYMENTS,
+                line: 5,
+                severity: "blocker",
+                claim: CLAIM_SECRET,
+                rule: "no-secrets",
+            }]),
         ),
         fanout(
             "code-hygiene",
             FILE_PAYMENTS,
-            &three_findings(
-                (FILE_PAYMENTS, 16, "warning", CLAIM_DATA),
-                (FILE_ORPHAN, 3, "blocker", CLAIM_DEAD_ORPHAN),
-                (FILE_LIVE, 3, "blocker", CLAIM_GUARD_HERRING),
-            ),
+            &findings(&[
+                Planted {
+                    file: FILE_PAYMENTS,
+                    line: 16,
+                    severity: "warning",
+                    claim: CLAIM_DATA,
+                    rule: "data-driven",
+                },
+                Planted {
+                    file: FILE_ORPHAN,
+                    line: 3,
+                    severity: "blocker",
+                    claim: CLAIM_DEAD_ORPHAN,
+                    rule: "dead-code",
+                },
+                Planted {
+                    file: FILE_LIVE,
+                    line: 3,
+                    severity: "blocker",
+                    claim: CLAIM_GUARD_HERRING,
+                    rule: "dead-code",
+                },
+            ]),
         ),
         // rust flags a real idiom (item 8) and a correct-but-looks-buggy red
         // herring (item 6) that the verifier will refute.
         fanout(
             "rust",
             FILE_PAYMENTS,
-            &two_findings(
-                (FILE_PAYMENTS, 16, "warning", CLAIM_RUST_IDIOM),
-                (FILE_PAYMENTS, 22, "warning", CLAIM_RED_HERRING),
-            ),
+            &findings(&[
+                Planted {
+                    file: FILE_PAYMENTS,
+                    line: 16,
+                    severity: "warning",
+                    claim: CLAIM_RUST_IDIOM,
+                    rule: "type-safety",
+                },
+                Planted {
+                    file: FILE_PAYMENTS,
+                    line: 22,
+                    severity: "warning",
+                    claim: CLAIM_RED_HERRING,
+                    rule: "error-handling",
+                },
+            ]),
         ),
     ]
 }
