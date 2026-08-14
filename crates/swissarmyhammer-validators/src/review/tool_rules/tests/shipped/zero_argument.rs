@@ -189,9 +189,9 @@ const SHELL_LINE_JOIN: char = '\\';
 /// How many shipped rules state `scope: files`.
 ///
 /// The count is the assertion that a rule added later reaches this guard. A
-/// fifteenth `files`-scope rule breaks it, and the author then reads the
+/// sixteenth `files`-scope rule breaks it, and the author then reads the
 /// contract before the rule ships.
-pub(super) const FILES_SCOPE_RULE_COUNT: usize = 14;
+pub(super) const FILES_SCOPE_RULE_COUNT: usize = 15;
 
 /// What the rules of this roster have in common, for the failure message.
 const FILES_SCOPE_ROSTER: &str = "state `scope: files`";
@@ -772,9 +772,9 @@ pub(super) fn script_holds_the_three_lines(script: &str) -> bool {
 ///
 /// The guard stands on the script rather than on the tool, because each tool
 /// answers an empty argument list its own way and a rule author cannot see
-/// which way from the rule. The one shape all 14 rules write is the shape
-/// this guard reads. Measured over the 14 shipped scripts: 7 write the guard
-/// on the first line, and 7 write it under `set -e` alone.
+/// which way from the rule. The one shape all 15 rules write is the shape
+/// this guard reads. Measured over the 15 shipped scripts: 7 write the guard
+/// on the first line, and 8 write it under `set -e` alone.
 #[test]
 fn each_shipped_files_scope_script_answers_a_run_that_gives_it_no_file() {
     let loader = builtin_loader();

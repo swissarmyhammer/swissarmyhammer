@@ -272,6 +272,8 @@ mod tests {
         "complexity-go.pass.go.tmpl",
         "function-length-go.fail.go.tmpl",
         "function-length-go.pass.go.tmpl",
+        "stuttering-name-go.fail.go.tmpl",
+        "stuttering-name-go.pass.go.tmpl",
     ];
 
     /// The shipped tool rules' fixtures reach the store, so doctor can prove

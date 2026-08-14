@@ -124,6 +124,28 @@ const SHIPPED_MISSING_DOCS_RULES: &[(&str, &str, &[&str])] = &[
     ("flutter", DART_MISSING_DOCS_RULE, SUPERSEDES_MISSING_DOCS),
 ];
 
+/// The shipped stuttering-name tool rule for Go. It runs the same revive
+/// `exported` rule `missing-docs-go` runs and selects the other half of it:
+/// the `naming` category, which is the exported name that opens with the name
+/// of its own package. Seven more acceptance tests drive it end to end.
+const GO_STUTTERING_NAME_RULE: &str = "stuttering-name-go";
+
+/// The name [`verify_shipped_tool_rules_pass_fixtures`] puts in its failure
+/// messages for this group. Every group that replaces a prompt rule is named
+/// for that rule; this one replaces none, so it is named for its own concern.
+const STUTTERING_NAME_RULE_KIND: &str = "stuttering-name";
+
+/// Every shipped stuttering-name tool rule, with the project type it serves
+/// and the prompt rules it supersedes.
+///
+/// It supersedes nothing. No shipped prompt rule reads a Go NAME — the naming
+/// rules that ship are `swift/naming-clarity`, `swift/doc-parameter-naming`
+/// and `js-ts/naming-and-style`, and none of the three reads a `.go` file — so
+/// this group replaces no rule and degrades to no rule. A machine without
+/// `revive` gets no answer to the question rather than a worse one.
+const SHIPPED_STUTTERING_NAME_RULES: &[(&str, &str, &[&str])] =
+    &[("go", GO_STUTTERING_NAME_RULE, SUPERSEDES_NOTHING)];
+
 /// The prompt rule every shipped dead-code tool rule supersedes.
 const DEAD_CODE_PROMPT_RULE: &str = "dead-code";
 

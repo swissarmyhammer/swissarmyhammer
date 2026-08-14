@@ -78,14 +78,18 @@ not a missing doc comment, so this rule does not own that defect. The config
 asks revive for the one check the rule owns. A filter on the category would
 guard a finding this config never makes, and no test could measure it.
 
-**No shipped rule owns a stuttering Go name today.** Measured: 25 shipped rules
-match a `.go` file, and no one of them reports a NAME as the defect. The naming
-rules that ship — `swift/naming-clarity`, `swift/doc-parameter-naming` and
+**`stuttering-name-go` owns the stuttering Go name.** It runs the same revive
+`exported` rule, states no argument at all, and selects the `naming` category
+in its filter, so the two rules together are revive's whole `exported` output
+with no finding owned two times and none dropped. Measured: 26 shipped rules
+match a `.go` file, and `stuttering-name-go` is the one of them that reports a
+NAME as the defect. The naming rules of the other languages —
+`swift/naming-clarity`, `swift/doc-parameter-naming` and
 `js-ts/naming-and-style` — read no `.go` file. The acceptance test
 `the_shipped_rules_that_read_a_go_file_stay_the_stated_list` holds that list of
-25, so a rule added later fails the test and the reader then decides. Card
-^6jzgb8v carries the gap. The `naming` category above is how a Go naming rule
-selects the finding.
+26, so a rule added later fails the test and the reader then decides, and
+`the_shipped_go_rules_that_run_revives_exported_rule_split_its_findings` drives
+both shipped scripts over one file and holds the split.
 
 ## A doc comment must open with the item's own name
 

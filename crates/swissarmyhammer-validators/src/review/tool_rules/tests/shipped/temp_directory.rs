@@ -30,10 +30,10 @@ const TEMP_DIRECTORY_TOOL: &str = "mktemp";
 
 /// How many shipped rules make a temporary directory.
 ///
-/// The count is the assertion that a rule added later reaches this guard. An
-/// eighteenth such rule breaks it, and the author then reads the contract
+/// The count is the assertion that a rule added later reaches this guard. A
+/// nineteenth such rule breaks it, and the author then reads the contract
 /// before the rule ships.
-const TEMP_DIRECTORY_RULE_COUNT: usize = 17;
+const TEMP_DIRECTORY_RULE_COUNT: usize = 18;
 
 /// What the rules of this roster have in common, for the failure message.
 const TEMP_DIRECTORY_ROSTER: &str = "make a temporary directory";

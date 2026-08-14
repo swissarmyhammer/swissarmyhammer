@@ -396,13 +396,15 @@ const GO_PROJECT_TYPE: &str = "go";
 /// set-wide rule reads every language.
 ///
 /// The list is here to hold one sentence of the `missing-docs-go` rule body:
-/// no shipped rule owns a stuttering Go NAME. `missing-docs-go` turns revive's
-/// stuttering check off, and no other rule reads a Go name, so the defect has
-/// no owner today. Card ^6jzgb8v carries the gap.
+/// `code-hygiene/stuttering-name-go` owns a repetitive Go NAME, and it is the
+/// one rule of this list that does. `missing-docs-go` turns revive's
+/// repetitive-name check off with `disableStutteringCheck` and owns the
+/// `comments` half of the same revive rule; `stuttering-name-go` runs the same
+/// rule and selects the `naming` half.
 ///
 /// A rule added to any set above fails this test. Read the new rule then: if
-/// it owns a Go name, correct the `missing-docs-go` rule body and card
-/// ^6jzgb8v with it. If it does not, add its name here.
+/// it owns a Go name as well, correct the `missing-docs-go` rule body and the
+/// `stuttering-name-go` rule body with it. If it does not, add its name here.
 const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
     "code-hygiene/cognitive-complexity",
     "code-hygiene/complexity-go",
@@ -416,6 +418,7 @@ const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
     "code-hygiene/missing-docs",
     "code-hygiene/missing-docs-go",
     "code-hygiene/no-commented-code",
+    "code-hygiene/stuttering-name-go",
     "code-security/command-safety",
     "code-security/injection",
     "code-security/no-secrets",
@@ -434,11 +437,11 @@ const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
 /// Acceptance: the shipped rules that read a `.go` file are exactly the ones
 /// [`SHIPPED_RULES_THAT_READ_A_GO_FILE`] names.
 ///
-/// The `missing-docs-go` rule body states that no shipped rule owns a
-/// stuttering Go name. That sentence is about every rule and not about one, so
-/// only an enumeration can hold it. The enumeration runs the real matcher over
-/// a `.go` path in a Go workspace, which is the same question the review scope
-/// stage asks.
+/// The `missing-docs-go` rule body states that `stuttering-name-go` owns a
+/// repetitive Go name and that no other shipped rule reads one. That sentence
+/// is about every rule and not about one, so only an enumeration can hold it.
+/// The enumeration runs the real matcher over a `.go` path in a Go workspace,
+/// which is the same question the review scope stage asks.
 #[test]
 fn the_shipped_rules_that_read_a_go_file_stay_the_stated_list() {
     let loader = builtin_loader();
@@ -458,9 +461,9 @@ fn the_shipped_rules_that_read_a_go_file_stay_the_stated_list() {
 
     assert_eq!(
         reading, SHIPPED_RULES_THAT_READ_A_GO_FILE,
-        "the rules that read a Go file moved; a rule that owns a Go NAME makes \
-         the `missing-docs-go` rule body wrong, because that body states the \
-         stuttering name has no owner"
+        "the rules that read a Go file moved; a SECOND rule that owns a Go NAME \
+         makes the `missing-docs-go` rule body wrong, because that body states \
+         `stuttering-name-go` is the one owner of the repetitive name"
     );
 }
 

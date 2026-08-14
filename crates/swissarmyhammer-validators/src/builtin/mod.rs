@@ -288,6 +288,15 @@ mod tests {
         "magic-numbers-dart",
     ];
 
+    /// The naming tool rules `code-hygiene` carries. Each supersedes nothing:
+    /// no shipped prompt rule reads a Go NAME, so there is no prompt rule to
+    /// replace and no fallback to degrade to.
+    ///
+    /// `stuttering-name-go` runs the same revive `exported` rule
+    /// `missing-docs-go` runs and owns the other half of it — the `naming`
+    /// category, an exported name that opens with the name of its own package.
+    const CODE_HYGIENE_NAMING_TOOL_RULES: &[&str] = &["stuttering-name-go"];
+
     /// The complexity tool rules `code-hygiene` carries, each paired with the
     /// prompt rules it supersedes.
     ///
@@ -348,6 +357,7 @@ mod tests {
             .chain(CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.iter())
             .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter())
             .chain(CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.iter())
+            .chain(CODE_HYGIENE_NAMING_TOOL_RULES.iter())
             .chain(
                 CODE_HYGIENE_COMPLEXITY_TOOL_RULES
                     .iter()
@@ -359,6 +369,7 @@ mod tests {
                 + CODE_HYGIENE_MISSING_DOCS_TOOL_RULES.len()
                 + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len()
                 + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len()
+                + CODE_HYGIENE_NAMING_TOOL_RULES.len()
                 + CODE_HYGIENE_COMPLEXITY_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
@@ -386,6 +397,11 @@ mod tests {
                 CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES
                     .iter()
                     .map(|name| (name, ["magic-numbers"].as_slice())),
+            )
+            .chain(
+                CODE_HYGIENE_NAMING_TOOL_RULES
+                    .iter()
+                    .map(|name| (name, [].as_slice())),
             )
             .chain(
                 CODE_HYGIENE_COMPLEXITY_TOOL_RULES

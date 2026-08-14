@@ -1,0 +1,24 @@
+// Package fixtures holds the Go fixtures of the `stuttering-name-go` tool rule.
+//
+// This file holds one exported name of every shape revive reads as repetitive:
+// a type and a function whose next rune after the package name opens a new
+// word, and a type whose next rune is an underscore. The tool must report each
+// one. A tool upgrade that stops reporting a shape makes the doctor mark the
+// rule unusable.
+package fixtures
+
+// PlainRecord is a documented exported type that does not open with the
+// package name, so only the names below are reported.
+type PlainRecord struct{}
+
+// FixturesRecord opens with the package name, so a caller outside the package
+// writes `fixtures.FixturesRecord` and reads the word two times. The doc
+// comment changes nothing: the check reads the NAME.
+type FixturesRecord struct{}
+
+// FixturesBuild carries the same repetition on a function.
+func FixturesBuild() {}
+
+// Fixtures_Thing carries the same repetition with an underscore where the two
+// names above carry an upper-case rune. Either one opens a new word.
+type Fixtures_Thing struct{}

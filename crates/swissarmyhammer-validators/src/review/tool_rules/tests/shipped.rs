@@ -34,6 +34,7 @@ mod magic_numbers;
 mod missing_docs;
 mod missing_docs_rust;
 mod scope_roster;
+mod stuttering_name_go;
 mod temp_directory;
 mod unused_dependencies;
 mod zero_argument;
@@ -802,6 +803,52 @@ fn sorted_names(names: &[String]) -> Vec<String> {
     let mut sorted = names.to_vec();
     sorted.sort();
     sorted
+}
+
+/// Drives the shipped script of `run` `runs` times over ONE probe repository,
+/// every run released together, and answers the sorted `path:line` rows each
+/// run reported.
+///
+/// One repository is what makes the probe. A tool that takes a file lock, and a
+/// tool whose cache directory is named for the workspace, can clash only with
+/// another run standing in the same workspace, so runs in different
+/// repositories could never measure it.
+///
+/// `files` is the file list the runs are given, which [`script_args`] reads
+/// beside the SHIPPED scope: a `files`-scope rule takes the staged paths, and a
+/// `workspace`-scope rule takes [`NO_SCRIPT_FILES`] because it receives an
+/// empty list on every run.
+fn rows_of_runs_started_together(
+    run: &ShippedRun,
+    staged: &[(&str, &str)],
+    files: &[&str],
+    runs: usize,
+) -> Vec<Vec<String>> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, run.project_types, run.rule);
+    let shipped = required_shipped_tool_rule(&loader, run.rule);
+    let repo = tempfile::tempdir().expect("temp dir");
+    stage_probe_files(repo.path(), staged.iter().copied());
+    let repo_root = probe_repository_root(&repo);
+    let args = script_args(shipped.scope, files);
+    let released = std::sync::Barrier::new(runs);
+
+    std::thread::scope(|threads| {
+        let running: Vec<_> = (0..runs)
+            .map(|_| {
+                threads.spawn(|| {
+                    released.wait();
+                    let reported = run_script_findings(&shipped.script, &repo_root, &args)
+                        .expect("each run must judge the probe repository and exit 0");
+                    sorted_names(&finding_rows(&reported, &repo_root))
+                })
+            })
+            .collect();
+        running
+            .into_iter()
+            .map(|run| run.join().expect("each run of the probe must finish"))
+            .collect()
+    })
 }
 
 /// A whole probe repository, and what the shipped script of one rule must

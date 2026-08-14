@@ -344,42 +344,16 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in() {
 /// needs eight.
 const LOCK_PROBE_RUNS: usize = 8;
 
-/// Drives the shipped script [`LOCK_PROBE_RUNS`] times over ONE probe
-/// repository, every run released together, and answers the sorted
-/// `path:line` rows each run reported.
+/// The run the lock probe drives: the shipped Go function-length rule over a
+/// Go workspace.
 ///
-/// One repository is what makes the probe: the shipped script names its cache
-/// directory for the workspace path, the lock stands in that directory, and
-/// runs in different repositories can therefore never clash. Two rules of this
-/// set drive golangci-lint over one workspace, so the clash is the everyday
-/// case rather than a contrived one.
-fn rows_of_runs_started_together(staged: &[(&str, &str)]) -> Vec<Vec<String>> {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
-    let shipped = required_shipped_tool_rule(&loader, GO_FUNCTION_LENGTH_RULE);
-    let repo = tempfile::tempdir().expect("temp dir");
-    stage_probe_files(repo.path(), staged.iter().copied());
-    let repo_root = probe_repository_root(&repo);
-    let args = script_args(shipped.scope, NO_SCRIPT_FILES);
-    let released = std::sync::Barrier::new(LOCK_PROBE_RUNS);
-
-    std::thread::scope(|threads| {
-        let running: Vec<_> = (0..LOCK_PROBE_RUNS)
-            .map(|_| {
-                threads.spawn(|| {
-                    released.wait();
-                    let reported = run_script_findings(&shipped.script, &repo_root, &args)
-                        .expect("each run must judge the probe repository and exit 0");
-                    sorted_names(&finding_rows(&reported, &repo_root))
-                })
-            })
-            .collect();
-        running
-            .into_iter()
-            .map(|run| run.join().expect("each run of the probe must finish"))
-            .collect()
-    })
-}
+/// The run states no `expected`, because the probe compares the runs against
+/// each other rather than against a list this constant holds.
+const GO_FUNCTION_LENGTH_LOCK_RUN: ShippedRun = ShippedRun {
+    project_types: GO_PROJECT_TYPES,
+    rule: GO_FUNCTION_LENGTH_RULE,
+    expected: NO_FINDINGS,
+};
 
 /// Acceptance: the shipped Go function-length tool rule reports while another
 /// instance holds the lock, through the real funlen pipeline.
@@ -403,10 +377,15 @@ fn the_shipped_go_function_length_tool_rule_reports_while_another_run_holds_the_
     );
     let expected = sorted_names(&[go_expected_row(GO_SHAPES_PATH, &source, "LongProcedure")]);
 
-    let reported = rows_of_runs_started_together(&[
-        (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
-        (GO_SHAPES_PATH, &source),
-    ]);
+    let reported = rows_of_runs_started_together(
+        &GO_FUNCTION_LENGTH_LOCK_RUN,
+        &[
+            (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
+            (GO_SHAPES_PATH, &source),
+        ],
+        NO_SCRIPT_FILES,
+        LOCK_PROBE_RUNS,
+    );
 
     assert!(
         reported.iter().all(|run| *run == expected),

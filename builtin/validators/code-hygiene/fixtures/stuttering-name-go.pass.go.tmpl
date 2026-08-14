@@ -1,0 +1,54 @@
+// Package fixtures holds the Go fixtures of the `stuttering-name-go` tool rule.
+//
+// The tool must report nothing here. Each exported name either does not repeat
+// the package name, or it stands behind a carve-out revive makes for itself. A
+// tool upgrade that reports one of them makes the doctor mark the rule
+// unusable.
+package fixtures
+
+// Fixtures is exactly the package name and no longer, so a caller writes
+// `fixtures.Fixtures` and reads the word one time.
+type Fixtures struct{}
+
+// Fixturesque opens with the package name and carries a lower-case rune under
+// it, so the name opens no new word there.
+type Fixturesque struct{}
+
+// FixturesLimit repeats the package name on a CONSTANT. revive reads the name
+// of a type and of a function alone, so a constant reports nothing.
+const FixturesLimit = 1
+
+// FixturesValue repeats the package name on a VARIABLE, and it reports nothing
+// for the reason the constant reports nothing.
+var FixturesValue = 1
+
+// PlainHolder is the receiver the method below stands on.
+type PlainHolder struct{}
+
+// FixturesMethod repeats the package name on a METHOD. A caller writes a
+// method name under the value it calls it on and never under the package, so
+// revive reads no method name.
+func (p PlainHolder) FixturesMethod() {}
+
+// fixturesHelper repeats the package name and is unexported, so no caller
+// outside the package can write it at all.
+func fixturesHelper() int { return FixturesLimit }
+
+// PlainBuild calls the unexported name above, and it opens with no package
+// name of its own.
+func PlainBuild() int { return fixturesHelper() }
+
+// The block below holds the inline suppression the rule body names. It is the
+// one way to exempt an exported name, and the name it stands above repeats the
+// package name in the shape the failing fixture reports.
+
+//revive:disable-next-line:exported
+type FixturesSuppressed struct{}
+
+// The declaration below carries NO doc comment, and a blank line stands under
+// this prose so that this prose is not its doc comment. revive reports it
+// under the `comments` category, which `missing-docs-go` owns and this rule's
+// filter drops. A filter that stopped reading the category would report it
+// here and fail this fixture.
+
+type Undocumented struct{}

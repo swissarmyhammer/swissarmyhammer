@@ -43,12 +43,12 @@ use super::zero_argument::{
 
 /// How many shipped rules carry a `run` script.
 ///
-/// Measured over `builtin/validators/*/rules/*.md`: 25 rules carry a `run`
-/// script, 14 state `scope: files` and 11 state `scope: workspace`. The count
+/// Measured over `builtin/validators/*/rules/*.md`: 26 rules carry a `run`
+/// script, 15 state `scope: files` and 11 state `scope: workspace`. The count
 /// is the assertion that a rule added later reaches one of the two rosters. A
-/// twenty-sixth rule breaks it, and the author then reads the contract of the
-/// scope the rule states.
-const SHIPPED_TOOL_RULE_COUNT: usize = 25;
+/// twenty-seventh rule breaks it, and the author then reads the contract of
+/// the scope the rule states.
+const SHIPPED_TOOL_RULE_COUNT: usize = 26;
 
 /// How many shipped rules state `scope: workspace`.
 ///

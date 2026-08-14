@@ -3,8 +3,8 @@ name: code-hygiene
 description: >-
   Flag hygiene defects in changed source code — commented-out code, overlong
   or overly complex functions, missing documentation on public APIs,
-  hardcoded values that should be data, and dead code with no inbound
-  callers.
+  hardcoded values that should be data, dead code with no inbound callers,
+  and an exported Go name that repeats the name of its own package.
 metadata:
   version: "{{version}}"
 match:
@@ -287,6 +287,62 @@ suppression the tool reads.
   `manifests` matches `Cargo.toml`, so a machete finding lands on a file the
   engine keeps, and the rule runs the default mode rather than the
   `--with-metadata` mode the misreporting half of the verdict measured.
+
+## Naming: one tool rule, and no prompt rule behind it
+
+`stuttering-name-go` reports an exported Go type or function whose name opens
+with the name of its own package, because a caller outside the package then
+writes the word two times — `staged.StagedType`.
+
+It supersedes nothing, and it is the second rule of this set to do that after
+the `manifests` set's `unused-dependencies-rust`. No shipped prompt rule reads a
+Go NAME: the naming rules that ship are `swift/naming-clarity`,
+`swift/doc-parameter-naming` and `js-ts/naming-and-style`, and none of the three
+reads a `.go` file. A machine without `revive` therefore gets no answer to this
+question rather than a worse one.
+
+| Rule | Tool | Inline suppression |
+|---|---|---|
+| `stuttering-name-go` | `revive` `exported`, the `naming` category | `//revive:disable-next-line:exported` |
+
+`missing-docs-go` runs the SAME revive rule and owns the other half of it. The
+`exported` rule answers two kinds of finding under one rule name and tells them
+apart by CATEGORY: a documentation finding carries `comments` and a repetitive
+name carries `naming`. `missing-docs-go` states `disableStutteringCheck` and
+owns the `comments` half; `stuttering-name-go` states no argument and selects
+the `naming` half. The two together are revive's whole `exported` output with no
+finding owned two times and none dropped, and the acceptance test
+`the_shipped_go_rules_that_run_revives_exported_rule_split_its_findings` drives
+both shipped scripts over one file and holds that split.
+
+### The naming survey
+
+The whole Go lint space was read before the rule was written, and each candidate
+was RUN over one probe file. `revive`'s `exported` rule holds the check alone.
+
+- **revive 1.15.0**: 12 rules write the `naming` category — `confusing-naming`,
+  `confusing-results`, `epoch-naming`, `error-naming`, `exported`,
+  `import-shadowing`, `package-directory-mismatch`, `package-naming`,
+  `receiver-naming`, `unexported-naming`, `use-any` and `var-naming`. Over a
+  probe holding a documented repetitive type, an undocumented repetitive type,
+  an underscore name, a name equal to the package name, a name whose next rune
+  is lower case, a repetitive constant, variable, function and method, and one
+  unexported type: `exported` reports the four repetitive names, `var-naming`
+  reports the UNDERSCORE alone, and the other ten are silent.
+- **staticcheck 2025.1.1**, `-checks all` over the same probe: `ST1000`,
+  `ST1003` on the same underscore, and `U1000` on the unexported type.
+  staticcheck names more than `exported` does — `ST1003` reads an underscore and
+  an initialism, and `ST1006`, `ST1011`, `ST1012` and `ST1016` each read a name
+  of their own — and none of them reads a name against its package.
+- **golangci-lint 2.12.2** with `default: all`, which is 115 linters: only
+  `revive` reports the repetition, and `unused` reports the dead type.
+
+`stuttering-name-go` drives revive DIRECTLY rather than through golangci-lint,
+so it needs neither the `GOLANGCI_LINT_CACHE` directory nor the
+`allow-serial-runners` key that `magic-numbers-go` and `function-length-go`
+carry. Both halves are measured in the rule file: eight runs started together in
+one workspace each reported every finding, and a module of 400 packages took the
+same time cold and warm at two different paths.
 
 ## Tools measured and rejected
 
