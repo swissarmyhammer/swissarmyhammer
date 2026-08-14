@@ -293,5 +293,8 @@ fn project_onto_files(
         // `run_review` reads them from there. Copying them onto every batch
         // would report the same excluded file once for each batch.
         excluded: Vec::new(),
+        // Carried verbatim: a batch is a subset of the run's files, never a
+        // different question, so every batch REVIEWS what the run's op named.
+        subject: work.subject,
     }
 }

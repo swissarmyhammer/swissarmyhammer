@@ -171,7 +171,7 @@ fn a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows() {
         SUBJECT_PATH,
         SUBJECT_SOURCE_LINE.repeat(SUBJECT_SOURCE_LINES),
     );
-    let rendered = rendered_file_block_bytes(&subject);
+    let rendered = rendered_file_block_bytes(&subject, ReviewSubject::Files);
     assert!(
         rendered < config.file_block_cap(),
         "the subject must be inside the per-file cap: {rendered} rendered bytes vs {}",
@@ -213,7 +213,7 @@ fn a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows() {
     let (_, small_skips) = crate::review::scope::batch_work_list(
         &small_change,
         config.batch_budget(small_framing),
-        rendered_file_block_bytes,
+        |file| rendered_file_block_bytes(file, ReviewSubject::Files),
     );
     assert!(
         small_skips.is_empty(),
@@ -223,7 +223,7 @@ fn a_file_inside_the_cap_stays_inside_it_when_the_change_around_it_grows() {
     let (_, grown_skips) = crate::review::scope::batch_work_list(
         &grown_change,
         config.batch_budget(grown_framing),
-        rendered_file_block_bytes,
+        |file| rendered_file_block_bytes(file, ReviewSubject::Files),
     );
     assert!(
         !grown_skips.iter().any(|skip| skip.path() == SUBJECT_PATH),
@@ -241,7 +241,7 @@ fn two_runs_over_the_same_change_report_the_same_over_cap_files() {
     let config = FleetConfig::default();
 
     let over_cap = bare_file_work(SUBJECT_PATH, short_line_source(OVER_CAP_SOURCE_LINES));
-    let rendered = rendered_file_block_bytes(&over_cap);
+    let rendered = rendered_file_block_bytes(&over_cap, ReviewSubject::Files);
     assert!(
         rendered > config.file_block_cap(),
         "the subject must be over the per-file cap: {rendered} rendered bytes vs {}",
@@ -261,11 +261,10 @@ fn two_runs_over_the_same_change_report_the_same_over_cap_files() {
 
     let review_once = || {
         let framing = prompt_framing_bytes(&change, &loader);
-        let (_, skipped) = crate::review::scope::batch_work_list(
-            &change,
-            config.batch_budget(framing),
-            rendered_file_block_bytes,
-        );
+        let (_, skipped) =
+            crate::review::scope::batch_work_list(&change, config.batch_budget(framing), |file| {
+                rendered_file_block_bytes(file, ReviewSubject::Files)
+            });
         skipped
     };
 
@@ -318,18 +317,17 @@ fn a_short_line_file_the_raw_byte_budget_admits_is_measured_by_its_rendered_size
         file.source_slice().len()
     );
 
-    let rendered = rendered_file_block_bytes(&file);
+    let rendered = rendered_file_block_bytes(&file, ReviewSubject::Files);
     assert!(
         rendered > BUDGET,
         "the RENDERED block is over the budget: {rendered} vs {BUDGET}"
     );
 
     let work = WorkList::new("purpose".to_string(), vec![validator_work("v", vec![file])]);
-    let (batches, skipped) = crate::review::scope::batch_work_list(
-        &work,
-        uniform_budget(BUDGET),
-        rendered_file_block_bytes,
-    );
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, uniform_budget(BUDGET), |file| {
+            rendered_file_block_bytes(file, ReviewSubject::Files)
+        });
 
     assert!(
         batches.is_empty(),
@@ -367,11 +365,10 @@ fn one_validators_oversized_file_does_not_cost_the_other_validators_that_file() 
             validator_work("light", vec![lean]),
         ],
     );
-    let (batches, skipped) = crate::review::scope::batch_work_list(
-        &work,
-        uniform_budget(BUDGET),
-        rendered_file_block_bytes,
-    );
+    let (batches, skipped) =
+        crate::review::scope::batch_work_list(&work, uniform_budget(BUDGET), |file| {
+            rendered_file_block_bytes(file, ReviewSubject::Files)
+        });
 
     assert_eq!(batches.len(), 1, "the affordable pair still reviews");
     assert_eq!(
@@ -420,8 +417,9 @@ fn every_prompt_a_packed_batch_sends_fits_inside_the_agent_prompt_cap() {
 
     let framing = prompt_framing_bytes(&work, &loader);
     let budget = FleetConfig::default().batch_budget(framing);
-    let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, budget, rendered_file_block_bytes);
+    let (batches, skipped) = crate::review::scope::batch_work_list(&work, budget, |file| {
+        rendered_file_block_bytes(file, ReviewSubject::Files)
+    });
 
     assert!(
         skipped.is_empty(),
@@ -440,7 +438,12 @@ fn every_prompt_a_packed_batch_sends_fits_inside_the_agent_prompt_cap() {
             prime.len()
         );
         for validator in batch.validators() {
-            let monolithic = render_fleet_prompt(batch.change_purpose(), validator, &ruleset);
+            let monolithic = render_fleet_prompt(
+                batch.change_purpose(),
+                validator,
+                &ruleset,
+                ReviewSubject::Files,
+            );
             assert!(
                 monolithic.len() <= AGENT_PROMPT_CAP,
                 "{}'s monolithic prompt is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap",
@@ -470,8 +473,12 @@ fn the_prompt_framing_bytes_cover_the_purpose_the_payload_header_and_the_ruleset
         work.change_purpose(),
         &work.validators()[0],
         loader.get_ruleset("bulk").expect("the ruleset is loaded"),
+        ReviewSubject::Files,
     );
-    let blocks: usize = work.distinct_files().map(rendered_file_block_bytes).sum();
+    let blocks: usize = work
+        .distinct_files()
+        .map(|file| rendered_file_block_bytes(file, ReviewSubject::Files))
+        .sum();
 
     assert!(
         framing >= monolithic.len() - blocks,
@@ -504,9 +511,12 @@ const CAP_PROBE_LINES: usize = 1_000;
 /// count, so it keeps filling the cap when the block format changes.
 fn file_filling_the_cap(path: &str, cap: usize) -> FileWork {
     let probe = bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(CAP_PROBE_LINES));
-    let per_line = rendered_file_block_bytes(&probe) / CAP_PROBE_LINES;
+    let per_line = rendered_file_block_bytes(&probe, ReviewSubject::Files) / CAP_PROBE_LINES;
     let mut lines = cap / per_line;
-    while rendered_file_block_bytes(&bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(lines))) > cap
+    while rendered_file_block_bytes(
+        &bare_file_work(path, SUBJECT_SOURCE_LINE.repeat(lines)),
+        ReviewSubject::Files,
+    ) > cap
     {
         lines -= 1;
     }
@@ -532,7 +542,7 @@ fn a_batch_prompt_fits_the_cap_when_one_file_fills_the_per_file_cap() {
 
     let first = file_filling_the_cap(SUBJECT_PATH, config.file_block_cap());
     let second = file_filling_the_cap("src/second.rs", config.file_block_cap());
-    let full_cap_cost = rendered_file_block_bytes(&first);
+    let full_cap_cost = rendered_file_block_bytes(&first, ReviewSubject::Files);
 
     let work = WorkList::new(
         "PURPOSE: two files at the per-file cap, in a change carrying far more duplicate \
@@ -563,8 +573,9 @@ fn a_batch_prompt_fits_the_cap_when_one_file_fills_the_per_file_cap() {
     );
 
     let budget = config.batch_budget(framing.total());
-    let (batches, skipped) =
-        crate::review::scope::batch_work_list(&work, budget, rendered_file_block_bytes);
+    let (batches, skipped) = crate::review::scope::batch_work_list(&work, budget, |file| {
+        rendered_file_block_bytes(file, ReviewSubject::Files)
+    });
     assert!(
         skipped.is_empty(),
         "neither file is over the per-file cap, so both are reviewed: {skipped:?}"
@@ -587,7 +598,12 @@ fn a_batch_prompt_fits_the_cap_when_one_file_fills_the_per_file_cap() {
             framing.total()
         );
         for validator in batch.validators() {
-            let monolithic = render_fleet_prompt(batch.change_purpose(), validator, &ruleset);
+            let monolithic = render_fleet_prompt(
+                batch.change_purpose(),
+                validator,
+                &ruleset,
+                ReviewSubject::Files,
+            );
             assert!(
                 monolithic.len() <= AGENT_PROMPT_CAP,
                 "{}'s monolithic prompt is {} bytes, over the {AGENT_PROMPT_CAP}-byte cap \
@@ -682,7 +698,7 @@ fn a_validators_suffix_splits_into_run_framing_plus_one_line_per_file() {
         vec![validator_work("bulk", files.clone())],
     );
 
-    let suffix = render_validator_suffix(&work.validators()[0], &rs).len();
+    let suffix = render_validator_suffix(&work.validators()[0], &rs, ReviewSubject::Files).len();
     let framing = prompt_framing(&work, &loader);
     let focus_lines: usize = files
         .iter()
@@ -757,7 +773,7 @@ fn every_builtin_validators_suffix_fits_the_framings_authored_share() {
             ProbeNames::new(rs.manifest.probes.iter().cloned()),
             Vec::new(),
         );
-        let suffix = render_validator_suffix(&validator, rs).len();
+        let suffix = render_validator_suffix(&validator, rs, ReviewSubject::Files).len();
         assert!(
             suffix < authored_share,
             "`{}` frames {suffix} bytes against the {authored_share}-byte authored share",

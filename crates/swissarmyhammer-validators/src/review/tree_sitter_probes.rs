@@ -778,7 +778,9 @@ mod tests {
         catalog, run_probes, FileChange, ProbeKind, ProbeOp, ProbeResult, ProbeRow,
     };
     use crate::review::test_support::{index_conn, loader_with, TestRepo, DIM};
-    use crate::review::{render_file_payload, scope_review, FileWork, Scope, WorkList};
+    use crate::review::{
+        render_file_payload, scope_review, FileWork, ReviewSubject, Scope, WorkList,
+    };
 
     /// A two-function Rust file, so a count row reads `2` rather than `0` or `1`.
     const TWO_FUNCTIONS: &str = "pub fn one() {}\npub fn two() {}\n";
@@ -1031,7 +1033,10 @@ mod tests {
     async fn a_trait_probes_rows_reach_the_rendered_validator_prompt() {
         let work = reviewed_work(ONE_FUNCTION, TWO_FUNCTIONS, &["functions"]).await;
 
-        let rendered = render_file_payload(std::slice::from_ref(changed_file_work(&work)));
+        let rendered = render_file_payload(
+            std::slice::from_ref(changed_file_work(&work)),
+            ReviewSubject::Files,
+        );
 
         assert!(
             rendered.contains("probe `functions` on `src/lib.rs`"),
@@ -1343,7 +1348,10 @@ mod tests {
         )
         .await;
 
-        let rendered = render_file_payload(std::slice::from_ref(changed_file_work(&work)));
+        let rendered = render_file_payload(
+            std::slice::from_ref(changed_file_work(&work)),
+            ReviewSubject::Files,
+        );
 
         assert!(
             rendered.contains("probe `public-surface` on `src/lib.rs`"),

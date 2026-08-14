@@ -1483,7 +1483,7 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:1`"),
+        markdown.contains("- [ ] `src/lib.rs:3`"),
         "the confirmed blocker must be rendered, got: {markdown}"
     );
     assert_eq!(parsed["counts"]["findings"], json!(1));
@@ -1698,6 +1698,95 @@ fn stale_line_fixture(repo: &TestRepo) -> AgentFactory {
     scripted_factory(agent)
 }
 
+/// The line of the fixture file this change did NOT touch: the committed
+/// `fn placeholder() {}`, still line 1 after the edit.
+const PRE_EXISTING_LINE: u32 = 1;
+
+/// A repo whose uncommitted change adds a function, paired with an agent that
+/// reports its finding on the file's PRE-EXISTING first line instead.
+///
+/// The verify script CONFIRMS the claim if this candidate ever reaches it —
+/// deliberately, so a regression in the off-change guard surfaces the finding
+/// in the report rather than vanishing behind a refute-by-default path and
+/// giving a false-negative "still passes" result.
+fn pre_existing_line_fixture(repo: &TestRepo) -> AgentFactory {
+    repo.write("src/lib.rs", "fn placeholder() {}\n");
+    repo.commit("initial");
+    repo.write("src/lib.rs", "fn placeholder() {}\n\nfn changed() {}\n");
+
+    write_ruleset(&repo.path().join(".validators"), "style", "*.rs", &[]);
+    let _ = on_disk_index_conn(repo.path());
+
+    let agent = ScriptedAgent::new(vec![
+        (
+            "# Validator: style".to_string(),
+            ScriptedReply::Text(findings_json_at_line(
+                "src/lib.rs",
+                PRE_EXISTING_LINE,
+                "placeholder has an off-change style violation",
+            )),
+        ),
+        (
+            "placeholder has an off-change style violation".to_string(),
+            ScriptedReply::Text(confirm_json()),
+        ),
+    ]);
+    scripted_factory(agent)
+}
+
+/// ^apb04az: under `review working` the subject is the diffs, so a finding on a
+/// line the change did not touch never reaches the report — however real it is,
+/// and even though the rigged verifier would confirm it.
+///
+/// This is what removes `git blame` from the implement loop: the engine, not
+/// the author, decides whether a finding belongs to the change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_working_drops_a_finding_on_a_line_the_change_did_not_touch() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = pre_existing_line_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("review working dispatch");
+    let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+
+    let markdown = parsed["markdown"].as_str().unwrap();
+    assert!(
+        !markdown.contains("off-change"),
+        "a finding on a line this change did not touch must never render under a \
+         diff op, even though the scripted verifier would confirm it: {markdown}"
+    );
+    assert_eq!(parsed["counts"]["findings"], json!(0));
+    assert_eq!(
+        parsed["counts"]["refuted"],
+        json!(1),
+        "the off-change finding must still be tallied as refuted: {parsed}"
+    );
+    // The report always names its scope, so a run that dropped everything is
+    // never mistaken for a run that read everything and found nothing.
+    assert!(
+        markdown.contains("> Scope: `review working`"),
+        "the report must name the op it ran: {markdown}"
+    );
+}
+
 /// A finding citing a line past the end of the file's current content must
 /// never reach the report, even when the (deliberately rigged) adversarial
 /// verifier would confirm it if it ever saw it — proving the deterministic
@@ -1778,7 +1867,7 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:1`"),
+        markdown.contains("- [ ] `src/lib.rs:3`"),
         "the confirmed blocker must be rendered through the server, got: {markdown}"
     );
     assert_eq!(parsed["counts"]["findings"], json!(1));
@@ -1955,7 +2044,7 @@ async fn review_sha_batch_size_override_skips_a_file_the_default_would_review() 
 #[serial_test::serial(cwd)]
 async fn review_file_reviews_an_oversized_source_file_under_the_default_budget() {
     use swissarmyhammer_validators::review::fleet::{rendered_file_block_bytes, FleetConfig};
-    use swissarmyhammer_validators::review::scope::FileWork;
+    use swissarmyhammer_validators::review::scope::{FileWork, ReviewSubject};
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -1972,13 +2061,16 @@ async fn review_file_reviews_an_oversized_source_file_under_the_default_budget()
     // raw-byte comparison back here; a raw size states nothing about whether the
     // packer takes the file.
     let measure = |content: &str| {
-        rendered_file_block_bytes(&FileWork::new(
-            "src/server.rs".to_string(),
-            Vec::new(),
-            Vec::new(),
-            content.to_string(),
-            Vec::new(),
-        ))
+        rendered_file_block_bytes(
+            &FileWork::new(
+                "src/server.rs".to_string(),
+                Vec::new(),
+                Vec::new(),
+                content.to_string(),
+                Vec::new(),
+            ),
+            ReviewSubject::Files,
+        )
     };
 
     // Three quarters of the per-file cap: unmistakably an oversized file, and
@@ -2212,7 +2304,7 @@ async fn review_working_an_oversized_file_does_not_block_review_of_the_others() 
     let markdown = parsed["markdown"].as_str().unwrap();
 
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:1`"),
+        markdown.contains("- [ ] `src/lib.rs:3`"),
         "the small file must still be reviewed and confirmed: {markdown}"
     );
     assert!(
@@ -2366,6 +2458,15 @@ fn seed_on_disk_index(root: &Path, dup: &str) {
     seed_chunk(&conn, "src/existing.rs", "old_compute", dup, &emb);
 }
 
+/// The first line these fixtures' uncommitted change ADDED: line 1 is the
+/// committed `fn placeholder() {}` and line 2 is the blank line, so the planted
+/// duplicate starts here.
+///
+/// A `review working` op reviews the diffs, so a finding must land on a line
+/// the change touched — one on line 1 is about pre-existing code and the verify
+/// guard refutes it before it reaches the report.
+const FIRST_CHANGED_LINE: u32 = 3;
+
 /// A findings array as a fleet agent emits it (the `validator` field is tagged by
 /// the engine, but must be present for the finding to deserialize).
 fn findings_json(file: &str, claim: &str) -> String {
@@ -2373,7 +2474,7 @@ fn findings_json(file: &str, claim: &str) -> String {
     // correctly — a raw `format!` template would corrupt the JSON.
     let array = json!([{
         "file": file,
-        "line": 1,
+        "line": FIRST_CHANGED_LINE,
         "validator": "agent-tagged",
         "rule": "r",
         "claim": claim,

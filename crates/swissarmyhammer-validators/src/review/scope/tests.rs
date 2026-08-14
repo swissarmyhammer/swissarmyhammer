@@ -353,7 +353,8 @@ async fn sha_scope_line_annotations_carry_correct_number_sha_and_mark() {
     // The actual rendered prime block a model reads must show line 2 with
     // this exact number, sha, and `+` mark — the numbering the model is
     // told to READ rather than count.
-    let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+    let rendered =
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
     let expected_line_2 = format!("     2 | {} + | EDITED two", &second_sha[..8]);
     assert!(
             rendered.contains(&expected_line_2),
@@ -606,7 +607,8 @@ async fn a_findings_line_number_survives_from_the_prime_to_the_report() {
         .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
         .expect("src/lib.rs must be under review");
 
-    let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+    let rendered =
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
     // The exact numbered line the model would read for line 3 — pulled
     // from the REAL render, not hand-typed, so this test would fail if the
     // format ever drifted.
@@ -652,6 +654,7 @@ async fn a_findings_line_number_survives_from_the_prime_to_the_report() {
         &[],
         &[],
         &crate::review::ToolReport::default(),
+        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1),
         "2026-04-11 13:08",
     );
     assert!(
@@ -754,7 +757,8 @@ async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_sy
     // The exact numbered line the model would read for the edited
     // function — pulled from the REAL render, not hand-typed, so this
     // test fails if the numbering ever drifts at depth.
-    let rendered = crate::review::fleet::render_file_payload(std::slice::from_ref(file));
+    let rendered =
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
     let expected_printed_line = format!(
         "{changed_line:>6} | {} + | fn target() {{ new_body(); }}",
         &second_sha[..8]
@@ -799,6 +803,7 @@ async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_sy
         &[],
         &[],
         &crate::review::ToolReport::default(),
+        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1),
         "2026-08-03 12:00",
     );
     let expected_citation = format!("`src/big.rs:{changed_line}`");
@@ -1239,5 +1244,230 @@ fn as_borrowed_strings_accepts_a_slice_that_already_borrows() {
         as_borrowed_strings(&already_borrowed),
         vec!["rust", "python"],
         "a caller holding borrowed keys needs no owned vector first"
+    );
+}
+
+// ---- what the op hands the agent (^apb04az) ---------------------------
+
+/// How many lines the fixture's large file carries. Big enough that a
+/// whole-file view and a change view cannot be confused for one another.
+const BIG_FILE_LINES: usize = 4000;
+
+/// The 1-based line of [`BIG_FILE_LINES`] the fixture change edits — mid-file,
+/// so the context band around it reaches neither end.
+const EDITED_LINE: usize = 2000;
+
+/// A line far from [`EDITED_LINE`], well outside any context band: present in a
+/// whole-file view, absent from a change view.
+const DISTANT_LINE: usize = 100;
+
+/// The fixture's large Rust file: one uniquely-numbered function per line.
+fn big_file(edited: Option<usize>) -> String {
+    (1..=BIG_FILE_LINES)
+        .map(|line| match edited {
+            Some(target) if target == line => format!("pub fn f{line}() -> u8 {{ 1 }}\n"),
+            _ => format!("pub fn f{line}() -> u8 {{ 0 }}\n"),
+        })
+        .collect()
+}
+
+/// The source line the fixture renders for `line`, as the numbered block
+/// prints it after the `sha` and `mark` columns.
+fn source_of(line: usize) -> String {
+    format!("| pub fn f{line}()")
+}
+
+/// A repo holding [`BIG_FILE_LINES`] lines, then one line of it edited, with
+/// the two commit shas the change spans.
+struct OneLineChange {
+    repo: TestRepo,
+    range: String,
+}
+
+impl OneLineChange {
+    /// Commit the large file, then commit a one-line edit to it.
+    fn new() -> Self {
+        let repo = TestRepo::new();
+        repo.write("src/big.rs", &big_file(None));
+        let before = repo.commit("add the big file");
+        repo.write("src/big.rs", &big_file(Some(EDITED_LINE)));
+        let after = repo.commit("edit one line of it");
+        Self {
+            repo,
+            range: format!("{before}..{after}"),
+        }
+    }
+
+    /// Drive the production scope stage over `scope` and render the run prime
+    /// — the exact bytes the fan-out's prime turn sends the agent.
+    async fn prime(&self, scope: Scope) -> String {
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+        let work = scope_review(scope, self.repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        crate::review::fleet::render_run_prime(&work)
+    }
+}
+
+/// ^apb04az: a `review sha` op hands the agent THE DIFF, not the file.
+///
+/// The whole card in one assertion pair: a one-line edit to a 4000-line file
+/// used to be handed over as 4000 lines, under a prompt that named the whole
+/// file as the review boundary — which is why zero of 53 measured findings
+/// landed on the change. Driven through the real `scope_review` and the real
+/// `render_run_prime`, so it fails if any stage of the production path stops
+/// reading the op's subject.
+#[tokio::test]
+async fn a_sha_op_hands_the_agent_the_diff_not_the_whole_file() {
+    let change = OneLineChange::new();
+
+    let prime = change.prime(Scope::Sha(change.range.clone())).await;
+
+    // The changed line is there, marked as the line to REVIEW.
+    assert!(
+        prime.contains(&format!("{EDITED_LINE} | ")),
+        "the changed line must be printed with its true number: {prime}"
+    );
+    assert!(
+        prime.contains(&source_of(EDITED_LINE)),
+        "the changed line's source must be printed: {prime}"
+    );
+
+    // A line far from the change is NOT there: the agent was handed the
+    // change, not the file.
+    assert!(
+        !prime.contains(&source_of(DISTANT_LINE)),
+        "a line far from the change must not be printed under a sha op: {prime}"
+    );
+
+    // And the block says which lines are the subject, in the engine's two
+    // words, rather than naming the whole file as the boundary.
+    assert!(
+        prime.contains("REVIEW") && prime.contains("CONSIDER"),
+        "the block must state what to REVIEW against what to CONSIDER: {prime}"
+    );
+    assert!(
+        !prime.contains("This whole file is the review boundary"),
+        "a sha op must not name the whole file as the review boundary: {prime}"
+    );
+}
+
+/// The same repo under a `review file` op hands the agent the WHOLE file —
+/// the other half of the distinction, so neither op can quietly become the
+/// other. A file the caller named on purpose is answered in full.
+#[tokio::test]
+async fn a_file_op_hands_the_agent_the_whole_file() {
+    let change = OneLineChange::new();
+
+    let prime = change.prime(Scope::File("src/big.rs".to_string())).await;
+
+    assert!(
+        prime.contains(&source_of(DISTANT_LINE)),
+        "a file op must print a line far from the last change: {prime}"
+    );
+    assert!(
+        prime.contains(&source_of(BIG_FILE_LINES)),
+        "a file op must print the file's last line: {prime}"
+    );
+}
+
+/// How many lines the relocated fixture file carries before its move. Long
+/// enough that the whole body sits well outside the context band around the one
+/// line the move also added.
+const MOVED_FILE_LINES: usize = 200;
+
+/// ^apb04az: a relocation reviews in proportion to its real delta.
+///
+/// A file moved to a new path has no base side AT THAT PATH, so without git's
+/// rename detection the engine diffs it as wholly added and reviews every line
+/// of it as new work. `^0fn6dbf` read as 70 files and 20548 insertions when its
+/// real delta was about 39 lines of module wiring. Here the move carries one
+/// added line, and that one line is the whole of what the review is handed.
+#[tokio::test]
+async fn a_relocated_file_reviews_as_the_lines_the_move_also_changed() {
+    let repo = TestRepo::new();
+    let body: String = (1..=MOVED_FILE_LINES)
+        .map(|line| format!("pub fn moved{line}() -> u8 {{ 0 }}\n"))
+        .collect();
+    repo.write("src/old.rs", &body);
+    let before = repo.commit("add the file at its original path");
+
+    std::fs::remove_file(repo.path().join("src/old.rs")).expect("remove the original path");
+    repo.write(
+        "src/new.rs",
+        &format!("{body}pub fn added_by_the_move() {{}}\n"),
+    );
+    let after = repo.commit("move the file and add one function");
+
+    let conn = index_conn();
+    let loader = loader_with("rust", "*.rs", &[]);
+    let embedder = MockEmbedder::new(DIM);
+    let work = scope_review(
+        Scope::Sha(format!("{before}..{after}")),
+        repo.path(),
+        &loader,
+        &conn,
+        &embedder,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let moved = work
+        .distinct_files()
+        .find(|file| file.path() == "src/new.rs")
+        .expect("the moved file must be under review");
+
+    // Only the line the move ALSO added is marked. Every relocated line reads
+    // as what it is: content that already existed, at a new address.
+    let touched: Vec<usize> = moved
+        .line_annotations()
+        .iter()
+        .enumerate()
+        .filter(|(_, annotation)| annotation.touched())
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert_eq!(
+        touched,
+        vec![MOVED_FILE_LINES + 1],
+        "a move plus one added line touches exactly that line"
+    );
+
+    // And the prime the agent reads shows the added line, not the moved body.
+    let prime = crate::review::fleet::render_run_prime(&work);
+    assert!(
+        prime.contains("pub fn added_by_the_move()"),
+        "the added line must be printed: {prime}"
+    );
+    assert!(
+        !prime.contains("pub fn moved1()"),
+        "a relocated line far from the change must not be printed: {prime}"
+    );
+}
+
+/// The two ops' primes differ by an order of magnitude on the same repo. The
+/// card's cost half: the diff view is what keeps a one-line edit from
+/// batching, fanning out, and being paid for as a 4000-line review.
+#[tokio::test]
+async fn the_diff_view_is_a_fraction_of_the_whole_file_view() {
+    let change = OneLineChange::new();
+
+    let diff_prime = change.prime(Scope::Sha(change.range.clone())).await;
+    let file_prime = change.prime(Scope::File("src/big.rs".to_string())).await;
+
+    /// How many times smaller the diff view must be, at least. A one-line
+    /// edit to a 4000-line file prints a band of tens of lines, so the real
+    /// ratio is far larger; the gate is deliberately loose so it measures the
+    /// distinction rather than the exact context width.
+    const MIN_RATIO: usize = 10;
+
+    assert!(
+        diff_prime.len() * MIN_RATIO < file_prime.len(),
+        "the diff view must be at least {MIN_RATIO}x smaller than the whole-file view: \
+         {} bytes against {} bytes",
+        diff_prime.len(),
+        file_prime.len()
     );
 }

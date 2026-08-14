@@ -60,10 +60,10 @@ use serde::Deserialize;
 
 use crate::review::fleet::{
     classify_reuse, emit_progress, render_numbered_lines, PrefixReuse, ReviewProgressEvent,
-    ReviewProgressSender,
+    ReviewProgressSender, SourceView,
 };
 use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
-use crate::review::scope::LineAnnotation;
+use crate::review::scope::{line_is_reviewed, LineAnnotation, ReviewSubject};
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::{AgentPool, PoolError};
 
@@ -207,38 +207,98 @@ fn line_out_of_bounds(candidate: &Candidate) -> bool {
     candidate.finding.line == 0 || candidate.finding.line > total_lines
 }
 
-/// Run the deterministic probe guard over a batch of candidates.
+/// The verdict reason recorded when [`off_the_change`] refutes a finding.
+const OFF_THE_CHANGE_REASON: &str = "refuted: this review's subject is the diffs — the lines the \
+change added or modified — and the cited line is not one of them. The finding is about \
+pre-existing code, which is context to consider and never itself the subject here (it may well \
+be real; it is not what this review was asked about)";
+
+/// Whether `candidate` reports a line this review's change did not touch,
+/// under a subject whose review boundary is the change itself.
 ///
-/// Two independent checks run per candidate, both deterministic and probe/agent
+/// This is the structural half of the REVIEW/CONSIDER distinction: the prompts
+/// state it, and this enforces it, so a model that reports a pre-existing
+/// defect anyway does not put it in front of an author who then has to run
+/// `git blame` to decide whether it is theirs.
+///
+/// Always `false` under [`ReviewSubject::Files`]: the caller named those files
+/// on purpose, so every line of them is the subject.
+///
+/// A candidate with no annotations — a finding whose `(validator, file)` never
+/// resolved to work-list context — is undecidable here, not a violation,
+/// exactly as [`line_out_of_bounds`] treats an empty slice: `build_candidates`
+/// already sends that case to the agent, which refutes it by default. A cited
+/// line past the annotated content is [`line_out_of_bounds`]' verdict to
+/// reach, not this one's.
+fn off_the_change(candidate: &Candidate, subject: ReviewSubject) -> bool {
+    !line_is_reviewed(subject, &candidate.line_annotations, candidate.finding.line)
+}
+
+/// The deterministic, STRUCTURAL reason `candidate` cannot be a finding of this
+/// review — `None` when nothing structural refutes it.
+///
+/// Both checks read only the candidate's own paired content plus the run's
+/// subject, so neither costs a probe or an agent round trip, and both run ahead
+/// of [`guard_verdict`]: a probe-based fact about a symbol cannot rescue a
+/// finding that is not describing this file, or not describing this review's
+/// subject.
+fn structural_refutation(candidate: &Candidate, subject: ReviewSubject) -> Option<&'static str> {
+    if line_out_of_bounds(candidate) {
+        return Some(LINE_OUT_OF_BOUNDS_REASON);
+    }
+    if off_the_change(candidate, subject) {
+        return Some(OFF_THE_CHANGE_REASON);
+    }
+    None
+}
+
+/// One refuted verdict, recorded with the reason that decided it.
+///
+/// The single shape both guard layers — structural and probe-fact — record, so
+/// a new refutation adds a reason rather than another copy of this literal.
+fn guard_refuted(finding: &Finding, reason: &str) -> VerifiedFinding {
+    VerifiedFinding {
+        finding: finding.clone(),
+        confirmed: false,
+        reason: reason.to_string(),
+        decided_by: Some(RefutingLayer::Guard),
+    }
+}
+
+/// Run the deterministic guard over a batch of candidates.
+///
+/// Two independent layers run per candidate, both deterministic and probe/agent
 /// free where they can decide:
 ///
-/// 1. [`line_out_of_bounds`] — the cited line does not exist in the candidate's
-///    own paired content. Checked FIRST: an out-of-bounds citation is refuted
-///    before [`guard_verdict`] ever runs, since a probe-based fact about a
-///    symbol cannot rescue a finding that cannot even be describing this file.
+/// 1. [`structural_refutation`] — the cited line does not exist in the
+///    candidate's own paired content ([`line_out_of_bounds`]), or it exists but
+///    is not part of what this review REVIEWS ([`off_the_change`]). Checked
+///    FIRST, for the reason that function's docs give.
 /// 2. [`guard_verdict`] — [`GUARD_RULES`], reusing the candidate's own
 ///    `probe_results` (never re-running a probe) and acting only on
 ///    [`ProbeKind::Fact`] probes.
 ///
-/// A candidate either check refutes is recorded outright (with
+/// A candidate either layer refutes is recorded outright (with
 /// [`RefutingLayer::Guard`]); every other candidate — `similar`-backed, or one
-/// neither check can decide — survives to the adversarial agent.
-pub fn run_guard(candidates: &[Candidate]) -> GuardOutcome {
+/// neither layer can decide — survives to the adversarial agent.
+///
+/// `subject` is the run's [`ReviewSubject`], the same one every fan-out prompt
+/// stated: it is what makes [`off_the_change`] a refutation under a diff op and
+/// a no-op under a file op.
+pub fn run_guard(candidates: &[Candidate], subject: ReviewSubject) -> GuardOutcome {
     let mut outcome = GuardOutcome::default();
     for candidate in candidates {
-        if line_out_of_bounds(candidate) {
+        if let Some(reason) = structural_refutation(candidate, subject) {
             tracing::debug!(
                 file = %candidate.finding.file,
                 line = candidate.finding.line,
                 validator = %candidate.finding.validator,
-                "guard auto-refuted finding: cited line is out of bounds"
+                reason,
+                "guard auto-refuted finding on a structural fact"
             );
-            outcome.refuted.push(VerifiedFinding {
-                finding: candidate.finding.clone(),
-                confirmed: false,
-                reason: LINE_OUT_OF_BOUNDS_REASON.to_string(),
-                decided_by: Some(RefutingLayer::Guard),
-            });
+            outcome
+                .refuted
+                .push(guard_refuted(&candidate.finding, reason));
             continue;
         }
         match guard_verdict(candidate) {
@@ -250,12 +310,9 @@ pub fn run_guard(candidates: &[Candidate]) -> GuardOutcome {
                     probe = %rule.probe,
                     "guard auto-refuted finding"
                 );
-                outcome.refuted.push(VerifiedFinding {
-                    finding: candidate.finding.clone(),
-                    confirmed: false,
-                    reason: rule.reason.to_string(),
-                    decided_by: Some(RefutingLayer::Guard),
-                });
+                outcome
+                    .refuted
+                    .push(guard_refuted(&candidate.finding, rule.reason));
             }
             None => outcome.survivors.push(candidate.clone()),
         }
@@ -385,8 +442,9 @@ pub async fn verify_findings(
     pool: &AgentPool,
     prime: Option<&SessionId>,
     progress: Option<&ReviewProgressSender>,
+    subject: ReviewSubject,
 ) -> VerifyOutcome {
-    let GuardOutcome { survivors, refuted } = run_guard(&candidates);
+    let GuardOutcome { survivors, refuted } = run_guard(&candidates, subject);
 
     // Stream each guard refutation as its verdict resolves — the guard decides
     // these inline as fan-out returns, so they are final the moment `run_guard`
@@ -637,10 +695,14 @@ pub fn render_verify_prompt(candidate: &Candidate) -> String {
     out.push('\n');
 
     out.push_str("# Source slice\n\n");
+    // The whole file, whatever the run's subject is: an adversary checking a
+    // citation needs the file the citation points into, and a finding that
+    // reached verify has already survived the structural guard.
     render_numbered_lines(
         &mut out,
         &candidate.source_slice,
         &candidate.line_annotations,
+        SourceView::Whole,
     );
 
     out.push_str("# Probe evidence (ground truth)\n\n");
@@ -722,7 +784,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         // The guard refuted it deterministically — no survivor reaches the agent.
         assert!(
@@ -745,7 +807,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
         assert_eq!(outcome.refuted.len(), 1);
 
         // The guard auto-refute is logged, naming the finding (its file/validator)
@@ -765,7 +827,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         // The guard cannot refute it — it survives to the adversarial agent.
         assert_eq!(
@@ -807,7 +869,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -841,7 +903,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert!(
             outcome.survivors.is_empty(),
@@ -882,7 +944,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -920,7 +982,7 @@ mod tests {
         // cannot be describing code that is actually in this content.
         let candidate = candidate_with_line(9, "line one\nline two\nline three\n");
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert!(
             outcome.survivors.is_empty(),
@@ -941,7 +1003,7 @@ mod tests {
         // `Finding.line` is documented 1-based; 0 never names a real line.
         let candidate = candidate_with_line(0, "line one\nline two\n");
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert!(outcome.survivors.is_empty(), "line 0 must be refuted");
         assert_eq!(outcome.refuted.len(), 1);
@@ -954,7 +1016,7 @@ mod tests {
         // bounds (an off-by-one would wrongly refute every last-line finding).
         let candidate = candidate_with_line(3, "line one\nline two\nline three\n");
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -971,7 +1033,7 @@ mod tests {
         // wrongly refuted as "out of bounds" against nothing.
         let candidate = candidate_with_line(42, "");
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -1027,7 +1089,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert!(
             outcome.survivors.is_empty(),
@@ -1049,7 +1111,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -1070,7 +1132,7 @@ mod tests {
             line_annotations: Vec::new(),
         };
 
-        let outcome = run_guard(&[candidate]);
+        let outcome = run_guard(&[candidate], ReviewSubject::Files);
 
         assert_eq!(
             outcome.survivors.len(),
@@ -1281,7 +1343,7 @@ mod tests {
         ]);
 
         let outcome = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            verify_findings(candidates, &pool, None, None).await
+            verify_findings(candidates, &pool, None, None, ReviewSubject::Files).await
         })
         .await;
 
@@ -1348,6 +1410,7 @@ mod tests {
                 &pool,
                 None,
                 Some(&progress_tx),
+                ReviewSubject::Files,
             )
             .await
         })
@@ -1420,7 +1483,8 @@ mod tests {
             let fanout_rx = pool.submit("FANOUT_MARKER: a still-running fan-out task");
             // Verify submits to the SAME pool; its task queues behind the fan-out
             // one and is drained by the same single worker.
-            let outcome = verify_findings(vec![candidate], &pool, None, None).await;
+            let outcome =
+                verify_findings(vec![candidate], &pool, None, None, ReviewSubject::Files).await;
             // The fan-out task also completed on the shared pool.
             let fanout = fanout_rx
                 .await
@@ -1486,7 +1550,14 @@ mod tests {
                 .expect("prime ok");
             let prime_session: SessionId = prime.session_id;
 
-            verify_findings(vec![candidate], &pool, Some(&prime_session), None).await
+            verify_findings(
+                vec![candidate],
+                &pool,
+                Some(&prime_session),
+                None,
+                ReviewSubject::Files,
+            )
+            .await
         })
         .await;
 

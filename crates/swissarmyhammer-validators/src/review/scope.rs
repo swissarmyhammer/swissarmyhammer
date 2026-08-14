@@ -86,6 +86,77 @@ pub enum Scope {
     Glob(String),
 }
 
+impl Scope {
+    /// What this scope names as the review's subject.
+    ///
+    /// The op already carries the intent, so nothing else selects it: asking
+    /// about the working tree or a sha is asking about a CHANGE, and asking
+    /// about a path or a glob is asking about FILES.
+    pub fn subject(&self) -> ReviewSubject {
+        match self {
+            Scope::Working | Scope::Sha(_) => ReviewSubject::Diffs,
+            Scope::File(_) | Scope::Glob(_) => ReviewSubject::Files,
+        }
+    }
+
+    /// The op that produced this scope, written as the caller typed it — the
+    /// scope line every report names so a narrowed scope can never read as a
+    /// clean result.
+    ///
+    /// A glob and a path both arrive on the `review file` op, so both describe
+    /// as `review file`.
+    pub fn describe(&self) -> String {
+        match self {
+            Scope::Working => "review working".to_string(),
+            Scope::Sha(range) => format!("review sha {range}"),
+            Scope::File(path) => format!("review file {path}"),
+            Scope::Glob(pattern) => format!("review file {pattern}"),
+        }
+    }
+}
+
+/// What a review op names as its subject — the change, or the files.
+///
+/// This is the one distinction every prompt in the engine states, in the same
+/// two words:
+///
+/// - **REVIEW** — the subject. Under [`Diffs`](ReviewSubject::Diffs) only the
+///   lines the change added or modified; under [`Files`](ReviewSubject::Files)
+///   every line of each named file. A finding must land on one of them.
+/// - **CONSIDER** — context. Surrounding pre-existing code, read to judge the
+///   subject correctly, never itself the subject of a finding. A pre-existing
+///   defect is out of scope under [`Diffs`](ReviewSubject::Diffs) even when it
+///   is real, and even when a validator flags it.
+///
+/// [`Scope::subject`] is the only thing that chooses between the two: there is
+/// no argument and no tool-surface field for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ReviewSubject {
+    /// Review the diffs only — the lines the change added or modified.
+    ///
+    /// The subject of [`Scope::Working`] and [`Scope::Sha`]. Surrounding
+    /// pre-existing code is rendered as context to CONSIDER, and a finding
+    /// that does not land on a changed line is refuted by the verify guard.
+    Diffs,
+    /// Review the named files whole — every line of each.
+    ///
+    /// The subject of [`Scope::File`] and [`Scope::Glob`]. The caller named
+    /// these files on purpose, so nothing narrows the answer: a test file
+    /// reviewed this way is reviewed like any other file.
+    Files,
+}
+
+impl ReviewSubject {
+    /// The one-line statement of what this subject reviews, rendered into the
+    /// report's scope line.
+    pub fn describe(self) -> &'static str {
+        match self {
+            ReviewSubject::Diffs => "the diffs only — lines this change added or modified",
+            ReviewSubject::Files => "the whole of each named file",
+        }
+    }
+}
+
 /// A forgiving scope input that enforces "exactly one of file/glob/working/sha".
 ///
 /// Fields are deliberately public: this is a forgiving-input builder surface —
@@ -152,6 +223,8 @@ pub struct WorkList {
     /// The changed files the scope stage dropped before any validator paired
     /// with them, each with its reason.
     excluded: Vec<ExcludedFile>,
+    /// What this run REVIEWS — the diffs, or the files whole.
+    subject: ReviewSubject,
 }
 
 impl WorkList {
@@ -165,7 +238,31 @@ impl WorkList {
             change_purpose: change_purpose.into(),
             validators: validators.into_iter().collect(),
             excluded: Vec::new(),
+            // A hand-assembled work-list names its files directly, with no
+            // change behind them — which IS the `Files` subject. The
+            // production path never relies on this: `scope_review` always
+            // calls `with_subject` with the op's own subject.
+            subject: ReviewSubject::Files,
         }
+    }
+
+    /// Attach what this run REVIEWS, taken from the op via [`Scope::subject`].
+    ///
+    /// Attached after [`new`](Self::new), the way
+    /// [`with_excluded`](Self::with_excluded) attaches its own once-per-run
+    /// data, so every hand-built work-list keeps the plain constructor.
+    pub fn with_subject(mut self, subject: ReviewSubject) -> Self {
+        self.subject = subject;
+        self
+    }
+
+    /// What this run REVIEWS — the diffs, or the files whole.
+    ///
+    /// Every prompt the engine renders reads this: it decides what a file
+    /// block shows, what the output contract calls the review boundary, and
+    /// whether the verify guard refutes a finding that misses the change.
+    pub fn subject(&self) -> ReviewSubject {
+        self.subject
     }
 
     /// Attach the files the scope stage dropped before any validator paired
@@ -429,6 +526,34 @@ impl LineAnnotation {
     }
 }
 
+/// Whether the 1-based `line` of a file with these `annotations` is a line this
+/// review REVIEWS.
+///
+/// The single predicate behind the REVIEW/CONSIDER boundary, so the two places
+/// that enforce it cannot drift: the verify guard, which refutes a fan-out
+/// finding that misses the change, and the tool-finding filter, which drops a
+/// deterministic tool's finding that misses it (tool findings never pass
+/// through verify).
+///
+/// Answers `true` whenever the question cannot be decided — under
+/// [`ReviewSubject::Files`], where the whole file is the subject; for a file
+/// with no annotations, whose `(validator, file)` never resolved to work-list
+/// context; for line `0`, which names no line; and for a line past the
+/// annotated content, whose refutation belongs to the bounds check instead.
+/// Every caller refutes only on a definite "not the subject".
+pub fn line_is_reviewed(subject: ReviewSubject, annotations: &[LineAnnotation], line: u32) -> bool {
+    if matches!(subject, ReviewSubject::Files) || annotations.is_empty() {
+        return true;
+    }
+    let Some(index) = (line as usize).checked_sub(1) else {
+        return true;
+    };
+    match annotations.get(index) {
+        Some(annotation) => annotation.touched(),
+        None => true,
+    }
+}
+
 /// One file's worth of work for one validator.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileWork {
@@ -559,6 +684,9 @@ pub async fn scope_review(
     embedder: &dyn TextEmbedder,
     progress: Option<&ReviewProgressSender>,
 ) -> Result<WorkList, AvpError> {
+    // The op is the only thing that decides what this run REVIEWS. Read once,
+    // here, and carried on the work-list from this point on.
+    let subject = scope.subject();
     let resolved = resolve_scope_files(&scope, repo_path)?;
 
     // A validator set's own fixture data is not source: a fail fixture holds
@@ -651,7 +779,9 @@ pub async fn scope_review(
 
     log_scope_selection(&validator_work);
 
-    Ok(WorkList::new(resolved.change_purpose, validator_work).with_excluded(excluded))
+    Ok(WorkList::new(resolved.change_purpose, validator_work)
+        .with_excluded(excluded)
+        .with_subject(subject))
 }
 
 /// The semantic diff's entities, grouped by file, plus the flattened probe

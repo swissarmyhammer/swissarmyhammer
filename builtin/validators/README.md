@@ -42,6 +42,28 @@ A rule with a `tool` block is a tool rule. A rule without one is a prompt
 rule. There is no separate directory, no separate schema, and no separate
 matcher — a tool rule is a rule with more keys.
 
+## What a rule may report on
+
+The engine, not the rule, decides which lines a finding may land on. The op the
+caller ran decides it, and the prompt states it in the same two words every
+time:
+
+- **REVIEW** — the subject. Under `review working` and `review sha`, only the
+  lines the change added or modified — the prompt marks each one `+`. Under
+  `review file`, every line of each named file.
+- **CONSIDER** — context. Surrounding pre-existing code, read to judge the
+  subject correctly, never itself the subject of a finding.
+
+So a rule body says WHAT is a defect, never WHERE to look for one. Do not write
+"check the whole file", "report pre-existing instances too", or "not just the
+diff" into a rule: under a diff op those instructions are wrong, and the verify
+guard refutes such a finding before it reaches the report. Write "report every
+instance in scope" instead, and let the prompt say what scope is.
+
+A rule may still narrow further, and several do — `case-sensitivity-coverage`
+fires only on a comparison the diff itself added. Narrowing is a rule's
+business; widening past the op's subject is not.
+
 ## Tool rules
 
 A tool rule binds one tool to one language. Example:

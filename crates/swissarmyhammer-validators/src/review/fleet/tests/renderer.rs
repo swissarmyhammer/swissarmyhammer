@@ -23,7 +23,12 @@ fn monolithic_prompt_contains_change_purpose_mandate_rules_and_output_contract()
     // The monolithic fallback for one validator: change purpose + the
     // validator's files + the validator's instructions (its full ruleset),
     // all in one self-contained prompt.
-    let prompt = render_fleet_prompt("PURPOSE: scaffolding the parser.", &vw, &rs);
+    let prompt = render_fleet_prompt(
+        "PURPOSE: scaffolding the parser.",
+        &vw,
+        &rs,
+        ReviewSubject::Files,
+    );
 
     assert!(
         prompt.contains("PURPOSE: scaffolding the parser."),
@@ -66,7 +71,7 @@ fn monolithic_prompt_renders_all_of_the_validators_rules() {
         vec![file_work("src/a.rs", "alpha", "src/dup_of_a.rs")],
     );
 
-    let prompt = render_fleet_prompt("purpose", &vw, &rs);
+    let prompt = render_fleet_prompt("purpose", &vw, &rs, ReviewSubject::Files);
 
     assert!(
         prompt.contains("FIRST_RULE_BODY"),
@@ -123,8 +128,11 @@ fn run_prime_holds_change_and_diffs_only_and_validator_suffix_holds_the_full_rul
         render_run_prime(&work),
         "the run prime render must be byte-stable across calls"
     );
-    let suffix = render_validator_suffix(&vw, &rs);
-    assert_eq!(suffix, render_validator_suffix(&vw, &rs));
+    let suffix = render_validator_suffix(&vw, &rs, ReviewSubject::Files);
+    assert_eq!(
+        suffix,
+        render_validator_suffix(&vw, &rs, ReviewSubject::Files)
+    );
 
     // The PRIME carries the change purpose and the file diff/source, ending
     // with the handoff — and carries NO validator text or contract.
@@ -179,7 +187,7 @@ fn run_prime_holds_change_and_diffs_only_and_validator_suffix_holds_the_full_rul
     // The monolithic fallback for the validator is self-contained: change +
     // validator's files + the validator suffix (path-scoped, contract, all
     // rules).
-    let monolithic = render_fleet_prompt(work.change_purpose(), &vw, &rs);
+    let monolithic = render_fleet_prompt(work.change_purpose(), &vw, &rs, ReviewSubject::Files);
     assert!(
         monolithic.contains("PURPOSE: scaffolding the parser."),
         "{monolithic}"
@@ -207,7 +215,7 @@ fn validator_suffix_emits_the_manifest_body_after_mandate_before_rules() {
         vec![file_work("src/a.rs", "alpha", "src/x.rs")],
     );
 
-    let suffix = render_validator_suffix(&vw, &rs);
+    let suffix = render_validator_suffix(&vw, &rs, ReviewSubject::Files);
 
     // The body line appears verbatim in the suffix.
     assert!(
@@ -246,7 +254,7 @@ fn validator_suffix_omits_guidance_when_body_is_empty() {
         vec![file_work("src/a.rs", "alpha", "src/x.rs")],
     );
 
-    let suffix = render_validator_suffix(&vw, &rs);
+    let suffix = render_validator_suffix(&vw, &rs, ReviewSubject::Files);
     assert!(
         !suffix.contains("## Guidance"),
         "a body-less validator must emit no guidance block: {suffix}"
@@ -268,7 +276,7 @@ fn monolithic_prompt_contains_the_manifest_body_guidance() {
         vec![file_work("src/a.rs", "alpha", "src/x.rs")],
     );
 
-    let prompt = render_fleet_prompt("purpose", &vw, &rs);
+    let prompt = render_fleet_prompt("purpose", &vw, &rs, ReviewSubject::Files);
     assert!(
         prompt.contains("does not apply to test code"),
         "the validator body guidance must reach the monolithic fallback: {prompt}"
@@ -369,7 +377,7 @@ fn monolithic_fallback_renders_the_shared_changed_set_evidence_once_not_once_per
         &[("no-copy-paste", "RULE_BODY.")],
     );
 
-    let prompt = render_fleet_prompt("purpose", &vw, &rs);
+    let prompt = render_fleet_prompt("purpose", &vw, &rs, ReviewSubject::Files);
 
     assert_eq!(
         prompt.matches("SHARED_CHANGED_SET_MARKER").count(),
@@ -438,7 +446,12 @@ fn monolithic_fallback_never_leaks_another_validators_shared_probe_evidence() {
     // must NOT show `dedup`'s shared evidence — its self-contained prompt
     // otherwise carries only its OWN files, never another validator's.
     let rs = ruleset("style", "STYLE_MANDATE.", &[("style-rule", "STYLE_BODY.")]);
-    let monolithic = render_fleet_prompt(work.change_purpose(), &other_validator, &rs);
+    let monolithic = render_fleet_prompt(
+        work.change_purpose(),
+        &other_validator,
+        &rs,
+        ReviewSubject::Files,
+    );
     assert!(
         !monolithic.contains("SHARED_CHANGED_SET_MARKER"),
         "a validator's monolithic fallback must show only its OWN declared \
@@ -461,7 +474,7 @@ fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
         "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string(),
     );
 
-    let payload = render_file_payload(std::slice::from_ref(&file));
+    let payload = render_file_payload(std::slice::from_ref(&file), ReviewSubject::Files);
 
     // The complete source — including the distant marker — is present.
     assert!(
@@ -498,15 +511,18 @@ fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
 /// full — while still leaving the tools advertised.
 #[test]
 fn output_contract_scopes_reads_to_other_files() {
+    // The contract a `review file` op renders: the whole of each named file
+    // is the subject.
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Files);
     assert!(
-        OUTPUT_CONTRACT.contains("other files"),
-        "the contract must scope reads to other (cross-file) files: {OUTPUT_CONTRACT}"
+        contract.contains("other files"),
+        "the contract must scope reads to other (cross-file) files: {contract}"
     );
     // The changed files are provided in full — the contract says so.
     assert!(
-        OUTPUT_CONTRACT.to_lowercase().contains("already provided")
-            || OUTPUT_CONTRACT.to_lowercase().contains("provided in full"),
-        "the contract must state the changed files are provided in full: {OUTPUT_CONTRACT}"
+        contract.to_lowercase().contains("already provided")
+            || contract.to_lowercase().contains("provided in full"),
+        "the contract must state the changed files are provided in full: {contract}"
     );
 }
 
@@ -516,18 +532,21 @@ fn output_contract_scopes_reads_to_other_files() {
 /// storm this contract exists to prevent.
 #[test]
 fn output_contract_demands_every_occurrence_with_no_bail_fast() {
-    let lower = OUTPUT_CONTRACT.to_lowercase();
+    // The contract a `review file` op renders: the whole of each named file
+    // is the subject.
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Files);
+    let lower = contract.to_lowercase();
     assert!(
         lower.contains("every occurrence of every rule"),
-        "the contract must demand every occurrence of every rule: {OUTPUT_CONTRACT}"
+        "the contract must demand every occurrence of every rule: {contract}"
     );
     assert!(
         lower.contains("do not stop at the first"),
-        "the contract must forbid stopping at the first match: {OUTPUT_CONTRACT}"
+        "the contract must forbid stopping at the first match: {contract}"
     );
     assert!(
-        OUTPUT_CONTRACT.contains("one finding per `file:line`"),
-        "the contract must require one finding per file:line: {OUTPUT_CONTRACT}"
+        contract.contains("one finding per `file:line`"),
+        "the contract must require one finding per file:line: {contract}"
     );
 }
 
@@ -537,26 +556,29 @@ fn output_contract_demands_every_occurrence_with_no_bail_fast() {
 /// elsewhere in the file (the finding-dribble this card kills).
 #[test]
 fn output_contract_names_the_whole_file_as_the_review_boundary_not_the_diff() {
-    let lower = OUTPUT_CONTRACT.to_lowercase();
+    // The contract a `review file` op renders: the whole of each named file
+    // is the subject.
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Files);
+    let lower = contract.to_lowercase();
     assert!(
-        OUTPUT_CONTRACT.contains("## Review scope"),
-        "the contract must carry an explicit review-scope section: {OUTPUT_CONTRACT}"
+        contract.contains("## Review scope"),
+        "the contract must carry an explicit review-scope section: {contract}"
     );
     assert!(
         lower.contains("whole current file"),
         "the contract must name the whole current file as the review boundary: \
-         {OUTPUT_CONTRACT}"
+         {contract}"
     );
     assert!(
         lower.contains("pre-existing instances"),
-        "the contract must put pre-existing instances in scope: {OUTPUT_CONTRACT}"
+        "the contract must put pre-existing instances in scope: {contract}"
     );
     assert!(
         lower.contains("orientation only"),
-        "the contract must frame the semantic diff as orientation only: {OUTPUT_CONTRACT}"
+        "the contract must frame the semantic diff as orientation only: {contract}"
     );
     assert!(
         lower.contains("not the review boundary"),
-        "the contract must state the diff is NOT the review boundary: {OUTPUT_CONTRACT}"
+        "the contract must state the diff is NOT the review boundary: {contract}"
     );
 }

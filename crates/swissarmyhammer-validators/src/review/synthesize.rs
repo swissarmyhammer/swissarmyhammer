@@ -42,8 +42,8 @@ use crate::review::fleet::{
     ReviewProgressSender,
 };
 use crate::review::scope::{
-    as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, ExcludedFile,
-    Scope, SkippedFile, WorkList,
+    as_borrowed_strings, batch_work_list, detected_project_type_keys, line_is_reviewed,
+    scope_review, ExcludedFile, LineAnnotation, ReviewSubject, Scope, SkippedFile, WorkList,
 };
 use crate::review::tool_health::ToolHealthCache;
 use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
@@ -279,6 +279,7 @@ pub fn synthesize(
     skipped: &[SkippedFile],
     excluded: &[ExcludedFile],
     tools: &ToolReport,
+    scope: &ReviewedScope,
     now: &str,
 ) -> ReviewReport {
     // The skip list is per (validator, file) pair, but the reader cares about
@@ -316,6 +317,12 @@ pub fn synthesize(
 
     let mut markdown = String::new();
     let _ = writeln!(markdown, "## Review Findings ({now})");
+
+    // The scope line, always — before any finding and before any warning. A
+    // narrowed scope that reports nothing must never read as a clean result,
+    // so the report states what was reviewed and how much was not, whether or
+    // not anything was found.
+    render_scope(&mut markdown, scope, counts.skipped_files.len());
 
     // Flag an incomplete run loudly, right under the header, when any fan-out
     // task failed — otherwise an all-failed run is byte-identical to a clean diff.
@@ -392,6 +399,100 @@ pub fn synthesize(
     );
 
     ReviewReport { markdown, counts }
+}
+
+/// What a report says it reviewed: the op as the caller named it, what that op
+/// makes the subject, and how many distinct files it reached.
+///
+/// Every report opens with this, whatever it found. A review whose scope was
+/// narrowed — by the op, by `.reviewignore`, by a fixture exclusion, by an
+/// over-cap file — and which then reports nothing is indistinguishable from a
+/// review that read everything and found nothing, unless the report says which
+/// it was. `^0fn6dbf` moved to `review` with zero findings after its agent
+/// stalled, and that read as clean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewedScope {
+    /// The op and its target, as [`Scope::describe`] writes it.
+    op: String,
+    /// What the op REVIEWS — the diffs, or the files whole.
+    subject: ReviewSubject,
+    /// How many distinct files the run reviewed.
+    files: usize,
+}
+
+impl ReviewedScope {
+    /// Describe the scope a run resolved, alongside how many distinct files it
+    /// reviewed.
+    pub fn new(scope: &Scope, files: usize) -> Self {
+        Self {
+            op: scope.describe(),
+            subject: scope.subject(),
+            files,
+        }
+    }
+}
+
+/// Render the report's scope line: the op, what it REVIEWS, the file count it
+/// reached, and the count it did not.
+///
+/// A `> ` block quote so it reads as a header note rather than a finding, and
+/// unconditional so `not_reviewed: 0` is stated rather than implied by silence.
+fn render_scope(markdown: &mut String, scope: &ReviewedScope, not_reviewed: usize) {
+    let _ = writeln!(
+        markdown,
+        "\n> Scope: `{}` — reviewed {}. {} file(s) reviewed, {} not reviewed.",
+        scope.op,
+        scope.subject.describe(),
+        scope.files,
+        not_reviewed
+    );
+}
+
+/// Drop every finding that does not land on a line this review REVIEWS.
+///
+/// Fan-out findings are already filtered by the verify guard
+/// ([`run_guard`](crate::review::verify::run_guard)), which refutes an
+/// off-change candidate before it costs an agent turn. Tool-rule findings never
+/// pass through verify — deterministic tool output is CONFIRMED by
+/// construction — so under [`ReviewSubject::Diffs`] they are filtered here
+/// instead, against the same per-line marks the guard reads, via the same
+/// [`line_is_reviewed`] predicate. Without this a tool rule reports every
+/// pre-existing instance in a changed file, which is exactly what a diff
+/// subject excludes.
+///
+/// A finding on a path the work-list does not carry has no annotations to
+/// judge it by, so it is kept — [`line_is_reviewed`] answers `true` on every
+/// undecidable case.
+fn retain_findings_on_the_change(
+    findings: Vec<VerifiedFinding>,
+    work: &WorkList,
+) -> Vec<VerifiedFinding> {
+    if matches!(work.subject(), ReviewSubject::Files) {
+        return findings;
+    }
+    let annotations: BTreeMap<&str, &[LineAnnotation]> = work
+        .distinct_files()
+        .map(|file| (file.path(), file.line_annotations()))
+        .collect();
+    findings
+        .into_iter()
+        .filter(|verified| {
+            let marks = annotations
+                .get(verified.finding.file.as_str())
+                .copied()
+                .unwrap_or(&[]);
+            let kept = line_is_reviewed(work.subject(), marks, verified.finding.line);
+            if !kept {
+                tracing::debug!(
+                    file = %verified.finding.file,
+                    line = verified.finding.line,
+                    validator = %verified.finding.validator,
+                    "tool finding dropped: the cited line is not one this change touched"
+                );
+            }
+            kept
+        })
+        .collect()
 }
 
 /// Every path the run did not review, distinct and sorted: the over-cap paths
@@ -698,6 +799,9 @@ pub async fn run_review(
     // Stage 1: scope → work-list (deterministic, LLM-free). The progress
     // sender rides along so the stage announces each file as it scopes it —
     // the run's FIRST events, emitted long before any fleet work exists.
+    // Kept past the move so the report can name the op the caller asked for,
+    // not a reconstruction of it.
+    let requested_scope = scope.clone();
     let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
     // Stage 2: run every healthy tool rule ONCE for the whole run,
@@ -756,7 +860,13 @@ pub async fn run_review(
     let prompt_framing = prompt_framing(&work, loader);
     let framing = prompt_framing.total();
     let budget = fleet_config.batch_budget(framing);
-    let (batches, skipped) = batch_work_list(&work, budget, rendered_file_block_bytes);
+    // The cost function is subject-aware: a diff subject renders each file's
+    // changed regions rather than the file, so the packer budgets the bytes
+    // the agent actually receives.
+    let subject = work.subject();
+    let (batches, skipped) = batch_work_list(&work, budget, |file| {
+        rendered_file_block_bytes(file, subject)
+    });
 
     tracing::info!(
         validators = work.validators().len(),
@@ -802,7 +912,7 @@ pub async fn run_review(
         // shared prime while it stays pinned. Awaiting drains every verify task.
         let candidates = build_candidates(batch, fleet_findings);
         let prime_session = prime.as_ref().map(|g| g.session_id());
-        let outcome = verify_findings(candidates, pool, prime_session, progress).await;
+        let outcome = verify_findings(candidates, pool, prime_session, progress, subject).await;
 
         // The batch (fan-out AND verify) has drained: release its prime pin so the
         // pinned cache entry does not outlive the batch. A run future dropped
@@ -819,7 +929,11 @@ pub async fn run_review(
     // skips the adversarial verify pass — so they join the verified stream
     // directly.
     let (tool_findings, tool_errors) = tool_runs.finish().await.into_parts();
-    verified.extend(tool_findings);
+    // A tool rule reads whole files, so under a diff subject it reports
+    // pre-existing instances the verify guard would have refuted had they come
+    // from an agent. They never reach verify, so the same boundary is applied
+    // here.
+    verified.extend(retain_findings_on_the_change(tool_findings, &work));
 
     // Stage 5: synthesize the merged, deduped, ordered, dated report. The summed
     // tally rides into the report so the tool boundary can flag/fail an incomplete
@@ -832,6 +946,7 @@ pub async fn run_review(
         &skipped,
         work.excluded(),
         &ToolReport::new(tool_attempted, tool_errors, tool_fallbacks),
+        &ReviewedScope::new(&requested_scope, work.distinct_files().count()),
         now,
     );
 
@@ -893,6 +1008,35 @@ mod tests {
     /// relationship (all succeeded, or all failed), not the magnitude — so naming
     /// it keeps the `FleetTally::new` arguments from reading as bare literals.
     const ATTEMPTED_TASKS: usize = 8;
+
+    /// How many files the fixture scope line reports as reviewed. These tests
+    /// assert on findings and gap blocks, not on the scope line's count, so the
+    /// number only has to be fixed.
+    const SCOPE_FILES: usize = 1;
+
+    /// [`synthesize`] under a fixed `review working` scope.
+    ///
+    /// Every test here asserts on what the findings, gaps and notes render to,
+    /// none on which op produced them, so the scope is named once here rather
+    /// than repeated at two dozen call sites.
+    fn synthesize_working(
+        verified: impl IntoIterator<Item = VerifiedFinding>,
+        tally: &FleetTally,
+        skipped: &[SkippedFile],
+        excluded: &[ExcludedFile],
+        tools: &ToolReport,
+        now: &str,
+    ) -> ReviewReport {
+        synthesize(
+            verified,
+            tally,
+            skipped,
+            excluded,
+            tools,
+            &ReviewedScope::new(&Scope::Working, SCOPE_FILES),
+            now,
+        )
+    }
 
     /// The per-file cap the oversized-file fixtures pretend the packer
     /// enforced. The magnitude mirrors the real default cap so the
@@ -971,7 +1115,7 @@ mod tests {
         // byte-identically to a clean diff, and surface the tally in its counts.
         // Every attempted task failed (failed == attempted), so the run is fully
         // incomplete — the magnitude is immaterial.
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::new(
                 TasksAttempted(ATTEMPTED_TASKS),
@@ -1003,7 +1147,7 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
@@ -1012,14 +1156,18 @@ mod tests {
             NOW,
         );
 
-        assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
+        assert!(
+            !report.markdown.contains("INCOMPLETE"),
+            "a fully successful tally raises no incomplete flag: {}",
+            report.markdown
+        );
         assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
         assert_eq!(report.counts.tasks_failed, 0);
     }
 
     #[test]
     fn renders_dated_header_with_the_input_timestamp_verbatim() {
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &[],
@@ -1041,7 +1189,7 @@ mod tests {
         // Zero attempted tasks means the resolved scope was empty — the report
         // must say so explicitly instead of rendering a bare findings header
         // that reads identically to a genuinely clean review.
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &[],
@@ -1076,7 +1224,7 @@ mod tests {
             TEST_OVERSIZE_RENDERED_BYTES,
             TEST_FILE_CAP_BYTES,
         )];
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &skipped,
@@ -1122,7 +1270,7 @@ mod tests {
         // did not review, and it must raise no finding at all.
         let excluded = vec![ExcludedFile::validator_fixture(TEST_EXCLUDED_FIXTURE)];
 
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &[],
@@ -1180,7 +1328,7 @@ mod tests {
         )];
         let excluded = vec![ExcludedFile::validator_fixture(TEST_EXCLUDED_FIXTURE)];
 
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &skipped,
@@ -1224,7 +1372,7 @@ mod tests {
                 TEST_FILE_CAP_BYTES,
             ),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &skipped,
@@ -1279,7 +1427,7 @@ mod tests {
                 TEST_TINY_CAP_BYTES,
             ),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &skipped,
@@ -1308,7 +1456,7 @@ mod tests {
                 TEST_TINY_CAP_BYTES,
             ),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &skipped,
@@ -1341,7 +1489,7 @@ mod tests {
             TEST_TINY_OVERSIZE_BYTES,
             TEST_TINY_CAP_BYTES,
         )];
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::new(TasksAttempted(1), TasksFailed(0)),
             &skipped,
@@ -1375,7 +1523,7 @@ mod tests {
     fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
         // Tasks ran and found nothing — that is a clean review, not an empty
         // scope, so the marker must not appear.
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::new(TasksAttempted(ATTEMPTED_TASKS), TasksFailed(0)),
             &[],
@@ -1405,7 +1553,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let _report = synthesize(
+        let _report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1435,7 +1583,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1474,7 +1622,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(
+        let report = synthesize_working(
             vec![one.clone(), one],
             &FleetTally::default(),
             &[],
@@ -1515,7 +1663,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(
+        let report = synthesize_working(
             vec![dup, dead],
             &FleetTally::default(),
             &[],
@@ -1569,7 +1717,7 @@ mod tests {
                 )
             })
             .collect();
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1606,7 +1754,7 @@ mod tests {
             confirmed("src/a.rs", 10, "dead-code", None, "First concern", None),
             confirmed("src/b.rs", 20, "style", None, "Second concern", None),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1659,7 +1807,7 @@ mod tests {
             ),
             confirmed("path/to/file.rs", 88, "style", None, "Minor issue", None),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1668,8 +1816,12 @@ mod tests {
             NOW,
         );
 
+        // The scope line opens every report, whatever it found, so a narrowed
+        // scope can never read as a clean result.
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
+
+> Scope: `review working` — reviewed the diffs only — lines this change added or modified. 1 file(s) reviewed, 0 not reviewed.
 
 - [ ] `path/to/file.rs:10` `perf/unattributed` — What's wrong and suggested fix.
 - [ ] `path/to/file.rs:42` `dead-code/no-unused` — What's wrong. Why it matters. Suggested fix.
@@ -1686,7 +1838,7 @@ mod tests {
             confirmed("src/a.rs", 90, "v", None, "a90 concern", None),
             confirmed("src/a.rs", 9, "v", None, "a9 concern", None),
         ];
-        let report = synthesize(
+        let report = synthesize_working(
             verified,
             &FleetTally::default(),
             &[],
@@ -1822,7 +1974,7 @@ mod tests {
             vec![],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
+        let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert_eq!(report.counts().tool_errors(), 1);
         assert!(
@@ -1862,7 +2014,7 @@ mod tests {
             )],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
+        let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert!(
             report
@@ -1895,7 +2047,7 @@ mod tests {
             )],
         );
 
-        let report = synthesize(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
+        let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
 
         assert!(
             report
@@ -1908,7 +2060,7 @@ mod tests {
 
     #[test]
     fn an_inert_tool_report_keeps_the_nothing_in_scope_marker() {
-        let report = synthesize(
+        let report = synthesize_working(
             vec![],
             &FleetTally::default(),
             &[],

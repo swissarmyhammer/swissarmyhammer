@@ -805,6 +805,10 @@ fn report_with_tally(attempted: TasksAttempted, failed: TasksFailed) -> ReviewRe
         &[],
         &[],
         &swissarmyhammer_validators::review::ToolReport::default(),
+        &swissarmyhammer_validators::review::synthesize::ReviewedScope::new(
+            &swissarmyhammer_validators::review::Scope::Working,
+            0,
+        ),
         "now",
     )
 }

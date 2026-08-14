@@ -9,15 +9,25 @@
 //! instead. The framing/measure helpers ([`rendered_file_block_bytes`],
 //! [`prompt_framing_bytes`]) run these same renderers, so the number the batch
 //! packer budgets on and the number the agent receives are the same bytes.
+//!
+//! # What every prompt here says about its subject
+//!
+//! The run's [`ReviewSubject`] decides what a file block shows and what the
+//! agent is told to do with it, and the same two words carry it everywhere:
+//! **REVIEW** the subject, **CONSIDER** the context. Under
+//! [`ReviewSubject::Diffs`] the subject is the lines the change added or
+//! modified and a block prints those lines plus a context band; under
+//! [`ReviewSubject::Files`] the subject is the whole of each named file and a
+//! block prints all of it.
 
 use std::fmt::Write as _;
 
 use crate::review::probes::{render_probe_evidence, render_probe_evidence_within, ProbeResult};
-use crate::review::scope::{FileWork, LineAnnotation, ValidatorWork, WorkList};
+use crate::review::scope::{FileWork, LineAnnotation, ReviewSubject, ValidatorWork, WorkList};
 use crate::validators::{RuleSet, ValidatorLoader};
 
 use super::{
-    MANDATE_HEADER, MAX_SHARED_EVIDENCE_BYTES, OUTPUT_CONTRACT, PRIME_HANDOFF, VALIDATOR_HEADER,
+    output_contract, MANDATE_HEADER, MAX_SHARED_EVIDENCE_BYTES, PRIME_HANDOFF, VALIDATOR_HEADER,
 };
 
 /// The header that opens both fan-out prompt renderings — the monolithic
@@ -45,19 +55,22 @@ const CHANGE_PURPOSE_HEADER: &str = "# Change purpose\n\n";
 ///
 /// `validator` is the work-list entry (its name and the file work); `ruleset` is
 /// the same validator's loaded [`RuleSet`], the authoritative source of the
-/// mandate (its description) and the verbatim rule bodies.
+/// mandate (its description) and the verbatim rule bodies. `subject` is the
+/// run's [`ReviewSubject`], which decides what each file block shows and what
+/// the output contract names as the review boundary.
 pub fn render_fleet_prompt(
     change_purpose: &str,
     validator: &ValidatorWork,
     ruleset: &RuleSet,
+    subject: ReviewSubject,
 ) -> String {
     let mut out = String::new();
     out.push_str(CHANGE_PURPOSE_HEADER);
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
-    out.push_str(&render_file_payload(validator.files()));
+    out.push_str(&render_file_payload(validator.files(), subject));
     render_shared_probe_evidence(&mut out, validator.shared_probe_results());
-    out.push_str(&render_validator_suffix(validator, ruleset));
+    out.push_str(&render_validator_suffix(validator, ruleset, subject));
     out
 }
 
@@ -80,7 +93,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
     out.push_str(work.change_purpose().trim());
     out.push_str("\n\n");
     let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
-    out.push_str(&render_file_payload(&distinct));
+    out.push_str(&render_file_payload(&distinct, work.subject()));
     render_shared_probe_evidence(&mut out, &work.shared_probe_results());
     out.push_str(PRIME_HANDOFF);
     out
@@ -96,17 +109,26 @@ pub fn render_run_prime(work: &WorkList) -> String {
 ///
 /// Always non-empty: it carries at least the rule bodies and the output contract,
 /// so a fork turn never degenerates to a full reprocess (`lcp == new_len`).
-pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> String {
-    render_suffix(validator.validator_name(), ruleset, validator.files())
+pub fn render_validator_suffix(
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    subject: ReviewSubject,
+) -> String {
+    render_suffix(
+        validator.validator_name(),
+        ruleset,
+        validator.files(),
+        subject,
+    )
 }
 
 /// The suffix bytes that do NOT move with the batch's file list — everything
 /// [`render_validator_suffix`] renders except the focus-file lines.
 ///
-/// The identity `render_validator_suffix(v, rs).len() ==
-/// validator_suffix_framing_bytes(v, rs) + sum of focus_file_line_bytes` holds
-/// by construction: both go through [`render_suffix`], one with the file list
-/// and one with none.
+/// The identity `render_validator_suffix(v, rs, s).len() ==
+/// validator_suffix_framing_bytes(v, rs, s) + sum of focus_file_line_bytes`
+/// holds by construction: both go through [`render_suffix`], one with the file
+/// list and one with none.
 ///
 /// This is the suffix term [`prompt_framing_bytes`] reserves, and the split is
 /// what makes that reserve independent of how many files the change carries.
@@ -116,15 +138,24 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
 /// was charged against the run's WHOLE file list in every batch, which both
 /// over-reserved for the batch actually being sent and grew the framing without
 /// bound as the change grew.
-fn validator_suffix_framing_bytes(validator: &ValidatorWork, ruleset: &RuleSet) -> usize {
-    render_suffix(validator.validator_name(), ruleset, &[]).len()
+fn validator_suffix_framing_bytes(
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    subject: ReviewSubject,
+) -> usize {
+    render_suffix(validator.validator_name(), ruleset, &[], subject).len()
 }
 
 /// The shared body of [`render_validator_suffix`] and
 /// [`validator_suffix_framing_bytes`]: the validator header, mandate, guidance,
 /// the focus-file list over `files`, every prompt rule body, and the output
 /// contract.
-fn render_suffix(validator_name: &str, ruleset: &RuleSet, files: &[FileWork]) -> String {
+fn render_suffix(
+    validator_name: &str,
+    ruleset: &RuleSet,
+    files: &[FileWork],
+    subject: ReviewSubject,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{VALIDATOR_HEADER}{validator_name}\n");
     out.push_str(MANDATE_HEADER);
@@ -133,7 +164,7 @@ fn render_suffix(validator_name: &str, ruleset: &RuleSet, files: &[FileWork]) ->
 
     render_validator_guidance(&mut out, ruleset.manifest_body());
 
-    render_focus_files(&mut out, files);
+    render_focus_files(&mut out, files, subject);
 
     out.push_str("## Rules\n\n");
     // Tool rules never render: no LLM reads a tool rule's body — the tool
@@ -144,7 +175,7 @@ fn render_suffix(validator_name: &str, ruleset: &RuleSet, files: &[FileWork]) ->
         out.push_str("\n\n");
     }
 
-    out.push_str(OUTPUT_CONTRACT);
+    out.push_str(&output_contract(subject));
     out.push('\n');
     out
 }
@@ -168,17 +199,35 @@ fn render_validator_guidance(out: &mut String, body: &str) {
     out.push_str("\n\n");
 }
 
-/// Append the "files in scope for this validator" list: the paths of the
-/// validator's matched files. The contents are in the inherited prime; this just
-/// scopes the validator to those files so it does not flag files another
-/// validator matched.
-fn render_focus_files(out: &mut String, files: &[FileWork]) {
-    out.push_str(
-        "## Files in scope\n\nApply the rules below to the WHOLE current contents of each \
-         file listed here — their complete current source is already provided above. Review \
-         every line of these files, not only the lines the change touched: a rule that fires \
-         anywhere in one of these files is in scope and must be reported now.\n\n",
-    );
+/// The "what to REVIEW against what to CONSIDER" statement the focus-file list
+/// opens with under [`ReviewSubject::Diffs`].
+///
+/// Stated here as well as in the file blocks and the output contract, because
+/// an agent reads the boundary where it reads its instructions, and the suffix
+/// is the last thing a forked session sees before its rules.
+const FOCUS_FILES_DIFFS: &str = "## Files in scope\n\nApply the rules below to the lines these \
+files' blocks mark with `+` — the lines this change added or modified. Those lines are what you \
+REVIEW: every finding must land on one of them. The unmarked lines around them are there to \
+CONSIDER — read them to judge the change correctly, and never report a finding on one. A defect \
+that was already there before this change is out of scope, however real it is and whatever rule \
+matches it.\n\n";
+
+/// The same statement under [`ReviewSubject::Files`], where the caller named
+/// these files on purpose and the whole of each is the subject.
+const FOCUS_FILES_WHOLE: &str = "## Files in scope\n\nApply the rules below to the WHOLE current \
+contents of each file listed here — their complete current source is already provided above. \
+Review every line of these files: the caller asked about these files themselves, so a rule that \
+fires anywhere in one of them is in scope and must be reported now.\n\n";
+
+/// Append the "files in scope for this validator" list: what to REVIEW in them,
+/// then the paths of the validator's matched files. The contents are in the
+/// inherited prime; this just scopes the validator to those files so it does
+/// not flag files another validator matched.
+fn render_focus_files(out: &mut String, files: &[FileWork], subject: ReviewSubject) {
+    out.push_str(match subject {
+        ReviewSubject::Diffs => FOCUS_FILES_DIFFS,
+        ReviewSubject::Files => FOCUS_FILES_WHOLE,
+    });
     for file in files {
         out.push_str(&focus_file_line(file));
     }
@@ -222,6 +271,11 @@ const FILE_PAYLOAD_HEADER: &str = "# Files under review\n\n";
 /// [`FileWork::source_slice`](crate::review::scope::FileWork::source_slice) can
 /// stand in for it.
 ///
+/// The cost depends on `subject` as much as on the file: under
+/// [`ReviewSubject::Diffs`] a block prints the changed regions and their
+/// context band, so a one-line edit to a long file costs a handful of lines
+/// rather than the file.
+///
 /// The cost is per **(validator, file) pair**, not per path: a file's block
 /// carries the probe evidence selected for THAT validator, so the same path can
 /// cost kilobytes for one validator and megabytes for another.
@@ -232,9 +286,9 @@ const FILE_PAYLOAD_HEADER: &str = "# Files under review\n\n";
 /// charges the pair for both. What this buys is the exact accounting the batch
 /// guarantee rests on: a rendered prompt is never more than
 /// [`prompt_framing_bytes`] plus the sum of this cost over the batch's files.
-pub fn rendered_file_block_bytes(file: &FileWork) -> usize {
+pub fn rendered_file_block_bytes(file: &FileWork, subject: ReviewSubject) -> usize {
     let mut out = String::new();
-    render_file_block(&mut out, file);
+    render_file_block(&mut out, file, subject);
     out.len() + focus_file_line_bytes(file)
 }
 
@@ -405,7 +459,7 @@ pub fn prompt_framing(work: &WorkList, loader: &ValidatorLoader) -> PromptFramin
         .filter_map(|validator| {
             let ruleset = loader.get_ruleset(validator.validator_name())?;
             Some((
-                validator_suffix_framing_bytes(validator, ruleset),
+                validator_suffix_framing_bytes(validator, ruleset, work.subject()),
                 validator.validator_name(),
             ))
         })
@@ -435,49 +489,92 @@ pub fn prompt_framing_bytes(work: &WorkList, loader: &ValidatorLoader) -> usize 
     prompt_framing(work, loader).total()
 }
 
-/// Render the file payload — one self-contained block per file (path + semantic
-/// diff + bounded source slice + probe evidence). Used by the run prime (every
+/// Render the file payload — one self-contained block per file (path + source
+/// view + semantic diff + probe evidence). Used by the run prime (every
 /// distinct file) and the monolithic fallback (one validator's files).
-pub fn render_file_payload(files: &[FileWork]) -> String {
+pub fn render_file_payload(files: &[FileWork], subject: ReviewSubject) -> String {
     let mut out = String::new();
     out.push_str(FILE_PAYLOAD_HEADER);
     for file in files {
-        render_file_block(&mut out, file);
+        render_file_block(&mut out, file, subject);
     }
     out
 }
 
-/// Append one file's review block: path, the full current source, the semantic
-/// diff of what changed, and the probe results rendered as evidence.
+/// What a [`ReviewSubject::Diffs`] block says before its numbered source: the
+/// marked lines are the subject, the unmarked ones are context.
 ///
-/// The changed file is always handed to the model **in full** — framed explicitly
-/// as the complete current contents the model does NOT need to re-read, because
-/// the read-round-trips that dominated review wall-clock came from the model
-/// re-reading a file it was only given a partial slice of. A file whose rendered
-/// block would exceed the per-file cap never reaches here as a partial view:
-/// [`batch_work_list`](crate::review::scope::batch_work_list) excludes it and
-/// reports it as a [`SkippedFile`](crate::review::scope::SkippedFile) gap instead
-/// of trimming it to a slice.
-fn render_file_block(out: &mut String, file: &FileWork) {
+/// The elision sentence matters as much as the boundary one. The block prints
+/// the changed regions and their context band, so a model that needs more of
+/// the file has to be told it may read it — otherwise it treats the printed
+/// band as the whole file and reasons about a truncated view.
+const DIFF_BLOCK_HEADER: &str = "### The change in this file\n\n\
+The lines marked `+` below are the lines this change added or modified. Those lines are what you \
+REVIEW: every finding you report on this file must land on one of them. The unmarked lines are \
+printed around them as context to CONSIDER — read them to judge the marked lines correctly, and \
+never report a finding on one. A defect that was already there before this change is out of \
+scope, however real it is and whatever rule matches it.\n\n\
+Long unchanged stretches are elided; `read_file` this path when you need more of the file to \
+judge a marked line.\n\n";
+
+/// What a [`ReviewSubject::Files`] block says before its numbered source: the
+/// caller asked about this file, so the whole of it is the subject.
+const WHOLE_FILE_BLOCK_HEADER: &str = "### Full current contents\n\n\
+This is the COMPLETE current source of the file. You do not need to read this file — it is \
+provided here in full. The caller asked about this file itself, so the whole file is what you \
+REVIEW: report every place a rule fires anywhere in it, including instances that sit outside the \
+change described below.\n\n";
+
+/// The semantic-diff header under [`ReviewSubject::Diffs`], where the entity
+/// list names the same change the marked lines carry.
+const DIFF_SEMANTIC_HEADER: &str = "### What changed (semantic diff)\n\n\
+The entities below are the ones this change touched — the same change the marked lines above \
+carry, named at entity level.\n\n";
+
+/// The semantic-diff header under [`ReviewSubject::Files`], where the entity
+/// list is orientation only and the file, not the change, is the subject.
+const WHOLE_FILE_SEMANTIC_HEADER: &str =
+    "### What changed (semantic diff — orientation only, NOT the review boundary)\n\n\
+The entities below are what this change touched, to orient you. They are context to CONSIDER, \
+not the review boundary: do NOT limit findings to these lines. Review the whole file above and \
+report every instance of every rule.\n\n";
+
+/// Append one file's review block: path, the source view the run's
+/// [`ReviewSubject`] calls for, the semantic diff of what changed, and the
+/// probe results rendered as evidence.
+///
+/// Under [`ReviewSubject::Files`] the file is handed to the model **in full** —
+/// framed explicitly as the complete current contents the model does NOT need
+/// to re-read, because the read-round-trips that dominated review wall-clock
+/// came from the model re-reading a file it was only given a partial slice of.
+/// Under [`ReviewSubject::Diffs`] the block prints the changed regions and
+/// their context band instead, and says so: the subject is those lines, so a
+/// view of them is not a partial view of the subject.
+///
+/// A file whose rendered block would exceed the per-file cap is never trimmed
+/// to fit: [`batch_work_list`](crate::review::scope::batch_work_list) excludes
+/// it and reports it as a [`SkippedFile`](crate::review::scope::SkippedFile)
+/// gap instead.
+fn render_file_block(out: &mut String, file: &FileWork, subject: ReviewSubject) {
     let _ = writeln!(out, "## File: {}\n", file.path());
 
-    out.push_str(
-        "### Full current contents\n\n\
-         This is the COMPLETE current source of the file. You do not need to read this \
-         file — it is provided here in full. Review it directly. This whole file is the \
-         review boundary: report every place a rule fires anywhere in it, including \
-         pre-existing instances that sit outside the change described below.\n\n",
-    );
-    render_numbered_source(out, file);
+    let (block_header, semantic_header, view) = match subject {
+        ReviewSubject::Diffs => (
+            DIFF_BLOCK_HEADER,
+            DIFF_SEMANTIC_HEADER,
+            SourceView::ChangedRegions,
+        ),
+        ReviewSubject::Files => (
+            WHOLE_FILE_BLOCK_HEADER,
+            WHOLE_FILE_SEMANTIC_HEADER,
+            SourceView::Whole,
+        ),
+    };
 
-    out.push_str(
-        "### What changed (semantic diff — orientation only, NOT the review boundary)\n\n",
-    );
-    out.push_str(
-        "The entities below are what this change touched, to orient you. They are context, \
-         not the review scope: do NOT limit findings to these lines. Review the whole file \
-         above and report every instance of every rule, changed or pre-existing.\n\n",
-    );
+    out.push_str(block_header);
+    render_numbered_source(out, file, view);
+
+    out.push_str(semantic_header);
     render_semantic_diff(out, file);
 
     out.push_str("### Probe evidence\n\n");
@@ -510,9 +607,41 @@ it appears in the file.
 
 ";
 
+/// Which lines of a file's source a numbered block prints.
+///
+/// The [`ReviewSubject`] chooses it: reviewing the diffs prints the changed
+/// regions, reviewing the files prints all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceView {
+    /// Every line of the source.
+    Whole,
+    /// Only the changed regions — each touched line widened by
+    /// [`DIFF_CONTEXT_LINES`] on both sides, overlapping bands merged.
+    ChangedRegions,
+}
+
+/// How many unchanged lines a changed region carries on each side under
+/// [`SourceView::ChangedRegions`] — the band the agent CONSIDERs.
+///
+/// Wide enough to carry the enclosing signature, the guard clauses above an
+/// edit, and the lines an edit reads from, so the change can be judged without
+/// a read round-trip. Narrow enough that a one-line edit to a long file renders
+/// as a handful of lines rather than the file, which is the whole point: the
+/// engine used to pick files from the diff and then hand over whole files.
+const DIFF_CONTEXT_LINES: usize = 20;
+
+/// What a [`SourceView::ChangedRegions`] block prints when the change touched
+/// no line of the file — a mode change, or a validator matched on a file the
+/// diff left alone.
+///
+/// Stated rather than left blank: an empty block reads as "the file is empty",
+/// which invites the model to invent a finding about it.
+const NO_CHANGED_LINES: &str = "_This change added or modified no line in this file, so there is \
+nothing here to REVIEW. Report no finding on it._\n\n";
+
 /// Append `file`'s source as a numbered, blame-annotated block — one line of
 /// [`LINE_FORMAT_LEGEND`]'s `{line:>6} | {sha:8} {mark} | {text}` layout per
-/// source line, inside a fenced code block.
+/// printed source line, inside a fenced code block.
 ///
 /// `file.source_slice().trim_end()` is the SAME content
 /// [`crate::review::scope::compute_line_annotations`] (the scope stage) used
@@ -522,14 +651,50 @@ it appears in the file.
 /// renderer the verify stage also uses (see that function's docs for why: a
 /// verifier that cannot read the SAME numbered source the fan-out agent saw
 /// has no way to check a finding's cited line against what is actually there).
-fn render_numbered_source(out: &mut String, file: &FileWork) {
-    render_numbered_lines(out, file.source_slice(), file.line_annotations());
+fn render_numbered_source(out: &mut String, file: &FileWork, view: SourceView) {
+    render_numbered_lines(out, file.source_slice(), file.line_annotations(), view);
+}
+
+/// The 1-based, inclusive line ranges [`SourceView::ChangedRegions`] prints:
+/// every touched line widened by [`DIFF_CONTEXT_LINES`] on each side, with
+/// overlapping or abutting bands merged so the block never elides a single
+/// line between two regions.
+///
+/// Empty when the change touched no line — [`render_numbered_lines`] renders
+/// [`NO_CHANGED_LINES`] rather than an empty fence in that case.
+fn changed_regions(annotations: &[LineAnnotation], total_lines: usize) -> Vec<(usize, usize)> {
+    let mut regions: Vec<(usize, usize)> = Vec::new();
+    for (index, annotation) in annotations.iter().take(total_lines).enumerate() {
+        if !annotation.touched() {
+            continue;
+        }
+        let line = index + 1;
+        let start = line.saturating_sub(DIFF_CONTEXT_LINES).max(1);
+        let end = (line + DIFF_CONTEXT_LINES).min(total_lines);
+        match regions.last_mut() {
+            Some(last) if start <= last.1 + 1 => last.1 = last.1.max(end),
+            _ => regions.push((start, end)),
+        }
+    }
+    regions
+}
+
+/// The line that stands in for `count` lines a
+/// [`SourceView::ChangedRegions`] block did not print, so a model never reads
+/// an elided block as the whole file.
+fn elision_line(count: usize) -> String {
+    format!("       … {count} unchanged line(s) not shown …\n")
 }
 
 /// Append `source` as a numbered, blame-annotated block — one line of
 /// [`LINE_FORMAT_LEGEND`]'s `{line:>6} | {sha:8} {mark} | {text}` layout per
-/// source line, inside a fenced code block. An empty (trimmed) `source` renders
-/// the bare empty fence: no legend, no numbering, nothing to number.
+/// printed source line, inside a fenced code block. An empty (trimmed) `source`
+/// renders the bare empty fence: no legend, no numbering, nothing to number.
+///
+/// `view` chooses which lines print. [`SourceView::Whole`] prints all of them;
+/// [`SourceView::ChangedRegions`] prints [`changed_regions`] and replaces each
+/// unprinted stretch with an [`elision_line`], keeping every printed line's
+/// TRUE number so a `Finding.line` still reads off the printed number.
 ///
 /// Shared by two call sites that both need the model to read a `Finding.line`
 /// off a real printed number rather than guess one:
@@ -546,7 +711,8 @@ fn render_numbered_source(out: &mut String, file: &FileWork) {
 ///   itself pointed at the right place. Giving verify the identical numbered
 ///   view closes that gap: the adversary can now read line `N` off the same
 ///   block the fan-out agent read it from and refute a finding whose citation
-///   does not match.
+///   does not match. Verify passes [`SourceView::Whole`], because an adversary
+///   checking a citation needs the file the citation points into.
 ///
 /// `annotations[i]` is assumed to correspond to `source`'s line `i` (both
 /// derived from the same trimmed content upstream); a missing entry — should
@@ -557,6 +723,7 @@ pub(crate) fn render_numbered_lines(
     out: &mut String,
     source: &str,
     annotations: &[LineAnnotation],
+    view: SourceView,
 ) {
     let source = source.trim_end();
     if source.is_empty() {
@@ -564,20 +731,52 @@ pub(crate) fn render_numbered_lines(
         return;
     }
 
+    let lines: Vec<&str> = source.lines().collect();
+    let regions = match view {
+        SourceView::Whole => vec![(1, lines.len())],
+        SourceView::ChangedRegions => changed_regions(annotations, lines.len()),
+    };
+    if regions.is_empty() {
+        out.push_str(NO_CHANGED_LINES);
+        return;
+    }
+
     out.push_str(LINE_FORMAT_LEGEND);
     out.push_str("```\n");
-    for (i, text) in source.lines().enumerate() {
-        let line = i + 1;
-        let (sha, mark) = match annotations.get(i) {
-            Some(annotation) => (
-                annotation.sha().to_string(),
-                if annotation.touched() { '+' } else { ' ' },
-            ),
-            None => ("????????".to_string(), ' '),
-        };
-        let _ = writeln!(out, "{line:>6} | {sha:8} {mark} | {text}");
+    let mut printed_through = 0usize;
+    for (start, end) in regions {
+        if start > printed_through + 1 {
+            out.push_str(&elision_line(start - printed_through - 1));
+        }
+        for line in start..=end {
+            render_numbered_line(out, line, lines[line - 1], annotations.get(line - 1));
+        }
+        printed_through = end;
+    }
+    if printed_through < lines.len() {
+        out.push_str(&elision_line(lines.len() - printed_through));
     }
     out.push_str("```\n\n");
+}
+
+/// Write one `{line:>6} | {sha:8} {mark} | {text}` row.
+///
+/// A missing `annotation` falls back to the same `????????` sentinel a blame
+/// failure uses, so an annotation list shorter than the source never panics.
+fn render_numbered_line(
+    out: &mut String,
+    line: usize,
+    text: &str,
+    annotation: Option<&LineAnnotation>,
+) {
+    let (sha, mark) = match annotation {
+        Some(annotation) => (
+            annotation.sha().to_string(),
+            if annotation.touched() { '+' } else { ' ' },
+        ),
+        None => ("????????".to_string(), ' '),
+    };
+    let _ = writeln!(out, "{line:>6} | {sha:8} {mark} | {text}");
 }
 
 /// Append the structured semantic diff for a file as a list of changed entities.

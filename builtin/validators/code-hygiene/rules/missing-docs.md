@@ -19,7 +19,10 @@ Examine the file content for public items lacking documentation:
 
 ## Reporting
 
-- If you find missing docs in a file -- you need to check the WHOLE file and report every place docs are missing, not just the diff
+- Report every place docs are missing across what the review puts in scope. The
+  prompt states that boundary and it decides which lines you may report on: the
+  lines the change added or modified under a diff op, the whole of each named
+  file under a file op. Report every instance inside it, never only the first.
 
 ## Exceptions (Don't Flag)
 

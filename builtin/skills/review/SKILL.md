@@ -24,7 +24,6 @@ $ARGUMENTS
 
 - **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
 - **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
-- **Never ask to refactor existing tests — blanket exception, overrides every other rule.** Do NOT raise, record, or relay any finding whose subject is *changing test code that already existed* — refactoring, deduplicating, restructuring, renaming, re-docstringing, or otherwise restyling it — even when a validator (duplication, complexity, missing-docs, reuse, naming, function-length, …) flags it. **Drop the finding.** Adding a *new* regression test for the change under review is fine and expected; rewriting the tests that were already in the repo is out of scope. Why: test refactoring is not the task, it burns the implement loop on churn, and — critically — rewriting an existing test file collides with the upstream/maintainer test suite the change is graded against, turning a correct fix into a broken merge. The only thing that lifts this exception is the user *explicitly* asking for test refactoring.
 - **One concern per checklist item.** The engine already formats this way — preserve it.
 - **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.
 - **Preserve history on re-run.** Always append new dated sections. Never edit or delete prior ones; never flip checkboxes yourself — the user (or the implementer picking up the task) owns the marks.
@@ -39,11 +38,56 @@ The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewRep
 - `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Each item reads ``- [ ] `file:line` `set/rule` — claim. suggestion.``, so the item names the validator set and the rule that produced it and the reader opens that rule without searching. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
 - `counts` — `{ findings, confirmed, refuted }`. Use it for the summary.
 
-| Op | Scope | When |
-|----|-------|------|
-| `{"op": "review working"}` | Uncommitted changes vs `HEAD` | The everyday default. |
-| `{"op": "review sha", "sha": "<commit-or-range>"}` | The changes in/since a commit or range (e.g. `HEAD~4..HEAD`, `abc123..HEAD`) | A commit, range, or "since" hint. |
-| `{"op": "review file", "path": "<path-or-glob>"}` | An explicit file path or glob | A specific file or set of files. |
+| Op | Scope | Reviews | When |
+|----|-------|---------|------|
+| `{"op": "review working"}` | Uncommitted changes vs `HEAD` | **the diffs only** | The everyday default. |
+| `{"op": "review sha", "sha": "<commit-or-range>"}` | The changes in/since a commit or range (e.g. `HEAD~4..HEAD`, `abc123..HEAD`) | **the diffs only** | A commit, range, or "since" hint. |
+| `{"op": "review file", "path": "<path-or-glob>"}` | An explicit file path or glob | **the whole file** | A specific file or set of files. |
+
+### What each op reviews
+
+The op is the whole of it. There is no argument, no modifier and no flag that
+picks between the two — asking about the working tree or a sha is asking about
+a CHANGE, and asking about a path or a glob is asking about FILES.
+
+#### Under `review working` and `review sha` — report findings ONLY on the diffs
+
+Report a finding **only** on a line the change added or modified. Report
+**nothing** on any other line of the file.
+
+This holds no matter what else the file contains. A real defect on an unchanged
+line is **not a finding** in a diff op. Neither is a defect a validator flags on
+an unchanged line. Neither is one you are certain about. If the change did not
+write that line, it is not under review, and you do not report it.
+
+The rest of the file is given to you for one reason: so you can judge the
+changed lines correctly. Read it, use it, and report nothing from it.
+
+The engine enforces this — a finding off the changed lines is refuted before it
+reaches the report — so a finding you raise there is not merely dropped, it is
+wasted work.
+
+#### Under `review file` — report findings anywhere in the named files
+
+Every line of each named file is under review. The caller asked about those
+files, so answer about all of them.
+
+#### The two words the engine renders in every prompt
+
+- **REVIEW** — the subject. A finding must land here.
+- **CONSIDER** — context. Read it to judge the subject; never report it.
+
+Under a diff op, REVIEW is the added and modified lines and CONSIDER is
+everything else. Under a file op, REVIEW is the whole of each named file.
+
+Two consequences for you as the driver:
+
+- `/finish` always passes a sha, so every finish review reviews that
+  iteration's diffs and nothing else. You never need `git blame` to decide
+  whether a finding belongs to the change — the engine has already answered
+  that.
+- `/review <path>` on a test file is a legitimate and wanted request. It
+  reviews that file whole, like any other file. Relay what it finds.
 
 ### Passthrough modifiers
 

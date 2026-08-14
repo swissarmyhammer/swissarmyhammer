@@ -72,7 +72,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::review::scope::{
-    BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, RuleNames, ValidatorWork, WorkList,
+    BatchBudget, BatchBytes, FileCapBytes, FileWork, ProbeNames, ReviewSubject, RuleNames,
+    ValidatorWork, WorkList,
 };
 use crate::review::tool_rules::ToolSuppression;
 use crate::review::types::{parse_findings_repaired, Finding};
@@ -87,12 +88,12 @@ mod render;
 
 use prime::prime_run_prefix;
 pub use prime::{classify_reuse, unpin_prefix_session, PrefixReuse};
-pub(crate) use render::render_numbered_lines;
 pub use render::{
     prompt_framing, prompt_framing_bytes, render_file_payload, render_fleet_prompt,
     render_run_prime, render_shared_probe_evidence, render_validator_suffix,
     rendered_file_block_bytes, PromptFraming,
 };
+pub(crate) use render::{render_numbered_lines, SourceView};
 
 /// The agent prompt cap every review prompt must fit inside, in **bytes**.
 ///
@@ -712,13 +713,14 @@ fn submit_fan_out(
                     },
                 );
             }
-            let suffix = render_validator_suffix(&task.validator, &task.ruleset);
+            let suffix = render_validator_suffix(&task.validator, &task.ruleset, work.subject());
             let rx = match prime {
                 Some(guard) => Submitted::Forked(pool.submit_forked(guard.session_id(), suffix)),
                 None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
                     work.change_purpose(),
                     &task.validator,
                     &task.ruleset,
+                    work.subject(),
                 ))),
             };
             PendingValidator { task, rx }
@@ -757,6 +759,7 @@ async fn collect_fan_out(
             ruleset: &task.ruleset,
             roster: &task.roster,
             files: &files,
+            subject: work.subject(),
         };
         let name = ctx.name();
         let collected = match rx {
@@ -845,6 +848,9 @@ struct TaskContext<'a> {
     roster: &'a [String],
     /// The validator's files, as every log line and progress event names them.
     files: &'a [String],
+    /// What the run REVIEWS — carried so the monolithic fallback and the
+    /// follow-up sweep state the same boundary the forked prompt did.
+    subject: ReviewSubject,
 }
 
 impl TaskContext<'_> {
@@ -858,7 +864,12 @@ impl TaskContext<'_> {
     /// prompt used when there is no prime to fork from, and again when a re-ask
     /// needs a second sample with no session to continue.
     fn monolithic_prompt(&self) -> String {
-        render_fleet_prompt(self.change_purpose, self.validator, self.ruleset)
+        render_fleet_prompt(
+            self.change_purpose,
+            self.validator,
+            self.ruleset,
+            self.subject,
+        )
     }
 }
 
@@ -1088,7 +1099,7 @@ async fn sweep_until_dry(
     let mut session = parent_session.clone();
     for sweep in 1..=MAX_FOLLOWUP_SWEEPS {
         let delivered = pool
-            .submit_forked(&session, FOLLOWUP_PROMPT.to_string())
+            .submit_forked(&session, followup_prompt(ctx.subject).to_string())
             .await;
         let Ok(Ok(turn)) = delivered else {
             tracing::debug!(
@@ -1363,7 +1374,13 @@ pub(crate) const VALIDATOR_HEADER: &str = "# Validator: ";
 /// format stays synchronized in one place.
 pub(crate) const MANDATE_HEADER: &str = "## Mandate\n\n";
 
-/// The finding output contract, shared verbatim by every fan-out prompt.
+/// The finding output contract for `subject`, shared verbatim by every fan-out
+/// prompt of that subject.
+///
+/// Composed from a shared [`FINDING_FIELDS`] body and three subject-specific
+/// sections — what to read, what to REVIEW against what to CONSIDER, and how
+/// completely to report — so the finding shape cannot drift between the two
+/// subjects while the boundary statement differs exactly where it must.
 ///
 /// It instructs the agent to emit a JSON array of findings, each carrying the
 /// four load-bearing fields the [`Finding`](crate::review::types::Finding)
@@ -1377,31 +1394,89 @@ pub(crate) const MANDATE_HEADER: &str = "## Mandate\n\n";
 /// models deliver their findings as a hallucinated tool call (e.g. invoking the
 /// validator name as a tool), leaving the parsed message empty and failing the
 /// task.
-const OUTPUT_CONTRACT: &str = "\
+pub(crate) fn output_contract(subject: ReviewSubject) -> String {
+    let (reading, scope, completeness) = match subject {
+        ReviewSubject::Diffs => (READING_FILES_DIFFS, REVIEW_SCOPE_DIFFS, COMPLETENESS_DIFFS),
+        ReviewSubject::Files => (READING_FILES_WHOLE, REVIEW_SCOPE_WHOLE, COMPLETENESS_WHOLE),
+    };
+    format!("{reading}{scope}{FINDING_FIELDS}{completeness}")
+}
+
+/// The reading-files section under [`ReviewSubject::Diffs`]: the change is
+/// inlined with a context band, and reading further is expected rather than
+/// discouraged, because the block is deliberately not the whole file.
+const READING_FILES_DIFFS: &str = "\
 ## Reading files
 
-The changed files under review are already provided in full — their \
-COMPLETE current contents are inlined above, so do NOT `read_file` (or `glob`/`grep`) \
-the changed files; you already have them. `read_file`/`glob`/`grep` remain \
-available, but only for OTHER files: cross-file duplication evidence, a changed \
-symbol's callers, or a type defined elsewhere. Reach for them only when a \
-finding genuinely depends on a file that is not already inlined here.
+The change under review is already provided — each file's added and modified lines \
+are inlined above, with the unchanged lines around them for context, and long \
+unchanged stretches elided. `read_file`/`glob`/`grep` are available: reach for them \
+when you need more of a file than its block shows in order to judge a marked line, \
+or for another file entirely — cross-file duplication evidence, a changed symbol's \
+callers, a type defined elsewhere.
 
+";
+
+/// The reading-files section under [`ReviewSubject::Files`]: the named files
+/// are inlined whole, so re-reading them is pure cost.
+const READING_FILES_WHOLE: &str = "\
+## Reading files
+
+The files under review are already provided in full — their COMPLETE current \
+contents are inlined above, so do NOT `read_file` (or `glob`/`grep`) them; you \
+already have them. `read_file`/`glob`/`grep` remain available, but only for OTHER \
+files: cross-file duplication evidence, a changed symbol's callers, or a type \
+defined elsewhere. Reach for them only when a finding genuinely depends on a file \
+that is not already inlined here.
+
+";
+
+/// The review-scope section under [`ReviewSubject::Diffs`] — the REVIEW vs
+/// CONSIDER statement, in the place the agent reads its instructions.
+///
+/// It states the enforcement, not only the instruction: a finding off the
+/// change is refuted by the verify guard, so the model is told the truth about
+/// what happens to one rather than merely asked not to write it.
+const REVIEW_SCOPE_DIFFS: &str = "\
 ## Review scope
 
-The review boundary is the WHOLE current file, not the changed lines. Each changed \
-file is inlined above in full; review every line of it. Pre-existing instances of a \
-rule — ones that were already there before this change, anywhere in a changed file — \
-are in scope and must be reported now, in this same pass, alongside instances in the \
-changed region. The \"What changed\" semantic diff is orientation only: it tells you \
-what this change touched, it is NOT the review boundary and NOT where to limit your \
-search. Do not treat the diff as the review boundary.
+REVIEW the lines marked `+` — the lines this change added or modified. Every finding \
+you report must land on one of them; a finding that lands anywhere else is refuted \
+before it reaches the report.
 
+CONSIDER everything else: the unmarked lines printed around the change, the \"What \
+changed\" semantic diff, the probe evidence, and any file you read. Context is what \
+you judge the change against, and it is never itself the subject of a finding. A \
+defect that was already there before this change is out of scope, however real it \
+is, and even when a rule below plainly matches it.
+
+";
+
+/// The review-scope section under [`ReviewSubject::Files`], where the caller
+/// named these files and the whole of each is the subject.
+const REVIEW_SCOPE_WHOLE: &str = "\
+## Review scope
+
+REVIEW the whole current file, not only the changed lines. The caller asked about \
+these files themselves, so each is inlined above in full: review every line of it. \
+Pre-existing instances of a rule — ones that were already there before the last \
+change, anywhere in a named file — are in scope and must be reported now, in this \
+same pass, alongside instances in the changed region.
+
+CONSIDER the \"What changed\" semantic diff and the probe evidence: they are \
+orientation only. The diff tells you what the last change touched; it is NOT the \
+review boundary and NOT where to limit your search.
+
+";
+
+/// The finding object contract — the same fields whatever the subject is, so
+/// the parser and the verify stage read one shape.
+const FINDING_FIELDS: &str = "\
 ## Output contract
 
-Once you have reviewed the inlined files in full (reading other files only if needed), \
-reply with your findings as a JSON array, written directly as the plain text of \
-your reply — the reply is parsed as JSON. The findings reply itself must be \
+Once you have reviewed what the section above puts in scope (reading other files only \
+if needed), reply with your findings as a JSON array, written directly as the plain \
+text of your reply — the reply is parsed as JSON. The findings reply itself must be \
 plain JSON text, never a tool call: a tool call is not a valid way to report \
 findings.
 
@@ -1417,12 +1492,29 @@ one of them cannot be traced back to a rule.
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
 - `suggestion`: the fix.
 
+";
+
+/// The completeness demand under [`ReviewSubject::Diffs`]: every match on a
+/// marked line, and none anywhere else.
+const COMPLETENESS_DIFFS: &str = "\
+Report every occurrence of every rule that fires, in this single pass — across every \
+marked line, not just the first: when a rule matches on several marked lines, emit a \
+separate finding for each match — one finding per `file:line`. Do not stop at the \
+first match and do not collapse repeated matches into one finding; list them ALL, so \
+the change can be fixed in one go rather than re-reviewed match by match.
+
+Report only real issues. If you find none, emit an empty array `[]`.
+";
+
+/// The completeness demand under [`ReviewSubject::Files`]: every match in the
+/// whole file, changed or not.
+const COMPLETENESS_WHOLE: &str = "\
 Report every occurrence of every rule that fires, in this single pass — across the \
 WHOLE file, not just the changed lines: when a rule matches on several lines, emit a \
 separate finding for each match — one finding per `file:line`. Do not stop at the \
 first match and do not collapse repeated matches into one finding; list them ALL, \
-including pre-existing instances that sit outside the changed region, so the whole \
-file can be fixed in one go rather than re-reviewed match by match.
+including instances that sit outside the changed region, so the whole file can be \
+fixed in one go rather than re-reviewed match by match.
 
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
@@ -1439,8 +1531,9 @@ Report only real issues. If you find none, emit an empty array `[]`.
 /// [`dedup_exact`]: crate::review::synthesize
 const MAX_FOLLOWUP_SWEEPS: u32 = 4;
 
-/// The follow-up "any more?" prompt [`sweep_until_dry`] tacks onto a validator's
-/// review session, repeated each sweep until the model goes dry.
+/// The follow-up "any more?" prompt [`sweep_until_dry`] tacks onto a
+/// validator's review session for `subject`, repeated each sweep until the
+/// model goes dry.
 ///
 /// Small models under-report instances of a rule on the first pass even under the
 /// whole-file [`OUTPUT_CONTRACT`] — they anchor on the salient match, and more
@@ -1454,13 +1547,45 @@ const MAX_FOLLOWUP_SWEEPS: u32 = 4;
 /// It must NOT contain [`PRIME_HANDOFF`] (so the turn is treated as a real review
 /// turn, not a prime), and its `## Completeness re-scan` header is the stable
 /// marker the fan-out logs and tests key on.
-const FOLLOWUP_PROMPT: &str = "\
+pub(crate) fn followup_prompt(subject: ReviewSubject) -> &'static str {
+    match subject {
+        ReviewSubject::Diffs => FOLLOWUP_PROMPT_DIFFS,
+        ReviewSubject::Files => FOLLOWUP_PROMPT_WHOLE,
+    }
+}
+
+/// The follow-up sweep under [`ReviewSubject::Diffs`] — a sweep of the marked
+/// lines only.
+///
+/// The whole-file sweep asks for "pre-existing matches outside the changed
+/// region", which is the exact opposite of what a diff review wants. Sweeping
+/// the change instead keeps the recall gain the loop exists for without
+/// spending four extra turns collecting findings the guard then refutes.
+const FOLLOWUP_PROMPT_DIFFS: &str = "\
+## Completeness re-scan
+
+You just reported your findings for these files. Before we finish, scan the SAME \
+marked lines again — the lines this change added or modified, already provided \
+above — and report any ADDITIONAL violations of the same rules that you have NOT \
+already named. Stay on the marked lines: an unmarked line is context, never a \
+finding. This is a within-change completeness sweep, not a new review.
+
+Reply with ONLY the additional, not-already-listed findings, as a JSON array in \
+the exact same object shape as before (`file`, `line`, `rule`, `claim`, \
+`evidence`, `suggestion`), written directly as the plain text of your reply — \
+never a tool call. If you have now named every instance and none remain, reply \
+with an empty array `[]`.
+";
+
+/// The follow-up sweep under [`ReviewSubject::Files`] — a sweep of the whole
+/// of each named file.
+const FOLLOWUP_PROMPT_WHOLE: &str = "\
 ## Completeness re-scan
 
 You just reported your findings for these files. Before we finish, scan the SAME \
 files again — their full current contents are already provided above — and report \
 any ADDITIONAL violations of the same rules that you have NOT already named: \
-pre-existing matches outside the changed region, or further lines the same rule \
+matches outside the changed region, or further lines the same rule \
 fires on. This is a within-file completeness sweep of the whole file, not a new \
 review.
 

@@ -550,10 +550,19 @@ mod tests {
         ]
     }
 
-    /// A findings array keyed the way drive's scenarios need it: rule `r`,
-    /// line 1 (the report assertions check `src/lib.rs:1`).
+    /// The first line `seeded_dup_repo`'s uncommitted change ADDED: line 1 is
+    /// the committed `fn placeholder() {}` and line 2 is the blank line, so the
+    /// duplicated body starts here.
+    ///
+    /// A `review working` op reviews the diffs, so a finding must land on a
+    /// line the change touched — one on line 1 is about pre-existing code and
+    /// the verify guard refutes it before it reaches the report.
+    const FIRST_CHANGED_LINE: u32 = 3;
+
+    /// A findings array keyed the way drive's scenarios need it: rule `r`, on
+    /// [`FIRST_CHANGED_LINE`] (the report assertions check that same line).
     fn findings_json(file: &str, claim: &str) -> String {
-        shared_findings_json(file, 1, "r", claim)
+        shared_findings_json(file, FIRST_CHANGED_LINE, "r", claim)
     }
 
     /// A confirming verify verdict (the verify stage asks the agent to confirm
@@ -608,12 +617,12 @@ mod tests {
             report.markdown()
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "the confirmed blocker finding must be rendered: {}",
             report.markdown()
         );
         assert!(
-            report.markdown().contains("src/lib.rs:1"),
+            report.markdown().contains("src/lib.rs:3"),
             "the finding's file:line must appear: {}",
             report.markdown()
         );
@@ -630,7 +639,7 @@ mod tests {
     fn repairable_findings_json(file: &str, claim: &str) -> String {
         let array = serde_json::json!([{
             "file": file,
-            "line": 1,
+            "line": FIRST_CHANGED_LINE,
             "rule": "r",
             "claim": claim,
             "evidence": "per `duplicates`: 0.94",
@@ -710,7 +719,7 @@ mod tests {
             "the validator is asked once and re-asked exactly once"
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "the re-asked reply's finding must be rendered: {}",
             report.markdown()
         );
@@ -834,7 +843,7 @@ mod tests {
             "a repaired parse spends no re-ask"
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "the repaired reply's finding must be rendered: {}",
             report.markdown()
         );
@@ -1007,7 +1016,7 @@ mod tests {
 
         let report = report.expect("pipeline should produce a report");
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "the confirmed blocker finding must be rendered after the permission round-trips: {}",
             report.markdown()
         );
@@ -1537,7 +1546,7 @@ mod tests {
              not the whole review connection",
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "the live validator's confirmed blocker must still be rendered: {}",
             report.markdown()
         );

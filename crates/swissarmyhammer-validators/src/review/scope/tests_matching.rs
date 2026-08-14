@@ -939,6 +939,7 @@ fn file_change_builder_records_the_before_side_as_before_never_the_transposition
         FileVersions {
             before: BeforeContent::new(Some("fn old() {}\n".to_string())),
             after: AfterContent::new(Some("fn new() {}\n".to_string())),
+            moved_from: None,
         },
     );
     let resolved = builder.finish(vec!["src/lib.rs".to_string()], "purpose".to_string(), None);
@@ -967,6 +968,7 @@ fn an_absent_before_side_is_an_addition_and_an_absent_after_side_a_deletion() {
         FileVersions {
             before: BeforeContent::absent(),
             after: AfterContent::new(Some("fn added() {}\n".to_string())),
+            moved_from: None,
         },
     );
     builder.push(
@@ -975,6 +977,7 @@ fn an_absent_before_side_is_an_addition_and_an_absent_after_side_a_deletion() {
             before: BeforeContent::new(Some("fn deleted() {}\n".to_string())),
             // A deleted file has no post-change content.
             after: AfterContent::new(None),
+            moved_from: None,
         },
     );
     let resolved = builder.finish(

@@ -347,6 +347,137 @@ pub(super) fn read_at_ref(
         .map_err(|e| AvpError::Context(format!("blob {spec} is not valid UTF-8: {e}")))
 }
 
+/// The rename/copy detection thresholds a review diff is found with, as git
+/// itself spells them: a percentage of similarity, 0 to 100.
+///
+/// Git's own defaults — 50% for a rename, 50% for a copy — which is what
+/// `git log -M -C` and `git status` already report a move by. Naming them here
+/// rather than leaving `DiffFindOptions` on its library defaults keeps the
+/// number the engine detects a move at readable beside the call that uses it.
+const RENAME_SIMILARITY_PERCENT: u16 = 50;
+
+/// A `new path -> old path` map of every file the diff found as a rename or a
+/// copy of another.
+///
+/// Without this, a relocated file has no base side at its new path, so it
+/// diffs as wholly ADDED: every line of it is marked as touched and reviewed
+/// as new work. `^0fn6dbf` read as 70 files, 20548 insertions and 20097
+/// deletions when its real delta was about 39 lines of module wiring. With
+/// it, the base side is read from the OLD path, so a pure move reviews as the
+/// nothing it changed, and a move-plus-edit reviews as the edit.
+///
+/// A detection failure degrades to an empty map — every file then resolves
+/// exactly as it did before — rather than failing the scope: rename detection
+/// makes a review proportionate, and is never what makes it correct.
+fn find_renames(diff: &mut git2::Diff<'_>) -> BTreeMap<String, String> {
+    let mut options = git2::DiffFindOptions::new();
+    options
+        .renames(true)
+        .copies(true)
+        .rename_threshold(RENAME_SIMILARITY_PERCENT)
+        .copy_threshold(RENAME_SIMILARITY_PERCENT);
+    if let Err(e) = diff.find_similar(Some(&mut options)) {
+        tracing::warn!(
+            error = %e,
+            "review scope: rename detection failed; a moved file will diff as wholly added"
+        );
+        return BTreeMap::new();
+    }
+
+    let mut sources = BTreeMap::new();
+    for delta in diff.deltas() {
+        if !matches!(delta.status(), git2::Delta::Renamed | git2::Delta::Copied) {
+            continue;
+        }
+        let (Some(old), Some(new)) = (path_of(delta.old_file()), path_of(delta.new_file())) else {
+            continue;
+        };
+        if old != new {
+            sources.insert(new, old);
+        }
+    }
+    sources
+}
+
+/// One side of a diff delta as a repo-relative path string, `None` when the
+/// side names no path or the path is not UTF-8.
+fn path_of(file: git2::DiffFile<'_>) -> Option<String> {
+    file.path()?.to_str().map(str::to_string)
+}
+
+/// The base-revision path a file's "before" content is read from: the path it
+/// was moved from when the diff found it as a rename or a copy, else its own
+/// path.
+fn base_path<'a>(renames: &'a BTreeMap<String, String>, path: &'a str) -> &'a str {
+    renames.get(path).map_or(path, String::as_str)
+}
+
+/// The [`FileVersions::moved_from`] a file carries: its rename/copy source when
+/// the diff found one, `None` when it did not move.
+fn moved_from(renames: &BTreeMap<String, String>, path: &str) -> Option<FilePath> {
+    renames.get(path).map(FilePath::new)
+}
+
+/// Every rename/copy source in the working tree, keyed by the file's current
+/// path.
+///
+/// Diffs `HEAD`'s tree against the working tree WITH the index, and includes
+/// untracked files, so a move is recognized whether it is committed, staged,
+/// or only saved to disk.
+fn working_rename_sources(repo: &GitOperations) -> BTreeMap<String, String> {
+    let inner = repo.repository().inner();
+    let Ok(head) = inner.head().and_then(|head| head.peel_to_tree()) else {
+        // No HEAD (an empty repository): nothing to have moved from.
+        return BTreeMap::new();
+    };
+    let mut options = git2::DiffOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    match inner.diff_tree_to_workdir_with_index(Some(&head), Some(&mut options)) {
+        Ok(mut diff) => find_renames(&mut diff),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "review scope: working-tree diff failed; a moved file will diff as wholly added"
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
+/// Every rename/copy source between two commit-ish endpoints, keyed by the
+/// file's path at the `to` endpoint.
+fn range_rename_sources(
+    repo: &GitOperations,
+    from: &GitRefSpec,
+    to: &GitRefSpec,
+) -> BTreeMap<String, String> {
+    let inner = repo.repository().inner();
+    let Some(from_tree) = revspec_tree(repo, from) else {
+        return BTreeMap::new();
+    };
+    let Some(to_tree) = revspec_tree(repo, to) else {
+        return BTreeMap::new();
+    };
+    match inner.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None) {
+        Ok(mut diff) => find_renames(&mut diff),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "review scope: range diff failed; a moved file will diff as wholly added"
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
+/// The tree a refspec points at, `None` when it cannot be resolved — the same
+/// best-effort degradation the rest of rename detection uses.
+fn revspec_tree<'a>(repo: &'a GitOperations, refspec: &GitRefSpec) -> Option<git2::Tree<'a>> {
+    let inner = repo.repository().inner();
+    let object = inner.revparse_single(refspec.as_str()).ok()?;
+    object.peel_to_commit().ok()?.tree().ok()
+}
+
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
 /// unstaged + untracked), reusing the git tool's changed-file accounting.
 pub(super) fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
@@ -371,12 +502,25 @@ pub(super) fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpErro
         .map(|path| Ok((path.clone(), read_working(repo_path, path)?)))
         .collect::<Result<_, AvpError>>()?;
 
+    // Recognize a move as a move: a file relocated in the working tree reads
+    // its base side from the path it came from, so its diff is the edit it
+    // carries rather than the whole file over again.
+    let renames = working_rename_sources(&repo);
+
     let mut builder = FileChangeBuilder::new();
     for path in &files {
         let after = AfterContent::new(after_by_path.get(path).cloned().unwrap_or(None));
+        let base = base_path(&renames, path);
         let before =
-            BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
-        builder.push(FilePath::new(path), FileVersions { before, after });
+            BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(base))?);
+        builder.push(
+            FilePath::new(path),
+            FileVersions {
+                before,
+                after,
+                moved_from: moved_from(&renames, path),
+            },
+        );
     }
     // Blame anchor: pinned to the branch's merge-base with main/master (see
     // `working_tree_blame_anchor`) so the sha column means the same thing on
@@ -403,11 +547,24 @@ pub(super) fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope
         None => (GitRefSpec::new(range), GitRefSpec::head()),
     };
 
+    // Recognize a move as a move: a file relocated within the range reads its
+    // base side from the path it came from, so a relocation commit reviews in
+    // proportion to its real delta rather than as thousands of added lines.
+    let renames = range_rename_sources(&repo, &from_ref, &to_ref);
+
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let before = BeforeContent::new(read_at_ref(&repo, from_ref.clone(), FilePath::new(path))?);
+        let base = base_path(&renames, path);
+        let before = BeforeContent::new(read_at_ref(&repo, from_ref.clone(), FilePath::new(base))?);
         let after = AfterContent::new(read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?);
-        builder.push(FilePath::new(path), FileVersions { before, after });
+        builder.push(
+            FilePath::new(path),
+            FileVersions {
+                before,
+                after,
+                moved_from: moved_from(&renames, path),
+            },
+        );
     }
 
     let purpose = commit_messages(&repo, &to_ref)
@@ -430,7 +587,16 @@ pub(super) fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope
     let before = BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
 
     let mut builder = FileChangeBuilder::new();
-    builder.push(FilePath::new(path), FileVersions { before, after });
+    builder.push(
+        FilePath::new(path),
+        FileVersions {
+            before,
+            after,
+            // A single named file is reviewed whole, so there is no move to
+            // recognize: its base side is its own path at HEAD or nothing.
+            moved_from: None,
+        },
+    );
     // Blame anchor: same stable merge-base pin as `resolve_working` — see
     // `working_tree_blame_anchor`.
     Ok(builder.finish(
@@ -466,6 +632,7 @@ pub(super) fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedSc
             FileVersions {
                 before: BeforeContent::absent(),
                 after,
+                moved_from: None,
             },
         );
     }
@@ -608,6 +775,15 @@ pub(super) struct FileVersions {
     pub(super) before: BeforeContent,
     /// The content after the change.
     pub(super) after: AfterContent,
+    /// The path the base side was read from when git found this file as a
+    /// rename or a copy of another — `None` when the file did not move.
+    ///
+    /// It lives beside the two contents rather than as a third argument to
+    /// [`FileChangeBuilder::push`] because it names where `before` came from,
+    /// and because a second bare [`FilePath`] parameter beside the destination
+    /// path would be exactly the transposition the typed halves exist to
+    /// prevent.
+    pub(super) moved_from: Option<FilePath>,
 }
 
 /// Accumulates the per-file sem-diff inputs and after-content as files resolve.
@@ -630,8 +806,18 @@ impl FileChangeBuilder {
     ///
     /// The two sides arrive as one named-field [`FileVersions`], so they cannot
     /// be transposed into an inverted diff.
+    ///
+    /// A file git found as a rename or a copy carries its source path in
+    /// [`FileVersions::moved_from`], which becomes the change's
+    /// `old_file_path`. Its status stays [`FileStatus::Modified`] rather than
+    /// `Added`, because the base side really was read — from the old path —
+    /// and a move is an edit of content that already existed.
     pub(super) fn push(&mut self, path: FilePath, versions: FileVersions) {
-        let FileVersions { before, after } = versions;
+        let FileVersions {
+            before,
+            after,
+            moved_from,
+        } = versions;
         let (before, after) = (before.into_inner(), after.into_inner());
         let path = path.into_string();
         if let Some(content) = &after {
@@ -645,7 +831,7 @@ impl FileChangeBuilder {
         self.file_changes.push(SemFileChange {
             file_path: path,
             status,
-            old_file_path: None,
+            old_file_path: moved_from.map(FilePath::into_string),
             before_content: before,
             after_content: after,
         });
