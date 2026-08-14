@@ -2,7 +2,8 @@
  * The failing fixture of the `missing-docs-typescript` tool rule.
  *
  * It holds one undocumented exported item of every kind the passing fixture
- * documents. The tool must report each one. A tool upgrade that stops
+ * documents, and one accessor of each kind the passing fixture's carve-out
+ * does NOT reach. The tool must report each one. A tool upgrade that stops
  * reporting a kind makes the doctor mark the rule unusable.
  */
 
@@ -20,7 +21,19 @@ export enum UndocumentedEnum {
 }
 
 export class UndocumentedClass {
+  private stored = "";
+
   undocumentedMethod(): void {}
+
+  get busy(): string {
+    const held = this.stored;
+    return held;
+  }
+
+  set busy(next: string) {
+    const held = next;
+    this.stored = held;
+  }
 }
 
 export function undocumentedFunction(): void {}

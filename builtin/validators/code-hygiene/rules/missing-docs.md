@@ -56,11 +56,16 @@ for Python.
 The two carve-outs were measured against each of the six shipped language rules
 — Dart, Go, Python, Rust, Swift and TypeScript.
 
-- "Simple getters/setters with self-explanatory names": five of the six report
-  an undocumented public getter. Dart, Go, Python, Rust and TypeScript report
-  it. Swift reports it only when the type declares no inherited type. Measured
-  with swiftlint 0.65.0, with the shipped `missing-docs-swift` run script. Three
-  probe files each declare one inherited type. The first probe file holds an
+- "Simple getters/setters with self-explanatory names": four of the six report
+  an undocumented public getter whatever its body holds. Dart, Go, Python and
+  Rust report it. TypeScript reports it only when the body holds more than one
+  statement: `missing-docs-typescript` reads the body for the word "simple", so
+  a getter of one `return` and a setter of one assignment each stay silent, and
+  an accessor of two statements reports. Measured over 4306 files of six
+  TypeScript repositories: 177 accessors reported before that reading and 30
+  after. Swift reports it only when the type declares no inherited type.
+  Measured with swiftlint 0.65.0, with the shipped `missing-docs-swift` run
+  script. Three probe files each declare one inherited type. The first holds an
   undocumented `public struct Wide: Equatable` at row 1, an undocumented
   `public var name` at row 2, an undocumented `public func compute()` at row 3,
   an undocumented nested `public struct Inner` at row 4 and an undocumented
@@ -85,11 +90,14 @@ The two carve-outs were measured against each of the six shipped language rules
   types measured are a protocol conformance, a superclass and a raw-value type.
   No other inherited type was measured. Swift stays silent for every getter in
   a type that declares an inherited type.
-- "Obvious implementations (Display, Debug, ToString, etc.)": four of the six
-  stay silent on it. Dart, Go, Python and Rust stay silent. TypeScript reports
-  an undocumented `toString()` and an undocumented `valueOf()`. Swift stays
-  silent inside a type that declares an inherited type, for the reason above.
-  Never carry this carve-out over from another language.
+- "Obvious implementations (Display, Debug, ToString, etc.)": five of the six
+  stay silent on it. Dart, Go, Python, Rust and TypeScript stay silent. Each
+  one names the shape in its own way: Python leaves the magic-method code out
+  of its selector, Go takes revive's fixed list of six method names, and
+  TypeScript names `toString`, `valueOf`, `toLocaleString`, `toJSON` and every
+  method keyed by a `Symbol` member. Swift stays silent inside a type that
+  declares an inherited type, for the reason above. Never carry this carve-out
+  over from another language.
 
 Run the language rule over the item to check either carve-out. What it reports
 is the whole answer.

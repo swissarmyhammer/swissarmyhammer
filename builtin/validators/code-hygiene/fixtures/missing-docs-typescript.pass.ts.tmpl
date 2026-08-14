@@ -1,7 +1,8 @@
 /**
  * The passing fixture of the `missing-docs-typescript` tool rule.
  *
- * Every exported item here has documentation. The tool must report nothing. A
+ * Every exported item here has documentation, and every undocumented item here
+ * stands inside a carve-out the rule keeps. The tool must report nothing. A
  * tool upgrade that reports one anyway makes the doctor mark the rule unusable.
  */
 
@@ -24,7 +25,47 @@ export enum DocumentedEnum {
 export class DocumentedClass {
   /** A documented public method. */
   documentedMethod(): void {}
+
+  private stored = "";
+
+  get name(): string {
+    return this.stored;
+  }
+
+  set name(next: string) {
+    this.stored = next;
+  }
+
+  toString(): string {
+    return this.stored;
+  }
+
+  valueOf(): string {
+    return this.stored;
+  }
+
+  toJSON(): object {
+    return { name: this.stored };
+  }
+
+  toLocaleString(): string {
+    return this.stored;
+  }
+
+  [Symbol.iterator](): Iterator<string> {
+    return [this.stored][Symbol.iterator]();
+  }
 }
 
 /** A documented exported function. */
 export function documentedFunction(): void {}
+
+describe("the test carve-out", () => {
+  it("takes an arrow callback", () => {
+    expect(documentedFunction()).toBe(undefined);
+  });
+
+  it("takes a function callback", function () {
+    expect(documentedFunction()).toBe(undefined);
+  });
+});
