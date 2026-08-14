@@ -22,6 +22,7 @@ use crate::agents::{
 use crate::install::SUPERSEDED_NATIVE_DENY_TOOLS;
 use crate::merge::merge_unique;
 use crate::registry::RegistryError;
+use crate::strategy::claude_settings::{POINTER_KEY_DENY, POINTER_KEY_PERMISSIONS};
 use crate::table;
 
 /// How many variants [`Component`] has, and so how many entries
@@ -630,8 +631,8 @@ pub fn permissions_present(path: &Path) -> bool {
         return false;
     };
     let Some(deny) = root
-        .get("permissions")
-        .and_then(|p| p.get("deny"))
+        .get(POINTER_KEY_PERMISSIONS)
+        .and_then(|p| p.get(POINTER_KEY_DENY))
         .and_then(|d| d.as_array())
     else {
         return false;

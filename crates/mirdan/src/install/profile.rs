@@ -24,6 +24,9 @@ use crate::mcp_config::{self, string_newtype, McpServerEntry, ServersKey, ToolNa
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
+use crate::strategy::claude_settings::{
+    permissions_deny_pointer, POINTER_KEY_DENY, POINTER_KEY_PERMISSIONS,
+};
 
 use super::applier::{
     for_each_detected_agent, register_mcp_server, scope_is_global, unregister_mcp_server,
@@ -973,23 +976,6 @@ pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
             POINTER_KEY_DENY: SUPERSEDED_NATIVE_DENY_TOOLS,
         }
     })
-}
-
-/// The `permissions` object key of the Claude Code settings shape.
-const POINTER_KEY_PERMISSIONS: &str = "permissions";
-
-/// The `deny` array key inside [`POINTER_KEY_PERMISSIONS`].
-const POINTER_KEY_DENY: &str = "deny";
-
-/// JSON pointer for the `permissions.deny` array (Claude Code shape).
-///
-/// Built from [`POINTER_KEY_PERMISSIONS`] and [`POINTER_KEY_DENY`] instead of
-/// spelled out, because a pointer that restates the keys is a second source of
-/// them: a change to either key would leave the pointer addressing the old
-/// path while the fragment carries the new one. A `const` cannot join other
-/// `const` strings, so this is a function.
-fn permissions_deny_pointer() -> String {
-    format!("/{POINTER_KEY_PERMISSIONS}/{POINTER_KEY_DENY}")
 }
 
 /// Merge the edit-redirect fragment into the settings file at `path`, or strip

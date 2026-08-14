@@ -20,6 +20,8 @@
 //!   `deny_tool`/`allow_tool` are no-ops and its MCP local scope falls back to
 //!   the project config.
 
+pub(crate) mod claude_settings;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -31,8 +33,7 @@ use crate::mcp_config::{self, McpServerEntry, ServersKey, ToolName};
 use crate::registry::RegistryError;
 use crate::settings;
 
-/// JSON pointer for an agent's denied-tools array (Claude Code shape).
-const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
+use claude_settings::permissions_deny_pointer;
 
 /// Per-agent configuration strategy.
 ///
@@ -191,7 +192,7 @@ impl AgentConfigStrategy for ClaudeCodeStrategy {
         tool: &str,
     ) -> Result<bool, RegistryError> {
         Self::edit_deny(agent, scope, |root| {
-            settings::ensure_array_contains(root, PERMISSIONS_DENY_POINTER, &json!(tool))
+            settings::ensure_array_contains(root, &permissions_deny_pointer(), &json!(tool))
         })
     }
 
@@ -210,7 +211,7 @@ impl AgentConfigStrategy for ClaudeCodeStrategy {
             return Ok(false);
         }
         Self::edit_deny(agent, scope, |root| {
-            settings::remove_from_array(root, PERMISSIONS_DENY_POINTER, &json!(tool))
+            settings::remove_from_array(root, &permissions_deny_pointer(), &json!(tool))
         })
     }
 }
@@ -521,6 +522,18 @@ mod tests {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
+    /// Read the denied-tools array out of `settings` through the schema keys.
+    ///
+    /// Addressing it with [`claude_settings::POINTER_KEY_PERMISSIONS`] and
+    /// [`claude_settings::POINTER_KEY_DENY`] rather than spelling the path out
+    /// is what makes these tests fail when a key changes and the pointer
+    /// `deny_tool`/`allow_tool` write through no longer follows it.
+    fn denied_tools(settings: &serde_json::Value) -> &Vec<serde_json::Value> {
+        settings[claude_settings::POINTER_KEY_PERMISSIONS][claude_settings::POINTER_KEY_DENY]
+            .as_array()
+            .expect("settings must hold the denied-tools array the schema keys name")
+    }
+
     #[test]
     fn strategy_for_dispatches_on_id() {
         let dir = tempfile::tempdir().unwrap();
@@ -583,11 +596,7 @@ mod tests {
             .deny_tool(&agent, InitScope::Project, "Bash")
             .unwrap());
         let json = read(&settings_path);
-        assert!(json["permissions"]["deny"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "Bash"));
+        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
 
         // Idempotent deny: no change the second time.
         assert!(!ClaudeCodeStrategy
@@ -598,11 +607,7 @@ mod tests {
             .allow_tool(&agent, InitScope::Project, "Bash")
             .unwrap());
         let json = read(&settings_path);
-        assert!(!json["permissions"]["deny"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "Bash"));
+        assert!(!denied_tools(&json).iter().any(|v| v == "Bash"));
     }
 
     #[test]
@@ -613,11 +618,7 @@ mod tests {
             .deny_tool(&agent, InitScope::User, "Bash")
             .unwrap();
         let json = read(&dir.path().join("global-settings.json"));
-        assert!(json["permissions"]["deny"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "Bash"));
+        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
     }
 
     #[test]
@@ -635,11 +636,7 @@ mod tests {
             "project settings.json must not be touched by local-scope deny"
         );
         let json = read(&local);
-        assert!(json["permissions"]["deny"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "Bash"));
+        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
     }
 
     #[test]
