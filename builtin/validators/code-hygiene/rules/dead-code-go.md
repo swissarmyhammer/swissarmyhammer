@@ -1,5 +1,5 @@
 ---
-name: unused-code-go
+name: dead-code-go
 description: Unexported Go items nothing in the package uses — checked by staticcheck, not by prompt.
 match:
   files:

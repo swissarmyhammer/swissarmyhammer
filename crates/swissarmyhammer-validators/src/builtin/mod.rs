@@ -268,7 +268,7 @@ mod tests {
     /// language's own suppression marker with a reason, or it is dead.
     const CODE_HYGIENE_DEAD_CODE_TOOL_RULES: &[&str] = &[
         "dead-code-rust",
-        "unused-code-go",
+        "dead-code-go",
         "dead-code-typescript",
         "dead-code-python",
         "dead-code-dart",

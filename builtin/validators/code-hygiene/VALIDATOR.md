@@ -232,7 +232,7 @@ one for each language a tool covers:
 | Rule | Tool | Staging marker |
 |---|---|---|
 | `dead-code-rust` | `cargo check` `dead_code`, plus a `grep` orphan-module scan | `#[expect(dead_code, reason = "...")]` |
-| `unused-code-go` | `staticcheck -checks U1000` | `//lint:ignore U1000 <reason>` |
+| `dead-code-go` | `staticcheck -checks U1000` | `//lint:ignore U1000 <reason>` |
 | `dead-code-typescript` | `ts-prune` | `// ts-prune-ignore-next` |
 | `dead-code-python` | `vulture` at its default confidence | `# noqa: V103` and its sibling codes |
 | `dead-code-dart` | `dart analyze`, four unused diagnostics | `// ignore: unused_element` and its siblings |

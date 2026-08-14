@@ -6,7 +6,7 @@ description: Detect added symbols with no inbound callers, orphaned modules, unr
 # Dead Code Validator
 
 This rule is the fallback. Six tool rules answer the dead-code question without
-you — `dead-code-rust`, `unused-code-go`, `dead-code-typescript`,
+you — `dead-code-rust`, `dead-code-go`, `dead-code-typescript`,
 `dead-code-python`, `dead-code-dart` and `dead-code-swift` — and each supersedes
 this rule for the files it matches. You read a file only when its language has
 no tool rule, or when `sah doctor` could not find that rule's tool.

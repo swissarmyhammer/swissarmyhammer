@@ -153,7 +153,7 @@ const SWIFT_DEAD_CODE_RULE: &str = "dead-code-swift";
 /// language's own suppression marker with a reason, or it is dead.
 const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
     ("rust", RUST_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
-    ("go", "unused-code-go", SUPERSEDES_DEAD_CODE),
+    ("go", "dead-code-go", SUPERSEDES_DEAD_CODE),
     ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
     ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
