@@ -101,9 +101,6 @@ const SWIFT_DEAD_CODE_PACKAGE: &[(&str, &str)] = &[
 /// documentation line of the second takes row 6.
 const SWIFT_NOTHING_CALLS_ROW: usize = 7;
 
-/// The argument list a `workspace`-scope script receives: none.
-const NO_SCRIPT_FILES: &[&str] = &[];
-
 /// Stages `staged` in a temporary repository, drives the shipped `dead-code-swift`
 /// script there, and answers each finding it reported as `path:line`, sorted.
 ///
@@ -129,18 +126,7 @@ fn swift_dead_code_findings(staged: &[(&str, &str)]) -> Vec<String> {
     let reported = run_script_findings(&shipped.script, &repo_root, &args)
         .expect("the shipped Swift dead-code script must judge the probe package and exit 0");
 
-    sorted_names(
-        &reported
-            .iter()
-            .map(|finding| {
-                format!(
-                    "{}:{}",
-                    normalize_tool_path(&finding.file, &repo_root),
-                    finding.line
-                )
-            })
-            .collect::<Vec<String>>(),
-    )
+    sorted_names(&finding_rows(&reported, &repo_root))
 }
 
 /// Acceptance: the shipped Swift dead-code tool rule keeps the test targets in

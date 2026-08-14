@@ -739,6 +739,28 @@ fn required_shipped_tool_rule(loader: &ValidatorLoader, rule: &str) -> ShippedTo
         .unwrap_or_else(|| panic!("the shipped tool rule `{rule}` must carry a tool block"))
 }
 
+/// The argument list a `workspace`-scope script receives: none.
+const NO_SCRIPT_FILES: &[&str] = &[];
+
+/// Each finding of `findings` as the `path:line` row a probe states, with the
+/// path of the probe repository taken off.
+///
+/// A tool reports an absolute path, and a probe states the path the work-list
+/// holds. [`normalize_tool_path`] is the one function the engine attributes a
+/// tool-reported path with, so a probe reads the same path the engine would.
+fn finding_rows(findings: &[Finding], repo_root: &Path) -> Vec<String> {
+    findings
+        .iter()
+        .map(|finding| {
+            format!(
+                "{}:{}",
+                normalize_tool_path(&finding.file, repo_root),
+                finding.line
+            )
+        })
+        .collect()
+}
+
 /// Stages `staged` in a temporary repository, drives the shipped script of
 /// `rule` there with the argument list a run over `files` carries, and answers
 /// each finding it reported as `path:line`.
@@ -766,16 +788,7 @@ fn shipped_script_findings(
 
     let findings = run_script_findings(&shipped.script, &repo_root, &args)?;
 
-    Ok(findings
-        .iter()
-        .map(|finding| {
-            format!(
-                "{}:{}",
-                normalize_tool_path(&finding.file, &repo_root),
-                finding.line
-            )
-        })
-        .collect())
+    Ok(finding_rows(&findings, &repo_root))
 }
 
 /// The entries of `expected` as the owned strings [`shipped_script_findings`]

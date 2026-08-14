@@ -10,11 +10,14 @@ supersedes: function-length
 tool:
   scope: workspace
   run: |
+    cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     config="$work/golangci.yml"
     cat > "$config" <<'FUNLEN_CONFIG'
     version: "2"
+    run:
+      allow-serial-runners: true
     linters:
       default: none
       enable:
@@ -34,6 +37,7 @@ tool:
       max-issues-per-linter: 0
       max-same-issues: 0
     FUNLEN_CONFIG
+    GOLANGCI_LINT_CACHE="$cache" \
     golangci-lint run --config "$config" --path-mode abs --show-stats=false \
       --output.json.path stdout ./... 2>/dev/null |
       jq -c '(.Issues // [])[] | select(.FromLinter == "funlen")
@@ -203,6 +207,51 @@ the rest.
 reports a path relative to the configuration file's own directory, which is a
 temporary directory, so every path would point outside the workspace.
 
+`allow-serial-runners` makes a second instance WAIT for the lock. `golangci-lint`
+takes one file lock for each run, and by default a second instance stops with
+`Error: parallel golangci-lint is running` on stderr and writes nothing to
+stdout. The script drops stderr, so that run would read as a clean file rather
+than as a failure. The lock stands in the cache directory, which the line above
+names for the workspace, so the runs of ONE workspace share it — and this set
+ships two rules that drive golangci-lint over one workspace. Measured over one
+workspace holding a probe module of one function above the gate, each row three
+rounds from a cold cache and three rounds from a warm one:
+
+| runs started together | runs that reported nothing |
+|---|---|
+| four, without the key | 0 of 4, in each of the six rounds |
+| eight, without the key | 3 of 8, in each of the six rounds |
+| eight, with the key | 0 of 8, in each of the six rounds |
+
+Four runs never clash, so the probe needs eight. The same eight runs with stderr
+kept named the reason on each run that reported nothing:
+`Error: parallel golangci-lint is running`.
+
+`GOLANGCI_LINT_CACHE` gives each workspace its own cache directory, named for the
+workspace path. The shared cache stores a finding with the ABSOLUTE path the run
+that first cached it read, and it answers by package content, so a second
+workspace holding the same bytes under the same module name gets the FIRST
+workspace's paths back. Two checkouts of one repository are the everyday form of
+this, and a review runs in a worktree. Measured over two directories holding the
+same probe module, one shared cache:
+
+| the run | what it reported |
+|---|---|
+| the first directory | its own plain file |
+| the second directory | the FIRST directory's plain file |
+| the second directory, the first one removed | the FIRST directory's plain file AND its generated file |
+| each directory, a cache of its own | its own plain file |
+
+Row 2 is the silence: the engine drops a finding it cannot place in the
+workspace, so the rule reports nothing and names no reason. Row 3 is worse than
+silence — it is a WRONG finding on generated code. `linters.exclusions.generated`
+reads the head of the file at the reported path, and a stale path names a file
+that is no longer there, so the filter lets the finding through. The carve-out
+fails OPEN. The acceptance test
+`the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in` drives
+the generated-code probe over two workspaces for that reason, and
+`magic-numbers-go` records the same measurement for `mnd`.
+
 The scope is `workspace` because golangci-lint loads packages, not loose files,
 and `./...` loads the whole module. The engine keeps only the findings in the
 changed files.
@@ -214,12 +263,16 @@ the configuration, where golangci-lint decides it.
 
 ## The temporary directory the configuration stands in
 
-`mktemp -d` makes the directory the golangci-lint configuration is written
-into, and `trap 'rm -rf "$work"' EXIT` removes it. The scope is
-`workspace`, so this script takes no file argument and the trap is the one
-change of the pair this rule needed. Measured over a Go module of one
-file: one run raised the count of entries under `TMPDIR` by 1 before the
-trap, and leaves that count unchanged after it.
+The script names two directories under `TMPDIR`, and each has an owner. The
+golangci-lint cache is named after the working directory and stands between runs
+on purpose. The configuration directory `mktemp -d` makes is the run's own, and
+`trap 'rm -rf "$work"' EXIT` removes it. The scope is `workspace`, so this
+script takes no file argument.
+
+Measured over a Go module of one file: the first run raised the count of entries
+under `TMPDIR` by 2 before the trap, one for the cache and one for the
+configuration, and each run after it raised the count by 1. After the trap the
+configuration is gone and the cache stays.
 
 ## The carve-outs the prompt rule states
 

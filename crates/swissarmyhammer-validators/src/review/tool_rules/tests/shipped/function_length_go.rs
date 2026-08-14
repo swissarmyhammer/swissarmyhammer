@@ -135,36 +135,6 @@ fn go_dense_test(name: &str, statements: usize) -> String {
     source
 }
 
-/// `source` with a trailing comment no earlier run wrote.
-///
-/// golangci-lint keys its cache on the CONTENT of a package and stores the
-/// ABSOLUTE path each finding stood on when the cache was written. Measured
-/// with golangci-lint 2.12.2 over two copies of one probe module at two paths:
-/// the second run reported the first copy's paths, and the generated-file
-/// filter then read a file that was no longer there and let the finding
-/// through. The three tests of this module passed on a cold cache and broke on
-/// a warm one for that reason.
-///
-/// The comment carries the wall clock and a counter, so no two runs of a probe
-/// share a package content and no run can take a cached answer. It stands at
-/// the END of the file, where it shifts no declaration line and stands under
-/// the generated header a probe puts at the head.
-///
-/// What the SHIPPED script does about a shared golangci-lint cache is the
-/// subject of `^mms9g8d`, which names a cache directory for each workspace.
-/// This module holds the carve-outs, and this helper goes away when that
-/// card lands.
-fn go_uncached(source: &str) -> String {
-    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    let since_epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{source}// probe {since_epoch} {run}\n")
-}
-
 /// The 1-based line the declaration of `name` stands on inside `source`.
 ///
 /// funlen anchors each finding on the line its `func` keyword stands on, so a
@@ -202,12 +172,12 @@ const GO_SHAPES_PATH: &str = "shapes/shapes.go";
 /// stand over 250 lines, hold one statement, and stay silent.
 #[test]
 fn the_shipped_go_function_length_tool_rule_measures_statements_and_not_lines() {
-    let source = go_uncached(&format!(
+    let source = format!(
         "{GO_PACKAGE_CLAUSE}{GO_PROBE_DECLARATIONS}{}{}{}",
         go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS),
         go_data_table("DecisionTable", DATA_SHAPE_ROWS),
         go_option_builder("OptionBuilder", DATA_SHAPE_ROWS),
-    ));
+    );
     let expected = go_expected_row(GO_SHAPES_PATH, &source, "LongProcedure");
 
     verify_staged_rows_report(
@@ -251,13 +221,13 @@ const GO_SUITE_PATH: &str = "suite/suite.go";
 /// is a helper. The run must report the helper and no other.
 #[test]
 fn the_shipped_go_function_length_tool_rule_reads_a_test_from_its_definition() {
-    let source = go_uncached(&format!(
+    let source = format!(
         "{}{GO_PROBE_DECLARATIONS}{}{}{}",
         "package probe\n\nimport \"testing\"\n\n",
         go_table_driven_test("TestTable", DATA_SHAPE_ROWS),
         go_dense_test("TestDense", OVER_THE_GATE_STATEMENTS),
         go_procedure("buildRequest", OVER_THE_GATE_STATEMENTS),
-    ));
+    );
     let expected = go_expected_row(GO_SUITE_TEST_PATH, &source, "buildRequest");
 
     verify_staged_rows_report(
@@ -283,6 +253,32 @@ const GO_PLAIN_POSITION_PATH: &str = "plain/staged.go";
 /// decide nothing and the header is the one difference between the two.
 const GO_GENERATED_POSITION_PATH: &str = "marked/staged.go";
 
+/// Drives the shipped script over a NEW probe repository holding one function
+/// over the statement gate two times — in a plain file, and in a file whose
+/// head carries the generated header — and holds the run to reporting the
+/// plain position alone. `reason` states what the caller measures.
+///
+/// Each call stages a repository of its own and removes it when it returns, so
+/// a caller that calls twice measures two workspaces holding the same bytes.
+fn verify_the_generated_position_stays_silent(reason: &str) {
+    let declarations = go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS);
+    let plain = format!("{GO_PACKAGE_CLAUSE}{declarations}");
+    let generated = format!("{GO_GENERATED_HEADER}{GO_PACKAGE_CLAUSE}{declarations}");
+    let expected = go_expected_row(GO_PLAIN_POSITION_PATH, &plain, "LongProcedure");
+
+    verify_staged_rows_report(
+        GO_PROJECT_TYPES,
+        GO_FUNCTION_LENGTH_RULE,
+        &[
+            (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
+            (GO_PLAIN_POSITION_PATH, &plain),
+            (GO_GENERATED_POSITION_PATH, &generated),
+        ],
+        &[&expected],
+        reason,
+    );
+}
+
 /// Acceptance: the shipped Go function-length tool rule skips a generated
 /// file, through the real funlen pipeline.
 ///
@@ -296,23 +292,126 @@ const GO_GENERATED_POSITION_PATH: &str = "marked/staged.go";
 /// run must report the plain position alone.
 #[test]
 fn the_shipped_go_function_length_tool_rule_skips_a_generated_file() {
-    let declarations = go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS);
-    let plain = go_uncached(&format!("{GO_PACKAGE_CLAUSE}{declarations}"));
-    let generated = go_uncached(&format!(
-        "{GO_GENERATED_HEADER}{GO_PACKAGE_CLAUSE}{declarations}"
-    ));
-    let expected = go_expected_row(GO_PLAIN_POSITION_PATH, &plain, "LongProcedure");
-
-    verify_staged_rows_report(
-        GO_PROJECT_TYPES,
-        GO_FUNCTION_LENGTH_RULE,
-        &[
-            (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
-            (GO_PLAIN_POSITION_PATH, &plain),
-            (GO_GENERATED_POSITION_PATH, &generated),
-        ],
-        &[&expected],
+    verify_the_generated_position_stays_silent(
         "the plain file reports its function, and the file whose head carries the generated \
          header reports nothing",
+    );
+}
+
+/// How many workspaces the cache probe drives, one after the other, over the
+/// same bytes.
+///
+/// Two is the whole shape: the first workspace fills the cache and is gone
+/// before the second one runs, which is what two checkouts of one repository,
+/// and a review in a worktree, do every day.
+const CACHE_PROBE_WORKSPACES: usize = 2;
+
+/// Acceptance: the shipped Go function-length tool rule reads the workspace it
+/// ran in, over bytes another workspace already cached.
+///
+/// golangci-lint answers by package CONTENT and stores each finding with the
+/// ABSOLUTE path of the run that first cached it, so a shared cache hands a
+/// second workspace the FIRST workspace's paths. Two things then break at
+/// once: the engine drops a finding it cannot place in the workspace, and the
+/// generated carve-out fails OPEN, because `linters.exclusions.generated`
+/// reads the head of the file at the reported path and a path that is no
+/// longer there lets the finding through.
+///
+/// The rule names a cache directory of its own for each workspace, so the two
+/// runs of this test share no cached answer. Measured with golangci-lint
+/// 2.12.2 over one shared cache and this probe: the second run reported the
+/// first workspace's paths, and reported the generated position beside the
+/// plain one once the first workspace was gone.
+#[test]
+fn the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in() {
+    for _ in 0..CACHE_PROBE_WORKSPACES {
+        verify_the_generated_position_stays_silent(
+            "each workspace reports its own plain file and no other row; a run answering \
+             from another workspace's cache reports that workspace's paths, and lets the \
+             generated position through",
+        );
+    }
+}
+
+/// How many runs of the shipped script the lock probe starts together.
+///
+/// golangci-lint takes ONE file lock, and the lock stands in the cache
+/// directory the run reads — which the shipped script names for the workspace,
+/// so the runs of one workspace share it. Measured over this probe without the
+/// `allow-serial-runners` key, three rounds from a cold cache and three from a
+/// warm one: 0 of 4 runs started together reported nothing, and 3 of 8 reported
+/// nothing, in each of the six rounds. Four runs never clash, so the probe
+/// needs eight.
+const LOCK_PROBE_RUNS: usize = 8;
+
+/// Drives the shipped script [`LOCK_PROBE_RUNS`] times over ONE probe
+/// repository, every run released together, and answers the sorted
+/// `path:line` rows each run reported.
+///
+/// One repository is what makes the probe: the shipped script names its cache
+/// directory for the workspace path, the lock stands in that directory, and
+/// runs in different repositories can therefore never clash. Two rules of this
+/// set drive golangci-lint over one workspace, so the clash is the everyday
+/// case rather than a contrived one.
+fn rows_of_runs_started_together(staged: &[(&str, &str)]) -> Vec<Vec<String>> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
+    let shipped = required_shipped_tool_rule(&loader, GO_FUNCTION_LENGTH_RULE);
+    let repo = tempfile::tempdir().expect("temp dir");
+    stage_probe_files(repo.path(), staged.iter().copied());
+    let repo_root = probe_repository_root(&repo);
+    let args = script_args(shipped.scope, NO_SCRIPT_FILES);
+    let released = std::sync::Barrier::new(LOCK_PROBE_RUNS);
+
+    std::thread::scope(|threads| {
+        let running: Vec<_> = (0..LOCK_PROBE_RUNS)
+            .map(|_| {
+                threads.spawn(|| {
+                    released.wait();
+                    let reported = run_script_findings(&shipped.script, &repo_root, &args)
+                        .expect("each run must judge the probe repository and exit 0");
+                    sorted_names(&finding_rows(&reported, &repo_root))
+                })
+            })
+            .collect();
+        running
+            .into_iter()
+            .map(|run| run.join().expect("each run of the probe must finish"))
+            .collect()
+    })
+}
+
+/// Acceptance: the shipped Go function-length tool rule reports while another
+/// instance holds the lock, through the real funlen pipeline.
+///
+/// `run: allow-serial-runners: true` makes a second instance WAIT for the
+/// lock. Without the key it stops with `Error: parallel golangci-lint is
+/// running` on stderr and writes nothing to stdout, and the script drops
+/// stderr — so the run reads as a clean file rather than as a failure, and the
+/// review is told the code is clean by a run that judged nothing.
+///
+/// Measured with golangci-lint 2.12.2 over this probe, three rounds from a
+/// cold cache and three from a warm one: without the key 3 of 8 runs reported
+/// nothing in each of the six rounds, and the same runs with stderr kept
+/// carried the lock error on each of those three. With the key all eight
+/// reported the one finding, in each of the six rounds.
+#[test]
+fn the_shipped_go_function_length_tool_rule_reports_while_another_run_holds_the_lock() {
+    let source = format!(
+        "{GO_PACKAGE_CLAUSE}{}",
+        go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS)
+    );
+    let expected = sorted_names(&[go_expected_row(GO_SHAPES_PATH, &source, "LongProcedure")]);
+
+    let reported = rows_of_runs_started_together(&[
+        (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
+        (GO_SHAPES_PATH, &source),
+    ]);
+
+    assert!(
+        reported.iter().all(|run| *run == expected),
+        "every run started together must report {expected:?}, because a second instance \
+         waits for the lock rather than stopping; a run that stopped wrote its reason to \
+         the stderr the script drops and reads here as a clean file: {reported:?}"
     );
 }
