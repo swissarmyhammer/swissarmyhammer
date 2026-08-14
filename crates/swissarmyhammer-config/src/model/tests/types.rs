@@ -125,14 +125,38 @@ fn test_model_config_select_executor_no_match() {
     let config = ModelConfig {
         executors: vec![ExecutorEntry {
             // Use a platform that definitely doesn't match current
-            platform: Some(Platform::LinuxX86_64),
+            platform: Some(Platform::LinuxX8664),
             executor: embedding_model_config().executors.remove(0).executor,
         }],
         quiet: false,
     };
-    // On macOS ARM this won't match LinuxX86_64
+    // On macOS ARM this won't match LinuxX8664
     // We can't guarantee which platform we're on, so just test the method works
     let _result = config.select_executor();
+}
+
+#[test]
+fn platform_wire_names_are_stable() {
+    // `platform:` is written into user model YAML, so these strings are a
+    // contract. Renaming a variant must not change them.
+    let expected = [
+        (Platform::MacosArm64, "macos-arm64"),
+        (Platform::MacosX8664, "macos-x86-64"),
+        (Platform::LinuxX8664, "linux-x86-64"),
+        (Platform::LinuxAarch64, "linux-aarch64"),
+    ];
+    for (platform, wire) in expected {
+        assert_eq!(
+            serde_yaml_ng::to_string(&platform).unwrap().trim(),
+            wire,
+            "wire name for {platform:?}"
+        );
+        assert_eq!(
+            serde_yaml_ng::from_str::<Platform>(wire).unwrap(),
+            platform,
+            "parsing wire name {wire}"
+        );
+    }
 }
 
 #[test]
@@ -140,8 +164,8 @@ fn test_platform_serialization_roundtrip() {
     // Exercises Platform serialization/deserialization for all variants.
     let platforms = vec![
         Platform::MacosArm64,
-        Platform::MacosX86_64,
-        Platform::LinuxX86_64,
+        Platform::MacosX8664,
+        Platform::LinuxX8664,
         Platform::LinuxAarch64,
     ];
     for platform in platforms {

@@ -132,7 +132,7 @@ fn test_platform_selection_prefers_platform_match() {
 fn test_platform_selection_falls_back_to_universal() {
     // Use a platform that doesn't match current
     let non_matching_platform = if Platform::current() == Platform::MacosArm64 {
-        Platform::LinuxX86_64
+        Platform::LinuxX8664
     } else {
         Platform::MacosArm64
     };

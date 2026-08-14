@@ -9,7 +9,7 @@
 ///
 /// Each newtype wraps a `String` and provides:
 /// - `#[serde(transparent)]` for seamless YAML/JSON (de)serialization
-/// - `Display`, `AsRef<str>`, `From<&str>`, `From<String>`
+/// - `Display`, `AsRef<str>`, `From<&str>`, `From<String>`, `From<&String>`
 /// - `new()` generates a fresh ULID (useful for ID types)
 /// - `from_string()` wraps an existing string
 /// - `as_str()` borrows the inner value
@@ -69,6 +69,16 @@ macro_rules! define_id {
         impl From<String> for $name {
             fn from(s: String) -> Self {
                 Self(s)
+            }
+        }
+
+        // `&String` does not reach `From<&str>` on its own: deref coercion
+        // applies to a declared `&str` parameter, never to an `Into<$name>`
+        // bound. Without this impl every caller holding a `String` field has
+        // to spell `.as_str()` at each call to a newtype-typed API.
+        impl From<&String> for $name {
+            fn from(s: &String) -> Self {
+                Self(s.clone())
             }
         }
 

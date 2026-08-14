@@ -97,17 +97,23 @@ fn reported_review_model_matches_the_switch_that_is_run() {
 #[test]
 fn review_chat_model_precedence() {
     assert_eq!(
-        ModelManager::review_chat_model_from(Some("opus".into()), Some("sonnet".into())),
+        ModelManager::review_chat_model_from(
+            ReviewModel(Some("opus".into())),
+            DefaultModel(Some("sonnet".into()))
+        ),
         "opus",
         "an explicit review.model wins"
     );
     assert_eq!(
-        ModelManager::review_chat_model_from(None, Some("sonnet".into())),
+        ModelManager::review_chat_model_from(
+            ReviewModel(None),
+            DefaultModel(Some("sonnet".into()))
+        ),
         "sonnet",
         "an overall model: drives review when review.model is unset"
     );
     assert_eq!(
-        ModelManager::review_chat_model_from(None, None),
+        ModelManager::review_chat_model_from(ReviewModel(None), DefaultModel(None)),
         REVIEW_DEFAULT_CLAUDE_MODEL,
         "a fully unconfigured review scope falls to the baked-in Haiku switch"
     );

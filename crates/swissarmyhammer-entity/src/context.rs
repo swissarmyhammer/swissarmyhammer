@@ -31,9 +31,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_fields::{
-    ComputeEngine, EntityDef, FieldType, FieldsContext, ValidationEngine,
+    ComputeEngine, EntityDef, EntityTypeName, FieldType, FieldsContext, ValidationEngine,
 };
-use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId};
+use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
 use tokio::sync::RwLock;
 
 use crate::changelog::{self, ChangeEntry};
@@ -42,6 +42,47 @@ use crate::error::{EntityError, Result};
 use crate::id_types::EntityId;
 use crate::io;
 use crate::store::EntityTypeStore;
+
+/// One of the staging directories an entity's files can be moved into.
+///
+/// Each entity type keeps its live, trashed, and archived files under the same
+/// parent (`{root}/{type}s/`), so a staging directory is fully described by
+/// which subdirectory it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagingDir {
+    /// `{root}/{type}s/.trash/` — where `delete()` moves files.
+    Trash,
+    /// `{root}/{type}s/.archive/` — where `archive()` moves files.
+    Archive,
+}
+
+/// A staging operation that moves an entity's files between live storage and
+/// a [`StagingDir`].
+///
+/// `delete`, `archive`, and `unarchive` share one routing path — cache
+/// delegation, store-handle delegation, undo-stack push, and legacy file-move
+/// fallback — and differ only by this discriminant. Holding the difference in
+/// data rather than in three parallel method bodies keeps them from drifting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagingOp {
+    /// Move the live file into `.trash/`.
+    Delete,
+    /// Move the live file into `.archive/`.
+    Archive,
+    /// Move the most recently archived file back into live storage.
+    Unarchive,
+}
+
+impl StagingOp {
+    /// The verb this operation records in its undo-stack label.
+    fn label(self) -> &'static str {
+        match self {
+            StagingOp::Delete => "delete",
+            StagingOp::Archive => "archive",
+            StagingOp::Unarchive => "unarchive",
+        }
+    }
+}
 
 /// Root-aware I/O coordinator for dynamic entities.
 ///
@@ -185,19 +226,23 @@ impl EntityContext {
     /// Includes the correct extension (.md or .yaml) based on the EntityDef.
     pub fn entity_path(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<PathBuf> {
-        let entity_type = entity_type.as_ref();
-        let def = self.entity_def(entity_type)?;
-        Ok(io::entity_file_path(&self.entity_dir(entity_type), id, def))
+        let entity_type = entity_type.into();
+        let def = self.entity_def(&entity_type)?;
+        Ok(io::entity_file_path(
+            &self.entity_dir(&entity_type),
+            id.into(),
+            def,
+        ))
     }
 
     /// Get the changelog path for a specific entity.
     pub fn changelog_path(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<PathBuf> {
         let path = self.entity_path(entity_type, id)?;
         Ok(path.with_extension("jsonl"))
@@ -232,16 +277,20 @@ impl EntityContext {
     /// `load_all`.
     ///
     /// If a `ComputeEngine` is attached, computed fields are derived after reading.
-    pub async fn read(&self, entity_type: impl AsRef<str>, id: impl AsRef<str>) -> Result<Entity> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
+    pub async fn read(
+        &self,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
+    ) -> Result<Entity> {
+        let entity_type = entity_type.into();
+        let id = id.into();
         if let Some(cache) = self.attached_cache() {
-            if let Some(mut entity) = cache.get(entity_type, id).await {
-                self.apply_compute(entity_type, &mut entity).await?;
+            if let Some(mut entity) = cache.get(&entity_type, &id).await {
+                self.apply_compute(&entity_type, &mut entity).await?;
                 return Ok(entity);
             }
         }
-        self.read_internal(entity_type, id).await
+        self.read_internal(&entity_type, &id).await
     }
 
     /// Read a single entity directly from disk, bypassing any attached cache.
@@ -370,15 +419,12 @@ impl EntityContext {
     /// delete, or `Ok(None)` for the legacy fallback path.
     pub async fn delete(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        if let Some(cache) = self.attached_cache() {
-            return cache.delete(entity_type, id).await;
-        }
-        self.delete_internal(entity_type, id).await
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
+    ) -> Result<Option<UndoEntryId>> {
+        let entity_type = entity_type.into();
+        let id = id.into();
+        self.stage(&entity_type, &id, StagingOp::Delete).await
     }
 
     /// Delete an entity directly from disk, bypassing any attached cache.
@@ -390,43 +436,111 @@ impl EntityContext {
         &self,
         entity_type: &str,
         id: &str,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, id, def);
+    ) -> Result<Option<UndoEntryId>> {
+        self.stage_internal(entity_type, id, StagingOp::Delete)
+            .await
+    }
 
-        // Read existing entity before deletion (used for attachment cleanup
-        // and legacy changelog).
-        let previous = io::read_entity(&path, entity_type, id, def).await.ok();
-        if let Some(ref old) = previous {
-            self.trash_entity_attachments(entity_type, old).await?;
+    /// Run a staging operation, routing through the cache when one is attached.
+    ///
+    /// `delete`, `archive`, and `unarchive` route identically and differ only
+    /// by their [`StagingOp`], so the routing lives here once.
+    async fn stage(
+        &self,
+        entity_type: &str,
+        id: &str,
+        op: StagingOp,
+    ) -> Result<Option<UndoEntryId>> {
+        if let Some(cache) = self.attached_cache() {
+            return match op {
+                StagingOp::Delete => cache.delete(entity_type, id).await,
+                StagingOp::Archive => cache.archive(entity_type, id).await,
+                StagingOp::Unarchive => cache.unarchive(entity_type, id).await,
+            };
+        }
+        self.stage_internal(entity_type, id, op).await
+    }
+
+    /// Run a staging operation directly on disk, bypassing any attached cache.
+    ///
+    /// Delegates to the registered [`StoreHandle`] when the entity type has
+    /// one: the handle records a store-format changelog entry, moves the
+    /// files, and the entry is pushed onto the shared undo stack. The entity
+    /// layer used to append a second legacy `ChangeEntry` here; that
+    /// dual-write was removed by card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
+    async fn stage_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+        op: StagingOp,
+    ) -> Result<Option<UndoEntryId>> {
+        let def = self.entity_def(entity_type)?;
+        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+
+        if op == StagingOp::Delete {
+            // Trash the entity's attachment files before its data file
+            // leaves live storage.
+            if let Ok(previous) = io::read_entity(&path, entity_type, id, def).await {
+                self.trash_entity_attachments(entity_type, &previous)
+                    .await?;
+            }
         }
 
-        // Delete — delegate to StoreHandle when available, otherwise
-        // fall back to the legacy io::trash_entity_files path.
-        //
-        // The store handle records the delete as a store-format changelog
-        // entry and trashes the file. The entity layer used to append a
-        // second legacy `ChangeEntry` describing the field-level removal;
-        // that dual-write was removed by card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
-        let _ = previous; // kept for the attachment-cleanup path above
         let store_handle = self.store_handles.read().await.get(entity_type).cloned();
-        if let Some(sh) = store_handle {
-            let entity_id = EntityId::from(id);
-            let entry_id = sh.delete(&entity_id).await?;
+        let Some(sh) = store_handle else {
+            return self.stage_fallback(&path, entity_type, op).await;
+        };
 
-            // Push onto the shared undo stack if a StoreContext is available
-            if let Some(sc) = self.store_context.get() {
-                let label = format!("delete {} {}", entity_type, id);
-                let item_id = StoredItemId::from(id);
-                sc.push(entry_id, label, item_id).await;
+        let entity_id = EntityId::from(id);
+        let entry_id = match op {
+            StagingOp::Delete => sh.delete(&entity_id).await?,
+            StagingOp::Archive => sh.archive(&entity_id).await?,
+            StagingOp::Unarchive => sh.unarchive_latest(&entity_id).await?.1,
+        };
+
+        // Push onto the shared undo stack if a StoreContext is available
+        if let Some(sc) = self.store_context.get() {
+            let label = format!("{} {} {}", op.label(), entity_type, id);
+            let item_id = StoredItemId::from(id);
+            sc.push(entry_id, label, item_id).await;
+        }
+        Ok(Some(entry_id))
+    }
+
+    /// Legacy file-move fallback for entity types with no registered
+    /// [`StoreHandle`].
+    ///
+    /// Reached only in tests and for entity types with no store — production
+    /// always registers a handle — so callers that depend on a changelog
+    /// entry must register one.
+    async fn stage_fallback(
+        &self,
+        path: &Path,
+        entity_type: &str,
+        op: StagingOp,
+    ) -> Result<Option<UndoEntryId>> {
+        match op {
+            StagingOp::Delete => {
+                io::trash_entity_files(path, &self.staging_dir(entity_type, StagingDir::Trash))
+                    .await?;
             }
-            Ok(Some(entry_id))
-        } else {
-            // Fallback for tests or entity types without a registered store
-            let trash = self.trash_dir(entity_type);
-            io::trash_entity_files(&path, &trash).await?;
-            Ok(None)
+            StagingOp::Archive => {
+                io::trash_entity_files(path, &self.staging_dir(entity_type, StagingDir::Archive))
+                    .await?;
+            }
+            StagingOp::Unarchive => {
+                io::restore_entity_files(path, &self.staging_dir(entity_type, StagingDir::Archive))
+                    .await?;
+            }
+        }
+        Ok(None)
+    }
+
+    /// Resolve a [`StagingDir`] to its path for an entity type.
+    fn staging_dir(&self, entity_type: &str, staging: StagingDir) -> PathBuf {
+        match staging {
+            StagingDir::Trash => self.trash_dir(entity_type),
+            StagingDir::Archive => self.archive_dir(entity_type),
         }
     }
 
@@ -437,30 +551,12 @@ impl EntityContext {
     /// This is the inverse of the trash operation performed by `delete()`.
     pub async fn restore_from_trash(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<()> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        self.restore_from_trash_internal(entity_type, id).await?;
-        // Refresh the cache so the restored entity shows up in `list()`.
-        if let Some(cache) = self.attached_cache() {
-            let _ = cache.refresh_from_disk(entity_type, id).await;
-        }
-        Ok(())
-    }
-
-    /// Pure disk restore-from-trash, bypassing any attached cache.
-    pub(crate) async fn restore_from_trash_internal(
-        &self,
-        entity_type: &str,
-        id: &str,
-    ) -> Result<()> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, id, def);
-        let trash = self.trash_dir(entity_type);
-        io::restore_entity_files(&path, &trash).await
+        let entity_type = entity_type.into();
+        let id = id.into();
+        self.restore(&entity_type, &id, StagingDir::Trash).await
     }
 
     /// Restore an entity from the archive back to live storage.
@@ -470,12 +566,20 @@ impl EntityContext {
     /// This is the inverse of the archive operation performed by `archive()`.
     pub async fn restore_from_archive(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<()> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        self.restore_from_archive_internal(entity_type, id).await?;
+        let entity_type = entity_type.into();
+        let id = id.into();
+        self.restore(&entity_type, &id, StagingDir::Archive).await
+    }
+
+    /// Restore an entity from a staging directory and refresh the cache.
+    ///
+    /// Restoring from `.trash/` and from `.archive/` differ only by the
+    /// source directory, so both public entry points share this body.
+    async fn restore(&self, entity_type: &str, id: &str, from: StagingDir) -> Result<()> {
+        self.restore_internal(entity_type, id, from).await?;
         // Refresh the cache so the restored entity shows up in `list()`.
         if let Some(cache) = self.attached_cache() {
             let _ = cache.refresh_from_disk(entity_type, id).await;
@@ -483,17 +587,11 @@ impl EntityContext {
         Ok(())
     }
 
-    /// Pure disk restore-from-archive, bypassing any attached cache.
-    pub(crate) async fn restore_from_archive_internal(
-        &self,
-        entity_type: &str,
-        id: &str,
-    ) -> Result<()> {
+    /// Pure disk restore from a staging directory, bypassing any attached cache.
+    async fn restore_internal(&self, entity_type: &str, id: &str, from: StagingDir) -> Result<()> {
         let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, id, def);
-        let archive = self.archive_dir(entity_type);
-        io::restore_entity_files(&path, &archive).await
+        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+        io::restore_entity_files(&path, &self.staging_dir(entity_type, from)).await
     }
 
     /// Archive an entity by type and ID.
@@ -513,15 +611,12 @@ impl EntityContext {
     /// archive, or `Ok(None)` for the legacy fallback path.
     pub async fn archive(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        if let Some(cache) = self.attached_cache() {
-            return cache.archive(entity_type, id).await;
-        }
-        self.archive_internal(entity_type, id).await
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
+    ) -> Result<Option<UndoEntryId>> {
+        let entity_type = entity_type.into();
+        let id = id.into();
+        self.stage(&entity_type, &id, StagingOp::Archive).await
     }
 
     /// Archive an entity directly on disk, bypassing any attached cache.
@@ -532,36 +627,9 @@ impl EntityContext {
         &self,
         entity_type: &str,
         id: &str,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, id, def);
-
-        // Archive — delegate to StoreHandle when available, otherwise
-        // fall back to the legacy io::trash_entity_files path.
-        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
-        if let Some(sh) = store_handle {
-            let entity_id = EntityId::from(id);
-            let entry_id = sh.archive(&entity_id).await?;
-            // Push onto the shared undo stack if a StoreContext is available
-            if let Some(sc) = self.store_context.get() {
-                let label = format!("archive {} {}", entity_type, id);
-                let item_id = StoredItemId::from(id);
-                sc.push(entry_id, label, item_id).await;
-            }
-            Ok(Some(entry_id))
-        } else {
-            // Fallback: legacy file move only. The entity layer used to
-            // also append an "archive" `ChangeEntry` to the changelog here;
-            // that dual-write was removed by card
-            // 01KQ5FJ0VXEQZVKHZBN49Q5GFS. The fallback path is reached only
-            // when no `StoreHandle` is registered (production always
-            // registers one), so callers depending on a changelog entry
-            // must register a store handle.
-            let archive = self.archive_dir(entity_type);
-            io::trash_entity_files(&path, &archive).await?;
-            Ok(None)
-        }
+    ) -> Result<Option<UndoEntryId>> {
+        self.stage_internal(entity_type, id, StagingOp::Archive)
+            .await
     }
 
     /// Restore an entity from the archive back to live storage.
@@ -581,15 +649,12 @@ impl EntityContext {
     /// unarchive, or `Ok(None)` for the legacy fallback path.
     pub async fn unarchive(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        if let Some(cache) = self.attached_cache() {
-            return cache.unarchive(entity_type, id).await;
-        }
-        self.unarchive_internal(entity_type, id).await
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
+    ) -> Result<Option<UndoEntryId>> {
+        let entity_type = entity_type.into();
+        let id = id.into();
+        self.stage(&entity_type, &id, StagingOp::Unarchive).await
     }
 
     /// Unarchive an entity directly on disk, bypassing any attached cache.
@@ -597,33 +662,9 @@ impl EntityContext {
         &self,
         entity_type: &str,
         id: &str,
-    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, id, def);
-
-        // Unarchive — delegate to StoreHandle when available
-        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
-        if let Some(sh) = store_handle {
-            let entity_id = EntityId::from(id);
-            let (_item, entry_id) = sh.unarchive_latest(&entity_id).await?;
-            // Push onto the shared undo stack if a StoreContext is available
-            if let Some(sc) = self.store_context.get() {
-                let label = format!("unarchive {} {}", entity_type, id);
-                let item_id = StoredItemId::from(id);
-                sc.push(entry_id, label, item_id).await;
-            }
-            Ok(Some(entry_id))
-        } else {
-            // Fallback: legacy file move only. The entity layer used to
-            // also append an "unarchive" `ChangeEntry` here; that
-            // dual-write was removed by card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
-            // The fallback is only reachable when no `StoreHandle` is
-            // registered (production always registers one).
-            let archive = self.archive_dir(entity_type);
-            io::restore_entity_files(&path, &archive).await?;
-            Ok(None)
-        }
+    ) -> Result<Option<UndoEntryId>> {
+        self.stage_internal(entity_type, id, StagingOp::Unarchive)
+            .await
     }
 
     /// Reconcile the cache entry for `(entity_type, id)` with the current
@@ -655,27 +696,33 @@ impl EntityContext {
     ///
     /// [`UndoCmd`]: crate::UndoCmd
     /// [`RedoCmd`]: crate::RedoCmd
-    pub async fn sync_entity_cache_from_disk(&self, entity_type: &str, id: &str) {
+    pub async fn sync_entity_cache_from_disk(
+        &self,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
+    ) {
+        let entity_type = entity_type.into();
+        let id = id.into();
         let Some(cache) = self.attached_cache() else {
             return;
         };
         // An unknown entity type means the registry never saw a YAML for
         // it; nothing to reconcile.
-        let def = match self.entity_def(entity_type) {
+        let def = match self.entity_def(&entity_type) {
             Ok(def) => def,
             Err(_) => return,
         };
-        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+        let path = io::entity_file_path(&self.entity_dir(&entity_type), &id, def);
 
         if path.exists() {
             // File present — pull disk state into the cache. Errors here
             // are non-fatal: `refresh_from_disk` only fails if the file
             // cannot be parsed, which means the cache is the better of
             // two bad options. Log and continue.
-            if let Err(e) = cache.refresh_from_disk(entity_type, id).await {
+            if let Err(e) = cache.refresh_from_disk(&entity_type, &id).await {
                 tracing::warn!(
-                    entity_type = entity_type,
-                    id = id,
+                    entity_type = entity_type.as_str(),
+                    id = id.as_str(),
                     error = %e,
                     "sync_entity_cache_from_disk: refresh_from_disk failed"
                 );
@@ -684,7 +731,7 @@ impl EntityContext {
             // File absent — the undo/redo either trashed it or moved it
             // to `.archive/`. Drop the cache entry so `read`/`list`
             // surface the deletion immediately.
-            cache.evict(entity_type, id).await;
+            cache.evict(&entity_type, &id).await;
         }
     }
 
@@ -716,16 +763,16 @@ impl EntityContext {
     /// If a `ComputeEngine` is attached, computed fields are derived after reading.
     pub async fn read_archived(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<Entity> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        let def = self.entity_def(entity_type)?;
-        let path = io::entity_file_path(&self.archive_dir(entity_type), id, def);
-        let mut entity = io::read_entity(&path, entity_type, id, def).await?;
+        let entity_type = entity_type.into();
+        let id = id.into();
+        let def = self.entity_def(&entity_type)?;
+        let path = io::entity_file_path(&self.archive_dir(&entity_type), &id, def);
+        let mut entity = io::read_entity(&path, &entity_type, &id, def).await?;
         entity.location = EntityLocation::Archive;
-        self.apply_compute(entity_type, &mut entity).await?;
+        self.apply_compute(&entity_type, &mut entity).await?;
         Ok(entity)
     }
 
@@ -869,14 +916,13 @@ impl EntityContext {
     /// chronological order.
     pub async fn read_changelog(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<Vec<ChangeEntry>> {
-        let entity_type = entity_type.as_ref();
-        let def = self.entity_def(entity_type)?;
-        let log_path = self.changelog_path(entity_type, &id)?;
-        let type_name = swissarmyhammer_fields::EntityTypeName::from(entity_type);
-        changelog::read_changelog_for(&type_name, def, &log_path).await
+        let entity_type = entity_type.into();
+        let def = self.entity_def(&entity_type)?;
+        let log_path = self.changelog_path(entity_type.clone(), id)?;
+        changelog::read_changelog_for(&entity_type, def, &log_path).await
     }
 
     /// Read the changelog for an entity, falling back to the trash directory
@@ -885,31 +931,32 @@ impl EntityContext {
     /// nor trash changelog exists (e.g. the entity was archived).
     pub async fn read_changelog_with_trash_fallback(
         &self,
-        entity_type: impl AsRef<str>,
-        id: impl AsRef<str>,
+        entity_type: impl Into<EntityTypeName>,
+        id: impl Into<EntityId>,
     ) -> Result<Vec<ChangeEntry>> {
-        let entity_type = entity_type.as_ref();
-        let id = id.as_ref();
-        let live_path = self.changelog_path(entity_type, id)?;
-        let def = self.entity_def(entity_type)?;
-        let file_stem = io::entity_file_path(&self.entity_dir(entity_type), id, def)
+        let entity_type = entity_type.into();
+        let id = id.into();
+        let live_path = self.changelog_path(entity_type.clone(), id.clone())?;
+        let def = self.entity_def(&entity_type)?;
+        let file_stem = io::entity_file_path(&self.entity_dir(&entity_type), &id, def)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or(id)
+            .unwrap_or(&id)
             .to_string();
 
-        let trash_dir = self.trash_dir(entity_type);
-        let trash_path = trash_dir.join(format!("{file_stem}.jsonl"));
-        let type_name = swissarmyhammer_fields::EntityTypeName::from(entity_type);
+        let trash_path = self
+            .staging_dir(&entity_type, StagingDir::Trash)
+            .join(format!("{file_stem}.jsonl"));
 
         // Try live first, then trash, then archive
         let entries =
-            changelog::read_changelog_with_fallback(&type_name, def, &live_path, &trash_path)
+            changelog::read_changelog_with_fallback(&entity_type, def, &live_path, &trash_path)
                 .await?;
         if entries.is_empty() && !live_path.exists() && !trash_path.exists() {
-            let archive_dir = self.archive_dir(entity_type);
-            let archive_path = archive_dir.join(format!("{file_stem}.jsonl"));
-            return changelog::read_changelog_for(&type_name, def, &archive_path).await;
+            let archive_path = self
+                .staging_dir(&entity_type, StagingDir::Archive)
+                .join(format!("{file_stem}.jsonl"));
+            return changelog::read_changelog_for(&entity_type, def, &archive_path).await;
         }
         Ok(entries)
     }
@@ -1000,8 +1047,15 @@ impl EntityContext {
         let siblings = entity.fields.clone();
 
         for name in &names_to_validate {
-            let fd = field_defs.iter().find(|f| f.name == name.as_str()).unwrap();
-            let value = entity.fields.get(name).cloned().unwrap();
+            let fd = field_defs
+                .iter()
+                .find(|f| f.name == name.as_str())
+                .expect("names_to_validate is collected from field_defs");
+            let value = entity
+                .fields
+                .get(name)
+                .cloned()
+                .expect("names_to_validate only holds names present in entity.fields");
             let validated = engine.validate(fd, value, &siblings).await.map_err(|e| {
                 EntityError::ValidationFailed {
                     field: name.clone(),

@@ -161,6 +161,9 @@ use super::parse_code;
 
 mod test_census;
 
+/// The test census — the per-test measurement the `no-test-cheating` rule
+/// reads. It shares this module's grammar rows, so it lives under `complexity`
+/// and is re-exported here as the plugin's public entry point.
 pub use test_census::{test_census, TestCensus, TestDefect};
 
 /// The cognitive-complexity score at or above which a function is flagged. The

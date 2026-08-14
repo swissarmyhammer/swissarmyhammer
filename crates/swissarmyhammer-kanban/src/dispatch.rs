@@ -221,6 +221,23 @@ fn list_param(op: &KanbanOperation, key: &str) -> Result<Option<Vec<String>>, Ka
     }
 }
 
+/// Read a forgiving list-of-refs param that also answers to a singular alias.
+///
+/// `plural` is read first, then `singular`. Both go through [`list_param`], so
+/// the alias names a second key without narrowing the shapes it accepts.
+/// Returns `Ok(None)` only when neither key is present — an explicit empty
+/// array still yields `Some(vec![])`.
+fn aliased_list_param(
+    op: &KanbanOperation,
+    plural: &str,
+    singular: &str,
+) -> Result<Option<Vec<String>>, KanbanError> {
+    if let Some(refs) = list_param(op, plural)? {
+        return Ok(Some(refs));
+    }
+    list_param(op, singular)
+}
+
 /// Normalize a forgiving `depends_on` param to canonical full ULIDs.
 ///
 /// Shape tolerance comes from [`ref_list`]. Every element then routes through
@@ -251,10 +268,7 @@ async fn resolve_depends_on(
 /// only reached for `add`/`update`, so `tag task`'s own `tag` param is
 /// untouched. Returns `Ok(None)` when neither key is present.
 fn tag_refs(op: &KanbanOperation) -> Result<Option<Vec<String>>, KanbanError> {
-    if let Some(refs) = list_param(op, "tags")? {
-        return Ok(Some(refs));
-    }
-    list_param(op, "tag")
+    aliased_list_param(op, "tags", "tag")
 }
 
 /// Read the forgiving `attachments` param.
@@ -397,10 +411,7 @@ async fn execute_column_operation(
 /// only when neither key is present — an explicit empty array is
 /// `Some(vec![])`, which `update task` uses to unassign.
 fn explicit_assignee_refs(op: &KanbanOperation) -> Result<Option<Vec<String>>, KanbanError> {
-    if let Some(refs) = list_param(op, "assignees")? {
-        return Ok(Some(refs));
-    }
-    list_param(op, "assignee")
+    aliased_list_param(op, "assignees", "assignee")
 }
 
 /// Normalize the explicit `assignees` param to registered actor ids.

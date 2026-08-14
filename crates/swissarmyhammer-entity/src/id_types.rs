@@ -27,6 +27,15 @@ mod tests {
     }
 
     #[test]
+    fn entity_id_from_string_reference() {
+        let owned = String::from("01ABC");
+        let id = EntityId::from(&owned);
+        assert_eq!(id.as_str(), "01ABC");
+        // The borrow survives the conversion.
+        assert_eq!(owned, "01ABC");
+    }
+
+    #[test]
     fn change_entry_id_new() {
         let id = ChangeEntryId::new();
         assert!(!id.as_str().is_empty());

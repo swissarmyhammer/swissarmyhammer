@@ -122,7 +122,7 @@ pub const REVIEW_DEFAULT_CLAUDE_MODEL: &str = "haiku";
 ///
 /// Different CLIs (SAH vs AVP) write to different directories and filenames.
 /// Pass this to `ModelManager` methods that read/write config.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelPaths {
     /// Directory name relative to project root (e.g. ".sah" or ".avp")
     pub dir_name: &'static str,
@@ -181,16 +181,52 @@ impl ChatModelConfig {
     }
 }
 
+/// An explicitly configured `review.model` — the review scope's own Claude CLI
+/// `--model` switch, or `None` when the key is unset.
+///
+/// A newtype rather than a bare `Option<String>` so it cannot be swapped with
+/// [`DefaultModel`], which has the same shape and the opposite precedence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ReviewModel(pub Option<String>);
+
+/// Wraps a raw `review.model` value read from configuration.
+impl From<Option<String>> for ReviewModel {
+    fn from(model: Option<String>) -> Self {
+        Self(model)
+    }
+}
+
+/// An explicitly configured top-level `model:` — the overall Claude CLI
+/// `--model` switch, or `None` when the key is unset.
+///
+/// The counterpart to [`ReviewModel`]; see that type for why both are newtypes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct DefaultModel(pub Option<String>);
+
+/// Wraps a raw top-level `model:` value read from configuration.
+impl From<Option<String>> for DefaultModel {
+    fn from(model: Option<String>) -> Self {
+        Self(model)
+    }
+}
+
 /// Runtime platform for executor selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Platform {
     /// macOS ARM64 (Apple Silicon) platform.
     MacosArm64,
-    /// macOS x86_64 (Intel) platform.
-    MacosX86_64,
-    /// Linux x86_64 platform.
-    LinuxX86_64,
+    /// macOS x86-64 (Intel) platform.
+    ///
+    /// The wire name is pinned because `kebab-case` renaming derives it from
+    /// the variant spelling, and user model YAML already carries the value.
+    #[serde(rename = "macos-x86-64")]
+    MacosX8664,
+    /// Linux x86-64 platform.
+    ///
+    /// The wire name is pinned for the same reason as [`Platform::MacosX8664`].
+    #[serde(rename = "linux-x86-64")]
+    LinuxX8664,
     /// Linux ARM64 (aarch64) platform.
     LinuxAarch64,
 }
@@ -204,11 +240,11 @@ impl Platform {
         }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
-            Platform::MacosX86_64
+            Platform::MacosX8664
         }
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
-            Platform::LinuxX86_64
+            Platform::LinuxX8664
         }
         #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
         {
@@ -221,7 +257,7 @@ impl Platform {
             all(target_os = "linux", target_arch = "aarch64"),
         )))]
         {
-            Platform::LinuxX86_64
+            Platform::LinuxX8664
         } // fallback
     }
 }
@@ -254,7 +290,7 @@ pub enum ModelExecutorType {
 ///       config:
 ///         source: ...
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorEntry {
     /// Optional platform constraint. If None, this executor is a universal fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,7 +304,7 @@ pub struct ExecutorEntry {
 /// Supports both the singular `executor:` format and the `executors:` list
 /// format with platform-based selection. The first compatible executor in the
 /// list is selected at runtime.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelConfig {
     /// Ordered list of executor entries; first compatible match wins.
     pub executors: Vec<ExecutorEntry>,
@@ -276,6 +312,9 @@ pub struct ModelConfig {
     pub quiet: bool,
 }
 
+/// Accepts both the singular `executor:` field and the plural `executors:`
+/// list, normalizing either into the [`ModelConfig::executors`] list, and
+/// ignores unknown keys.
 impl<'de> serde::Deserialize<'de> for ModelConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -342,11 +381,13 @@ impl<'de> serde::Deserialize<'de> for ModelConfig {
 ///
 /// Uses serde's tagged representation to ensure type safety and proper
 /// serialization of executor-specific configuration data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ModelExecutorConfig {
+    /// Run the embedding model locally through llama.cpp.
     #[serde(rename = "llama-embedding")]
     LlamaEmbedding(EmbeddingModelConfig),
+    /// Run the embedding model on the Apple Neural Engine.
     #[serde(rename = "ane-embedding")]
     AneEmbedding(EmbeddingModelConfig),
 }
@@ -354,7 +395,7 @@ pub enum ModelExecutorConfig {
 /// Configuration for embedding model execution
 ///
 /// Used with the `llama-embedding` executor type for semantic embedding models.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmbeddingModelConfig {
     /// Model source (HuggingFace or local path)
     pub source: ModelSource,
@@ -489,6 +530,9 @@ pub enum ModelError {
     ConfigError(String),
 }
 
+/// A failure to parse or validate model configuration is `Critical` — nothing
+/// downstream can trust the configuration. A failed lookup or file operation is
+/// `Error`: the caller can fall back to another source and continue.
 impl Severity for ModelError {
     fn severity(&self) -> ErrorSeverity {
         match self {
@@ -600,6 +644,7 @@ struct ModelMergeStats {
 ///
 /// Provides functionality to load agents from built-in sources, user directories,
 /// and project directories with proper precedence handling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ModelManager;
 
 impl ModelManager {
@@ -1569,11 +1614,12 @@ impl ModelManager {
     /// rule and cannot disagree, regardless of where each reads the raw config
     /// from.
     pub fn review_chat_model_from(
-        review_model: Option<String>,
-        default_model: Option<String>,
+        review_model: ReviewModel,
+        default_model: DefaultModel,
     ) -> String {
         review_model
-            .or(default_model)
+            .0
+            .or(default_model.0)
             .unwrap_or_else(|| REVIEW_DEFAULT_CLAUDE_MODEL.to_string())
     }
 
@@ -1591,8 +1637,8 @@ impl ModelManager {
     /// * `Result<String, ModelError>` - The effective Claude CLI `--model` switch
     pub fn resolve_review_chat_model(paths: &ModelPaths) -> Result<String, ModelError> {
         Ok(Self::review_chat_model_from(
-            Self::get_review_chat_model(paths)?,
-            Self::get_chat_model(paths)?,
+            ReviewModel(Self::get_review_chat_model(paths)?),
+            DefaultModel(Self::get_chat_model(paths)?),
         ))
     }
 
