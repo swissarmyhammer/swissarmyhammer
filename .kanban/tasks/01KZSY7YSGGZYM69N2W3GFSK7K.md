@@ -61,8 +61,25 @@ comments:
     - evidence: 6 files — builtin/validators/code-hygiene/rules/magic-numbers-swift.md, builtin/validators/code-hygiene/rules/missing-docs-swift.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/complexity_swift.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/magic_numbers.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
     - next: /review
   timestamp: 2026-08-12T23:16:31.334855+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzw4h028gbp1b6040g3zqckz
+  text: |-
+    ### review — clean
+    - evidence: review sha ec4c659b5~1..ec4c659b5 — 16 validator/file pairs attempted, 0 failed, 0 skipped; findings 0, confirmed 0, refuted 0. No prior Review Findings section, no unchecked item.
+    - next: card moved to done
+  timestamp: 2026-08-12T23:22:08.840017+00:00
+- actor: claude-code
+  id: 01kzw4hp7krgsfqecxhrze0ahs
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 6 files. Both defects corrected in both sibling rules, copied from the complexity-swift shape of ^h2ezbs7. Each script now tests stderr for the decode message before it reads the status, and all three stderr greps in each script are anchored to line start. Six acceptance tests drive the shipped bytes, each watched RED first — and the intermediate state was instructive: adding the decode test unanchored turned both decode-NAME tests red, which is the exact false fire the card describes, and the anchors turned all six green. SWIFT_DECODE_NAME_POSITION_ONLY and SWIFT_CONFIG_NAME_POSITION_ONLY moved into shipped.rs so all three swiftlint modules share one copy.
+    - Correction to the card's own table: for these two rules BOTH decode rows are status 0, not the 0/2 pair complexity-swift measures. The magic-numbers child states `severity: warning` and the missing-docs child states `warning: [open, public]` with no error list, so no finding reaches error severity and swiftlint never exits 2. Re-measured with the installed swiftlint 0.65.0 and stated on each rule body.
+    - test: green — cargo nextest run -p swissarmyhammer-validators, 696 passed, 0 skipped (690 before, plus the 6 new tests). fmt and clippy clean.
+    - commit: ec4c659b5
+    - review: clean — 0 findings over ec4c659b5~1..ec4c659b5, 16 pairs attempted, 0 failed. Task moved to done.
+  timestamp: 2026-08-12T23:22:31.539651+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff480
 title: magic-numbers-swift and missing-docs-swift read a file swiftlint cannot decode as a clean file
 ---
 swiftlint reads a source file as UTF-8 alone. A file that holds other bytes — a Swift file a person saved in Latin-1, or a binary file under a `.swift` name — makes swiftlint write ``Could not read contents of `<path>` `` to stderr. swiftlint then lints no line of that file.

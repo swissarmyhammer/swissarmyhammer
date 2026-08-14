@@ -74,8 +74,28 @@ comments:
     - evidence: 5 files — builtin/validators/code-hygiene/rules/magic-numbers-swift.md, builtin/validators/code-hygiene/rules/missing-docs-swift.md, builtin/validators/code-hygiene/rules/complexity-swift.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/magic_numbers.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs. 698/698 tests pass, fmt clean, clippy clean.
     - next: /review
   timestamp: 2026-08-13T00:10:58.196543+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzw7hp5t6438qe0v0hj8szq7
+  text: |-
+    ### review — clean
+    - evidence: `review sha 7896580b9~1..7896580b9` — 0 findings, 0 confirmed, 0 refuted; 8 validators attempted, 0 failed, 0 skipped. No prior Review Findings sections, no unchecked items.
+    - next: task moved to done.
+  timestamp: 2026-08-13T00:14:57.210998+00:00
+- actor: claude-code
+  id: 01kzw7jefnjkq6gz0qdb44315h
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files. Answer (2) chosen: drop the byte count, keep the entry count. The defect was reproduced first rather than trusted, because four commits moved these tables today — two fixture roots whose absolute paths differ by exactly 3 characters. Every entry count holds; no byte count reproduces. Each delta is exactly 3 per entry that carries a path, and the 3-entry row moved 6 rather than 9 because the `warning_threshold` entry carries an empty `file` field, which confirms the diagnosed cause precisely.
+    - Why not (3): each measurement runs inside a `mktemp -d` directory that differs on every run and every machine, so recording the path makes the number checkable only in a directory that no longer exists. Why not (1): it keeps a number a later reader still cannot check, documenting the defect instead of removing it. The entry count is also what the script gates on (`jq -e 'type == "array" and length > 0'`); the byte count gates nothing.
+    - `0 bytes` and `an empty array, 5 bytes` STAY — measured byte-identical at both roots, because they carry no path, and they carry the distinction the status gate depends on.
+    - Applied to every affected row, not only the rows the card quoted: 3 rows in magic-numbers-swift, 4 in missing-docs-swift, 1 row plus 1 prose sentence in complexity-swift, and the two acceptance-test doc comments. Each status table now states WHY it holds an entry count and no byte count, so the next re-measurement does not put them back. dead-code-swift.md needed no change; it carries no such count.
+    - Post-change survey: the only byte counts left anywhere in the Swift rules are 45 × `0 bytes` and 10 × `5 bytes`, all path-independent.
+    - test: green — cargo nextest run -p swissarmyhammer-validators, 698 passed, 0 skipped. fmt and clippy clean.
+    - commit: 7896580b9
+    - review: clean — 0 findings over 7896580b9~1..7896580b9, 8 validators attempted, 0 failed. Task moved to done.
+  timestamp: 2026-08-13T00:15:22.101870+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff780
 title: Swift rule status tables state stdout byte counts that move with the path length
 ---
 The status tables of the three shipped swiftlint rules state a byte count

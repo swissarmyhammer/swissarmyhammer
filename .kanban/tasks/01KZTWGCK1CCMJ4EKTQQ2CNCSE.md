@@ -138,8 +138,32 @@ comments:
     - evidence: 9 files — crates/swissarmyhammer-validators/src/review/fleet/tests.rs (rewritten as the shared parent), and the new crates/swissarmyhammer-validators/src/review/fleet/tests/{attribution,budget,fanout,forking,progress,reask,renderer,reuse}.rs. Pure move, proved byte-identical by diff. Tests: 68 fleet tests before, 68 after; `cargo nextest run -p swissarmyhammer-validators`: 708 passed, 0 failed, 0 skipped. `cargo fmt --all -- --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. Largest resulting file 29113 raw bytes, est. 74470 rendered — 28% of the 262144-byte cap.
     - next: /review. New card ^0fn6dbf raised for six files elsewhere in the repository that pass the cap on their source render alone.
   timestamp: 2026-08-13T01:18:34.954119+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzwdae9sakh8pnw2s5jqyja2
+  text: |-
+    ### review — clean
+    - evidence: `review sha 8d2217b99~1..8d2217b99`. skipped: 0, skipped_files: [] — no file was skipped for the size cap. The coverage hole is closed: the nine split files were all reviewed.
+    - engine returned 17 findings, all dropped under the review skill blanket exception (findings that ask to change test code that already existed). Every one of the nine files is test code (`#[cfg(test)] mod tests;` at fleet.rs:1475). Each finding subject was proved to pre-date the commit by grep of 8d2217b99~1: `validator_work` undocumented at original line 143; `short_line_source(1_000)` at 776; `.repeat(500)` at 816/878/944; `PoolConfig::remote(4)` at 1804+; `PoolConfig::remote(2)` at 2212+; `Some(2064)` at 2655; `(0..10)` at 2204; `Some(1000)`/`Some(20)` at 3229-3231.
+    - 0 findings dropped for a false premise. Every named line was read and each premise held.
+    - pure move verified independently of the commit message: non-scaffolding added and removed content are identical multisets, 2614 lines each, 0 lines unique to either side. No new logic entered the delta.
+    - prior finding (the 319188-byte cap) is checked.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-13T01:55:51.225203+00:00
+- actor: claude-code
+  id: 01kzwdbq3dwm509crp6skmx3mm
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 9 files. fleet/tests.rs split into eight subject modules plus a shared parent, in the idiom review/tool_rules/tests.rs already uses. Proved a PURE MOVE: every surviving line of the nine files, concatenated in original order with module headers stripped, is byte-identical to the original minus the 22 section-marker and blank lines the module docs replaced; `diff` reports no difference. 68 fleet tests before and after. Largest resulting file renders at 28% of the cap; the original stood at 122% of it.
+    - test: green — cargo nextest run -p swissarmyhammer-validators, 708 passed, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: 8d2217b99
+    - review: clean — **skipped_files: []**, so all nine files were actually reviewed and the coverage hole is proved closed. 17 engine findings, every one dropped under the skill's existing-test exception, each verified against the parent commit 8d2217b99~1 rather than trusted. 0 dropped for a false premise. The reviewer independently re-proved the pure move: added and removed content are identical multisets, 2614 lines each, zero unique to either side. Task moved to done.
+
+    The cap is hit in more than one place, so the cause was reported beyond the named line. Six files elsewhere exceed 262144 bytes on the SOURCE RENDER ALONE, before diff and probes, making them unreviewable by every validator rather than only by duplication: kanban/src/scope_commands.rs (313824), sem/src/parser/plugins/code/complexity.rs (302861), kanban/src/dispatch.rs (284258), tools/tests/integration/file_tools_integrations.rs (276387), config/src/model.rs (267136), entity/src/context.rs (262659). Carded as ^0fn6dbf.
+
+    Standing caveat, repeated because it still holds: the engine's own findings do not yet carry the set/rule attribution on a live run, because the installed sah binary predates commit 18fd3f260. The reviewer of this very commit had to infer attribution from wording again. The shape is held by tests; proving it live needs a rebuilt sah and an MCP restart.
+  timestamp: 2026-08-13T01:56:33.005844+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff880
 title: A recorded finding must name the validator set and the rule that produced it
 ---
 A review finding recorded on a kanban task names a file and a line. It never names the validator set or the rule that produced it.

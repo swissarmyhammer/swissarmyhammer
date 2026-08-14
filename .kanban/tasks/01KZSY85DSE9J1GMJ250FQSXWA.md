@@ -62,8 +62,27 @@ comments:
     - evidence: 3 files — builtin/validators/code-hygiene/rules/complexity-swift.md, builtin/validators/code-hygiene/VALIDATOR.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/complexity_swift.rs. 697 validators tests pass, 503 mirdan tests pass, fmt and clippy clean.
     - next: /review
   timestamp: 2026-08-12T23:38:29.261120+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzw5pcj95rbc9jfrwnj14p6k
+  text: |-
+    ### review — clean
+    - evidence: `review sha d8f813b84~1..d8f813b84` — 0 findings, 0 confirmed, 0 refuted, 8 validators attempted, 0 failed, 0 skipped. No prior Review Findings section holds an unchecked item. No finding was dropped for a false premise, because the engine reported none.
+    - next: none — task moves to done.
+  timestamp: 2026-08-12T23:42:34.057170+00:00
+- actor: claude-code
+  id: 01kzw5q2h4c0r3tewvxw5s8e7e
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files. The measurement said ADD, and the number that decided it is 1 finding over 894 files at a gate of 250. Corpus is the one the ignores_case_statements measurement used: Alamofire 0455bfb (98 files), swift-nio 08b497c (554), vapor c6818be (242), none carrying a .swiftlint.yml. Sweep: 20 → 316 findings, 30 (swiftlint's own default) → 148, 50 → 41, 100 → 3, 250 → 1, 300 → 0. The one finding is a 259-line @Sendable registration block at swift-nio Benchmarks/.../Benchmarks.swift:45.
+    - The trade the card warned about does not materialise at 250. A SwiftUI body of 200 Text rows in a VStack is silent, and reports at 300, which is where function-length fires. At swiftlint's default of 30 it would materialise: 148 findings.
+    - Two measurements that came out of the work and are now stated in the rule rather than left to be re-found: `cyclomatic_complexity` reads no closure either and swiftlint ships no closure-complexity rule, so superseding drops the COMPLEXITY gate for a closure — length is all the closure gate gives. And a nested closure aggregates: three VStack of 100 rows inside a Group report the outer Group at 306 lines.
+    - The existing test `..._reads_no_computed_property_body` broke once the rule shipped, because its probe's 300-row VStack now reports. Its probe moved to a computed var of 300 straight statement lines, which is the gap that genuinely remains.
+    - test: green — 697 validators tests, 503 mirdan tests, fmt and clippy clean. RED watched first: `left: []`, `right: ["Sources/Panel.swift:5"]`.
+    - commit: d8f813b84
+    - review: clean — 0 findings over d8f813b84~1..d8f813b84, 8 validators attempted, 0 failed. Task moved to done.
+  timestamp: 2026-08-12T23:42:56.548512+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff580
 title: complexity-swift drops the closure, which function-length measures
 ---
 `function-length` states "All Function Types: Methods, closures, lambdas, standalone functions". `complexity-swift` supersedes that prompt rule, and its child configuration names `cyclomatic_complexity` and `function_body_length` alone.

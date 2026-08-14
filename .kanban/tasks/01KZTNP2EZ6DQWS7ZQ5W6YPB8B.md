@@ -56,8 +56,29 @@ comments:
     - evidence: 6 files — crates/mirdan/src/retired_validators.rs, crates/mirdan/src/install/profile.rs, crates/mirdan/src/install/tests.rs, crates/mirdan/src/lib.rs, and the two new byte-frozen snapshots under crates/mirdan/retired-validators/
     - next: /review
   timestamp: 2026-08-13T12:06:42.561980+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzxgrp9yd0qx9kmnvc7fvp68
+  text: |-
+    ### review — clean
+    - evidence: review sha 59f31b4f6~1..59f31b4f6 — 0 findings (16 validator passes attempted, 0 failed, 0 files skipped). No prior open findings on this task.
+    - next: none; task moved to done.
+  timestamp: 2026-08-13T12:15:18.334659+00:00
+- actor: claude-code
+  id: 01kzxgsr5ynczxncm2334rnze2
+  text: |-
+    ### finish iteration 1 — clean
+    - Resumed from an abandoned session that started this card at 06:04 and died before committing, leaving four modified mirdan files and the two snapshots uncommitted. Its work was NOT taken on trust.
+    - implement: changed — 6 files. The load-bearing check passed: both snapshots are byte-identical to what 59bd9ae5c~1 shipped, verified by piping `git show` through sha256 (duplication-parsed.md 7b361a52…1a73b, 17288 bytes; no-commented-code-parsed.md 5212b5fa…91c6b, 9013 bytes). A single wrong byte would stop the prune firing forever, silently.
+    - One real defect found in the inherited work. Both halves were proved load-bearing by mutation, and `prune_removes_only_the_named_file_from_a_still_shipping_set` passed under BOTH mutations — it asserted only that the manifest and a sibling survived, never that the named file was removed, so "only" was vacuously true for a prune that does nothing. The missing assertion is added. This is the test-integrity/no-test-cheating rule: every test must be able to fail.
+    - Proved end to end with the real binary in a throwaway HOME. An aged store reproduces the card's exact doctor rows (`tool missing: bash: : command not found`); `sah init user` reports `Removed retired validator rule(s): duplication/rules/duplication-parsed.md, code-hygiene/rules/no-commented-code-parsed.md`; both files go, every still-shipping sibling survives, and doctor afterwards shows neither row. Re-aged with an EDITED copy, the same command pruned only the unmodified file and left the edit intact.
+    - test: green — 513/513 mirdan tests, fmt and clippy clean.
+    - commit: 59f31b4f6
+    - review: clean — 0 findings over 59f31b4f6~1..59f31b4f6, 16 passes attempted, 0 failed, 0 skipped. The engine raised nothing against either byte-frozen snapshot, so nothing had to be set aside on that ground. Task moved to done.
+
+    The user's real ~/.validators/ was never touched and still holds both stale files. To clean it, after this lands and sah is rebuilt: `sah init user`. Edited copies stay, by design.
+  timestamp: 2026-08-13T12:15:53.022799+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff980
 title: Prune a retired RULE file from a deployed validator store
 ---
 `mirdan::retired_validators::prune_unmodified_retired_sets` prunes a whole

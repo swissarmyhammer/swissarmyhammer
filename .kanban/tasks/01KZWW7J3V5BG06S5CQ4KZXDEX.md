@@ -838,8 +838,71 @@ comments:
     - discovered: `^hfx8vw7` — strategy/mod.rs holds a second source of the permissions.deny pointer.
     - next: /review
   timestamp: 2026-08-13T16:45:52.415464+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzy0rcvxxdjwj9vkcmd1d3ka
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha 303f7feb7~1..303f7feb7`, 16 validators attempted, 0 failed, 0 skipped, 0 findings. All nine prior findings checked. Task moved to `done`.
+    - scope: round 4, the commit only, not the working tree.
+    - false premise: 0 findings were dropped for a false premise, because there were no findings.
+    - existing-tests exception: not applied this round. No finding was dropped.
+
+    Convergence: this round converged. Rounds 1 to 3 each removed the named lines
+    and left the cause, so the next round found new sites in the same file. This
+    round removed the cause of the loop instead. The author's sweep now compares
+    each const value as a substring of each string literal, so it sees a repeat
+    that is a token inside a larger format string. That is the class of repeat the
+    review engine reported in every earlier round and the author's equality check
+    could not see. The commit also introduced no new abstraction, and a new
+    abstraction was what produced fresh sites in rounds 2 and 3.
+
+    An independent substring sweep, written for this review and not the author's
+    script, reports 10 remaining sites in profile.rs. Two were read at the named
+    line and confirmed structural:
+
+    - `profile.rs:287` — `skill_ctx.set("agent", ...)` is a Liquid template
+      variable name that shared partials read as `{{ agent }}`. It is not the
+      reporter label. The two share a spelling only.
+    - `profile.rs:908` — `"{verb} {subject} for {changed} agent(s)"` counts
+      detected coding agents, not builtin agent items. `AGENT_ITEM_LABEL` is the
+      label for a builtin item, so this is a different noun.
+
+    The other sites are three `include_str!` path arguments, which the compiler
+    requires to be literals, and two tracing sentences where the word is English
+    prose. All are false positives of substring matching, not unfixed findings.
+
+    Observation, not a finding, because no validator raised it: the commit message
+    states that `test_temp_dir_errors_name_the_directory_that_failed` asserts the
+    two helper messages and not which helper a call site reaches for, so reverting
+    the call site leaves the suite green. This was read and confirmed at
+    `crates/mirdan/src/install/tests.rs`. The test is a message contract, not a
+    regression guard for the round-3 fix.
+
+    - next: none. Card closes.
+  timestamp: 2026-08-13T16:54:45.885349+00:00
+- actor: claude-code
+  id: 01kzy0styyjtjemfrtf0ztedsx
+  text: |-
+    ### finish iteration 4 — clean. The loop closed.
+    - Resumed after the round-4 agent died mid-run on a network error, leaving partial uncommitted work. That work was verified, not trusted: two of four findings were done, findings 2 and 3 had not been touched at all, and one inherited test did not pin what it appeared to.
+    - implement: changed — 5 files. The regression is fixed properly: `temp_subdir_error(what, e)` takes the noun as a PARAMETER, so a call site cannot report a subdirectory failure without naming the directory, and the repeated literal round 2 removed does not come back.
+    - **The detector was the real fix.** Rounds 2 and 3 swept by whole-literal EQUALITY, structurally blind to a repeat sitting as a token inside a format string — which was exactly the class the engine kept reporting. The sweep now compares every const value as a SUBSTRING. It found 22 sites in profile.rs where equality saw 3, fixed 10 that no finding ever named — including `PERMISSIONS_DENY_POINTER` restating both `POINTER_KEY_*` constants under a doc comment claiming they could never drift — and 0 sites in the other five files.
+    - **Zero new abstractions**, which was the loop generator in rounds 2 and 3. Every fix used an existing constant; the one shape change is a rename in place.
+    - test: green — 521 mirdan, 14181 workspace, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: 303f7feb7
+    - review: clean — 16 attempted, 0 failed, 0 skipped, 0 findings. Task moved to done.
+
+    **Convergence confirmed independently.** The reviewer did not accept the 12 documented collisions on the author's word: it wrote its own substring sweep and read two at the line. `skill_ctx.set("agent", …)` is a Liquid variable the shared partials read as `{{ agent }}`; `"{verb} {subject} for {changed} agent(s)"` counts DETECTED CODING AGENTS while `AGENT_ITEM_LABEL` is the reporter label for one BUILTIN agent — a different noun. The rest are `include_str!` path arguments the compiler requires to be literals, and English prose in tracing sentences. All false positives of substring matching.
+
+    Round counts across the card: 3, 2, 4, 0.
+
+    **One thing carried forward, honestly, and it is NOT a finding** — no validator raised it. `test_temp_dir_errors_name_the_directory_that_failed` asserts the two helper MESSAGES, not which helper a call site reaches for; reverting the call-site fix leaves the suite green, because that failure path is close to unreachable. It is a message contract, not a regression guard. The regression fix at profile.rs:764 is held by review, not by a test.
+
+    Also carded rather than swept in: ^hfx8vw7 — crates/mirdan/src/strategy/mod.rs declares its own `PERMISSIONS_DENY_POINTER`, a second source of one external contract, in a module no finding names.
+  timestamp: 2026-08-13T16:55:33.086808+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffffa80
 title: Prune the four retired tool-rule fixtures from a deployed validator store
 ---
 `^w6ypb8b` added `RETIRED_VALIDATOR_FILES` to

@@ -535,8 +535,24 @@ comments:
 
     Task left in `review` with 34 unformalised findings. Not forced to done.
   timestamp: 2026-08-08T20:46:15.998418+00:00
-position_column: review
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzv7jm85e0e5z4kctvfvj1ft
+  text: |-
+    Closed on the direction of a person, 2026-08-12.
+
+    The finish loop stopped this card at iteration 4 and asked a person to decide. The person decided: close it.
+
+    All 255 recorded findings are checked. Four rounds closed them.
+
+    Two facts stay open, and they are NOT closed by this card:
+
+    - `crates/claude-agent/tests/integration/coverage_tests.rs` is larger than the review prompt cap (366210 bytes against 262144). The `duplication` validator never read this file in any round. Every clean report for that file is a gap in coverage, not a pass.
+    - `crates/claude-agent/src/agent.rs` is 344350 bytes and the same validator skipped it for the same reason. This is source code, not test code.
+
+    The last review round measured 34 more findings. The review agent stopped on a server error before it wrote them to this description. They stand in the comment above this one.
+  timestamp: 2026-08-12T14:56:13.573195+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff080
 title: Lowercase the capitalized error Display messages in claude-agent
 ---
 `builtin/validators/rust/rules/error-handling.md` states: Display messages on errors are lowercase, with no trailing punctuation.

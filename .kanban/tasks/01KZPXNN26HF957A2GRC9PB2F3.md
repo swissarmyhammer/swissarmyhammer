@@ -153,8 +153,29 @@ comments:
     - evidence: 1 file — `builtin/validators/code-security/rules/injection.md`. Added a `## Before you report` gate (quote the sink from the file; read the quoted characters for the treatment; stay silent when it is already present; the 2026-08-12 measurement and the `shipped.rs` case) and a **Treatment already present** exception. `cargo nextest run -p swissarmyhammer-validators -p mirdan` → 1193 passed, 0 failed, 0 skipped, including `the_swift_package_root_restores_the_directory_before_it_removes_it` (PASS 0.198s, in the full module run). `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` exit 0.
     - next: /review. The one review finding is checked off as resolved-by-rule-correction — its premise was false on disk, so the rule was corrected instead of the code. Nothing staged; no file outside `builtin/validators/` and this card was touched.
   timestamp: 2026-08-12T22:59:13.583875+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzw3aedpxdm4k8m9hke6cdh6
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha 51af948d7~1..51af948d7` — findings 0, confirmed 0, refuted 0, attempted 0, failed 0, skipped 0. Commit 51af948d7 changes three files: `builtin/validators/code-security/rules/injection.md` and the two `.kanban` files of this task. No validator declares a `*.md` match glob, so no file of this commit is in the scope of any validator. A direct `review file` call on the rule file gives the same empty result, which proves the empty scope and not a silent skip.
+    - prior findings: the one finding of 2026-08-12 18:48, at `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:970`, is marked `- [x]` and carries its resolution note.
+    - limit of this pass: the engine cannot run the injection rule on the text of the rule, because the rule text is markdown and every validator matches source code only.
+    - next: none. The task moves to done.
+  timestamp: 2026-08-12T23:01:05.590271+00:00
+- actor: claude-code
+  id: 01kzw3bgyrr3ybvh9fpfv3k1wb
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file, builtin/validators/code-security/rules/injection.md. The finding's premise was refuted by `git blame -L 966,972`: line 970 alone sits at bf0cd8d34 (^btphzkn, 05:25) carrying the quoted form, while its neighbours are still at f495f760c. The producing rule was identified by evidence, not guessed — `dump validators` matches code-security on shipped.rs, that set ships three rules, and the finding's words are the verbatim heading of injection.md section 2. A "Before you report" gate now requires quoting the sink from the file with every quote and escape character, plus a "Treatment already present" exception. The retired byte-frozen snapshot at crates/mirdan/retired-validators/injection/rules/injection.md was deliberately left alone; editing it would break pruning.
+    - test: green — cargo nextest run -p swissarmyhammer-validators -p mirdan, 1193 passed, 0 failed, 0 skipped, including this card's own subject test inside the full parallel module run. fmt and clippy clean.
+    - commit: 51af948d7
+    - review: clean — task moved to done.
+
+    Caveat recorded rather than hidden: this second review attempted 0 pairs. No validator in the fleet declares a `*.md` match glob, so the rule file this commit changed is in no validator's scope, and `review file` on it returns the same empty scope. The card's own CODE change was reviewed for real in iteration 1 (d7d3288d7, 2 findings raised). A corrected rule's own text cannot be reviewed by the engine today.
+  timestamp: 2026-08-12T23:01:40.952437+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff380
 title: swift_package_root test races the working directory under a parallel module run
 ---
 `the_swift_package_root_restores_the_directory_before_it_removes_it` in `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs` fails when the `shipped::` module runs in parallel, and passes when it runs alone.

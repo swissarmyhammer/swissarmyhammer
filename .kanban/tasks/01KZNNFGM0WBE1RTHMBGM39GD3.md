@@ -53,8 +53,29 @@ comments:
     - green: `cargo nextest run -p swissarmyhammer-validators` 698 passed, 0 failed; `cargo nextest run -p mirdan` 503 passed; `cargo fmt --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-12T23:56:55.541661+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kzw6sgvnfjpkfkv3c3rgbc4n
+  text: |-
+    ### review — clean
+    - evidence: `review sha 0ec4963f7~1..0ec4963f7` — 0 findings, 0 confirmed, 0 refuted; 8 validators attempted, 0 failed, 0 skipped, no skipped files. No prior `## Review Findings` section carried unchecked items. 0 findings dropped for a false premise, 0 dropped for the existing-test exception.
+    - next: task moved to done.
+  timestamp: 2026-08-13T00:01:45.333238+00:00
+- actor: claude-code
+  id: 01kzw6taz2p1vd09rgrfc9xjj0
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files. It went the TOOL way; the card's escape hatch was not needed. `periphery scan --help` (3.8.0) carries four path options that are not the same thing: `--exclude-tests` and `--exclude-targets` take targets out of the INDEX, `--index-exclude` takes source globs out of the index, and `--report-exclude` is "purely cosmetic, these files will still be indexed". That last one is exactly the split the card asked for — the test targets stay indexed so a test still counts as a caller, and their own declarations never reach the report.
+    - Measurement re-taken over Alamofire 0455bfb, reproducing both the rule's 103/74 table and the card's 22/52 split: shipped flags → 74 findings, 22 in Source/ and 52 in Tests/; with `--report-exclude` per test target → 22, every one in Source/; with `--exclude-tests` → 25.
+    - Two facts decided it. A `diff` of the filtered 22 against the Source/ subset of the unfiltered run is IDENTICAL, so the filter drops findings and changes no analysis. And `--exclude-tests`, which reads like the shorter spelling of this carve-out, is the one flag that BREAKS it: it adds three findings a test does call — RequestTaskMap.isEmpty, OfflineRetrier.init(monitor:maximumWait:isOfflineError:) and RequestInterceptor.retryRequired.
+    - Test target paths come from `swift package describe --type json`, never from a `Tests/` naming guess — Alamofire declares one test target at `Tests` with an explicit path:, swift-nio declares fifteen at `Tests/<Name>`. The script writes one flag per target, because one flag holding two space-joined globs excludes nothing (measured: 74).
+    - `supersedes: dead-code` STAYS and is now honest — the prompt rule's "test functions and test-only helpers" carve-out is reproduced by the run.
+    - RED verified twice by editing the shipped script itself: without the filter the run reported the test-only helper; with `--exclude-tests` it reported the declaration a test calls.
+    - test: green — 698 validators tests, 503 mirdan tests, fmt and clippy clean.
+    - commit: 0ec4963f7
+    - review: clean — 0 findings over 0ec4963f7~1..0ec4963f7, 8 validators attempted, 0 failed, 0 skipped. Task moved to done.
+  timestamp: 2026-08-13T00:02:12.066011+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffff680
 title: dead-code-swift reports test-only helpers, which dead-code exempts by name
 ---
 `builtin/validators/code-hygiene/rules/dead-code-swift.md` runs `swift build --build-tests` then `periphery scan --retain-public ...` and declares `supersedes: [dead-code]`.
