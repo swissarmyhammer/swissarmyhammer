@@ -450,15 +450,14 @@ async fn test_high_concurrency_stress_test() {
 
     println!("Running high concurrency stress test with 100 simultaneous operations...");
 
-    let profiler = MemoryProfiler::new();
-    let start_time = std::time::Instant::now();
-
     let operation = create_stress_test_operation(temp_dir_arc);
-    let (success_count, error_count) = run_concurrent_test(registry, context, 100, operation).await;
 
+    let start_time = std::time::Instant::now();
+    let ((success_count, error_count), delta) =
+        profile_memory(|| run_concurrent_test(registry, context, 100, operation)).await;
     let total_duration = start_time.elapsed();
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta for 100 concurrent operations: {} ({})",

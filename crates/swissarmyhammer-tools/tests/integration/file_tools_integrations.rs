@@ -24,7 +24,8 @@
 //!   inputs.
 //!
 //! This module carries what those ten share: the imports, the registry and
-//! context fixtures, the argument builders, and the tool-registration checks.
+//! context fixtures, the memory profiler, the argument builders, and the
+//! tool-registration checks.
 
 mod composition;
 mod concurrency;
@@ -109,6 +110,24 @@ impl MemoryProfiler {
             format!("{} bytes", bytes)
         }
     }
+}
+
+/// Run `operation` inside a memory profiling window and return its result
+/// beside the memory the operation cost.
+///
+/// The window opens immediately before the operation is awaited and closes
+/// as soon as it resolves, so the setup that builds the arguments and the
+/// reporting that reads the result stay outside the measurement. The delta is
+/// `None` on a platform [`MemoryProfiler`] cannot read.
+async fn profile_memory<F, Fut, T>(operation: F) -> (T, Option<isize>)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let profiler = MemoryProfiler::new();
+    let result = operation().await;
+    let delta = profiler.memory_delta();
+    (result, delta)
 }
 
 /// Create a test context with mock storage backends for testing MCP tools

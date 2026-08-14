@@ -5,19 +5,6 @@
 
 use super::*;
 
-/// Profile memory usage of an operation and return the memory delta
-#[allow(dead_code)]
-async fn profile_memory<F, Fut, T>(operation: F) -> (T, Option<isize>)
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = T>,
-{
-    let profiler = MemoryProfiler::new();
-    let result = operation().await;
-    let delta = profiler.memory_delta();
-    (result, delta)
-}
-
 // ============================================================================
 // Performance Benchmarking Tests
 // ============================================================================
@@ -48,8 +35,6 @@ async fn test_full_file_read_memory_usage() {
     }
     write_result.unwrap();
 
-    let profiler = MemoryProfiler::new();
-
     println!("File exists: {}", large_file.exists());
     println!("File path: {}", large_file.to_string_lossy());
 
@@ -58,7 +43,7 @@ async fn test_full_file_read_memory_usage() {
     arguments.insert("path".to_string(), json!(large_file.to_string_lossy()));
 
     println!("Reading file with memory profiling...");
-    let result = read_tool.execute(arguments, &context).await;
+    let (result, delta) = profile_memory(|| read_tool.execute(arguments, &context)).await;
 
     match &result {
         Ok(r) => println!(
@@ -68,7 +53,7 @@ async fn test_full_file_read_memory_usage() {
         Err(e) => panic!("Read tool error: {}", e),
     }
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta during read: {} ({})",
@@ -108,18 +93,16 @@ async fn test_offset_limit_read_memory_usage() {
 
     fs::write(large_file, &content).unwrap();
 
-    let profiler = MemoryProfiler::new();
-
     let mut offset_args = serde_json::Map::new();
     offset_args.insert("op".to_string(), json!("read file"));
     offset_args.insert("path".to_string(), json!(large_file.to_string_lossy()));
     offset_args.insert("offset".to_string(), json!(500));
     offset_args.insert("limit".to_string(), json!(100));
 
-    let result = read_tool.execute(offset_args, &context).await;
+    let (result, delta) = profile_memory(|| read_tool.execute(offset_args, &context)).await;
     assert!(result.is_ok());
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta for offset/limit read: {} ({})",
@@ -161,17 +144,15 @@ async fn test_large_file_write_memory_usage() {
         content.len() / 1024 / 1024
     );
 
-    let profiler = MemoryProfiler::new();
-
     let mut arguments = serde_json::Map::new();
     arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(content));
 
-    let result = write_tool.execute(arguments, &context).await;
+    let (result, delta) = profile_memory(|| write_tool.execute(arguments, &context)).await;
     assert!(result.is_ok());
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta during write: {} ({})",
@@ -230,8 +211,6 @@ async fn test_large_file_edit_memory_usage() {
     write_tool.execute(write_args, &context).await.unwrap();
 
     // Test single edit memory usage
-    let profiler = MemoryProfiler::new();
-
     let mut edit_args = serde_json::Map::new();
     edit_args.insert("op".to_string(), json!("edit file"));
     edit_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
@@ -245,10 +224,10 @@ async fn test_large_file_edit_memory_usage() {
     );
     edit_args.insert("replace_all".to_string(), json!(false));
 
-    let result = edit_tool.execute(edit_args, &context).await;
+    let (result, delta) = profile_memory(|| edit_tool.execute(edit_args, &context)).await;
     assert!(result.is_ok());
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta for single edit: {} ({})",
@@ -269,8 +248,6 @@ async fn test_large_file_edit_memory_usage() {
     }
 
     // Test replace_all memory usage
-    let profiler = MemoryProfiler::new();
-
     let mut edit_all_args = serde_json::Map::new();
     edit_all_args.insert("op".to_string(), json!("edit file"));
     edit_all_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
@@ -281,10 +258,10 @@ async fn test_large_file_edit_memory_usage() {
     );
     edit_all_args.insert("replace_all".to_string(), json!(true));
 
-    let result = edit_tool.execute(edit_all_args, &context).await;
+    let (result, delta) = profile_memory(|| edit_tool.execute(edit_all_args, &context)).await;
     assert!(result.is_ok());
 
-    if let Some(delta) = profiler.memory_delta() {
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta for replace_all: {} ({})",
@@ -317,52 +294,54 @@ async fn test_concurrent_operations_memory_usage() {
 
     println!("Testing memory usage during concurrent file operations...");
 
-    let profiler = MemoryProfiler::new();
+    let (success_count, delta) = profile_memory(|| async {
+        // Create multiple files for concurrent operations
+        let mut join_set = tokio::task::JoinSet::new();
 
-    // Create multiple files for concurrent operations
-    let mut join_set = tokio::task::JoinSet::new();
+        for i in 0..20 {
+            let registry_clone = registry.clone();
+            let context_clone = context.clone();
+            let temp_dir_path = temp_dir.clone();
 
-    for i in 0..20 {
-        let registry_clone = registry.clone();
-        let context_clone = context.clone();
-        let temp_dir_path = temp_dir.clone();
+            join_set.spawn(async move {
+                let file_path = temp_dir_path.join(format!("concurrent_file_{}.txt", i));
 
-        join_set.spawn(async move {
-            let file_path = temp_dir_path.join(format!("concurrent_file_{}.txt", i));
+                // Generate content for each file
+                let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
 
-            // Generate content for each file
-            let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
+                // Write file
+                let write_tool = registry_clone.get_tool("files").unwrap();
+                let mut write_args = serde_json::Map::new();
+                write_args.insert("op".to_string(), json!("write file"));
+                write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
+                write_args.insert("content".to_string(), json!(content));
 
-            // Write file
-            let write_tool = registry_clone.get_tool("files").unwrap();
-            let mut write_args = serde_json::Map::new();
-            write_args.insert("op".to_string(), json!("write file"));
-            write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
-            write_args.insert("content".to_string(), json!(content));
+                let write_result = write_tool.execute(write_args, &context_clone).await;
 
-            let write_result = write_tool.execute(write_args, &context_clone).await;
+                // Read file back
+                let read_tool = registry_clone.get_tool("files").unwrap();
+                let mut read_args = serde_json::Map::new();
+                read_args.insert("op".to_string(), json!("read file"));
+                read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
-            // Read file back
-            let read_tool = registry_clone.get_tool("files").unwrap();
-            let mut read_args = serde_json::Map::new();
-            read_args.insert("op".to_string(), json!("read file"));
-            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
+                let read_result = read_tool.execute(read_args, &context_clone).await;
 
-            let read_result = read_tool.execute(read_args, &context_clone).await;
-
-            (write_result, read_result)
-        });
-    }
-
-    // Wait for all operations to complete
-    let mut success_count = 0;
-    while let Some(result) = join_set.join_next().await {
-        if let (Ok(_), Ok(_)) = result.unwrap() {
-            success_count += 1;
+                (write_result, read_result)
+            });
         }
-    }
 
-    if let Some(delta) = profiler.memory_delta() {
+        // Wait for all operations to complete
+        let mut success_count = 0;
+        while let Some(result) = join_set.join_next().await {
+            if let (Ok(_), Ok(_)) = result.unwrap() {
+                success_count += 1;
+            }
+        }
+        success_count
+    })
+    .await;
+
+    if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
             "Memory delta for {} concurrent operations: {} ({})",
