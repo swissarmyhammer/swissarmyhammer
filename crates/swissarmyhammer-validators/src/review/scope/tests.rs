@@ -352,9 +352,10 @@ async fn sha_scope_line_annotations_carry_correct_number_sha_and_mark() {
 
     // The actual rendered prime block a model reads must show line 2 with
     // this exact number, sha, and `+` mark — the numbering the model is
-    // told to READ rather than count.
+    // told to READ rather than count. A sha scope reviews the diffs, so the
+    // block renders under the subject `Scope::Sha` prescribes.
     let rendered =
-        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Diffs);
     let expected_line_2 = format!("     2 | {} + | EDITED two", &second_sha[..8]);
     assert!(
             rendered.contains(&expected_line_2),
@@ -756,9 +757,12 @@ async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_sy
 
     // The exact numbered line the model would read for the edited
     // function — pulled from the REAL render, not hand-typed, so this
-    // test fails if the numbering ever drifts at depth.
+    // test fails if the numbering ever drifts at depth. A sha scope
+    // reviews the diffs, so the block renders under the subject
+    // `Scope::Sha` prescribes: the changed region keeps its TRUE line
+    // number even though the untouched lines above it are elided.
     let rendered =
-        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Diffs);
     let expected_printed_line = format!(
         "{changed_line:>6} | {} + | fn target() {{ new_body(); }}",
         &second_sha[..8]

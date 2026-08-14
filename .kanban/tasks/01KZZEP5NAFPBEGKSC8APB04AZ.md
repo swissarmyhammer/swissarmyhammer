@@ -81,6 +81,74 @@ comments:
     - next: ready for review.
     task: ^apb04az
   timestamp: 2026-08-14T12:11:09.777792+00:00
+- actor: claude-code
+  id: 01m006dhaexkgtnhd9eyxp5q6a
+  text: |
+    ### review — findings
+    - scope: `review sha 4b17421e5~1..4b17421e5` (that commit only), nothing excluded
+    - engine state: the running engine PREDATES this commit. Both `sah serve` pids exec binaries built 2026-08-14 06:00:57; the commit is 07:12:06. `strings` finds the commit's new prompt text `is out of scope, however real it is` ONLY in `target/debug/sah`, which no process runs. This review therefore ran under the OLD whole-file engine.
+    - counts: 31 findings, 31 confirmed, 23 refuted, 81 attempted, 0 failed
+    - attribution: 13 findings land on lines this commit added or modified; 18 land on pre-existing lines — the old engine doing what this card fixes, not a failure of the fix
+    - honesty: all 31 named lines were read and match their claim. 0 findings dropped for a false premise.
+    - deleted exception: the existing-tests exception is gone, so it was NOT applied. It would have dropped 17 findings; all 17 are recorded instead.
+    - evidence: crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/tests.rs:499,647; crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1486,1615,1689,1870,2079,2084,2215,2307,2340; crates/swissarmyhammer-validators/src/review/drive.rs:620,625,722,846,898,1019,1163,1243,1549; crates/swissarmyhammer-validators/src/review/fleet/render.rs:675; crates/swissarmyhammer-validators/src/review/fleet/tests/budget.rs:409,538; crates/swissarmyhammer-validators/src/review/fleet/tests/renderer.rs:558; crates/swissarmyhammer-validators/src/review/scope/tests.rs:197,198,357,761,875; crates/swissarmyhammer-validators/src/review/verify.rs:441
+    - next: rebuild and reinstall `sah` so the engine contains the change, then re-review to get true acceptance evidence; fix the 13 on-change findings and the 18 pre-existing ones now recorded
+  timestamp: 2026-08-14T13:12:10.318397+00:00
+- actor: claude-code
+  id: 01m006fsr5bgfpdt01ksz1dj0q
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 19 files. The engine did not merely fail to state the boundary, it stated the OPPOSITE four times per prompt, identically for all three ops: the file block called the whole file the review boundary and told the agent to report pre-existing instances, and the follow-up prompt spent up to four turns hunting matches outside the changed region. `ReviewSubject` (Diffs|Files) is now chosen by `Scope::subject()` alone — no new argument, no tool-surface change. Enforced rather than only asked for: `scope::line_is_reviewed` is called by the verify guard, so an off-change candidate never costs an agent turn, and again over tool-rule findings which never reach verify. The blanket existing-tests exception is deleted with no replacement.
+    - The skill wording was sharpened after the implementer finished, on the user's reading: the engine prompts were already blunt, the SKILL was not. It now states the prohibition outright — report a finding only on an added or modified line, report nothing on any other line, a real defect on an unchanged line is not a finding.
+    - test: green — cargo nextest run --workspace 14186 passed, 0 failed, 0 skipped; mirdan + skills 650 passed; validators + tools 2233 passed. fmt and clippy clean.
+    - commit: 4b17421e5
+    - review: findings — 31 recorded.
+
+    **THE RUNNING ENGINE PREDATES THIS COMMIT, so this review is not acceptance evidence.** Proved three ways, the third being content rather than mtime inference: the new prompt text `is out of scope, however real it is` appears only in `target/debug/sah` (mtime 07:02), which nothing runs, and is ABSENT from both binaries the two live `sah serve` processes actually exec — `target/release/sah` and `~/.cargo/bin/sah`, both mtime 06:00:57, against a commit dated 07:12:06.
+
+    So this run is the OLD whole-file engine. The finding split follows directly, by `git blame` on all 31:
+    - **13 land on lines this commit added or modified** — real work, to be done now.
+    - **18 land on pre-existing lines** — the old engine reading whole files, which is the precise defect this commit removes. They are not evidence the fix failed.
+
+    17 of those 18 would have been dropped under the blanket existing-tests exception this very commit deletes. They are recorded rather than dropped, correctly.
+
+    **Plan**: work the 13 on-change findings, then rebuild and install `sah` and re-review the same range. That rebuild is the acceptance step — and the 18 become a TEST of the fix rather than blind work: under the new engine they should not be raised at all. If any of them IS raised again, it is real and gets worked.
+  timestamp: 2026-08-14T13:13:24.485291+00:00
+- actor: claude-code
+  id: 01m007qte9kzrcvwjbxphjp6c4
+  text: |
+    ### Worked the 13 on-change findings
+
+    Scope of this pass: only the 13 findings that `git blame` puts on a line commit `4b17421e5` added or modified. The other 18 sit on pre-existing lines, are left unchecked and untouched, and get re-tested after the engine is rebuilt.
+
+    **FIRST_CHANGED_LINE propagation (9 findings, 2 files).** Every assertion that spelled the fixture's first changed line as a literal now reads the constant.
+
+    - `drive.rs` — the 6 named sites (620, 625, 722, 846, 1019, 1549) plus **2 extra sites the findings did not name**: the batch-merge assertions at 934 (`src/lib.rs:3`) and 939 (`src/other.rs:3`). Same cause, same file, so both were fixed.
+    - `tools/review/tests.rs` — the 3 named sites (1486, 1870, 2307). **0 extra sites.** The remaining `src/lib.rs:1` at 1938 is a different cause: it is the engine's fixed skipped-file sentinel, not the fixture's changed line.
+
+    **Deliberate non-fix, so the next pass knows why.** `drive.rs:889` spells the same literal `3` as the *input* to `shared_findings_json("src/lib.rs", 3, ...)`. It is the sibling of `drive.rs:898`, which is finding #18 on the pre-existing list and is explicitly out of scope for this pass. Fixing one of the pair without the other is worse than fixing neither, so both were left. Assertions now read the constant while these two script inputs still spell `3`; the tests pass because both are 3 today. `drive.rs:898` closes the gap when it is worked.
+
+    **`render.rs:675` — REGION_MERGE_GAP.** Extracted `const REGION_MERGE_GAP: usize = 1;` with docs stating what the gap means (overlapping or abutting bands merge, so no single line is ever elided between two regions). **0 extra sites**: the other `1`s in the file are index arithmetic (`index + 1`, `lines[line - 1]`, `.max(1)`) and the elision-loop adjacency test, which are not this knob.
+
+    **`scope/tests.rs:357` and `:761` — Scope::Sha now renders under ReviewSubject::Diffs.** Both tests build a `Scope::Sha` work list, so they now render with the subject that scope prescribes. **0 extra sites**: `:611` renders under `Scope::Glob`, where `Files` is correct and stays. Both tests still hold: at `:357` the 3-line file's context band covers all 3 lines, so the untouched-line-renders-a-space assertion is unchanged; at `:761` the change sits at line 191 of 191, so the band prints it with its TRUE number while the 190 filler lines above elide — a stronger test of the numbering than before.
+
+    **`fleet/tests/renderer.rs:558` — ReviewSubject::Diffs coverage.** The suite had 0 uses of `Diffs` against 14 of `Files`. Added 8 tests covering every renderer that takes a subject:
+
+    - `output_contract(Diffs)` × 3, mirroring the three `Files` contract tests: the marked lines are the boundary (and NOT "whole current file"), an off-change finding is refuted, a pre-existing defect is out of scope, reads beyond the inlined band are invited rather than discouraged, and completeness is demanded across every marked line.
+    - `render_file_payload(Diffs)` × 3 on a 200-line fixture with one changed line: the changed region prints with its true number and `+` mark while distant lines elide; the SAME fixture under `Files` prints every line the diff view elides; and a file the change never touched says it has nothing to review rather than rendering empty.
+    - `followup_prompt` × 1, both subjects — the diff sweep stays on the marked lines, the whole-file sweep still reaches outside the changed region. It had no test at all before.
+    - `render_fleet_prompt(Diffs)` × 1 — the subject reaches the end of the chain.
+
+    **RED verified, not assumed.** With `render_file_block`'s `Diffs` arm forced to `SourceView::Whole`, `diff_payload_prints_the_changed_region_and_elides_the_rest` and `diff_payload_says_so_when_the_change_touched_no_line_of_the_file` both FAIL; the mutation was reverted and both pass. The `Diffs`/`Files` pairs also assert mutually exclusive things about the same input, so no implementation that ignores the subject can satisfy both.
+  timestamp: 2026-08-14T13:35:15.913179+00:00
+- actor: claude-code
+  id: 01m007r28f9tp3q3yb99gh6f1k
+  text: |
+    ### implement — changed
+    - evidence: 5 files — `crates/swissarmyhammer-validators/src/review/fleet/render.rs`, `crates/swissarmyhammer-validators/src/review/fleet/tests/renderer.rs`, `crates/swissarmyhammer-validators/src/review/drive.rs`, `crates/swissarmyhammer-validators/src/review/scope/tests.rs`, `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs`. 13 of 13 on-change findings checked off; 2 extra sites of the same cause fixed in `drive.rs` (934, 939). `cargo nextest run --workspace` — 14194 run, 14194 passed, 0 failed, 0 skipped. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - next: the 18 pre-existing-line findings stay open by design — rebuild and install `sah`, then re-review the same range under the new engine.
+    task: ^apb04az
+  timestamp: 2026-08-14T13:35:23.919380+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Review the diffs for a working or sha op, and the whole file for a file op
@@ -140,7 +208,7 @@ Watch the vocabulary: `SKILL.md` already uses "mode" for task-mode against range
 It is wrong in both directions:
 
 1. **It is a manual patch over this card's defect.** 36 of the 53 findings above were dropped through it by hand, each needing a `git show <sha>^` to confirm. Once a diff op reviews only diffs, pre-existing test code is out of scope structurally, and nothing needs dropping.
-2. **It breaks an explicit request.** `/review tests/some_test.rs` is a legitimate and wanted thing to do — reviewing a test file on purpose, to clean it up. A blanket exception that overrides every other rule guts exactly that request, silently. The user asked about that file; the answer must not be pre-emptied.
+2. **It breaks an explicit request.** `/review tests/some_test.rs` is a legitimate and wanted thing to do — reviewing a test file on purpose, to clean it up. A blanket exception that overrides every other rule guts exactly that request, silently. The user asked about that file; the answer must not be pre-empted.
 
 Its stated secondary reason — that rewriting an existing test file collides with the upstream test suite a change is graded against — needs no exception either, because both paths already handle it: a diff op never raises those findings, and a file op means the user deliberately asked for that file.
 
@@ -163,3 +231,56 @@ It also never covered production code, which is exactly how `^4kzxdex` lost four
 - Every report names its scope and its exclusions.
 
 #tool-validators
+
+## Review Scope and Engine State (2026-08-14 07:13)
+
+Scope reviewed: `review sha 4b17421e5~1..4b17421e5` — that commit only. Nothing excluded.
+
+**The running review engine does NOT contain this commit.** Evidence:
+
+- Commit `4b17421e5` is dated 2026-08-14 07:12:06 -0500.
+- Both `sah serve` processes exec binaries built BEFORE it: pid 65954 runs `target/release/sah` (mtime 2026-08-14 06:00:57, started 06:31:16), pid 59780 runs `~/.cargo/bin/sah` (same mtime).
+- Direct string test: `strings` finds the commit's new prompt text `is out of scope, however real it is` in `target/debug/sah` only. It is MISSING from `~/.cargo/bin/sah` and from `target/release/sah`. No process runs the debug binary.
+
+So this review ran under the OLD whole-file engine. 18 of the 31 findings below sit on lines this commit never touched — that is the old engine doing exactly what this card fixes, NOT evidence the fix failed. Per-finding attribution by `git blame` against `4b17421e5`:
+
+- **On lines this commit added or modified (13)**: tools/review/tests.rs:1486, 1870, 2307; drive.rs:620, 625, 722, 846, 1019, 1549; render.rs:675; scope/tests.rs:357, 761. (renderer.rs:558 anchors on an older line but its subject, `ReviewSubject`, was introduced by THIS commit.)
+- **On pre-existing lines (18)**: review_op/tests.rs:499, 647; tools/review/tests.rs:1615, 1689, 2079, 2084, 2215, 2340; drive.rs:898, 1163, 1243; budget.rs:409, 538; renderer.rs:558; scope/tests.rs:197, 198, 875; verify.rs:441.
+
+**Honesty check**: every one of the 31 findings names a line that exists and matches its claim. I read each named line. **Zero findings were dropped for a false premise.** Specifically confirmed: `FIRST_CHANGED_LINE` really is defined in-scope in both `tools/review/tests.rs:2468` (file-level const, flat file) and `drive.rs:560` (inside the single flat `mod tests`, 424..2216); `renderer.rs` really has 0 uses of `ReviewSubject::Diffs` against 14 of `ReviewSubject::Files`; `scope/tests.rs:357` and `:761` really do build `Scope::Sha` work lists and then render with `ReviewSubject::Files`; `verify_findings` at `verify.rs:441` really takes `candidates: Vec<Candidate>` and only ever borrows it (`run_guard(&candidates, subject)`).
+
+**Deleted exception**: the blanket existing-tests exception was removed by this commit, so it was NOT applied. Under it I would have dropped 17 findings — review_op/tests.rs:499, 647; tools/review/tests.rs:1615, 1689, 2079, 2084, 2215, 2340; drive.rs:898, 1163, 1243; budget.rs:409, 538; renderer.rs:558; scope/tests.rs:197, 198, 875. All 17 are recorded below instead.
+
+## Review Findings (2026-08-14 07:13)
+
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/tests.rs:499` `magic-numbers/no-magic-numbers` — Multiplier 6 configures test timing (advancing clock 6 intervals) but is unexplained; should be a named constant describing what 6 represents. Define a named constant like `const KEEP_ALIVE_INTERVALS_TO_VERIFY_DISARMED: usize = 6;` and use it: `advance(TEST_KEEP_ALIVE * KEEP_ALIVE_INTERVALS_TO_VERIFY_DISARMED).await;`.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/review_op/tests.rs:647` `magic-numbers/no-magic-numbers` — Multiplier 3 configures test timing (advancing clock 3 intervals) but is unexplained; should be a named constant describing what 3 represents. Define a named constant like `const KEEP_ALIVE_WINDOWS_FOR_MULTIPLE_TICKS: usize = 3;` and use it: `advance(TEST_KEEP_ALIVE * KEEP_ALIVE_WINDOWS_FOR_MULTIPLE_TICKS).await;`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1486` `code-hygiene/magic-numbers` — The literal `3` is hardcoded in a test assertion string and should use the `FIRST_CHANGED_LINE` constant defined elsewhere in the file. Use `format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE)` to build the expected string dynamically, or assign the string to a test constant.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1615` `reuse/reuse` — planted_duplicate_fixture_committed reimplements the entire fixture setup that planted_duplicate_fixture provides. Except for one additional commit, the functions are identical in validator setup, index seeding, and agent scripting. Parameterize planted_duplicate_fixture to accept a boolean flag controlling whether to commit the duplicate (leaving it as working-tree change or committed), eliminating the duplication. Or make planted_duplicate_fixture_committed call planted_duplicate_fixture and then issue the extra commit.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1689` `magic-numbers/no-magic-numbers` — Magic number 9999 used as test input for out-of-bounds line number — should be a named constant to explain the test's intent. Create a named constant like `const OUT_OF_BOUNDS_LINE: u32 = 9999;` and use it in place of the literal.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:1870` `code-hygiene/magic-numbers` — The literal `3` is hardcoded in a test assertion string and should use the `FIRST_CHANGED_LINE` constant defined elsewhere in the file. Use `format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE)` to build the expected string dynamically.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2079` `magic-numbers/no-magic-numbers` — Magic number 4 used as denominator in ratio calculation (3/4 of file cap) — should be a named constant to clarify the fraction. Create named constants like `const CAP_FRACTION_DENOMINATOR: u64 = 4;` or better yet, use `const TARGET_FRACTION: f64 = 0.75;` to express the intent directly.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2079` `magic-numbers/no-magic-numbers` — Magic number 3 used as numerator in ratio calculation (3/4 of file cap) — should be a named constant to clarify the fraction. Create a named constant like `const CAP_FRACTION_NUMERATOR: u64 = 3;` or use `const TARGET_FRACTION: f64 = 0.75;` for clarity.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2084` `magic-numbers/no-magic-numbers` — Magic number 15 used as string repetition count for test fixture generation — should be a named constant to document the deliberate test size. Create a named constant like `const FILLER_TEXT_REPETITIONS: usize = 15;` and use it in place of the literal.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2215` `magic-numbers/no-magic-numbers` — Magic number 1.5 used as test input for fractional batch_size validation — should be a named constant to clarify the test intent. Create a named constant like `const FRACTIONAL_BATCH_SIZE_TEST_INPUT: f64 = 1.5;` to explain this is deliberately testing non-integer input handling.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2307` `code-hygiene/magic-numbers` — The literal `3` is hardcoded in a test assertion string and should use the `FIRST_CHANGED_LINE` constant defined elsewhere in the file. Use `format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE)` to build the expected string dynamically.
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/review/tests.rs:2340` `magic-numbers/no-magic-numbers` — Magic number 2 used to configure review tool concurrency for testing — should be a named constant to clarify the test configuration intent. Create a named constant like `const TEST_CONCURRENCY_LEVEL: usize = 2;` to document why this specific concurrency is chosen for testing.
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:620` `completeness/invariant-propagation` — The constant FIRST_CHANGED_LINE was introduced to centralize the invariant 'first changed line is 3 for seeded_dup_repo tests', but this assertion still uses the hardcoded literal instead of the constant, creating maintenance risk if the invariant ever changes. Replace the hardcoded string "3" with a format!() call: `report.markdown().contains(&format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE))`.
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:625` `completeness/invariant-propagation` — Hardcoded line number in assertion should use FIRST_CHANGED_LINE constant for consistency and maintainability. Replace hardcoded string with `report.markdown().contains(&format!("src/lib.rs:{}", FIRST_CHANGED_LINE))`.
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:722` `completeness/invariant-propagation` — Hardcoded line number in assertion should use FIRST_CHANGED_LINE constant for consistency and maintainability. Replace hardcoded string with `report.markdown().contains(&format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE))`.
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:846` `completeness/invariant-propagation` — Hardcoded line number in assertion should use FIRST_CHANGED_LINE constant for consistency and maintainability. Replace hardcoded string with `report.markdown().contains(&format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE))`.
+- [ ] `crates/swissarmyhammer-validators/src/review/drive.rs:898` `magic-numbers/no-magic-numbers` — Magic number 3 hardcodes the first changed line in test findings — should use the already-defined FIRST_CHANGED_LINE constant to keep test line expectations in sync. Replace 3 with FIRST_CHANGED_LINE: shared_findings_json("src/other.rs", FIRST_CHANGED_LINE, "r", "other-dup-claim").
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:1019` `completeness/invariant-propagation` — Hardcoded line number in assertion should use FIRST_CHANGED_LINE constant for consistency and maintainability. Replace hardcoded string with `report.markdown().contains(&format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE))`.
+- [ ] `crates/swissarmyhammer-validators/src/review/drive.rs:1163` `magic-numbers/no-magic-numbers` — Magic number 6 configures test stream chunking without explanation — should be a named constant describing the intent (e.g., test chunk count for replica invariant tests). Extract a const TEST_STREAM_CHUNK_COUNT: usize = 6; and use it both at line 1163 and line 1243.
+- [ ] `crates/swissarmyhammer-validators/src/review/drive.rs:1243` `magic-numbers/no-magic-numbers` — Magic number 6 configures test stream chunking without explanation — should be a named constant describing the intent (e.g., test chunk count for drain window regression tests). Extract a const TEST_STREAM_CHUNK_COUNT: usize = 6; and use it both at line 1163 and line 1243.
+- [x] `crates/swissarmyhammer-validators/src/review/drive.rs:1549` `completeness/invariant-propagation` — Hardcoded line number in assertion should use FIRST_CHANGED_LINE constant for consistency and maintainability. Replace hardcoded string with `report.markdown().contains(&format!("- [ ] `src/lib.rs:{}`", FIRST_CHANGED_LINE))`.
+- [x] `crates/swissarmyhammer-validators/src/review/fleet/render.rs:675` `magic-numbers/no-magic-numbers` — Unexplained numeric literal 1 in region-merge logic — this represents the maximum line gap for merging adjacent changed regions and should be a named constant. Extract `const REGION_MERGE_GAP: usize = 1;` and use `start <= last.1 + REGION_MERGE_GAP`.
+- [ ] `crates/swissarmyhammer-validators/src/review/fleet/tests/budget.rs:409` `magic-numbers/no-magic-numbers` — Unexplained numeric literal 2_400 in test fixture — represents the line count for oversized test files and should be a named constant. Extract `const OVER_CAP_TEST_LINES: usize = 2_400;` and use `.repeat(OVER_CAP_TEST_LINES)`.
+- [ ] `crates/swissarmyhammer-validators/src/review/fleet/tests/budget.rs:538` `magic-numbers/no-magic-numbers` — Unexplained numeric literal 500 in test fixture — represents the repetition count for test rule-body sizing and should be a named constant. Extract `const TEST_RULE_BODY_REPETITIONS: usize = 500;` and use `.repeat(TEST_RULE_BODY_REPETITIONS)`.
+- [x] `crates/swissarmyhammer-validators/src/review/fleet/tests/renderer.rs:558` `completeness/invariant-propagation` — The test suite exercises ReviewSubject::Files exclusively, but ReviewSubject::Diffs is a real enum variant (created by Scope::subject() for working-tree and range reviews). Render functions must handle both variants consistently, requiring tests for both code paths. Add tests for ReviewSubject::Diffs to mirror the Files tests—e.g., a test that calls output_contract(ReviewSubject::Diffs) and verifies the contract correctly names the changed lines (diffs) as the review boundary, not the whole file.
+- [ ] `crates/swissarmyhammer-validators/src/review/scope/tests.rs:197` `magic-numbers/no-magic-numbers` — Hardcoded literal `30` configures test fixture padding generation and should be a named constant for clarity and maintainability. Extract to a named constant: `const PADDING_LINES: usize = 30;` at the top of the test function, then use `(0..PADDING_LINES)` in both places.
+- [ ] `crates/swissarmyhammer-validators/src/review/scope/tests.rs:198` `magic-numbers/no-magic-numbers` — Hardcoded literal `30` configures test fixture padding generation and should be a named constant for clarity and maintainability. Use the same named constant `PADDING_LINES` instead of repeating the literal `30`.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/tests.rs:357` `completeness/invariant-propagation` — Scope::Sha (sha range review) should render diffs, but test explicitly passes ReviewSubject::Files. Per change: "review working and review sha review the diffs only, review file reviews the whole file." — the scope choice should determine ReviewSubject, not contradict it. Change line 357 to use ReviewSubject::Diffs to match the scope's prescribed behavior.
+- [x] `crates/swissarmyhammer-validators/src/review/scope/tests.rs:761` `completeness/invariant-propagation` — Scope::Sha (sha range review) should render diffs, but test explicitly passes ReviewSubject::Files. Same issue as line 357 — the scope choice (sha) contradicts the rendering choice (Files). Change line 761 to use ReviewSubject::Diffs to match the scope's prescribed behavior.
+- [ ] `crates/swissarmyhammer-validators/src/review/scope/tests.rs:875` `magic-numbers/no-magic-numbers` — Hardcoded timeout of 5 seconds is unexplained and should be a named constant. The comment above discusses test expectations but does not explicitly justify the 5-second limit. Extract to a named constant at the top of the test: `const BLAME_TIMEOUT_SECS: u64 = 5;` then use `Duration::from_secs(BLAME_TIMEOUT_SECS)`.
+- [ ] `crates/swissarmyhammer-validators/src/review/verify.rs:441` `rust/api-design` — Function parameter accepts `Vec<Candidate>` but should accept `&[Candidate]` per the rule 'Accept generics, not concrete types' — the function only borrows the parameter and never requires ownership, forcing unnecessary moves on callers. Change parameter from `candidates: Vec<Candidate>` to `candidates: &[Candidate]`. Callers can pass `&vec` or `&vec[..]` with no friction.

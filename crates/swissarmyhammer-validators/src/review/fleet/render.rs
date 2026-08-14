@@ -630,6 +630,15 @@ pub(crate) enum SourceView {
 /// engine used to pick files from the diff and then hand over whole files.
 const DIFF_CONTEXT_LINES: usize = 20;
 
+/// The largest line gap [`changed_regions`] merges two context bands across.
+///
+/// A band starting no further than this past the previous band's end is folded
+/// into it. At `1` that means "overlapping or abutting": the merged region
+/// therefore never elides a single line between two bands, because eliding one
+/// line costs more characters than printing it and reads as a hole in the
+/// source.
+const REGION_MERGE_GAP: usize = 1;
+
 /// What a [`SourceView::ChangedRegions`] block prints when the change touched
 /// no line of the file — a mode change, or a validator matched on a file the
 /// diff left alone.
@@ -672,7 +681,7 @@ fn changed_regions(annotations: &[LineAnnotation], total_lines: usize) -> Vec<(u
         let start = line.saturating_sub(DIFF_CONTEXT_LINES).max(1);
         let end = (line + DIFF_CONTEXT_LINES).min(total_lines);
         match regions.last_mut() {
-            Some(last) if start <= last.1 + 1 => last.1 = last.1.max(end),
+            Some(last) if start <= last.1 + REGION_MERGE_GAP => last.1 = last.1.max(end),
             _ => regions.push((start, end)),
         }
     }

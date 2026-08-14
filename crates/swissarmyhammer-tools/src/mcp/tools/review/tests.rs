@@ -1483,7 +1483,7 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:3`"),
+        markdown.contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
         "the confirmed blocker must be rendered, got: {markdown}"
     );
     assert_eq!(parsed["counts"]["findings"], json!(1));
@@ -1867,7 +1867,7 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:3`"),
+        markdown.contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
         "the confirmed blocker must be rendered through the server, got: {markdown}"
     );
     assert_eq!(parsed["counts"]["findings"], json!(1));
@@ -2304,7 +2304,7 @@ async fn review_working_an_oversized_file_does_not_block_review_of_the_others() 
     let markdown = parsed["markdown"].as_str().unwrap();
 
     assert!(
-        markdown.contains("- [ ] `src/lib.rs:3`"),
+        markdown.contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
         "the small file must still be reviewed and confirmed: {markdown}"
     );
     assert!(

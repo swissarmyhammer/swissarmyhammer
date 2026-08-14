@@ -617,12 +617,16 @@ mod tests {
             report.markdown()
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "the confirmed blocker finding must be rendered: {}",
             report.markdown()
         );
         assert!(
-            report.markdown().contains("src/lib.rs:3"),
+            report
+                .markdown()
+                .contains(&format!("src/lib.rs:{FIRST_CHANGED_LINE}")),
             "the finding's file:line must appear: {}",
             report.markdown()
         );
@@ -719,7 +723,9 @@ mod tests {
             "the validator is asked once and re-asked exactly once"
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "the re-asked reply's finding must be rendered: {}",
             report.markdown()
         );
@@ -843,7 +849,9 @@ mod tests {
             "a repaired parse spends no re-ask"
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "the repaired reply's finding must be rendered: {}",
             report.markdown()
         );
@@ -931,12 +939,16 @@ mod tests {
 
         // Both batches' confirmed findings are merged into the one report.
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "batch 1's finding must be rendered: {}",
             report.markdown()
         );
         assert!(
-            report.markdown().contains("- [ ] `src/other.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/other.rs:{FIRST_CHANGED_LINE}`")),
             "batch 2's finding must be rendered: {}",
             report.markdown()
         );
@@ -1016,7 +1028,9 @@ mod tests {
 
         let report = report.expect("pipeline should produce a report");
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "the confirmed blocker finding must be rendered after the permission round-trips: {}",
             report.markdown()
         );
@@ -1546,7 +1560,9 @@ mod tests {
              not the whole review connection",
         );
         assert!(
-            report.markdown().contains("- [ ] `src/lib.rs:3`"),
+            report
+                .markdown()
+                .contains(&format!("- [ ] `src/lib.rs:{FIRST_CHANGED_LINE}`")),
             "the live validator's confirmed blocker must still be rendered: {}",
             report.markdown()
         );

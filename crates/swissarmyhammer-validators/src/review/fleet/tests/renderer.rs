@@ -582,3 +582,288 @@ fn output_contract_names_the_whole_file_as_the_review_boundary_not_the_diff() {
         "the contract must state the diff is NOT the review boundary: {contract}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The same renderers under [`ReviewSubject::Diffs`] — what a `review working`
+// or `review sha` op puts in a prompt. Every renderer above takes the subject,
+// so each needs both variants: a renderer that answered `Files` correctly and
+// `Diffs` wrongly would pass every test above.
+// ---------------------------------------------------------------------------
+
+/// The 8-character blame label every line of the diff fixtures carries. No
+/// assertion reads the value, but the renderer prints the column at a fixed
+/// width, so it has to be exactly 8 characters wide.
+const TEST_BLAME_SHA: &str = "beefcafe";
+
+/// How many lines the diff-view fixture's file holds — comfortably more than
+/// the context band a changed region carries, so the diff render must elide
+/// both above and below the change.
+const DIFF_FIXTURE_LINES: usize = 200;
+
+/// The 1-based line the diff-view fixture's change touched. It sits deep
+/// enough inside [`DIFF_FIXTURE_LINES`] that untouched content stands on both
+/// sides of it.
+const DIFF_FIXTURE_CHANGED_LINE: usize = 120;
+
+/// The source text of the diff fixture's line `line` — distinct per line, so
+/// an assertion naming one line can never match another.
+fn fixture_line_text(line: usize) -> String {
+    format!("fn line_{line}() {{}}")
+}
+
+/// The `{line:>6} | {sha:8} {mark} | {text}` row a marked (changed) line
+/// renders to.
+fn marked_row(line: usize) -> String {
+    format!(
+        "{line:>6} | {TEST_BLAME_SHA} + | {}",
+        fixture_line_text(line)
+    )
+}
+
+/// The same row for an unmarked (context) line, whose mark column is a space.
+fn unmarked_row(line: usize) -> String {
+    format!(
+        "{line:>6} | {TEST_BLAME_SHA}   | {}",
+        fixture_line_text(line)
+    )
+}
+
+/// A [`FileWork`] spanning [`DIFF_FIXTURE_LINES`] lines, with the 1-based
+/// lines in `touched` marked as the ones this change added or modified — the
+/// shape the scope stage hands the renderer for a `review working` or
+/// `review sha` op.
+fn file_work_with_changed_lines(path: &str, touched: &[usize]) -> FileWork {
+    let source: String = (1..=DIFF_FIXTURE_LINES)
+        .map(|line| format!("{}\n", fixture_line_text(line)))
+        .collect();
+    file_work_with_slice(path, "alpha", "src/x.rs", source).with_line_annotations(
+        (1..=DIFF_FIXTURE_LINES).map(|line| {
+            crate::review::scope::LineAnnotation::new(TEST_BLAME_SHA, touched.contains(&line))
+        }),
+    )
+}
+
+/// Under [`ReviewSubject::Diffs`] a file block prints the lines the change
+/// touched plus their context band and elides the rest, so a one-line edit to
+/// a long file costs a handful of lines rather than the file.
+#[test]
+fn diff_payload_prints_the_changed_region_and_elides_the_rest() {
+    let file = file_work_with_changed_lines("src/a.rs", &[DIFF_FIXTURE_CHANGED_LINE]);
+
+    let payload = render_file_payload(std::slice::from_ref(&file), ReviewSubject::Diffs);
+
+    assert!(
+        payload.contains(&marked_row(DIFF_FIXTURE_CHANGED_LINE)),
+        "the changed line must print with its TRUE number and a `+` mark: {payload}"
+    );
+    assert!(
+        payload.contains(&unmarked_row(DIFF_FIXTURE_CHANGED_LINE - 1)),
+        "the line above the change must print as unmarked context: {payload}"
+    );
+    assert!(
+        !payload.contains(&fixture_line_text(1)),
+        "a line far above the change must not print: {payload}"
+    );
+    assert!(
+        !payload.contains(&fixture_line_text(DIFF_FIXTURE_LINES)),
+        "a line far below the change must not print: {payload}"
+    );
+    assert!(
+        payload.contains("unchanged line(s) not shown"),
+        "the elided stretches must be named, never silently dropped: {payload}"
+    );
+
+    // The block names the marked lines as the boundary, never the whole file.
+    let lower = payload.to_lowercase();
+    assert!(
+        lower.contains("added or modified"),
+        "the block must name the added/modified lines as the subject: {payload}"
+    );
+    assert!(
+        !lower.contains("complete current source"),
+        "a diff block must never claim to be the complete current source: {payload}"
+    );
+}
+
+/// The other half of the same fixture: [`ReviewSubject::Files`] prints every
+/// line the diff view elides, so neither subject can quietly become the other.
+#[test]
+fn whole_file_payload_prints_every_line_the_diff_payload_elides() {
+    let file = file_work_with_changed_lines("src/a.rs", &[DIFF_FIXTURE_CHANGED_LINE]);
+
+    let payload = render_file_payload(std::slice::from_ref(&file), ReviewSubject::Files);
+
+    assert!(
+        payload.contains(&fixture_line_text(1)),
+        "the whole-file view must print the first line: {payload}"
+    );
+    assert!(
+        payload.contains(&fixture_line_text(DIFF_FIXTURE_LINES)),
+        "the whole-file view must print the last line: {payload}"
+    );
+    assert!(
+        !payload.contains("unchanged line(s) not shown"),
+        "the whole-file view elides nothing: {payload}"
+    );
+}
+
+/// A file the change left alone renders a stated "nothing to review here"
+/// rather than an empty block, which a model reads as an empty file and
+/// invents a finding about.
+#[test]
+fn diff_payload_says_so_when_the_change_touched_no_line_of_the_file() {
+    let file = file_work_with_changed_lines("src/a.rs", &[]);
+
+    let payload = render_file_payload(std::slice::from_ref(&file), ReviewSubject::Diffs);
+
+    assert!(
+        payload.contains("nothing here to REVIEW"),
+        "an untouched file must say it has nothing to review: {payload}"
+    );
+    assert!(
+        !payload.contains(&fixture_line_text(DIFF_FIXTURE_CHANGED_LINE)),
+        "an untouched file's source must not print at all: {payload}"
+    );
+}
+
+/// The `Diffs` mirror of [`output_contract_scopes_reads_to_other_files`]: the
+/// block is deliberately not the whole file, so reading further is invited
+/// rather than discouraged.
+#[test]
+fn output_contract_under_diffs_invites_reading_beyond_the_inlined_band() {
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Diffs);
+    let lower = contract.to_lowercase();
+    assert!(
+        lower.contains("more of a file"),
+        "the contract must invite reading more of a file than its block shows: {contract}"
+    );
+    assert!(
+        lower.contains("another file entirely"),
+        "the contract must still scope cross-file reads: {contract}"
+    );
+    assert!(
+        !lower.contains("provided in full"),
+        "a diff contract must never claim the files are provided in full: {contract}"
+    );
+}
+
+/// The `Diffs` mirror of
+/// [`output_contract_demands_every_occurrence_with_no_bail_fast`]: every match
+/// across the marked lines, in one pass.
+#[test]
+fn output_contract_under_diffs_demands_every_marked_line_with_no_bail_fast() {
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Diffs);
+    let lower = contract.to_lowercase();
+    assert!(
+        lower.contains("every occurrence of every rule"),
+        "the contract must demand every occurrence of every rule: {contract}"
+    );
+    assert!(
+        lower.contains("do not stop at the first"),
+        "the contract must forbid stopping at the first match: {contract}"
+    );
+    assert!(
+        contract.contains("one finding per `file:line`"),
+        "the contract must require one finding per file:line: {contract}"
+    );
+    assert!(
+        lower.contains("marked line"),
+        "the completeness demand must be scoped to the marked lines: {contract}"
+    );
+}
+
+/// The `Diffs` mirror of
+/// [`output_contract_names_the_whole_file_as_the_review_boundary_not_the_diff`]:
+/// the marked lines are the boundary, a pre-existing defect is out of scope,
+/// and the contract says what happens to a finding that lands elsewhere.
+#[test]
+fn output_contract_names_the_marked_lines_as_the_review_boundary_not_the_file() {
+    let contract = crate::review::fleet::output_contract(ReviewSubject::Diffs);
+    let lower = contract.to_lowercase();
+    assert!(
+        contract.contains("## Review scope"),
+        "the contract must carry an explicit review-scope section: {contract}"
+    );
+    assert!(
+        lower.contains("added or modified"),
+        "the contract must name the added/modified lines as the boundary: {contract}"
+    );
+    assert!(
+        lower.contains("refuted"),
+        "the contract must state that an off-change finding is refuted: {contract}"
+    );
+    assert!(
+        lower.contains("out of scope"),
+        "the contract must put a pre-existing defect out of scope: {contract}"
+    );
+    assert!(
+        !lower.contains("whole current file"),
+        "a diff contract must never name the whole current file as the boundary: {contract}"
+    );
+}
+
+/// The follow-up sweep is subject-specific too: it sweeps the marked lines
+/// under `Diffs` and the whole file under `Files`. Sweeping "outside the
+/// changed region" on a diff review spends four turns collecting findings the
+/// verify guard then refutes.
+#[test]
+fn the_followup_sweep_stays_on_the_marked_lines_under_diffs_only() {
+    let diffs = crate::review::fleet::followup_prompt(ReviewSubject::Diffs);
+    let files = crate::review::fleet::followup_prompt(ReviewSubject::Files);
+
+    assert!(
+        diffs.contains(RESCAN_NEEDLE) && files.contains(RESCAN_NEEDLE),
+        "both sweeps must carry the stable re-scan header"
+    );
+    assert!(
+        diffs.to_lowercase().contains("stay on the marked lines"),
+        "the diff sweep must hold the model to the marked lines: {diffs}"
+    );
+    assert!(
+        !diffs.to_lowercase().contains("outside the changed region"),
+        "the diff sweep must not send the model outside the change: {diffs}"
+    );
+    assert!(
+        files.to_lowercase().contains("outside the changed region"),
+        "the whole-file sweep must still reach outside the changed region: {files}"
+    );
+}
+
+/// The subject reaches the end of the chain: a monolithic per-validator prompt
+/// rendered under `Diffs` carries the diff focus-file statement and the diff
+/// contract, and none of the whole-file wording.
+#[test]
+fn monolithic_prompt_under_diffs_carries_the_diff_review_boundary() {
+    let rs = ruleset("deduplicate", "mandate", &[("no-copy-paste", "RULE_BODY")]);
+    let vw = validator_work(
+        "deduplicate",
+        vec![file_work_with_changed_lines(
+            "src/a.rs",
+            &[DIFF_FIXTURE_CHANGED_LINE],
+        )],
+    );
+
+    let prompt = render_fleet_prompt("purpose", &vw, &rs, ReviewSubject::Diffs);
+    let lower = prompt.to_lowercase();
+
+    assert!(
+        prompt.contains("## Files in scope"),
+        "the suffix must still list the validator's files: {prompt}"
+    );
+    assert!(
+        lower.contains("every finding must land on one of them"),
+        "the focus-file list must state the diff boundary: {prompt}"
+    );
+    assert!(
+        !lower.contains("whole current contents"),
+        "a diff prompt must not ask for the whole current contents: {prompt}"
+    );
+    assert!(
+        !lower.contains("whole current file"),
+        "a diff prompt's contract must not name the whole current file: {prompt}"
+    );
+    assert!(
+        prompt.contains(&marked_row(DIFF_FIXTURE_CHANGED_LINE)),
+        "the inlined block must carry the marked line: {prompt}"
+    );
+}
