@@ -25,52 +25,15 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
 use crate::validators::ValidatorLoader;
 
+use super::excluded::ExcludedFile;
 use super::resolve::{normalize_lexically, retain_scope_files, ResolvedScope};
 
-/// The reason recorded for a file dropped because it is a validator set's own
-/// fixture data.
+/// The reason logged for a file dropped because it is a validator set's own
+/// fixture data, matching the reason
+/// [`ExcludedFile::validator_fixture`] records.
 const VALIDATOR_FIXTURE_REASON: &str = "validator fixture";
-
-/// A changed file the scope stage dropped before any validator paired with it,
-/// carrying the reason it was dropped.
-///
-/// An excluded file is never reviewed: it becomes no LLM (validator, file) pair
-/// and is never an argument to a tool rule's `run` script. It is reported rather
-/// than dropped in silence — the report names every one of them and its reason,
-/// so a reader can tell a deliberate exclusion from a file the run missed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ExcludedFile {
-    /// The excluded file's repo-relative path.
-    path: String,
-    /// Why the scope stage dropped it, in the reader's words.
-    reason: String,
-}
-
-impl ExcludedFile {
-    /// The file dropped because it lives under a validator set's `fixtures/`
-    /// directory — the one exclusion the scope stage makes, and the one way to
-    /// name it.
-    pub(crate) fn validator_fixture(path: &str) -> Self {
-        Self {
-            path: path.to_string(),
-            reason: VALIDATOR_FIXTURE_REASON.to_string(),
-        }
-    }
-
-    /// The excluded file's repo-relative path.
-    pub fn path(&self) -> &str {
-        &self.path
-    }
-
-    /// Why the scope stage dropped it, in the reader's words.
-    pub fn reason(&self) -> &str {
-        &self.reason
-    }
-}
 
 /// Split every changed file that lives under a loaded validator set's
 /// `fixtures/` directory out of `resolved`.

@@ -1647,13 +1647,39 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
         loader: &crate::validators::ValidatorLoader,
         progress: Option<ReviewProgressSender>,
     ) -> crate::review::synthesize::ReviewReport {
+        drive_review(
+            agent,
+            notification_rx,
+            repo,
+            conn,
+            loader,
+            progress,
+            Scope::File("src/lib.rs".to_string()),
+        )
+        .await
+    }
+
+    /// Drive `scope` over `agent` with `loader`, emitting progress on
+    /// `progress` when the caller wants to watch the run.
+    ///
+    /// The whole production pipeline runs: scope resolution (and with it the
+    /// `.reviewignore` filter), tool rules, fan-out, verify and synthesis.
+    async fn drive_review(
+        agent: Arc<ScriptedAgent>,
+        notification_rx: broadcast::Receiver<SessionNotification>,
+        repo: &crate::review::test_support::TestRepo,
+        conn: &Connection,
+        loader: &crate::validators::ValidatorLoader,
+        progress: Option<ReviewProgressSender>,
+        scope: Scope,
+    ) -> crate::review::synthesize::ReviewReport {
         let embedder = model_embedding::mock::MockEmbedder::new(crate::review::test_support::DIM);
         tokio::time::timeout(
             PIPELINE_TIMEOUT,
             run_review_over_agent(
                 DynConnectTo::new(ScriptedAdapter::new(agent)),
                 notification_rx,
-                Scope::File("src/lib.rs".to_string()),
+                scope,
                 repo.path(),
                 loader,
                 conn,
@@ -1665,8 +1691,8 @@ for f in "$@"; do awk -v f="$f" '/TODO/ { print f ":" NR ": TODO left in code" }
             ),
         )
         .await
-        .expect("the review file pipeline must not hang")
-        .expect("the review file pipeline must produce a report")
+        .expect("the review pipeline must not hang")
+        .expect("the review pipeline must produce a report")
     }
 
     /// Acceptance: with the tool present and healthy, `review file` reports the
@@ -2226,6 +2252,168 @@ for f in "$@"; do awk -v f="$f" '/TODO/ {{ print f ":" NR ": TODO left in code" 
         assert!(
             !report.markdown().contains("Nothing in scope to review."),
             "an excluded fixture is a reported exclusion, never an empty scope: {}",
+            report.markdown()
+        );
+    }
+
+    // ---- .reviewignore over the production review path --------------------
+
+    /// A `.reviewignore` that excludes every file, the degenerate case of the
+    /// fork workflow the rule exists for.
+    const REVIEWIGNORE_EXCLUDING_EVERYTHING: &str = "*\n";
+
+    /// A `.reviewignore` in the fork shape: ignore the whole tree, then
+    /// re-include one subtree.
+    ///
+    /// Re-inclusion needs EVERY parent directory, so `!src/` has to precede
+    /// `!src/lib.rs` — a `!src/lib.rs` alone never re-includes the file,
+    /// because the excluded `src/` directory is never descended into.
+    const REVIEWIGNORE_FORK_SHAPE: &str = "*\n!src/\n!src/lib.rs\n";
+
+    /// The source file the fork-shape `.reviewignore` re-includes.
+    const FORK_REVIEWED_FILE: &str = "src/lib.rs";
+
+    /// The upstream file the fork-shape `.reviewignore` leaves excluded.
+    const FORK_IGNORED_FILE: &str = "vendor/dep.rs";
+
+    /// A source file carrying a TODO on its second line, so the tool rule
+    /// reports exactly one finding for it when — and only when — the file
+    /// reaches review.
+    const SOURCE_WITH_A_TODO: &str = "fn a() {}\n// TODO: fix this\n";
+
+    /// Acceptance: a `.reviewignore` of `*` is a deliberate full exclusion —
+    /// a clean, passing review that names what was excluded and by which
+    /// pattern from which ignore file.
+    ///
+    /// It must read as neither an ordinary clean pass (nothing was read, and
+    /// the report has to say so) nor an empty scope, a stalled run, or a
+    /// size-cap skip — those stay gaps. The file carries a TODO the tool rule
+    /// would report on sight, so a report with no finding proves the file
+    /// never reached review.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_over_a_fully_excluded_reviewignore_is_a_clean_deliberate_exclusion() {
+        let (repo, conn) = todo_repo();
+        repo.write(".reviewignore", REVIEWIGNORE_EXCLUDING_EVERYTHING);
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "docs-tool");
+        let loader = tool_rule_loader(base.path(), "true");
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(vec![], notify_tx, true);
+
+        let report = drive_file_review(agent, notification_rx, &repo, &conn, &loader, None).await;
+
+        assert_eq!(
+            report.counts().findings(),
+            0,
+            "a fully excluded scope is clean: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().tool_errors(),
+            0,
+            "no tool ran, so no tool broke: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().tasks_failed(),
+            0,
+            "no fan-out task ran, so none failed: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().skipped_files(),
+            ["src/lib.rs".to_string()],
+            "the excluded file is the one file the run did not review: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("* (from .reviewignore)"),
+            "the report must name the excluding pattern and its ignore file: {}",
+            report.markdown()
+        );
+        assert!(
+            report
+                .markdown()
+                .contains("Every file in scope was excluded"),
+            "a full exclusion must say so, so it never reads as an ordinary clean pass: {}",
+            report.markdown()
+        );
+        assert!(
+            !report.markdown().contains("Nothing in scope to review."),
+            "a deliberate full exclusion is not an empty scope: {}",
+            report.markdown()
+        );
+        assert!(
+            !report.markdown().contains("TODO left in code"),
+            "an excluded file's content must never reach a rule: {}",
+            report.markdown()
+        );
+    }
+
+    /// Acceptance: the fork shape — ignore the upstream tree, re-include your
+    /// own subtree — reviews the subtree and nothing else.
+    ///
+    /// Both files carry the same TODO, so the tool rule reports one finding per
+    /// file that reaches review. One finding, on the re-included file, is the
+    /// proof that the re-inclusion and the exclusion both held.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_over_a_fork_shaped_reviewignore_reviews_only_the_reincluded_subtree() {
+        let repo = crate::review::test_support::TestRepo::new();
+        repo.write("README.md", "# upstream\n");
+        repo.commit("upstream");
+        repo.write(FORK_REVIEWED_FILE, SOURCE_WITH_A_TODO);
+        repo.write(FORK_IGNORED_FILE, SOURCE_WITH_A_TODO);
+        repo.write(".reviewignore", REVIEWIGNORE_FORK_SHAPE);
+        let conn = crate::review::test_support::index_conn();
+        let base = tempfile::tempdir().expect("tool rule base dir");
+        crate::review::test_support::write_tool_rule_fixtures(base.path(), "docs-tool");
+        let loader = tool_rule_loader(base.path(), "true");
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = broadcast_agent(vec![], notify_tx, true);
+
+        let report = drive_review(
+            agent,
+            notification_rx,
+            &repo,
+            &conn,
+            &loader,
+            None,
+            Scope::Working,
+        )
+        .await;
+
+        assert!(
+            report
+                .markdown()
+                .contains(&format!("- [ ] `{FORK_REVIEWED_FILE}:2`")),
+            "the re-included subtree is reviewed: {}",
+            report.markdown()
+        );
+        assert!(
+            !report
+                .markdown()
+                .contains(&format!("- [ ] `{FORK_IGNORED_FILE}")),
+            "the ignored upstream tree is never reviewed: {}",
+            report.markdown()
+        );
+        assert_eq!(
+            report.counts().skipped_files(),
+            [FORK_IGNORED_FILE.to_string()],
+            "the ignored file is the one file the run did not review: {}",
+            report.markdown()
+        );
+        assert!(
+            report.markdown().contains("* (from .reviewignore)"),
+            "the report must name the excluding pattern and its ignore file: {}",
+            report.markdown()
+        );
+        assert!(
+            !report
+                .markdown()
+                .contains("Every file in scope was excluded"),
+            "a partly excluded scope is not a full exclusion: {}",
             report.markdown()
         );
     }

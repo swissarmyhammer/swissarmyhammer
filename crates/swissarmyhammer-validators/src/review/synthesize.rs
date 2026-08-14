@@ -43,7 +43,8 @@ use crate::review::fleet::{
 };
 use crate::review::scope::{
     as_borrowed_strings, batch_work_list, detected_project_type_keys, line_is_reviewed,
-    scope_review, ExcludedFile, LineAnnotation, ReviewSubject, Scope, SkippedFile, WorkList,
+    scope_review, ExcludedFile, ExclusionKind, LineAnnotation, ReviewSubject, Scope, SkippedFile,
+    WorkList,
 };
 use crate::review::tool_health::ToolHealthCache;
 use crate::review::tool_install::{install_missing_tools, PoolInstallAgent};
@@ -137,9 +138,9 @@ pub struct ReviewCounts {
     skipped: usize,
     /// Every file path the run did not review — distinct, sorted: the
     /// `skipped` over-cap paths plus the paths the scope stage excluded
-    /// deliberately (a validator set's own fixture data). Orchestrators gate on
-    /// this list without parsing markdown; the markdown names each path's
-    /// reason.
+    /// deliberately (an ignore rule matched it, or it is a validator set's own
+    /// fixture data). Orchestrators gate on this list without parsing markdown;
+    /// the markdown names each path's reason.
     skipped_files: Vec<String>,
     /// How many tool-rule runs broke (nonzero exit or a stdout-contract
     /// violation). A non-zero value means those rules judged nothing: the
@@ -186,9 +187,9 @@ impl ReviewCounts {
 
     /// Every file path the run did not review — distinct, sorted: the
     /// [`ReviewCounts::skipped`] over-cap paths plus the paths the scope stage
-    /// excluded deliberately (a validator set's own fixture data).
-    /// Orchestrators gate on this list without parsing markdown; the markdown
-    /// names each path's reason.
+    /// excluded deliberately (an ignore rule matched it, or it is a validator
+    /// set's own fixture data). Orchestrators gate on this list without parsing
+    /// markdown; the markdown names each path's reason.
     pub fn skipped_files(&self) -> &[String] {
         &self.skipped_files
     }
@@ -257,13 +258,19 @@ impl ReviewReport {
 /// review that contains an over-cap file can never end clean.
 ///
 /// `excluded` names every [`ExcludedFile`] the scope stage dropped before any
-/// validator paired with it — a validator set's own fixture data. Each is
-/// rendered as a named note with its reason and each path joins
-/// [`ReviewCounts::skipped_files`], so the exclusion is reported rather than
-/// silent. It is deliberately NOT a finding and NOT counted by
+/// validator paired with it — a file an ignore pattern matched, or a validator
+/// set's own fixture data. Each is rendered as a named note with its reason and
+/// each path joins [`ReviewCounts::skipped_files`], so the exclusion is reported
+/// rather than silent. It is deliberately NOT a finding and NOT counted by
 /// [`ReviewCounts::skipped`]: a fixture is data the store declares, `sah doctor`
 /// is its gate, and reviewing it would fire every rule the fail fixture exists
-/// to make fire.
+/// to make fire; an ignore exclusion is what the repository's own configuration
+/// asked for.
+///
+/// When the exclusions cover every file the scope resolved, the report says so
+/// explicitly. That review is CLEAN — it named what it excluded and why — and
+/// it must read as neither an ordinary clean pass nor one of the empty results
+/// that stay gaps: an empty scope, a stalled run, or a size-cap skip.
 ///
 /// `tools` carries the run's tool-rule facts: each broken tool run is
 /// rendered as a tool error (its raw stderr, never findings and never a clean
@@ -358,6 +365,12 @@ pub fn synthesize(
     render_tool_errors(&mut markdown, tools);
     render_tool_fallbacks(&mut markdown, tools);
 
+    // An empty result names its cause, every time. A full exclusion is a
+    // deliberate, wanted outcome — the fork workflow's whole point — so it says
+    // so and passes; an empty scope is a gap and says THAT instead. The two are
+    // mutually exclusive: the first needs exclusions, the second needs none.
+    render_full_exclusion(&mut markdown, scope, excluded);
+
     // Say so explicitly when the resolved scope was empty (zero fan-out tasks,
     // zero tool activity, nothing skipped and nothing excluded either): a bare
     // findings header would read identically to a genuinely clean review.
@@ -418,16 +431,20 @@ pub struct ReviewedScope {
     subject: ReviewSubject,
     /// How many distinct files the run reviewed.
     files: usize,
+    /// How many files the scope stage resolved, before any exclusion — the
+    /// denominator a full exclusion is measured against.
+    resolved: usize,
 }
 
 impl ReviewedScope {
     /// Describe the scope a run resolved, alongside how many distinct files it
-    /// reviewed.
-    pub fn new(scope: &Scope, files: usize) -> Self {
+    /// reviewed and how many the scope stage resolved before any exclusion.
+    pub fn new(scope: &Scope, files: usize, resolved: usize) -> Self {
         Self {
             op: scope.describe(),
             subject: scope.subject(),
             files,
+            resolved,
         }
     }
 }
@@ -514,23 +531,93 @@ fn not_reviewed_paths(
     paths.into_iter().map(str::to_string).collect()
 }
 
-/// Render one note per file the scope stage excluded, naming the file and the
-/// reason it was dropped.
+/// Render every file the scope stage excluded, naming the reason it was
+/// dropped.
 ///
 /// A note rather than a warning, and never a finding: the exclusion is
 /// deliberate, so the reader needs to know it happened and why, not to fix it.
+/// The two kinds render differently because they read differently — an ignore
+/// pattern is a repository's own configuration and covers whole directories at
+/// a time, a fixture is one file the validator store declares.
 fn render_excluded_files(markdown: &mut String, excluded: &[ExcludedFile]) {
-    if excluded.is_empty() {
+    render_ignored_files(markdown, excluded);
+    render_fixture_files(markdown, excluded);
+}
+
+/// Render the files an ignore pattern excluded, grouped under the pattern and
+/// the ignore file it came from.
+///
+/// Grouped rather than one line per file because a single pattern routinely
+/// covers a whole directory of changed files — a board directory the finish
+/// loop rewrites on every comment — and a report that names each of them buries
+/// what it actually reviewed. Every path still rides in
+/// [`ReviewCounts::skipped_files`] for a consumer that wants them.
+fn render_ignored_files(markdown: &mut String, excluded: &[ExcludedFile]) {
+    let by_pattern = count_by_reason(excluded, ExclusionKind::ReviewIgnore);
+    if by_pattern.is_empty() {
+        return;
+    }
+    let total: usize = by_pattern.values().sum();
+    let _ = writeln!(
+        markdown,
+        "\n> {total} file(s) not reviewed — excluded by an ignore rule:"
+    );
+    for (pattern, count) in by_pattern {
+        let _ = writeln!(markdown, "> - `{pattern}` — {count} file(s)");
+    }
+}
+
+/// Render one note per file excluded as a validator set's own fixture data,
+/// naming the file and the reason it was dropped.
+fn render_fixture_files(markdown: &mut String, excluded: &[ExcludedFile]) {
+    let fixtures: Vec<&ExcludedFile> = excluded
+        .iter()
+        .filter(|file| file.kind() == ExclusionKind::ValidatorFixture)
+        .collect();
+    if fixtures.is_empty() {
         return;
     }
     let _ = writeln!(
         markdown,
         "\n> {} file(s) not reviewed — excluded from the review scope:",
-        excluded.len()
+        fixtures.len()
     );
-    for file in excluded {
+    for file in fixtures {
         let _ = writeln!(markdown, "> - `{}` — {}", file.path(), file.reason());
     }
+}
+
+/// How many files carry each distinct reason among the exclusions of `kind`.
+///
+/// Sorted by reason, so the rendered group order is the same on every run.
+fn count_by_reason(excluded: &[ExcludedFile], kind: ExclusionKind) -> BTreeMap<&str, usize> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for file in excluded.iter().filter(|file| file.kind() == kind) {
+        *counts.entry(file.reason()).or_default() += 1;
+    }
+    counts
+}
+
+/// State a FULL exclusion: every file the scope resolved was excluded, so
+/// nothing was left to review.
+///
+/// The notes above name each pattern and each reason; this line says they
+/// covered the WHOLE scope. Without it a fully excluded run renders as a header
+/// and a scope line, which is exactly what an ordinary clean pass renders as —
+/// and that is the one thing this report must never be mistaken for. It is a
+/// clean, passing review: the run read nothing because the repository asked it
+/// to read nothing. The empty results that stay gaps — an empty scope, a
+/// stalled run, a size-cap skip — each carry their own line instead.
+fn render_full_exclusion(markdown: &mut String, scope: &ReviewedScope, excluded: &[ExcludedFile]) {
+    if scope.resolved == 0 || excluded.len() < scope.resolved {
+        return;
+    }
+    let _ = writeln!(
+        markdown,
+        "\n> Every file in scope was excluded — {} of {} file(s) — so nothing was left to review. The exclusions above are deliberate: this is a clean review, not an empty scope, a failed run, or a size-cap skip.",
+        excluded.len(),
+        scope.resolved
+    );
 }
 
 /// Render each broken tool run as a tool error block: never findings and
@@ -946,7 +1033,11 @@ pub async fn run_review(
         &skipped,
         work.excluded(),
         &ToolReport::new(tool_attempted, tool_errors, tool_fallbacks),
-        &ReviewedScope::new(&requested_scope, work.distinct_files().count()),
+        &ReviewedScope::new(
+            &requested_scope,
+            work.distinct_files().count(),
+            work.resolved_files(),
+        ),
         now,
     );
 
@@ -1036,7 +1127,9 @@ mod tests {
             skipped,
             excluded,
             tools,
-            &ReviewedScope::new(&Scope::Working, SCOPE_FILES),
+            // The scope resolved what it reviewed plus what it excluded, so a
+            // fixture that carries an exclusion never reads as a FULL one.
+            &ReviewedScope::new(&Scope::Working, SCOPE_FILES, SCOPE_FILES + excluded.len()),
             now,
         )
     }

@@ -21,6 +21,7 @@ use crate::review::ignore::{
     ensure_reviewignore, load_review_ignore_matcher, review_ignore_reason,
 };
 
+use super::excluded::ExcludedFile;
 use super::{Scope, SCOPE_VALIDATOR};
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
@@ -41,12 +42,25 @@ pub(super) struct ResolvedScope {
     pub(super) blame_at: Option<git2::Oid>,
 }
 
+/// The scope stage's reviewable file set, and the files an ignore pattern took
+/// out of it.
+///
+/// The two travel together because the report names both: what a run reviewed,
+/// and what it deliberately did not. Their sum is how many files the scope
+/// reached, which is what makes "every file in scope was excluded" a claim the
+/// engine can prove rather than infer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ScopeFiles {
+    /// The reviewable file set, after the ignore filter.
+    pub(super) resolved: ResolvedScope,
+    /// One entry per file an ignore pattern excluded, in resolved order.
+    pub(super) ignored: Vec<ExcludedFile>,
+}
+
 /// Resolve a [`Scope`] to its changed-file set and the inputs every later step
-/// needs (sem-diff `FileChange`s, after-content, change purpose).
-pub(super) fn resolve_scope_files(
-    scope: &Scope,
-    repo_path: &Path,
-) -> Result<ResolvedScope, AvpError> {
+/// needs (sem-diff `FileChange`s, after-content, change purpose), alongside the
+/// files the ignore filter excluded.
+pub(super) fn resolve_scope_files(scope: &Scope, repo_path: &Path) -> Result<ScopeFiles, AvpError> {
     // Auto-generate `.reviewignore` (defaulting to `.kanban/`) on the first
     // review of any repo, never clobbering a user-edited one. It is untracked
     // and non-code, so it never enters the working scope resolved below.
@@ -73,25 +87,36 @@ pub(super) fn resolve_scope_files(
 
 /// Drop every resolved file the review-scope ignore `matcher` excludes, keeping
 /// the three views of the scope (paths, sem-diff inputs, after-content) mutually
-/// consistent.
+/// consistent, and returning one [`ExcludedFile`] per dropped path.
 ///
-/// A `Scope::File` naming an ignored path therefore resolves to an empty scope —
-/// consistent with the other scopes, never an error. Each excluded path is logged
-/// at DEBUG with its FULL path and the excluding pattern's source, never truncated.
-pub(super) fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> ResolvedScope {
+/// A `Scope::File` naming an ignored path therefore resolves to a scope with
+/// nothing left to review — consistent with the other scopes, never an error.
+/// The exclusion is REPORTED rather than silent: the returned entry carries the
+/// excluding pattern and the ignore file it came from, so a report over a fully
+/// excluded scope names its own cause instead of reading as an empty scope.
+/// Each excluded path is also logged at DEBUG with its FULL path and the
+/// excluding pattern's source, never truncated.
+pub(super) fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> ScopeFiles {
     let mut kept: Vec<String> = Vec::with_capacity(resolved.files.len());
+    let mut ignored: Vec<ExcludedFile> = Vec::new();
     for path in &resolved.files {
         match review_ignore_reason(matcher, path) {
-            Some(pattern) => tracing::debug!(
-                path = %path,
-                pattern = %pattern,
-                "review scope: excluded ignored path"
-            ),
+            Some(pattern) => {
+                tracing::debug!(
+                    path = %path,
+                    pattern = %pattern,
+                    "review scope: excluded ignored path"
+                );
+                ignored.push(ExcludedFile::review_ignored(path, pattern));
+            }
             None => kept.push(path.clone()),
         }
     }
 
-    retain_scope_files(resolved, kept)
+    ScopeFiles {
+        resolved: retain_scope_files(resolved, kept),
+        ignored,
+    }
 }
 
 /// Narrow `resolved` to the `kept` paths, keeping its three views of the scope

@@ -42,8 +42,8 @@ pub use probes::{
 };
 pub use scope::{
     as_borrowed_strings, batch_work_list, detected_project_type_keys, scope_review, BatchBudget,
-    BatchBytes, ExcludedFile, FileCapBytes, FileWork, LineAnnotation, ProbeNames, ReviewSubject,
-    RuleNames, Scope, ScopeSpec, SkippedFile, ValidatorWork, WorkList,
+    BatchBytes, ExcludedFile, ExclusionKind, FileCapBytes, FileWork, LineAnnotation, ProbeNames,
+    ReviewSubject, RuleNames, Scope, ScopeSpec, SkippedFile, ValidatorWork, WorkList,
 };
 pub use synthesize::{
     run_review, synthesize, FleetTally, ReviewCounts, ReviewReport, TasksAttempted, TasksFailed,

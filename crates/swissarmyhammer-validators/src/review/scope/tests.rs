@@ -655,7 +655,7 @@ async fn a_findings_line_number_survives_from_the_prime_to_the_report() {
         &[],
         &[],
         &crate::review::ToolReport::default(),
-        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1),
+        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1, 1),
         "2026-04-11 13:08",
     );
     assert!(
@@ -807,7 +807,7 @@ async fn a_known_commit_with_many_lines_above_the_change_resolves_the_correct_sy
         &[],
         &[],
         &crate::review::ToolReport::default(),
-        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1),
+        &crate::review::synthesize::ReviewedScope::new(&Scope::Working, 1, 1),
         "2026-08-03 12:00",
     );
     let expected_citation = format!("`src/big.rs:{changed_line}`");

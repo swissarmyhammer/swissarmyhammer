@@ -120,12 +120,23 @@ pub fn review_ignore_reason(matcher: &Gitignore, rel_path: &str) -> Option<Strin
 }
 
 /// A human string naming the glob that excluded a path and the ignore file it
-/// came from, for the scope stage's debug log — e.g. `.kanban/ (from .reviewignore)`.
+/// came from — e.g. `.kanban/ (from .reviewignore)`.
+///
+/// Read by the scope stage's debug log and by the report, which groups the
+/// files an ignore rule excluded under this string. The source is named by FILE
+/// NAME, not by its path: both ignore files sit at the repository root, so the
+/// name identifies which one without carrying an absolute path that says
+/// nothing more and differs on every machine. A source with no file name (which
+/// [`GitignoreBuilder::add`] never produces) falls back to the whole path.
 fn describe_glob(glob: &Glob) -> String {
-    match glob.from() {
-        Some(source) => format!("{} (from {})", glob.original(), source.display()),
-        None => glob.original().to_string(),
-    }
+    let Some(source) = glob.from() else {
+        return glob.original().to_string();
+    };
+    let named = source.file_name().map_or_else(
+        || source.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    format!("{} (from {})", glob.original(), named)
 }
 
 #[cfg(test)]

@@ -58,9 +58,9 @@ pub struct ReviewCountsView {
     skipped: usize,
     /// Every file path the run did not review — distinct, sorted: the
     /// `skipped` over-cap paths plus the paths the scope stage excluded
-    /// deliberately (a validator set's own fixture data). Orchestrators gate on
-    /// this list without parsing markdown; the markdown names each path's
-    /// reason.
+    /// deliberately (an ignore rule matched it, or it is a validator set's own
+    /// fixture data). Orchestrators gate on this list without parsing markdown;
+    /// the markdown names each path's reason.
     skipped_files: Vec<String>,
 }
 
@@ -102,9 +102,9 @@ impl ReviewCountsView {
 
     /// Every file path the run did not review — distinct, sorted: the
     /// [`ReviewCountsView::skipped`] over-cap paths plus the paths the scope
-    /// stage excluded deliberately (a validator set's own fixture data).
-    /// Orchestrators gate on this list without parsing markdown; the markdown
-    /// names each path's reason.
+    /// stage excluded deliberately (an ignore rule matched it, or it is a
+    /// validator set's own fixture data). Orchestrators gate on this list
+    /// without parsing markdown; the markdown names each path's reason.
     pub fn skipped_files(&self) -> &[String] {
         &self.skipped_files
     }

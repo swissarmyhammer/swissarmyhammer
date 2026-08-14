@@ -51,12 +51,13 @@ use crate::review::probes::{
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
 mod batch;
+mod excluded;
 mod fixtures;
 mod resolve;
 
 pub use batch::{batch_work_list, BatchBudget, BatchBytes, FileCapBytes, SkippedFile};
+pub use excluded::{ExcludedFile, ExclusionKind};
 use fixtures::split_validator_fixtures;
-pub use fixtures::ExcludedFile;
 use resolve::*;
 
 /// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
@@ -223,6 +224,8 @@ pub struct WorkList {
     /// The changed files the scope stage dropped before any validator paired
     /// with them, each with its reason.
     excluded: Vec<ExcludedFile>,
+    /// How many files the scope stage resolved, before any exclusion.
+    resolved_files: usize,
     /// What this run REVIEWS — the diffs, or the files whole.
     subject: ReviewSubject,
 }
@@ -238,6 +241,9 @@ impl WorkList {
             change_purpose: change_purpose.into(),
             validators: validators.into_iter().collect(),
             excluded: Vec::new(),
+            // A hand-assembled work-list resolved nothing: it names its files
+            // directly. `scope_review` always calls `with_resolved_files`.
+            resolved_files: 0,
             // A hand-assembled work-list names its files directly, with no
             // change behind them — which IS the `Files` subject. The
             // production path never relies on this: `scope_review` always
@@ -274,6 +280,26 @@ impl WorkList {
     pub fn with_excluded(mut self, excluded: impl IntoIterator<Item = ExcludedFile>) -> Self {
         self.excluded = excluded.into_iter().collect();
         self
+    }
+
+    /// Attach how many files the scope stage resolved, before any exclusion.
+    ///
+    /// Attached after [`new`](Self::new), the way
+    /// [`with_excluded`](Self::with_excluded) attaches its own once-per-run
+    /// data, so every hand-built work-list keeps the plain constructor.
+    pub fn with_resolved_files(mut self, resolved_files: usize) -> Self {
+        self.resolved_files = resolved_files;
+        self
+    }
+
+    /// How many files the scope stage resolved, before any exclusion.
+    ///
+    /// The denominator the report reads: a run whose exclusions cover this
+    /// whole count excluded EVERY file in scope, which is a clean review that
+    /// names its exclusions rather than an empty scope. Reviewed plus excluded
+    /// need not reach it — a resolved file no validator matched is neither.
+    pub fn resolved_files(&self) -> usize {
+        self.resolved_files
     }
 
     /// The review-level intent.
@@ -687,7 +713,17 @@ pub async fn scope_review(
     // The op is the only thing that decides what this run REVIEWS. Read once,
     // here, and carried on the work-list from this point on.
     let subject = scope.subject();
-    let resolved = resolve_scope_files(&scope, repo_path)?;
+    let ScopeFiles {
+        resolved,
+        ignored: excluded,
+    } = resolve_scope_files(&scope, repo_path)?;
+
+    // How many files this scope REACHED, read before the fixture split narrows
+    // it any further: the reviewable set plus everything the ignore filter
+    // already took out. It is the denominator that lets the report state a
+    // FULL exclusion as a fact — a `.reviewignore` that covers the whole scope
+    // is a deliberate clean review, not an empty one.
+    let resolved_files = resolved.files.len() + excluded.len();
 
     // A validator set's own fixture data is not source: a fail fixture holds
     // the very defect its rule reports, so reviewing it makes every matching
@@ -695,7 +731,12 @@ pub async fn scope_review(
     // STORE — every loaded set's `fixtures/` directory — so it leaves the
     // work-list here, before any progress event, any validator pairing, and any
     // tool-rule argument list.
-    let (resolved, excluded) = split_validator_fixtures(resolved, repo_path, loader);
+    let (resolved, fixtures) = split_validator_fixtures(resolved, repo_path, loader);
+
+    // The two deliberate exclusions share one list, ignore-excluded first, in
+    // the order each stage dropped them. The report tells them apart by their
+    // kind, never by their order.
+    let excluded: Vec<ExcludedFile> = excluded.into_iter().chain(fixtures).collect();
 
     // The base-revision content per file, keyed for the line-mark diff below.
     // Built from the same `file_changes` the sem differ reads (a borrow, not a
@@ -781,6 +822,7 @@ pub async fn scope_review(
 
     Ok(WorkList::new(resolved.change_purpose, validator_work)
         .with_excluded(excluded)
+        .with_resolved_files(resolved_files)
         .with_subject(subject))
 }
 
