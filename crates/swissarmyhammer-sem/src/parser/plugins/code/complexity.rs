@@ -1055,6 +1055,12 @@ static ALL_SPECS: &[&ComplexitySpec] = &[
 ];
 
 /// The spec for a language id, or `None` when that language has no mapping.
+///
+/// Reads [`ALL_SPECS`], a slice of REFERENCES to [`ComplexitySpec`], which is
+/// why the body ends in `.copied()`. Three same-named siblings read three other
+/// tables of three other types, two of them slices of values. Sharing one body
+/// costs a trait and four impls to save four lines — see the
+/// `parser::plugins::code` module doc.
 fn spec_for_language(language: &str) -> Option<&'static ComplexitySpec> {
     ALL_SPECS.iter().find(|s| s.language == language).copied()
 }
@@ -1407,6 +1413,12 @@ fn resolve_declarator_name<'s>(node: Node<'_>, source: &'s str) -> Option<&'s st
 }
 
 /// The source text a node spans, when the byte range is valid UTF-8 boundaries.
+///
+/// This copy answers `Option`. The text is compared against test markers, so an
+/// empty string would read as "this is not a test" and would score a test
+/// function as complex code. The `duplication` copy answers `""` on purpose,
+/// because a chunk must still hash. The four contracts of this name are
+/// recorded in the `parser::plugins::code` module doc.
 fn node_text<'s>(node: Node<'_>, source: &'s str) -> Option<&'s str> {
     source.get(node.start_byte()..node.end_byte())
 }
@@ -1446,6 +1458,10 @@ fn child_by_field_or_kind<'t>(node: Node<'t>, name: &str) -> Option<Node<'t>> {
 /// spells a test as a call, the callee of the call that defines it (Elixir's
 /// `test "..." do`, jest/mocha's `it("...", () => { ... })`), read through
 /// [`defining_call`]. The file name is never consulted.
+///
+/// The `duplication` function of the same name takes a `TestSpec` and ORs four
+/// `marked_by_*` readings instead. The two share a name and nothing else — see
+/// the `parser::plugins::code` module doc.
 fn is_test_definition(node: Node<'_>, source: &str, spec: &ComplexitySpec) -> bool {
     if name_signature_marks_test(node, source, spec) {
         return true;

@@ -293,6 +293,98 @@ async fn working_scope_groups_duplicate_under_validator_with_full_source() {
     );
 }
 
+// ---- scope_review: file scope on a file with no working-tree change ---
+
+/// `review file` on a tracked file that matches HEAD byte for byte still probes
+/// it. The scope reviews the named file WHOLE, so every entity in it is added
+/// work and the `similar` candidate probe has real evidence to attach.
+///
+/// Reading the base side from HEAD for a file with no working-tree change left
+/// the semantic diff empty, and an entity-bound probe with no entity emits NO
+/// result at all — which a candidate-probe validator cannot tell apart from
+/// "the probe ran and found no candidates". That silence is why the same bytes
+/// returned a different finding set on each run of `review file`.
+#[tokio::test]
+async fn file_scope_probes_a_file_with_no_working_tree_change_as_whole_added_work() {
+    let repo = TestRepo::new();
+    let reimplemented = body("compute");
+    repo.write("src/lib.rs", &format!("{reimplemented}\n"));
+    repo.commit("initial");
+    // No working-tree edit follows: the file is byte-identical to HEAD.
+
+    // The index holds the reviewed file's own chunk, which `similar` must
+    // exclude, and an existing util it must offer as the reuse candidate.
+    let conn = index_conn();
+    let query_vec = vec![0.1_f32; DIM];
+    seed_chunk(&conn, "src/lib.rs", "compute", &reimplemented, &query_vec);
+    seed_chunk(
+        &conn,
+        "src/util.rs",
+        "mean_squared_error",
+        &reimplemented,
+        &query_vec,
+    );
+
+    let loader = loader_with("reuse", "*.rs", &["similar"]);
+    let embedder = MockEmbedder::new(DIM);
+
+    let work = scope_review(
+        Scope::File("src/lib.rs".to_string()),
+        repo.path(),
+        &loader,
+        &conn,
+        &embedder,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let file = work
+        .validators()
+        .iter()
+        .find(|v| v.validator_name() == "reuse")
+        .and_then(|v| v.files().iter().find(|f| f.path() == "src/lib.rs"))
+        .expect("the named file must be under review");
+
+    // What the validator actually READS is asserted first, because that text is
+    // the whole defect: `_No probe evidence._` says nothing about whether
+    // `similar` ran, so the validator judged from nothing and answered
+    // differently on each run.
+    let rendered =
+        crate::review::fleet::render_file_payload(std::slice::from_ref(file), ReviewSubject::Files);
+    assert!(
+        rendered.contains("probe `similar`"),
+        "the rendered payload must name the similar probe, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("_No probe evidence._"),
+        "the rendered payload must not claim there is no probe evidence, got:\n{rendered}"
+    );
+
+    // The two facts behind that text.
+    assert!(
+        file.semantic_diff
+            .iter()
+            .any(|c| c.entity_name == "compute"),
+        "a file with no working-tree change is reviewed whole, so its entities \
+         are added work, got: {:?}",
+        file.changed_symbols
+    );
+    let similar = file
+        .probe_results
+        .iter()
+        .find(|r| r.name == "similar")
+        .expect("a similar result bound to the file's own added body");
+    assert!(
+        similar
+            .rows
+            .iter()
+            .any(|row| row.file_path == "src/util.rs"),
+        "similar must offer the existing util as a reuse candidate, got: {:?}",
+        similar.rows
+    );
+}
+
 // ---- scope_review: line annotations (blame + change marks) ------------
 
 /// Production-path test: a real two-commit git history feeds `scope_review`

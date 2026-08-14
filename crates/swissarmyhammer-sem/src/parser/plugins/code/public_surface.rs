@@ -624,6 +624,11 @@ static SURFACE_SPECS: &[SurfaceSpec] = &[
 ];
 
 /// The roster row for `language`, `None` when the language has none.
+///
+/// Reads [`SURFACE_SPECS`], a slice of [`SurfaceSpec`] VALUES, where two of its
+/// three same-named siblings read slices of references. The four rosters hold
+/// four unrelated types, so the four one-line bodies stay apart — see the
+/// `parser::plugins::code` module doc.
 fn spec_for_language(language: &str) -> Option<&'static SurfaceSpec> {
     SURFACE_SPECS.iter().find(|spec| spec.language == language)
 }

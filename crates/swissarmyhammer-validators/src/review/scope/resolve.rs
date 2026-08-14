@@ -631,8 +631,18 @@ pub(super) fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope
 /// with [`AvpError::Validator`] and its content is never read into scope.
 pub(super) fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
-    let after = AfterContent::new(read_working(repo_path, path)?);
-    let before = BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?);
+    let working = read_working(repo_path, path)?;
+    let head = read_at_ref(&repo, GitRefSpec::head(), FilePath::new(path))?;
+    // A file with no working-tree change carries NO base side, so every entity
+    // in it diffs as added work — the same whole-content shape `resolve_glob`
+    // gives each of its files. Keeping the identical HEAD revision here would
+    // leave the semantic diff empty, and an entity-bound probe with no entity
+    // emits no result at all. A candidate-probe validator cannot tell that
+    // silence apart from "the probe ran and found no candidates", so it judges
+    // from nothing and answers differently on each run.
+    let base = if head == working { None } else { head };
+    let after = AfterContent::new(working);
+    let before = BeforeContent::new(base);
 
     let mut builder = FileChangeBuilder::new();
     builder.push(

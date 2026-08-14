@@ -1,3 +1,57 @@
+//! Tree-sitter code plugins: entity extraction, complexity, duplication,
+//! commented code and public surface.
+//!
+//! # No shared tree-sitter helper module: the decision, not an omission
+//!
+//! Each plugin here keeps its own small tree-sitter helpers. Several of them
+//! carry the SAME NAME in more than one file. A `similar` probe scores those
+//! pairs high, because the probe measures shape. The shape is alike and the
+//! contract is not. The `reuse` rule carves out exactly this case: "A `similar`
+//! candidate that only *looks* alike (same shape, different domain or contract)
+//! is not a reuse miss."
+//!
+//! Read the contract before you report one of these pairs.
+//!
+//! `node_text` has four copies and four different contracts:
+//!
+//! | site | signature | answer when the text is absent |
+//! |---|---|---|
+//! | `complexity::node_text` | `(Node, &str) -> Option<&str>` | `None` |
+//! | `duplication::node_text` | `(Node, &str) -> &str` | `""` |
+//! | `entity_extractor::node_text` | `(Node, &[u8]) -> &str` | `""`, through `utf8_text` |
+//! | `swissarmyhammer_treesitter::ParsedFile::node_text` | a method, `-> Option<&str>` | `None` |
+//!
+//! The `Option` and the `""` are not two spellings of one answer. `complexity`
+//! compares the text against test markers, so `""` there would read as "this is
+//! not a test" and would score a test function as complex code. `duplication`
+//! must still hash and compare a chunk whose slice it cannot read, so `""` is
+//! the answer it needs. `entity_extractor` takes bytes and validates UTF-8;
+//! the two `&str` copies slice text that is already valid UTF-8 and can miss on
+//! a codepoint boundary instead. One contract cannot serve all four sites.
+//!
+//! `spec_for_language` has four copies. Each reads a DIFFERENT static table of a
+//! DIFFERENT type: `ALL_SPECS`/`ComplexitySpec`, `COMMENT_SPECS`/`CommentSpec`,
+//! `SURFACE_SPECS`/`SurfaceSpec`, and `LANGUAGE_SPECS`/`LanguageSpec`. Two
+//! tables hold references and two hold values. Each body is one
+//! `.iter().find()` line. A shared version needs a trait, four impls of it, and
+//! a generic function, to replace four lines. That moves code and adds to it.
+//! The `duplication/rust` rule states the test this fails: "Do not flag this
+//! unless a further shared abstraction would strictly reduce the code (not just
+//! relocate it)".
+//!
+//! `is_test_definition` has two copies that share a name and nothing else. The
+//! `duplication` copy takes a `TestSpec` and ORs four `marked_by_*` helpers. The
+//! `complexity` copy takes a `ComplexitySpec` and reads a name, then a defining
+//! call's target, then attributes.
+//!
+//! Three more named counterparts sit in OTHER crates —
+//! `swissarmyhammer-treesitter`, `swissarmyhammer-templating` — and one is a
+//! TEST file in `swissarmyhammer-tools`. A helper for these plugins cannot live
+//! in any of them.
+//!
+//! Recorded on 2026-08-14 for ^4dyewvd, against the seven pairs a `review file`
+//! run raised on `complexity.rs`.
+
 mod commented_code;
 mod complexity;
 mod duplication;

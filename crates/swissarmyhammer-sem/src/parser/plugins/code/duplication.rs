@@ -768,6 +768,11 @@ static LANGUAGE_SPECS: &[LanguageSpec] = &[
 ];
 
 /// The roster row of `language`, `None` when the roster names none.
+///
+/// Reads [`LANGUAGE_SPECS`], a slice of [`LanguageSpec`] VALUES. The three
+/// `spec_for_language` functions in the sibling plugins read three other tables
+/// of three other types — see the `parser::plugins::code` module doc for why the
+/// four one-line bodies are not one shared function.
 fn language_spec(language: &str) -> Option<&'static LanguageSpec> {
     LANGUAGE_SPECS.iter().find(|spec| spec.language == language)
 }
@@ -889,6 +894,11 @@ fn annotated_sibling(marker: Node<'_>) -> Option<Node<'_>> {
 }
 
 /// Whether `node` defines test code.
+///
+/// Takes a [`TestSpec`] and ORs the four `marked_by_*` readings. The
+/// `complexity` function of the same name takes a `ComplexitySpec` and reads a
+/// name, then a defining call's target, then attributes. The two share a name
+/// and nothing else — see the `parser::plugins::code` module doc.
 fn is_test_definition(node: Node<'_>, spec: &TestSpec, source: &str) -> bool {
     marked_by_call(node, spec, source)
         || marked_by_attribute(node, spec, source)
@@ -1063,6 +1073,11 @@ fn last_path_segment(text: &str) -> &str {
 }
 
 /// The source text of `node`.
+///
+/// This copy answers `""` for a span it cannot read, because a chunk must still
+/// hash and compare whatever the slice gave. The `complexity` copy answers
+/// `Option`, because `""` there would read as "not a test". The two contracts
+/// disagree on purpose — see the `parser::plugins::code` module doc.
 fn node_text<'a>(node: Node<'_>, source: &'a str) -> &'a str {
     source
         .get(node.start_byte()..node.end_byte())

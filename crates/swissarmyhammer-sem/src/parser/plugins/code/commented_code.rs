@@ -224,6 +224,11 @@ static SWIFT_COMMENT_SPEC: CommentSpec = CommentSpec {
 };
 
 /// The comment spec for a language id, `None` when the language has no row.
+///
+/// Reads [`COMMENT_SPECS`], a slice of REFERENCES to [`CommentSpec`]. Three
+/// same-named siblings read three other tables of three other types. A shared
+/// version needs a trait and four impls to replace four one-line bodies — see
+/// the `parser::plugins::code` module doc for that measurement.
 fn spec_for_language(language: &str) -> Option<&'static CommentSpec> {
     COMMENT_SPECS
         .iter()
