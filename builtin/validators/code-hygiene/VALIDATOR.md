@@ -251,8 +251,23 @@ see which callers exist and which cannot: rustc never reports a reachable `pub`
 item, `U1000` never reports an exported Go identifier, `dart analyze`'s
 `unused_element` fires only on `_`-prefixed names, and `--retain-public` is the
 same exemption for Swift. Python has no compiler, so `__all__` is the marker
-vulture reads, and TypeScript has no marker at all — every `export` is surface,
-and the module graph is the whole answer.
+vulture reads.
+
+TypeScript names its surface one level up, in the PACKAGE rather than in the
+module: `package.json` `main`, `exports`, `bin` and their siblings, and the
+`tsconfig.json` `paths` mapping a repository writes under its own package name.
+`dead-code-typescript` reads both and hands the modules they name to ts-prune's
+own `--ignore`, which is `--retain-public` for TypeScript. Measured over three
+published libraries, that carve-out takes `zod` from 1946 findings to 78,
+`zustand` from 9 to 1 and `redux` from 14 to 6, and it moves this workspace's 58
+by zero, because both of its TypeScript projects are private applications that
+publish nothing. The rule file states each measurement.
+
+The framework-registered entry point is the one carve-out no shipped rule
+reproduces for TypeScript. ts-prune has no plugin and no configuration reader,
+so a `vite.config.ts` alias target, a vitest browser command and a Next.js route
+module each take the marker. `knip` answers that shape natively, and the
+superseded verdict below records the measurement.
 
 The fourth carve-out, work-in-process scaffolding, became an **annotation
 contract**: staged code carries the language's own suppression marker with a
@@ -269,7 +284,10 @@ suppression the tool reads.
   and the compilers answer the first.
 - The **`knip`** rejection is superseded by `dead-code-typescript`. `ts-prune`
   was taken instead: it carries an inline suppression, and its claim — an export
-  no module imports — is narrower.
+  no module imports — is narrower. Both reasons the rejection stated are wrong
+  as written, and the re-measurement below says so. The inline suppression is
+  the one property that still separates the two tools, and the swap is a card of
+  its own.
 - The **`periphery`** rejection is superseded by `dead-code-swift`. The earlier
   verdict was made against a directory holding a loose `.swift` file, which
   periphery refused. The fixtures now carry a `Package.swift`, which is what the
@@ -421,6 +439,33 @@ It also cannot meet the fixture contract. Knip reads a project — `package.json
 `tsconfig.json`, and an installed `node_modules` — never a loose file, and
 "unused" is a whole-project question, so a fail fixture and a pass fixture in
 one directory cannot be judged apart.
+
+**Both halves of that verdict were re-measured on 2026-08-14, and both are
+wrong as written.** The second half is refuted by the shipped rule itself:
+ts-prune also reads a project and never a loose file, and the fixture directory
+now carries a `tsconfig.json.tmpl` that names the two TypeScript dead-code
+fixtures, so the pair is judged the same way the Swift pair is. The first half
+was measured against one private APPLICATION, which is the workspace where a
+package declares no surface at all. Measured against three published libraries —
+`zod` at `4e1720c`, `zustand` at `2115efb` and `redux` at `3084fc3` — knip's
+entry-point resolution is the thing this set wants, and its plugins answer the
+framework-registered entry point that `dead-code-typescript` still leaves to a
+marker:
+
+| workspace | `dead-code-typescript` | knip 6.32.0 |
+|---|---|---|
+| zod | 78 | 13 |
+| zustand | 1 | 0 |
+| redux | 6 | 2 |
+
+`ts-prune` is nonetheless still the shipped tool, and it is now the WEAKER
+choice on maintenance as well: `ts-prune` 0.10.3 was published on 2021-12-12,
+its repository is archived, and its README names knip as the successor. The
+swap is tracked as its own card, because two properties have to be answered
+first. Knip has no line-comment suppression at all, so the staging contract
+would move to a JSDoc tag and `/** @public */` states "public" rather than "a
+consumer lands next". And knip exits 1 for a run that found issues and 2 for a
+run it could not make, so the script has to tell those apart.
 
 ### `periphery` — rejected, and the rejection is superseded by `dead-code-swift`
 

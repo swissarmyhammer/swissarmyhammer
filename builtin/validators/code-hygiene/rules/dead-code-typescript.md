@@ -15,22 +15,211 @@ supersedes: dead-code
 tool:
   scope: workspace
   run: |
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    cat > "$work/entries.js" <<'ENTRY_MODULES'
+    // Writes the ts-prune --ignore pattern naming the entry modules of one
+    // TypeScript project. An entry module is a source file that a package
+    // manifest of this workspace publishes, or that a tsconfig `paths` mapping
+    // puts under a workspace package's own name. Both are a package stating
+    // its own surface.
+    const fs = require("fs");
+    const path = require("path");
+
+    // The suffixes TypeScript resolves a module specifier through.
+    const SOURCE_SUFFIXES = [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+    ];
+
+    // The package.json fields that name a published module beside `exports`.
+    const PUBLISHED_FIELDS = ["main", "module", "browser", "types", "typings"];
+
+    // The directories a workspace walk never enters.
+    const UNWALKED = new Set(["node_modules", ".git"]);
+
+    /** Collects every string leaf of a package.json field. */
+    function leaves(value, out) {
+      if (typeof value === "string") out.push(value);
+      else if (value && typeof value === "object") {
+        for (const inner of Object.values(value)) leaves(inner, out);
+      }
+      return out;
+    }
+
+    /** Escapes a literal for use inside a regular expression. */
+    function quote(text) {
+      return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /** Every file under `dir`, absolute, skipping the unwalked directories. */
+    function walk(dir, out) {
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return out;
+      }
+      for (const entry of entries) {
+        if (UNWALKED.has(entry.name)) continue;
+        const at = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(at, out);
+        else out.push(at);
+      }
+      return out;
+    }
+
+    /** The paths a manifest publishes, relative to the manifest's directory. */
+    function publishedPaths(manifest) {
+      const out = [];
+      for (const field of PUBLISHED_FIELDS) {
+        if (typeof manifest[field] === "string") out.push(manifest[field]);
+      }
+      leaves(manifest.exports, out);
+      leaves(manifest.bin, out);
+      return out.filter(
+        (p) => (p.startsWith("./") || p.startsWith("../")) && !p.includes("*"),
+      );
+    }
+
+    /** The tsconfig `paths` targets keyed on a workspace package's own name. */
+    function selfPaths(table, names) {
+      if (!table) return [];
+      const out = [];
+      for (const [key, targets] of Object.entries(table)) {
+        const bare = key.endsWith("/*") ? key.slice(0, -2) : key;
+        if (names.has(bare)) out.push(...targets);
+      }
+      return out;
+    }
+
+    /** The spellings a declared path resolves through, extensions included. */
+    function spellings(declared) {
+      const out = [declared];
+      const dot = declared.lastIndexOf(".");
+      const slash = declared.lastIndexOf("/");
+      const stem = dot > slash ? declared.slice(0, dot) : declared;
+      for (const suffix of SOURCE_SUFFIXES) out.push(stem + suffix);
+      return out;
+    }
+
+    /** The existing files one absolute spelling names, `*` expanded. */
+    function resolve(spelling) {
+      if (!spelling.includes("*")) {
+        try {
+          return fs.statSync(spelling).isFile() ? [spelling] : [];
+        } catch {
+          return [];
+        }
+      }
+      const head = spelling.slice(0, spelling.indexOf("*"));
+      const dir = head.endsWith(path.sep) ? head : path.dirname(head);
+      const parts = spelling.split("*").map(quote);
+      const pattern = new RegExp(`^${parts.join("(.*)")}$`);
+      return walk(dir, []).filter((file) => pattern.test(file));
+    }
+
+    /**
+     * How ts-prune spells the path of a file in its report.
+     *
+     * The presenter cuts the working directory out of the absolute path and
+     * then cuts one leading separator, so a file OUTSIDE the project keeps its
+     * whole absolute path minus that separator.
+     */
+    function reportedAs(absolute, projectDir) {
+      if (absolute.startsWith(`${projectDir}${path.sep}`)) {
+        return path.relative(projectDir, absolute);
+      }
+      return absolute.replace(new RegExp(`^${quote(path.sep)}`), "");
+    }
+
+    /** Every package manifest of the workspace, with the directory of each. */
+    function manifests(workspaceRoot) {
+      const found = [];
+      for (const file of walk(workspaceRoot, [])) {
+        if (path.basename(file) !== "package.json") continue;
+        try {
+          found.push({
+            dir: path.dirname(file),
+            manifest: JSON.parse(fs.readFileSync(file, "utf8")),
+          });
+        } catch {
+          continue;
+        }
+      }
+      return found;
+    }
+
+    function main() {
+      const projectDir = process.cwd();
+      const workspaceRoot = path.resolve(process.argv[2]);
+      const config = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+      const found = manifests(workspaceRoot);
+      const names = new Set(
+        found
+          .map(({ manifest }) => manifest.name)
+          .filter((name) => typeof name === "string"),
+      );
+
+      const declared = [];
+      for (const { dir, manifest } of found) {
+        for (const p of publishedPaths(manifest)) {
+          declared.push(path.resolve(dir, p));
+        }
+      }
+      const table = (config.compilerOptions || {}).paths;
+      for (const p of selfPaths(table, names)) {
+        declared.push(path.resolve(projectDir, p));
+      }
+
+      const entries = new Set();
+      for (const one of declared) {
+        for (const spelling of spellings(one)) {
+          for (const file of resolve(spelling)) {
+            entries.add(reportedAs(file, projectDir));
+          }
+        }
+      }
+
+      if (entries.size === 0) return;
+      const alternation = [...entries].sort().map(quote).join("|");
+      process.stdout.write(`^(?:${alternation}):`);
+    }
+
+    try {
+      main();
+    } catch (failure) {
+      process.stderr.write(
+        `dead-code-typescript: no entry module read in ${process.cwd()}: ${failure}\n`,
+      );
+    }
+    ENTRY_MODULES
+    root="$PWD"
     find . -name node_modules -prune -o -name .git -prune -o -name 'tsconfig.json' -print |
       while IFS= read -r config; do
         dir="${config%/*}"
         prefix=""
         [ "$dir" = "." ] || prefix="${dir#./}/"
-        (cd "$dir" && ts-prune -p tsconfig.json) |
+        (cd "$dir" && tsc -p tsconfig.json --showConfig) > "$work/config.json" 2>/dev/null
+        entries="$(cd "$dir" && node "$work/entries.js" "$root" "$work/config.json")"
+        [ -n "$entries" ] || entries='$^'
+        (cd "$dir" && ts-prune -p tsconfig.json --ignore "$entries" --skip '$^') |
           grep -v ' (used in module)$' |
           grep -v '\.d\.ts:' |
           sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#${prefix}\1:\2: unused export '\3'; nothing in the project imports it#p"
       done | sort -u
   doctor:
-    check_command: "which ts-prune find grep sed sort"
+    check_command: "which ts-prune tsc node find grep sed sort mktemp"
     check_version_command: "npm list -g --depth 0 ts-prune | grep -o 'ts-prune@.*'"
   install:
     commands:
-      - "npm install -g ts-prune@0.10.3"
+      - "npm install -g ts-prune@0.10.3 typescript@5.9.3"
 ---
 
 # Dead Code — TypeScript
@@ -39,9 +228,201 @@ tool:
 imports. That is a narrow, objective claim about the module graph, and it is the
 whole of what this rule owns.
 
-`knip` was the other candidate and is rejected; `VALIDATOR.md` records the
-measurement. `ts-prune` was taken over it for two reasons: it has an inline
-suppression the code can carry, and its claim is one sentence long.
+An entry module is the one shape that claim gets wrong. Its callers stand
+outside the repository, so no module imports it and every one of its exports
+reports. The run therefore reads the modules a package PUBLISHES out of the
+project's own manifests, and hands them to ts-prune's own `--ignore`.
+
+## The corpus every number below was measured over
+
+Three published TypeScript libraries, cloned at HEAD on 2026-08-14, beside this
+workspace:
+
+| repository | commit | `.ts` and `.tsx` files | `tsconfig.json` projects |
+|---|---|---|---|
+| colinhacks/zod | `4e1720c` | 424 | 9 |
+| pmndrs/zustand | `2115efb` | 34 | 2 |
+| reduxjs/redux | `3084fc3` | 53 | 3 |
+| this workspace | HEAD | — | 2 |
+
+Each of the three publishes a real `src/index.ts`, which is the shape the
+exported-public-API carve-out is about. This workspace is the control: both of
+its TypeScript projects are private applications that publish nothing.
+
+## The exported public API, which the manifests answer
+
+`dead-code`, the prompt rule this one supersedes, exempts "a `pub`/exported item
+that is the crate's/library's surface for *external* callers", and it names how
+to read that surface: "Where a language names its surface in one place — Python's
+`__all__`, a module's export list — that list is the answer."
+
+TypeScript has no `pub` and no `__all__`, so every `export` is a module's
+surface and only the module graph says whether the surface is reached. The
+PACKAGE, not the module, is where the published surface stands, and a package
+states it in two places. Both are build configuration a project already keeps,
+never lint configuration:
+
+- **`package.json`** — `main`, `module`, `browser`, `types`, `typings`, every
+  string leaf of `exports`, and every value of `bin`. The run reads the whole
+  `exports` map rather than one condition, because a library that publishes its
+  source states it in a condition of its own: `zod` writes
+  `"@zod/source": "./src/index.ts"` beside `"types": "./index.d.cts"`, and its
+  own `tsconfig.json` names `customConditions: ["@zod/source"]`.
+- **`tsconfig.json` `compilerOptions.paths`** — every target of a mapping whose
+  key is a workspace package's own NAME, or that name with `/*`. That is the
+  self-reference a repository writes so its own tests can import the package the
+  way an outside caller does, and its target is the source entry. `zustand`
+  writes `"zustand": ["./src/index.ts"]` and `"zustand/*": ["./src/*.ts"]`;
+  `redux` writes `"redux": ["./src/index.ts"]`.
+
+A key that names no package of the workspace states nothing. `redux` writes
+`"@internal/*": ["./src/*"]` in the same table, which maps every source file, and
+the run leaves every one of them under the gate.
+
+This is `--retain-public` for TypeScript. `dead-code-swift` passes that flag and
+Alamofire drops from 493 findings to 103; the numbers here are the same shape.
+
+Measured over the corpus:
+
+| workspace | findings, no entry carve-out | findings, the shipped run | time |
+|---|---|---|---|
+| zod | 1946 | 78 | 7.6 s |
+| zustand | 9 | 1 | 0.7 s |
+| redux | 14 | 6 | 1.0 s |
+| this workspace | 58 | 58 | 6.2 s |
+
+The 1868 findings the carve-out takes off `zod` stand in seven modules the
+package's own `exports` map names: `src/index.ts`, `src/v4/index.ts`,
+`src/mini/index.ts`, `src/v4-mini/index.ts`, `src/v4/mini/index.ts`,
+`src/v3/index.ts` and `src/locales/index.ts`, holding 284, 285, 250, 250, 216,
+247 and 52 findings. `src/index.ts` is counted twice, because `packages/bench`
+is a second project whose program reaches the same file.
+
+The 8 the carve-out takes off `redux` are the whole of `src/index.ts`. The 8 it
+takes off `zustand` are `combine`, `redux`, `ssrSafe`, `subscribeWithSelector`,
+`useShallow`, `shallow`, `create` and `ExtractState`, each a name the package
+publishes under a subpath.
+
+This workspace does not move, and that is the answer a private application
+should get. `apps/kanban-app/ui/package.json` and `apps/mirdan-app/ui/package.json`
+each state `"private": true` and name no `main`, no `exports` and no self
+`paths` mapping, so neither declares a surface and nothing is exempt.
+
+### What the manifest alone cannot answer
+
+`package.json` names the paths a package PUBLISHES, and a library that builds
+publishes build output. Measured over the corpus, counting each entry path of
+each named package and asking whether it names a source file of the tree:
+
+| package | entry paths | resolve to a source file |
+|---|---|---|
+| zod | 37 | 9 |
+| redux | 4 | 0 |
+| zustand | 5 | 0 |
+
+`redux` names `dist/cjs/redux.cjs`, `dist/redux.mjs` and `dist/redux.d.mts`;
+`zustand` names `./index.js` and `./*.js`. The source of each is `src/index.ts`,
+and only the build configuration — `tsup.config.ts` for `redux` — states that
+mapping. No arithmetic on the published path finds it: the bundle carries the
+package's name and the source carries `index`.
+
+So the manifest answers `zod` on its own and answers neither of the other two,
+and the `paths` table answers those two. Both facts are read, because one of
+them is not enough.
+
+A `*` inside an `exports` path is dropped, and a `*` inside a `paths` target is
+expanded. An `exports` subpath pattern maps the published tree, so `"./*"` over
+build output at the package root would match every file of the repository, tests
+included. A `paths` target names SOURCE, which is what TypeScript resolves it
+against, so `./src/*.ts` expands to the source modules and to nothing else.
+
+### The entry the run does not find
+
+A package whose manifest names build output alone, and whose tsconfig writes no
+self-reference, keeps its entry module under the gate. The author answers that
+one with the staging marker below, or by adding the self-reference the
+repository's own tests already want.
+
+## The entry points a framework registers, which the marker answers
+
+`dead-code` also exempts "framework-invoked handlers, CLI command callbacks,
+registered hooks/callbacks — anything the runtime or a framework calls by
+convention rather than by an in-repo call site". A module the module graph never
+reaches, because a configuration file names it by path or a framework loads it by
+file name, is that shape.
+
+ts-prune has no plugin, no configuration reader, and no framework roster, so the
+run cannot answer this one. The author writes `// ts-prune-ignore-next`.
+
+The measurement states the cost. Of the 143 findings the shipped run leaves over
+the four workspaces, 69 are this shape:
+
+| shape | findings | where |
+|---|---|---|
+| a Next.js app-router `page`, `layout`, `route` or `not-found` module | 24 | `zod` `packages/docs/app/**` |
+| a page-directory module of Next.js or of docusaurus | 4 | `zod` `packages/docs/pages/api/`, `redux` `website/src/pages/` |
+| a build or test configuration module's `default` export | 10 | `vite.config.ts`, `vitest.config.ts`, `vitest.config.mts`, `tsup.config.ts`, `docusaurus.config.ts`, `source.config.ts` |
+| a component only an `.mdx` page names | 16 | `zod` `packages/docs/components/**` |
+| a module a bundler aliases by path, and a vitest browser command | 15 | this workspace, `src/test/stubs/` and `src/test/integration-commands.ts` |
+
+The rest are real. This workspace's own 58 were hand-checked ten at a time
+before this change and seven of the ten were dead: `BoardProgress`, an exported
+React component nothing renders; `info`, `debug` and `trace`, three names of a
+five-name re-export facade in `src/lib/log.ts` that no caller ever asked for;
+and `clickInAct`, `getStrList`, `RecentBoard` and `minimalTheme`, each defined
+once and referenced nowhere. The whole
+`src/components/fields/displays/index.ts` barrel is in the same list: it is a
+NESTED barrel that every consumer bypasses by importing the concrete module, no
+manifest publishes it, and it stays reported.
+
+`knip` answers this shape with a plugin for each framework, and the survey below
+records that verdict.
+
+## The tool survey, and what ts-prune cannot do
+
+`ts-prune` 0.10.3 was published on 2021-12-12 and its repository is ARCHIVED.
+Its README opens with a maintenance notice added by its own author on
+2025-09-19: "**ts-prune is now in maintenance mode** - For new projects, we
+recommend [knip](https://github.com/webpro/knip) which carries forward the same
+mission with more features." The whole space was read again before this rule was
+changed:
+
+| tool | latest | published | state |
+|---|---|---|---|
+| `ts-prune` | 0.10.3 | 2021-12-12 | archived, maintenance mode, names knip |
+| `knip` | 6.32.2 | 2026-08-11 | active |
+| `ts-unused-exports` | 11.0.1 | 2024-11-25 | quiet, volunteer-maintained |
+| `unimported` | 1.31.1 | 2023-11-18 | archived, deprecated on npm, names knip |
+| `depcheck` | 1.4.7 | 2023-10-17 | archived, names knip; dependencies only |
+| `eslint-plugin-import` `no-unused-modules` | 2.32.0 | 2025-06-20 | active |
+| `oxlint` | 1.78.0 | 2026-08-10 | no unused-export rule |
+| `@biomejs/biome` | 2.5.8 | 2026-08-11 | no unused-export rule |
+
+`oxlint` and Biome cannot answer the question at all today. `oxlint` leaves
+`import/no-unused-modules` unchecked in its tracking issue, and Biome's
+`noUnusedExports` is an open discussion.
+
+`knip` answers BOTH carve-outs of this rule natively. Its documentation states
+"The `main`, `bin`, and `exports` fields may contain entry files", and it ships a
+plugin for each framework whose configuration file becomes an entry file of its
+own. Measured over the same corpus, `knip 6.32.0` with
+`--include exports,nsExports,types,nsTypes`:
+
+| workspace | this rule | knip |
+|---|---|---|
+| zod | 78 | 13 |
+| zustand | 1 | 0 |
+| redux | 6 | 2 |
+
+The difference is the framework carve-out this rule leaves to the marker.
+
+`ts-prune` is kept here, and the swap is a decision of its own rather than a
+side effect of this one. Two properties have to be answered first. `knip` has no
+line-comment suppression at all — its documentation refuses one — so the staging
+contract would move to a JSDoc tag, and `/** @public */` says "public" rather
+than "a consumer lands next". And `knip` exits 1 for a run that found issues and
+2 for a run it could not make, so the script would have to tell those apart
+where this one reads a report.
 
 ## The staging contract
 
@@ -52,11 +433,59 @@ Measured on a probe project: an unannotated `export const` reports, and the same
 export behind `// ts-prune-ignore-next` does not. Put the reason on the same line
 after the marker, so the next reader can tell staged work from a leftover.
 
-TypeScript has no `pub` and no `__all__` — every `export` is the module's
-surface, and the module graph is the only thing that says whether the surface is
-reached. Two shapes reach an export without importing it, and both need the
-marker: a module a bundler aliases by path, and a function a framework registers
-by name.
+## The rule owns its own gate
+
+`ts-prune` reads a configuration of its own through cosmiconfig, and
+`package.json#ts-prune` is one of the places it searches. It merges what it finds
+UNDER the command line, so an option the run does not state is the project's to
+set.
+
+Measured with ts-prune 0.10.3 over a probe holding one dead export, beside a
+`package.json` stating `"ts-prune": { "ignore": "src", "skip": "src" }`:
+
+| the run | findings |
+|---|---|
+| `ts-prune -p tsconfig.json` | 0 |
+| `ts-prune -p tsconfig.json --ignore '$^' --skip '$^'` | 1 |
+
+Row 1 is a project turning the whole gate off without saying so. The run
+therefore states both options on every call. `$^` is a regular expression that
+matches no line, so a project with no entry module keeps the whole gate. The
+acceptance test
+`the_shipped_typescript_dead_code_tool_rule_keeps_its_own_gate_beside_a_project_config`
+holds row 2.
+
+`--ignore` is matched against the whole REPORT LINE rather than against the
+path, so the pattern the run builds is anchored — `^(?:<path>|<path>):` — and
+each path in it is escaped. Without the anchor a path would also silence an
+export whose NAME held the same text.
+
+## The program is the project's own
+
+`ts-prune` reads a `tsconfig.json` to build the module graph, and that file is
+the project's list of its own files. `dead-code` exempts "test functions and
+test-only helpers", and a test inside the program needs no exemption: it is a
+caller, so the export it imports is not dead.
+
+A project that excludes its tests from its own `tsconfig.json` takes those
+callers out of the graph. Measured on a probe holding one export a test imports
+and one export nothing imports:
+
+| the project's `tsconfig.json` | findings |
+|---|---|
+| `include: ["src"]` | the export nothing imports |
+| the same, plus `exclude: ["src/**/*.test.ts"]` | both exports |
+
+Which files a program holds is the project's decision, and
+`builtin/validators/README.md` states that a script may read the project's own
+configuration for the FILE LIST. So the run reads the list and never rewrites
+it, and an author whose project excludes its tests answers with the marker.
+
+Measured over the 12 `tsconfig.json` projects of the four corpus workspaces:
+each one holds every test file that stands beside the sources it names. The
+acceptance test
+`the_shipped_typescript_dead_code_tool_rule_reads_the_program_the_project_states`
+holds both rows of the table.
 
 ## What the pipe drops, and why
 
@@ -73,40 +502,48 @@ the same tree: 18 of the remaining 75 lines came from one generated file,
 Both are attribution, not exemption. To exempt one export, write the marker in
 the code.
 
-## The measurement
-
-Over this whole workspace — two `tsconfig.json` projects,
-`apps/kanban-app/ui` and `apps/mirdan-app/ui` — the rule reports **58** findings
-in **3.7 s**.
-
-Ten were hand-checked. Seven are real: `BoardProgress`, an exported React
-component nothing renders; `info`, `debug` and `trace`, three names of a
-five-name re-export facade in `src/lib/log.ts` that no caller ever asked for;
-the whole `src/components/fields/displays/index.ts` barrel, which every consumer
-bypasses by importing the concrete module; and `clickInAct`, `getStrList`,
-`RecentBoard` and `minimalTheme`, each defined once and referenced nowhere.
-
-Three are reached by a name the import graph cannot see: the five exports of
-`src/test/stubs/tauri-plugin-dialog.ts`, which `vite.config.ts` names as a
-`resolve.alias` target, and the vitest browser commands in
-`src/test/integration-commands.ts`, which a test calls as
-`commands.createTestBoard(...)` after the config registers the module. Those are
-the two shapes named above, and each takes a `// ts-prune-ignore-next`.
-
 ## How the run is shaped
 
 The scope is `workspace` because "nothing imports it" is a whole-project
-question. `ts-prune` reads a `tsconfig.json` to build the module graph, so the
-script finds every `tsconfig.json` outside `node_modules`, runs the tool in that
-project's own directory, and puts the project's path back on the front of each
-finding. That is how a monorepo whose root carries no `tsconfig.json` still gets
-checked. The engine keeps only the findings in the changed files.
+question. The script finds every `tsconfig.json` outside `node_modules`, runs the
+tool in that project's own directory, and puts the project's path back on the
+front of each finding. That is how a monorepo whose root carries no
+`tsconfig.json` still gets checked. The engine keeps only the findings in the
+changed files.
 
-The `tsconfig.json` a project already has is its build configuration, not lint
-configuration: it is what makes the program a program. The rule reads it and
-never writes one, and it never reads or writes any lint configuration.
+`tsc --showConfig` is what reads the tsconfig, because `paths` usually stands in
+a file the project EXTENDS: `redux` writes its table in `tsconfig.base.json`, and
+`zod` writes `.configs/tsconfig.base.json`. `--showConfig` resolves the
+`extends` chain and prints one JSON document, and it also reads the comments and
+the trailing commas a `tsconfig.json` may hold and a `JSON.parse` may not —
+`redux/tsconfig.json` opens with a comment and `zod/packages/zod/tsconfig.json`
+ends with a trailing comma.
+
+Entry resolution fails OPEN. A `tsc` run that writes no configuration, and a
+manifest that does not parse, leave the pattern empty, the run then states
+`--ignore '$^'`, and every export of that project stays under the gate. A failure
+adds findings and never takes one away, so it cannot answer clean for a broken
+read. The node script names the project on stderr when that happens.
 
 `sort -u` collapses the duplicate a nested `tsconfig.json` produces when two
-projects hold the same file.
+projects hold the same file. The entry pattern is computed for each project, so
+the duplicate rows agree.
 
 Ending the pipe in `sed`, and the loop in `sort`, normalizes the exit status.
+
+`mktemp -d` makes the directory the node script is written into, and
+`trap 'rm -rf "$work"' EXIT` removes it. The scope is `workspace`, so this
+script takes no file argument.
+
+## What the fixture pair holds, and what it cannot
+
+The fixture pair holds the staging contract: the fail fixture carries one
+unannotated unused export of five kinds, and the pass fixture carries the same
+five behind the marker.
+
+It cannot hold either carve-out above. Doctor counts only the findings a run
+reports ABOUT the fixture under test, and both carve-outs take findings off a
+DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
+move neither count. The five acceptance tests in
+`tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
+repositories instead, and each one names the fact it holds.

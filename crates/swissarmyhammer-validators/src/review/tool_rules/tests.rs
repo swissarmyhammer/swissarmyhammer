@@ -165,6 +165,13 @@ const RUST_DEAD_CODE_RULE: &str = "dead-code-rust";
 /// One more acceptance test drives that split end to end.
 const SWIFT_DEAD_CODE_RULE: &str = "dead-code-swift";
 
+/// The shipped dead-code tool rule for TypeScript and JavaScript. ts-prune has
+/// no entry-point concept of its own, so the run reads the package manifests
+/// and the tsconfig `paths` table for the modules a package publishes, and
+/// states its own `--ignore` and `--skip` so a project cannot turn the gate
+/// off. Five more acceptance tests drive those answers end to end.
+const TYPESCRIPT_DEAD_CODE_RULE: &str = "dead-code-typescript";
+
 /// Every shipped dead-code tool rule, with the project type it serves.
 ///
 /// Each supersedes the `dead-code` prompt rule for its language. Three of
@@ -176,7 +183,7 @@ const SWIFT_DEAD_CODE_RULE: &str = "dead-code-swift";
 const SHIPPED_DEAD_CODE_RULES: &[(&str, &str, &[&str])] = &[
     ("rust", RUST_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("go", "dead-code-go", SUPERSEDES_DEAD_CODE),
-    ("nodejs", "dead-code-typescript", SUPERSEDES_DEAD_CODE),
+    ("nodejs", TYPESCRIPT_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("python", PYTHON_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
     ("flutter", "dead-code-dart", SUPERSEDES_DEAD_CODE),
     ("swift", SWIFT_DEAD_CODE_RULE, SUPERSEDES_DEAD_CODE),
