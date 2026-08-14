@@ -418,6 +418,55 @@ fn moved_from(renames: &BTreeMap<String, String>, path: &str) -> Option<FilePath
     renames.get(path).map(FilePath::new)
 }
 
+/// Record one resolved file's two sides on `builder`, attaching the rename/copy
+/// source `renames` holds for its path.
+///
+/// The shared tail of [`resolve_working`] and [`resolve_sha`]: each reads the
+/// two sides from a different place and then records them identically, the
+/// [`moved_from`] lookup included. Taking the map rather than a ready
+/// [`FilePath`] keeps that lookup in one place, and keeps a second bare path
+/// out of the argument list — the hazard [`FileVersions::moved_from`]
+/// documents.
+fn push_moved_file(
+    builder: &mut FileChangeBuilder,
+    path: &str,
+    before: BeforeContent,
+    after: AfterContent,
+    renames: &BTreeMap<String, String>,
+) {
+    builder.push(
+        FilePath::new(path),
+        FileVersions {
+            before,
+            after,
+            moved_from: moved_from(renames, path),
+        },
+    );
+}
+
+/// The rename/copy sources of a diff, or an empty map when building that diff
+/// failed.
+///
+/// The shared tail of both rename lookups below: each builds a different diff
+/// and then reads it the same way. `what` names the lookup in the warning, so a
+/// degraded run still says which diff it lost.
+fn renames_of_diff(
+    diff: Result<git2::Diff<'_>, git2::Error>,
+    what: &str,
+) -> BTreeMap<String, String> {
+    match diff {
+        Ok(mut diff) => find_renames(&mut diff),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                diff = what,
+                "review scope: diff failed; a moved file will diff as wholly added"
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
 /// Every rename/copy source in the working tree, keyed by the file's current
 /// path.
 ///
@@ -432,16 +481,10 @@ fn working_rename_sources(repo: &GitOperations) -> BTreeMap<String, String> {
     };
     let mut options = git2::DiffOptions::new();
     options.include_untracked(true).recurse_untracked_dirs(true);
-    match inner.diff_tree_to_workdir_with_index(Some(&head), Some(&mut options)) {
-        Ok(mut diff) => find_renames(&mut diff),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "review scope: working-tree diff failed; a moved file will diff as wholly added"
-            );
-            BTreeMap::new()
-        }
-    }
+    renames_of_diff(
+        inner.diff_tree_to_workdir_with_index(Some(&head), Some(&mut options)),
+        "working tree",
+    )
 }
 
 /// Every rename/copy source between two commit-ish endpoints, keyed by the
@@ -458,16 +501,10 @@ fn range_rename_sources(
     let Some(to_tree) = revspec_tree(repo, to) else {
         return BTreeMap::new();
     };
-    match inner.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None) {
-        Ok(mut diff) => find_renames(&mut diff),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "review scope: range diff failed; a moved file will diff as wholly added"
-            );
-            BTreeMap::new()
-        }
-    }
+    renames_of_diff(
+        inner.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None),
+        "range",
+    )
 }
 
 /// The tree a refspec points at, `None` when it cannot be resolved — the same
@@ -513,14 +550,7 @@ pub(super) fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpErro
         let base = base_path(&renames, path);
         let before =
             BeforeContent::new(read_at_ref(&repo, GitRefSpec::head(), FilePath::new(base))?);
-        builder.push(
-            FilePath::new(path),
-            FileVersions {
-                before,
-                after,
-                moved_from: moved_from(&renames, path),
-            },
-        );
+        push_moved_file(&mut builder, path, before, after, &renames);
     }
     // Blame anchor: pinned to the branch's merge-base with main/master (see
     // `working_tree_blame_anchor`) so the sha column means the same thing on
@@ -557,14 +587,7 @@ pub(super) fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope
         let base = base_path(&renames, path);
         let before = BeforeContent::new(read_at_ref(&repo, from_ref.clone(), FilePath::new(base))?);
         let after = AfterContent::new(read_at_ref(&repo, to_ref.clone(), FilePath::new(path))?);
-        builder.push(
-            FilePath::new(path),
-            FileVersions {
-                before,
-                after,
-                moved_from: moved_from(&renames, path),
-            },
-        );
+        push_moved_file(&mut builder, path, before, after, &renames);
     }
 
     let purpose = commit_messages(&repo, &to_ref)

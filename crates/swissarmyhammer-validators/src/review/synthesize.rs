@@ -464,18 +464,18 @@ fn render_scope(markdown: &mut String, scope: &ReviewedScope, not_reviewed: usiz
 /// judge it by, so it is kept — [`line_is_reviewed`] answers `true` on every
 /// undecidable case.
 fn retain_findings_on_the_change(
-    findings: Vec<VerifiedFinding>,
+    findings: impl IntoIterator<Item = VerifiedFinding>,
     work: &WorkList,
 ) -> Vec<VerifiedFinding> {
+    let findings = findings.into_iter();
     if matches!(work.subject(), ReviewSubject::Files) {
-        return findings;
+        return findings.collect();
     }
     let annotations: BTreeMap<&str, &[LineAnnotation]> = work
         .distinct_files()
         .map(|file| (file.path(), file.line_annotations()))
         .collect();
     findings
-        .into_iter()
         .filter(|verified| {
             let marks = annotations
                 .get(verified.finding.file.as_str())
@@ -965,7 +965,10 @@ pub async fn run_review(
 /// recomputes blame. A finding whose `(validator, file)` is not in the
 /// work-list (an agent inventing a path) yields empty context rather than being
 /// dropped, so it still reaches the verifier and refutes by default there.
-fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
+fn build_candidates(
+    work: &WorkList,
+    findings: impl IntoIterator<Item = Finding>,
+) -> Vec<Candidate> {
     findings
         .into_iter()
         .map(|finding| {

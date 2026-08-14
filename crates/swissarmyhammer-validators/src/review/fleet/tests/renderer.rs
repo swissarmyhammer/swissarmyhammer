@@ -611,19 +611,19 @@ fn fixture_line_text(line: usize) -> String {
     format!("fn line_{line}() {{}}")
 }
 
-/// The `{line:>6} | {sha:8} {mark} | {text}` row a marked (changed) line
-/// renders to.
-fn marked_row(line: usize) -> String {
-    format!(
-        "{line:>6} | {TEST_BLAME_SHA} + | {}",
-        fixture_line_text(line)
-    )
-}
+/// The mark column of a line the change added or modified.
+const CHANGED_MARK: char = '+';
 
-/// The same row for an unmarked (context) line, whose mark column is a space.
-fn unmarked_row(line: usize) -> String {
+/// The mark column of an unchanged context line.
+const CONTEXT_MARK: char = ' ';
+
+/// The `{line:>6} | {sha:8} {mark} | {text}` row line `line` renders to.
+///
+/// One function for both marks — [`CHANGED_MARK`] and [`CONTEXT_MARK`] — so the
+/// two rows cannot drift into disagreeing about the column layout they share.
+fn format_row(line: usize, mark: char) -> String {
     format!(
-        "{line:>6} | {TEST_BLAME_SHA}   | {}",
+        "{line:>6} | {TEST_BLAME_SHA} {mark} | {}",
         fixture_line_text(line)
     )
 }
@@ -653,11 +653,11 @@ fn diff_payload_prints_the_changed_region_and_elides_the_rest() {
     let payload = render_file_payload(std::slice::from_ref(&file), ReviewSubject::Diffs);
 
     assert!(
-        payload.contains(&marked_row(DIFF_FIXTURE_CHANGED_LINE)),
+        payload.contains(&format_row(DIFF_FIXTURE_CHANGED_LINE, CHANGED_MARK)),
         "the changed line must print with its TRUE number and a `+` mark: {payload}"
     );
     assert!(
-        payload.contains(&unmarked_row(DIFF_FIXTURE_CHANGED_LINE - 1)),
+        payload.contains(&format_row(DIFF_FIXTURE_CHANGED_LINE - 1, CONTEXT_MARK)),
         "the line above the change must print as unmarked context: {payload}"
     );
     assert!(
@@ -863,7 +863,7 @@ fn monolithic_prompt_under_diffs_carries_the_diff_review_boundary() {
         "a diff prompt's contract must not name the whole current file: {prompt}"
     );
     assert!(
-        prompt.contains(&marked_row(DIFF_FIXTURE_CHANGED_LINE)),
+        prompt.contains(&format_row(DIFF_FIXTURE_CHANGED_LINE, CHANGED_MARK)),
         "the inlined block must carry the marked line: {prompt}"
     );
 }
