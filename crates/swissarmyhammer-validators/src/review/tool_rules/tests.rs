@@ -248,6 +248,15 @@ const PYTHON_FUNCTION_LENGTH_RULE: &str = "function-length-python";
 /// its script to reading only the files it is given.
 const GO_COMPLEXITY_RULE: &str = "complexity-go";
 
+/// The shipped function-length tool rule for Go. Its gate is a STATEMENT
+/// count, so the shapes `function-length` exempts — a composite literal, a
+/// builder chain, a table-driven test — carry a handful of statements over
+/// hundreds of lines and stay under it. Three acceptance tests drive it end to
+/// end: one holds those shapes beside a function over the gate, one holds the
+/// test carve-out to the DEFINITION rather than to the path, and one holds the
+/// generated-code carve-out golangci-lint makes for itself.
+const GO_FUNCTION_LENGTH_RULE: &str = "function-length-go";
+
 /// Every shipped complexity tool rule, with the project type it serves and
 /// the prompt rules it supersedes.
 ///
@@ -283,7 +292,7 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
         SUPERSEDES_BOTH_COMPLEXITY_GATES,
     ),
     ("go", GO_COMPLEXITY_RULE, SUPERSEDES_COGNITIVE_COMPLEXITY),
-    ("go", "function-length-go", SUPERSEDES_FUNCTION_LENGTH),
+    ("go", GO_FUNCTION_LENGTH_RULE, SUPERSEDES_FUNCTION_LENGTH),
 ];
 
 /// The builtin `manifests` set, the one that matches dependency manifests

@@ -1,7 +1,7 @@
 // Package fixtures holds the Go fixtures of the `function-length-go` tool rule.
 //
-// This file holds one function under the line gate: ShortMixState runs
-// 202 counted lines against the gate of 250. The body is mechanical on
+// This file holds one function under the statement gate: ShortMixState runs
+// 150 statements against the gate of 160. The body is mechanical on
 // purpose; its one job is to stand under that gate.
 //
 // The tool must report nothing. A threshold that stopped applying would
@@ -159,57 +159,5 @@ func ShortMixState(seed uint64) uint64 {
 	state = state<<10 | state>>(64-10)
 	state = state*31 + 73
 	state = state<<11 | state>>(64-11)
-	state = state*31 + 74
-	state = state<<12 | state>>(64-12)
-	state = state*31 + 75
-	state = state<<13 | state>>(64-13)
-	state = state*31 + 76
-	state = state<<14 | state>>(64-14)
-	state = state*31 + 77
-	state = state<<15 | state>>(64-15)
-	state = state*31 + 78
-	state = state<<16 | state>>(64-16)
-	state = state*31 + 79
-	state = state<<17 | state>>(64-17)
-	state = state*31 + 80
-	state = state<<18 | state>>(64-18)
-	state = state*31 + 81
-	state = state<<19 | state>>(64-19)
-	state = state*31 + 82
-	state = state<<20 | state>>(64-20)
-	state = state*31 + 83
-	state = state<<21 | state>>(64-21)
-	state = state*31 + 84
-	state = state<<22 | state>>(64-22)
-	state = state*31 + 85
-	state = state<<23 | state>>(64-23)
-	state = state*31 + 86
-	state = state<<24 | state>>(64-24)
-	state = state*31 + 87
-	state = state<<25 | state>>(64-25)
-	state = state*31 + 88
-	state = state<<26 | state>>(64-26)
-	state = state*31 + 89
-	state = state<<27 | state>>(64-27)
-	state = state*31 + 90
-	state = state<<28 | state>>(64-28)
-	state = state*31 + 91
-	state = state<<29 | state>>(64-29)
-	state = state*31 + 92
-	state = state<<30 | state>>(64-30)
-	state = state*31 + 93
-	state = state<<31 | state>>(64-31)
-	state = state*31 + 94
-	state = state<<32 | state>>(64-32)
-	state = state*31 + 95
-	state = state<<33 | state>>(64-33)
-	state = state*31 + 96
-	state = state<<34 | state>>(64-34)
-	state = state*31 + 97
-	state = state<<35 | state>>(64-35)
-	state = state*31 + 98
-	state = state<<36 | state>>(64-36)
-	state = state*31 + 99
-	state = state<<37 | state>>(64-37)
 	return state
 }

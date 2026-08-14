@@ -181,7 +181,8 @@ Two languages name one tool for each gate, so each takes one rule for each:
   `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
   statement count 250 code lines of Python measures out to.
 - `complexity-go` — `gocognit -over 15`, and `function-length-go` — `funlen`
-  through golangci-lint at `lines: 250` with `ignore-comments` on.
+  through golangci-lint at `statements: 160`, the statement count 250 code lines
+  of Go measures out to.
 
 A tool measures its own way, and three of the five complexity gates are the
 published Sonar cognitive complexity the `complexity` probe computes:

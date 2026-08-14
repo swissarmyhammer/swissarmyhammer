@@ -29,6 +29,7 @@ mod complexity_typescript;
 mod dead_code;
 mod dead_code_rust;
 mod dead_code_swift;
+mod function_length_go;
 mod magic_numbers;
 mod missing_docs;
 mod missing_docs_rust;
@@ -1057,18 +1058,41 @@ struct ShippedStagedRows {
 /// Drives the shipped script of `probe` over every file it stages, and holds
 /// the run to reporting exactly the rows the probe names.
 fn verify_shipped_staged_rows_report(probe: &ShippedStagedRows) {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
-    let staged_files: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
+    verify_staged_rows_report(
+        probe.run.project_types,
+        probe.run.rule,
+        probe.staged,
+        probe.run.expected,
+        probe.reason,
+    );
+}
 
-    let reported = shipped_script_findings(&loader, probe.run.rule, probe.staged, &staged_files)
+/// Drives the shipped script of `rule` over every file of `staged`, and holds
+/// the run to reporting exactly the `path:line` rows `expected` names.
+///
+/// `staged` and `expected` are borrowed rather than `'static`, because a probe
+/// whose shape is a function of several hundred lines builds its source, and
+/// the line each finding stands on, at run time. A probe whose files fit in the
+/// binary states them as a [`ShippedStagedRows`] and reaches this function
+/// through [`verify_shipped_staged_rows_report`].
+fn verify_staged_rows_report(
+    project_types: &[&str],
+    rule: &str,
+    staged: &[(&str, &str)],
+    expected: &[&str],
+    reason: &str,
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+    let staged_files: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+
+    let reported = shipped_script_findings(&loader, rule, staged, &staged_files)
         .expect("a script given its own files must judge them and exit 0");
 
     assert_eq!(
         sorted_names(&reported),
-        sorted_names(&expected_script_findings(probe.run.expected)),
-        "{}",
-        probe.reason
+        sorted_names(&expected_script_findings(expected)),
+        "{reason}"
     );
 }
 

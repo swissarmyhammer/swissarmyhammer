@@ -21,9 +21,15 @@ tool:
         - funlen
       settings:
         funlen:
-          lines: 250
-          statements: 10000
+          lines: 10000
+          statements: 160
           ignore-comments: true
+      exclusions:
+        rules:
+          - linters:
+              - funlen
+            path: _test\.go$
+            text: "^Function '(Test|Benchmark|Fuzz|Example)([^\\p{Ll}].*)?' "
     issues:
       max-issues-per-linter: 0
       max-same-issues: 0
@@ -42,60 +48,145 @@ tool:
 
 # Function Length — Go
 
-`funlen` reports every function that runs too long. Its `lines` limit with
-`ignore-comments` on is the closest metric Go has to the code-line count the
-`function-length` prompt rule states.
+`funlen` reports every function that runs too long. It holds two dimensions,
+`lines` and `statements`, and this rule gates on the second one.
 
-## Why funlen's line count, and not a statement count
+## The corpus every number below was measured over
 
-The prompt rule counts 250 lines of code, blank lines and comment-only lines
-excluded. Three Go metrics could stand for that number, so all three were
-measured rather than picked.
+Six well-known Go repositories, cloned at HEAD on 2026-08-14:
 
-A Go program replicating funlen's `parseStmts` and `getLines` from its source,
-and computing each function's true code lines from `go/scanner` tokens, ran over
-the Go 1.26.5 standard library plus the `github.com` tree of the module cache,
-132 MB of third-party source — 94774 functions in all. Of those, 379 are
-genuinely over 250 code lines.
+| repository | commit |
+|---|---|
+| kubernetes/client-go | `3fcdd4c72588c077802ae4c6a3fec8375665080b` |
+| spf13/cobra | `adbc8813901bba65827259daa8e22ff94ec1f30e` |
+| etcd-io/etcd | `0836b69e9cf47d00b535f2bc331b4c47bb23cb80` |
+| gin-gonic/gin | `34dac209ffb6ef85cc78c5d217bbb7ad001d68fd` |
+| grpc/grpc-go | `bf9e7cd3430df40d0732ba42eb88bd5f2cc63407` |
+| prometheus/prometheus | `05f9eb8b3b8e10b48c8f4153b0714dbe9bc9a630` |
 
-| metric | median ratio to code lines, functions of 250+ code lines | at a gate of 250: findings / false positives / missed |
+5470 `.go` files, 1290 of them `_test.go`, in 32 Go modules. Each module was run
+two times through golangci-lint: one run at `lines: 1, statements: 10000`, which
+makes funlen print every function's own LINE count in its message, and one at
+`lines: 10000, statements: 1`, which makes it print every function's own
+STATEMENT count. 23216 functions came back with both numbers, so every sweep
+below is arithmetic on the tool's own counts rather than on a model of them.
+
+## Why the gate is a statement count
+
+`funlen` ORs its two dimensions. `funlen.go` runs the statement check first and
+`continue`s past the line check when it fires, and that `continue` is there so
+one function reports one time — not so one dimension can excuse the other. A
+statement limit standing BESIDE a line gate can therefore only add findings.
+Measured at `lines: 250`:
+
+| `statements` | findings | in `_test.go` |
 |---|---|---|
-| funlen `lines`, `ignore-comments: true` | 1.002 | 412 / 39 / 6 |
-| revive `function-length` lines | 1.132 | 517 / 138 / 0 |
-| funlen `statements` | 0.763, but p10 0.012 and p90 0.997 | not usable |
+| 40 | 982 | 625 |
+| 80 | 253 | 185 |
+| 120 | 180 | 149 |
+| 180 | 162 | 142 |
+| 250 | 161 | 142 |
+| 10000 | 161 | 142 |
 
-funlen with comments ignored counts code lines plus blank lines, and a long Go
-function carries almost none of the latter, so the ratio sits on 1.00 and the
-gate can be the prompt rule's own 250 with no correction.
+The line gate at 250 is therefore the floor of that column, and its own finding
+set is nearly all shapes the `function-length` prompt rule exempts. Of the 161
+functions over 250 funlen lines, 136 hold 40 statements or fewer:
 
-revive's `function-length` rule counts raw physical lines — its `countLines` is
-`End().Line - Pos().Line - 1` and subtracts nothing — so it charges a function
-for the comments the prompt rule excludes, and reports 138 functions that are
-under the real limit.
+| statements | findings at `lines: 250` | in `_test.go` |
+|---|---|---|
+| 0..20 | 114 | 111 |
+| 21..40 | 22 | 19 |
+| 41..80 | 6 | 6 |
+| 81..120 | 3 | 1 |
+| 121..180 | 6 | 1 |
+| over 180 | 10 | 4 |
 
-A statement count cannot stand for a line count in Go at all. The ratio spans
-80x across the range, because a 400-line composite literal is one statement.
+The two dimensions select two different populations, and the ratio states it:
 
-## Why the statement limit is 10000
+| population | statements for each funlen line |
+|---|---|
+| functions of 250+ lines | p10 0.004, median 0.017, p90 0.290 |
+| functions of 100+ statements | p10 0.437, median 0.633, p90 0.780 |
 
-`funlen` runs its statement check first and `continue`s past the line check when
-it fires, so the statement dimension has to be out of reach for the line gate to
-be the gate. It cannot be turned off: `NewAnalyzer` reads `stmtLimit == 0` as
-"use the default of 40". The largest statement count in the 94774-function
-corpus is 6400 — `rewriteValueAMD64` in the Go compiler — so 10000 clears every
-real function.
+A median of 0.017 is four statements over 250 lines, which is a data literal.
+`cobra/bash_completions.go` `writePreamble` runs 365 lines and holds 2
+statements — one call writing one shell script. `prometheus` `HandleDropletsList`
+runs 589 lines and holds 1. Lines select data; statements select code.
+
+So the statement count is the gate, and the line limit stands out of reach.
+
+## Why the earlier line gate measured the wrong thing
+
+This rule gated on `lines: 250` before, and the measurement behind that number
+was sound for the question it asked. A Go program replicating funlen's
+`parseStmts` and `getLines`, over the Go 1.26.5 standard library plus 132 MB of
+the module cache — 94774 functions — put funlen's `lines` with
+`ignore-comments: true` at a median ratio of 1.002 to the true code lines a
+`go/scanner` walk counts, against 1.132 for revive's `function-length`. funlen's
+line count IS the prompt rule's own count of code lines, and that is still true.
+
+The ground truth was the wrong one. It was "over 250 code lines", and the prompt
+rule does not state that a function over 250 code lines is a finding: it states
+that one is a finding UNLESS it is mostly configuration or data, an
+initialization function that sets many fields, generated code, or a test. Take
+the exempt shapes out of the ground truth and the line count stops being the
+metric, because the shapes it selects are almost entirely the exempt ones.
+
+The same measurement recorded `funlen statements` as "not usable", on a ratio to
+code lines that spans p10 0.012 to p90 0.997. That spread IS the carve-out doing
+its work: a function holds far fewer statements than lines exactly when its
+lines are data.
+
+## Why the gate is 160
+
+The prompt rule counts 250 code lines. The procedural population — the 58
+functions of 100 statements or more — holds a median 0.633 statements for each
+funlen line, and funlen's line count is the code-line count. 250 times 0.633 is
+158, so the gate is 160. This is the derivation `function-length-python` makes
+for its own `PLR0915` threshold of 180; Go's ratio is lower than Python's 0.72,
+so Go's number is lower.
+
+Measured, 160 is where the sweep turns. A statement gate reports a function
+whatever its line count, so a gate under the ratio reports functions the prompt
+rule does not list at all:
+
+| `statements`, `lines: 10000` | findings | over 250 lines | under 250 lines |
+|---|---|---|---|
+| 120 | 35 | 16 | 19 |
+| 140 | 17 | 12 | 5 |
+| 160 | 12 | 11 | 1 |
+| 180 | 11 | 10 | 1 |
+| 200 | 7 | 7 | 0 |
+
+At 160 the corpus reports 12 functions and 11 of them stand over the prompt
+rule's own 250 lines as well. The one that does not is `grpc-go`
+`interop/client/client.go` `main`, 235 lines of 187 statements.
+
+The trade is stated rather than hidden: a function whose length comes from long
+expressions rather than from statements passes. `prometheus/tsdb/head_wal.go`
+`loadWAL` runs 396 lines on 122 statements and this gate is silent on it. A
+missed finding leaves the review where it was, and a wrong finding is a
+requirement to change correct code, which is the same trade `complexity-swift`
+records for `ignores_case_statements`.
+
+## Why the line limit is 10000
+
+The line dimension cannot be turned off: `NewAnalyzer` reads `lineLimit == 0` as
+"use the default of 60". It has to be put out of reach instead. The largest
+funlen line count in the corpus is 3294, so 10000 clears every real function.
 
 ## Why golangci-lint runs the lint
 
 `funlen` ships a standalone binary and that binary has no threshold flags.
 `funlen -flags` lists `V`, `all`, `c`, `flags`, `json`, `source`, `tags`, `test`
 and `v`, and nothing else; `lines` and `statements` are hardwired to 60 and 40
-in `NewAnalyzer`. A standalone run therefore cannot gate at 250, whatever the
+in `NewAnalyzer`. A standalone run therefore cannot gate at 160, whatever the
 command line says.
 
-`golangci-lint` carries the same funlen analyzer and configures it. That is the
-same verdict, reached the same way, that `magic-numbers-go` records for `mnd`,
-and it is the same pinned tool.
+`golangci-lint` carries the same funlen analyzer, configures it, and carries the
+exclusion machinery the test carve-out below needs. That is the same verdict,
+reached the same way, that `magic-numbers-go` records for `mnd`, and it is the
+same pinned tool.
 
 ## Why the run is shaped this way
 
@@ -118,8 +209,8 @@ changed files.
 
 Selection in the pipe is attribution, not exemption. `golangci-lint` also emits
 `typecheck` diagnostics on the same stream, and the `jq` filter drops them; they
-belong to the build, not to this rule. To exempt one function, write
-`//nolint:funlen // <reason>` on it in the code.
+belong to the build, not to this rule. Every exemption this rule makes stands in
+the configuration, where golangci-lint decides it.
 
 ## The temporary directory the configuration stands in
 
@@ -129,3 +220,112 @@ into, and `trap 'rm -rf "$work"' EXIT` removes it. The scope is
 change of the pair this rule needed. Measured over a Go module of one
 file: one run raised the count of entries under `TMPDIR` by 1 before the
 trap, and leaves that count unchanged after it.
+
+## The carve-outs the prompt rule states
+
+`function-length` exempts four shapes: a test, generated code, a function that
+is mostly configuration or data, and an initialization function that sets many
+fields. The run reproduces all four.
+
+### Configuration, data and an initializer, which the gate drops
+
+`function-length` exempts "Functions that are mostly configuration/data (e.g.,
+builder patterns with many options)" and "Initialization functions that set many
+fields". A composite literal is ONE statement however many rows it holds, and a
+builder chain is one statement however many options it sets, so the statement
+gate drops both without reading a name or a path.
+
+Measured with golangci-lint 2.12.2 on a probe module, at the gate of 160:
+
+| the shape | funlen lines | funlen statements | the run |
+|---|---|---|---|
+| a procedure of 170 assignments | 170 | 170 | reports |
+| a composite literal of 300 rows | 302 | 1 | silent |
+| a builder chain of 300 options | 301 | 1 | silent |
+| a table-driven test of 300 rows | 307 | 4 | silent |
+
+The acceptance test
+`the_shipped_go_function_length_tool_rule_measures_statements_and_not_lines`
+holds the first three rows. An initializer that sets many fields is the same
+shape: each assignment is a statement, so an initializer of more than 160 fields
+reports and the author answers it with the annotation below.
+
+### A test, which the run drops by the DEFINITION
+
+`function-length` exempts "Functions explicitly marked as tests", and
+`cognitive-complexity` names the mark for the whole set: "Identify a test from
+its attribute or framework naming convention at the **definition**, never from
+the file name. A complex helper named `build_request` in a file called
+`foo_test.rs` is still a complex function and is still listed."
+
+Go states that convention in `go test`: a test is a function named `TestXxx`,
+`BenchmarkXxx`, `FuzzXxx` or `ExampleXxx`, where the rune after the prefix is
+not a lower-case letter, in a file whose name ends `_test.go`. Both halves are
+the definition, and `go test` requires both.
+
+funlen writes the function's own NAME into every message it reports — `Function
+'TestFoo' has too many statements (170 > 160)` — so a `linters.exclusions.rules`
+entry that reads `text` reads the definition. The entry names both halves of the
+convention and names `funlen` alone, so it can silence no other linter.
+
+The statement gate already drops the table-driven test, which is the shape that
+would otherwise make a suppression mandatory on idiomatic code: measured, 111 of
+the 142 `_test.go` findings the old line gate raised hold 20 statements or
+fewer. The exclusion covers the remainder. Over the corpus, at the gate of 160:
+
+| the run | findings | in `_test.go` |
+|---|---|---|
+| no test carve-out | 12 | 4 |
+| the shipped exclusion | 8 | 0 |
+
+The four it drops are named test functions of 191 to 258 statements. A path
+exclusion alone would have dropped 142 of the old gate's 161 findings, 11 of
+them helpers in test files that the prompt rule still lists — the trade
+`complexity-go` refuses.
+
+Measured with golangci-lint 2.12.2 on a probe module, at the gate of 160, over
+one function of 170 statements in each shape:
+
+| the declaration | the run |
+|---|---|
+| `TestDense` in a `_test.go` file | silent |
+| `buildRequest` in the same `_test.go` file | reports |
+| `Testify` in a `_test.go` file | reports |
+| `TestLooking` outside a `_test.go` file | reports |
+
+Row 2 is the helper the prompt rule keeps. Row 3 is the lower-case rune after
+the prefix, which `go test` refuses as a test and the `[^\p{Ll}]` class refuses
+here. Row 4 is the file-name half. The acceptance test
+`the_shipped_go_function_length_tool_rule_reads_a_test_from_its_definition`
+holds rows 1 and 2 beside a table-driven test.
+
+The expression stands in a double-quoted YAML scalar, so the class is written
+`[^\\p{Ll}]`: YAML reads `\\` as one backslash and hands `[^\p{Ll}]` to Go's
+regexp engine. `\p` is not a YAML escape, so the single-backslash spelling is a
+parse failure rather than a different match.
+
+### Generated code, which golangci-lint drops for itself
+
+`linters.exclusions.generated` defaults to `lax`, which drops every finding in a
+file whose head carries the line `go generate` states —
+`^// Code generated .* DO NOT EDIT\.$` above the first text that is neither a
+comment nor blank. The rule states no `generated` key, so it takes that default.
+A `rules` list does not replace it: measured over two files that hold the same
+function of 170 statements, one under the header and one without it, the run
+reports the plain file alone. The acceptance test
+`the_shipped_go_function_length_tool_rule_skips_a_generated_file` holds both
+positions, and `complexity-go` records the same measurement for the three Go
+rules of this set.
+
+An author cannot answer this carve-out with the annotation below. The generator
+writes the file again, and the annotation goes away each time. That is why the
+run makes the test and the author does not.
+
+## The annotation an author writes
+
+To exempt one function, write `//nolint:funlen // <reason>` on it in the code.
+Measured with golangci-lint 2.12.2 over one function of 170 statements against
+the gate of 160: the annotation directly above the `func` line gives no finding.
+
+The first fix a finding asks for is still to split the function. The annotation
+is the second fix, and the reason beside it states why.

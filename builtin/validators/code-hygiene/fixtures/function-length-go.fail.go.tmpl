@@ -1,7 +1,7 @@
 // Package fixtures holds the Go fixtures of the `function-length-go` tool rule.
 //
-// This file holds one function over the line gate: LongMixState runs
-// 262 counted lines against the gate of 250. The body is mechanical on
+// This file holds one function over the statement gate: LongMixState runs
+// 170 statements against the gate of 160. The body is mechanical on
 // purpose; its one job is to stand over that gate.
 //
 // The tool must report it. A tool upgrade that stops reporting the shape
@@ -179,97 +179,5 @@ func LongMixState(seed uint64) uint64 {
 	state = state<<20 | state>>(64-20)
 	state = state*31 + 83
 	state = state<<21 | state>>(64-21)
-	state = state*31 + 84
-	state = state<<22 | state>>(64-22)
-	state = state*31 + 85
-	state = state<<23 | state>>(64-23)
-	state = state*31 + 86
-	state = state<<24 | state>>(64-24)
-	state = state*31 + 87
-	state = state<<25 | state>>(64-25)
-	state = state*31 + 88
-	state = state<<26 | state>>(64-26)
-	state = state*31 + 89
-	state = state<<27 | state>>(64-27)
-	state = state*31 + 90
-	state = state<<28 | state>>(64-28)
-	state = state*31 + 91
-	state = state<<29 | state>>(64-29)
-	state = state*31 + 92
-	state = state<<30 | state>>(64-30)
-	state = state*31 + 93
-	state = state<<31 | state>>(64-31)
-	state = state*31 + 94
-	state = state<<32 | state>>(64-32)
-	state = state*31 + 95
-	state = state<<33 | state>>(64-33)
-	state = state*31 + 96
-	state = state<<34 | state>>(64-34)
-	state = state*31 + 97
-	state = state<<35 | state>>(64-35)
-	state = state*31 + 98
-	state = state<<36 | state>>(64-36)
-	state = state*31 + 99
-	state = state<<37 | state>>(64-37)
-	state = state*31 + 100
-	state = state<<38 | state>>(64-38)
-	state = state*31 + 101
-	state = state<<39 | state>>(64-39)
-	state = state*31 + 102
-	state = state<<40 | state>>(64-40)
-	state = state*31 + 103
-	state = state<<41 | state>>(64-41)
-	state = state*31 + 104
-	state = state<<42 | state>>(64-42)
-	state = state*31 + 105
-	state = state<<43 | state>>(64-43)
-	state = state*31 + 106
-	state = state<<44 | state>>(64-44)
-	state = state*31 + 107
-	state = state<<45 | state>>(64-45)
-	state = state*31 + 108
-	state = state<<46 | state>>(64-46)
-	state = state*31 + 109
-	state = state<<47 | state>>(64-47)
-	state = state*31 + 110
-	state = state<<48 | state>>(64-48)
-	state = state*31 + 111
-	state = state<<49 | state>>(64-49)
-	state = state*31 + 112
-	state = state<<50 | state>>(64-50)
-	state = state*31 + 113
-	state = state<<51 | state>>(64-51)
-	state = state*31 + 114
-	state = state<<52 | state>>(64-52)
-	state = state*31 + 115
-	state = state<<53 | state>>(64-53)
-	state = state*31 + 116
-	state = state<<54 | state>>(64-54)
-	state = state*31 + 117
-	state = state<<55 | state>>(64-55)
-	state = state*31 + 118
-	state = state<<56 | state>>(64-56)
-	state = state*31 + 119
-	state = state<<57 | state>>(64-57)
-	state = state*31 + 120
-	state = state<<58 | state>>(64-58)
-	state = state*31 + 121
-	state = state<<59 | state>>(64-59)
-	state = state*31 + 122
-	state = state<<60 | state>>(64-60)
-	state = state*31 + 123
-	state = state<<61 | state>>(64-61)
-	state = state*31 + 124
-	state = state<<62 | state>>(64-62)
-	state = state*31 + 125
-	state = state<<63 | state>>(64-63)
-	state = state*31 + 126
-	state = state<<1 | state>>(64-1)
-	state = state*31 + 127
-	state = state<<2 | state>>(64-2)
-	state = state*31 + 128
-	state = state<<3 | state>>(64-3)
-	state = state*31 + 129
-	state = state<<4 | state>>(64-4)
 	return state
 }
