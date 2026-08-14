@@ -6,6 +6,115 @@
 
 use super::*;
 
+/// Write operations the safety test runs against one shared file.
+const SAFETY_WRITE_OPERATIONS: usize = 5;
+
+/// Read operations the safety test runs against one shared file.
+const SAFETY_READ_OPERATIONS: usize = 5;
+
+/// Write operations that share one content value, so the safety test also
+/// covers two tasks racing on identical bytes.
+const SAFETY_WRITERS_PER_CONTENT: usize = 2;
+
+/// Operations the high concurrency stress test runs at the same time.
+const STRESS_TEST_CONCURRENCY: usize = 100;
+
+/// Operations of [`STRESS_TEST_CONCURRENCY`] that have to succeed.
+const STRESS_TEST_MIN_SUCCESSES: usize = 90;
+
+/// Files the stress test has to leave on disk.
+const STRESS_TEST_MIN_FILES: usize = 90;
+
+/// Time the whole stress test may take.
+const STRESS_TEST_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Memory [`STRESS_TEST_CONCURRENCY`] operations may add together.
+const STRESS_TEST_MEMORY_BUDGET: usize = 200_000_000;
+
+/// Times the base line repeats in the smallest file the stress test writes.
+const STRESS_BASE_LINE_REPEATS: usize = 1000;
+
+/// File sizes the stress test cycles through.
+const STRESS_FILE_SIZE_VARIANTS: usize = 10;
+
+/// Line repeats each successive stress file size adds.
+const STRESS_FILE_SIZE_STEP: usize = 500;
+
+/// Files the mixed operation test creates up front for its readers and
+/// editors to share.
+const MIXED_BASE_FILES: usize = 20;
+
+/// Times the base line repeats in each file the mixed operation test creates
+/// up front.
+const MIXED_BASE_FILE_LINE_REPEATS: usize = 100;
+
+/// Write operations the mixed operation test spawns.
+const MIXED_WRITE_OPERATIONS: usize = 30;
+
+/// Read operations the mixed operation test spawns.
+const MIXED_READ_OPERATIONS: usize = 30;
+
+/// Edit operations the mixed operation test spawns.
+const MIXED_EDIT_OPERATIONS: usize = 30;
+
+/// Glob operations the mixed operation test spawns.
+const MIXED_GLOB_OPERATIONS: usize = 20;
+
+/// Operations the mixed operation test spawns across every kind.
+const MIXED_TOTAL_OPERATIONS: usize =
+    MIXED_WRITE_OPERATIONS + MIXED_READ_OPERATIONS + MIXED_EDIT_OPERATIONS + MIXED_GLOB_OPERATIONS;
+
+/// Operations of [`MIXED_TOTAL_OPERATIONS`] that may fail.
+const MIXED_MAX_ERRORS: usize = 10;
+
+/// Time the whole mixed operation test may take.
+const MIXED_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Times the base line repeats in the smallest file a mixed write operation
+/// creates.
+const MIXED_NEW_FILE_MIN_LINE_REPEATS: usize = 50;
+
+/// File sizes a mixed write operation cycles through.
+const MIXED_NEW_FILE_SIZE_VARIANTS: usize = 50;
+
+/// Glob patterns the mixed operation test cycles through.
+const GLOB_PATTERNS: &[&str] = &["*.txt", "base_*.txt", "new_file_*.txt", "**/*.txt"];
+
+/// Read operations the shared access test spawns.
+const ACCESS_READ_OPERATIONS: usize = 50;
+
+/// Write operations the shared access test spawns.
+const ACCESS_WRITE_OPERATIONS: usize = 25;
+
+/// Grep operations the shared access test spawns.
+const ACCESS_GREP_OPERATIONS: usize = 25;
+
+/// Operations the shared access test spawns across every kind.
+const ACCESS_TOTAL_OPERATIONS: usize =
+    ACCESS_READ_OPERATIONS + ACCESS_WRITE_OPERATIONS + ACCESS_GREP_OPERATIONS;
+
+/// Lines the file every shared access operation touches starts with.
+const ACCESS_SHARED_FILE_LINES: usize = 1000;
+
+/// Times the base line repeats in each file a shared access write creates.
+const ACCESS_NEW_FILE_LINE_REPEATS: usize = 100;
+
+/// Time the whole shared access test may take.
+const ACCESS_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// One shared file read in this many asks for a window instead of the whole
+/// file.
+const WINDOWED_READ_EVERY: usize = 3;
+
+/// Lines each successive windowed read moves its window down the file.
+const WINDOWED_READ_OFFSET_STEP: usize = 100;
+
+/// Lines a windowed read asks for.
+const WINDOWED_READ_LIMIT: usize = 500;
+
+/// Grep patterns the shared access test cycles through.
+const GREP_PATTERNS: &[&str] = &["SHARED_FILE_CONTENT", "initial data"];
+
 /// Run concurrent operations and aggregate results
 async fn run_concurrent_test<F, Fut>(
     registry: Arc<ToolRegistry>,
@@ -55,7 +164,8 @@ fn create_stress_test_operation(
         let temp_dir_path = temp_dir_arc.clone();
         Box::pin(async move {
             let file_path = temp_dir_path.join(format!("stress_test_file_{}.txt", i));
-            let content_size = 1000 + (i % 10) * 500;
+            let content_size =
+                STRESS_BASE_LINE_REPEATS + (i % STRESS_FILE_SIZE_VARIANTS) * STRESS_FILE_SIZE_STEP;
             let content = format!("Stress test content for file {}\n", i).repeat(content_size);
 
             let write_tool = registry.get_tool("files").unwrap();
@@ -102,19 +212,23 @@ fn verify_stress_test_results(
     );
 
     assert!(
-        success_count >= 90,
-        "At least 90% of operations should succeed, got {}/100",
+        success_count >= STRESS_TEST_MIN_SUCCESSES,
+        "At least {} of {} operations should succeed, got {}",
+        STRESS_TEST_MIN_SUCCESSES,
+        STRESS_TEST_CONCURRENCY,
         success_count
     );
     assert!(
-        total_duration.as_secs() < 120,
-        "High concurrency test should complete within 2 minutes"
+        total_duration < STRESS_TEST_TIME_BUDGET,
+        "High concurrency test should complete within {:?}",
+        STRESS_TEST_TIME_BUDGET
     );
 
     let files_created = std::fs::read_dir(temp_dir_path).unwrap().count();
     assert!(
-        files_created >= 90,
-        "Should create at least 90 files, created {}",
+        files_created >= STRESS_TEST_MIN_FILES,
+        "Should create at least {} files, created {}",
+        STRESS_TEST_MIN_FILES,
         files_created
     );
 }
@@ -134,7 +248,8 @@ fn spawn_write_operations(
 
         join_set.spawn(async move {
             let file_path = temp_dir_clone.join(format!("new_file_{}.txt", i));
-            let content = format!("New file content {}\n", i).repeat(50 + i % 50);
+            let content = format!("New file content {}\n", i)
+                .repeat(MIXED_NEW_FILE_MIN_LINE_REPEATS + i % MIXED_NEW_FILE_SIZE_VARIANTS);
 
             let write_tool = registry_clone.get_tool("files").unwrap();
             let mut write_args = serde_json::Map::new();
@@ -230,12 +345,7 @@ fn spawn_glob_operations(
             let mut glob_args = serde_json::Map::new();
             glob_args.insert("op".to_string(), json!("glob files"));
 
-            let pattern = match i % 4 {
-                0 => "*.txt",
-                1 => "base_*.txt",
-                2 => "new_file_*.txt",
-                _ => "**/*.txt",
-            };
+            let pattern = GLOB_PATTERNS[i % GLOB_PATTERNS.len()];
 
             glob_args.insert("pattern".to_string(), json!(pattern));
             glob_args.insert("path".to_string(), json!(temp_dir_clone.to_string_lossy()));
@@ -257,18 +367,22 @@ fn verify_mixed_operation_results(
     );
 
     assert!(
-        success_count >= 100,
-        "At least 100/110 operations should succeed, got {}",
+        success_count >= MIXED_TOTAL_OPERATIONS - MIXED_MAX_ERRORS,
+        "At least {} of {} operations should succeed, got {}",
+        MIXED_TOTAL_OPERATIONS - MIXED_MAX_ERRORS,
+        MIXED_TOTAL_OPERATIONS,
         success_count
     );
     assert!(
-        error_count <= 10,
-        "Should have at most 10 errors, got {}",
+        error_count <= MIXED_MAX_ERRORS,
+        "Should have at most {} errors, got {}",
+        MIXED_MAX_ERRORS,
         error_count
     );
     assert!(
-        total_duration.as_secs() < 60,
-        "Mixed operations should complete within 1 minute"
+        total_duration < MIXED_TIME_BUDGET,
+        "Mixed operations should complete within {:?}",
+        MIXED_TIME_BUDGET
     );
 }
 
@@ -291,9 +405,9 @@ fn spawn_concurrent_reads(
             read_args.insert("op".to_string(), json!("read file"));
             read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
-            if i % 3 == 0 {
-                read_args.insert("offset".to_string(), json!(i * 100));
-                read_args.insert("limit".to_string(), json!(500));
+            if i % WINDOWED_READ_EVERY == 0 {
+                read_args.insert("offset".to_string(), json!(i * WINDOWED_READ_OFFSET_STEP));
+                read_args.insert("limit".to_string(), json!(WINDOWED_READ_LIMIT));
             }
 
             read_tool.execute(read_args, &context_clone).await
@@ -316,7 +430,8 @@ fn spawn_concurrent_writes(
 
         join_set.spawn(async move {
             let file_path = temp_dir_clone.join(format!("concurrent_write_{}.txt", i));
-            let content = format!("Concurrent write operation {}\n", i).repeat(100);
+            let content =
+                format!("Concurrent write operation {}\n", i).repeat(ACCESS_NEW_FILE_LINE_REPEATS);
 
             let write_tool = registry_clone.get_tool("files").unwrap();
             let mut write_args = serde_json::Map::new();
@@ -347,11 +462,7 @@ fn spawn_concurrent_greps(
             let mut grep_args = serde_json::Map::new();
             grep_args.insert("op".to_string(), json!("grep files"));
 
-            let pattern = if i % 2 == 0 {
-                "SHARED_FILE_CONTENT"
-            } else {
-                "initial data"
-            };
+            let pattern = GREP_PATTERNS[i % GREP_PATTERNS.len()];
 
             grep_args.insert("pattern".to_string(), json!(pattern));
             grep_args.insert("path".to_string(), json!(temp_dir_clone.to_string_lossy()));
@@ -387,7 +498,7 @@ async fn test_concurrent_file_operations_safety() {
             let write_tool = registry.get_tool("files").unwrap();
             let write_args = write_args(
                 &file_clone.to_string_lossy(),
-                &format!("content from task {}", i / 2),
+                &format!("content from task {}", i / SAFETY_WRITERS_PER_CONTENT),
             );
             write_tool
                 .execute(write_args, &context)
@@ -410,10 +521,15 @@ async fn test_concurrent_file_operations_safety() {
         }
     };
 
-    // Run 5 write and 5 read operations
-    let (write_success, write_error) =
-        run_concurrent_test(registry.clone(), context.clone(), 5, write_op).await;
-    let (read_success, read_error) = run_concurrent_test(registry, context, 5, read_op).await;
+    let (write_success, write_error) = run_concurrent_test(
+        registry.clone(),
+        context.clone(),
+        SAFETY_WRITE_OPERATIONS,
+        write_op,
+    )
+    .await;
+    let (read_success, read_error) =
+        run_concurrent_test(registry, context, SAFETY_READ_OPERATIONS, read_op).await;
 
     let success_count = write_success + read_success;
     let error_count = write_error + read_error;
@@ -430,7 +546,7 @@ async fn test_concurrent_file_operations_safety() {
 
     // All operations should complete without causing data corruption or system instability
     assert!(
-        success_count + error_count == 10,
+        success_count + error_count == SAFETY_WRITE_OPERATIONS + SAFETY_READ_OPERATIONS,
         "All concurrent operations should complete"
     );
 }
@@ -448,24 +564,30 @@ async fn test_high_concurrency_stress_test() {
     let temp_dir = _env.temp_dir();
     let temp_dir_arc = Arc::new(temp_dir.clone());
 
-    println!("Running high concurrency stress test with 100 simultaneous operations...");
+    println!(
+        "Running high concurrency stress test with {} simultaneous operations...",
+        STRESS_TEST_CONCURRENCY
+    );
 
     let operation = create_stress_test_operation(temp_dir_arc);
 
     let start_time = std::time::Instant::now();
-    let ((success_count, error_count), delta) =
-        profile_memory(|| run_concurrent_test(registry, context, 100, operation)).await;
+    let ((success_count, error_count), delta) = profile_memory(|| {
+        run_concurrent_test(registry, context, STRESS_TEST_CONCURRENCY, operation)
+    })
+    .await;
     let total_duration = start_time.elapsed();
 
     if let Some(delta) = delta {
         let abs_delta = delta.unsigned_abs();
         println!(
-            "Memory delta for 100 concurrent operations: {} ({})",
+            "Memory delta for {} concurrent operations: {} ({})",
+            STRESS_TEST_CONCURRENCY,
             if delta >= 0 { "+" } else { "-" },
             MemoryProfiler::format_bytes(abs_delta)
         );
 
-        let max_expected_memory = 200_000_000;
+        let max_expected_memory = STRESS_TEST_MEMORY_BUDGET;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -488,10 +610,10 @@ async fn test_mixed_operation_concurrency_stress() {
 
     println!("Running mixed operation concurrency stress test...");
 
-    let base_files = 20;
-    for i in 0..base_files {
+    for i in 0..MIXED_BASE_FILES {
         let file_path = &temp_dir.join(format!("base_file_{}.txt", i));
-        let content = format!("Base content for file {} that can be edited\n", i).repeat(100);
+        let content = format!("Base content for file {} that can be edited\n", i)
+            .repeat(MIXED_BASE_FILE_LINE_REPEATS);
         std::fs::write(file_path, content).unwrap();
     }
 
@@ -504,30 +626,30 @@ async fn test_mixed_operation_concurrency_stress() {
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        30,
+        MIXED_WRITE_OPERATIONS,
     );
     spawn_read_operations(
         &mut join_set,
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        30,
-        base_files,
+        MIXED_READ_OPERATIONS,
+        MIXED_BASE_FILES,
     );
     spawn_edit_operations(
         &mut join_set,
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        30,
-        base_files,
+        MIXED_EDIT_OPERATIONS,
+        MIXED_BASE_FILES,
     );
     spawn_glob_operations(
         &mut join_set,
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        20,
+        MIXED_GLOB_OPERATIONS,
     );
 
     let mut success_count = 0;
@@ -555,7 +677,7 @@ async fn test_concurrent_file_access_patterns() {
 
     println!("Testing concurrent access patterns to shared file...");
 
-    let initial_content = "SHARED_FILE_CONTENT: initial data\n".repeat(1000);
+    let initial_content = "SHARED_FILE_CONTENT: initial data\n".repeat(ACCESS_SHARED_FILE_LINES);
     std::fs::write(shared_file, &initial_content).unwrap();
 
     let start_time = std::time::Instant::now();
@@ -567,21 +689,21 @@ async fn test_concurrent_file_access_patterns() {
         registry.clone(),
         context.clone(),
         shared_file.clone(),
-        50,
+        ACCESS_READ_OPERATIONS,
     );
     spawn_concurrent_writes(
         &mut join_set,
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        25,
+        ACCESS_WRITE_OPERATIONS,
     );
     spawn_concurrent_greps(
         &mut join_set,
         registry.clone(),
         context.clone(),
         temp_dir_path.clone(),
-        25,
+        ACCESS_GREP_OPERATIONS,
     );
 
     let mut success_count = 0;
@@ -602,13 +724,15 @@ async fn test_concurrent_file_access_patterns() {
     );
 
     assert_eq!(
-        success_count, 100,
-        "All 100 concurrent operations should succeed"
+        success_count, ACCESS_TOTAL_OPERATIONS,
+        "All {} concurrent operations should succeed",
+        ACCESS_TOTAL_OPERATIONS
     );
     assert_eq!(error_count, 0, "Should have no errors");
     assert!(
-        total_duration.as_secs() < 30,
-        "Concurrent access should complete within 30 seconds"
+        total_duration < ACCESS_TIME_BUDGET,
+        "Concurrent access should complete within {:?}",
+        ACCESS_TIME_BUDGET
     );
 
     assert!(shared_file.exists());

@@ -9,6 +9,69 @@ use super::*;
 // Performance Benchmarking Tests
 // ============================================================================
 
+/// Times the base sentence repeats inside one block of the read fixture.
+const READ_FIXTURE_SENTENCES_PER_BLOCK: usize = 20;
+
+/// Blocks the read fixture holds.
+const READ_FIXTURE_BLOCKS: usize = 1000;
+
+/// Memory a full read may add, as a multiple of the file it reads.
+const FULL_READ_MEMORY_BUDGET_MULTIPLE: usize = 3;
+
+/// First line the windowed read asks for.
+const WINDOWED_READ_OFFSET: usize = 500;
+
+/// Lines the windowed read asks for.
+const WINDOWED_READ_LIMIT: usize = 100;
+
+/// Bytes one line is assumed to cost when the windowed read budgets memory.
+const ESTIMATED_BYTES_PER_LINE: usize = 100;
+
+/// Memory a windowed read may add, as a multiple of the window it reads.
+const WINDOWED_READ_MEMORY_BUDGET_MULTIPLE: usize = 10;
+
+/// Times the base sentence repeats inside one section of the write fixture.
+const WRITE_FIXTURE_SENTENCES_PER_SECTION: usize = 100;
+
+/// Sections the write fixture holds.
+const WRITE_FIXTURE_SECTIONS: usize = 1000;
+
+/// Memory a large write may add, as a multiple of the content it writes.
+const WRITE_MEMORY_BUDGET_MULTIPLE: usize = 2;
+
+/// Lines one block of the edit fixture holds.
+const EDIT_FIXTURE_LINES_PER_BLOCK: usize = 5000;
+
+/// Blocks the edit fixture holds. The product with
+/// [`EDIT_FIXTURE_LINES_PER_BLOCK`] stays under the 10MB write limit.
+const EDIT_FIXTURE_BLOCKS: usize = 40;
+
+/// Memory one edit may add, as a multiple of the file it edits.
+const SINGLE_EDIT_MEMORY_BUDGET_MULTIPLE: usize = 2;
+
+/// Memory a replace-all edit may add, as a multiple of the file it edits.
+const REPLACE_ALL_MEMORY_BUDGET_MULTIPLE: usize = 3;
+
+/// File operations the concurrent memory test runs at the same time.
+const CONCURRENT_FILE_OPERATIONS: usize = 20;
+
+/// Times the base line repeats in each file the concurrent memory test writes.
+const CONCURRENT_FILE_LINE_REPEATS: usize = 1000;
+
+/// Memory `CONCURRENT_FILE_OPERATIONS` operations may add together.
+const CONCURRENT_OPERATIONS_MEMORY_BUDGET: usize = 50_000_000;
+
+/// Build the large file the two read memory tests profile against.
+fn read_memory_fixture() -> String {
+    let chunk = "Memory usage test content with realistic data patterns. "
+        .repeat(READ_FIXTURE_SENTENCES_PER_BLOCK);
+    let mut content = String::new();
+    for i in 0..READ_FIXTURE_BLOCKS {
+        content.push_str(&format!("Block {}: {}", i, chunk));
+    }
+    content
+}
+
 #[tokio::test]
 async fn test_full_file_read_memory_usage() {
     let registry = create_test_registry().await;
@@ -19,15 +82,11 @@ async fn test_full_file_read_memory_usage() {
     let temp_dir = _env.temp_dir();
     let large_file = &temp_dir.join("memory_test_file.txt");
 
-    let chunk = "Memory usage test content with realistic data patterns. ".repeat(20);
-    let mut content = String::new();
-    for i in 0..1000 {
-        content.push_str(&format!("Block {}: {}", i, chunk));
-    }
+    let content = read_memory_fixture();
 
     println!(
-        "Creating {}MB file for memory profiling...",
-        content.len() / 1024 / 1024
+        "Creating {} file for memory profiling...",
+        MemoryProfiler::format_bytes(content.len())
     );
     let write_result = fs::write(large_file, &content);
     if let Err(ref e) = write_result {
@@ -62,7 +121,7 @@ async fn test_full_file_read_memory_usage() {
         );
 
         let file_size = content.len();
-        let max_expected_memory = file_size * 3;
+        let max_expected_memory = file_size * FULL_READ_MEMORY_BUDGET_MULTIPLE;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -85,19 +144,15 @@ async fn test_offset_limit_read_memory_usage() {
     let temp_dir = _env.temp_dir();
     let large_file = &temp_dir.join("memory_test_file.txt");
 
-    let chunk = "Memory usage test content with realistic data patterns. ".repeat(20);
-    let mut content = String::new();
-    for i in 0..1000 {
-        content.push_str(&format!("Block {}: {}", i, chunk));
-    }
+    let content = read_memory_fixture();
 
     fs::write(large_file, &content).unwrap();
 
     let mut offset_args = serde_json::Map::new();
     offset_args.insert("op".to_string(), json!("read file"));
     offset_args.insert("path".to_string(), json!(large_file.to_string_lossy()));
-    offset_args.insert("offset".to_string(), json!(500));
-    offset_args.insert("limit".to_string(), json!(100));
+    offset_args.insert("offset".to_string(), json!(WINDOWED_READ_OFFSET));
+    offset_args.insert("limit".to_string(), json!(WINDOWED_READ_LIMIT));
 
     let (result, delta) = profile_memory(|| read_tool.execute(offset_args, &context)).await;
     assert!(result.is_ok());
@@ -110,8 +165,8 @@ async fn test_offset_limit_read_memory_usage() {
             MemoryProfiler::format_bytes(abs_delta)
         );
 
-        let limit_size = 100 * 100;
-        let max_expected_memory = limit_size * 10;
+        let window_size = WINDOWED_READ_LIMIT * ESTIMATED_BYTES_PER_LINE;
+        let max_expected_memory = window_size * WINDOWED_READ_MEMORY_BUDGET_MULTIPLE;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -133,15 +188,16 @@ async fn test_large_file_write_memory_usage() {
     let large_file = &temp_dir.join("memory_write_test.txt");
 
     // Generate content for memory testing (under 10MB limit)
-    let chunk = "Memory profiling write test content with varied patterns. ".repeat(100);
+    let chunk = "Memory profiling write test content with varied patterns. "
+        .repeat(WRITE_FIXTURE_SENTENCES_PER_SECTION);
     let mut content = String::new();
-    for i in 0..1000 {
+    for i in 0..WRITE_FIXTURE_SECTIONS {
         content.push_str(&format!("Section {}: {}", i, chunk));
     }
 
     println!(
-        "Testing write memory usage for {}MB file...",
-        content.len() / 1024 / 1024
+        "Testing write memory usage for {} file...",
+        MemoryProfiler::format_bytes(content.len())
     );
 
     let mut arguments = serde_json::Map::new();
@@ -160,9 +216,8 @@ async fn test_large_file_write_memory_usage() {
             MemoryProfiler::format_bytes(abs_delta)
         );
 
-        // Memory usage should be reasonable - allow up to 2x content size
         let content_size = content.len();
-        let max_expected_memory = content_size * 2;
+        let max_expected_memory = content_size * WRITE_MEMORY_BUDGET_MULTIPLE;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -195,8 +250,9 @@ async fn test_large_file_edit_memory_usage() {
     let large_file = &temp_dir.join("memory_edit_test.txt");
 
     // Create file with repeated patterns for editing
-    let base_pattern = "MEMORY_TEST_PATTERN: original_content_here\n".repeat(5000);
-    let content = base_pattern.repeat(40); // 200K lines, safe under 10MB
+    let base_pattern =
+        "MEMORY_TEST_PATTERN: original_content_here\n".repeat(EDIT_FIXTURE_LINES_PER_BLOCK);
+    let content = base_pattern.repeat(EDIT_FIXTURE_BLOCKS);
 
     println!(
         "Creating file with {} lines for edit memory testing...",
@@ -235,9 +291,8 @@ async fn test_large_file_edit_memory_usage() {
             MemoryProfiler::format_bytes(abs_delta)
         );
 
-        // Single edit should use reasonable memory
         let file_size = fs::metadata(large_file).unwrap().len() as usize;
-        let max_expected_memory = file_size * 2; // Allow 2x file size
+        let max_expected_memory = file_size * SINGLE_EDIT_MEMORY_BUDGET_MULTIPLE;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -269,9 +324,8 @@ async fn test_large_file_edit_memory_usage() {
             MemoryProfiler::format_bytes(abs_delta)
         );
 
-        // Replace_all may use more memory but should still be reasonable
         let file_size = fs::metadata(large_file).unwrap().len() as usize;
-        let max_expected_memory = file_size * 3; // Allow 3x file size for replace_all
+        let max_expected_memory = file_size * REPLACE_ALL_MEMORY_BUDGET_MULTIPLE;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -298,7 +352,7 @@ async fn test_concurrent_operations_memory_usage() {
         // Create multiple files for concurrent operations
         let mut join_set = tokio::task::JoinSet::new();
 
-        for i in 0..20 {
+        for i in 0..CONCURRENT_FILE_OPERATIONS {
             let registry_clone = registry.clone();
             let context_clone = context.clone();
             let temp_dir_path = temp_dir.clone();
@@ -307,7 +361,8 @@ async fn test_concurrent_operations_memory_usage() {
                 let file_path = temp_dir_path.join(format!("concurrent_file_{}.txt", i));
 
                 // Generate content for each file
-                let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
+                let content = format!("Concurrent test content for file {}\n", i)
+                    .repeat(CONCURRENT_FILE_LINE_REPEATS);
 
                 // Write file
                 let write_tool = registry_clone.get_tool("files").unwrap();
@@ -352,7 +407,7 @@ async fn test_concurrent_operations_memory_usage() {
 
         // Concurrent operations should not cause excessive memory usage
         // Allow reasonable overhead for tokio runtime and file handles
-        let max_expected_memory = 50_000_000; // 50MB max for 20 concurrent operations
+        let max_expected_memory = CONCURRENT_OPERATIONS_MEMORY_BUDGET;
 
         assert!(
             abs_delta < max_expected_memory,
@@ -365,7 +420,7 @@ async fn test_concurrent_operations_memory_usage() {
     }
 
     assert_eq!(
-        success_count, 20,
+        success_count, CONCURRENT_FILE_OPERATIONS,
         "All concurrent operations should succeed"
     );
 }
