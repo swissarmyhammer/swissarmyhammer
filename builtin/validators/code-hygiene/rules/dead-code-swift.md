@@ -52,7 +52,7 @@ tool:
   doctor:
     check_command: "which periphery swift jq && test -f Package.swift"
     check_version_command: "periphery version"
-    fix_hint: "brew install peripheryapp/periphery/periphery, and run the review from the directory holding Package.swift"
+    fix_hint: "brew install periphery, and run the review from the directory holding Package.swift"
 ---
 
 # Dead Code — Swift

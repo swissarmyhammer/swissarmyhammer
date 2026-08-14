@@ -76,8 +76,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 mod review_fixture;
 
 use review_fixture::{
-    gated_planted_agent, mock_embedder_factory, plant_diff, scripted_factory, seed_on_disk_index,
-    TestRepo, CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_SECRET,
+    gated_planted_agent, isolate_review_tool_rules, mock_embedder_factory, plant_diff,
+    scripted_factory, seed_on_disk_index, TestRepo, CLAIM_DUP, CLAIM_GUARD_HERRING,
+    CLAIM_RED_HERRING, CLAIM_SECRET,
 };
 
 /// Byte capacity of the in-memory duplex pipe both peers read/write through.
@@ -192,6 +193,7 @@ async fn settled_snapshot(handler: &CapturingClient) -> Vec<ProgressNotification
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_progress_is_received_by_a_real_client_over_a_byte_stream_transport() {
+    let _sah_bin = isolate_review_tool_rules();
     // Keep the server-side code_context bootstrap hermetic: this test asserts
     // review progress delivery, not semantic embeddings, so skip the multi-GB
     // embedding-model load. nextest runs each test in its own process, so the
@@ -706,6 +708,7 @@ async fn serve_to_raw_client(
 /// server-side channel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_content_is_streamed_to_a_client_that_omits_the_progress_token() {
+    let _sah_bin = isolate_review_tool_rules();
     // Hermetic bootstrap, exactly as the tokenful test above.
     std::env::set_var("SAH_DISABLE_EMBEDDING", "1");
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
@@ -841,6 +844,7 @@ async fn review_content_is_streamed_to_a_client_that_omits_the_progress_token() 
 /// the token for its own multiplexing).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_progress_ticks_are_monotonic_in_wire_order() {
+    let _sah_bin = isolate_review_tool_rules();
     // Hermetic bootstrap, exactly as the tests above.
     std::env::set_var("SAH_DISABLE_EMBEDDING", "1");
     let _home = IsolatedTestEnvironment::new().expect("isolated env");

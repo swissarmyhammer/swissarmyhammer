@@ -42,8 +42,8 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, 
 mod review_fixture;
 
 use review_fixture::{
-    mock_embedder_factory, plant_diff, planted_agent, scripted_factory, seed_on_disk_index,
-    TestRepo, FILE_PAYMENTS,
+    isolate_review_tool_rules, mock_embedder_factory, plant_diff, planted_agent, scripted_factory,
+    seed_on_disk_index, TestRepo, FILE_PAYMENTS,
 };
 
 /// Client handler that captures every `notifications/progress` it sees.
@@ -165,6 +165,7 @@ fn assert_arrival_order_is_wire_order() {
 #[tokio::test]
 async fn review_working_emits_progress_notifications_per_pair_when_token_supplied() {
     assert_arrival_order_is_wire_order();
+    let _sah_bin = isolate_review_tool_rules();
 
     // Keep the server-side code_context bootstrap hermetic: this test asserts
     // review progress wiring, not semantic embeddings, so skip the multi-GB

@@ -955,8 +955,10 @@ mod tests {
     /// `finalize_completed`, so `get lines` on a timed-out command returns
     /// nothing.
     ///
-    /// It must also send file search and file edits off the shell — the
-    /// same rules the `shell` skill states (see
+    /// The text must also send file search and file edits off the shell:
+    /// this tool is not the file search tool (`rg` is the shell fallback),
+    /// and it is not the file editing tool. These are the same rules the
+    /// `shell` skill states (see
     /// `shell_output_guidance_states_blocking_and_no_tail` in
     /// `swissarmyhammer-skills/tests/shell_output_guidance.rs`), since the
     /// guidance is duplicated in the tool description and the skill by

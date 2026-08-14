@@ -48,8 +48,8 @@ use tracing_subscriber::EnvFilter;
 mod review_fixture;
 
 use review_fixture::{
-    context_at, mock_embedder_factory, plant_diff, planted_agent, scripted_factory,
-    seed_on_disk_index, TestRepo,
+    context_at, isolate_review_tool_rules, mock_embedder_factory, plant_diff, planted_agent,
+    scripted_factory, seed_on_disk_index, TestRepo,
 };
 
 /// Drive the real `review working` tool path under a global subscriber installed
@@ -58,6 +58,7 @@ use review_fixture::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_working_engine_traces_reach_a_global_subscriber() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     // --- install the GLOBAL subscriber exactly like `sah serve` does ---
     // registry().with(EnvFilter::new("rmcp=warn,debug")).with(fmt::layer()

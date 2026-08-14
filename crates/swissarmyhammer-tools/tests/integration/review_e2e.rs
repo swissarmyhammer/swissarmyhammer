@@ -40,10 +40,10 @@ use swissarmyhammer_kanban::{
 };
 
 use super::review_fixture::{
-    plant_diff, plant_project_validator_set, plant_validator_fixture, report_has_claim,
-    run_review_op, seed_on_disk_index, working_args, TestRepo, CLAIM_DATA, CLAIM_DEAD_ORPHAN,
-    CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_REUSE, CLAIM_RUST_IDIOM, CLAIM_SECRET,
-    FILE_PROJECT_FIXTURE,
+    isolate_review_tool_rules, plant_diff, plant_project_validator_set, plant_validator_fixture,
+    report_has_claim, run_review_op, seed_on_disk_index, working_args, TestRepo, CLAIM_DATA,
+    CLAIM_DEAD_ORPHAN, CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_REUSE,
+    CLAIM_RUST_IDIOM, CLAIM_SECRET, FILE_PROJECT_FIXTURE,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +57,7 @@ use super::review_fixture::{
 #[serial_test::serial(cwd)]
 async fn review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     let repo = TestRepo::new();
     plant_diff(&repo);
@@ -143,6 +144,7 @@ async fn review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings(
 #[serial_test::serial(cwd)]
 async fn review_e2e_sha_range_confirms_the_same_defects() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     let repo = TestRepo::new();
     plant_diff(&repo);
@@ -195,6 +197,7 @@ async fn review_e2e_sha_range_confirms_the_same_defects() {
 #[serial_test::serial(cwd)]
 async fn review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_source() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     let repo = TestRepo::new();
     // The set is standing configuration, so it lands in the baseline commit
@@ -257,6 +260,7 @@ async fn review_e2e_sha_excludes_a_validator_fixture_and_still_reviews_the_sourc
 #[serial_test::serial(cwd)]
 async fn review_e2e_file_glob_confirms_scoped_defects() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     let repo = TestRepo::new();
     plant_diff(&repo);
@@ -295,6 +299,7 @@ async fn review_e2e_file_glob_confirms_scoped_defects() {
 #[serial_test::serial(cwd)]
 async fn review_e2e_report_lands_on_a_kanban_task_in_the_dated_gfm_format() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let _sah_bin = isolate_review_tool_rules();
 
     let repo = TestRepo::new();
     plant_diff(&repo);
