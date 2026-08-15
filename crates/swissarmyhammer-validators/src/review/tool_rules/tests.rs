@@ -69,13 +69,9 @@ const CODE_HYGIENE_SET: &str = "code-hygiene";
 /// The prompt rule every shipped missing-docs tool rule supersedes.
 const MISSING_DOCS_PROMPT_RULE: &str = "missing-docs";
 
-/// The prompt rule that owns the length gate. The Rust complexity tool rule
-/// supersedes it beside `cognitive-complexity`, and the Python one owns it
-/// alone.
+/// The prompt rule that owns the length gate. It is the ONE size gate the set
+/// states, and every shipped function-length tool rule supersedes it alone.
 const FUNCTION_LENGTH_PROMPT_RULE: &str = "function-length";
-
-/// The prompt rule that owns the branching gate.
-const COGNITIVE_COMPLEXITY_PROMPT_RULE: &str = "cognitive-complexity";
 
 /// What a missing-docs tool rule supersedes.
 const SUPERSEDES_MISSING_DOCS: &[&str] = &[MISSING_DOCS_PROMPT_RULE];
@@ -86,16 +82,7 @@ const SUPERSEDES_DEAD_CODE: &[&str] = &[DEAD_CODE_PROMPT_RULE];
 /// What a magic-numbers tool rule supersedes.
 const SUPERSEDES_MAGIC_NUMBERS: &[&str] = &[MAGIC_NUMBERS_PROMPT_RULE];
 
-/// What a tool rule that decides both complexity gates supersedes.
-const SUPERSEDES_BOTH_COMPLEXITY_GATES: &[&str] = &[
-    COGNITIVE_COMPLEXITY_PROMPT_RULE,
-    FUNCTION_LENGTH_PROMPT_RULE,
-];
-
-/// What a tool rule that decides the branching gate alone supersedes.
-const SUPERSEDES_COGNITIVE_COMPLEXITY: &[&str] = &[COGNITIVE_COMPLEXITY_PROMPT_RULE];
-
-/// What a tool rule that decides the length gate alone supersedes.
+/// What a tool rule that decides the length gate supersedes.
 const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
 
 /// The shipped missing-docs tool rule for Rust, the one the pipeline
@@ -275,38 +262,32 @@ const SHIPPED_MAGIC_NUMBERS_RULES: &[(&str, &str, &[&str])] = &[
     ("flutter", DART_MAGIC_NUMBERS_RULE, SUPERSEDES_MAGIC_NUMBERS),
 ];
 
-/// The shipped complexity tool rule for Rust, the one the pipeline
-/// acceptance test drives end to end.
-const RUST_COMPLEXITY_RULE: &str = "complexity-rust";
+/// The shipped function-length tool rule for Rust, the one the pipeline
+/// acceptance test drives end to end. `cargo clippy` gives one exit status to
+/// a run it could not make and to a run it made from end to end, so nine more
+/// acceptance tests drive this rule over the shapes that tell those two apart.
+const RUST_FUNCTION_LENGTH_RULE: &str = "function-length-rust";
 
-/// The shipped complexity tool rule for TypeScript and JavaScript. It carries
-/// the test carve-out both prompt rules state, so a second acceptance test
-/// drives its fail fixture end to end and names every guard the fixture holds.
-const TYPESCRIPT_COMPLEXITY_RULE: &str = "complexity-typescript";
+/// The shipped function-length tool rule for TypeScript and JavaScript. It
+/// carries the test carve-out the prompt rule states, at the DEFINITION rather
+/// than at the file name, so three more acceptance tests drive it end to end:
+/// one names every guard its fail fixture holds, one holds the framework
+/// function names the config READS out of `node_modules`, and one holds the
+/// script to reading only the files it is given.
+const TYPESCRIPT_FUNCTION_LENGTH_RULE: &str = "function-length-typescript";
 
-/// The shipped complexity tool rule for Swift. swiftlint reads the project's
-/// own `.swiftlint.yml` as the parent of the rule's own config, so four more
-/// acceptance tests drive it end to end: one holds the project's `excluded:`
-/// list, one holds a run whose every file that list excludes, one holds the
-/// rule's own thresholds against a project that states other ones, and one
-/// holds the run to breaking on a file it cannot read.
-const SWIFT_COMPLEXITY_RULE: &str = "complexity-swift";
+/// The shipped function-length tool rule for Swift. swiftlint reads the
+/// project's own `.swiftlint.yml` as the parent of the rule's own config, so
+/// several more acceptance tests drive it end to end: one holds the project's
+/// `excluded:` list, one holds a run whose every file that list excludes, one
+/// holds the rule's own thresholds against a project that states other ones,
+/// and one holds the run to breaking on a file it cannot read.
+const SWIFT_FUNCTION_LENGTH_RULE: &str = "function-length-swift";
 
-/// The shipped complexity tool rule for Python. It carries the test carve-out
-/// the prompt rule states, and it carries neither of the other two, so five
-/// acceptance tests drive it end to end: one holds its script to reading only
-/// the files it is given, one holds the test carve-out, one holds the
-/// generated file it still reports, and two hold it to breaking on a file the
-/// tool cannot read.
-const PYTHON_COMPLEXITY_RULE: &str = "complexity-python";
-
-/// The shipped function-length tool rule for Python. A second acceptance
-/// test holds its script to reading only the files it is given.
+/// The shipped function-length tool rule for Python. Its gate is a STATEMENT
+/// count, and it reads the test carve-out from the NAME ruff anchors each
+/// `PLR0915` diagnostic on. Several acceptance tests drive it end to end.
 const PYTHON_FUNCTION_LENGTH_RULE: &str = "function-length-python";
-
-/// The shipped complexity tool rule for Go. A second acceptance test holds
-/// its script to reading only the files it is given.
-const GO_COMPLEXITY_RULE: &str = "complexity-go";
 
 /// The shipped function-length tool rule for Go. Its gate is a STATEMENT
 /// count, so the shapes `function-length` exempts — a composite literal, a
@@ -319,31 +300,19 @@ const GO_FUNCTION_LENGTH_RULE: &str = "function-length-go";
 
 /// The shipped function-length tool rule for Dart. `dart_code_linter` computes
 /// a `source-lines-of-code` metric that counts the code lines the prompt rule
-/// defines, and takes its gate as a command-line flag. It carries the length
-/// gate alone: Dart keeps the `cognitive-complexity` prompt rule, because the
-/// same tool's complexity and nesting metrics each report a large population
-/// of the shapes that rule carves out. `VALIDATOR.md` records the survey.
+/// defines, and takes its gate as a command-line flag.
 const DART_FUNCTION_LENGTH_RULE: &str = "function-length-dart";
 
-/// Every shipped complexity tool rule, with the project type it serves and
-/// the prompt rules it supersedes.
+/// Every shipped function-length tool rule, with the project type it serves
+/// and the prompt rule it supersedes.
 ///
-/// This is the one roster whose rows do not share a `supersedes` list. One
-/// run decides both gates for Rust, TypeScript and Swift, so those rules
-/// replace both prompt rules; Python and Go name one tool for each gate, so
-/// each takes one rule for each. Dart takes the LENGTH gate alone, and keeps
-/// the `complexity` probe and the `cognitive-complexity` prompt rule, because
-/// no Dart metric reproduces either of that rule's two gates.
-const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
+/// Every row names the SAME prompt rule, because `function-length` is the one
+/// size gate this set states. Each language carries exactly one such rule.
+const SHIPPED_FUNCTION_LENGTH_RULES: &[(&str, &str, &[&str])] = &[
     (
         "rust",
-        RUST_COMPLEXITY_RULE,
-        SUPERSEDES_BOTH_COMPLEXITY_GATES,
-    ),
-    (
-        "python",
-        PYTHON_COMPLEXITY_RULE,
-        SUPERSEDES_COGNITIVE_COMPLEXITY,
+        RUST_FUNCTION_LENGTH_RULE,
+        SUPERSEDES_FUNCTION_LENGTH,
     ),
     (
         "python",
@@ -352,15 +321,14 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     ),
     (
         "nodejs",
-        TYPESCRIPT_COMPLEXITY_RULE,
-        SUPERSEDES_BOTH_COMPLEXITY_GATES,
+        TYPESCRIPT_FUNCTION_LENGTH_RULE,
+        SUPERSEDES_FUNCTION_LENGTH,
     ),
     (
         "swift",
-        SWIFT_COMPLEXITY_RULE,
-        SUPERSEDES_BOTH_COMPLEXITY_GATES,
+        SWIFT_FUNCTION_LENGTH_RULE,
+        SUPERSEDES_FUNCTION_LENGTH,
     ),
-    ("go", GO_COMPLEXITY_RULE, SUPERSEDES_COGNITIVE_COMPLEXITY),
     ("go", GO_FUNCTION_LENGTH_RULE, SUPERSEDES_FUNCTION_LENGTH),
     (
         "flutter",

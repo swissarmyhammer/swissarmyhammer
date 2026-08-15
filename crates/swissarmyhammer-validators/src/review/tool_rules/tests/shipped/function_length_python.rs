@@ -1,75 +1,12 @@
-//! Acceptance tests for the shipped `complexity-python` and
-//! `function-length-python` tool rules.
+//! Acceptance tests for the shipped `function-length-python` tool rule.
 //!
-//! Each test drives the SHIPPED script over a probe Python tree and reads
-//! what the real complexipy or ruff reported.
+//! Each test drives the SHIPPED script over a probe Python tree and reads what
+//! the real ruff reported, end to end.
 //!
-//! One module stands for each language of the family, because one file for
-//! the whole family runs past the byte cap a review prompt holds.
+//! One module stands for each language of the family, because one file for the
+//! whole family runs past the byte cap a review prompt holds.
 
 use super::*;
-
-/// A Python function whose innermost block stands 6 levels deep. complexipy
-/// adds one for a block and one more for each level that block stands under,
-/// so the cognitive complexity is 21 against the gate of 15.
-///
-/// ruff's `C901`, which this rule ran before, scores the same function 7 and
-/// reports nothing: McCabe counts one decision point for each `if` and reads
-/// no nesting at all. That measured difference is why the rule left ruff.
-const PYTHON_COMPLEXITY_UNREAD_SOURCE: &str = r#"def branch(value):
-    if value > 0:
-        if value > 0:
-            if value > 0:
-                if value > 0:
-                    if value > 0:
-                        if value > 0:
-                            value -= 1
-    return value
-"#;
-
-/// Every Python file staged in the probe repository the complexity script is
-/// given none of. A tool that walks a whole tree reaches the nested file as
-/// readily as the one at the root.
-const PYTHON_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
-    ("top.py", PYTHON_COMPLEXITY_UNREAD_SOURCE),
-    ("deep/nested/other.py", PYTHON_COMPLEXITY_UNREAD_SOURCE),
-];
-
-/// Each finding the Python complexity script reports over the two files it is
-/// given, as `path:line`.
-const PYTHON_COMPLEXITY_READ_FINDINGS: &[&str] = &["deep/nested/other.py:1", "top.py:1"];
-
-/// The `complexity-python` probe over a run that is given no file.
-const PYTHON_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_COMPLEXITY_RULE,
-        expected: NO_FINDINGS,
-    },
-    staged: PYTHON_COMPLEXITY_UNREAD_FILES,
-    with_files: PYTHON_COMPLEXITY_READ_FINDINGS,
-    reason: READS_ONLY_ITS_ARGUMENTS,
-};
-
-/// Acceptance: the shipped Python complexity tool rule reads only the files
-/// it is given, through the real complexipy pipeline.
-///
-/// complexipy holds no default target. Measured with complexipy 7.0.0, given
-/// no path: `You need to define paths in the CLI call arguments or in
-/// complexipy.toml file`, and exit 1. A script that gave the tool that empty
-/// argument list would answer a refusal, and the engine would read the refusal
-/// as a tree with no finding in it.
-///
-/// The shipped script reaches no such run: it hands complexipy one file at a
-/// time, so the tool takes no empty argument list. Measured over this probe
-/// with the argument count removed: the run with no argument reported nothing
-/// and exited 0, the same as the shipped script. The count stands because the
-/// `run` key of `builtin/validators/README.md` states it, and because it
-/// answers before `mktemp -d` runs.
-#[test]
-fn the_shipped_python_complexity_tool_rule_reads_only_the_files_it_is_given() {
-    verify_shipped_run_reads_only_its_arguments(&PYTHON_COMPLEXITY_EMPTY_RUN_PROBE);
-}
 
 /// The head of the plain Python position: none.
 const PYTHON_PLAIN_HEAD: &[&str] = &[];
@@ -98,215 +35,6 @@ const PYTHON_GENERATED_POSITION: ShippedStagedFile = ShippedStagedFile {
     path: "marked/staged.py",
     head: PYTHON_GENERATED_HEAD,
 };
-
-/// Both Python positions, in the order the work-list holds them.
-const PYTHON_GENERATED_POSITIONS: &[ShippedStagedFile] =
-    &[PYTHON_PLAIN_POSITION, PYTHON_GENERATED_POSITION];
-
-/// The positions the run must report, which is the whole roster.
-const PYTHON_GENERATED_REPORTED: &[&str] = &["plain/staged.py", "marked/staged.py"];
-
-/// The staged Python positions, and the two of them the real complexipy
-/// pipeline must report.
-const PYTHON_COMPLEXITY_GENERATED_PROBE: ShippedStagedPositions = ShippedStagedPositions {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_COMPLEXITY_RULE,
-        expected: PYTHON_GENERATED_REPORTED,
-    },
-    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
-    change_purpose: "one function over the complexity gate, staged in two positions",
-    declarations: PYTHON_COMPLEXITY_UNREAD_SOURCE,
-    staged: PYTHON_GENERATED_POSITIONS,
-    support: NO_SUPPORT_FILES,
-    reason: "a generated Python file reports like any other file, because complexipy reads \
-             no header and Python states no header convention to read",
-};
-
-/// Acceptance: the shipped Python complexity tool rule REPORTS a generated
-/// file, through the real complexipy pipeline.
-///
-/// `cognitive-complexity`, the prompt rule this rule supersedes, exempts
-/// generated code. This rule reproduces none of that carve-out, and this test
-/// holds the gap measured rather than left to be discovered.
-///
-/// complexipy reads no file header: measured over three files, the one whose
-/// head carries the protocol-buffer header, the one whose head carries
-/// `# @generated`, and the plain file each reported their function. Its one
-/// file filter, `--exclude <glob>`, reads the PATH, and it reaches no file
-/// named on the command line at all: measured over the same three files named
-/// as arguments, `--exclude 'DO NOT EDIT'`, `--exclude '*_pb2.py'` and
-/// `--exclude 'marked_pb2.py'` each dropped none of them. The sibling
-/// `complexity-go` makes the header test itself, because Go states one
-/// convention; a Python header test would name one generator instead.
-#[test]
-fn the_shipped_python_complexity_tool_rule_reports_a_generated_file() {
-    verify_shipped_staged_positions_report(&PYTHON_COMPLEXITY_GENERATED_PROBE);
-}
-
-/// One Python test method beside one module-level helper, each with an
-/// innermost block 6 levels deep, so each scores 21 against the gate of 15.
-///
-/// The name of the method is the pytest and unittest convention at the
-/// DEFINITION, which is the mark `cognitive-complexity` states for its test
-/// carve-out. The helper carries no such name, and the prompt rule keeps it
-/// listed: "A complex helper named `build_request` in a file called
-/// `foo_test.rs` is still a complex function and is still listed."
-const PYTHON_COMPLEXITY_TEST_SOURCE: &str = r#"class TestThing:
-    def test_method(self, value):
-        if value > 0:
-            if value > 0:
-                if value > 0:
-                    if value > 0:
-                        if value > 0:
-                            if value > 0:
-                                value -= 1
-        return value
-
-
-def build_request(value):
-    if value > 0:
-        if value > 0:
-            if value > 0:
-                if value > 0:
-                    if value > 0:
-                        if value > 0:
-                            value -= 1
-    return value
-"#;
-
-/// The one test file staged for the carve-out probe.
-const PYTHON_COMPLEXITY_TEST_FILES: &[(&str, &str)] =
-    &[("suite/staged_test.py", PYTHON_COMPLEXITY_TEST_SOURCE)];
-
-/// The one row the run must report: the module-level helper, at the line its
-/// `def` stands on.
-///
-/// The test method stands at row 2 of the same file, so a run that reported
-/// the method as well, or reported it instead, answers another list.
-const PYTHON_COMPLEXITY_TEST_ROWS: &[&str] = &["suite/staged_test.py:13"];
-
-/// The staged Python test file, and the one row the real complexipy pipeline
-/// must report over it.
-const PYTHON_COMPLEXITY_TEST_PROBE: ShippedStagedRows = ShippedStagedRows {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_COMPLEXITY_RULE,
-        expected: PYTHON_COMPLEXITY_TEST_ROWS,
-    },
-    staged: PYTHON_COMPLEXITY_TEST_FILES,
-    reason: "the filter reads the NAME each finding carries, so the test method goes and the \
-             helper beside it stays",
-};
-
-/// Acceptance: the shipped Python complexity tool rule drops a test function
-/// and keeps the helper beside it, through the real complexipy pipeline.
-///
-/// `cognitive-complexity` exempts a test, and it names the DEFINITION as the
-/// mark rather than the file name. Python states that convention twice: pytest
-/// collects a function or method whose name starts with `test`
-/// (`python_functions = ["test"]`, read from pytest 9.1.1), and unittest
-/// collects a method whose name starts with `test`
-/// (`unittest.TestLoader.testMethodPrefix`).
-///
-/// complexipy holds no flag that reads a function name, and its `--exclude`
-/// glob reads the path the prompt rule refuses. So the filter reads the name
-/// the SARIF report carries — the bare name of a function, and `Class::method`
-/// for a method. Measured over this probe: the script without the filter
-/// reported both rows, and the shipped script reports the helper alone.
-#[test]
-fn the_shipped_python_complexity_tool_rule_drops_a_test_function_and_keeps_its_helper() {
-    verify_shipped_staged_rows_report(&PYTHON_COMPLEXITY_TEST_PROBE);
-}
-
-/// What the one error of a Python file complexipy could not read must name.
-///
-/// The script writes this text for a path that holds no file and for a file
-/// the parser refuses alike, because the engine reads one broken run either
-/// way and the agent needs the path.
-const PYTHON_COMPLEXITY_UNREADABLE_ERROR_PREFIX: &str =
-    "complexity-python: complexipy could not read";
-
-/// Where the Python file that is never written stands inside the probe
-/// repository.
-const PYTHON_COMPLEXITY_ABSENT_PATH: &str = "absent.py";
-
-/// What the one error of an absent Python file must name.
-const PYTHON_COMPLEXITY_ABSENT_ERROR: &[&str] = &[
-    PYTHON_COMPLEXITY_UNREADABLE_ERROR_PREFIX,
-    PYTHON_COMPLEXITY_ABSENT_PATH,
-];
-
-/// The `complexity-python` probe over a path that holds no file.
-const PYTHON_COMPLEXITY_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_COMPLEXITY_RULE,
-        expected: PYTHON_COMPLEXITY_ABSENT_ERROR,
-    },
-    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
-    change_purpose: "a Python file that is not there",
-    path: PYTHON_COMPLEXITY_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Python complexity tool rule BREAKS on a file it
-/// cannot read, through the real complexipy pipeline.
-///
-/// Measured with complexipy 7.0.0 over a path that holds no file: the tool
-/// wrote a SARIF run holding no result and exited 1 — the same status it
-/// writes for a finding. A script that read status 1 as a measured run would
-/// report no finding and exit 0, and the engine would read a file the tool
-/// never judged as a clean file. The `[ ! -r "$file" ]` test names the path
-/// and exits 1 before complexipy runs.
-#[test]
-fn the_shipped_python_complexity_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&PYTHON_COMPLEXITY_ABSENT_PROBE);
-}
-
-/// A Python file that does not parse: the body of `broken` holds no statement.
-const PYTHON_COMPLEXITY_UNPARSABLE_SOURCE: &str =
-    concat!("def broken(value):\n", "    if value > 0:\n",);
-
-/// Where the unparsable file stands inside the probe repository.
-const PYTHON_COMPLEXITY_UNPARSABLE_PATH: &str = "unparsable.py";
-
-/// What the one error of an unparsable Python file must name.
-const PYTHON_COMPLEXITY_UNPARSABLE_ERROR: &[&str] = &[
-    PYTHON_COMPLEXITY_UNREADABLE_ERROR_PREFIX,
-    PYTHON_COMPLEXITY_UNPARSABLE_PATH,
-];
-
-/// The `complexity-python` probe over a Python file complexipy cannot parse.
-const PYTHON_COMPLEXITY_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_COMPLEXITY_RULE,
-        expected: PYTHON_COMPLEXITY_UNPARSABLE_ERROR,
-    },
-    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
-    change_purpose: "a Python file the parser cannot read",
-    path: PYTHON_COMPLEXITY_UNPARSABLE_PATH,
-    source: Some(PYTHON_COMPLEXITY_UNPARSABLE_SOURCE.as_bytes()),
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Python complexity tool rule BREAKS on a Python file
-/// it cannot parse, through the real complexipy pipeline.
-///
-/// The file is readable, so the readability test admits it and complexipy
-/// reads it. Measured with complexipy 7.0.0: the tool wrote `error: Failed to
-/// process <path> - Please check file/folder exists or check syntax` to
-/// STDOUT, wrote 0 bytes to stderr, and exited 1 — the same status it writes
-/// for a finding, so the status alone cannot tell the two apart. The script
-/// accepts status 1 only beside a report holding one result or more, and this
-/// run held none, so the script forwards the tool's own console text, names
-/// the file and exits 1.
-#[test]
-fn the_shipped_python_complexity_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_run_breaks(&PYTHON_COMPLEXITY_UNPARSABLE_PROBE);
-}
 
 /// A Python function of 190 statements, which stands over the `PLR0915` gate
 /// of 180. `PLR0915` counts a statement rather than a line, and a semicolon
@@ -360,11 +88,12 @@ const PYTHON_LENGTH_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// Acceptance: the shipped Python function-length tool rule reads only the
 /// files it is given, through the real ruff pipeline.
 ///
-/// The two Python rules of this roster share one tool and one default target,
-/// so the length gate answers for the tree the same way the complexity gate
-/// does. Measured over this probe with no argument: without the guard the
-/// script reported 2 findings and exited 0; with the guard it reports none
-/// and exits 0. The same script over the two staged files reports 2.
+/// ruff holds a default target: given no path it walks the tree under the
+/// working directory, so a script that handed the tool an empty argument list
+/// would judge files the work-list never named. Measured over this probe with
+/// no argument: without the guard the script reported 2 findings and exited 0;
+/// with the guard it reports none and exits 0. The same script over the two
+/// staged files reports 2.
 #[test]
 fn the_shipped_python_function_length_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_LENGTH_EMPTY_RUN_PROBE);
@@ -455,11 +184,10 @@ const PYTHON_LENGTH_SUITE_PATH: &str = "suite/staged_test.py";
 /// Acceptance: the shipped Python function-length tool rule reads a test from
 /// its DEFINITION, through the real ruff pipeline.
 ///
-/// `function-length` exempts "Functions explicitly marked as tests", and
-/// `cognitive-complexity` names the mark for the whole set: "Identify a test
-/// from its attribute or framework naming convention at the definition, never
-/// from the file name. A complex helper named `build_request` in a file called
-/// `foo_test.rs` is still a complex function and is still listed."
+/// `function-length` exempts "Functions explicitly marked as tests". The mark
+/// stands at the DEFINITION, and never at the file name: a long helper named
+/// `build_request` in a file called `staged_test.py` is still a long function
+/// and is still listed.
 ///
 /// ruff writes no name into its message, and it anchors each `PLR0915` finding
 /// on the NAME of the function it measured, so the script reads the definition
@@ -535,8 +263,7 @@ fn the_shipped_python_function_length_tool_rule_reports_a_field_setting_initiali
 ///
 /// `function-length` exempts generated code. ruff holds no generated-file
 /// heuristic — measured, no option of its 166 names one — and Python states no
-/// header convention for one either, which is the verdict the sibling
-/// `complexity-python` already records for the same language.
+/// header convention for one either.
 ///
 /// The two positions hold the same function over the gate, so the header is
 /// the one difference between them, and the run must report both.
@@ -562,6 +289,10 @@ fn the_shipped_python_function_length_tool_rule_reports_a_generated_file() {
     );
 }
 
+/// A Python file that does not parse: the body of `broken` holds no statement.
+const PYTHON_LENGTH_UNPARSABLE_SOURCE: &str =
+    concat!("def broken(value):\n", "    if value > 0:\n",);
+
 /// What the one error of a Python file ruff could not parse must name.
 const PYTHON_LENGTH_UNMEASURED_ERROR_PREFIX: &str =
     "function-length-python: ruff could not measure";
@@ -585,7 +316,7 @@ const PYTHON_LENGTH_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
     change_purpose: "a Python file the parser cannot read",
     path: PYTHON_LENGTH_UNPARSABLE_PATH,
-    source: Some(PYTHON_COMPLEXITY_UNPARSABLE_SOURCE.as_bytes()),
+    source: Some(PYTHON_LENGTH_UNPARSABLE_SOURCE.as_bytes()),
     support: NO_SUPPORT_FILES,
 };
 

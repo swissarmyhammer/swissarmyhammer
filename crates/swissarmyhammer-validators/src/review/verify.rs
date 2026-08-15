@@ -14,11 +14,6 @@
 //!      symbol has non-empty inbound callers.
 //!    - [`duplicates`](ProbeKind::Fact) auto-refutes a `duplication` finding with
 //!      no matching duplicate block.
-//!    - [`complexity`](ProbeKind::Fact) auto-refutes a `complexity` finding on a
-//!      file whose every function scored under both gates. The probe lists one
-//!      row per over-gate function, so an empty result is the measured fact
-//!      "nothing here is too complex" — the agent cannot re-derive a different
-//!      count and reinstate the claim.
 //!
 //!    `similar` is a [`candidate`](ProbeKind::Candidate) probe, not a fact, so a
 //!    reuse-miss finding gets no deterministic guard and goes straight to the
@@ -165,12 +160,6 @@ static GUARD_RULES: &[GuardRule] = &[
         probe: "duplicates",
         refute: Refute::WhenRowsAbsent,
         reason: "refuted by `duplicates` fact: no matching duplicate block exists",
-    },
-    GuardRule {
-        class: "complexity",
-        probe: "complexity",
-        refute: Refute::WhenRowsAbsent,
-        reason: "refuted by `complexity` fact: every function in this file is under both the                  cognitive-complexity and the condition-nesting gate",
     },
 ];
 
@@ -1044,103 +1033,6 @@ mod tests {
     }
 
     // ---- verdict parser (pure) -------------------------------------------
-
-    /// A `complexity` finding about `symbol` in `file`.
-    fn complexity_finding(file: &str, symbol: &str) -> Finding {
-        Finding {
-            file: file.to_string(),
-            line: 1,
-            validator: "complexity".to_string(),
-            rule: Some("cognitive-complexity".to_string()),
-            claim: format!("`{symbol}` nests conditions 4 levels deep."),
-            evidence: "match arms contain code at depth 4".to_string(),
-            suggestion: Some("Flatten it.".to_string()),
-        }
-    }
-
-    /// A `complexity` (fact) probe result for `file` listing `over_gate`
-    /// functions. An empty list is the fact "nothing here is too complex".
-    fn complexity_probe(file: &str, over_gate: &[&str]) -> ProbeResult {
-        ProbeResult {
-            name: "complexity".to_string(),
-            kind: ProbeKind::Fact,
-            target: file.to_string(),
-            rows: over_gate
-                .iter()
-                .map(|name| ProbeRow {
-                    file_path: file.to_string(),
-                    symbol: Some((*name).to_string()),
-                    line: Some(1),
-                    similarity: None,
-                    detail: Some("cognitive complexity 21 (gate 15)".to_string()),
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn guard_auto_refutes_complexity_when_no_function_is_over_a_gate() {
-        // The exact false positive the card records: a claim of "depth 4" on a
-        // file the scorer measured as under both gates. The measured fact wins.
-        let candidate = Candidate {
-            finding: complexity_finding("src/tag_parser.rs", "collect_line_tags"),
-            source_slice: "fn collect_line_tags() {}".to_string(),
-            probe_results: vec![complexity_probe("src/tag_parser.rs", &[])],
-            line_annotations: Vec::new(),
-        };
-
-        let outcome = run_guard(&[candidate], ReviewSubject::Files);
-
-        assert!(
-            outcome.survivors.is_empty(),
-            "an empty complexity fact must refute a complexity claim"
-        );
-        assert_eq!(outcome.refuted.len(), 1);
-        assert!(!outcome.refuted[0].confirmed);
-        assert_eq!(outcome.refuted[0].decided_by, Some(RefutingLayer::Guard));
-    }
-
-    #[test]
-    fn guard_passes_a_complexity_finding_when_the_scorer_listed_an_over_gate_function() {
-        // The gate stays a gate: a measured over-gate function still goes to the
-        // adversarial verifier rather than being refuted away.
-        let candidate = Candidate {
-            finding: complexity_finding("src/walk.rs", "walk"),
-            source_slice: "fn walk() {}".to_string(),
-            probe_results: vec![complexity_probe("src/walk.rs", &["walk"])],
-            line_annotations: Vec::new(),
-        };
-
-        let outcome = run_guard(&[candidate], ReviewSubject::Files);
-
-        assert_eq!(
-            outcome.survivors.len(),
-            1,
-            "a real over-gate function must reach the agent"
-        );
-        assert!(outcome.refuted.is_empty());
-    }
-
-    #[test]
-    fn guard_passes_a_complexity_finding_when_the_language_was_not_computed() {
-        // An unmapped language emits a not-computed row, so the result is NOT
-        // empty and the guard must not read it as "nothing is too complex".
-        let candidate = Candidate {
-            finding: complexity_finding("src/app.py", "handler"),
-            source_slice: "def handler():\n    pass\n".to_string(),
-            probe_results: vec![complexity_probe("src/app.py", &["<not computed>"])],
-            line_annotations: Vec::new(),
-        };
-
-        let outcome = run_guard(&[candidate], ReviewSubject::Files);
-
-        assert_eq!(
-            outcome.survivors.len(),
-            1,
-            "a not-computed row must leave the claim undecided, never refuted"
-        );
-        assert!(outcome.refuted.is_empty());
-    }
 
     #[test]
     fn parse_verdict_reads_a_fenced_confirm() {

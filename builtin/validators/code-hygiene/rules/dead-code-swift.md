@@ -234,6 +234,6 @@ rather than an absolute path, so the `jq` only has to split the column off.
 
 The rule declares no install commands. Homebrew is the supported way to install
 periphery and it installs the current version only, so a Homebrew command cannot
-pin one — the same reason `complexity-swift` and `missing-docs-swift` state.
+pin one — the same reason `function-length-swift` and `missing-docs-swift` state.
 The `doctor.fix_hint` names the Homebrew command instead. `sah doctor` shows
 that hint as the fix; the install lifecycle never runs it.

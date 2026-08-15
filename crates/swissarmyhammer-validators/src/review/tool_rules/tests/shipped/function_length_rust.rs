@@ -1,4 +1,4 @@
-//! Acceptance tests for the shipped `complexity-rust` tool rule.
+//! Acceptance tests for the shipped `function-length-rust` tool rule.
 //!
 //! Each test drives the SHIPPED script over a probe cargo package and reads
 //! what the real `cargo clippy` reported.
@@ -6,101 +6,22 @@
 //! One module stands for each language of the family, because one file for
 //! the whole family runs past the byte cap a review prompt holds.
 
-use super::complexity::complexity_work;
+use super::function_length::function_length_work;
 use super::*;
 
-/// A cargo package holding one function over the nesting gate and nothing
-/// else the four lints report. `[workspace]` keeps cargo inside the
-/// temporary directory.
-const COMPLEX_PACKAGE_MANIFEST: &str = concat!(
-    "[package]\nname = \"complex-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+/// A cargo package holding one function over the length gate and nothing else
+/// the lint reports. `[workspace]` keeps cargo inside the temporary directory.
+const LONG_PACKAGE_MANIFEST: &str = concat!(
+    "[package]\nname = \"length-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
     "\n[workspace]\n",
 );
 
-/// The library of [`COMPLEX_PACKAGE_MANIFEST`]. `fold_grid` is a free
-/// function at control-flow depth 6, and a free function body is itself one
-/// level, so its innermost block sits at nesting level 7 against the gate
-/// of 6. The Rust tool rule must report it once. The body stays well under
-/// the line gate and takes two arguments, so the same run reports nothing
-/// else.
-const COMPLEX_LIB_RS: &str = r#"//! A probe crate for the shipped Rust complexity tool rule.
-
-/// Folds a grid of readings into one band, one nested block for each test.
-pub fn fold_grid(grid: &[Vec<i32>], limit: i32) -> i32 {
-    let mut band = 0;
-    for row in grid {
-        for cell in row {
-            if *cell > 0 {
-                if *cell < limit {
-                    while band < *cell {
-                        if band % 2 == 0 {
-                            band += 2;
-                        }
-                        band += 1;
-                    }
-                }
-            }
-        }
-    }
-    band
-}
-"#;
-
-/// The library path inside the complexity probe package, as the work-list
-/// holds it.
-const COMPLEX_LIB_PATH: &str = "src/lib.rs";
-
-/// Acceptance: the shipped Rust complexity tool rule reports an over-complex
-/// function on a real cargo workspace, through the real clippy pipeline,
-/// and suppresses both prompt rules it supersedes.
-///
-/// The suppression half is what a rule that supersedes two names buys. A
-/// healthy `complexity-rust` must silence `cognitive-complexity` AND
-/// `function-length` for the file, so no LLM re-reads a gate the tool
-/// already decided.
-///
-/// The reporting half also proves the threshold reached clippy.
-/// `excessive-nesting-threshold` defaults to `0`, which turns the lint off
-/// altogether, so the probe reports only when the script's temporary
-/// `clippy.toml` is the file `CLIPPY_CONF_DIR` names.
-#[test]
-fn the_shipped_rust_complexity_tool_rule_reports_an_over_complex_function() {
-    let repo = tempfile::tempdir().unwrap();
-    std::fs::write(repo.path().join("Cargo.toml"), COMPLEX_PACKAGE_MANIFEST).unwrap();
-    std::fs::create_dir_all(repo.path().join("src")).unwrap();
-    std::fs::write(repo.path().join(COMPLEX_LIB_PATH), COMPLEX_LIB_RS).unwrap();
-    let loader = builtin_loader();
-    let project_types = ["rust"];
-    require_tool_installed(&loader, &project_types, RUST_COMPLEXITY_RULE);
-    let work = complexity_work(RUST_COMPLEXITY_RULE, COMPLEX_LIB_PATH, COMPLEX_LIB_RS);
-
-    let plan = plan_tool_rules(&work, &loader, &project_types, None);
-
-    let run = required_run(&plan, RUST_COMPLEXITY_RULE);
-    assert_eq!(run.files(), [COMPLEX_LIB_PATH.to_string()]);
-    let suppressed = plan
-        .suppression()
-        .suppressed_rules(CODE_HYGIENE_SET, COMPLEX_LIB_PATH);
-    for prompt_rule in SUPERSEDES_BOTH_COMPLEXITY_GATES {
-        assert!(
-            suppressed.contains(*prompt_rule),
-            "a healthy tool rule that supersedes two prompt rules must suppress both; \
-             `{prompt_rule}` is missing from {suppressed:?}"
-        );
-    }
-
-    verify_run_reports_one_finding(
-        run,
-        repo.path(),
-        COMPLEX_LIB_PATH,
-        CODE_HYGIENE_SET,
-        RUST_COMPLEXITY_RULE,
-        "too nested",
-    );
-}
-
 /// Where the probe cargo manifest stands inside a Rust probe repository.
 const RUST_PROBE_MANIFEST_PATH: &str = "Cargo.toml";
+
+/// The library path inside the length probe package, as the work-list holds
+/// it.
+const RUST_PROBE_LIB_PATH: &str = "src/lib.rs";
 
 /// The probe cargo manifest, staged beside a Rust probe file that the
 /// work-list does NOT name.
@@ -108,7 +29,7 @@ const RUST_PROBE_MANIFEST_PATH: &str = "Cargo.toml";
 /// A `workspace`-scope rule loads a project rather than a file list, so cargo
 /// breaks on the staged file only when it finds a package to lint.
 const RUST_PROBE_SUPPORT_FILES: &[(&str, &str)] =
-    &[(RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST)];
+    &[(RUST_PROBE_MANIFEST_PATH, LONG_PACKAGE_MANIFEST)];
 
 /// One line of the body of a function built to run over the length gate.
 const LONG_FUNCTION_BODY_LINE: &str = "    let _ = 1;\n";
@@ -119,12 +40,20 @@ const LONG_FUNCTION_BODY_LINE: &str = "    let _ = 1;\n";
 /// lines answer 302 against the gate of 250.
 const LONG_FUNCTION_BODY_LINES: usize = 300;
 
+/// The name the probe gives a function built to run over the length gate,
+/// where the test itself states nothing about that name.
+const LONG_PROBE_FUNCTION_NAME: &str = "long_defaults";
+
+/// The words of the clippy message the length gate writes, which the claim of
+/// a finding carries.
+const LENGTH_GATE_CLAIM_FRAGMENT: &str = "too many lines";
+
 /// A Rust function named `name` whose body runs [`LONG_FUNCTION_BODY_LINES`]
 /// lines, with `head` written above its `pub fn` line.
 ///
-/// Every shape the length gate measures runs past 250 lines, and
-/// [`ShippedStagedRows`] carries only `&'static` bytes, so a probe of that gate
-/// builds its source here rather than writing 300 lines out for each function.
+/// Every shape the length gate measures runs past 250 lines, and a staged probe
+/// carries only `&'static` bytes, so a probe of that gate builds its source
+/// here rather than writing 300 lines out for each function.
 fn long_rust_function(head: &str, name: &str) -> String {
     format!(
         "{head}pub fn {name}() {{\n{}}}\n",
@@ -132,32 +61,85 @@ fn long_rust_function(head: &str, name: &str) -> String {
     )
 }
 
-/// Drives the shipped `complexity-rust` script over a probe cargo package that
-/// holds `files`, and answers each finding it reported as `path:line`, sorted.
+/// Acceptance: the shipped Rust function-length tool rule reports a long
+/// function on a real cargo workspace, through the real clippy pipeline, and
+/// suppresses the prompt rule it supersedes.
+///
+/// The suppression half is what `supersedes` buys. A healthy
+/// `function-length-rust` must silence `function-length` for the file, so no
+/// LLM re-reads a gate the tool already decided.
+///
+/// The reporting half also proves the threshold reached clippy.
+/// `too_many_lines` stands in clippy's `pedantic` group, which is allow by
+/// default, so the probe reports only when the script's `-W` flag and its
+/// temporary `clippy.toml` both reached the run.
+#[test]
+fn the_shipped_rust_function_length_tool_rule_reports_a_long_function() {
+    let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repo.path().join(RUST_PROBE_MANIFEST_PATH),
+        LONG_PACKAGE_MANIFEST,
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo.path().join("src")).unwrap();
+    std::fs::write(repo.path().join(RUST_PROBE_LIB_PATH), &source).unwrap();
+    let loader = builtin_loader();
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let work = function_length_work(RUST_FUNCTION_LENGTH_RULE, RUST_PROBE_LIB_PATH, &source);
+
+    let plan = plan_tool_rules(&work, &loader, RUST_PROJECT_TYPES, None);
+
+    let run = required_run(&plan, RUST_FUNCTION_LENGTH_RULE);
+    assert_eq!(run.files(), [RUST_PROBE_LIB_PATH.to_string()]);
+    let suppressed = plan
+        .suppression()
+        .suppressed_rules(CODE_HYGIENE_SET, RUST_PROBE_LIB_PATH);
+    for prompt_rule in SUPERSEDES_FUNCTION_LENGTH {
+        assert!(
+            suppressed.contains(*prompt_rule),
+            "a healthy tool rule must suppress every prompt rule it supersedes; \
+             `{prompt_rule}` is missing from {suppressed:?}"
+        );
+    }
+
+    verify_run_reports_one_finding(
+        run,
+        repo.path(),
+        RUST_PROBE_LIB_PATH,
+        CODE_HYGIENE_SET,
+        RUST_FUNCTION_LENGTH_RULE,
+        LENGTH_GATE_CLAIM_FRAGMENT,
+    );
+}
+
+/// Drives the shipped `function-length-rust` script over a probe cargo package
+/// that holds `files`, and answers each finding it reported as `path:line`,
+/// sorted.
 ///
 /// The manifest is staged beside `files` because cargo lints a package and
 /// never a loose file. The findings are the SCRIPT's own, before the engine
 /// keeps only the ones in the changed files.
-fn rust_complexity_findings(files: &[(&str, &str)]) -> Vec<String> {
-    rust_complexity_findings_under(COMPLEX_PACKAGE_MANIFEST, files)
+fn rust_function_length_findings(files: &[(&str, &str)]) -> Vec<String> {
+    rust_function_length_findings_under(LONG_PACKAGE_MANIFEST, files)
 }
 
-/// Drives the shipped `complexity-rust` script over a probe cargo package whose
-/// manifest holds `manifest` and which holds `files`, and answers each finding
-/// it reported as `path:line`, sorted.
+/// Drives the shipped `function-length-rust` script over a probe cargo package
+/// whose manifest holds `manifest` and which holds `files`, and answers each
+/// finding it reported as `path:line`, sorted.
 ///
 /// The manifest is a parameter because one probe writes a clippy lint at deny
 /// level into it, and that shape shares its exit status with a run cargo could
 /// not make.
-fn rust_complexity_findings_under(manifest: &str, files: &[(&str, &str)]) -> Vec<String> {
+fn rust_function_length_findings_under(manifest: &str, files: &[(&str, &str)]) -> Vec<String> {
     let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
     let mut staged: Vec<(&str, &str)> = vec![(RUST_PROBE_MANIFEST_PATH, manifest)];
     staged.extend_from_slice(files);
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
-    let reported = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
-        .expect("the shipped Rust complexity script must judge the probe package and exit 0");
+    let reported = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
+        .expect("the shipped Rust function-length script must judge the probe package and exit 0");
 
     sorted_names(&reported)
 }
@@ -165,7 +147,7 @@ fn rust_complexity_findings_under(manifest: &str, files: &[(&str, &str)]) -> Vec
 /// The `path:line` entry [`shipped_script_findings`] answers a finding at row
 /// `row` of `path` with.
 ///
-/// Every expected entry of a Rust complexity probe is built here, from the
+/// Every expected entry of a Rust function-length probe is built here, from the
 /// same constant the probe stages the file under, so a path that moves moves
 /// its expected entries with it.
 fn probe_row(path: &str, row: usize) -> String {
@@ -189,47 +171,47 @@ const LENGTH_GATE_ANNOTATION: &str =
 /// [`BARE_LONG_FUNCTION_LINES`] plus its own annotation line.
 const RUST_BARE_LONG_FUNCTION_ROW: usize = 1;
 
-/// Acceptance: the shipped Rust complexity tool rule drops a long function
+/// Acceptance: the shipped Rust function-length tool rule drops a long function
 /// that carries the length-gate annotation, and keeps the bare one beside it,
 /// through the real clippy pipeline.
 ///
-/// `function-length`, one of the two prompt rules this rule supersedes, exempts
-/// "Functions that are mostly configuration/data (e.g., builder patterns with
-/// many options)" and "Initialization functions that set many fields". Clippy
-/// counts a data line like a code line, and its configuration holds no key that
-/// tells the two apart, so the run cannot reproduce that carve-out. The
-/// annotation is the whole answer, and this test holds it.
+/// `function-length`, the prompt rule this rule supersedes, exempts "Functions
+/// that are mostly configuration/data (e.g., builder patterns with many
+/// options)" and "Initialization functions that set many fields". Clippy counts
+/// a data line like a code line, and its configuration holds no key that tells
+/// the two apart, so the run cannot reproduce that carve-out. The annotation is
+/// the whole answer, and this test holds it.
 ///
 /// Both functions hold the same 300 body lines, so the annotation is the one
 /// difference between the function that reports and the function that stays
 /// silent.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_answers_the_length_gate_annotation() {
+fn the_shipped_rust_function_length_tool_rule_answers_the_length_gate_annotation() {
     let source = format!(
         "{}{}",
         long_rust_function("", "bare_defaults"),
         long_rust_function(LENGTH_GATE_ANNOTATION, "annotated_defaults")
     );
 
-    let reported = rust_complexity_findings(&[(COMPLEX_LIB_PATH, &source)]);
+    let reported = rust_function_length_findings(&[(RUST_PROBE_LIB_PATH, &source)]);
 
     assert_eq!(
         reported,
-        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_BARE_LONG_FUNCTION_ROW)]),
+        sorted_names(&[probe_row(RUST_PROBE_LIB_PATH, RUST_BARE_LONG_FUNCTION_ROW)]),
         "the annotation is the author's answer to the data carve-out, so the annotated \
          function must stay silent and the bare one must report"
     );
 }
 
-/// A probe crate root with nothing for the four lints to read, for a probe that
-/// measures another file of the same package.
+/// A probe crate root with nothing for the length gate to report, for a probe
+/// that measures another file of the same package.
 const EMPTY_PROBE_LIB_RS: &str = "//! A probe crate root with nothing to lint.\n";
 
 /// Where the probe integration test stands inside the probe repository.
 const RUST_PROBE_INTEGRATION_TEST_PATH: &str = "tests/it.rs";
 
 /// The attribute that marks the probe's test function at its DEFINITION, which
-/// is the mark `cognitive-complexity` states for its test carve-out.
+/// is the mark `function-length` states for its test carve-out.
 const RUST_TEST_ATTRIBUTE: &str = "#[test]\n";
 
 /// How many lines [`RUST_TEST_ATTRIBUTE`] runs above the `pub fn` line it
@@ -245,31 +227,31 @@ const RUST_TEST_FUNCTION_ROW: usize = RUST_TEST_ATTRIBUTE_LINES + 1;
 /// and the helper opens on the next one.
 const RUST_TEST_HELPER_ROW: usize = RUST_TEST_ATTRIBUTE_LINES + BARE_LONG_FUNCTION_LINES + 1;
 
-/// Acceptance: the shipped Rust complexity tool rule REPORTS a long test
+/// Acceptance: the shipped Rust function-length tool rule REPORTS a long test
 /// function, and the helper beside it, through the real clippy pipeline.
 ///
-/// Both prompt rules this rule supersedes exempt a test, and
-/// `cognitive-complexity` names the DEFINITION as the mark: "A complex helper
-/// named `build_request` in a file called `foo_test.rs` is still a complex
-/// function and is still listed."
+/// `function-length`, the prompt rule this rule supersedes, exempts a test, and
+/// it names the DEFINITION as the mark: "A complex helper named
+/// `build_request` in a file called `foo_test.rs` is still a long function and
+/// is still listed."
 ///
 /// Clippy holds no flag and no configuration key that reads `#[test]`, so the
 /// run reproduces none of that carve-out and the author answers it with the
 /// annotation. `--all-targets` is what puts the test target in front of the
-/// gates. Dropping the flag would read the TARGET, which is the mark the prompt
+/// gate. Dropping the flag would read the TARGET, which is the mark the prompt
 /// rule forbids: it drops the helper beside the test, and it drops every
 /// `#[cfg(test)]` module as well. This test holds both rows, so a run that
 /// silenced either half answers another list.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_reports_a_test_function_and_its_helper() {
+fn the_shipped_rust_function_length_tool_rule_reports_a_test_function_and_its_helper() {
     let source = format!(
         "{}{}",
         long_rust_function(RUST_TEST_ATTRIBUTE, "test_table"),
         long_rust_function("", "build_request")
     );
 
-    let reported = rust_complexity_findings(&[
-        (COMPLEX_LIB_PATH, EMPTY_PROBE_LIB_RS),
+    let reported = rust_function_length_findings(&[
+        (RUST_PROBE_LIB_PATH, EMPTY_PROBE_LIB_RS),
         (RUST_PROBE_INTEGRATION_TEST_PATH, &source),
     ]);
 
@@ -279,7 +261,7 @@ fn the_shipped_rust_complexity_tool_rule_reports_a_test_function_and_its_helper(
             probe_row(RUST_PROBE_INTEGRATION_TEST_PATH, RUST_TEST_FUNCTION_ROW),
             probe_row(RUST_PROBE_INTEGRATION_TEST_PATH, RUST_TEST_HELPER_ROW),
         ]),
-        "`--all-targets` puts the test target in front of the gates, and no clippy key \
+        "`--all-targets` puts the test target in front of the gate, and no clippy key \
          reads `#[test]`, so the test function and the helper beside it both report"
     );
 }
@@ -321,27 +303,27 @@ const RUST_GENERATED_HEAD_LINES: usize = 2;
 /// would name the same row of [`RUST_GENERATED_ANNOTATED_PATH`].
 const RUST_GENERATED_FUNCTION_ROW: usize = RUST_GENERATED_HEAD_LINES + 1;
 
-/// Acceptance: the shipped Rust complexity tool rule REPORTS a checked-in
+/// Acceptance: the shipped Rust function-length tool rule REPORTS a checked-in
 /// generated file, and drops the one whose module declaration carries the
 /// annotation, through the real clippy pipeline.
 ///
-/// Both prompt rules this rule supersedes exempt generated code. Rust states no
-/// generated-file header convention, and clippy reads no header: the two module
-/// files here each carry the header two generators write, and the bare one
-/// still reports. A header test in the script would name the first lines of one
-/// generator and never a convention, which is why the sibling `complexity-go`
-/// makes such a test and this rule does not.
+/// `function-length`, the prompt rule this rule supersedes, exempts generated
+/// code. Rust states no generated-file header convention, and clippy reads no
+/// header: the two module files here each carry the header two generators
+/// write, and the bare one still reports. A header test in the script would
+/// name the first lines of one generator and never a convention, which is why
+/// the sibling `function-length-go` makes such a test and this rule does not.
 ///
 /// The author answers this carve-out at the `mod` declaration, which stands in
 /// the PARENT file and which the generator never writes again. The two module
 /// files hold the same bytes, so the annotation is the one difference between
 /// the file that reports and the file that stays silent.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_reports_a_generated_file() {
-    let generated = long_rust_function(RUST_GENERATED_HEAD, "fold_grid");
+fn the_shipped_rust_function_length_tool_rule_reports_a_generated_file() {
+    let generated = long_rust_function(RUST_GENERATED_HEAD, LONG_PROBE_FUNCTION_NAME);
 
-    let reported = rust_complexity_findings(&[
-        (COMPLEX_LIB_PATH, RUST_GENERATED_ROOT_RS),
+    let reported = rust_function_length_findings(&[
+        (RUST_PROBE_LIB_PATH, RUST_GENERATED_ROOT_RS),
         (RUST_GENERATED_BARE_PATH, &generated),
         (RUST_GENERATED_ANNOTATED_PATH, &generated),
     ]);
@@ -359,35 +341,36 @@ fn the_shipped_rust_complexity_tool_rule_reports_a_generated_file() {
 
 /// A Rust library the compiler refuses: the body of `broken` answers a string
 /// where its signature states an integer.
-const RUST_COMPLEXITY_UNCOMPILABLE_SOURCE: &str = concat!(
+const RUST_UNCOMPILABLE_SOURCE: &str = concat!(
     "//! A probe crate the compiler refuses.\n",
     "pub fn broken() -> i32 { \"not an integer\" }\n",
 );
 
 /// The line the script writes when clippy read the workspace but never linted
 /// part of it.
-const RUST_UNLINTABLE_LINE: &str = "complexity-rust: cargo clippy could not lint the workspace";
+const RUST_UNLINTABLE_LINE: &str =
+    "function-length-rust: cargo clippy could not lint the workspace";
 
 /// What the one error of a workspace cargo cannot lint must name: the script's
 /// own line, and cargo's own words beside it.
-const RUST_COMPLEXITY_UNCOMPILABLE_ERROR: &[&str] = &[RUST_UNLINTABLE_LINE, "could not compile"];
+const RUST_UNCOMPILABLE_ERROR: &[&str] = &[RUST_UNLINTABLE_LINE, "could not compile"];
 
-/// The `complexity-rust` probe over a workspace that does not compile.
-const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+/// The `function-length-rust` probe over a workspace that does not compile.
+const RUST_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
         project_types: RUST_PROJECT_TYPES,
-        rule: RUST_COMPLEXITY_RULE,
-        expected: RUST_COMPLEXITY_UNCOMPILABLE_ERROR,
+        rule: RUST_FUNCTION_LENGTH_RULE,
+        expected: RUST_UNCOMPILABLE_ERROR,
     },
-    prompt_rule: COGNITIVE_COMPLEXITY_PROMPT_RULE,
+    prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
     change_purpose: "a Rust workspace the compiler refuses",
-    path: COMPLEX_LIB_PATH,
-    source: Some(RUST_COMPLEXITY_UNCOMPILABLE_SOURCE.as_bytes()),
+    path: RUST_PROBE_LIB_PATH,
+    source: Some(RUST_UNCOMPILABLE_SOURCE.as_bytes()),
     support: RUST_PROBE_SUPPORT_FILES,
 };
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace it
-/// cannot compile, through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule BREAKS on a workspace
+/// it cannot compile, through the real clippy pipeline.
 ///
 /// `cargo clippy` lints nothing when the workspace does not compile: it writes
 /// its own errors to stderr, writes no lint message, and exits nonzero. An
@@ -397,8 +380,8 @@ const RUST_COMPLEXITY_UNCOMPILABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
 /// script now writes the report to a file, tests the status, and exits 1 with a
 /// line that names the rule.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_it_cannot_compile() {
-    verify_shipped_run_breaks(&RUST_COMPLEXITY_UNCOMPILABLE_PROBE);
+fn the_shipped_rust_function_length_tool_rule_breaks_on_a_workspace_it_cannot_compile() {
+    verify_shipped_run_breaks(&RUST_UNCOMPILABLE_PROBE);
 }
 
 /// The root manifest of a probe workspace that holds two members.
@@ -425,7 +408,7 @@ const RUST_BAD_MEMBER_MANIFEST_PATH: &str = "bad/Cargo.toml";
 /// Where the library of the member the compiler refuses stands.
 const RUST_BAD_MEMBER_LIB_PATH: &str = "bad/src/lib.rs";
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace
+/// Acceptance: the shipped Rust function-length tool rule BREAKS on a workspace
 /// whose MEMBER cannot compile, even when another member fills the findings
 /// file, through the real clippy pipeline.
 ///
@@ -437,21 +420,21 @@ const RUST_BAD_MEMBER_LIB_PATH: &str = "bad/src/lib.rs";
 /// and exited 0, and the long function of `bad/src/lib.rs` was read as clean.
 ///
 /// The RAW report holds what the filtered file drops. A member that fails its
-/// type check writes a rustc error code, `E0308` here, and clippy runs the four
-/// lints only after that type check. So the script tests the raw report for a
-/// rustc error code, and the member that compiles cannot hide the member that
-/// does not.
+/// type check writes a rustc error code, `E0308` here, and clippy runs the
+/// length gate only after that type check. So the script tests the raw report
+/// for a rustc error code, and the member that compiles cannot hide the member
+/// that does not.
 ///
 /// Both members hold the same long function, so the member that compiles is the
 /// one that fills the findings file.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_member_it_cannot_compile() {
+fn the_shipped_rust_function_length_tool_rule_breaks_on_a_workspace_member_it_cannot_compile() {
     let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let good = long_rust_function("", "fold_grid");
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let good = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let bad = format!(
-        "{RUST_COMPLEXITY_UNCOMPILABLE_SOURCE}{}",
-        long_rust_function("", "fold_grid")
+        "{RUST_UNCOMPILABLE_SOURCE}{}",
+        long_rust_function("", LONG_PROBE_FUNCTION_NAME)
     );
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_TWO_MEMBER_ROOT_MANIFEST),
@@ -462,7 +445,7 @@ fn the_shipped_rust_complexity_tool_rule_breaks_on_a_workspace_member_it_cannot_
     ];
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
-    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
         .expect_err("a workspace member the compiler refuses must break the run");
 
     let detail = failure.to_string();
@@ -497,10 +480,10 @@ const RUST_WORKING_BUILD_SCRIPT: &str = "fn main() {}\n";
 /// The line the script writes when cargo compiled a build script and never ran
 /// it, so clippy never linted the crate that build script serves.
 const RUST_BUILD_SCRIPT_BROKEN_LINE: &str =
-    "complexity-rust: a build script did not run, so clippy did not lint every crate";
+    "function-length-rust: a build script did not run, so clippy did not lint every crate";
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS on a package whose
-/// BUILD SCRIPT breaks, through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule BREAKS on a package
+/// whose BUILD SCRIPT breaks, through the real clippy pipeline.
 ///
 /// A build script that breaks is a fourth reason cargo exits nonzero, beside a
 /// run cargo could not make, a crate that fails its type check, and a lint at
@@ -517,18 +500,18 @@ const RUST_BUILD_SCRIPT_BROKEN_LINE: &str =
 /// cargo writes one `build-script-executed` entry for every build script it
 /// RAN, and that entry is what a broken build script leaves out.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_breaks_on_a_build_script_that_breaks() {
+fn the_shipped_rust_function_length_tool_rule_breaks_on_a_build_script_that_breaks() {
     let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let source = long_rust_function("", "fold_grid");
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_BUILD_SCRIPT_MANIFEST),
         (RUST_BUILD_SCRIPT_PATH, RUST_BROKEN_BUILD_SCRIPT),
-        (COMPLEX_LIB_PATH, source.as_str()),
+        (RUST_PROBE_LIB_PATH, source.as_str()),
     ];
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
-    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
         .expect_err("a build script that breaks must break the run");
 
     let detail = failure.to_string();
@@ -538,28 +521,28 @@ fn the_shipped_rust_complexity_tool_rule_breaks_on_a_build_script_that_breaks() 
     );
 }
 
-/// Acceptance: the shipped Rust complexity tool rule MEASURES a package whose
-/// build script RUNS, through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule MEASURES a package
+/// whose build script RUNS, through the real clippy pipeline.
 ///
 /// This is the control of the test above. The two packages hold the same
 /// manifest and the same library, and the build script is the one difference,
 /// so a gate that broke this run would break every package that carries a
-/// build script. This repository carries eight of them.
+/// build script. This repository carries fifteen of them.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_measures_a_package_beside_a_build_script_that_runs() {
-    let source = long_rust_function("", "fold_grid");
+fn the_shipped_rust_function_length_tool_rule_measures_a_package_beside_a_build_script_that_runs() {
+    let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
 
-    let reported = rust_complexity_findings_under(
+    let reported = rust_function_length_findings_under(
         RUST_BUILD_SCRIPT_MANIFEST,
         &[
             (RUST_BUILD_SCRIPT_PATH, RUST_WORKING_BUILD_SCRIPT),
-            (COMPLEX_LIB_PATH, &source),
+            (RUST_PROBE_LIB_PATH, &source),
         ],
     );
 
     assert_eq!(
         reported,
-        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_BARE_LONG_FUNCTION_ROW)]),
+        sorted_names(&[probe_row(RUST_PROBE_LIB_PATH, RUST_BARE_LONG_FUNCTION_ROW)]),
         "a build script that runs leaves the run measured, so the finding must stand"
     );
 }
@@ -573,22 +556,22 @@ const RUST_BAD_MEMBER_BUILD_MANIFEST: &str = concat!(
 /// Where the build script of that member stands.
 const RUST_BAD_MEMBER_BUILD_SCRIPT_PATH: &str = "bad/build.rs";
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace
+/// Acceptance: the shipped Rust function-length tool rule BREAKS on a workspace
 /// whose MEMBER holds a build script that breaks, even when another member
 /// fills the findings file, through the real clippy pipeline.
 ///
 /// This rule states `scope: workspace`, and this repository holds more than 20
-/// members and eight build scripts. Measured with clippy 0.1.97 over this
+/// members and fifteen build scripts. Measured with clippy 0.1.97 over this
 /// shape: the earlier gate wrote `good/src/lib.rs:1` alone and exited 0, and
 /// the long function of `bad/src/lib.rs` was read as clean.
 ///
 /// Both members hold the same long function, so the member that compiles is
 /// the one that fills the findings file.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_breaks_on_a_member_build_script_that_breaks() {
+fn the_shipped_rust_function_length_tool_rule_breaks_on_a_member_build_script_that_breaks() {
     let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let source = long_rust_function("", "fold_grid");
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_TWO_MEMBER_ROOT_MANIFEST),
         (RUST_GOOD_MEMBER_MANIFEST_PATH, RUST_GOOD_MEMBER_MANIFEST),
@@ -602,7 +585,7 @@ fn the_shipped_rust_complexity_tool_rule_breaks_on_a_member_build_script_that_br
     ];
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
-    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
         .expect_err("a member build script that breaks must break the run");
 
     let detail = failure.to_string();
@@ -626,7 +609,7 @@ const RUST_GOOD_MEMBER_DENY_MANIFEST: &str = concat!(
     "\n[lints]\nworkspace = true\n",
 );
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS on a workspace
+/// Acceptance: the shipped Rust function-length tool rule BREAKS on a workspace
 /// whose member holds a build script that breaks, BESIDE a lint at deny level
 /// in another member, through the real clippy pipeline.
 ///
@@ -641,11 +624,12 @@ const RUST_GOOD_MEMBER_DENY_MANIFEST: &str = concat!(
 /// The build script entries answer the shape on their own: cargo compiled the
 /// build script of `bad` and never ran it, whatever the other member reported.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_breaks_on_a_broken_build_script_beside_a_denied_lint() {
+fn the_shipped_rust_function_length_tool_rule_breaks_on_a_broken_build_script_beside_a_denied_lint()
+{
     let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_COMPLEXITY_RULE);
-    let good = long_rust_function(DENY_LEVEL_UNWRAP_LINE, "fold_grid");
-    let bad = long_rust_function("", "fold_grid");
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let good = long_rust_function(DENY_LEVEL_UNWRAP_LINE, LONG_PROBE_FUNCTION_NAME);
+    let bad = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_TWO_MEMBER_DENY_ROOT_MANIFEST),
         (
@@ -662,7 +646,7 @@ fn the_shipped_rust_complexity_tool_rule_breaks_on_a_broken_build_script_beside_
     ];
     let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
 
-    let failure = shipped_script_findings(&loader, RUST_COMPLEXITY_RULE, &staged, &paths)
+    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
         .expect_err("a build script that breaks must break the run, whatever else reported");
 
     let detail = failure.to_string();
@@ -695,8 +679,8 @@ const DENY_LEVEL_UNWRAP_LINES: usize = 1;
 /// stands above the long function.
 const RUST_DENY_LEVEL_ROW: usize = DENY_LEVEL_UNWRAP_LINES + 1;
 
-/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
-/// stands a clippy lint at deny level, through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule MEASURES a workspace
+/// that stands a clippy lint at deny level, through the real clippy pipeline.
 ///
 /// `cargo clippy` exits nonzero for two different reasons. The tool could not
 /// lint the workspace, and the tool linted the workspace correctly while a lint
@@ -706,47 +690,51 @@ const RUST_DENY_LEVEL_ROW: usize = DENY_LEVEL_UNWRAP_LINES + 1;
 /// Measured with clippy 0.1.97 over this probe: cargo exits 101, writes
 /// `error: could not compile` to stderr, and writes
 /// `clippy::too_many_lines src/lib.rs:2 this function has too many lines
-/// (300/250)` into the report. So the script must test the REPORT beside the
+/// (302/250)` into the report. So the script must test the REPORT beside the
 /// status, which is what `builtin/validators/README.md` states for a status
 /// two shapes share.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_a_deny_level_lint() {
-    let source = long_rust_function(DENY_LEVEL_UNWRAP_LINE, "long_defaults");
+fn the_shipped_rust_function_length_tool_rule_measures_a_workspace_beside_a_deny_level_lint() {
+    let source = long_rust_function(DENY_LEVEL_UNWRAP_LINE, LONG_PROBE_FUNCTION_NAME);
 
-    let reported =
-        rust_complexity_findings_under(DENY_LEVEL_PACKAGE_MANIFEST, &[(COMPLEX_LIB_PATH, &source)]);
+    let reported = rust_function_length_findings_under(
+        DENY_LEVEL_PACKAGE_MANIFEST,
+        &[(RUST_PROBE_LIB_PATH, &source)],
+    );
 
     assert_eq!(
         reported,
-        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_DENY_LEVEL_ROW)]),
+        sorted_names(&[probe_row(RUST_PROBE_LIB_PATH, RUST_DENY_LEVEL_ROW)]),
         "a lint at deny level makes cargo exit nonzero for a workspace it DID lint, so the \
          run must keep the finding the report holds"
     );
 }
 
-/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
-/// stands a clippy lint at deny level and holds NO finding of the four gates,
-/// through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule MEASURES a workspace
+/// that stands a clippy lint at deny level and holds NO finding of the length
+/// gate, through the real clippy pipeline.
 ///
 /// This is the clean half of the deny-level shape, and a gate that reads the
 /// findings file answers it wrong. cargo exits 101 for the denied lint, the
-/// findings file is empty because the workspace is clean at the four gates, and
-/// a gate that reads that file calls the run broken. Measured over this probe:
-/// the earlier gate wrote `complexity-rust: cargo clippy could not lint the
-/// workspace` and exited 1, for a workspace clippy linted from end to end.
+/// findings file is empty because the workspace is clean at the length gate,
+/// and a gate that reads that file calls the run broken. Measured over this
+/// probe: the earlier gate wrote `function-length-rust: cargo clippy could not
+/// lint the workspace` and exited 1, for a workspace clippy linted from end to
+/// end.
 ///
 /// The correct answer is no finding at exit 0, and this test holds the script
 /// to it.
 #[test]
-fn the_shipped_rust_complexity_tool_rule_measures_a_clean_workspace_beside_a_deny_level_lint() {
-    let reported = rust_complexity_findings_under(
+fn the_shipped_rust_function_length_tool_rule_measures_a_clean_workspace_beside_a_deny_level_lint()
+{
+    let reported = rust_function_length_findings_under(
         DENY_LEVEL_PACKAGE_MANIFEST,
-        &[(COMPLEX_LIB_PATH, DENY_LEVEL_UNWRAP_LINE)],
+        &[(RUST_PROBE_LIB_PATH, DENY_LEVEL_UNWRAP_LINE)],
     );
 
     assert!(
         reported.is_empty(),
-        "a workspace clippy linted from end to end is clean at the four gates, whatever \
+        "a workspace clippy linted from end to end is clean at the length gate, whatever \
          status a denied lint gives it; got {reported:?}"
     );
 }
@@ -769,61 +757,80 @@ const UNUSED_VARIABLE_LINES: usize = 1;
 /// holds the unused variable stands above the long function.
 const RUST_DENY_FLAGS_ROW: usize = UNUSED_VARIABLE_LINES + 1;
 
-/// Acceptance: the shipped Rust complexity tool rule MEASURES a workspace that
-/// raises every warning to an error through `RUSTFLAGS`, through the real
+/// Acceptance: the shipped Rust function-length tool rule MEASURES a workspace
+/// that raises every warning to an error through `RUSTFLAGS`, through the real
 /// clippy pipeline.
 ///
 /// `RUSTFLAGS="-D warnings"` is the third shape that makes cargo exit nonzero
 /// for a workspace clippy DID lint, beside a crate-level `#![deny(...)]` and a
 /// `[lints.clippy]` table. Measured with clippy 0.1.97 over this probe: cargo
 /// exits 101, the raw report holds the error code `unused_variables`, and the
-/// four gates arrive at level `error` rather than `warning`.
+/// length gate arrives at level `error` rather than `warning`.
 ///
 /// The filter selects on the lint CODE, so the finding stands at either level,
 /// and the run must keep it.
 #[test]
 #[serial_test::serial(env)]
-fn the_shipped_rust_complexity_tool_rule_measures_a_workspace_beside_deny_level_flags() {
+fn the_shipped_rust_function_length_tool_rule_measures_a_workspace_beside_deny_level_flags() {
     use swissarmyhammer_common::test_utils::EnvVarGuard;
 
     let source = format!(
         "{UNUSED_VARIABLE_LINE}{}",
-        long_rust_function("", "long_defaults")
+        long_rust_function("", LONG_PROBE_FUNCTION_NAME)
     );
     let _flags = EnvVarGuard::set(RUST_FLAGS_ENV, DENY_EVERY_WARNING_FLAG);
 
-    let reported = rust_complexity_findings(&[(COMPLEX_LIB_PATH, &source)]);
+    let reported = rust_function_length_findings(&[(RUST_PROBE_LIB_PATH, &source)]);
 
     assert_eq!(
         reported,
-        sorted_names(&[probe_row(COMPLEX_LIB_PATH, RUST_DENY_FLAGS_ROW)]),
-        "`RUSTFLAGS=\"-D warnings\"` raises the four gates to level `error` and makes cargo \
+        sorted_names(&[probe_row(RUST_PROBE_LIB_PATH, RUST_DENY_FLAGS_ROW)]),
+        "`RUSTFLAGS=\"-D warnings\"` raises the length gate to level `error` and makes cargo \
          exit nonzero, and the run must keep the finding the report holds"
     );
 }
 
 /// The line the script writes when the filter could not read the report.
-const FILTER_BROKEN_LINE: &str = "complexity-rust: jq could not read the clippy report";
+const FILTER_BROKEN_LINE: &str = "function-length-rust: jq could not read the clippy report";
 
 /// What the one error of a filter that cannot read the report must name.
-const RUST_COMPLEXITY_FILTER_BROKEN_ERROR: &[&str] = &[FILTER_BROKEN_LINE];
+const RUST_FILTER_BROKEN_ERROR: &[&str] = &[FILTER_BROKEN_LINE];
+
+/// The healthy probe package, as the `&'static` bytes [`ShippedStagedTree`]
+/// carries.
+///
+/// [`long_rust_function`] writes its 300 body lines at run time rather than as
+/// a literal, so the tree is built one time and held in a `static` for the life
+/// of the process, which is what `&'static` asks of it.
+fn long_function_probe_tree() -> &'static [(&'static str, &'static str)] {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static TREE: std::sync::OnceLock<[(&'static str, &'static str); 2]> =
+        std::sync::OnceLock::new();
+
+    TREE.get_or_init(|| {
+        let source = SOURCE.get_or_init(|| long_rust_function("", LONG_PROBE_FUNCTION_NAME));
+        [
+            (RUST_PROBE_MANIFEST_PATH, LONG_PACKAGE_MANIFEST),
+            (RUST_PROBE_LIB_PATH, source.as_str()),
+        ]
+    })
+}
 
 /// The healthy probe package, read with a filter that cannot run.
-const RUST_COMPLEXITY_FILTER_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
-    run: ShippedRun {
-        project_types: RUST_PROJECT_TYPES,
-        rule: RUST_COMPLEXITY_RULE,
-        expected: RUST_COMPLEXITY_FILTER_BROKEN_ERROR,
-    },
-    staged: &[
-        (RUST_PROBE_MANIFEST_PATH, COMPLEX_PACKAGE_MANIFEST),
-        (COMPLEX_LIB_PATH, COMPLEX_LIB_RS),
-    ],
-    reason: "a filter that cannot read the report must break the run",
-};
+fn rust_filter_broken_probe() -> ShippedStagedTree {
+    ShippedStagedTree {
+        run: ShippedRun {
+            project_types: RUST_PROJECT_TYPES,
+            rule: RUST_FUNCTION_LENGTH_RULE,
+            expected: RUST_FILTER_BROKEN_ERROR,
+        },
+        staged: long_function_probe_tree(),
+        reason: "a filter that cannot read the report must break the run",
+    }
+}
 
-/// Acceptance: the shipped Rust complexity tool rule BREAKS when the filter
-/// cannot read the clippy report, through the real clippy pipeline.
+/// Acceptance: the shipped Rust function-length tool rule BREAKS when the
+/// filter cannot read the clippy report, through the real clippy pipeline.
 ///
 /// The filter step once ended in a pipe to `sort -u`, and the script writes
 /// `set -e` with no `pipefail`. A shell pipeline takes the status of its last
@@ -838,6 +845,6 @@ const RUST_COMPLEXITY_FILTER_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]
-fn the_shipped_rust_complexity_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
-    verify_shipped_tree_breaks_without(&RUST_COMPLEXITY_FILTER_BROKEN_PROBE, FILTER_BINARY_NAME);
+fn the_shipped_rust_function_length_tool_rule_breaks_when_the_filter_cannot_read_the_report() {
+    verify_shipped_tree_breaks_without(&rust_filter_broken_probe(), FILTER_BINARY_NAME);
 }

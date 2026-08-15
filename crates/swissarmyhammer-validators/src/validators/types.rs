@@ -717,11 +717,10 @@ impl RuleSetManifest {
 /// The prompt rules a tool rule replaces when its tool is healthy.
 ///
 /// Frontmatter takes one name (`supersedes: missing-docs`) or a list
-/// (`supersedes: [cognitive-complexity, function-length]`). One tool run can
-/// answer more than one prompt rule — a single `cargo clippy` run decides both
-/// cognitive complexity and function length — so the value is a list of names,
-/// and one name is the short spelling of a list of one. A prompt rule names
-/// none, so its list is empty.
+/// (`supersedes: [function-length, missing-docs]`). One tool run can answer
+/// more than one prompt rule, so the value is a list of names, and one name is
+/// the short spelling of a list of one. A prompt rule names none, so its list
+/// is empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(from = "SupersedesFrontmatter", into = "Vec<String>")]
 pub struct Supersedes(Vec<String>);

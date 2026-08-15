@@ -2137,9 +2137,9 @@ mod tests {
             vec![],
             vec![ToolFallback::for_test(
                 "hygiene",
-                "complexity-rust",
-                &["cognitive-complexity", "function-length"],
-                "tool missing: no clippy",
+                "pair-check",
+                &["function-length", "missing-docs"],
+                "tool missing: no linter",
             )],
         );
 
@@ -2148,7 +2148,7 @@ mod tests {
         assert!(
             report
                 .markdown
-                .contains("prompt rules 'cognitive-complexity', 'function-length' ran instead"),
+                .contains("prompt rules 'function-length', 'missing-docs' ran instead"),
             "the note must name every superseded prompt rule: {}",
             report.markdown
         );

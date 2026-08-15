@@ -170,8 +170,8 @@ The trade is stated rather than hidden: a function whose length comes from long
 expressions rather than from statements passes. `prometheus/tsdb/head_wal.go`
 `loadWAL` runs 396 lines on 122 statements and this gate is silent on it. A
 missed finding leaves the review where it was, and a wrong finding is a
-requirement to change correct code, which is the same trade `complexity-swift`
-records for `ignores_case_statements`.
+requirement to change correct code, which is the trade this set takes wherever
+a gate would otherwise make a suppression mandatory on correct code.
 
 ## Why the line limit is 10000
 
@@ -306,10 +306,10 @@ reports and the author answers it with the annotation below.
 ### A test, which the run drops by the DEFINITION
 
 `function-length` exempts "Functions explicitly marked as tests", and
-`cognitive-complexity` names the mark for the whole set: "Identify a test from
-its attribute or framework naming convention at the **definition**, never from
-the file name. A complex helper named `build_request` in a file called
-`foo_test.rs` is still a complex function and is still listed."
+this set names the mark: identify a test from its attribute or framework naming
+convention at the **definition**, never from the file name. A complex helper
+named `build_request` in a file called `foo_test.rs` is still a long function
+and is still listed.
 
 Go states that convention in `go test`: a test is a function named `TestXxx`,
 `BenchmarkXxx`, `FuzzXxx` or `ExampleXxx`, where the rune after the prefix is
@@ -334,7 +334,7 @@ fewer. The exclusion covers the remainder. Over the corpus, at the gate of 160:
 The four it drops are named test functions of 191 to 258 statements. A path
 exclusion alone would have dropped 142 of the old gate's 161 findings, 11 of
 them helpers in test files that the prompt rule still lists — the trade
-`complexity-go` refuses.
+`function-length-python` refuses for the same shape.
 
 Measured with golangci-lint 2.12.2 on a probe module, at the gate of 160, over
 one function of 170 statements in each shape:
@@ -367,8 +367,7 @@ A `rules` list does not replace it: measured over two files that hold the same
 function of 170 statements, one under the header and one without it, the run
 reports the plain file alone. The acceptance test
 `the_shipped_go_function_length_tool_rule_skips_a_generated_file` holds both
-positions, and `complexity-go` records the same measurement for the three Go
-rules of this set.
+positions.
 
 An author cannot answer this carve-out with the annotation below. The generator
 writes the file again, and the annotation goes away each time. That is why the

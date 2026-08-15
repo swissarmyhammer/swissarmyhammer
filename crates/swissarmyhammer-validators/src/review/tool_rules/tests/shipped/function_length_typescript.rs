@@ -1,4 +1,4 @@
-//! Acceptance tests for the shipped `complexity-typescript` tool rule.
+//! Acceptance tests for the shipped `function-length-typescript` tool rule.
 //!
 //! Each test drives the SHIPPED script, or the SHIPPED eslint config, over
 //! a probe repository and reads what the real eslint reported.
@@ -6,74 +6,69 @@
 //! One module stands for each language of the family, because one file for
 //! the whole family runs past the byte cap a review prompt holds.
 
-use super::complexity::complexity_work;
+use super::function_length::function_length_work;
 use super::*;
 
-/// The materialized name of the `complexity-typescript` fail fixture.
-const TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE: &str = "complexity-typescript.fail.ts";
+use std::sync::LazyLock;
+
+/// The materialized name of the `function-length-typescript` fail fixture.
+const TYPESCRIPT_LENGTH_FAIL_FIXTURE: &str = "function-length-typescript.fail.ts";
 
 /// Where the fail fixture stands inside the probe repository, as the
 /// work-list holds it.
-const TYPESCRIPT_COMPLEXITY_FIXTURE_PATH: &str = "src/complexity-typescript-fail.ts";
+const TYPESCRIPT_LENGTH_FIXTURE_PATH: &str = "src/function-length-typescript-fail.ts";
 
-/// The start of the source line each guard in the `complexity-typescript`
+/// The start of the source line each guard in the `function-length-typescript`
 /// fail fixture is reported at.
 ///
-/// Both gates report at the head of the function they measure, and for a
-/// method and for an accessor that head is the member's NAME. Each entry is
-/// therefore the text the gate points at, not the name alone.
-const TYPESCRIPT_COMPLEXITY_FAIL_GUARDS: &[&str] = &[
-    "function foldGrid(",
-    "function mixState(",
-    "foldRows(",
-    "get band(",
-    "context.run(",
-    "context.each(rows)(",
-    "context.for(rows)(",
-    "step(\"build the grid\", (",
+/// The gate reports at the head of the function it measures, and for a method
+/// that head is the member's NAME. Each entry is therefore the text the gate
+/// points at, and not the declared name alone.
+const TYPESCRIPT_LENGTH_FAIL_GUARDS: &[&str] = &[
+    "export function foldReadings(",
+    "public fold(",
+    "export const foldHeld = (",
 ];
 
-/// The `complexity-typescript` fail fixture, and every guard the real eslint
-/// pipeline must measure inside it.
-const TYPESCRIPT_COMPLEXITY_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
+/// The `function-length-typescript` fail fixture, and every guard the real
+/// eslint pipeline must measure inside it.
+const TYPESCRIPT_LENGTH_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
     run: ShippedRun {
-        project_types: &["nodejs"],
-        rule: TYPESCRIPT_COMPLEXITY_RULE,
-        expected: TYPESCRIPT_COMPLEXITY_FAIL_GUARDS,
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_FUNCTION_LENGTH_RULE,
+        expected: TYPESCRIPT_LENGTH_FAIL_GUARDS,
     },
-    fixture: TYPESCRIPT_COMPLEXITY_FAIL_FIXTURE,
-    path: TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+    fixture: TYPESCRIPT_LENGTH_FAIL_FIXTURE,
+    path: TYPESCRIPT_LENGTH_FIXTURE_PATH,
     support: NO_SUPPORT_FIXTURES,
     noun: "guard",
 };
 
-/// Acceptance: the shipped TypeScript complexity tool rule measures every
+/// Acceptance: the shipped TypeScript function-length tool rule measures every
 /// guard its fail fixture holds, through the real eslint pipeline.
 ///
-/// A guard is held to the SOURCE LINE its finding stands on, because both
-/// gates report at the head of the function they measure, and that head is a
-/// member's name for a method and for an accessor.
+/// A guard is held to the SOURCE LINE its finding stands on. The tool names the
+/// function it measured for two of the three and names none for the third —
+/// measured, it writes `Arrow function has too many lines (304).` — so the
+/// position is the only text that tells one finding from another.
 ///
-/// Six of the eight are the shapes a carve-out too broad in one direction
-/// loses in silence, and all six stand inside a `describe` block. A class
-/// method and an accessor report at their NAME, which stands outside the
-/// function node the gates measure, so a lookup over the function ranges
-/// alone climbs to the test callback and exempts them. `context.run(...)`,
-/// `context.each(rows)(...)` and `context.for(rows)(...)` are calls whose
-/// root identifier is a test-framework name and which are not test-framework
-/// calls: a mark that reads the root identifier alone exempts the first, and
-/// a mark that reads any pair of a test name and a modifier name exempts the
-/// other two. A bare `step(...)` is a call to a name only Playwright spells,
-/// and Playwright spells it `test.step` alone, so a mark that takes `step`
-/// with no root exempts a build step, a wizard step and a saga step.
+/// The three guards are the three shapes the gate must reach, and the fixture
+/// carries each one at 302 body lines against the gate of 250: an exported
+/// function declaration, a class method, and an arrow function bound to a
+/// `const`. The method is the shape a lookup too narrow loses in silence,
+/// because it reports at its NAME, which stands before the `FunctionExpression`
+/// the gate measures; a lookup over the function ranges alone therefore misses
+/// it and climbs to whatever function stands around it. The pass fixture holds
+/// the same three shapes UNDER the gate, so the pair answers for the gate
+/// itself rather than for a shape the tool cannot read at all.
 #[test]
-fn the_shipped_typescript_complexity_tool_rule_measures_every_fail_fixture_guard() {
+fn the_shipped_typescript_function_length_tool_rule_measures_every_fail_fixture_guard() {
     verify_shipped_fail_fixture_reports_each(
-        &TYPESCRIPT_COMPLEXITY_FAIL_PROBE,
+        &TYPESCRIPT_LENGTH_FAIL_PROBE,
         |content| {
-            complexity_work(
-                TYPESCRIPT_COMPLEXITY_RULE,
-                TYPESCRIPT_COMPLEXITY_FIXTURE_PATH,
+            function_length_work(
+                TYPESCRIPT_FUNCTION_LENGTH_RULE,
+                TYPESCRIPT_LENGTH_FIXTURE_PATH,
                 content,
             )
         },
@@ -171,9 +166,9 @@ const TYPESCRIPT_NOT_AN_OPENER: &[&str] = &["mocha", "jest", "expect", "run", "s
 /// The one framework function that needs a framework root before it.
 const TYPESCRIPT_ROOTED_CALL: &[&str] = &["step"];
 
-/// Acceptance: the shipped `complexity-typescript` config READS its framework
-/// function names out of the resolved node module tree, and the written
-/// mirror it falls back to says the same thing.
+/// Acceptance: the shipped `function-length-typescript` config READS its
+/// framework function names out of the resolved node module tree, and the
+/// written mirror it falls back to says the same thing.
 ///
 /// Three review rounds each found a hand-written list of framework spellings
 /// wrong in one direction or the other. The list is therefore read: from
@@ -190,16 +185,16 @@ const TYPESCRIPT_ROOTED_CALL: &[&str] = &["step"];
 /// read holds every name the two review rounds named, holds none of the five
 /// names that open no test, and marks `step` as needing a root.
 #[test]
-fn the_shipped_typescript_complexity_config_reads_its_framework_names() {
+fn the_shipped_typescript_function_length_config_reads_its_framework_names() {
     let loader = builtin_loader();
     let project_types = ["nodejs"];
-    require_tool_installed(&loader, &project_types, TYPESCRIPT_COMPLEXITY_RULE);
+    require_tool_installed(&loader, &project_types, TYPESCRIPT_FUNCTION_LENGTH_RULE);
     let source = std::fs::read_to_string(shipped_asset(
         &loader,
         &RULE_SOURCE_ASSET,
-        TYPESCRIPT_COMPLEXITY_RULE,
+        TYPESCRIPT_FUNCTION_LENGTH_RULE,
     ))
-    .expect("read the shipped TypeScript complexity rule");
+    .expect("read the shipped TypeScript function-length rule");
     let (resolve, config) = shipped_eslint_config(&source);
     let probe = tempfile::tempdir().unwrap();
     let script = probe.path().join("read-framework-names.cjs");
@@ -272,52 +267,80 @@ struct FrameworkNames {
     rooted: Vec<String>,
 }
 
-/// A TypeScript function whose innermost block stands 6 levels deep. The
-/// published Sonar algorithm adds one for a block and one more for each level
-/// that block stands under, so the cognitive complexity is 21 against the
-/// gate of 15.
-const TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE: &str = r#"export function branch(value: number): number {
-  if (value > 0) {
-    if (value > 0) {
-      if (value > 0) {
-        if (value > 0) {
-          if (value > 0) {
-            if (value > 0) {
-              value -= 1;
-            }
-          }
-        }
-      }
+/// One body line of the probe function the length script is given no path to.
+const TYPESCRIPT_LENGTH_UNREAD_BODY_LINE: &str = "  value += 1;\n";
+
+/// How many body lines that probe function runs.
+///
+/// The last of them is the `return`, so the source repeats
+/// [`TYPESCRIPT_LENGTH_UNREAD_BODY_LINE`] one time fewer. eslint counts the
+/// signature line and the closing brace beside the body, so the function
+/// answers 302 against the gate of 250 — the number the tool itself wrote,
+/// measured: `Function 'branch' has too many lines (302).`
+const TYPESCRIPT_LENGTH_UNREAD_BODY_LINES: usize = 300;
+
+/// A TypeScript function of [`TYPESCRIPT_LENGTH_UNREAD_BODY_LINES`] body lines,
+/// which stands over the length gate of 250.
+///
+/// The gate measures LINES, so the source is BUILT here rather than written
+/// out. 300 lines of one statement carry no fact a reader needs, and they run
+/// this module past the byte cap a review prompt holds.
+static TYPESCRIPT_LENGTH_UNREAD_SOURCE: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "export function branch(value: number): number {{\n{}  return value;\n}}\n",
+        TYPESCRIPT_LENGTH_UNREAD_BODY_LINE.repeat(TYPESCRIPT_LENGTH_UNREAD_BODY_LINES - 1)
+    )
+});
+
+/// Where the probe repository holds its top-level TypeScript file.
+const TYPESCRIPT_LENGTH_UNREAD_TOP_PATH: &str = "top.ts";
+
+/// Where the probe repository holds its nested TypeScript file.
+///
+/// It stands under two directories, because a tool that reads a default target
+/// of its own walks the whole tree rather than the root alone.
+const TYPESCRIPT_LENGTH_UNREAD_NESTED_PATH: &str = "deep/nested/other.ts";
+
+/// Every TypeScript file staged in the probe repository the function-length
+/// script is given none of.
+static TYPESCRIPT_LENGTH_UNREAD_FILES: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
+    vec![
+        (
+            TYPESCRIPT_LENGTH_UNREAD_TOP_PATH,
+            TYPESCRIPT_LENGTH_UNREAD_SOURCE.as_str(),
+        ),
+        (
+            TYPESCRIPT_LENGTH_UNREAD_NESTED_PATH,
+            TYPESCRIPT_LENGTH_UNREAD_SOURCE.as_str(),
+        ),
+    ]
+});
+
+/// Each finding the TypeScript function-length script reports over the two
+/// files it is given, as `path:line`.
+///
+/// Each probe function opens on the first line of its own file, so each entry
+/// names line 1.
+const TYPESCRIPT_LENGTH_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
+
+/// The `function-length-typescript` probe over a run that is given no file.
+///
+/// The staged source is built at run time, so the probe is built here rather
+/// than written as a constant.
+fn typescript_length_empty_run_probe() -> ShippedEmptyRun {
+    ShippedEmptyRun {
+        run: ShippedRun {
+            project_types: NODEJS_PROJECT_TYPES,
+            rule: TYPESCRIPT_FUNCTION_LENGTH_RULE,
+            expected: NO_FINDINGS,
+        },
+        staged: TYPESCRIPT_LENGTH_UNREAD_FILES.as_slice(),
+        with_files: TYPESCRIPT_LENGTH_READ_FINDINGS,
+        reason: READS_ONLY_ITS_ARGUMENTS,
     }
-  }
-  return value;
 }
-"#;
 
-/// Every TypeScript file staged in the probe repository the complexity script
-/// is given none of.
-const TYPESCRIPT_COMPLEXITY_UNREAD_FILES: &[(&str, &str)] = &[
-    ("top.ts", TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE),
-    ("deep/nested/other.ts", TYPESCRIPT_COMPLEXITY_UNREAD_SOURCE),
-];
-
-/// Each finding the TypeScript complexity script reports over the two files
-/// it is given, as `path:line`.
-const TYPESCRIPT_COMPLEXITY_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
-
-/// The `complexity-typescript` probe over a run that is given no file.
-const TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
-    run: ShippedRun {
-        project_types: NODEJS_PROJECT_TYPES,
-        rule: TYPESCRIPT_COMPLEXITY_RULE,
-        expected: NO_FINDINGS,
-    },
-    staged: TYPESCRIPT_COMPLEXITY_UNREAD_FILES,
-    with_files: TYPESCRIPT_COMPLEXITY_READ_FINDINGS,
-    reason: READS_ONLY_ITS_ARGUMENTS,
-};
-
-/// Acceptance: the shipped TypeScript complexity tool rule reads only the
+/// Acceptance: the shipped TypeScript function-length tool rule reads only the
 /// files it is given, through the real eslint pipeline.
 ///
 /// eslint with no path argument reads the working directory, and the config
@@ -327,6 +350,6 @@ const TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 /// exited 0; with the guard it reports none and exits 0. The same script over
 /// the two staged files reports 2.
 #[test]
-fn the_shipped_typescript_complexity_tool_rule_reads_only_the_files_it_is_given() {
-    verify_shipped_run_reads_only_its_arguments(&TYPESCRIPT_COMPLEXITY_EMPTY_RUN_PROBE);
+fn the_shipped_typescript_function_length_tool_rule_reads_only_the_files_it_is_given() {
+    verify_shipped_run_reads_only_its_arguments(&typescript_length_empty_run_probe());
 }

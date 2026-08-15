@@ -126,11 +126,12 @@ Write one name, or a list of names:
     supersedes: missing-docs
 
     supersedes:
-      - cognitive-complexity
       - function-length
+      - missing-docs
 
-One tool run can replace more than one prompt rule. One `cargo clippy` run
-decides cognitive complexity and function length, so that rule names both.
+One tool run can replace more than one prompt rule, and the list is how a rule
+says so. No shipped rule names two today: each shipped tool rule replaces
+exactly one prompt rule.
 
 The `tool` block keys:
 

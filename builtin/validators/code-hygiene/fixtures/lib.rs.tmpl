@@ -15,15 +15,15 @@ pub mod missing_docs_fail;
 #[path = "missing-docs-rust.pass.rs"]
 pub mod missing_docs_pass;
 
-/// The failing fixture of `complexity-rust`: it holds one function over each
-/// gate, so the tool must report both.
-#[path = "complexity-rust.fail.rs"]
-pub mod complexity_fail;
+/// The failing fixture of `function-length-rust`: it holds one free function
+/// and one method over the gate, so the tool must report both.
+#[path = "function-length-rust.fail.rs"]
+pub mod function_length_fail;
 
-/// The passing fixture of `complexity-rust`: the same two shapes under the
-/// gates, so the tool must report nothing.
-#[path = "complexity-rust.pass.rs"]
-pub mod complexity_pass;
+/// The passing fixture of `function-length-rust`: the same two shapes under
+/// the gate, so the tool must report nothing.
+#[path = "function-length-rust.pass.rs"]
+pub mod function_length_pass;
 
 /// The failing fixture of `dead-code-rust`: it holds one unannotated dead item
 /// of every kind, so the compiler must report each one.

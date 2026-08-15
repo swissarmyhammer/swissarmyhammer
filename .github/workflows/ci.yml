@@ -26,7 +26,7 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # The `missing-docs-rust` and `complexity-rust` tool rules check
+          # The `missing-docs-rust` and `function-length-rust` tool rules check
           # `which cargo-clippy jq`, and their tests state that tool as a
           # precondition rather than installing it. A job states the components
           # it needs, the same way the Clippy and Rustfmt jobs do.
@@ -83,7 +83,7 @@ jobs:
         with:
           node-version: 22
       - name: Install the tools the TypeScript rules declare
-        # The exact packages `complexity-typescript`, `magic-numbers-typescript`,
+        # The exact packages `function-length-typescript`, `magic-numbers-typescript`,
         # `missing-docs-typescript` and `dead-code-typescript` state under
         # `install.commands`. The step above gives this job its own global
         # package prefix, so a plugin an earlier run installed is not there.

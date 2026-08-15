@@ -189,9 +189,9 @@ const SHELL_LINE_JOIN: char = '\\';
 /// How many shipped rules state `scope: files`.
 ///
 /// The count is the assertion that a rule added later reaches this guard. A
-/// seventeenth `files`-scope rule breaks it, and the author then reads the
+/// fifteenth `files`-scope rule breaks it, and the author then reads the
 /// contract before the rule ships.
-pub(super) const FILES_SCOPE_RULE_COUNT: usize = 16;
+pub(super) const FILES_SCOPE_RULE_COUNT: usize = 14;
 
 /// What the rules of this roster have in common, for the failure message.
 const FILES_SCOPE_ROSTER: &str = "state `scope: files`";

@@ -11,7 +11,7 @@
 //! for one language answers shapes the other languages cannot show stands one
 //! module more, named for that language — the Rust dead-code rule reads the
 //! cargo report, and the Swift one builds the package's test targets; the
-//! complexity family stands one module for each language it drives.
+//! function-length family stands one module for each language it drives.
 //! Each module then stays small enough for a reviewer, and for the review
 //! engine, to read whole. `scope_roster`, `temp_directory` and `zero_argument`
 //! are the three
@@ -20,19 +20,18 @@
 //! language. `scope_roster` states which of those set-wide guards reads which
 //! rule, and it holds the two scope rosters to the whole set.
 
-mod complexity;
-mod complexity_go;
-mod complexity_python;
-mod complexity_rust;
-mod complexity_swift;
-mod complexity_typescript;
 mod dead_code;
 mod dead_code_python;
 mod dead_code_rust;
 mod dead_code_swift;
 mod dead_code_typescript;
+mod function_length;
 mod function_length_dart;
 mod function_length_go;
+mod function_length_python;
+mod function_length_rust;
+mod function_length_swift;
+mod function_length_typescript;
 mod magic_numbers;
 mod missing_docs;
 mod missing_docs_rust;
@@ -987,7 +986,7 @@ const BROKEN_COMMAND_MARKER: &str = ".sah-broken-command";
 /// run that read the stubbed `PATH` before that test finished still has to find
 /// a command there, and a directory removed under such a run makes the shell
 /// answer `No such file or directory` for a tool the machine has. Measured with
-/// a directory of its own for each stub: `complexity-rust` broke that way in
+/// a directory of its own for each stub: the Rust clippy rule broke that way in
 /// the whole-suite run, on `.tmp06q4QT/jq: No such file or directory`.
 #[cfg(unix)]
 fn stub_directory() -> &'static Path {
@@ -1034,9 +1033,9 @@ fn resolved_binary(binary: &str) -> String {
 /// it exits nonzero only when [`BROKEN_COMMAND_MARKER`] stands in the working
 /// directory, which this probe alone stages, and it hands every other run
 /// through to the real binary. Measured with the plain stub instead: the whole
-/// tool-rule suite reported 8 failures, among them four `complexity-go` tests
-/// whose fixture pair broke on `exit status: 127` and three `complexity-rust`
-/// tests whose fixtures broke on `jq could not read the clippy report`.
+/// tool-rule suite reported 8 failures, among them four Go tests whose fixture
+/// pair broke on `exit status: 127` and three Rust clippy tests whose fixtures
+/// broke on `jq could not read the clippy report`.
 ///
 /// The caller still stands under `#[serial_test::serial(env)]`, because the
 /// `PATH` it leads is process state whatever the stub then does.
@@ -1141,46 +1140,12 @@ fn verify_shipped_run_reads_only_its_arguments(probe: &ShippedEmptyRun) {
     );
 }
 
-/// Staged files, and the exact ROWS one tool rule's real pipeline must report
-/// over them.
-///
-/// [`ShippedStagedPositions`] names the FILE of each finding, so it cannot tell
-/// one definition of a file from another. A carve-out a script decides by the
-/// NAME of a definition needs the row: the file reports either way, and the row
-/// states which definition the script kept and which one it dropped.
-struct ShippedStagedRows {
-    /// The run the staged files must produce. Each entry of its `expected` is
-    /// one `path:line` the script must report.
-    run: ShippedRun,
-
-    /// Each file staged in the probe repository, with the bytes it holds. The
-    /// script is given every one of them.
-    staged: &'static [(&'static str, &'static str)],
-
-    /// Why those rows report and the others stay silent.
-    reason: &'static str,
-}
-
-/// Drives the shipped script of `probe` over every file it stages, and holds
-/// the run to reporting exactly the rows the probe names.
-fn verify_shipped_staged_rows_report(probe: &ShippedStagedRows) {
-    verify_staged_rows_report(
-        probe.run.project_types,
-        probe.run.rule,
-        probe.staged,
-        probe.run.expected,
-        probe.reason,
-    );
-}
-
 /// Drives the shipped script of `rule` over every file of `staged`, and holds
 /// the run to reporting exactly the `path:line` rows `expected` names.
 ///
 /// `staged` and `expected` are borrowed rather than `'static`, because a probe
 /// whose shape is a function of several hundred lines builds its source, and
-/// the line each finding stands on, at run time. A probe whose files fit in the
-/// binary states them as a [`ShippedStagedRows`] and reaches this function
-/// through [`verify_shipped_staged_rows_report`].
+/// the line each finding stands on, at run time.
 fn verify_staged_rows_report(
     project_types: &[&str],
     rule: &str,

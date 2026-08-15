@@ -165,7 +165,7 @@ shape: "One status can carry both a measured run and a broken run. The status of
 a failure is then the same as the status of a finding. The script must then test
 the REPORT beside the status, and accept the shared status only for the report
 shape a measured run writes." The two Rust rules beside this one, `dead-code-rust`
-and `complexity-rust`, make the same four tests over the same cargo report.
+and `function-length-rust`, make the same four tests over the same cargo report.
 
 The deny-level shape is not a corner case for THIS rule. Under
 `RUSTFLAGS="-D warnings"` a `missing_docs` diagnostic itself arrives at level

@@ -1691,28 +1691,24 @@ tool:
     }
 
     /// `supersedes` takes a list of names: one tool run can replace more than
-    /// one prompt rule, so one `cargo clippy` run answers both the
-    /// `cognitive-complexity` and the `function-length` prompt rule.
+    /// one prompt rule, so a rule that names two must parse both.
     #[test]
     fn test_parse_tool_rule_supersedes_list() {
         let content = r#"---
-name: complexity-rust
-description: Complexity and length by clippy, not by prompt.
+name: pair-check
+description: Two gates by one linter, not by prompt.
 supersedes:
-  - cognitive-complexity
   - function-length
+  - missing-docs
 tool:
   scope: workspace
   run: cargo clippy --message-format json
 ---
 "#;
-        let rule = parse_rule_plain(content, Path::new("complexity-rust.md")).unwrap();
+        let rule = parse_rule_plain(content, Path::new("pair-check.md")).unwrap();
 
         assert!(rule.is_tool_rule());
-        assert_eq!(
-            rule.supersedes.names(),
-            ["cognitive-complexity", "function-length"]
-        );
+        assert_eq!(rule.supersedes.names(), ["function-length", "missing-docs"]);
     }
 
     /// A rule without a `tool` block stays a prompt rule with no tool fields —

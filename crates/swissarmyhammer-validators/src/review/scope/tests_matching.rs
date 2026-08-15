@@ -269,40 +269,23 @@ async fn symbol_targeted_probes_attach_to_the_file_bearing_the_symbol() {
     );
 }
 
-// ---- scope_review: complexity probe evidence -------------------------
-
-/// A file with one function far over the nesting gate and one well under it.
-const MIXED_COMPLEXITY_SOURCE: &str = r#"fn deep(a: bool, b: bool, items: &[u8]) -> u8 {
-    if a {
-        for item in items {
-            while b {
-                if *item > 0 {
-                    return 1;
-                }
-            }
-        }
-    }
-    0
-}
-
-fn shallow(a: Option<u8>) -> u8 {
-    match a {
-        Some(v) => v,
-        None => 0,
-    }
-}
-"#;
+// ---- scope_review: file-bound probe evidence ------------------------
 
 /// Drive the real `scope_review` over a repo holding `source`, and return the
-/// `complexity` probe evidence the pipeline attached to the file.
-async fn complexity_evidence_for(source: &str) -> Vec<ProbeResult> {
+/// `functions` probe evidence the pipeline attached to the file.
+///
+/// `functions` is a file-bound `fact` probe: it reads the parse of each file
+/// under review and writes one row carrying the count it measured. That is the
+/// whole shape this pair holds — a computed number reaches the work item, so a
+/// review agent reads a measurement instead of counting by eye.
+async fn function_evidence_for(source: &str) -> Vec<ProbeResult> {
     let repo = TestRepo::new();
     repo.write("src/lib.rs", "fn placeholder() {}\n");
     repo.commit("initial");
     repo.write("src/lib.rs", source);
 
     let conn = index_conn();
-    let loader = loader_with("complexity", "*.rs", &["complexity"]);
+    let loader = loader_with("counting", "*.rs", &["functions"]);
     let embedder = MockEmbedder::new(DIM);
 
     let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
@@ -311,8 +294,8 @@ async fn complexity_evidence_for(source: &str) -> Vec<ProbeResult> {
 
     work.validators
         .iter()
-        .find(|v| v.validator_name == "complexity")
-        .expect("the complexity validator matched the changed .rs file")
+        .find(|v| v.validator_name == "counting")
+        .expect("the counting validator matched the changed .rs file")
         .files
         .iter()
         .find(|f| f.path == "src/lib.rs")
@@ -322,56 +305,48 @@ async fn complexity_evidence_for(source: &str) -> Vec<ProbeResult> {
 }
 
 #[tokio::test]
-async fn scope_review_attaches_computed_complexity_evidence_to_the_file() {
+async fn scope_review_attaches_computed_function_evidence_to_the_file() {
     // The production path: a real repo, the real loader, the real probe
-    // runner. The agent must receive the measured numbers, not be asked for
-    // them.
-    let evidence = complexity_evidence_for(MIXED_COMPLEXITY_SOURCE).await;
+    // runner. The row must carry the number the parse measured.
+    let evidence = function_evidence_for("fn one() {}\n\nfn two() {}\n\nfn three() {}\n").await;
 
     let result = evidence
         .iter()
-        .find(|r| r.name == "complexity")
-        .expect("the complexity probe result reaches the work item");
-    let symbols: Vec<&str> = result
-        .rows
-        .iter()
-        .filter_map(|row| row.symbol.as_deref())
-        .collect();
-
+        .find(|r| r.name == "functions")
+        .expect("the functions probe result reaches the work item");
     assert_eq!(
-        symbols,
-        vec!["deep"],
-        "only the over-gate function is listed, got: {:?}",
+        result.rows.len(),
+        1,
+        "the probe writes one row for the file, got: {:?}",
         result.rows
     );
     assert!(
         result.rows[0]
             .detail
             .as_deref()
-            .is_some_and(|d| d.contains("max condition-nesting depth 4 (gate 4)")),
-        "the row carries the measured depth and its gate, got: {:?}",
+            .is_some_and(|d| d.contains("3 function definitions")),
+        "the row carries the measured count, got: {:?}",
         result.rows[0].detail
     );
 }
 
 #[tokio::test]
-async fn scope_review_reports_an_empty_complexity_result_for_a_simple_file() {
-    // An empty result is the deterministic fact the verify guard refutes a
-    // complexity claim with. It must survive the whole pipeline, not be
-    // dropped as "no evidence".
-    let evidence = complexity_evidence_for(
-            "fn shallow(a: Option<u8>) -> u8 {\n    match a {\n        Some(v) => v,\n        None => 0,\n    }\n}\n",
-        )
-        .await;
+async fn scope_review_reports_a_zero_count_for_a_file_with_no_function() {
+    // A measured zero is a fact, not an absence of evidence. It must survive
+    // the whole pipeline rather than be dropped as "no evidence".
+    let evidence = function_evidence_for("pub const LIMIT: u8 = 4;\n").await;
 
     let result = evidence
         .iter()
-        .find(|r| r.name == "complexity")
-        .expect("a simple file still gets a complexity result");
+        .find(|r| r.name == "functions")
+        .expect("a file with no function still gets a functions result");
     assert!(
-        result.rows.is_empty(),
-        "no function is over a gate, got: {:?}",
-        result.rows
+        result.rows[0]
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("0 function definitions")),
+        "the row carries the measured zero, got: {:?}",
+        result.rows[0].detail
     );
 }
 

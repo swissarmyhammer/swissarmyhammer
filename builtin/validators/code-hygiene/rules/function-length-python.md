@@ -309,13 +309,13 @@ holds 0 statements and stays silent at a gate of 0.
 ### A test, which the run drops by the DEFINITION
 
 `function-length` exempts "Functions explicitly marked as tests", and
-`cognitive-complexity` names the mark for the whole set: "Identify a test from
-its attribute or framework naming convention at the **definition**, never from
-the file name. A complex helper named `build_request` in a file called
-`foo_test.rs` is still a complex function and is still listed."
+this set names the mark: identify a test from its attribute or framework naming
+convention at the **definition**, never from the file name. A complex helper
+named `build_request` in a file called `foo_test.rs` is still a long function
+and is still listed.
 
-Python states that convention twice, and the siblings `complexity-python` and
-`missing-docs-python` read the same two sources. pytest collects a function or
+Python states that convention twice, and the sibling `missing-docs-python`
+reads the same two sources. pytest collects a function or
 method whose name starts with `test` — read from pytest 9.1.1,
 `python_functions = ["test"]`. unittest collects a method whose name starts
 with `test` — read from the standard library,
@@ -339,8 +339,7 @@ two it drops beyond the carve-out are helpers the prompt rule still lists:
 - `ansible` `test/lib/ansible_test/_util/target/sanity/import/importer.py`
   `main`, 246 statements.
 
-That is the trade `complexity-python` refuses for a test path and
-`function-length-go` refuses for `_test.go`. The acceptance test
+That is the trade `function-length-go` refuses for `_test.go`. The acceptance test
 `the_shipped_python_function_length_tool_rule_reads_a_test_from_its_definition`
 holds one file carrying `test_dense` over the gate, `build_request` over the
 gate, and a 300-row data table, and holds the run to reporting `build_request`
@@ -350,7 +349,7 @@ Go's own carve-out reads BOTH halves of `go test` — the name and the `_test.go
 file name — because `go test` requires both. Python requires neither: pytest's
 `python_files` and unittest's discovery pattern are configuration, not a
 language rule, and the prompt rule refuses the file name outright. So this rule
-reads the name and nothing else, which is what `complexity-python` already
+reads the name and nothing else, which is what `missing-docs-python` already
 does for the same language.
 
 ### An initializer that sets many fields, which nothing drops
@@ -379,8 +378,8 @@ exempts.
 So a field-setting initializer over the gate REPORTS, and the author answers
 it. The first answer is to move the fields into a default for each one, or into
 a table the initializer reads. The second answer is the annotation below. This
-is the verdict `function-length-go` and `complexity-swift` each record for the
-same carve-out. The acceptance test
+is the verdict `function-length-go` and `function-length-swift` each record for
+the same carve-out. The acceptance test
 `the_shipped_python_function_length_tool_rule_reports_a_field_setting_initializer`
 holds one bare initializer of 190 field-setting statements beside the same one
 annotated, and holds the run to reporting the bare one alone.
@@ -391,8 +390,8 @@ annotated, and holds the run to reporting the bare one alone.
 heuristic — no option of the 166 names one — and Python states no header
 convention for one either. Go states one, which is why `function-length-go`
 drops a generated file; a Python header test would name the first lines of one
-generator and never the convention. That is the verdict `complexity-python`
-already records for the same language.
+generator and never the convention. That is the verdict `function-length-rust`
+records for Rust, for the same reason.
 
 Measured over the corpus: 0 of the 14 findings stand in a file whose head
 carries a generated mark, so the gap costs the corpus nothing. Measured on a
@@ -428,10 +427,9 @@ is the second fix, and the reason beside it states why.
 
 ## The run answers for its own arguments
 
-This rule and `complexity-python` drive one tool, so they share its
-default target of `.`. A run with no path walks the tree for the statement
-gate as it does for the branch gate. The script counts its arguments
-first, and a count of zero exits 0 with no finding.
+`ruff` takes a default target of `.`, so a run with no path walks the whole
+tree for the statement gate. The script counts its arguments first, and a
+count of zero exits 0 with no finding.
 
 Measured over two Python files, each holding one function of 190
 statements, with no argument: 2 findings before the guard, 0 after it. The

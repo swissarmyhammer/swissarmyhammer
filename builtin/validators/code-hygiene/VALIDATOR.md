@@ -2,7 +2,7 @@
 name: code-hygiene
 description: >-
   Flag hygiene defects in changed source code — commented-out code, overlong
-  or overly complex functions, missing documentation on public APIs,
+  functions, missing documentation on public APIs,
   hardcoded values that should be data, dead code with no inbound callers,
   and an exported Go name that repeats the name of its own package.
 metadata:
@@ -12,7 +12,6 @@ match:
     - "@file_groups/source_code"
 probes:
   - callers
-  - complexity
 ---
 
 # Code Hygiene
@@ -155,69 +154,64 @@ each one belongs to `dart run custom_lint`, the command that rule runs:
 configuration, and a failed `dart pub get` would leave a clean-looking run. Both
 are recorded in the rule file.
 
-## Complexity and length: eight tool rules, and a probe that stays
+## Function length: six tool rules, one for each language
 
-`cognitive-complexity` and `function-length` are two prompt rules over one
-concern — a function a reader cannot hold in their head. A linter decides both
-for the languages that have one, so eight tool rules supersede them.
+`function-length` is the ONE size gate this set states — a function a reader
+cannot hold in their head — and six tool rules supersede it, one for each
+language with a linter that decides it. Each language carries exactly one such
+rule.
 
-Three languages settle both gates in one run, so each of those rules names both
-prompt rules:
+| the rule | the tool, and the gate |
+|---|---|
+| `function-length-rust` | one `cargo clippy` run over `too_many_lines` at `250` |
+| `function-length-typescript` | one `eslint` run over `max-lines-per-function` at `250`, with blank lines and comments skipped |
+| `function-length-swift` | one `swiftlint` run over `function_body_length` and `closure_body_length`, each at `250` |
+| `function-length-python` | ruff `PLR0915` at `max-statements=180` |
+| `function-length-go` | `funlen` through golangci-lint at `statements: 160` |
+| `function-length-dart` | `dart_code_linter` 4.2.0 at `--source-lines-of-code=250` |
 
-- `complexity-rust` — one `cargo clippy` run over four lints:
-  `excessive_nesting` at `6`, `too_many_lines` at `250`, `too_many_arguments`
-  at `7`, and `type_complexity` at `250`.
-- `complexity-typescript` — one `eslint` run over
-  `sonarjs/cognitive-complexity` at `15` and `max-lines-per-function` at `250`
-  with blank lines and comments skipped. The config wraps both rules to keep
-  the test carve-out that the two prompt rules state.
- - `complexity-swift` — one `swiftlint` run over `cyclomatic_complexity` at `15`
-   with `ignores_case_statements` on, and `function_body_length` and
-   `closure_body_length` each at `250`.
+Four of the six count the LINES the prompt rule counts — it says "Exclude blank
+lines and comment-only lines" — so each of those carries the prompt rule's own
+number, 250, with no derivation. Two count STATEMENTS instead, so each derives
+its own number from a measured statements-to-lines ratio: 180 for Python and 160
+for Go. Each rule file states its corpus, its commits, its file count and its
+sweep.
 
-Two languages name one tool for each gate, so each takes one rule for each:
+The TypeScript rule and the Go rule each reproduce the test carve-out the prompt
+rule states, and each reads it at the DEFINITION — the framework call that holds
+the callback for TypeScript, and the function name `go test` requires for Go.
+Python reads the name ruff anchors its diagnostic on. Rust, Swift and Dart
+cannot: each rule file states what its tool offers and what the gap costs,
+measured over that language's own corpus.
 
-- `complexity-python` — `complexipy --max-complexity-allowed 15`, and
-  `function-length-python` — ruff `PLR0915` at `max-statements=180`, the
-  statement count 250 code lines of Python measures out to.
-- `complexity-go` — `gocognit -over 15`, and `function-length-go` — `funlen`
-  through golangci-lint at `statements: 160`, the statement count 250 code lines
-  of Go measures out to.
+## Complexity is measured by nothing, and no prompt rule asks a model to
 
-Dart takes the LENGTH gate alone. `function-length-dart` runs
-`dart_code_linter` 4.2.0 at `--source-lines-of-code=250`, and no rule carries the
-branching gate for Dart. The survey below states why.
+There is no `cognitive-complexity` prompt rule, there are no `complexity-<lang>`
+tool rules, and the `complexity` probe is gone with them. Nothing in this set
+measures cyclomatic complexity, cognitive complexity or nesting depth.
 
-A tool measures its own way, and three of the five complexity gates are the
-published Sonar cognitive complexity the `complexity` probe computes:
-`sonarjs/cognitive-complexity`, `gocognit` and `complexipy` are that algorithm,
-clippy's `excessive_nesting` counts lexical nesting depth, and swiftlint's
-`cyclomatic_complexity` counts decision points with `switch` arms left out. So
-the numbers need not agree. Each tool rule's own file states what its tool
-measures and what the threshold rests on.
+The reason is that no complexity gate could be made objective. A tool finding is
+a requirement under this set's contract, so a gate whose findings sit mostly on
+correct code makes suppressions mandatory on correct code. The Dart survey below
+is the measurement that settled it, and it settled it for every language:
 
-`complexity-python` ran ruff `C901` before, which is McCabe cyclomatic
-complexity. It was replaced because that metric reads no nesting: measured over
-one function of six nested `if` blocks, `C901` scores 7 and complexipy scores
-21, so the gate stayed silent on the shape the prompt rule exists for. The rule
-file carries the whole comparison.
+- At a cyclomatic gate of 15, 188 of 356 non-test findings stand at nesting
+  level 2 or less — flat `??` and `&&` chains, which the cognitive metric itself
+  carves out. No threshold separates them, because the flat shapes run to 149.
+- At a condition-nesting gate of 4, 131 of 229 non-test findings come from
+  CLOSURES rather than from conditions.
 
-The languages split on the nesting gate. Rust keeps it: nesting depth is the
-backbone of the Sonar cognitive metric, and `excessive_nesting` measures exactly
-that. TypeScript, Go and Python keep it another way, because the Sonar metric
-charges a function for its nesting inside the one score. Swift drops it, because
-swiftlint's `nesting` rule measures nested type and function declarations rather
-than nested conditions.
+The five tool rules that shipped before this made the same trade in five
+different ways, and no two of them measured the same thing: clippy counted
+lexical nesting depth, swiftlint counted decision points with `switch` arms left
+out, and only the eslint, gocognit and complexipy rules computed the published
+Sonar score. A gate whose number depends on which language a file is written in
+is not one gate.
 
-Dart drops the branching gate whole, and the survey below states the
-measurement. That is the same shape of trade `complexity-swift` makes for
-nesting, one gate larger.
+Two tools stop being required with them: `gocognit` and `complexipy`. No
+surviving rule runs either.
 
-The `complexity` probe stays. Dart, every other language, and every workspace
-whose tool doctor cannot find keep the probe and the prompt rules. That is the
-designed fallback, not a gap.
-
-### The complexity and length survey for Dart
+### The Dart survey that settled it
 
 Dart was the last language with no gate of either kind, so the whole tool space
 was read before the verdict. Every measurement was taken on Dart SDK 3.11.0 with
@@ -264,9 +258,9 @@ server and `sonar-scanner`.
 So one tool computes all three metrics. `source-lines-of-code` is taken, and the
 other two are rejected on what they measure.
 
-**`cyclomatic-complexity` — rejected.** `cognitive-complexity` exempts
-"Configuration parsing with many options, where the score comes from a long flat
-list of simple cases rather than from nesting", and Dart's dominant idioms ARE
+**`cyclomatic-complexity` — rejected.** A complexity gate has to carve out
+configuration parsing with many options, where the score comes from a long flat
+list of simple cases rather than from nesting, and Dart's dominant idioms ARE
 that list: a `copyWith` of N optional parameters writes N `??` operators, an `==`
 writes N `&&`, and a `lerp` writes N ternaries. Cyclomatic complexity charges one
 for each. At the gate of 15 the corpus reports 356 findings outside test files,
@@ -280,16 +274,17 @@ it rates these near zero. No threshold separates them: the flat shapes run to
 **`maximum-nesting-level` — rejected.** The metric reads a widget tree three
 constructors deep as 1 and a collection literal four deep as 1, both correct, and
 it raises the depth by one for EVERY closure body. Dart is closure-heavy. The
-prompt rule's gate is CONDITION-nesting depth 4 or more; at that gate the corpus
+gate under measurement was CONDITION-nesting depth 4 or more; at that gate the corpus
 reports 229 findings outside test files and only 98 of them have a condition
 depth of 4 or more, so **131 of 229 come from closures rather than conditions**.
 34 have condition depth 0 or 1 — `_TabScaffoldExampleState.build` reaches level 6
 through nested builder callbacks with no condition at all.
 
 Under this set's contract a tool finding is a requirement, so either gate would
-make hundreds of suppressions mandatory on code the prompt rule calls correct.
-That is the trade `complexity-swift` refused for `switch` arms and
-`function-length-go` refused for test paths.
+make hundreds of suppressions mandatory on code a reader calls correct. That is
+the trade `function-length-go` refuses for test paths, and it is the measurement
+that took the complexity gate away from every language rather than from Dart
+alone.
 
 ## Commented-out code: no tool rule, and the prompt rule as the whole answer
 
@@ -452,8 +447,8 @@ reader can see what was measured, and when it stopped being the answer.
 
 ### `clippy::cognitive_complexity` — rejected
 
-Clippy's own branch count, and the obvious candidate for the `complexity-rust`
-rule. Rejected because it walks the macro-expanded AST.
+Clippy's own branch count, and the obvious candidate for a Rust complexity gate.
+Rejected because it walks the macro-expanded AST.
 
 This workspace builds `tracing` with the `log` feature. The log bridge expands
 each call site into many branches, and clippy attributes those branches to the
@@ -467,9 +462,8 @@ from real branching, and the pipe cannot filter it — the finding carries a
 function and a number, nothing more. At the gate of 15 it reports 460 findings
 across this workspace, the mass of them sitting just over the gate.
 
-`clippy::excessive_nesting` replaces it. On the same probe pair it reports
-identical spans with and without the `log` feature, so the macro expansion
-never reaches it.
+Nothing replaces it. The section "Complexity is measured by nothing" above
+states why no complexity gate ships for any language.
 
 ### `cargo machete` — rejected, and the rejection is superseded by the `manifests` set
 

@@ -818,8 +818,8 @@ Never runs.
 name: pair-check
 description: A rule that replaces two prompt rules.
 supersedes:
-  - cognitive-complexity
   - function-length
+  - missing-docs
 tool:
   scope: files
   run: "definitely-not-a-real-tool-1f9c \"$@\""
@@ -1306,7 +1306,7 @@ Python only.
         assert!(
             tool_row
                 .message
-                .contains("prompt rules 'cognitive-complexity', 'function-length' run instead"),
+                .contains("prompt rules 'function-length', 'missing-docs' run instead"),
             "a degraded row must name every superseded prompt rule; got '{}'",
             tool_row.message
         );

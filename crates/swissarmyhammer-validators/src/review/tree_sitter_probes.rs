@@ -12,7 +12,7 @@
 //!
 //! Grammars and language routing come from
 //! [`swissarmyhammer_sem::parser::plugins::code::parse_code`] — the same table
-//! the entity extractor and the `complexity` probe read. This module adds no
+//! the entity extractor and the complexity scorer read. This module adds no
 //! grammar list of its own.
 //!
 //! Each `(file, revision)` under review is parsed **once per review** by the
@@ -26,7 +26,7 @@
 //! The `TREE_SITTER_PROBES` roster holds the implementations. The probe catalog
 //! builds a row from each one, reading the name and kind off the implementation
 //! itself, so a validator declares a tree-sitter probe in its `probes:` list
-//! exactly as it declares `complexity`, and `check validators` sees it through
+//! exactly as it declares `callers`, and `check validators` sees it through
 //! the same [`probe_exists`](crate::review::probes::probe_exists).
 
 use std::collections::BTreeMap;
@@ -44,7 +44,7 @@ use crate::review::probes::{
 ///
 /// A file whose language is absent from the grammar roster must read as
 /// **unknown**, never as "this probe found nothing here" — the same contract
-/// the `complexity` probe holds with its own not-computed row. Emitting this
+/// `assertion-census` holds with its own not-computed row. Emitting this
 /// row keeps the result non-empty, so the verify guard cannot mistake an
 /// unparsed file for a probe that came back clean.
 pub const TREE_SITTER_NOT_PARSED: &str =

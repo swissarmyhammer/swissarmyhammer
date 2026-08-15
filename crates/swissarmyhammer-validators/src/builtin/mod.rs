@@ -92,16 +92,16 @@ mod tests {
     /// The probe-bearing focused validators that kept their own dedicated
     /// probe and stayed standalone (folding either into a merged set would
     /// force its probe onto every other rule in that set). Probe names must be
-    /// real catalog entries (`duplicates` / `similar` / `callers` /
-    /// `complexity`); never `search_symbol` or `get_blastradius`.
+    /// real catalog entries (`duplicates` / `similar` / `callers`); never
+    /// `search_symbol` or `get_blastradius`.
     const PROBE_VALIDATORS: &[(&str, &str)] =
         &[("duplication", "duplicates"), ("reuse", "similar")];
 
     /// The two sets the nine single-rule builtin validators were merged into:
-    /// `code-security` (no probes) and `code-hygiene` (`probes: [callers,
-    /// complexity]`, needed by the `dead-code` and `cognitive-complexity` rules
-    /// bundled inside it). See [`test_code_security_loads_with_three_rules_and_no_probes`]
-    /// and [`test_code_hygiene_loads_its_rule_roster_and_callers_and_complexity_probes`].
+    /// `code-security` (no probes) and `code-hygiene` (`probes: [callers]`,
+    /// needed by the `dead-code` rule bundled inside it). See
+    /// [`test_code_security_loads_with_three_rules_and_no_probes`] and
+    /// [`test_code_hygiene_loads_its_rule_roster_and_the_callers_probe`].
     const MERGED_VALIDATORS: &[&str] = &["code-security", "code-hygiene"];
 
     /// The nine single-rule builtin validators retired by the code-security /
@@ -240,7 +240,6 @@ mod tests {
     const CODE_HYGIENE_PROMPT_RULES: &[&str] = &[
         "no-commented-code",
         "function-length",
-        "cognitive-complexity",
         "missing-docs",
         "data-driven",
         "magic-numbers",
@@ -297,41 +296,25 @@ mod tests {
     /// category, an exported name that opens with the name of its own package.
     const CODE_HYGIENE_NAMING_TOOL_RULES: &[&str] = &["stuttering-name-go"];
 
-    /// The complexity tool rules `code-hygiene` carries, each paired with the
-    /// prompt rules it supersedes.
+    /// The function-length tool rules `code-hygiene` carries.
     ///
-    /// This is the one group whose `supersedes` differs per rule, so each row
-    /// carries its own list. One run decides both gates for Rust, TypeScript
-    /// and Swift, so those rules replace both prompt rules; Python and Go name
-    /// one tool for each gate, so each takes one rule for each. Dart keeps the
-    /// `complexity` probe and both prompt rules, because its only metrics tool
-    /// is commercial.
-    const CODE_HYGIENE_COMPLEXITY_TOOL_RULES: &[(&str, &[&str])] = &[
-        (
-            "complexity-rust",
-            &["cognitive-complexity", "function-length"],
-        ),
-        ("complexity-python", &["cognitive-complexity"]),
-        ("function-length-python", &["function-length"]),
-        (
-            "complexity-typescript",
-            &["cognitive-complexity", "function-length"],
-        ),
-        (
-            "complexity-swift",
-            &["cognitive-complexity", "function-length"],
-        ),
-        ("complexity-go", &["cognitive-complexity"]),
-        ("function-length-go", &["function-length"]),
-        ("function-length-dart", &["function-length"]),
+    /// Every one of them supersedes `function-length` and nothing else, because
+    /// that is the ONE size gate this set states. Each language carries exactly
+    /// one such rule, and nothing measures complexity for any language.
+    const CODE_HYGIENE_FUNCTION_LENGTH_TOOL_RULES: &[&str] = &[
+        "function-length-rust",
+        "function-length-python",
+        "function-length-typescript",
+        "function-length-swift",
+        "function-length-go",
+        "function-length-dart",
     ];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and
-    /// declares `probes: [callers, complexity]` — `callers` for `dead-code`,
-    /// `complexity` for `cognitive-complexity` (the rest are in-file
-    /// judgments that need no probe).
+    /// declares `probes: [callers]` — `callers` for `dead-code`. Every other
+    /// rule of the set is an in-file judgment that needs no probe.
     #[test]
-    fn test_code_hygiene_loads_its_rule_roster_and_callers_and_complexity_probes() {
+    fn test_code_hygiene_loads_its_rule_roster_and_the_callers_probe() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
@@ -341,8 +324,8 @@ mod tests {
 
         assert_eq!(
             ruleset.manifest.probes,
-            vec!["callers".to_string(), "complexity".to_string()],
-            "code-hygiene should declare exactly [callers, complexity], got: {:?}",
+            vec!["callers".to_string()],
+            "code-hygiene should declare exactly [callers], got: {:?}",
             ruleset.manifest.probes
         );
         for declared in &ruleset.manifest.probes {
@@ -359,11 +342,7 @@ mod tests {
             .chain(CODE_HYGIENE_DEAD_CODE_TOOL_RULES.iter())
             .chain(CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.iter())
             .chain(CODE_HYGIENE_NAMING_TOOL_RULES.iter())
-            .chain(
-                CODE_HYGIENE_COMPLEXITY_TOOL_RULES
-                    .iter()
-                    .map(|(name, _)| name),
-            );
+            .chain(CODE_HYGIENE_FUNCTION_LENGTH_TOOL_RULES.iter());
         assert_eq!(
             ruleset.rules.len(),
             CODE_HYGIENE_PROMPT_RULES.len()
@@ -371,7 +350,7 @@ mod tests {
                 + CODE_HYGIENE_DEAD_CODE_TOOL_RULES.len()
                 + CODE_HYGIENE_MAGIC_NUMBERS_TOOL_RULES.len()
                 + CODE_HYGIENE_NAMING_TOOL_RULES.len()
-                + CODE_HYGIENE_COMPLEXITY_TOOL_RULES.len(),
+                + CODE_HYGIENE_FUNCTION_LENGTH_TOOL_RULES.len(),
             "code-hygiene should carry exactly its prompt and tool rules, got: {rule_names:?}"
         );
         for expected in expected_rules {
@@ -385,7 +364,8 @@ mod tests {
         // group promises: the documentation tools replace the `missing-docs`
         // prompt rule, the magic-number tools replace the `magic-numbers`
         // prompt rule, the dead-code tools replace the `dead-code` prompt rule,
-        // and each complexity tool replaces the gates its own tool decides.
+        // and each function-length tool replaces the `function-length` prompt
+        // rule.
         let expected_supersedes = CODE_HYGIENE_MISSING_DOCS_TOOL_RULES
             .iter()
             .map(|name| (name, ["missing-docs"].as_slice()))
@@ -405,9 +385,9 @@ mod tests {
                     .map(|name| (name, [].as_slice())),
             )
             .chain(
-                CODE_HYGIENE_COMPLEXITY_TOOL_RULES
+                CODE_HYGIENE_FUNCTION_LENGTH_TOOL_RULES
                     .iter()
-                    .map(|(name, superseded)| (name, *superseded)),
+                    .map(|name| (name, ["function-length"].as_slice())),
             );
         for (tool_rule_name, superseded) in expected_supersedes {
             let tool_rule = ruleset

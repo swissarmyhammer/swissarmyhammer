@@ -844,8 +844,6 @@ const GO_PROJECT_TYPE: &str = "go";
 /// it owns a Go name as well, correct the `missing-docs-go` rule body and the
 /// `stuttering-name-go` rule body with it. If it does not, add its name here.
 const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
-    "code-hygiene/cognitive-complexity",
-    "code-hygiene/complexity-go",
     "code-hygiene/data-driven",
     "code-hygiene/dead-code",
     "code-hygiene/dead-code-go",

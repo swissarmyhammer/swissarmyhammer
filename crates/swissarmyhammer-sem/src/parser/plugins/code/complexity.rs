@@ -170,9 +170,8 @@ pub use test_census::{test_census, TestCensus, TestDefect};
 /// Sonar default.
 pub const COGNITIVE_COMPLEXITY_THRESHOLD: u32 = 15;
 
-/// The condition-nesting depth at or above which a function is flagged. The
-/// depth `cognitive-complexity.md` already stated: "conditions nested more than
-/// 3 levels deep (4+ is a flag)".
+/// The condition-nesting depth at or above which a function is flagged:
+/// conditions nested more than 3 levels deep.
 pub const NESTING_DEPTH_THRESHOLD: u32 = 4;
 
 /// The deepest tree-sitter tree depth the walk descends before stopping and

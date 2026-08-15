@@ -75,10 +75,8 @@ const DART_FUNCTION_LENGTH_TEST_PATH_PROBE: ShippedFailFixture = ShippedFailFixt
 /// A one-validator work-list over `path` for the builtin `code-hygiene` set,
 /// naming the `function-length` prompt rule and the Dart tool rule.
 ///
-/// It names `function-length` alone. `function-length-dart` supersedes that
-/// rule and no other, because no Dart metric reproduces either gate of
-/// `cognitive-complexity`; naming the branching rule here would state a
-/// supersession the rule does not declare.
+/// It names `function-length` alone, which is the ONE size gate this set
+/// states and the one rule `function-length-dart` supersedes.
 fn dart_function_length_work(path: &str, content: &str) -> WorkList {
     WorkList::new(
         "a function over the length gate",
@@ -130,8 +128,8 @@ fn the_shipped_dart_function_length_tool_rule_reports_every_fail_fixture_declara
 /// at the gate of 250 the corpus reports 400 findings, 376 of them in test
 /// files and 369 of those on the file's own `main`.
 ///
-/// The carve-out reads a PATH, which is the mark `cognitive-complexity`
-/// forbids, and the rule file states why no other mark exists: a Dart test is
+/// The carve-out reads a PATH, which is the mark this set forbids, and the
+/// rule file states why no other mark exists: a Dart test is
 /// an anonymous closure handed to `test(...)`, so it carries no definition to
 /// read, and `dart_code_linter` 4.2.0 excludes by glob alone.
 ///

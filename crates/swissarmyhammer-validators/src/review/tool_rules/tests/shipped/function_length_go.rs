@@ -202,11 +202,11 @@ const GO_SUITE_PATH: &str = "suite/suite.go";
 /// Acceptance: the shipped Go function-length tool rule reads a test from its
 /// DEFINITION, through the real funlen pipeline.
 ///
-/// `function-length` exempts "Functions explicitly marked as tests", and
-/// `cognitive-complexity` names the mark for the whole set: "Identify a test
-/// from its attribute or framework naming convention at the definition, never
-/// from the file name. A complex helper named `build_request` in a file called
-/// `foo_test.rs` is still a complex function and is still listed."
+/// `function-length` exempts "Functions explicitly marked as tests", and this
+/// set names the mark: identify a test from its attribute or framework naming
+/// convention at the definition, never from the file name. A complex helper
+/// named `build_request` in a file called `foo_test.rs` is still a long
+/// function and is still listed.
 ///
 /// funlen writes the function's own NAME into every message it reports, so the
 /// exclusion rule reads the definition. The three declarations share one file,

@@ -136,10 +136,9 @@ The gate is 250, which is the number the prompt rule states in as many words —
 value is strictly OVER the threshold, so the flag carries the prompt rule's own
 number with no derivation.
 
-This rule supersedes `function-length` alone. Dart keeps the
-`cognitive-complexity` prompt rule and the `complexity` probe, because no Dart
-tool reproduces either of that rule's two gates. `VALIDATOR.md` records that
-survey and the measurement behind it.
+This rule supersedes `function-length`, the ONE size gate this set states.
+Nothing measures complexity, for Dart or for any other language. `VALIDATOR.md`
+records the Dart survey and the measurement that settled it.
 
 ## Every number below was measured with `dart_code_linter` 4.2.0
 
@@ -170,8 +169,8 @@ closure's lines count toward the function that HOLDS it: measured, a `void
 topFn()` whose only statement is a 300-line closure reads 303, and a `void
 main()` holding one 300-line `test(...)` closure reads 302. Only a closure
 standing in a top-level variable, inside no function at all, escapes. That is
-the trade this rule makes, and `complexity-swift` records the mirror of it —
-Swift needs a second rule for a closure and reads no closure complexity at all.
+the trade this rule makes, and `function-length-swift` records the mirror of
+it — Swift needs a second swiftlint rule to reach a closure at all.
 
 ## The corpus every count below was measured over
 
@@ -213,9 +212,9 @@ mandatory on idiomatic Dart test files.
 
 ### The carve-out reads a PATH, and this is what that costs
 
-`cognitive-complexity` names the mark for the whole set: "Identify a test from
-its attribute or framework naming convention at the **definition**, never from
-the file name." This rule cannot meet that standard, and the reason is
+this set names the mark: identify a test from its attribute or framework naming
+convention at the **definition**, never from the file name. This rule cannot
+meet that standard, and the reason is
 structural rather than a missing option.
 
 A Dart test is an anonymous closure handed to `test(...)`, `testWidgets(...)` or
@@ -300,7 +299,7 @@ fields. The run reproduces two of them and the author answers the other two.
   exclusion list above.
 - **Configuration and data** the run does NOT drop. A data line counts like a
   code line, so the two `_*WidgetsDefinitions` tables of the measurement above
-  report. `complexity-swift` records the same gap for the same reason, and its
+  report. `function-length-swift` records the same gap for the same reason, and its
   answer is the same: move the data out of the declaration, or write the
   annotation.
 - **An initializer that sets many fields** the run does not drop either. A
