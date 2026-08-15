@@ -156,6 +156,48 @@ const TYPESCRIPT_SELF_PATHS_PROBE: ShippedStagedTree = ShippedStagedTree {
              that names no package of the workspace states nothing",
 };
 
+/// Where the module nothing imports stands, as the work-list holds it.
+const TYPESCRIPT_PROBE_ORPHAN_PATH: &str = "src/orphan.ts";
+
+/// A module NO other module of the project imports, holding three kinds of
+/// export.
+///
+/// Each export stands on a row of its own — the constant on row 2, the
+/// function on row 5 and the type on row 10 — so the run has to name each
+/// SYMBOL rather than the file that holds them.
+const TYPESCRIPT_PROBE_ORPHAN: &str = concat!(
+    "/** A constant nothing in the project imports. */\n",
+    "export const ORPHAN_LIMIT = 1;\n",
+    "\n",
+    "/** A function nothing in the project imports. */\n",
+    "export function orphanHelper(): number {\n",
+    "  return 2;\n",
+    "}\n",
+    "\n",
+    "/** A type nothing in the project imports. */\n",
+    "export type OrphanOptions = { size: number };\n",
+);
+
+/// A probe whose entry module stands beside a module nothing imports at all.
+const TYPESCRIPT_ORPHAN_MODULE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &["src/orphan.ts:2", "src/orphan.ts:5", "src/orphan.ts:10"],
+    },
+    staged: &[
+        (
+            TYPESCRIPT_PROBE_MANIFEST_PATH,
+            TYPESCRIPT_SOURCE_EXPORTS_MANIFEST,
+        ),
+        (TYPESCRIPT_PROBE_TSCONFIG_PATH, TYPESCRIPT_PROBE_TSCONFIG),
+        (TYPESCRIPT_PROBE_ENTRY_PATH, TYPESCRIPT_PROBE_ENTRY),
+        (TYPESCRIPT_PROBE_ORPHAN_PATH, TYPESCRIPT_PROBE_ORPHAN),
+    ],
+    reason: "a module no other module imports is dead export by export, so the run names each \
+             of its three exports at the row that export stands on",
+};
+
 /// A manifest carrying a ts-prune configuration of the project's own.
 ///
 /// ts-prune reads its configuration through cosmiconfig, and `package.json` is
@@ -356,4 +398,24 @@ fn the_shipped_typescript_dead_code_tool_rule_answers_the_staging_marker() {
 fn the_shipped_typescript_dead_code_tool_rule_reads_the_program_the_project_states() {
     verify_shipped_tree_reports(&TYPESCRIPT_TESTS_IN_PROGRAM_PROBE);
     verify_shipped_tree_reports(&TYPESCRIPT_TESTS_OUT_OF_PROGRAM_PROBE);
+}
+
+/// Acceptance: a module NO other module imports is dead export by export, and
+/// the run names each export at its own row.
+///
+/// This is the property that decided the `knip` question, so it is held rather
+/// than left to the survey. The rule claims "every exported symbol no other
+/// module in the project imports", and the everyday shape of that claim is an
+/// author adding a module nothing imports yet.
+///
+/// Measured on this probe with knip 6.32.2, tuned with the entry list this
+/// rule's own node script computes: `--include exports,types,namespaceMembers,
+/// enumMembers` answers `{"issues":[]}` at exit 0, and adding `files` answers
+/// one entry carrying `"exports":[]` and no row. knip resolves reachability
+/// first, so it reports such a module ONE time with no symbol and no row, and
+/// no configuration makes it enumerate the exports. The shipped run names all
+/// three.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_nothing_imports() {
+    verify_shipped_tree_reports(&TYPESCRIPT_ORPHAN_MODULE_PROBE);
 }

@@ -339,8 +339,9 @@ publish nothing. The rule file states each measurement.
 The framework-registered entry point is the one carve-out no shipped rule
 reproduces for TypeScript. ts-prune has no plugin and no configuration reader,
 so a `vite.config.ts` alias target, a vitest browser command and a Next.js route
-module each take the marker. `knip` answers that shape natively, and the
-superseded verdict below records the measurement.
+module each take the marker. `knip` answers that shape natively and was measured
+against this rule in full; `ts-prune` is kept on RECALL, and the superseded
+verdict below records every number.
 
 The fourth carve-out, work-in-process scaffolding, became an **annotation
 contract**: staged code carries the language's own suppression marker with a
@@ -355,12 +356,12 @@ suppression the tool reads.
   carve-outs need a reader and that a tool replacing the prompt rule would
   report staged work as dead. The annotation contract answers the second half,
   and the compilers answer the first.
-- The **`knip`** rejection is superseded by `dead-code-typescript`. `ts-prune`
-  was taken instead: it carries an inline suppression, and its claim — an export
-  no module imports — is narrower. Both reasons the rejection stated are wrong
-  as written, and the re-measurement below says so. The inline suppression is
-  the one property that still separates the two tools, and the swap is a card of
-  its own.
+- The **`knip`** rejection is superseded by `dead-code-typescript`, and the
+  question of swapping to knip was then RE-OPENED and settled on measurement.
+  `ts-prune` is kept. Both reasons the original rejection stated are wrong as
+  written, and both reasons the swap was proposed on are wrong as measured. The
+  section below carries the whole record, and `dead-code-typescript` carries the
+  tables.
 - The **`periphery`** rejection is superseded by `dead-code-swift`. The earlier
   verdict was made against a directory holding a loose `.swift` file, which
   periphery refused. The fixtures now carry a `Package.swift`, which is what the
@@ -522,22 +523,41 @@ package declares no surface at all. Measured against three published libraries �
 `zod` at `4e1720c`, `zustand` at `2115efb` and `redux` at `3084fc3` — knip's
 entry-point resolution is the thing this set wants, and its plugins answer the
 framework-registered entry point that `dead-code-typescript` still leaves to a
-marker:
+marker.
 
-| workspace | `dead-code-typescript` | knip 6.32.0 |
-|---|---|---|
-| zod | 78 | 13 |
-| zustand | 1 | 0 |
-| redux | 6 | 2 |
+**The swap was then measured in full, and `ts-prune` is KEPT.** The comparison
+that motivated it — zod 78 against 13, zustand 1 against 0, redux 6 against 2 —
+was itself taken with NO `node_modules`, where knip fails to load a project's
+vitest configuration and still exits 1. zustand's 0 was a broken run. The
+command also named `nsExports` and `nsTypes`, two spellings that select nothing
+in 6.32.2.
 
-`ts-prune` is nonetheless still the shipped tool, and it is now the WEAKER
-choice on maintenance as well: `ts-prune` 0.10.3 was published on 2021-12-12,
-its repository is archived, and its README names knip as the successor. The
-swap is tracked as its own card, because two properties have to be answered
-first. Knip has no line-comment suppression at all, so the staging contract
-would move to a JSDoc tag and `/** @public */` states "public" rather than "a
-consumer lands next". And knip exits 1 for a run that found issues and 2 for a
-run it could not make, so the script has to tell those apart.
+Re-measured with dependencies installed and knip tuned — given the entry list
+`dead-code-typescript` already computes, an `ignore` from each tsconfig's
+`exclude`, and `ignoreExportsUsedInFile` — both of knip's losses go away, so it
+was not rejected a second time on a configuration nobody tried:
+
+| workspace | `dead-code-typescript` | knip tuned | genuinely dead, this rule | genuinely dead, knip |
+|---|---|---|---|---|
+| zod | 76 | 7 | 28 | 4 |
+| zustand | 1 | 0 | 0 | 0 |
+| redux | 6 | 1 | 1 | 1 |
+
+knip wins precision — 100 % against 35 % — and it is 20 times faster. RECALL
+decided it: of the 30 genuinely dead symbols the two tools jointly name, this
+rule names 29 and tuned knip names 2. knip resolves reachability FIRST, so a
+module no entry reaches becomes ONE positionless `files` entry whose exports are
+never enumerated, and over zod that swallows 27 dead symbols into 6 lines with
+no names. No configuration changes it. `dead-code-typescript` reports
+`path:line` on changed files, and an author adding a module nothing imports yet
+is exactly the shape knip cannot report by symbol.
+
+Two facts recorded against a future re-opening. knip's staging marker EXPIRES,
+which `// ts-prune-ignore-next` never does: a custom JSDoc tag under
+`--tags=-<name>` raises `Unused tag ...` the moment the consumer lands. And a
+`tsconfig.json` that is not JSON is silent under BOTH tools, so the swap would
+not have answered the open card about a broken tool reading as a clean tree.
+`dead-code-typescript` carries every measurement.
 
 ### `periphery` — rejected, and the rejection is superseded by `dead-code-swift`
 

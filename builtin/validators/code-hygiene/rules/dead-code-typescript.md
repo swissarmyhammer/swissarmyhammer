@@ -249,6 +249,23 @@ Each of the three publishes a real `src/index.ts`, which is the shape the
 exported-public-API carve-out is about. This workspace is the control: both of
 its TypeScript projects are private applications that publish nothing.
 
+**Every count in this file states whether the repository's dependencies were
+installed**, because both tools move with that state. Measured over the three
+libraries, each cloned twice — once bare and once after the package manager the
+repository names had run:
+
+| workspace | this rule, bare | this rule, installed | time bare | time installed |
+|---|---|---|---|---|
+| zod | 78 | 76 | 7.8 s | 11.5 s |
+| zustand | 1 | 1 | 0.7 s | 0.9 s |
+| redux | 6 | 6 | 1.0 s | 1.7 s |
+
+The two zod findings that go are `packages/docs/source.config.ts` `docs` and
+`blogPosts`: that package's `postinstall` runs `fumadocs-mdx`, which writes a
+`.source` module importing both. So an install can only ADD callers, and this
+rule reads more findings without one rather than fewer. The tool it was compared
+against behaves the other way, and the survey below states that.
+
 ## The exported public API, which the manifests answer
 
 `dead-code`, the prompt rule this one supersedes, exempts "a `pub`/exported item
@@ -282,7 +299,7 @@ the run leaves every one of them under the gate.
 This is `--retain-public` for TypeScript. `dead-code-swift` passes that flag and
 Alamofire drops from 493 findings to 103; the numbers here are the same shape.
 
-Measured over the corpus:
+Measured over the corpus, each repository bare:
 
 | workspace | findings, no entry carve-out | findings, the shipped run | time |
 |---|---|---|---|
@@ -402,27 +419,103 @@ changed:
 `import/no-unused-modules` unchecked in its tracking issue, and Biome's
 `noUnusedExports` is an open discussion.
 
-`knip` answers BOTH carve-outs of this rule natively. Its documentation states
-"The `main`, `bin`, and `exports` fields may contain entry files", and it ships a
-plugin for each framework whose configuration file becomes an entry file of its
-own. Measured over the same corpus, `knip 6.32.0` with
-`--include exports,nsExports,types,nsTypes`:
+### The knip decision, and what decided it
 
-| workspace | this rule | knip |
-|---|---|---|
-| zod | 78 | 13 |
-| zustand | 1 | 0 |
-| redux | 6 | 2 |
+`ts-prune` IS KEPT. The whole question was re-opened against `knip 6.32.2` and
+settled on measurement, and this section is that record so the next reader
+re-opens it with numbers rather than a survey.
 
-The difference is the framework carve-out this rule leaves to the marker.
+**The table this decision replaces was measured in a broken state.** An earlier
+comparison read `zod` 78 against 13, `zustand` 1 against 0 and `redux` 6 against
+2, and every one of those knip numbers came from a repository with NO
+`node_modules`. knip is DEGRADED there and says so on stderr —
+`ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')` —
+while still exiting 1. `zustand`'s 0 was a failed configuration load, not a clean
+tree. Two spellings in that command were dead as well: `nsExports` and `nsTypes`
+select nothing in 6.32.2, and the live key is `namespaceMembers`.
 
-`ts-prune` is kept here, and the swap is a decision of its own rather than a
-side effect of this one. Two properties have to be answered first. `knip` has no
-line-comment suppression at all — its documentation refuses one — so the staging
-contract would move to a JSDoc tag, and `/** @public */` says "public" rather
-than "a consumer lands next". And `knip` exits 1 for a run that found issues and
-2 for a run it could not make, so the script would have to tell those apart
-where this one reads a report.
+Re-measured with dependencies installed, and with knip TUNED — handed the entry
+list this rule's own node script already computes, an `ignore` built from each
+tsconfig's `exclude`, and `ignoreExportsUsedInFile: true`, which is the lever
+that matches this rule's own `(used in module)` drop:
+
+| workspace | this rule | knip tuned | this rule, time | knip, time |
+|---|---|---|---|---|
+| zod | 76 | 7 | 10.8 s | 0.4 s |
+| zustand | 1 | 0 | 0.9 s | 0.4 s |
+| redux | 6 | 1 | 1.7 s | 0.5 s |
+
+Both losses an untuned knip showed are configurable away, so knip was NOT
+rejected on a configuration nobody tried — the earlier rejection in
+`VALIDATOR.md` made that error once. Naming zustand's `paths` entries takes it
+from 8 findings to 0; an `ignore` naming `examples/**` takes redux from 4 to 1.
+
+Every finding of both tools was then read by hand:
+
+| workspace | tool | findings | genuinely dead | framework entry | used in own file | wrong |
+|---|---|---|---|---|---|---|
+| zod | this rule | 76 | 28 | 47 | 0 | 1 |
+| zod | knip tuned | 7 | 4 | 0 | 3 | 0 |
+| zustand | this rule | 1 | 0 | 1 | 0 | 0 |
+| zustand | knip tuned | 0 | 0 | 0 | 0 | 0 |
+| redux | this rule | 6 | 1 | 5 | 0 | 0 |
+| redux | knip tuned | 1 | 1 | 0 | 0 | 0 |
+
+knip wins PRECISION outright, 100 % against 35 %, and it is 20 times faster. It
+loses RECALL, and recall is what decided this. **Of the 30 genuinely dead
+symbols the two tools jointly name, this rule names 29 and tuned knip names 2.**
+
+Three causes, and no option reaches any of them:
+
+- **knip will not enumerate the exports of a module no entry reaches.** It
+  writes one `files` entry carrying a name and NO ROW, and stops. Measured on a
+  probe publishing `src/index.ts` beside an unreferenced `src/orphan.ts` holding
+  three dead exports: `--include exports,types,namespaceMembers,enumMembers`
+  answers `{"issues":[]}` at exit 0, adding `files` answers one entry carrying
+  `"exports":[]`, and this rule names all three at rows 2, 5 and 10. Over `zod`
+  that shape swallows 27 dead symbols into 6 module lines with no names.
+- **A dead export inside a module that IS an entry is invisible.** `zod`
+  `packages/tsc/generate.ts` `VALIBOT` is dead and knip answers `No exports
+  found`, because a `package.json` script names the module. The one lever,
+  `includeEntryExports`, is all or nothing: it takes zod to 362 and zustand
+  to 13.
+- **`ignoreExportsUsedInFile` does not reach `namespaceMembers`.** All 3
+  remaining zod false positives are namespace members used on the next lines of
+  their own file.
+
+The first cause is fatal for THIS rule. Its claim is "every exported symbol no
+other module in the project imports", reported as `path:line`, and the everyday
+shape of that claim — an author adds a module nothing imports yet — is the one
+shape knip cannot report by symbol. knip makes a different claim: no entry
+reaches this file, and then, inside the files an entry does reach, nothing
+imports this export. A better gate and a worse inventory. The acceptance test
+`the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_nothing_imports`
+holds the probe above, so the property that decided this cannot be lost quietly.
+
+The other measurements the swap needed, recorded so no one repeats them:
+
+| the question | the answer |
+|---|---|
+| the machine-readable shape | `{"issues":[{"file":..., "<type>":[{"name","line","col","pos"}]}]}`, one object for each FILE, `issues` the only top-level key |
+| does it need an installed `node_modules` | YES. `redux` reports 2 findings without one and 7 with one, both at exit 1, and the only sign is stderr |
+| `-c <file>` | takes a path outside the project and REPLACES `knip.json`, `.knip.json`, `knip.jsonc` and `knip.config.ts`, but NOT `package.json#knip`, so every option has to be stated |
+| exit 0 | a clean run, `{"issues":[]}` |
+| exit 1 | a run that found issues, and also a run degraded by a missing `node_modules` |
+| exit 2 | a run knip refused to make; stdout is prose rather than JSON, and `--no-exit-code` cannot mask it |
+| a `tsconfig.json` that is not JSON | NO signal at all: exit 1, the count unmoved, 174 bytes on stderr the only difference |
+
+The last row is why the swap would NOT have answered the open card about this
+rule answering zero for a tool that broke. Both tools are silent for that shape,
+and a fail-closed test has to read stderr either way.
+
+What the swap WOULD have fixed is the path defect: knip runs once at the
+workspace root and writes each path relative to it, so the per-project prefix
+arithmetic this rule performs has no counterpart at all.
+
+`ts-prune` being archived is a real risk and it is not answered by keeping it.
+The successor is named, the corpus is kept, and the tables above are directly
+comparable, so this decision can be re-taken the moment knip enumerates the
+exports of an unreachable module.
 
 ## The staging contract
 
@@ -432,6 +525,30 @@ import. Nothing else counts. A staged export with no marker is dead.
 Measured on a probe project: an unannotated `export const` reports, and the same
 export behind `// ts-prune-ignore-next` does not. Put the reason on the same line
 after the marker, so the next reader can tell staged work from a leftover.
+
+**This marker does not expire, and that is a defect of the shipped tool rather
+than of the contract.** `builtin/validators/README.md` states "Prefer a marker
+that expires", because Rust's `#[expect(dead_code)]` raises
+`unfulfilled_lint_expectations` the moment the consumer lands and cleans itself
+up. `ts-prune` has no such report, so a `// ts-prune-ignore-next` outlives the
+change that justified it and no run ever asks for it back.
+
+`knip` DOES have one, and it is the one property where the successor is plainly
+stronger. Measured with knip 6.32.2: a custom JSDoc tag —
+`/** @staged the importer lands in the next change */` — filtered with
+`--tags=-staged` silences an export of every kind, and the moment a real importer
+lands knip writes `Unused tag in src/lib.ts: dStaged → @staged`, which
+`--treat-tag-hints-as-errors` turns into a nonzero status. Three constraints
+came with it: the tag must stand in a BLOCK comment, because `// @staged` is read
+as nothing; the name must be one alpha word, because `dist/util/tag.js` matches
+`/[a-zA-Z]+/` and `--tags=-sah` would therefore silence `@sah-staged` too; and
+`@public`, `@beta` and `@alias` never expire, because `isAlwaysIgnored` returns
+before the hint runs — beside carrying a TSDoc release-stage meaning that states
+the opposite of "a consumer lands next".
+
+The expiry did not carry the decision, because the section above shows the swap
+costing 27 of 29 genuinely dead symbols. It is recorded here because it is the
+strongest argument for re-opening the question.
 
 ## The rule owns its own gate
 
@@ -544,6 +661,12 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The five acceptance tests in
+move neither count. The six acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
+
+It cannot hold the module-level claim either. A fixture directory is flat and
+every fixture stands in the same program, so no fixture can be a module NOTHING
+imports while another is the entry that spares it. The sixth acceptance test
+stages that shape as a probe repository, and it is the test that pins the
+property the knip decision turned on.
