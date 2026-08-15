@@ -830,9 +830,11 @@ instead — `tsc -p tsconfig.json --listFilesOnly` prints the absolute path of
 every file the project's own program holds, and stops before the type check —
 and it spells each of those files the way the presenter spells it. The file
 whose spelling meets the reported one is the file of the finding. That is a
-fact about the program rather than an arithmetic on a path: ts-prune reports a
-file of the program, so a spelling ONE file of the program carries names that
-file and no other.
+fact about the program rather than an arithmetic on a path: ts-prune builds its
+program from the same `tsconfig.json` `tsc` read, so a spelling ONE file of
+that list carries names the file ts-prune reported and no other. Where the two
+readings of the program disagree, the run declines rather than guesses, and the
+list below states each way they can.
 
 `reportedAs` in the node script is the presenter's own operation, copied rather
 than modelled, and BOTH jobs of that script read it: the `--ignore` pattern has
@@ -849,11 +851,11 @@ and the engine keeps a workspace-scope finding only when its path meets a file
 of the run, so such a finding was dropped without a word — a silent miss.
 Completing one path and testing it against the filesystem instead named a REAL
 file the finding was not about wherever the cut fell inside a sibling's name —
-a wrong finding. The file list answers both, and it names a file that stands
-nowhere for no input at all: every path the run writes is a file the program
-holds.
+a wrong finding. The file list answers both: every path the run writes is a
+path `tsc` listed for the program, so no line of the report is a path the run
+made up.
 
-**An item whose spelling one file of the program does not carry is DECLINED.**
+**An item the file list does not place at exactly one file is DECLINED.**
 
 The run reports no finding for that item, and states it on stderr, on a line
 the engine reads:
@@ -873,7 +875,8 @@ wrote its drops at the project's own `tsconfig.json`, and the rule's own
 and `**/*.cjs` — select no `.json` path, so the workspace retain discarded
 every one of them on every run.
 
-Three things reach that line, and each is a fact rather than a judgment:
+The placement states an item on that channel for three reasons, and each one is
+a fact rather than a judgment:
 
 - Two files of the program carry the spelling. The `consumersrc` shape above is
   one.
@@ -883,9 +886,14 @@ Three things reach that line, and each is a fact rather than a judgment:
 - The program lists no file at all. That is one line for the whole project
   rather than one for each of its findings.
 
+The entry job writes on the same channel, and "Entry resolution fails OPEN"
+below states what that line carries.
+
 Measured over this workspace, the shipped script before this change against the
-shipped script after it: 58 findings and 58 findings, the same bytes on stdout,
-0 items declined, 0 bytes on stderr, 6.2 s against 7.3 s.
+shipped script after it, the lowest of three runs each: 58 findings and 58
+findings, the same bytes on stdout, 0 items declined, 0 bytes on stderr, and
+5.6 s against 6.3 s. The second `tsc` call is what those 0.7 s buy, and the
+answer it buys is the file list this section turns on.
 
 **The three library rows below were measured under the EARLIER placement**, and
 those checkouts no longer stand on the machine that measured them, so this
@@ -899,10 +907,12 @@ shipped run answers, and it is stated for the row that was re-measured:
 | redux | 6 | 0 | — |
 | this workspace | 58 | 0 | 0 |
 
-A count that moves under the shipped placement moves for one reason — a
-spelling one file of the program does not carry — and the run states each such
-item. So a re-measurement reads the difference off the report rather than off a
-diff of two lists.
+The placement reads the same rows ts-prune wrote and writes one row for each row
+it places, so it adds no row. A row goes missing two ways, and both are legible:
+the run declines the item, and it states each one it declines; or two projects
+that reported the same file now spell it alike and `sort -u` collapses a pair
+the earlier spelling held apart. So a re-measurement reads a difference off the
+report and off the duplicate rows, rather than off a diff of two lists.
 
 The one finding of zod's 76 that this section is about is
 `packages/zod/src/v4/core/standard-schema.ts:157` `StandardSchemaWithJSON`,
