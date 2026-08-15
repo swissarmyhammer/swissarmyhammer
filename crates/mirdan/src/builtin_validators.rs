@@ -142,8 +142,77 @@ mod tests {
     }
 
     /// The build artifact directory a fixture's own tool writes beside it. The
-    /// build script skips it, so the guard below must skip it too.
+    /// build script skips it, so the guards below must skip it too.
     const BUILD_ARTIFACT_DIR: &str = "target";
+
+    /// The directory the build script embeds, and the source of truth every
+    /// guard below is held against.
+    fn builtin_validators_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators")
+    }
+
+    /// The filename of every fixture the `set` ships on disk.
+    ///
+    /// Reads the set's `fixtures/` directory, which is what the build script
+    /// embeds, so the answer is the set of fixtures a deployed store receives.
+    /// A roster below names files, so this rejects a nested layout it could
+    /// never name.
+    ///
+    /// The name is taken as the directory stores it. The embedded name carries
+    /// that spelling through to the store, so a roster entry must match it
+    /// character for character; a match that ignored case would pass an entry
+    /// the store never writes under that spelling.
+    fn fixture_filenames_on_disk(set: &str) -> std::collections::BTreeSet<String> {
+        let fixtures_dir = builtin_validators_dir().join(set).join("fixtures");
+        let entries = std::fs::read_dir(&fixtures_dir).unwrap_or_else(|error| {
+            panic!(
+                "cannot read the fixtures directory {}: {error}",
+                fixtures_dir.display()
+            )
+        });
+
+        let mut filenames = std::collections::BTreeSet::new();
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "cannot read an entry of {}: {error}",
+                        fixtures_dir.display()
+                    )
+                })
+                .path();
+            let name = path
+                .file_name()
+                .expect("every directory entry has a file name")
+                .to_string_lossy()
+                .to_string();
+            if path.is_dir() {
+                assert_eq!(
+                    name, BUILD_ARTIFACT_DIR,
+                    "a fixtures directory holds fixture files and the \
+                     `{BUILD_ARTIFACT_DIR}` build artifact directory alone; \
+                     `{set}/fixtures/{name}` is neither, and a flat roster \
+                     cannot name what it holds"
+                );
+                continue;
+            }
+            filenames.insert(name);
+        }
+        filenames
+    }
+
+    /// Hold `subject` to naming nothing `reference` lacks.
+    ///
+    /// Fails with `complaint` and every name the two disagree on, so the
+    /// failure names the files rather than a count.
+    fn assert_no_names_outside(
+        subject: &std::collections::BTreeSet<&str>,
+        reference: &std::collections::BTreeSet<&str>,
+        complaint: &str,
+    ) {
+        let deviating: Vec<&str> = subject.difference(reference).copied().collect();
+        assert!(deviating.is_empty(), "{complaint}: {deviating:?}");
+    }
 
     /// Every file of a validator set reaches the store, not only its markdown.
     ///
@@ -152,8 +221,7 @@ mod tests {
     /// fixture-less, and the rule silently falls back to its prompt rule.
     #[test]
     fn test_every_builtin_validator_file_is_embedded() {
-        let source_dir =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators");
+        let source_dir = builtin_validators_dir();
         let embedded: std::collections::BTreeSet<&str> = get_builtin_validators()
             .into_iter()
             .map(|(name, _)| name)
@@ -222,8 +290,17 @@ mod tests {
         "lib.rs.tmpl",
     ];
 
-    /// The `code-hygiene` fixtures, one pair for each of its tool rules plus
-    /// the package files a `workspace`-scope tool needs beside them.
+    /// The `code-hygiene` fixtures: one fail/pass pair for each of its tool
+    /// rules, then the shared package files.
+    ///
+    /// A `workspace`-scope tool reads a package, not a loose file, so the
+    /// doctor stages the pair beside the package file of that language before
+    /// it runs the tool. The package files carry no defect and belong to no one
+    /// rule; every probe of their language needs them, so one copy stands here
+    /// for all of them.
+    ///
+    /// This roster and the directory it names agree in both directions, held by
+    /// [`test_fixture_rosters_and_the_fixtures_directory_agree`].
     const CODE_HYGIENE_FIXTURES: &[&str] = &[
         "missing-docs-rust.fail.rs.tmpl",
         "missing-docs-rust.pass.rs.tmpl",
@@ -257,6 +334,8 @@ mod tests {
         "magic-numbers-go.pass.go.tmpl",
         "magic-numbers-swift.fail.swift.tmpl",
         "magic-numbers-swift.pass.swift.tmpl",
+        "magic-numbers-dart.fail.dart.tmpl",
+        "magic-numbers-dart.pass.dart.tmpl",
         "function-length-rust.fail.rs.tmpl",
         "function-length-rust.pass.rs.tmpl",
         "function-length-python.fail.py.tmpl",
@@ -271,24 +350,77 @@ mod tests {
         "function-length-dart.pass.dart.tmpl",
         "stuttering-name-go.fail.go.tmpl",
         "stuttering-name-go.pass.go.tmpl",
+        "Cargo.toml.tmpl",
+        "Cargo.lock.tmpl",
+        "lib.rs.tmpl",
+        "pyproject.toml.tmpl",
+        "tsconfig.json.tmpl",
+        "go.mod.tmpl",
+        "Package.swift.tmpl",
     ];
 
-    /// The shipped tool rules' fixtures reach the store, so doctor can prove
-    /// each rule healthy in an installed project.
-    ///
-    /// Every set that ships a tool rule is listed here. A set whose fixtures
+    /// Each set that ships tool-rule fixtures, paired with the roster naming
+    /// them. Every set that ships a tool rule stands here. A set whose fixtures
     /// never reach the store has every one of its rules reported fixture-less,
     /// and each falls silently back to its prompt rule — or, for a rule that
     /// supersedes nothing, to no rule at all.
+    const FIXTURE_ROSTERS: &[(&str, &[&str])] = &[
+        ("code-hygiene", CODE_HYGIENE_FIXTURES),
+        ("manifests", MANIFESTS_FIXTURES),
+    ];
+
+    /// Each fixture roster and the directory it stands for agree in BOTH
+    /// directions.
+    ///
+    /// A roster is written by hand, so it drifts from the directory two ways,
+    /// and a guard that only walks the roster sees neither. A fixture added on
+    /// disk and left out of the roster stays unheld: every entry the roster
+    /// does name exists, so the list is internally consistent and wrong only by
+    /// omission. A roster entry whose file was renamed or deleted names
+    /// nothing, and the rule it stands for loses its fixtures with no test to
+    /// say so.
+    #[test]
+    fn test_fixture_rosters_and_the_fixtures_directory_agree() {
+        for &(set, roster) in FIXTURE_ROSTERS {
+            let filenames = fixture_filenames_on_disk(set);
+            let on_disk: std::collections::BTreeSet<&str> =
+                filenames.iter().map(String::as_str).collect();
+            let listed: std::collections::BTreeSet<&str> = roster.iter().copied().collect();
+
+            // Two empty sets agree, so a directory that read as empty would
+            // carry this test to a pass having compared nothing.
+            assert!(
+                !on_disk.is_empty(),
+                "`{set}/fixtures/` reads as empty, so the two comparisons below \
+                 hold nothing and this test cannot fail"
+            );
+
+            assert_no_names_outside(
+                &on_disk,
+                &listed,
+                &format!(
+                    "`{set}` ships these fixtures on disk and no roster entry names \
+                     them, so nothing holds them to reaching a deployed store"
+                ),
+            );
+            assert_no_names_outside(
+                &listed,
+                &on_disk,
+                &format!(
+                    "the `{set}` roster names these fixtures and no file on disk \
+                     answers them, so the rule they stand for has lost its fixtures"
+                ),
+            );
+        }
+    }
+
+    /// The shipped tool rules' fixtures reach the store, so doctor can prove
+    /// each rule healthy in an installed project.
     #[test]
     fn test_tool_rule_fixtures_are_embedded() {
         let sets = builtin_validators_by_set();
 
-        let expected = [
-            ("code-hygiene", CODE_HYGIENE_FIXTURES),
-            ("manifests", MANIFESTS_FIXTURES),
-        ];
-        for (set, fixtures) in expected {
+        for &(set, fixtures) in FIXTURE_ROSTERS {
             let files = &sets[set];
             for fixture in fixtures {
                 assert!(
