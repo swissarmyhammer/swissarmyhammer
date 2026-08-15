@@ -385,7 +385,7 @@ const TYPESCRIPT_OUTSIDE_MODULE_PROBE: ShippedStagedTree = ShippedStagedTree {
     ],
     reason: "the presenter's cut leaves a file inside the project under the project directory \
              and a file the cut never touched at its whole absolute path less the leading \
-             separator, and the run rebuilds each from the working directory ts-prune used",
+             separator, and the run reads both back off the file list of the program",
 };
 
 /// The head the staged module of the outside-module probe carries: none. The
@@ -493,19 +493,9 @@ const TYPESCRIPT_SIBLING_PREFIX_TSCONFIG: &str = concat!(
     "}\n",
 );
 
-/// The row the run reports a DROPPED finding at.
-///
-/// The project's own tsconfig is the file whose program made the spelling, and
-/// it always stands as a file, so the drop travels the channel a finding
-/// travels rather than a pipe nothing reads.
-const TYPESCRIPT_CONSUMER_DROP_ROW: &str = "packages/consumer/tsconfig.json:1";
-
-/// The words the claim of a dropped finding opens with.
-const TYPESCRIPT_DROP_CLAIM_HEAD: &str = "dead-code-typescript dropped one finding.";
-
-/// The spelling two files of the sibling-prefix probe both answer, which is
-/// the finding that run drops.
-const TYPESCRIPT_DROPPED_SPELLING: &str = "src/lib.ts:2";
+/// The spelling two files of the sibling-prefix probe both carry, which is the
+/// finding that run declines.
+const TYPESCRIPT_DECLINED_SPELLING: &str = "src/lib.ts:2";
 
 /// A probe whose project stands beside two packages whose names begin with its
 /// own.
@@ -514,8 +504,8 @@ const TYPESCRIPT_DROPPED_SPELLING: &str = "src/lib.ts:2";
 /// the working directory: `src/lib.ts:2`, `src/other.ts:4` and
 /// `-bench/src/lib.ts:2`. The first row is the `packages/consumersrc` module
 /// wearing the spelling of `packages/consumer/src/lib.ts`, whose row 2 holds
-/// the LIVE export instead. Two files answer that spelling, so the run drops
-/// it and reports the drop at [`TYPESCRIPT_CONSUMER_DROP_ROW`].
+/// the LIVE export instead. Two files of the program carry that spelling, so
+/// the run reports no finding for it and declines the item out loud.
 const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
     run: ShippedRun {
         project_types: NODEJS_PROJECT_TYPES,
@@ -523,7 +513,6 @@ const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
         expected: &[
             "packages/consumer/src/other.ts:4",
             "packages/consumer-bench/src/lib.ts:2",
-            TYPESCRIPT_CONSUMER_DROP_ROW,
         ],
     },
     staged: &[
@@ -539,9 +528,9 @@ const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
         (TYPESCRIPT_SIBLING_BENCH_LIB_PATH, TYPESCRIPT_PROBE_LIB),
         (TYPESCRIPT_SIBLING_CUT_LIB_PATH, TYPESCRIPT_PROBE_LIB),
     ],
-    reason: "the cut the presenter makes needs no separator after the match, so the run rebuilds \
-             each spelling the cut can have made and reports the finding only where exactly one \
-             of them stands as a file; it never names a file that is not the file of the finding",
+    reason: "the run spells each file of the program the way ts-prune spells it, and reports the \
+             finding at the one file that carries the spelling ts-prune wrote; it never names a \
+             file that is not the file of the finding",
 };
 
 /// Acceptance: an export the package manifest publishes is not dead.
@@ -639,8 +628,9 @@ fn the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_not
 /// path it reports, and cuts one leading separator after that. A file INSIDE
 /// the project therefore comes back under the project directory, and a file the
 /// cut never touched comes back as the whole absolute path less that separator.
-/// The run rebuilds both from the working directory ts-prune used, which is the
-/// operation `reportedAs` in the rule's own node script copies as well.
+/// The run reads both back off the file list of the program: it spells each
+/// file of that list the way the presenter spells it, and the file whose
+/// spelling meets the reported one is the file of the finding.
 ///
 /// Measured over `zod` at `4e1720c` with the dependencies installed: 1 of the
 /// 76 findings named `packages/bench/<the absolute path of the checkout>/
@@ -665,47 +655,42 @@ fn the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project
 /// `-bench/src/lib.ts`, and `packages/consumersrc/lib.ts` reaches it as
 /// `src/lib.ts` — the spelling of a real, LIVE file of the project.
 ///
-/// The run rebuilds every spelling the cut can have made from the working
-/// directory ts-prune used, and reports the finding at the one that stands as
-/// a file. Two spellings that both stand are a path the run cannot confirm, so
-/// the run drops that finding and reports the drop at the project's own
-/// tsconfig.
+/// The run never inverts that cut. It spells each file of the program the way
+/// the presenter spells it, and reports the finding at the one file that
+/// carries the spelling ts-prune wrote. A spelling two files of the program
+/// carry names no one file, so the run reports no finding for it.
 #[test]
 fn the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding() {
     verify_shipped_tree_reports(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
 }
 
-/// Acceptance: a finding the run drops is said out loud, on stdout.
+/// Acceptance: a finding the run cannot place is stated out loud.
 ///
-/// A drop written on stderr reaches nobody. `run_shell` pipes stderr, so no
-/// terminal inherits it, and the runner reads that buffer only for a run that
-/// exits NONZERO. This rule exits 0 on a normal run, so a drop written there
-/// reaches no author, no log and no report — a run that dropped a finding then
-/// reads exactly like a clean tree.
+/// A run that reports no finding and exits 0 over an item it never judged reads
+/// exactly like a clean tree. `builtin/validators/README.md` states the answer:
+/// a script that judged the code and could not judge ONE item writes a line
+/// opening `sah-diagnostic:` on stderr and still exits 0, and the report states
+/// each marked line.
 ///
-/// stdout is the channel every finding travels, so the drop travels it too.
-/// The run writes it at the project's own tsconfig, which is the file whose
-/// program made the spelling and always stands as a file.
+/// No file filter can drop such a line. The engine keeps a workspace-scope
+/// FINDING only when its path meets a file of the run, and a diagnostic is
+/// about the RUN rather than about a reviewed file, so it has no path to be
+/// kept by.
 ///
-/// The row alone is not the whole of it. This test reads the CLAIM, so a run
-/// that wrote some other sentence at that row cannot pass.
+/// The count alone is not the whole of it. This test reads the MESSAGE, so a
+/// run that declined some other item cannot pass.
 #[test]
-fn the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_drops_out_loud() {
-    let claims = drive_shipped_staged_tree_claims(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
-
-    let dropped: Vec<&String> = claims
-        .iter()
-        .filter(|claim| claim.starts_with(TYPESCRIPT_DROP_CLAIM_HEAD))
-        .collect();
+fn the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_declines_out_loud() {
+    let declined = drive_shipped_staged_tree_diagnostics(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
 
     assert_eq!(
-        dropped.len(),
+        declined.len(),
         1,
-        "the run must say the one finding it drops out loud; it reported {claims:?}"
+        "the run must state the one finding it cannot place; it stated {declined:?}"
     );
     assert!(
-        dropped[0].contains(TYPESCRIPT_DROPPED_SPELLING),
-        "the drop must name the line it dropped; it said '{}'",
-        dropped[0]
+        declined[0].contains(TYPESCRIPT_DECLINED_SPELLING),
+        "the diagnostic must name the finding it declined; it said '{}'",
+        declined[0]
     );
 }

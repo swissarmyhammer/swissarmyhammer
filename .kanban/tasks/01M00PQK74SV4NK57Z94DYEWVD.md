@@ -138,8 +138,34 @@ comments:
     - evidence: 8 files — crates/swissarmyhammer-validators/src/review/scope/resolve.rs, crates/swissarmyhammer-validators/src/review/scope/tests.rs, crates/swissarmyhammer-sem/src/parser/plugins/code/mod.rs, complexity.rs, duplication.rs, entity_extractor.rs, commented_code.rs, public_surface.rs. `cargo nextest run --workspace` 14213 passed 0 skipped; fmt and clippy clean.
     - next: /review. Note for the reviewer: the fix is NOT yet proven against the live `review file`, because the running MCP server (PID 16107) executes a binary built before the edit.
   timestamp: 2026-08-14T22:31:32.461187+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m016rscan8eqbc0cyxb9hnkf
+  text: |-
+    ### review — clean
+    - scope: `review sha 8dcb83f15~1..8dcb83f15` — diffs only, 8 files reviewed, 0 not reviewed, 0 skipped
+    - evidence: counts findings=0, confirmed=0, refuted=1, attempted=9, failed=0 — no file:line findings
+    - no `reuse` or `duplication` finding reached the report on the nine new per-site doc records or on the functions they document
+    - no prior Review Findings section on this task, so nothing was left unchecked
+    - next: none — task moved to done
+  timestamp: 2026-08-14T22:37:33.450689+00:00
+- actor: claude-code
+  id: 01m016t5hwwct31g2cm9z9mpfv
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - **Job 1: reproduced, root-caused, fixed in one line.** Reproduced at 2 findings then 0 on `complexity.rs` with a clean tree both times. `resolve_file` read the base side from HEAD unconditionally, so a file matching HEAD was diffed AGAINST ITSELF: the sem differ returned no changes, and `run_similar` — which iterates ADDED function entities — emitted zero `ProbeResult`s. Not an empty-rows result; NO result. The prompt rendered `_No probe evidence._`, which says nothing about whether the probe ran, so `reuse` judged from nothing and varied run to run.
+    - It contradicted two comments already in the tree: `resolve_file`'s own doc says a file carries "its working-tree changes if any, else its whole content reviewed as all-added work", and `scope_review` says whole-content files carry only `after_content`. `resolve_glob` did that; `resolve_file` did not. Fix: `let base = if head == working { None } else { head };`
+    - Both halves of the card's diagnostic question are answered: the probe runs on every pass, and an empty candidate list now renders its own header plus the `(no rows)` sentinel — different text from `_No probe evidence._`.
+    - Alternatives ruled out with EVIDENCE, not reasoning: index fully embedded (50432/50433 chunks, 1904/1904 files); no timeout, row cap, `spawn_blocking` or `catch_unwind` anywhere on the probe path (every timeout in drive.rs is `#[cfg(test)]`, and `budget` values are rendered prompt bytes); no dummy-vector fallback in the embedder; `fuse_and_rank` builds hits in doc-index order with a stable sort, so it never leaks HashMap ordering.
+    - **Job 2: settled AGAINST a shared tree-sitter helper**, and the card's evidence was verified against source rather than taken. The `Option` vs `""` split in `node_text` is LOAD-BEARING: `complexity` compares the text against test markers, so `""` would read as "not a test" and score a test function as complex code, while `duplication` must still hash a chunk whose slice it cannot read; `entity_extractor` takes `&[u8]` and validates UTF-8 where the two `&str` copies slice and miss on codepoint boundaries. The four `spec_for_language` rosters are four unrelated types, two slices of references and two of values — a shared version costs a trait plus four impls to replace four one-line bodies, which the `duplication/rust` rule rejects as relocation rather than reduction.
+    - The decision is written WHERE THE VALIDATOR WILL FIND IT — the reuse validator inlines the file, so it lives in the code: a module-doc section plus nine per-site records, each stating that site's own contract so the notes are not themselves a duplicated block.
+    - test: green — 14213 passed, 0 skipped. fmt and clippy clean. `cargo doc` warnings unchanged from the stashed baseline, 13 both ways.
+    - commit: 8dcb83f15
+    - review: clean — 0 findings, 9 attempted, 1 refuted, 8 files reviewed, 0 not reviewed. No reuse or duplication finding fired on the new doc records or the functions they document, so the loop this card exists to stop did not recur.
+
+    **Two bounds on what this proves, stated rather than glossed.** The defect is in `resolve_file` and reaches `review file` ONLY — a `review sha` run, where before and after genuinely differ, could not exercise it either way, so the finish loop's own reviews were never affected. And the running server executes a binary built BEFORE this commit, so the fix is not live in the process that reviewed it. Proving `review file` repeatable needs a rebuild and a server restart.
+  timestamp: 2026-08-14T22:38:18.684519+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8680
 title: 'review file is not repeatable: the same bytes returned 0, then 8, then 0 findings'
 ---
 Measured on 2026-08-14 while working ^hmw6f0z, on `crates/swissarmyhammer-sem/src/parser/plugins/code/complexity.rs`.

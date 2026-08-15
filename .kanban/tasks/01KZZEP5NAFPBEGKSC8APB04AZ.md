@@ -255,8 +255,43 @@ comments:
     - next: ready for `/review`. The 17 pre-existing defects named in the 07:13 section are deliberately still in the tree — out of scope for a diff op, and `/review <path>` is the tool for them.
     task: ^apb04az
   timestamp: 2026-08-14T14:44:39.969256+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00c07mwnx1t2rb1g6rt5s7n
+  text: |
+    ### review — clean
+
+    - evidence: `review sha d9f51b304~1..d9f51b304` — 0 findings, 0 confirmed, 0 refuted. 9 validators attempted, 0 failed, 0 skipped, 0 skipped files. All 35 prior findings are checked; 0 open.
+    - scope line present in the report: "> Scope: `review sha d9f51b304~1..d9f51b304` — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 0 not reviewed." The 3 files are `fleet/tests/renderer.rs`, `scope/resolve.rs`, `synthesize.rs`; the 2 other paths in the commit are this card's own `.kanban` files, which are not source.
+    - engine identity: the MCP server is pid 82279, started 08:53:44. `lsof` shows it execs `target/release/sah` inode 389059752, mtime 08:50:26 — the build that carries this card's change. The older pid 65954 execs a different, replaced inode (387862663) and did not serve this call, which the scope line in the output confirms.
+    - attribution: 0 findings raised, so no finding lands on a pre-existing line. Nothing to attribute by `git blame`.
+    - honesty check: 0 findings dropped for a false premise. The blanket existing-tests exception is deleted and was not applied.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-14T14:49:45.884537+00:00
+- actor: claude-code
+  id: 01m00c1qmkhf6fyzkk264zvtxh
+  text: |-
+    ### finish iteration 4 — clean. Card done.
+    - implement: changed — 3 files. All 4 acceptance-run findings worked, 0 false premises, each file swept for the same cause. renderer.rs collapses `marked_row`/`unmarked_row` into one `format_row(line, mark)` with named `CHANGED_MARK`/`CONTEXT_MARK` so a bare `' '` cannot be misread. resolve.rs gains `renames_of_diff` and `push_moved_file`; the latter takes the rename map rather than a second bare `FilePath`, which respects that file's own documented rule at `FileVersions::moved_from` — a second path beside the destination is the transposition the typed halves exist to prevent. synthesize.rs takes `impl IntoIterator`, with 1 extra site of the same cause found and fixed in `build_candidates` and two measured and left with reasons.
+    - The 18 deferred findings checked off as resolved by the scope fix, not by an edit.
+    - test: green — cargo nextest run --workspace 14194 passed, 0 failed, 0 skipped. fmt and clippy clean. No public declaration changed.
+    - commit: d9f51b304
+    - review: clean — 0 findings, 9 validators attempted, 0 failed, 0 skipped, 3 files reviewed, 0 not reviewed. Task moved to done.
+
+    **The clean was proved real rather than assumed**, which is the discipline this card added applied to itself. The scope line `> Scope: review sha d9f51b304~1..d9f51b304 — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 0 not reviewed.` appears in the output, and the string ` file(s) reviewed, ` exists ONLY in the 08:50:26 binary — so its presence proves the new engine served the call, not the older `sah serve` still running on a replaced image. All 9 `*.rs` validators ran with 0 failed and 0 skipped.
+
+    **Every done-when item is met:**
+    - `review working` / `review sha` report findings only on added or modified lines — acceptance run: 4 of 4 on the change, 0 of 18 pre-existing raised, with 17 subjects demonstrably still in the tree.
+    - `review file` still reviews whole files, test files included, with no exception suppressing the answer.
+    - No review round needed `git blame` to decide scope — the last two rounds ran blame only to REPORT attribution, never to decide it.
+    - The existing-tests exception is gone from SKILL.md with no replacement anywhere.
+    - SKILL.md, the fan-out prompt, the file block, the output contract and the follow-up sweep each state REVIEW against CONSIDER.
+    - Rename detection is in `resolve.rs`, proved by a 200-line file moved with one added line marking exactly line 201, and all 201 with detection disabled.
+    - Every report names its scope and its exclusions, visible in the product.
+
+    Round counts across the card: 31, 4, 0. The first round ran on the old engine and is not comparable; the drop from 4 to 0 is the ordinary one.
+  timestamp: 2026-08-14T14:50:35.027933+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffffc80
 title: Review the diffs for a working or sha op, and the whole file for a file op
 ---
 The review engine reviews whole FILES that a change touched, not the CHANGE. So a one-line edit to a 4000-line file offers the reviewer 4000 lines, and the reviewer reports defects that were there before the author arrived.

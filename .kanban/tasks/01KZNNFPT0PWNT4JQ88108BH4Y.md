@@ -83,8 +83,39 @@ comments:
     - follow-up cards: ^3r5bhpj (knip swap), ^gxncs25 (silent zero on a ts-prune crash), ^yxky1aj (absolute path prefixed onto a project path)
     - next: /review
   timestamp: 2026-08-14T23:49:05.891716+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m01bbqcr3wymsvvr8tqf1bje
+  text: |-
+    ### review — clean
+    - evidence: `review sha 7f4ef93a3~1..7f4ef93a3`, diffs only, 4 files reviewed, 0 not reviewed. 9 validator runs attempted, 0 failed, 0 skipped. counts: 0 findings, 0 confirmed, 0 refuted. No prior Review Findings section on the card, so no unchecked item stays open.
+    - findings dropped for a false premise: 0. The engine raised no finding, so no claim needed a read to confirm.
+    - judged the one deviation the implementer stated: no fixture pair was added.
+      - The premise is TRUE, and it was read, not assumed. `crates/swissarmyhammer-validators/src/doctor.rs` `run_fixture` counts only the findings whose file name equals the fixture under test. Both carve-outs take findings off `src/index.ts`, a different file.
+      - One qualification, which does not change the decision. The pass half of a pair CAN hold the entry carve-out if the pass fixture is made the published entry, so "a pair cannot distinguish" is stronger than what holds. The cost makes the decision right anyway: the pass fixture would stop holding the marker contract it now holds for five kinds of export, one pair holds one bit and there are two entry paths, and it can hold neither negative control. `builtin/validators/code-hygiene/fixtures/` also carries no `package.json` and is shared by 4 TypeScript rules and 8 TypeScript fixtures, which is the second stated reason and it is correct.
+      - The 5 acceptance tests DO hold the carve-outs, and they run green: `cargo test -p swissarmyhammer-validators --lib shipped::dead_code_typescript` 5 passed, 0 failed. `verify_shipped_tree_reports` asserts the EXACT reported set, so each probe holds absence and presence together, which a fixture pair cannot do.
+        - Carve-out 1 (published surface) is held twice, each with a control: the `exports` `source` probe and the `paths` self-reference probe each expect `["src/lib.ts:2"]` alone, so the entry is silent AND the ordinary module still reports. The `@internal/*` alias in the second probe maps every source file and must exempt nothing, which catches an over-broad carve-out.
+        - Carve-out 2 (framework-registered) is held as the MARKER contract only, not as detection. The rule body states outright that ts-prune has no plugin, no configuration reader and no framework roster, and 69 of the 143 remaining findings are this shape and each needs a hand-written marker. The card granted this by naming the annotation contract and saying "Decide."
+        - The test carve-out is held two-sided by the in-program and out-of-program probes, and the project-config probe closes the live hole where a project's own ts-prune settings silenced the gate.
+      - "3 of 5 watched RED" is consistent with the change: probes 1 and 2 would report the extra `src/index.ts:2` under the old rule and the project-config probe would report nothing. History was not replayed.
+    - next: none, the card is done.
+  timestamp: 2026-08-14T23:57:48.312013+00:00
+- actor: claude-code
+  id: 01m01bd5r7nykf3qwfy93tkcap
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - **The card's proposed mechanism was REFUTED as stated.** It suggested reading `package.json` `main`/`exports`. Those name BUILD OUTPUT: only 9 of 37 zod entry paths, 0 of 4 redux and 0 of 5 zustand resolve to a source file. So the run reads TWO facts, both the package stating its own surface — every string leaf of `exports` plus `main`/`module`/`browser`/`types`/`typings`/`bin`, AND every `compilerOptions.paths` target whose key is a workspace package's OWN name, since a self-name mapping states the surface while a generic `@internal/*` alias does not. Both go to ts-prune's `--ignore`.
+    - The mandatory marker survives only for the framework-registered shape, which ts-prune has no mechanism to see — no plugin, no config reader, no framework roster. 69 of the 143 remaining findings are that shape. Held as a MARKER CONTRACT, not as detection, and stated plainly in the rule.
+    - **A live hole was closed on the way**: a project's own `package.json#ts-prune {"ignore": "src"}` silenced the ENTIRE gate — 0 findings before, 1 after the run began stating its own `--ignore`/`--skip`.
+    - Corpus at HEAD 2026-08-14: zod 4e1720c 424 files 1946→78; zustand 2115efb 34 files 9→1; redux 3084fc3 53 files 14→6; this workspace 58→58, correct because both its TS projects are private and publish nothing.
+    - **Tool survey found ts-prune ARCHIVED** — published 2021-12-12, repo archived, maintenance notice its own author added 2025-09-19 naming `knip` as successor. knip answers BOTH carve-outs natively (entry files from package.json, plus a plugin per framework): zod 13 against this rule's 78. knip was not taken because the card names ts-prune; the swap is card ^3r5bhpj. Also filed: ^gxncs25 (the pipe answers zero when ts-prune crashes) and ^yxky1aj (project path prefixed onto an absolute path).
+    - **Deliberate deviation, and the reviewer judged it rather than accepting it**: no fixture pair was added, because doctor's `run_fixture` counts only findings whose file name equals the fixture under test, while both carve-outs remove findings from a DIFFERENT file — the entry module. The reviewer read `doctor.rs` and confirmed the premise, then qualified it honestly: the PASS half alone could hold the entry carve-out if the pass fixture were made the published entry, but it would lose the marker contract for five export kinds it currently carries, one pair carries one bit against two entry paths, and a pair can carry no negative control. Five acceptance tests over probe repositories carry the facts instead, 3 of 5 watched RED first, and `verify_shipped_tree_reports` asserts the EXACT reported set so each probe holds absence and presence together — which a fixture pair cannot do.
+    - Carve-out 1 is held twice, each with a control: the `exports` probe and the `paths` self-reference probe each expect `["src/lib.ts:2"]` alone, so the entry module is silent while the ordinary module still reports, and the second adds `"@internal/*"` mapping every source file which must exempt nothing — that control catches an over-broad carve-out, the dangerous failure.
+    - test: green — 743 validators, 522 mirdan. fmt and clippy clean.
+    - commit: 7f4ef93a3
+    - review: clean — 0 findings, 9 runs attempted, 0 failed, 0 skipped, 4 files reviewed.
+  timestamp: 2026-08-14T23:58:35.783786+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8880
 title: dead-code-typescript reports library entry points and framework-registered exports as dead
 ---
 `builtin/validators/code-hygiene/rules/dead-code-typescript.md` runs `ts-prune` per `tsconfig.json` and declares `supersedes: [dead-code]`.

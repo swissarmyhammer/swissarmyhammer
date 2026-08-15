@@ -122,8 +122,30 @@ comments:
     - evidence: 2 files — crates/swissarmyhammer-tools/tests/integration/file_tools_integrations/concurrency.rs, crates/swissarmyhammer-tools/tests/integration/file_tools_integrations/performance.rs. Both findings flipped to `- [x]`. Cause removed across each whole file: 37 more sites in concurrency.rs, 21 more sites in performance.rs. `cargo nextest run -p swissarmyhammer-tools` 1521 passed 0 failed 0 skipped; `cargo clippy --workspace --all-targets -- -D warnings` exit 0; `cargo fmt --check` clean.
     - next: ready for /review
   timestamp: 2026-08-14T15:49:09.267044+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00fmratpt00qqd3x9y13hbb
+  text: |-
+    ### review — clean
+    - evidence: `review sha 55497cf9f~1..55497cf9f` — 0 findings, 0 confirmed, 0 refuted, 9 validator passes attempted, 0 failed, 0 skipped. 2 file(s) reviewed, 0 not reviewed. Both prior findings (concurrency.rs:457, performance.rs:301) are checked.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-14T15:53:24.058187+00:00
+- actor: claude-code
+  id: 01m00fnvwvsdt4zxs2fya8j456
+  text: |-
+    ### finish iteration 2 — clean. Card done.
+    - implement: changed — 2 files. Both findings worked, 0 false premises. The shared cause (an unnamed count literal handed to a concurrency helper or used as a loop bound) was removed across both whole files: 10 more sites of the exact cause in concurrency.rs, 3 in performance.rs, plus the other literals the same rule covers — 58 further sites in total.
+    - Every constant is named for meaning, not value, and derived totals now derive: `MIXED_TOTAL_OPERATIONS` sums its four spawn counts and the success floor is that total minus the error ceiling, so a changed count cannot leave a lying assertion message behind.
+    - Three fixes went past renaming, because a rename alone would have left a defect on lines this work authored: the glob and grep selectors became named slices indexed by the modulus of their OWN length, so the modulus cannot drift from the arm count; the duplicated five-line read fixture became one helper with two callers; and a hand-rolled `content.len() / 1024 / 1024` became `MemoryProfiler::format_bytes`, dropping the unit literals and reporting the true size.
+    - test: green — 1521 swissarmyhammer-tools tests, 0 skipped; the 9 tests in the two files pass alone too. fmt and clippy clean.
+    - commit: 55497cf9f
+    - review: clean — 0 findings, 2 files reviewed, 0 not reviewed, 9 passes attempted, 0 failed. Task moved to done.
+
+    **A live test of the churn pattern, and it came out well.** The diff is large — 350 insertions, 91 deletions — in service of two small findings, which is exactly the shape that took ^4kzxdex four rounds. It produced ZERO new findings. The broad sweep did not generate a new round.
+
+    **One rule tension worth a human decision, recorded rather than resolved here.** The finish rule says a finding shows one example of a cause and the cause must be removed from the whole file. Card ^apb04az establishes that pre-existing code is out of scope for a diff op. Those two pull in opposite directions: 58 of the 60 sites fixed here were pre-existing literals the new engine would never have raised. It cost nothing this time and the result is better code, but the rules do not agree on whether it was in scope, and a future sweep may be larger and less benign.
+  timestamp: 2026-08-14T15:54:00.475335+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffffe80
 title: Dead test helper profile_memory hides behind allow(dead_code)
 ---
 `profile_memory` in `crates/swissarmyhammer-tools/tests/integration/file_tools_integrations/performance.rs` has no caller. It carries `#[allow(dead_code)]`, so the compiler does not report it.

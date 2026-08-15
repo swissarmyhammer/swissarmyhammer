@@ -60,8 +60,35 @@ comments:
     - evidence: 15 files. New — `builtin/validators/code-hygiene/rules/stuttering-name-go.md`, `builtin/validators/code-hygiene/fixtures/stuttering-name-go.{fail,pass}.go.tmpl`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/stuttering_name_go.rs`. Changed — `builtin/validators/code-hygiene/VALIDATOR.md`, `builtin/validators/code-hygiene/rules/missing-docs-go.md`, `crates/mirdan/src/builtin_validators.rs`, `crates/swissarmyhammer-validators/src/builtin/mod.rs`, and 6 files under `crates/swissarmyhammer-validators/src/review/tool_rules/tests/`. `cargo nextest run --workspace`: 14212 tests run, 14212 passed, 0 skipped. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-14T21:22:40.248604+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m0131y6qapttktmk19z036af
+  text: |-
+    ### review — clean
+    - evidence: `review sha 86ebb5eb6~1..86ebb5eb6` — 0 findings, 0 confirmed, 0 refuted, 18 validator-file pairs attempted, 0 failed. 10 files reviewed; the two `stuttering-name-go.*.go.tmpl` fixtures were excluded from scope as validator fixtures, so the demonstrated defect in them was not reported.
+    - roster check: `stuttering-name-go` is in every roster that must carry it — `crates/swissarmyhammer-validators/src/builtin/mod.rs` (`CODE_HYGIENE_NAMING_TOOL_RULES`, chained into both the count assertion and the supersedes map), `crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs` (`SHIPPED_STUTTERING_NAME_RULES`), `tests/shipped.rs` (`mod stuttering_name_go`), `tests/shipped/missing_docs.rs` (`SHIPPED_RULES_THAT_READ_A_GO_FILE`), and `crates/mirdan/src/builtin_validators.rs` (both fixtures).
+    - count check: the Go-file roster reads 26 and is sorted, with the entry after `no-commented-code` and before `code-security/command-safety`. `SHIPPED_TOOL_RULE_COUNT` reads 26 with the 15 + 11 split. `builtin/validators/code-hygiene/rules/missing-docs-go.md` states 26 two times. `builtin/validators/code-hygiene/VALIDATOR.md` names the rule in its prose and its table but states no Go-file count, so it has none to hold. No stale 25 is left anywhere.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-14T21:32:38.999063+00:00
+- actor: claude-code
+  id: 01m0133gmz53c1vg8t0pbr2vw8
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - implement: changed — 15 files, 4 of them new. A new shipped rule `code-hygiene/stuttering-name-go` owns the defect. It runs the SAME revive `exported` rule that missing-docs-go runs and selects `.RuleName == "exported" and .Category == "naming"`, so the two rules split revive's whole `exported` output with nothing owned twice and nothing dropped. `missing-docs-go` keeps `disableStutteringCheck` unchanged.
+    - The filter reads the CATEGORY, not the message text — deliberately. revive's `sayRepetitiveInsteadOfStutters` rewrites "that stutters" as "that is repetitive" while the Category does not move, so a filter on the sentence breaks the moment that argument is set.
+    - **The survey was run, not skipped**, each candidate over one probe file: of revive's 12 naming-category rules, `exported` reports the four repetitive names and `var-naming` reports only the underscore, the other ten silent; `staticcheck -checks all` reports ST1000, ST1003 and U1000 — it names more than `exported` does, but none of its checks reads a name against its package; `golangci-lint` with `default: all` is 115 linters and only revive reports the repetition.
+    - **revive has neither golangci-lint hazard, measured** rather than assumed: eight runs started together in one workspace each reported all four findings over two rounds, and a module of 400 packages cost 0.12 / 0.11 / 0.12 / 0.11s over first-cold, first-warm, second-cold and second-warm at two paths, each reporting its own 400 paths. Two acceptance tests hold both halves.
+    - **All three stale facts in the card were corrected**: the Go roster was 25 before this card rather than the stated 27, and is 26 now; the roster lives in `tests/shipped/missing_docs.rs` and is sorted, so the entry went in after `code-hygiene/no-commented-code`; and `dead-code-go` already carried its renamed form from ^n8ptdxb.
+    - RED first: with the rule file moved aside all eight new acceptance tests failed; mutating the shipped filter to drop the Category clause failed seven of the eight, the fixture pair among them.
+    - test: green — cargo nextest run --workspace 14212 passed, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: 86ebb5eb6
+    - review: clean — 0 findings, 18 pairs attempted, 0 failed, 0 skipped, 10 files reviewed, 2 not reviewed.
+
+    **Roster consistency verified at every named line**, since adding a rule is the change most likely to leave one stale: `builtin/mod.rs:298` (chained into BOTH the total-count assertion and the supersedes map, with an empty supersedes slice because this rule replaces no prompt rule), `tests.rs:150`, `shipped.rs` module registration, `missing_docs.rs:421` with the sort holding at 26 entries, and mirdan's fixture roster. The count reads 26 everywhere it is stated — `scope_roster.rs:51` with the split updated to 15 files plus 11 workspace, and `missing-docs-go.md` twice, where the stale sentence "No shipped rule owns a stuttering Go name today" is replaced by one naming the new owner. A repository sweep for a stale 25 found none. VALIDATOR.md names the rule in four places and states no count, so it has none to hold.
+
+    **The reviewer caught a false premise in its OWN work** and did not record it: an `rg` sweep rendered the rule name as `n-name-go`, which read as a broken registration. Re-reading the named lines with the file tool showed every one reads `stuttering-name-go` — a shell rendering artifact, not file content. The two fixtures were excluded from scope by the engine itself as `validator fixture`, so the deliberate defect the fail fixture demonstrates was never a candidate finding.
+  timestamp: 2026-08-14T21:33:30.655615+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8580
 title: No shipped rule owns a stuttering Go name
 ---
 `revive` reports a stuttering exported Go name — a name that repeats its own

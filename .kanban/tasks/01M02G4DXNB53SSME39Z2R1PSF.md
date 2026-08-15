@@ -101,8 +101,25 @@ comments:
     - **Found and fixed a genuine gap against this task's own "Done when" criterion** ("The deleted rules and fixtures are in the retired snapshot so a deployed store prunes them"): `crates/mirdan/src/retired_validators.rs` `RETIRED_VALIDATOR_FILES` had NOT been updated — the 6 deleted rule files (`cognitive-complexity.md`, `complexity-{go,python,rust,swift,typescript}.md`) and their 10 fixtures were absent, meaning any store an earlier install wrote would keep these forever with no prune. Recovered all 16 files byte-for-byte from `git show HEAD:<path>` and verified each via sha256 before wiring them in. Added entries to `RETIRED_VALIDATOR_FILES` (snapshots under `crates/mirdan/retired-validators/code-hygiene/{rules,fixtures}/`), added `RETIRED_RULES_WITH_NO_FIXTURES` to carve out `cognitive-complexity.md` (a probe/prompt rule with no fixtures, unlike the 5 tool rules) from the fixture-pairing guard, added a test proving that carve-out is real (not masking a gap), renamed/updated the roster-shape test, and updated `crates/mirdan/src/install/tests.rs` (`RETIRED_FIXTURE_COUNT` 4→14, plus "four"/"three" prose) to match. All `mirdan` tests green (523 passed) and full workspace green (14222 passed) after the fix.
     task: ^z2r1psf
   timestamp: 2026-08-15T12:12:27.161531+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m02rgmcprjka17wma5fbef3b
+  text: |-
+    ### review — clean
+    - evidence: `review sha b88bab962~1..b88bab962` — 0 findings, 0 confirmed, 0 refuted, 45 validator/file pairs attempted, 0 failed, 0 skipped. Scope line states "reviewed the diffs only — lines this change added or modified. 30 file(s) reviewed, 18 not reviewed." All 18 exclusions carry the reason "validator fixture", which covers the 6 new `.tmpl` fixtures that hold the defect they demonstrate.
+    - verification beyond the engine (read, not assumed):
+      - SHIPPED_TOOL_RULE_COUNT 25 MATCHES — 25 rule files carry `run:`.
+      - FILES_SCOPE_RULE_COUNT 14 MATCHES; WORKSPACE_SCOPE_RULE_COUNT 11 MATCHES; 14 + 11 = 25, no overlap, no gap.
+      - TEMP_DIRECTORY_RULE_COUNT 21 MATCHES — it counts run-rules whose script holds `mktemp -d`, a subset of the 25.
+      - Sorted Go-file roster in `tests/shipped/missing_docs.rs` — 24 entries MATCHES, and the order is correct.
+      - Rosters and supersedes map in `crates/swissarmyhammer-validators/src/builtin/mod.rs` — no deleted rule named; the 3 new rules are present and each supersedes `function-length`.
+      - `cargo check --workspace --all-targets` on a fresh target directory — 0 errors, 0 warnings.
+    - no leftover reference to the 6 deleted rule names. The `complexity` entries under `crates/mirdan/retired-validators/` and `retired_validators.rs` are the PRE-EXISTING retired validator SET from commit 54fc50ac05, untouched by this commit.
+    - the complexity probe wiring is gone and nothing dangles. `test_census.rs` imports 9 items from `complexity.rs`, and `test_census` has a live non-test consumer at `crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs`.
+    - not covered by this verdict: no validator declares a `*.md` glob, so the 3 new rule bodies (`function-length-rust.md`, `function-length-swift.md`, `function-length-typescript.md`) matched no validator and no validator read them.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-15T13:06:54.998395+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8d80
 title: Remove the complexity gates entirely and keep only function-length
 ---
 Drop complexity as a measured concern. Every language keeps exactly one size gate — function/method length — and nothing measures cyclomatic or cognitive complexity.

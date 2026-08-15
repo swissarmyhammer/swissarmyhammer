@@ -59,8 +59,28 @@ comments:
     - evidence: 4 files — crates/mirdan/src/strategy/claude_settings.rs (new), crates/mirdan/src/strategy/mod.rs, crates/mirdan/src/install/profile.rs, crates/mirdan/src/status.rs. `cargo nextest run -p mirdan` 522 passed, 0 failed. `cargo nextest run --workspace` 14195 passed, 0 failed, 0 skipped. `cargo fmt --all --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-14T15:15:42.946083+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00dq4s14tgpywwnb2wejzbe
+  text: |-
+    ### review — clean
+    - evidence: `review sha 333da3fcf~1..333da3fcf`. counts: findings 0, confirmed 0, refuted 0, attempted 9, failed 0, skipped 0. Report scope line: "reviewed the diffs only — lines this change added or modified. 4 file(s) reviewed, 0 not reviewed." No prior Review Findings sections on the card. Zero findings dropped for a false premise, because the engine raised none.
+    - next: none. Task moved to done.
+  timestamp: 2026-08-14T15:19:45.185685+00:00
+- actor: claude-code
+  id: 01m00dr1ezqkhsmd59d11jvmdy
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files. The single source is a new `strategy/claude_settings.rs`, and the placement was reasoned from what each module declares about itself rather than by convenience: `settings.rs` opens by calling itself "intentionally agent-agnostic: the caller supplies the JSON pointer/key", so a Claude Code schema key there breaks its own contract, while `strategy/mod.rs` opens with "All agent-specific configuration knowledge lives here". The install → strategy edge already exists via `install/applier.rs`, so this adds none.
+    - The guard test was proved by MUTATION in three directions, not asserted: with the pointer written as a literal, changing `POINTER_KEY_DENY` turns 4 tests RED; switching the pointer to the derived form with the key still changed turns the same 4 GREEN; restoring the literal and changing `POINTER_KEY_PERMISSIONS` instead turns the same 4 RED. Three of the four are the `strategy::tests` deny/allow tests, which is what binds the guard to the two call sites the card names.
+    - The sweep found a SECOND production site the card never named. 29 string consts against 4107 literals; raw substring gives 612 hits, almost all coincidental word overlap, and 209 in the shape that matters (a const value as a delimited segment of a longer literal). Of the 28 production hits, 26 are `include_str!` arguments, which a macro cannot take a const for. The real one: `status.rs::permissions_present` read the two keys as literals, while `install/profile.rs` documents that the installer and that detector "derive from one source and cannot drift" — true of the tool list, false of the keys. Production restatements: 3 before, 0 after. Nine remain in tests, 8 of them self-consistent fixtures in the agent-agnostic `settings.rs`, deliberately left rather than importing Claude keys into a module that declares itself agent-agnostic.
+    - test: green — 522 mirdan, 14195 workspace, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: 333da3fcf
+    - review: clean — 0 findings, 9 pairs attempted, 0 failed, 0 skipped. Task moved to done.
+
+    First-round clean, which is worth noting: the report carried `reviewed the diffs only — 4 file(s) reviewed, 0 not reviewed`, so ^apb04az's engine served this call. Under the old whole-file engine, four mirdan files would very likely have produced pre-existing findings and cost a round.
+  timestamp: 2026-08-14T15:20:14.559944+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffffd80
 title: Remove the second source of the permissions.deny JSON pointer in strategy/mod.rs
 ---
 `crates/mirdan/src/strategy/mod.rs:35` declares:

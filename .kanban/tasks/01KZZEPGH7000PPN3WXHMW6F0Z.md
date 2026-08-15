@@ -121,8 +121,35 @@ comments:
     - verified the three flagged risk areas: shared `define_id!` macro's new `From<&String>` impl (single definition in swissarmyhammer-common/src/id_types.rs, reused by swissarmyhammer-entity/src/id_types.rs, no ambiguity/build errors), `Platform::MacosX8664` wire format pinned and round-trip tested in crates/swissarmyhammer-config/src/model/tests/types.rs (`platform_wire_names_are_stable`), and the `StagingOp`/`StagingDir` consolidation in crates/swissarmyhammer-entity/src/context.rs covered by the passing suite
     - next: hand off to review
   timestamp: 2026-08-14T18:03:21.392084+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00qxx45tr38f2n0pb5t3c8r
+  text: |-
+    ### review — clean
+    - evidence: `review sha 8c15fc182~1..8c15fc182` — 9 files attempted, 0 findings, 0 confirmed, 0 refuted, 0 failed, 0 skipped, empty `skipped_files`. Run twice, identical counts both times.
+    - scope: diffs only. The report scope line reads "reviewed the diffs only — lines this change added or modified", confirming the new sha-scoped engine (^apb04az). No finding landed on a pre-existing line, because no finding was raised.
+    - false premise: 0 findings dropped. No existing-tests exception applied; it no longer exists.
+    - serde rename: wire format preserved byte for byte. Compiled the OLD spellings `MacosX86_64`/`LinuxX86_64` under `rename_all = "kebab-case"` and measured `macos-x86-64`/`linux-x86-64`; the new `#[serde(rename)]` pins reproduce both exactly. No old variant name remains in the repo; `model/tests/types.rs` pins all four names both directions.
+    - `define_id!` macro: the added `From<&String>` sits beside existing `From<&str>` and `From<String>` in a macro used by 7 crates. `cargo check --workspace --all-targets` passes with zero warnings, ruling out coherence conflict and `.into()` inference ambiguity.
+    - ^4dyewvd nondeterminism: NOT reproduced on this scope. Two runs over identical bytes gave identical counts, and `complexity.rs` produced 0 findings both times. This neither confirms nor refutes the carded `review file` observation, since that op reads whole files and this one reads a 3-line diff hunk.
+    - next: card is clean on the fix commit's own diffs and moves to done. Its second "Done when" bullet asks for a `review file` pass over the four files whole, which this sha-scoped pass does not establish.
+  timestamp: 2026-08-14T18:18:12.485582+00:00
+- actor: claude-code
+  id: 01m00qzq0axsbez1a1sgpdckv8
+  text: |-
+    ### finish iteration 1 — clean. Card done, with one gap named.
+    - **The re-measurement vindicated this card's own caveat completely.** `review file` on all four files, before any edit, returned 30 findings against the recorded 28 — but only **5 of the 28 survive**: 23 gone, 25 new. Per file: context.rs 9→16, model.rs 11→11, complexity.rs 7→**0**, dispatch.rs 1→3.
+    - The mechanism is visible in the data. All 15 cross-file "extract to a shared module" findings vanished — those were the PROMPT duplication rule standing in for the missing `duplication-parsed` tool rule. With the stale rules pruned from `~/.validators/`, the deterministic detector runs and finds nothing across those crates, which alone erased every complexity.rs finding and 5 of 11 on model.rs. Also gone: three path-traversal claims (`entity_file_path` already routes ids through `sanitize_id`), a `get_` prefix pair, and an acronym claim that read the error-handling rule backwards. The replacements are a category the old engine never reported on these files — type-safety 12, trait-implementations 4, documentation 4, naming-consistency 2.
+    - implement: changed — 9 files. All 30 worked plus 4 extra sweep sites. One enabling change outside the four files: the `impl Into` signature change broke 89 call sites passing `&String`, so a single `impl From<&String>` went into the shared `define_id!` macro rather than scattering `.as_str()` through 20 files of mostly existing tests. The 89-edit approach was tried, measured and reverted.
+    - test: green — cargo nextest run --workspace 14199 passed, 0 failed, 0 skipped. fmt and clippy clean.
+    - commit: 8c15fc182
+    - review: clean — 9 attempted, 0 findings, 0 failed, 0 skipped, run twice with identical counts. Task moved to done.
+
+    **Two risky changes were verified by measurement, not reasoning.** The serde rename was checked by compiling the OLD variants under `rename_all = "kebab-case"` in a throwaway crate: they emit `macos-x86-64` and `linux-x86-64`, which the new `#[serde(rename)]` pins reproduce exactly, so user model YAML keeps parsing. The shared `define_id!` change was checked with `cargo check --workspace --all-targets` at exactly this commit — the real hazards there (a coherence conflict, newly-ambiguous `.into()` inference) are compile errors, and there are none.
+
+    **The gap, named rather than assumed.** This card's second done-when reads "The four files re-review with no confirmed finding" — a `review file` criterion over WHOLE files. The review step was scoped to the commit's diffs, so its clean verdict does NOT establish that bullet. The implementer reported all four re-review at 0, but that is its own measurement, not an independent one. And per ^4dyewvd the condition is not currently decidable: complexity.rs returned 0, then 8, then 0 findings on the same bytes under `review file`, with seven of the eight pointing at other files and three at other crates. The reviewer ran this scope twice with stable results but declined to call that a refutation, since a 3-line doc hunk is a different workload from a whole-file run. ^4dyewvd stands.
+  timestamp: 2026-08-14T18:19:11.754164+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8180
 title: 28 pre-existing findings in the six files ^0fn6dbf made reviewable
 ---
 Splitting the six over-cap files on ^0fn6dbf made them readable by the review engine for the first time. The first narrow review of them returned **28 confirmed findings**, every one in PRE-EXISTING production code rather than in that card's own change. The new module scaffolding produced no surviving finding.
@@ -152,3 +179,33 @@ On all 11 runs the tool rules `duplication/duplication-parsed` and `code-hygiene
 - The four files re-review with no confirmed finding.
 
 #tool-validators
+
+## Review Findings (2026-08-14 13:11)
+
+> Scope: `review sha 8c15fc182~1..8c15fc182` — reviewed the diffs only — lines this change added or modified. 9 file(s) reviewed, 0 not reviewed.
+
+No findings. The fix commit 8c15fc182 is clean on its own diffs.
+
+Two runs of the same scope returned identical counts — 9 attempted, 0 findings,
+0 refuted, 0 failed, 0 skipped, empty `skipped_files`. 0 findings were dropped
+for a false premise, because none were raised. No existing-tests exception was
+applied; that exception no longer exists.
+
+The two high-risk changes were verified beyond the engine result:
+
+- **Wire format of the renamed `Platform` variants is preserved byte for byte.**
+  `MacosX86_64` and `LinuxX86_64` under `rename_all = "kebab-case"` derive
+  `macos-x86-64` and `linux-x86-64`. This was measured by compiling the OLD
+  variant spellings against serde, not reasoned from the rename rule. The new
+  `#[serde(rename)]` pins on `MacosX8664` and `LinuxX8664` reproduce those two
+  strings exactly. No old variant name survives anywhere in the repository, and
+  `model/tests/types.rs` now pins all four wire names in both directions.
+- **The `From<&String>` impl added to the shared `define_id!` macro breaks no
+  caller.** The macro already carried `From<&str>` and `From<String>`, so the
+  addition risked a coherence conflict or `.into()` inference ambiguity in any
+  of the seven crates that invoke it. `cargo check --workspace --all-targets`
+  passes with zero warnings, which rules both out.
+
+Scope note: this pass reviewed the fix commit's own diffs, as scoped. It does
+not by itself establish the second "Done when" bullet, which asks for a
+`review file` pass over the four files whole.

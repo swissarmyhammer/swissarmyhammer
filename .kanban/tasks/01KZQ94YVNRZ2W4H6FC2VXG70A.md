@@ -160,8 +160,30 @@ comments:
     - evidence: 2 files — crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
     - next: /review
   timestamp: 2026-08-15T02:42:35.604248+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m01n1gn1z1p37a6aajp8x1ev
+  text: |-
+    ### review — clean
+    - evidence: `review sha 714a537db~1..714a537db` — 0 findings, 0 confirmed, 0 refuted; 9 validators attempted, 0 failed, 0 skipped; 2 file(s) reviewed, 0 not reviewed. Round 3. All prior findings from 2026-08-14 20:49 (1 item) and 2026-08-14 21:18 (2 items) are checked.
+    - next: task moved to done. The macros this commit added to remove restated literals raised no finding. No new cause. No fourth round.
+  timestamp: 2026-08-15T02:46:59.489978+00:00
+- actor: claude-code
+  id: 01m01n2zj5m82jhsvtp272bz0b
+  text: |-
+    ### finish — done. Converged in 3 rounds (1, 2, 0 findings).
+    - **Round 1**: the probe now reads the config OF THE FILE, never one config for the workspace — for each argument it walks up to the first `.dart_tool/package_config.json`, and because `dart analyze` takes one `--packages` per run, it GROUPS its arguments by the config found and builds one probe package per group. Measured over a two-package monorepo: per-config grouping reports alpha 8 and beta 8; one package under the alpha config reports alpha 8 and beta 6+8; no flag reports 6+8 in both. The grouping is what separates the first row from the second. No-config fallback is the prior behaviour and cannot read as clean, because the answer is a SUPERSET.
+    - **Round 2 finding, and it was real**: `dart pub get` discarded both streams and never read its status, so a failed pub get left no package config and the run answered 0 rows at exit 0 — reproduced by replacing pub get with a command exiting 127. Fixed in the established shape. The sweep found **18** commands discarding status, not one; `set -e` now reaches all of them, and two were reshaped because a pipeline hid one and a subshell hid the other. Measured analyze statuses: 0/1/2/3 all write rows, 64 judges nothing, so the gate is `> 3`. Status 3 is LOAD-BEARING, not tolerated — the no-config fallback leaves every `package:` import unresolved, which is an ERROR. `--offline` stays, measured across three PUB_CACHE states, which also CORRECTED the finding's claim: an unwritable cache does not reach the failure for a zero-dependency probe; the SDK constraint does.
+    - **Round 3**: two restated literals in the round-2 tests. The sweep used the substring detector rather than whole-literal equality and found **24 real restatements at 24 sites** where the review named 3 — 113 of 125 raw hits being coincidental (`pub` inside `pubspec`, `documented` inside `undocumented`, which means the opposite). All 24 gone, both detectors now answer 0. `concat!` takes literals and `expected` is a static slice on const probes, so a macro answers it, following the shape `stuttering_name_go.rs` already uses.
+    - **The reviewer verified both safety questions rather than accepting them**: stubbing each swept command to exit 9 stops the whole run; forcing statuses 0/1/2/3 gives exit 0 with 2 rows while 4/5/64/127 give exit 1 with 0 rows; and status 3's load-bearing claim was checked independently. It also dropped 3 candidate findings on evidence.
+    - Rounds 1 and 2 each needed a HAND review of the rule body, because no validator declares a `*.md` glob (^j169agt). Round 3 touches no rule body, so it has no unreviewed substance.
+    - commits: 0d813edce, b804e667b, 714a537db. test: green — 760 validators, 522 mirdan, 86 review tests. fmt and clippy clean.
+
+    **Not the ^4kzxdex churn pattern**, and the reviewer named why: round 2's fix was STRUCTURAL rather than local — 24 sites swept with two detectors that now answer zero, instead of the 3 the review named. A local fix would have left the same class ready to fire on the next commit. It did not fire.
+
+    One restatement is left standing and named: `SHIPPED_RULES_THAT_READ_A_GO_FILE`, a roster of 26 fully-qualified rule ids whose doc tells the next reader to add a name by hand, and 13 of whose entries name sets and rules with no constant anywhere. Pre-existing, untouched.
+  timestamp: 2026-08-15T02:47:47.525491+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8b80
 title: missing-docs-dart probe resolves no dependency, so every Flutter @override build() reports
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-dart.md` builds a probe package that declares no dependencies. An import of `package:flutter/material.dart` therefore does not resolve inside the probe.

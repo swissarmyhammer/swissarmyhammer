@@ -57,8 +57,35 @@ comments:
     - evidence: 6 files — builtin/validators/code-hygiene/rules/dead-code-python.md, builtin/validators/code-hygiene/fixtures/pyproject.toml.tmpl (new), builtin/validators/code-hygiene/fixtures/dead-code-python.fail.py.tmpl, builtin/validators/code-hygiene/fixtures/dead-code-python.pass.py.tmpl, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_python.rs (new), crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/temp_directory.rs. `cargo nextest run -p swissarmyhammer-validators` 749/749 pass; `-p mirdan -p swissarmyhammer-cli` 1224/1224 pass; `cargo fmt --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-15T00:28:46.306179+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m01dgpb32h8m66yvnxqvvhw1
+  text: |-
+    ### review — clean
+    - evidence: `review sha 7db629a21~1..7db629a21` — 0 findings, 0 confirmed, 0 refuted, 9 validator attempts, 0 failed. No findings to record, so no dated Review Findings section was appended.
+    - scope: the report scope line states "reviewed the diffs only — lines this change added or modified". 3 files reviewed, 3 excluded.
+    - fixtures: the engine excluded all three `.tmpl` fixtures by category, each named in the report with the reason "validator fixture". No finding asked to remove or use the dead code the fixtures demonstrate, so the mechanism is intact.
+    - coverage limit (read before trusting "clean"): the 544-line rule body `builtin/validators/code-hygiene/rules/dead-code-python.md` — the substance of this commit — was NOT read by any validator. No validator in the roster declares a `*.md` match glob. The three reviewed files are the three `.rs` files, and the 9 attempts are exactly the 9 validators matching `*.rs`. The clean result covers the Rust acceptance tests, not the prose of the rule.
+    - vulture claim verified by measurement, not taken on trust (vulture 2.14 installed). Two-file probe: `pkg/m.py` defines three functions, `pkg/__init__.py` re-exports one behind `from .m import alias_used as alias_used` and names one in a tuple `__all__`. Result: only the third, `control`, reported. Negative control — the plain import and an empty `__all__` — made all three report. A list `__all__` behaved the same as the tuple. Both mechanisms the carve-out rests on are real and load-bearing, so no marker was needed and the carve-out reproduces.
+    - next: none — task moved to done.
+  timestamp: 2026-08-15T00:35:28.227843+00:00
+- actor: claude-code
+  id: 01m01djk8bwh6rkjr70rhrp0sa
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - **The card's premise was corrected by reading vulture's source.** vulture does not know only `__all__`. `_add_aliases` already reads the PEP 484 explicit re-export (`from .views import MethodView as MethodView`), which is how flask states its whole surface in 39 lines and fastapi in 20; and `_assigns_special_variable__all__` accepts a TUPLE, so `requests` — which the card says declares nothing — is read. So NO marker was added to correct code. The run reads the one fact vulture reads nowhere: the entry point, from pyproject.toml, setup.cfg and setup.py, into a whitelist module.
+    - **A live defect surfaced while building the probe**: vulture reads a `[tool.vulture]` section out of the PROJECT'S OWN pyproject.toml and merges it under the command line. `ignore_names = ["*"]` reported 0 findings at exit 0, and a pyproject.toml that is not valid TOML made vulture exit 1 on a traceback, which the old pipe read as a clean tree. The run now passes its own `--config`, states `--min-confidence 60`, and is a script accepting only vulture's status 0 and 3.
+    - **Tool survey drove five candidates over one probe package**, ruling out four with reasons: `dead` never reads pyproject.toml — where all four corpus packages state their entry points — needs `git ls-files`, and has no decorator roster; `deadcode` does not read the redundant alias and crashes on Python 3.14; neither `ruff` nor `pylint` has any cross-module unused-symbol rule, their whole unused set being scoped to a file or a private name.
+    - Measured whole-repository at named commits: requests 8068356, 37 files, 89→89; flask 2a8a38b, 83 files, 105→98; fastapi a1fa70d, 1136 files, **1318→272**; django 3436cf9, 2928 files, 3255→2952. flask's 7 are Flask 3's own `@app.get`/`@app.post` shortcuts, which `@*.route` never covered.
+    - Carve-out 3's stated gaps DO NOT OCCUR: 0 `Test`-named classes reported over 4184 files, because vulture handles them natively in test files, and the residue is closed by reading the class statement transitively.
+    - The old table's 100 reproduces exactly and stays 100 — MethodView, HTTPDigestAuth, get_namespace, iter_lines and from_key_val_list are stated nowhere, and the rule now says so.
+    - test: green — 749 validators, 1224 combined. fmt and clippy clean.
+    - commit: 7db629a21
+    - review: clean — 0 findings, 9 attempts, 0 failed. The reviewer VERIFIED the load-bearing vulture claim itself rather than accepting it: a two-file probe reported only the control, and switching to a plain import with an empty `__all__` made all three report — a negative control settling causation. Both legs hold. All three fixtures were excluded by the engine as `validator fixture`.
+
+    **The clean verdict is narrower than it looks, and the reviewer said so loudly.** The 544-line rule body — the substance of this commit — was read by NO validator, because none declares a `*.md` glob. Exact accounting: 9 changed files, 2 `.kanban` dropped by .reviewignore, 3 fixtures excluded by category, leaving 4; the 3 reviewed are the `.rs` files, and `attempted: 9` is precisely the number of validators matching `*.rs`. Third occurrence this session, now carded as ^j169agt.
+  timestamp: 2026-08-15T00:36:30.603065+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8980
 title: dead-code-python reports a package's whole public API when it declares no __all__
 ---
 `builtin/validators/code-hygiene/rules/dead-code-python.md` runs `vulture` and declares `supersedes: [dead-code]`.

@@ -109,8 +109,32 @@ comments:
     - confirmed `review_file_excludes_a_shipped_builtin_fixture_under_a_shadowing_user_set` is a deliberate full exclusion: `Scope::File(SHIPPED_BUILTIN_FIXTURE)` resolves exactly one file, and the fixture split excludes that same one file, so `excluded.len() == scope.resolved == 1` and `render_full_exclusion` fires by construction. The test's own assertions (`skipped_files == [fixture]`, `contains("validator fixture")`, `!contains("Nothing in scope to review.")`) hold and do not conflict with the new line.
     - next: none
   timestamp: 2026-08-14T16:27:55.155402+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00j8h2s67zmg6e45tmhv39y
+  text: |
+    ### review — clean
+    - evidence: `review sha ac298a7eb~1..ac298a7eb` — 0 findings, 0 confirmed, 1 refuted, 18 attempted, 0 failed, 0 skipped. Scope line: "reviewed the diffs only — lines this change added or modified. 12 file(s) reviewed, 0 not reviewed." No prior Review Findings sections on this task.
+    - self-test of this commit's own change: the commit touches 14 files, of which 2 are `.kanban/` files that `.reviewignore` excludes. The scope line reports 12 reviewed and 0 not reviewed, and names NO exclusion. This is the OLD form. The new full-exclusion reporting this commit adds is NOT in the report, because the running engine (`target/release/sah` built 09:56:40, process started 09:56:49) predates the commit (11:28:49). The change is correctly not yet live.
+    - next: none
+  timestamp: 2026-08-14T16:39:09.145914+00:00
+- actor: claude-code
+  id: 01m00j9zaypf7m04xsb94dhygv
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - implement: changed — 12 files. The card's bug reproduced on the FIRST RED run: a `.reviewignore` of `*` rendered `Nothing in scope to review.`, the gap message, for a deliberate and wanted full exclusion. Cause: `filter_resolved_scope` dropped every ignore-matched path with only a DEBUG log, so nothing downstream knew the file had existed and the run reached the empty-scope branch.
+    - New `scope/excluded.rs` holds `ExcludedFile` (moved off `scope/fixtures.rs`) plus an `ExclusionKind` of `ReviewIgnore` or `ValidatorFixture` — one list with two kinds, which keeps `synthesize` at exactly 7 arguments, where clippy's too-many-arguments gate stands.
+    - `WorkList::resolved_files()` is the new denominator that makes "every file in scope was excluded" PROVABLE: a resolved file no validator matched is neither reviewed nor excluded, so `reviewed + excluded` alone cannot answer it.
+    - Exclusions group by pattern rather than one line per file, because in this repo a single `.kanban/` pattern covers dozens of changed files on every finish-loop review and a line each would bury what the run actually read. Every path still rides in `counts.skipped_files`.
+    - The full-exclusion sentence and `Nothing in scope to review.` are mutually exclusive BY CONSTRUCTION — the first requires exclusions, the second requires none.
+    - The two exclusion reasons compose without conflation: an ignored file is resolved then excluded and reported with its pattern; an unchanged file under a diff op is never resolved and is accounted for by ^apb04az's scope line.
+    - test: green — cargo nextest run --workspace 14197 passed, 0 failed, 0 skipped, run twice for stability. fmt and clippy clean.
+    - commit: ac298a7eb
+    - review: clean — 0 findings, 18 attempted, 1 refuted, 0 failed, 0 skipped. Task moved to done.
+
+    **A self-test ran as a negative control, and it confirmed the defect exactly.** The reviewing engine predates this commit (binary built 09:56:40, process started 09:56:49, commit authored 11:28:49), so it produced the OLD form. The commit touches 14 files, two of them `.kanban/tasks/*` which this repo's `.reviewignore` excludes with its single `.kanban/` pattern. The report read `12 file(s) reviewed, 0 not reviewed` — the two excluded files left NO trace in either counter, no grouped exclusion line, and no full-exclusion sentence. That is the behaviour this commit removes, demonstrated live by an engine that does not yet carry the fix.
+  timestamp: 2026-08-14T16:39:56.510182+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff80
 title: A .reviewignore that excludes everything is a valid clean review, not an empty scope
 ---
 When `.reviewignore` deliberately excludes every file in scope, that is a correct and wanted outcome: there is nothing to review, and the report must say so and pass. It must NOT read as an error, and it must not be confused with the failure modes that also produce an empty result.

@@ -49,8 +49,28 @@ comments:
     - evidence: 5 files — builtin/validators/code-hygiene/rules/function-length-go.md, builtin/validators/code-hygiene/rules/dead-code-go.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_swift.rs
     - next: /review
   timestamp: 2026-08-14T20:42:20.376188+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m010g6gk2fsyzpajew1mznr4
+  text: |-
+    ### review — clean
+    - evidence: `review sha 32913e339~1..32913e339` — 0 findings, 0 confirmed, 0 refuted, 9 validator runs attempted, 0 failed, 0 skipped. Scope line reports "reviewed the diffs only", 3 files reviewed, 0 not reviewed.
+    - next: none — task moved to done.
+  timestamp: 2026-08-14T20:48:00.531183+00:00
+- actor: claude-code
+  id: 01m010hbd9m23nvpd2g30g6gye
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - implement: changed — 5 files. Both defects fixed on the shipped bytes, each held by an acceptance test watched RED first. The `lines: 10000, statements: 160` gate and the name-based test exclusion from ^1h52223 are untouched.
+    - **The two fixes are COUPLED in a way neither card stated: the lock stands IN the cache directory.** So a per-workspace cache alone does not answer the lock, because two rules of this set drive golangci-lint over one workspace and share that directory. Both fixes are needed. Measured over one workspace, three cold rounds and three warm: without `allow-serial-runners`, 4 runs together lost nothing but 8 runs lost 3, in EVERY round; with the key, 8 runs lost none, in every round.
+    - **The shared-cache failure is worse than a silent zero — the generated-code carve-out FAILS OPEN.** With the first directory removed, the second run reported the first directory's plain file AND its generated file, because `linters.exclusions.generated` reads the head of the file at the REPORTED path, which is not in this workspace. That produces a WRONG FINDING, not merely a missing one. Stated in the rule as a four-row table naming the fail-open as the stronger consequence. This symptom was found by ^1h52223's implementer and recorded here; the card did not originally state it.
+    - **staticcheck does NOT share the defect**, measured rather than assumed: its cache key includes the workspace path. Over a module of 400 packages — first run 0.82s, same run again 0.21s (a hit), first run over a copy at another path 0.84s, the COLD number, so a copy is a cache MISS and no cached answer can carry a foreign path. Eight concurrent runs each reported all 400 findings, so it takes no lock either. Stated in `dead-code-go.md` — the renamed rule, since ^n8ptdxb renamed it this session and this card predates that.
+    - The `go_uncached` nonce workaround ^1h52223 used in tests is DELETED; those three tests now run on the shipped bytes alone. Two new acceptance tests: one drives the generated-code probe over two workspaces, one releases eight runs together over one workspace. The shared `finding_rows` helper and `NO_SCRIPT_FILES` moved up to `shipped.rs` rather than being copied a third time.
+    - test: green — 727 validators tests, twice. fmt and clippy clean.
+    - commit: 32913e339
+    - review: clean — 0 findings, 9 attempted, 0 failed, 0 skipped, 3 files reviewed, 0 not reviewed.
+  timestamp: 2026-08-14T20:48:38.313486+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8480
 title: function-length-go silently reports nothing on a lock clash or a shared golangci-lint cache
 ---
 `builtin/validators/code-hygiene/rules/function-length-go.md` runs `funlen` through `golangci-lint` with the same script shape `magic-numbers-go` had before ^s2ftjys. Two defects were measured on that shape, and both make the rule report ZERO findings and name no reason:

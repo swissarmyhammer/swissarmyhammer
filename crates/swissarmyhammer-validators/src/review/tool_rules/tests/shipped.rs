@@ -745,14 +745,15 @@ fn required_shipped_tool_rule(loader: &ValidatorLoader, rule: &str) -> ShippedTo
 /// The argument list a `workspace`-scope script receives: none.
 const NO_SCRIPT_FILES: &[&str] = &[];
 
-/// Each finding of `findings` as the `path:line` row a probe states, with the
+/// Each finding of `outcome` as the `path:line` row a probe states, with the
 /// path of the probe repository taken off.
 ///
 /// A tool reports an absolute path, and a probe states the path the work-list
 /// holds. [`normalize_tool_path`] is the one function the engine attributes a
 /// tool-reported path with, so a probe reads the same path the engine would.
-fn finding_rows(findings: &[Finding], repo_root: &Path) -> Vec<String> {
-    findings
+fn finding_rows(outcome: &ScriptOutcome, repo_root: &Path) -> Vec<String> {
+    outcome
+        .findings
         .iter()
         .map(|finding| {
             format!(
@@ -786,15 +787,12 @@ fn shipped_script_findings(
     drive_shipped_script(loader, rule, staged, files, finding_rows)
 }
 
-/// The claim each finding of `findings` carries.
+/// Each item `outcome` declined, in the order the run stated them.
 ///
-/// A row states WHERE a finding stands. Only the claim states WHAT the run
-/// said there, so a probe of a sentence the author reads reads this.
-fn finding_claims(findings: &[Finding], _repo_root: &Path) -> Vec<String> {
-    findings
-        .iter()
-        .map(|finding| finding.claim.clone())
-        .collect()
+/// A finding says what the run judged. A diagnostic says what the run could
+/// NOT judge, so a probe of a declined item reads this.
+fn script_diagnostics(outcome: &ScriptOutcome, _repo_root: &Path) -> Vec<String> {
+    outcome.diagnostics.clone()
 }
 
 /// Stages `staged` in a temporary repository, drives the shipped script of
@@ -808,7 +806,7 @@ fn drive_shipped_script<T>(
     rule: &str,
     staged: &[(&str, &str)],
     files: &[&str],
-    read: impl Fn(&[Finding], &Path) -> Vec<T>,
+    read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Result<Vec<T>, ScriptFailure> {
     let shipped = required_shipped_tool_rule(loader, rule);
     let repo = tempfile::tempdir().unwrap();
@@ -818,7 +816,7 @@ fn drive_shipped_script<T>(
 
     let outcome = run_script(&shipped.script, &repo_root, &args)?;
 
-    Ok(read(&outcome.findings, &repo_root))
+    Ok(read(&outcome, &repo_root))
 }
 
 /// The entries of `expected` as the owned strings [`shipped_script_findings`]
@@ -887,7 +885,7 @@ fn rows_of_runs_started_together(
                     released.wait();
                     let reported = run_script(&shipped.script, &repo_root, &args)
                         .expect("each run must judge the probe repository and exit 0");
-                    sorted_names(&finding_rows(&reported.findings, &repo_root))
+                    sorted_names(&finding_rows(&reported, &repo_root))
                 })
             })
             .collect();
@@ -953,12 +951,12 @@ fn drive_shipped_staged_tree(probe: &ShippedStagedTree) -> Result<Vec<String>, S
 }
 
 /// Drives the shipped script of `probe` over the tree it stages, and answers
-/// the CLAIM each finding of that run carries.
+/// each item that run declined.
 ///
-/// A probe of a SENTENCE the author reads reads this. The rows a probe states
-/// hold where a finding stands, and a run that says the wrong thing at the
-/// right row passes them.
-fn drive_shipped_staged_tree_claims(probe: &ShippedStagedTree) -> Vec<String> {
+/// A probe of an item the run could not judge reads this. The rows a probe
+/// states hold the findings alone, so a run that declined an item in silence
+/// passes them.
+fn drive_shipped_staged_tree_diagnostics(probe: &ShippedStagedTree) -> Vec<String> {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
@@ -968,7 +966,7 @@ fn drive_shipped_staged_tree_claims(probe: &ShippedStagedTree) -> Vec<String> {
         probe.run.rule,
         probe.staged,
         &paths,
-        finding_claims,
+        script_diagnostics,
     )
     .expect("the shipped script must judge the probe package and exit 0")
 }

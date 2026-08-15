@@ -29,8 +29,31 @@ comments:
     - The three tests broke on a WARM golangci-lint cache before `go_uncached` was added: golangci-lint keys its cache on package content and replays the first run's absolute paths, which also makes the generated-code filter fail open. That is ^mms9g8d's defect, reproduced and recorded on that card. This card touched the heredoc configuration alone and left the pipeline region ^mms9g8d owns untouched.
     - next: /review
   timestamp: 2026-08-14T20:10:43.091086+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m00yx2z1w7s91sdygfbmr4xf
+  text: |-
+    ### review — clean
+    - evidence: `review sha 09d8c2d28~1..09d8c2d28` — 0 findings, 0 confirmed, 2 refuted, 9 attempted. 3 files reviewed, 2 fixture files out of scope. No prior Review Findings section on this task.
+    - scope: the engine reviewed the diffs only — the lines this commit added or modified.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-14T20:20:05.729010+00:00
+- actor: claude-code
+  id: 01m00yybne3f0h1bkjs89e4jc6
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - **The card's premise was corrected by measurement.** It assumed funlen's two dimensions AND. They OR — `funlen.go` runs the statement check first and only `continue`s so a function reports once. So a statement limit BESIDE the line gate can only add findings, and the fix is an inversion: `lines: 10000, statements: 160`. The statement count is now the gate and the line limit is out of reach.
+    - Corpus: 6 Go repositories at HEAD — kubernetes/client-go 3fcdd4c, spf13/cobra adbc881, etcd-io/etcd 0836b69, gin-gonic/gin 34dac20, grpc/grpc-go bf9e7cd, prometheus/prometheus 05f9eb8. 5470 .go files, 1290 of them _test.go, 32 modules. Two runs per module with each dimension set to 1 in turn make funlen print every function's own line AND statement count, so 23216 functions came back with both numbers and every sweep is arithmetic on the tool's own counts rather than a re-run.
+    - **What decided 160**: of the 161 functions over 250 funlen lines, 136 hold 40 statements or fewer. Statements-to-lines ratio is median 0.017 for the 250+-line population and 0.633 for the 100+-statement population — lines select DATA, statements select CODE. 250 × 0.633 = 160, the same derivation function-length-python used for its 180. The sweep confirms the elbow: 120 → 35 findings of which 19 stand under 250 lines, 140 → 17 of which 5, **160 → 12 of which 1**, 190 → 10 of which 0.
+    - **Tests exempted by DEFINITION, not path.** funlen writes the function name into its own message, so the exclusion matches `Test|Benchmark|Fuzz|Example` names in _test.go: 12 → 8. A plain path exclusion would have dropped 142 of the old gate's 161, ELEVEN of them helpers the prompt rule still lists — the trade complexity-go refuses, and consistent with the no-path-based-test-exclusion rule.
+    - The three trailing shapes are silent at the gate: composite literal 302 lines/1 statement, builder chain 301/1, table-driven test 307/4. The statement gate alone drops all three; the exclusion only covers the dense named tests that remain.
+    - Non-regressions held: generated-code carve-out untouched (`exclusions.generated: lax`), `//nolint:funlen` still silences, both under acceptance tests.
+    - Prediction re-run through the real tool: predicted 12 findings and 8 after the carve-out, measured 12 and 8.
+    - test: green. commit: 09d8c2d28. review: clean — 0 findings, 2 refuted, 9 attempted; 3 files reviewed, 2 fixtures out of scope.
+
+    **Two process notes.** The commit subject initially read "set lines to 250, statements to 10000" — the OLD broken state rather than the fix — and was amended to "gate function-length-go on statements at 160, not lines". And the rule body now contains `statements: 10000` in THREE legitimate roles: the quoted defect, the measurement harness, and nowhere in the shipped `run` block. The reviewer was warned and verified which role each played rather than assuming.
+  timestamp: 2026-08-14T20:20:47.406949+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8380
 title: function-length-go sets statements 10000, which removes the data and builder carve-out
 ---
 `builtin/validators/code-hygiene/rules/function-length-go.md` runs `funlen` through golangci-lint at `lines: 250`, `statements: 10000`, `ignore-comments: true`, and declares `supersedes: [function-length]`.

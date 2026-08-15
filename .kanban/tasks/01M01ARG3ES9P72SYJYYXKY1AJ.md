@@ -133,6 +133,82 @@ comments:
     - evidence: 3 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs. New acceptance test `the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_drops_out_loud`, watched RED on the shipped bytes then GREEN, beside the drop row added to the sibling-prefix probe. `cargo nextest run -p swissarmyhammer-validators`: 748 run, 748 passed, 0 skipped. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. Both review findings flipped to `- [x]`.
     - next: /review
   timestamp: 2026-08-15T16:44:13.960661+00:00
+- actor: claude-code
+  id: 01m035gcb6bhn2xycmm9an77bh
+  text: |
+    ### review — findings
+
+    - evidence: 4 findings — builtin/validators/code-hygiene/rules/dead-code-typescript.md:227, :246, :824, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs:693. Engine `review sha ebed84085~1..ebed84085` read 2 files over 9 validator runs and reported 0 findings; all 4 items come from a check by hand of the rule body, which no validator glob reaches.
+    - convergence: NOT converging. Round 1 fix made the round 2 defect, round 2 fix made the two round 3 defects, and round 3 fix makes these. Every round moves the same lines and makes a new cause on them.
+    - stop condition: the round 3 review set it — a further round of new causes on these lines means hand-off, not a fourth iteration. That condition is met. A person must take this rule body, not another agent round.
+    - next: hand off. The two causes to settle by hand are (1) the drop row is a path this rule's own `match.files` globs never select, so the workspace retain discards it always, and (2) `found` counts candidates that exist, not candidates that are correct.
+  timestamp: 2026-08-15T16:53:58.246437+00:00
+- actor: claude-code
+  id: 01m035nvb7e9mrbayxkfr9yx4p
+  text: |-
+    ### finish iteration 4 — stuck
+
+    - implement: changed — 3 files (round 3)
+    - test: green — cargo nextest, 748 passed
+    - commit: ebed84085
+    - review: findings — builtin/validators/code-hygiene/rules/dead-code-typescript.md:227, :246, :824; crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs:693
+
+    **Guardrail hit. Task is STUCK — it stays in `review`. Do not iterate a fifth time.**
+
+    Four rounds, and each fix put a new cause on the same lines. The reviewer set the stop condition in round 2 and it is met.
+
+    Round 4 named two root causes for the first time. Both are structural, not wording:
+
+    1. **The drop row is a path this rule's own globs never select.** `run_tool_script` keeps a `scope: workspace` finding only when its path stands in `run.files` (`crates/swissarmyhammer-validators/src/review/tool_rules.rs:95-100`). `run.files` is the changed-file list filtered through the rule's globs — `**/*.ts`, `**/*.tsx`, `**/*.js`, `**/*.jsx`, `**/*.mjs`, `**/*.cjs`. A `tsconfig.json` matches none of them. So the drop cannot reach the report on ANY run, not merely on runs where that file is unchanged. The rule body's concession reads as a satisfiable condition; it is unsatisfiable. Moving the channel from stderr to stdout changed nothing.
+
+    2. **`found` measures existence, not correctness.** A candidate that exists but is the wrong file gives `found` = 1, so the `-ne 1` branch never runs and the tool reports at a file the finding is not about. That is a wrong finding, not a drop.
+
+    **Blocked on [[^m6ba1bf]].** Root cause 1 is this rule working around the engine defect that `^m6ba1bf` fixes: a tool rule has no supported channel for "the tool could not answer". Once the engine carries that signal, the whole drop-reporting apparatus in this rule is very likely deleted rather than repaired. Fix `^m6ba1bf` first, then re-scope this card.
+
+    The corpus counts are NOT unverified — the reviewer confirmed the `found -eq 1` path is byte-for-byte unchanged, so the numbers stand. One finding was dropped for a false premise.
+  timestamp: 2026-08-15T16:56:57.447914+00:00
+- actor: claude-code
+  id: 01m0374rr6nrv0cep5v9m4ndhb
+  text: |-
+    ### Unblocked — ^m6ba1bf landed as 9fcdd8387. RE-SCOPE this card.
+
+    The engine now carries a diagnostic that no glob filter can drop. A tool-rule script states a declined item by writing a stderr line opening `sah-diagnostic:` while exiting 0; `ToolOutcome`/`ToolReport` carry `diagnostics: Vec<ToolDiagnostic>`, the workspace retain reaches `outcome.findings` alone, and synthesis renders a block per entry naming the validator, the rule and the message. `ToolReport::is_inert` reads the vector, so a run whose only fact is a diagnostic no longer prints "Nothing in scope to review." The contract is in `builtin/validators/README.md`.
+
+    **Do NOT repair the four open findings as written.** Three of them describe the stdout drop-reporting apparatus, which is now the wrong shape. The new scope is:
+
+    1. **DELETE the stdout drop-reporting apparatus** from `builtin/validators/code-hygiene/rules/dead-code-typescript.md`, and with it the three prose claims the round-4 review flagged at :227, :246 and :824. Replace it with one `sah-diagnostic:` line. This removes the unsatisfiable concession — the diagnostic no longer needs a path its globs select, because it is about the RUN.
+
+    2. **Fix the surviving root cause: `found` measures existence, not correctness.** A candidate that exists but is the wrong file gives `found` = 1, so the `-ne 1` branch never runs and the rule reports at a file the finding is not about — a WRONG finding, not a drop. This one is real and independent of the carrier. The fix is not another rebuild spelling; four rounds show widening the rebuild is what produces the next round's defect. Decline the item and state it, unless the candidate can be confirmed as the right file rather than merely an existing one.
+
+    3. Drop the now-dead assertion at `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs:693`, and hold the new behaviour instead.
+
+    The corpus counts stand — the `found -eq 1` path was byte-for-byte unchanged and the reviewer confirmed it. Do not re-measure; the clones are gone from this machine.
+  timestamp: 2026-08-15T17:22:34.886352+00:00
+- actor: claude-code
+  id: 01m0388az87ps244bg8gsma5bs
+  text: |-
+    Round 5, on the re-scope. The rebuild is GONE. Nothing widens it, because nothing inverts the cut any more.
+
+    THE DESIGN. The presenter's cut destroys text, so no arithmetic reads the path back — every round of this card tried and made the next round's defect. The run now goes the other way. `tsc -p tsconfig.json --listFilesOnly` prints the absolute path of every file the project's own program holds, and the run spells each of those files with `reportedAs`, the presenter's own operation the script already carried. The file whose spelling meets the reported one IS the file of the finding, because ts-prune reports a file of the program. Exactly one such file places the finding. Zero, or two, is an item the run declines.
+
+    WHY THIS ANSWERS FINDING :227 ROOT AND NOT AROUND IT. `found` counted candidates that EXIST. The new test counts files of the PROGRAM that carry the spelling. Existence of an unrelated file can no longer place a finding: `/w/a/src/x.ts` standing on disk means nothing unless the program of `/w/ab` holds it, and if the program holds both it and the nested original, both carry the same spelling and the item declines. The reviewer's wrong-finding shape cannot reach a report from this code.
+
+    THE CARRIER. The stdout apparatus at the tsconfig is deleted whole. A declined item is one stderr line opening `sah-diagnostic:` at exit 0, per `builtin/validators/README.md` and ^m6ba1bf. The engine's workspace retain reaches `outcome.findings` alone, so no glob can drop it. The message does NOT repeat the rule name — synthesis already names the validator and the rule.
+
+    ONE MORE SILENT CHANNEL CLOSED beside the card's list: the entries job used to write its fail-open failure as a bare stderr line, which the engine drops as tool chatter. Both jobs now use the marker, so `tsc --showConfig` writing nothing, and a manifest that does not parse, reach the report instead of nobody.
+
+    WATCHED RED, then GREEN. `..._says_the_finding_it_declines_out_loud` reads the DIAGNOSTIC rather than a stdout row; on the shipped bytes before the change it read `[]` against 1. `..._names_no_file_that_is_not_the_file_of_the_finding` lost the tsconfig row from `expected` and failed on the old script. Both green after.
+
+    THE HARNESS. `drive_shipped_script` now hands its reader the whole `ScriptOutcome` rather than the findings alone, so a probe can read diagnostics. `finding_claims` and `drive_shipped_staged_tree_claims` had one caller — the deleted drop test — so they are deleted rather than left dead; `script_diagnostics` and `drive_shipped_staged_tree_diagnostics` take their place. The two direct `finding_rows` callers (shipped.rs, dead_code_swift.rs) pass the outcome.
+
+    MEASURED, this workspace, shipped bytes extracted from the front matter before and after: 58 findings and 58 findings, byte-identical stdout, 0 items declined, 0 bytes on stderr, 6.2 s against 7.3 s — the second `tsc` call costs less than the per-finding shell loop it replaces. Checked separately over both projects: all 58 reported spellings meet exactly one file of the program, 0 meet none, 0 meet two.
+
+    THE CORPUS ROWS ARE NOT RE-MEASURED, and the rule body now says so in those words. The card ruled that out and the clones are gone. The earlier argument — the `found -eq 1` path is unchanged — does NOT carry over, because that path no longer exists, so the table marks zod, zustand and redux as measured under the earlier placement and marks this workspace as the row measured under the shipped one. A count that moves now moves for one reason and the run states each such item, so a re-measurement reads the difference off the report.
+
+    WHAT A HUMAN MUST CHECK BY HAND. No validator declares a `*.md` glob, so the engine reads none of the rule body. By hand: (1) the node program in the front matter, above all `placeFindings` and `reportedPath`; (2) the rewritten "The path each finding is reported at" section, which drops the four-shape table and makes no exhaustive claim about path shapes — it names one shape, `packages/consumersrc`, as an example; (3) the corpus table caption stating which rows were measured under which placement.
+  timestamp: 2026-08-15T17:42:00.424639+00:00
+depends_on:
+- 01M034AGX0RXH2RCCPPM6BA1BF
 position_column: doing
 position_ordinal: '8280'
 title: dead-code-typescript prefixes a project path onto an absolute path, so the finding names a file that is nowhere
@@ -166,3 +242,16 @@ The engine read one file, `crates/swissarmyhammer-validators/src/review/tool_rul
 
 - [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:220` `hand-check/path-arithmetic` — The comment says three spellings reach the loop, the table at line 747 gives "anywhere else" the whole absolute path less its leading separator, and the paragraph at line 791 says one shape only stays open. A fourth spelling is reachable. `String.replace` given a string cuts the FIRST occurrence of that text wherever it stands, and the working directory can stand at a position after the first character of the path. For the working directory `/w/packages/a` and the file `/mnt/backup/w/packages/a/src/x.ts`, the presenter writes `mnt/backup/src/x.ts`. None of `$cwd/$cut`, `$cwd$cut` and `/$cut` builds that path again, so `found` is 0 and the run refuses the finding. A nested copy of an absolute tree — a backup mount, a bind mount, a staged copy — makes that shape. State the fourth shape in the comment and in the table, and put it with the residue at line 791, which says one shape only.
 - [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:239` `hand-check/observability` — The refusal is silent. The comment at line 237 says the finding is "said out loud", and the prose at line 795 says the run "writes each such line on stderr, naming the project and the count". Nothing reads that stderr on a run that exits 0. `crates/swissarmyhammer-common/src/command.rs:56` sets `.stderr(Stdio::piped())`, so the bytes do not reach the terminal. `crates/swissarmyhammer-validators/src/review/tool_rules.rs:770-776` reads `output.stderr` only inside the `!output.status.success()` branch; on the success path it reads `output.stdout` alone and drops the buffer. A normal run of this rule exits 0. So a refused finding reaches no author, no log and no report — the same silent drop this rule was written to remove, and the shape `shipped.rs:931` names: a run that reports no finding and exits 0 reads exactly like a clean tree. `verify_shipped_tree_reports` holds the refusal only by the absence of the row from `expected`; no test holds the announcement. Carry the refusal out of the script on a path the author reads, and hold it with a test.
+
+## Review Findings (2026-08-15 11:46)
+
+> Scope: `review sha ebed84085~1..ebed84085` — reviewed the diffs only — lines this change added or modified. 2 file(s) reviewed, 0 not reviewed.
+
+The engine read the two Rust files this commit changes — `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs` and `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs` — over 9 validator runs, and reported no finding. No validator declares a `*.md` glob, thus the engine did not read `builtin/validators/code-hygiene/rules/dead-code-typescript.md`, which is the third file this commit changes. The items below come from a check by hand of that rule body and of the two Rust files, against the tool-rule runner. Each item is on a line that this commit adds.
+
+The counts are verified. The implementer did not measure the corpus again, and argued the numbers cannot move because the `found` -eq 1 path is unchanged. The argument holds. The diff of the script touches comment lines only, plus the two `printf` lines INSIDE the `if [ "$found" -ne 1 ]` branch. `cut=`, `stands=""`, `found=0`, the candidate loop and the `case "$stands"` block are all context lines in the diff. A workspace whose drop count is 0 therefore runs the same bytes and writes the same rows. One finding was dropped for a false premise, this one.
+
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:246` `hand-check/observability` — The drop still reaches nobody. The `printf` writes the drop at `${config#./}`, which is a `tsconfig.json`. The runner keeps a `scope: workspace` finding only when its path is one of the files of the RUN: `crates/swissarmyhammer-validators/src/review/tool_rules.rs:95-100` retains a finding only when `normalize_tool_path` of its path is in `run.files`. `run.files` is the changed-file work-list filtered through the rule's OWN `match.files` globs — `matched_rule_files` at `tool_rules.rs:421-441` calls `rule.matches(ruleset, &ctx)` per path. This rule declares six globs at lines 6-11: `**/*.ts`, `**/*.tsx`, `**/*.js`, `**/*.jsx`, `**/*.mjs`, `**/*.cjs`. A `tsconfig.json` matches none of them, so it can never stand in `run.files`, for ANY changed-file set. The retain therefore discards every drop announcement on every engine run. The channel moved from stderr to stdout, and the drop is still lost before the report. Write the drop at a path the rule's own globs select, or take the announcement off the finding channel altogether.
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:824` `hand-check/accuracy` — The concession is not honest. It says the engine "keeps a workspace-scope finding only when its path meets a file of the run, so the drop reaches the report when the project's own `tsconfig.json` is one of the changed files". That names a condition a reader takes as satisfiable, and it is not: the rule's globs never select a `.json` path, so the tsconfig is never a file of the run. The text describes a narrow hole while the hole is total. State the condition that actually governs — the rule's own `match.files` list — and state that the current row satisfies it never.
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:227` `hand-check/exhaustive-claim` — A new unconditional claim came in with the fourth shape. The comment says the shape "stands at no candidate below, so the run drops it"; line 748 says the working directory "rebuilds none of the fourth"; line 810 says "no rebuild reaches it"; line 800 says the run "drops rather than guesses" for both shapes. The first half is true — no candidate rebuilds the ORIGINAL file. The second half is not: `found` counts candidates that EXIST, not candidates that are the right file. For the working directory `/w/ab` and the file `/w/a/w/ab/src/x.ts` the cut is `w/a/src/x.ts`, and the candidate `/w/a/src/x.ts` stands whenever that file is present. Then `found` is 1, the `-ne 1` branch does not run, and the run reports the finding at a file it is not about — a wrong finding, not a drop. Say what `found` measures, and hold the fourth shape to the same statement the first three get.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs:693` `hand-check/coverage` — The new test cannot catch the item above at line 246. `drive_shipped_staged_tree_claims` at `shipped.rs:961` reaches `run_script_findings` through `drive_shipped_script`, and `run_script_findings` parses stdout and stops. The workspace retain of `run_tool_script` at `tool_rules.rs:95-100` is on neither path, so the test holds the sentence the SCRIPT writes and says nothing about the sentence the REPORT carries. `TYPESCRIPT_CONSUMER_DROP_ROW` in `expected` has the same gap. The rule body at line 858 states that the outside module is held "through the engine as well"; the drop is not. Drive the drop through the engine path that applies the retain, and hold the row there.

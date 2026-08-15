@@ -163,8 +163,57 @@ comments:
     - evidence: 12 files — 4 new, 8 modified. `cargo nextest run -p swissarmyhammer-validators -p mirdan`: 1284 passed, 0 failed. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review. The card's `complexity-dart.md` was not written; the reason is measured above and needs a human decision on whether the card is satisfied.
   timestamp: 2026-08-15T04:08:03.203169+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m01vvz3d4gcrfzvra24b7ymy
+  text: |-
+    ### review — clean
+
+    - scope: `review sha 5df34d385~1..5df34d385` (new engine, card ^apb04az)
+    - evidence: 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed, 0 skipped. 8 files reviewed, 2 excluded.
+    - fixtures: the engine excluded `function-length-dart.fail.dart.tmpl` and `function-length-dart.pass.dart.tmpl` by category ("validator fixture"). The deliberate defect in them was never a candidate.
+    - coverage limit (^j169agt): no validator declares a `*.md` glob. The 9 validators that ran are exactly those matching `*.rs`, and the 8 files reviewed are exactly the 8 `.rs` files. The 538-line rule body `builtin/validators/code-hygiene/rules/function-length-dart.md` and the 101 changed lines of `builtin/validators/code-hygiene/VALIDATOR.md` matched zero validators and were NOT read. The clean verdict covers the Rust wiring only — not the rule script, thresholds, `supersedes` list, or prose.
+
+    ### roster audit — one stale comment, OFF-DIFF
+
+    Audited every roster and count that should carry the new rule. All carry it, and every stated total is consistent:
+
+    - `builtin/mod.rs` `CODE_HYGIENE_COMPLEXITY_TOOL_RULES` — entry present; by-language order, new entry last per convention.
+    - `tool_rules/tests.rs` `SHIPPED_COMPLEXITY_RULES` — present, `project_types: [flutter]` matches the rule.
+    - `tests/shipped.rs` — `mod function_length_dart;` in correct alphabetical position.
+    - `scope_roster.rs` — `SHIPPED_TOOL_RULE_COUNT = 27` verified; `WORKSPACE_SCOPE_RULE_COUNT = 11` correctly unchanged (the Dart rule is `files` scope).
+    - `zero_argument.rs` — `FILES_SCOPE_RULE_COUNT = 16` verified; the 6 + 10 prose split verified against all 16 scripts. This commit CORRECTED a pre-existing wrong 7/8 split.
+    - `temp_directory.rs` — `TEMP_DIRECTORY_RULE_COUNT = 22` verified.
+    - `mirdan/src/builtin_validators.rs` — both fixtures listed; the rule file correctly absent from the prompt-rules-only list.
+    - `VALIDATOR.md` — "eight tool rules" verified as 8; Dart length gate recorded; complexity rejection recorded with measurements.
+
+    NOT a finding for this scope, but real and worth a card: `crates/swissarmyhammer-validators/src/builtin/mod.rs:306-308` doc comment still reads "Dart keeps the `complexity` probe and both prompt rules, because its only metrics tool is commercial." Both clauses are now false — Dart supersedes `function-length` (line 326), and `dart_code_linter` 4.2.0 is MIT. The identical sibling comment WAS corrected at `tool_rules/tests.rs:330-336`; this second copy was missed. The commit's only edit to `builtin/mod.rs` is the single added line 326, so the stale comment is on an UNCHANGED line and is out of scope for a diff op — the engine correctly did not report it.
+
+    - next: file a card to fix the `builtin/mod.rs` doc comment to match the corrected wording in `tests.rs`. Separately, ^j169agt leaves every shipped `.md` rule body unreviewed.
+  timestamp: 2026-08-15T04:46:17.709512+00:00
+- actor: claude-code
+  id: 01m01vy0xmcw3sacasyr2qfwc4
+  text: |-
+    ### finish iteration 1 — clean. Card done, with one deviation for a person to judge.
+    - **The survey found a tool the rule set had written off**: `dart_code_linter` 4.2.0, published 2026-08-11, Bancolombia, MIT — a maintained free fork of the discontinued `dart_code_metrics` on a current analyzer, computing all three metrics with every threshold as a CLI flag. That directly corrects VALIDATOR.md's claim that commercial DCM was the only Dart tool computing them.
+    - Measured all three metrics over 3931 .dart files and 63241 functions (dart-lang/http, dart-lang/shelf, flutter/packages).
+    - **`source-lines-of-code` IS the length gate** — it counts exactly what `function-length` defines, blanks and comments excluded. Shipped at 250.
+    - **Cyclomatic complexity REJECTED on measurement**: at a gate of 15, 188 of 356 non-test findings sit at nesting level ≤ 2 — flat `??`/`&&` chains in `copyWith`, `==` and `lerp`, with `InputDecoration.copyWith` scoring 59 at nesting 1. Those are precisely the "long flat list of simple cases" `cognitive-complexity` carves out, and NO threshold separates them, since the flat shapes run to 149.
+    - **Maximum nesting level REJECTED too**: every closure body raises the depth by one and Dart is closure-heavy, so at the prompt rule's own gate 131 of 229 non-test findings come from closures rather than conditions.
+    - **DEVIATION FROM THE CARD, for a person to judge.** The card specifies `complexity-dart.md` superseding BOTH prompt rules. This ships `function-length-dart.md` superseding `function-length` alone — the shape function-length-go and function-length-python already take. Shipping either complexity gate would make hundreds of suppressions mandatory on code the prompt rule calls correct, the trade complexity-swift and function-length-go each explicitly refused. The card's done-when allows "records why no tool can give them"; this is the in-between case — one gate from a tool, and a measured reason the other cannot be given.
+    - **Two defects surfaced while building it.** The probe package's `environment: sdk:` LOWER BOUND is the language version, and a fixed floor made a whole 3508-file run report 0 findings; the script now derives it from `dart --version`. The two shipped sibling Dart rules carry the same defect — filed as ^hc2pcyp. And `dart_code_linter` silently skips any file under a dot directory, so probe copies use flat names with a mapping table.
+    - Real-repository measurement: 3508 files of flutter/packages, 22 findings in 55s at exit 0. All 22 are true measurements; 9 fall under a prompt-rule carve-out the tool cannot express, and the rule names each one.
+    - test: green — 1284 validators + mirdan tests. fmt and clippy clean.
+    - commit: 5df34d385
+    - review: clean — 0 findings, 9 attempted, 0 failed, 8 files reviewed, 2 fixtures excluded by category.
+
+    **Rosters verified against actual entries rather than taken on faith**: `SHIPPED_TOOL_RULE_COUNT` 27, `FILES_SCOPE_RULE_COUNT` 16 with its 6+10 prose split — which this commit CORRECTED from a pre-existing wrong 7/8 — `TEMP_DIRECTORY_RULE_COUNT` 22, `WORKSPACE_SCOPE_RULE_COUNT` 11 correctly left alone since the Dart rule is files-scoped, and VALIDATOR.md's "eight tool rules" which is genuinely 8. mirdan lists both fixtures and correctly omits the rule from its prompt-rules-only list.
+
+    **One staleness found and deliberately NOT forced into this card**: `builtin/mod.rs:306-308` still says Dart "keeps both prompt rules, because its only metrics tool is commercial" — both clauses now false. It sits on an unchanged line, so it is off-diff, and the engine refutes off-diff candidates before they reach the report; its silence was correct rather than a miss. Manufacturing an out-of-scope finding would corrupt the contract ^apb04az established. Carded separately instead.
+
+    **Scope caveat, and it dominates here**: this commit's entire payload is a 538-line `.md` rule body plus 101 changed lines of VALIDATOR.md, and NONE of it was read — the 9 validators attempted are precisely those matching `*.rs`, and the 8 files reviewed are precisely the 8 `.rs` files. The clean verdict covers the Rust wiring only. It says nothing about whether the shell script is correct, the thresholds right, or `supersedes` naming the right rules. See ^j169agt.
+  timestamp: 2026-08-15T04:47:25.108566+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8c80
 title: 'dart goes objective: complexity and function-length tool rules'
 ---
 Dart is the only language with no complexity gate and no function-length gate. The prompt rules `cognitive-complexity` and `function-length` still apply to Dart files, so an LLM measures and decides.

@@ -39,8 +39,38 @@ comments:
     - evidence: 5 files — builtin/validators/code-hygiene/rules/missing-docs-typescript.md, builtin/validators/code-hygiene/rules/missing-docs.md, builtin/validators/code-hygiene/fixtures/missing-docs-typescript.pass.ts.tmpl, builtin/validators/code-hygiene/fixtures/missing-docs-typescript.fail.ts.tmpl, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs. `cargo nextest run -p swissarmyhammer-validators` 738 passed, 0 failed. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
     - next: /review
   timestamp: 2026-08-14T23:05:07.972784+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m018yzbacnmkt69jf2mxtccs
+  text: |-
+    ### review — clean
+    - scope: `review sha f6bac188a~1..f6bac188a`. The report scope line reads "reviewed the diffs only — lines this change added or modified". 1 file reviewed, 2 not reviewed.
+    - engine: 2 findings raised, both `completeness/inverse-operation-coverage` on `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1499` and `:1535`. Both landed on lines this commit added (the single hunk is `@@ -1476,0 +1477,152 @@`). No finding landed on a pre-existing line.
+    - dropped: 2 of 2 findings, both for a false premise. Each asserted the change lacks proof that obvious implementations and simple accessors are NOT reported. That proof exists and runs.
+    - evidence: `tests.rs:114-125` puts `("nodejs", "missing-docs-typescript", ...)` in `SHIPPED_MISSING_DOCS_RULES`. `missing_docs.rs:19-23` runs that roster through `verify_shipped_tool_rules_pass_fixtures`, which asserts `row.usable()` (`shipped.rs:1482-1486`). `doctor.rs:435-442` makes a rule unusable when the pass fixture reports any finding: "the pass fixture ... produced {pass_count} finding(s); none are allowed". The pass fixture holds the simple getter, simple setter, `toString`, `valueOf`, `toJSON`, `toLocaleString` and `[Symbol.iterator]`.
+    - verified by running: `cargo test -p swissarmyhammer-validators --lib missing_docs_tool_rule_passes_its_fixtures` — 1 passed, 0 failed, 27.53s, through the real eslint pipeline.
+    - fixtures: the engine excluded both `.ts.tmpl` fixtures by category ("validator fixture"), so no finding asked to document a fixture.
+    - scope gap, not a finding: the two rule bodies in the commit, `builtin/validators/code-hygiene/rules/missing-docs-typescript.md` (+254) and `missing-docs.md` (+28), entered no validator's candidate set. They were neither reviewed nor listed as skipped.
+    - next: none. Task moves to done.
+  timestamp: 2026-08-14T23:15:53.322599+00:00
+- actor: claude-code
+  id: 01m0190jyby15572a864t8h3ss
+  text: |-
+    ### finish iteration 1 — clean. Card done.
+    - **The tool survey rejected the obvious options.** `require-jsdoc` ships `checkGetters`/`checkSetters`, and they were REJECTED: each silences every accessor of its kind whatever the body holds, while the prompt rule asks only for a SIMPLE one. Two `contexts` selectors carry it instead — a getter reports when its body is not a single `return`, a setter when its body is not a single assignment. Corpus: 177 accessors before, 30 after; the blunt options would have left 0.
+    - Obvious implementations: no option exists, so a selector names `toString`, `valueOf`, `toLocaleString`, `toJSON` on an Identifier key plus any method keyed by a Symbol member expression, covering every well-known symbol at one stroke. 10 before, 0 after. The plugin's own `isExemptedImplementer` is a near neighbour but far narrower and answers none of these.
+    - `.d.ts` filter decided FIRST as the card ordered, following `dead-code-typescript`'s stated reason word for word. 244 of 9341 files.
+    - **One load-bearing discovery**: a `contexts` selector on `MethodDefinition` reports almost nothing under `publicOnly`, because the built-in visitor hands the check the method's `value` — the FunctionExpression — while `isUncommentedExport` reads the two nodes differently. Every method selector must end in `> :matches(FunctionExpression, TSEmptyBodyFunctionExpression)`; the second member is needed because an overload signature, an optional `declared?()` and a `declare class` member each carry that node and all three reported before.
+    - **The card's stated cause for the test carve-out was wrong.** `describe`/`it` being call expressions is not what holds it — the ArrowFunctionExpression visitor reads a function only when its parent is an assignment, default export, variable declarator or property. Measured: the `function` callback form reports only with `publicOnly` off AND `checkAllFunctionExpressions: true` together; the arrow form answers to no setting at all. The config now writes `checkAllFunctionExpressions: false` so the one flippable setting is written down, and the pass fixture carries a `describe` with one callback of each form.
+    - Corpus: 6 repositories at named commits (axios, zod, nest, trpc, vite, vue core), 4306 .ts/.tsx files. 9498 findings before, 9097 after — 157 removed by the selectors, 244 by the filter, **0 added**. The shipped script extracted from the rule's own `run` block reproduces 9097 exactly.
+    - `missing-docs.md` is the one file beyond the card: its measured survey named TypeScript on the wrong side of both carve-outs, and this change makes those sentences false.
+    - test: green — 738 validators tests. fmt and clippy clean.
+    - commit: f6bac188a
+    - review: clean — the engine raised 2 and **both were dropped for a false premise, verified by RUNNING the test** rather than by reasoning: `cargo test --lib missing_docs_tool_rule_passes_its_fixtures` passed in 27.5s through the real eslint pipeline, and the pass fixture holds precisely a simple getter, a simple setter, toString, valueOf, toJSON, toLocaleString and `[Symbol.iterator]`. Both findings asserted an absence that provably exists. Both fixtures were excluded by the engine as `validator fixture`.
+
+    **One gap the reviewer named, which is not a defect in this change.** The two rule bodies are the BULK of this commit — missing-docs-typescript.md at +254 and missing-docs.md at +28 — and neither was reviewed. They were not listed as skipped either; they simply entered no validator's candidate set, because no validator declares a `*.md` match glob. So the rule prose, which is the actual product here, went unexamined. This is the second time it has surfaced (first on ^c9pb2f3).
+  timestamp: 2026-08-14T23:16:46.155104+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff8780
 title: missing-docs-typescript reports trivial getters and obvious methods, and filters no .d.ts
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-typescript.md` runs `jsdoc/require-jsdoc` at `publicOnly: true` over seven declaration kinds and three contexts, and declares `supersedes: [missing-docs]`.
