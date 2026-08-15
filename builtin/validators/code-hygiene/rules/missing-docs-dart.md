@@ -10,12 +10,19 @@ supersedes: missing-docs
 tool:
   scope: files
   run: |
+    set -e
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     work="$(cd "$work" && pwd -P)"
+    for file in "$@"; do
+      if [ ! -r "$file" ]; then
+        printf 'missing-docs-dart cannot read %s\n' "$file" >&2
+        exit 1
+      fi
+    done
     printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '>=3.0.0 <5.0.0'" > "$work/probe-pubspec.yaml"
     cat > "$work/probe-options.yaml" <<'ANALYSIS_OPTIONS'
     analyzer:
@@ -44,7 +51,7 @@ tool:
     ANALYSIS_OPTIONS
     : > "$work/files"
     for file in "$@"; do
-      dir="$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)"
+      dir="$(cd "$(dirname "$file")" && pwd -P)"
       config="-"
       while [ -n "$dir" ]; do
         if [ -f "$dir/.dart_tool/package_config.json" ]; then
@@ -58,7 +65,8 @@ tool:
       done
       printf '%s\t%s\n' "$config" "$file" >> "$work/files"
     done
-    awk -F'\t' '{ print $1 }' "$work/files" | sort -u > "$work/configs"
+    awk -F'\t' '{ print $1 }' "$work/files" > "$work/named-configs"
+    sort -u "$work/named-configs" > "$work/configs"
     group=0
     while IFS= read -r config; do
       group=$((group + 1))
@@ -72,16 +80,30 @@ tool:
         mkdir -p "$(dirname "$copy")"
         cp "$file" "$copy"
       done < "$work/group"
-      (cd "$package" && dart pub get --offline) > /dev/null 2>&1
+      pub_status=0
+      dart pub get --offline --directory "$package" > "$work/pub-get" 2>&1 || pub_status=$?
+      if [ "$pub_status" -ne 0 ] || [ ! -f "$package/.dart_tool/package_config.json" ]; then
+        cat "$work/pub-get" >&2
+        printf 'missing-docs-dart: dart pub get exited %s and left the probe package with no package config, so the lint reads no member of it\n' "$pub_status" >&2
+        exit 1
+      fi
+      analysis_status=0
       if [ "$config" = "-" ]; then
-        dart analyze --format=machine "$package"
+        dart analyze --format=machine "$package" \
+          > "$work/analysis" 2> "$work/analysis-error" || analysis_status=$?
       else
-        dart analyze --format=machine --packages="$config" "$package"
-      fi |
-        awk -F'|' -v prefix="$package/lib/" '
-          $3 == "PUBLIC_MEMBER_API_DOCS" && index($4, prefix) == 1 {
-            printf "%s:%s: %s\n", substr($4, length(prefix) + 1), $5, $8
-          }'
+        dart analyze --format=machine --packages="$config" "$package" \
+          > "$work/analysis" 2> "$work/analysis-error" || analysis_status=$?
+      fi
+      if [ "$analysis_status" -gt 3 ]; then
+        cat "$work/analysis-error" "$work/analysis" >&2
+        printf 'missing-docs-dart: dart analyze exited %s and judged no code\n' "$analysis_status" >&2
+        exit 1
+      fi
+      awk -F'|' -v prefix="$package/lib/" '
+        $3 == "PUBLIC_MEMBER_API_DOCS" && index($4, prefix) == 1 {
+          printf "%s:%s: %s\n", substr($4, length(prefix) + 1), $5, $8
+        }' "$work/analysis"
     done < "$work/configs"
   doctor:
     check_command: "which dart awk mktemp"
@@ -113,8 +135,9 @@ silently rather than loudly:
   directory. A loose file with the configuration beside it reports nothing.
 - The analyzer needs `.dart_tool/package_config.json` to recognize the package,
   and only `dart pub get` writes it. Without it this lint stays quiet while
-  other lints still report. `--offline` keeps the probe package, which declares
-  no dependencies, off the network.
+  other lints still report. So the run reads the status of `dart pub get` and
+  tests that file, and "Every status the run reads" below states what it writes
+  when either answer is wrong.
 
 ## The probe moves a file, so the exclude list puts it back
 
@@ -312,6 +335,106 @@ setter with a block body, and a top-level setter each report nothing, while the
 `set pairedValue(int next)` that stands beside `int get pairedValue` reports.
 The fixture pairs its getter and its setter for that reason.
 
+## Every status the run reads
+
+Two commands of this script can fail on a machine that HAS the Dart SDK, and
+each of them fails silently: the run then writes no row and exits 0, which the
+engine reads as a clean file. So the run puts each of the two into a file, tests
+its status, writes a line of its own, and exits 1.
+
+### `dart pub get`
+
+The probe package is worth nothing until the analyzer recognizes it, and only
+`.dart_tool/package_config.json` makes it one. Measured on Dart SDK 3.11.0 over
+a probe package holding one undocumented class and one undocumented method:
+
+| the run | rows | status |
+|---|---|---|
+| `dart pub get` succeeds | 2 | 0 |
+| the same package with its `.dart_tool` taken away | 0 | 0 |
+| `sdk: '>=9.0.0 <10.0.0'`, so `pub get` exits 1 and writes no `.dart_tool` | 0 | 0 |
+
+An SDK outside the `>=3.0.0 <5.0.0` window the script declares reaches the third
+row. That silence defeats EVERY path of this rule, the `--packages` path and the
+fallback alike, so it is not a shape of the missing-config fallback below.
+
+The run therefore reads the status of `dart pub get` AND tests that the package
+config stands, and it names the failure rather than analyzing a package the
+analyzer does not recognize. The acceptance test
+`the_shipped_dart_missing_docs_tool_rule_breaks_when_pub_get_cannot_run` holds
+it, with the `pub` run of `dart` replaced by a command that exits 127 and the
+`analyze` run left standing. Measured over that probe: the earlier shape wrote
+0 rows and exited 0, which reads as a clean file; the shipped shape writes no
+row, that line, and exit 1.
+
+`--offline` stays. The probe package declares no dependency, so pub resolves it
+with nothing from the network and nothing from the cache. Measured with
+`PUB_CACHE` naming an empty directory, with `PUB_CACHE` naming a directory that
+does not exist, and with `PUB_CACHE` naming a directory that cannot be written:
+`dart pub get --offline` exits 0 and writes the package config each time, and a
+run without the flag answers the same. So `--offline` cannot fail where a
+networked run would stand, and it keeps a review off the network.
+
+### `dart analyze`
+
+`dart analyze` keeps one status for issues and another for a failure. Measured
+on Dart SDK 3.11.0:
+
+| the run | status | stdout |
+|---|---|---|
+| a lint finding alone, which is INFO | 0 | each finding |
+| the same run under `--fatal-infos` | 1 | each finding |
+| an unused local variable raised to WARNING | 2 | each finding |
+| an unresolved import, and a file that does not parse | 3 | each finding |
+| `--packages=<file that does not exist>` | 64 | none |
+| a subcommand `dart` does not know | 64 | none |
+
+0 through 3 are the four issue severities, and every one of the four writes its
+rows. 64 is the usage error, and it judges nothing. So the run accepts 0 through
+3 and breaks above them. 3 is load-bearing rather than tolerated: the fallback
+path leaves every `package:` import unresolved, which is an ERROR, so a run that
+reported correctly with no package config takes status 3.
+
+The earlier shape was one pipe that ended in `awk`, so the script took awk's
+status and answered exit 0 for every failure of the analyzer. The acceptance
+test
+`the_shipped_dart_missing_docs_tool_rule_breaks_when_the_analyzer_cannot_run`
+holds the shipped shape, with the `analyze` run of `dart` replaced by a command
+that exits 127 and the `pub` run left standing. Measured over that probe: the
+pipe wrote 0 rows and exited 0; the shipped shape writes no row, that line, and
+exit 1.
+
+`the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs`
+is the control for both tests. It drives the same staged file with neither run
+stubbed and holds it to two rows, so a gate that broke every run it could not
+read at a glance cannot pass the pair.
+
+### Every other command
+
+`set -e` stands at the head of the script, so no other command can fail without
+stopping the run. Eighteen commands of the earlier shape threw their status
+away. The two `dart` calls above are two of them. The other sixteen are
+`mktemp`, the two `pwd -P` resolutions, the two template writes, the four list
+writes, the `awk` that headed the config pipe, the two `mkdir -p` calls, the
+three `cp` calls, and the reporting `awk`, whose status was read on the last
+group alone. A `cp` that failed dropped one file out of the probe package with
+no word said, which is the same silence in a smaller size.
+
+Two commands are shaped so that `set -e` reaches them at all.
+`awk ... | sort -u` became two commands writing two files, because a pipeline
+takes the status of its last command alone and the script writes no `pipefail`.
+`dart pub get` runs under `--directory` rather than inside
+`(cd "$package" && ...)`, so every command of the script runs at the repository
+root and no subshell stands between a failure and the script.
+
+The run tests each file it is given before it builds anything, and names the
+file it cannot read. `set -e` alone answers such a run too, but it answers with
+`cd: lib: No such file or directory` — a temporary path of the probe, and not
+the file the review handed over. Measured with the test taken out: that line and
+exit 1. The acceptance test
+`the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read` holds
+the named line.
+
 ## How the run is shaped
 
 The temporary directory is resolved with `pwd -P` before use. On macOS
@@ -319,8 +442,10 @@ The temporary directory is resolved with `pwd -P` before use. On macOS
 analyze` reports the resolved path (`/private/var/...`), and the prefix strip
 would match nothing.
 
-The pipe ends in `awk` rather than `grep` because `grep` exits nonzero when it
-matches nothing, which the engine reads as a broken tool on every clean run.
+The report is read with `awk` rather than `grep` because `grep` exits nonzero
+when it matches nothing, which the engine reads as a broken tool on every clean
+run. `awk` reads the analysis file the run wrote, rather than a pipe, so the
+status of `dart analyze` reaches the test above instead of being dropped.
 
 The scope is `files` because the probe package holds the files the script is
 given.
@@ -336,7 +461,8 @@ Dart SDK, not a package with its own version, so no install command can pin it.
 The `doctor.fix_hint` states `brew install dart-sdk` instead. `sah doctor` shows
 that hint as the fix; the install lifecycle never runs it.
 
-Selection in the pipe is attribution, not exemption: to exempt one member,
+Selection in the report filter is attribution, not exemption: to exempt one
+member,
 write `// ignore: public_member_api_docs` above it in the code. Measured: the
 marker on the line above silences the finding, and
 `// ignore_for_file: public_member_api_docs` at the top of a file silences the
@@ -366,10 +492,12 @@ files.
 `mktemp -d` makes one working directory for the whole run, and
 `trap 'rm -rf "$work"' EXIT` removes it. It holds `probe-pubspec.yaml` and
 `probe-options.yaml`, the `files` list that pairs each argument with the
-package config that resolves it, the `configs` list of the distinct configs,
-the `group` list of the group being built, and one `package-<n>` directory for
-each group. Each of those holds a `pubspec.yaml`, an `analysis_options.yaml`
-and a copy of each file of its group under `lib/`.
+package config that resolves it, the `named-configs` list of the config of each
+argument and the `configs` list of the distinct ones, the `group` list of the
+group being built, the `pub-get` output and the `analysis` and `analysis-error`
+output of the group being built, and one `package-<n>` directory for each
+group. Each of those holds a `pubspec.yaml`, an `analysis_options.yaml` and a
+copy of each file of its group under `lib/`.
 
 Measured over one file: one run raised the count of entries under `TMPDIR` by 1
 before the trap, and leaves that count unchanged after it. Measured over two

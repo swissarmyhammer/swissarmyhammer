@@ -999,8 +999,9 @@ fn stub_directory() -> &'static Path {
 
 /// The path of `binary` on this machine, or a panic naming it.
 ///
-/// The stub built by [`verify_shipped_tree_breaks_without`] hands every other
-/// run through to this path, so it is resolved BEFORE the stub leads `PATH`.
+/// The stub built by [`verify_shipped_tree_breaks_without_run_of`] hands every
+/// other run through to this path, so it is resolved BEFORE the stub leads
+/// `PATH`.
 #[cfg(unix)]
 fn resolved_binary(binary: &str) -> String {
     let output = std::process::Command::new("sh")
@@ -1040,16 +1041,40 @@ fn resolved_binary(binary: &str) -> String {
 /// `PATH` it leads is process state whatever the stub then does.
 #[cfg(unix)]
 fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
+    verify_shipped_tree_breaks_without_run_of(probe, binary, None);
+}
+
+/// Holds the run of `probe` to breaking when ONE run of `binary` cannot run,
+/// with an error that names every fragment the probe expects.
+///
+/// `subcommand` is the word that run takes as its first argument, and `None`
+/// breaks every run of the binary. A script that calls one binary two times —
+/// `dart pub get` to build the probe package, then `dart analyze` to judge it —
+/// reads a status of its own for each call, so a probe of one of the two has to
+/// leave the other one standing.
+///
+/// [`verify_shipped_tree_breaks_without`] carries the rest of the contract: why
+/// the stub breaks for one run alone, and what `PATH` the caller must guard.
+#[cfg(unix)]
+fn verify_shipped_tree_breaks_without_run_of(
+    probe: &ShippedStagedTree,
+    binary: &str,
+    subcommand: Option<&str>,
+) {
     use std::os::unix::fs::PermissionsExt;
     use swissarmyhammer_common::test_utils::PathGuard;
 
     let real = resolved_binary(binary);
+    let named = match subcommand {
+        None => String::new(),
+        Some(word) => format!(" && [ \"$1\" = \"{word}\" ]"),
+    };
     let stubs = stub_directory();
     let stub = stubs.join(binary);
     std::fs::write(
         &stub,
         format!(
-            "#!/bin/sh\nif [ -e \"./{BROKEN_COMMAND_MARKER}\" ]; then\n  \
+            "#!/bin/sh\nif [ -e \"./{BROKEN_COMMAND_MARKER}\" ]{named}; then\n  \
              exit {COMMAND_NOT_FOUND_STATUS}\nfi\nexec \"{real}\" \"$@\"\n"
         ),
     )

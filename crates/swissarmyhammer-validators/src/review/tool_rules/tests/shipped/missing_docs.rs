@@ -424,6 +424,190 @@ fn the_shipped_dart_missing_docs_tool_rule_reads_one_package_config_for_each_pac
     );
 }
 
+/// The binary both runs of the shipped Dart script call.
+const DART_BINARY_NAME: &str = "dart";
+
+/// The word `dart pub get` takes as its first argument.
+///
+/// It is what tells the run that BUILDS the probe package from the run that
+/// judges it, so a stub can break one of the two and leave the other standing.
+const DART_PUB_SUBCOMMAND: &str = "pub";
+
+/// The word `dart analyze` takes as its first argument.
+const DART_ANALYZE_SUBCOMMAND: &str = "analyze";
+
+/// Where the library of the broken-`dart` probes stands, as the work-list
+/// holds it.
+///
+/// It stands under `lib/`, because that is the one position
+/// `public_member_api_docs` reads.
+const DART_BROKEN_RUN_PATH: &str = "lib/broken_run.dart";
+
+/// One undocumented public class holding one undocumented method.
+///
+/// Two members, so a run that reached the lint reports two rows. That is what
+/// makes silence readable as a defect here: no answer of this file is empty.
+const DART_BROKEN_RUN_SOURCE: &str = concat!("class BrokenRun {\n", "  void member() {}\n", "}\n");
+
+/// The one file the broken-`dart` probes stage. The work-list names it.
+const DART_BROKEN_RUN_STAGED: &[(&str, &str)] = &[(DART_BROKEN_RUN_PATH, DART_BROKEN_RUN_SOURCE)];
+
+/// Each `path:line` entry the probe reports when both `dart` runs stand: the
+/// class on row 1 and the method on row 2 of [`DART_BROKEN_RUN_SOURCE`].
+const DART_BROKEN_RUN_ROWS: &[&str] = &["lib/broken_run.dart:1", "lib/broken_run.dart:2"];
+
+/// The words the error of a `dart pub get` that could not run must carry.
+const DART_PUB_GET_BROKEN_ERROR: &[&str] = &["missing-docs-dart", "dart pub get exited"];
+
+/// The probe of a `dart pub get` that cannot run, and the words its error must
+/// carry.
+const DART_PUB_GET_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: DART_PUB_GET_BROKEN_ERROR,
+    },
+    staged: DART_BROKEN_RUN_STAGED,
+    reason: "a `dart pub get` that did not run leaves the probe package with no package \
+             config, and the lint then reads no member of it at all",
+};
+
+/// The words the error of a `dart analyze` that could not run must carry.
+const DART_ANALYZE_BROKEN_ERROR: &[&str] = &["missing-docs-dart", "dart analyze exited"];
+
+/// The probe of a `dart analyze` that cannot run, and the words its error must
+/// carry.
+const DART_ANALYZE_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: DART_ANALYZE_BROKEN_ERROR,
+    },
+    staged: DART_BROKEN_RUN_STAGED,
+    reason: "a `dart analyze` that did not run judged no code, so the run has nothing to \
+             report and must not answer as though it had",
+};
+
+/// The same probe with no `dart` run stubbed, and each row it must report.
+const DART_WHOLE_RUN_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: DART_BROKEN_RUN_ROWS,
+    },
+    staged: DART_BROKEN_RUN_STAGED,
+    reason: "both `dart` runs stand, so the probe package is built, the analyzer \
+             recognizes it, and the lint reports the class and the method",
+};
+
+/// Acceptance: the shipped Dart missing-docs tool rule BREAKS when
+/// `dart pub get` cannot run.
+///
+/// The script builds a probe package and runs `dart pub get` inside it, because
+/// the analyzer reads `public_member_api_docs` only for a package it recognizes,
+/// and only `dart pub get` writes the `.dart_tool/package_config.json` that
+/// makes it one. So a `dart pub get` that failed takes the whole rule down —
+/// the fallback path and the `--packages` path alike — and it takes it down
+/// SILENTLY: the analyzer still runs, still exits 0, and reports no member.
+///
+/// Measured on Dart SDK 3.11.0 over a probe package holding one undocumented
+/// class and one undocumented method: 2 rows after a `dart pub get` that
+/// succeeds, and 0 rows at exit 0 after one that fails and writes no
+/// `.dart_tool`. An SDK outside the `>=3.0.0 <5.0.0` constraint the script
+/// declares reaches that state — `dart pub get` then exits 1 and writes
+/// nothing.
+///
+/// The stub breaks the `pub` run and hands the `analyze` run through, so this
+/// probe measures the pub-get status alone.
+/// [`the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs`]
+/// is the control that keeps the gate from simply breaking every run.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_dart_missing_docs_tool_rule_breaks_when_pub_get_cannot_run() {
+    verify_shipped_tree_breaks_without_run_of(
+        &DART_PUB_GET_BROKEN_PROBE,
+        DART_BINARY_NAME,
+        Some(DART_PUB_SUBCOMMAND),
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule BREAKS when
+/// `dart analyze` cannot run.
+///
+/// `dart analyze` keeps one status for issues and another for a failure.
+/// Measured on Dart SDK 3.11.0: 0 with infos alone, 1 under `--fatal-infos`,
+/// 2 with a warning, 3 with an error — and each of those four writes its rows
+/// to stdout. 64 is the usage error, which writes 0 bytes and judges nothing;
+/// `--packages=<file that does not exist>` and an unknown subcommand each take
+/// it. The script accepts 0 through 3 and breaks above them.
+///
+/// The earlier shape of this step was one pipe that ended in `awk`, so the
+/// script took awk's status and answered exit 0 for every failure of the
+/// analyzer. Measured over this probe with `dart analyze` replaced by a command
+/// that exits 127: the pipe wrote 0 rows and exited 0, which the engine reads
+/// as a clean file; the shipped shape writes no row, that line, and exit 1.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_dart_missing_docs_tool_rule_breaks_when_the_analyzer_cannot_run() {
+    verify_shipped_tree_breaks_without_run_of(
+        &DART_ANALYZE_BROKEN_PROBE,
+        DART_BINARY_NAME,
+        Some(DART_ANALYZE_SUBCOMMAND),
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule reports both members of
+/// the probe when every `dart` run stands, through the real `dart analyze`
+/// pipeline.
+///
+/// This is the control half of the two tests above it. A gate that broke every
+/// run it could not read at a glance would pass both of them and throw away the
+/// findings of a run the tool DID make. Holding the same staged file to two
+/// rows states that the two status tests break a broken run and no other.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs() {
+    verify_shipped_tree_reports(&DART_WHOLE_RUN_PROBE);
+}
+
+/// Where the Dart file that is never written stands inside the probe
+/// repository.
+const DART_ABSENT_PATH: &str = "lib/absent.dart";
+
+/// What the script writes for a file it cannot read.
+const DART_CANNOT_READ_MESSAGE: &str = "missing-docs-dart cannot read";
+
+/// What the one error of an absent file must name.
+const DART_ABSENT_ERROR: &[&str] = &[DART_CANNOT_READ_MESSAGE, DART_ABSENT_PATH];
+
+/// The `missing-docs-dart` probe over a path that holds no file.
+const DART_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: DART_ABSENT_ERROR,
+    },
+    prompt_rule: MISSING_DOCS_PROMPT_RULE,
+    change_purpose: "a Dart file that is not there",
+    path: DART_ABSENT_PATH,
+    source: None,
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Dart missing-docs tool rule BREAKS on a file it
+/// cannot read, through the real `dart analyze` pipeline.
+///
+/// The script copies each file it is given into the probe package, so a file
+/// that is not there is a file the analyzer never sees, and the run would
+/// report no member of it while reporting for every other file of the group.
+/// The script therefore tests each file it is given before it builds anything,
+/// and exits nonzero with the name of the file it cannot read.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
+    verify_shipped_run_breaks(&DART_ABSENT_PROBE);
+}
+
 /// The materialized name of the `missing-docs-go` fail fixture.
 const GO_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-go.fail.go";
 

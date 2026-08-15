@@ -62,6 +62,51 @@ comments:
     - evidence: 3 files — builtin/validators/code-hygiene/rules/missing-docs-dart.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
     - next: /review
   timestamp: 2026-08-15T01:47:28.615851+00:00
+- actor: claude-code
+  id: 01m01j3yxg4t670jnpxsf411cp
+  text: |
+    ### review — findings
+    - evidence: engine `review sha 0d813edce~1..0d813edce` returned 0 findings over 2 Rust files. 1 hand finding on builtin/validators/code-hygiene/rules/missing-docs-dart.md:75 — unchecked `dart pub get --offline` silences the whole rule at exit 0. Measured: 2 rows after a pub get that succeeds, 0 rows when it fails.
+    - next: read the exit status of `dart pub get` and fail loudly. Task stays in review.
+  timestamp: 2026-08-15T01:55:53.904813+00:00
+- actor: claude-code
+  id: 01m01k8x2t0ttt178ts8cah4fr
+  text: |-
+    Pulled back from review. Finding worked.
+
+    **The finding, reproduced through the shipped bytes.** With the script as it stood at HEAD and `dart pub get` replaced by a command that exits 127, the run answered `Ok([])` — 0 rows, exit 0 — over a probe package holding one undocumented class and one undocumented method. Two rows when the same probe runs with `pub get` standing. That is the clean-file shape.
+
+    **The fix follows dead-code-rust / function-length-python / missing-docs-python.** Each tool call goes into a file, the status is captured, the status is tested, the run writes its own line and exits 1.
+
+    - `dart pub get --offline --directory "$package" > "$work/pub-get" 2>&1 || pub_status=$?`, then a test of the status AND of `$package/.dart_tool/package_config.json`. The artifact test is the precondition the rule body names.
+    - `dart analyze ... > "$work/analysis" 2> "$work/analysis-error" || analysis_status=$?`, then `[ "$analysis_status" -gt 3 ]`. The pipe into `awk` is gone; `awk` reads the file.
+
+    **Measured status sets, Dart SDK 3.11.0.** `dart analyze`: 0 for an INFO lint alone, 1 under `--fatal-infos`, 2 for a WARNING, 3 for an ERROR — each of the four writes its rows to stdout — and 64 for the usage error, which judges nothing. So 0..3 are measured runs. 3 is load-bearing, not tolerated: the missing-config fallback leaves every `package:` import unresolved, which is an ERROR, so the correct fallback run takes status 3. `dart pub get`: exit 1 with no `.dart_tool` when the SDK stands outside the declared `>=3.0.0 <5.0.0` window.
+
+    **`--offline` stays.** The probe package declares no dependency, so pub needs nothing from the network and nothing from the cache. Measured with `PUB_CACHE` naming an empty directory, a directory that does not exist, and a directory that cannot be written: `dart pub get --offline` exits 0 and writes the package config each time, and a run without the flag answers the same. So it cannot fail where a networked run would stand. Note against the finding's second cause: an unwritable `PUB_CACHE` does NOT reach the failure for this zero-dependency probe. The SDK constraint does.
+
+    **Sweep: 18 commands threw their status away.** The two `dart` calls are two of them. The other sixteen: `mktemp`, two `pwd -P` resolutions, two template writes, four list writes, the `awk` that headed the config pipe, two `mkdir -p`, three `cp`, and the reporting `awk` (whose status was read on the last group alone). `set -e` at the head of the script now covers every one. Two commands had to be reshaped so `set -e` could reach them at all:
+    - `awk ... | sort -u` became two commands writing two files. A pipeline takes the status of its last command alone and the script writes no `pipefail`.
+    - `dart pub get` runs under `--directory` rather than inside `(cd "$package" && ...)`. Every command of the script now runs at the repository root, and no subshell stands between a failure and the script.
+
+    Also added the per-file readability test the README asks for (`missing-docs-dart cannot read <path>`). `set -e` alone answers such a run with `cd: lib: No such file or directory`, which names a temporary path of the probe rather than the file the review handed over.
+
+    **Four acceptance tests on the shipped bytes, each watched RED first.**
+    - `..._breaks_when_pub_get_cannot_run` — RED `Ok([])` with the script as it stood; GREEN after.
+    - `..._breaks_when_the_analyzer_cannot_run` — RED `Ok([])`; GREEN after.
+    - `..._breaks_on_a_file_it_cannot_read` — RED on the wrong line (`bash: line 35: cd: lib: No such file or directory`); GREEN with the named line.
+    - `..._reports_both_members_when_dart_runs` — the control. Same staged file, neither run stubbed, two rows. It stops the two status tests from being satisfied by a gate that breaks every run.
+
+    The stub helper `verify_shipped_tree_breaks_without` was generalized to `verify_shipped_tree_breaks_without_run_of(probe, binary, subcommand)`. The script calls one binary two times, so a probe of one status has to leave the other standing. `subcommand: None` writes the same stub bytes as before, so the four existing callers are unchanged.
+
+    Verification: `cargo nextest run -p swissarmyhammer-validators` 760 passed, 0 failed. `cargo nextest run -p mirdan` 522 passed. `cargo nextest run -p swissarmyhammer-tools -E 'test(review)'` 86 passed. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. The doctor fixture pair is unchanged and `every_shipped_missing_docs_tool_rule_passes_its_fixtures` passes.
+
+    ARCHITECTURE.md needs no update: the change stays inside `swissarmyhammer-validators` and one builtin rule file, and creates no module and no dependency edge.
+
+    ### implement — changed
+    - evidence: 3 files — builtin/validators/code-hygiene/rules/missing-docs-dart.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
+    - next: /review
+  timestamp: 2026-08-15T02:16:04.442228+00:00
 position_column: doing
 position_ordinal: '8280'
 title: missing-docs-dart probe resolves no dependency, so every Flutter @override build() reports
@@ -86,3 +131,33 @@ Measured on Dart SDK 3.11.0 with a two-package probe. Package `framework` declar
 `Object` always resolves, so `toString`, `operator ==` and `hashCode` keep the carve-out with or without this fix.
 
 Found while implementing ^j0g7yk1, which fixed a different axis of the same probe (the position and generator exclude list). #tool-validators #objectivity
+
+## Review Findings (2026-08-14 20:49)
+
+> Scope: `review sha 0d813edce~1..0d813edce` — reviewed the diffs only — lines this change added or modified. 2 file(s) reviewed, 0 not reviewed.
+
+The engine reported 0 findings over the 2 Rust files. It read NO `.md` file: no
+validator declares a `*.md` glob, so the 214-line rule body — the substance of
+this commit — entered no candidate set. Carded as ^j169agt. The finding below
+comes from reading that file by hand, and is measured, not argued.
+
+- [x] `builtin/validators/code-hygiene/rules/missing-docs-dart.md:75` `hand/uncovered-md` — `(cd "$package" && dart pub get --offline) > /dev/null 2>&1` discards both streams and never reads the exit status. When that command fails the probe package holds no `.dart_tool/package_config.json`, and the rule then reports NOTHING at exit 0, which the engine reads as a clean file. Measured on Dart SDK 3.11.0: a probe package holding one undocumented class and one undocumented method reports 2 rows after a `pub get` that succeeds, and 0 rows at exit 0 when `pub get` fails and writes no `.dart_tool`. An SDK outside the declared `>=3.0.0 <5.0.0` constraint, or an unwritable `PUB_CACHE`, reaches that state. Read the exit status of `dart pub get` and fail the run loudly instead of analyzing a package the analyzer does not recognize. Note the provenance: this commit MOVED this line into the per-group loop and reindented it, so git marks it changed, but the discarded exit status is PRE-EXISTING — the same unchecked call stood at the top level before this commit. This commit multiplies it across one call per config group.
+
+### The fallback claim holds
+
+The implementer argues that when no package config is found the run falls back
+to the probe package alone and "cannot read as clean" because the answer is a
+SUPERSET. Checked against the shipped script, that reasoning HOLDS:
+
+- The fallback command at line 77 is byte-identical to the command this commit
+  replaced, so the fallback is the behaviour the rule already had.
+- A genuinely undocumented member is not an override, so resolution cannot
+  silence it. Only the false override is added.
+- `verify_supported_rows_report` asserts with `assert_eq!` over sorted names,
+  so it is an EXACT set and not a subset. The test
+  `the_shipped_dart_missing_docs_tool_rule_reports_the_override_with_no_package_config`
+  names BOTH rows, so a fallback that fell to one row or to silence fails.
+  Confirmed passing.
+
+The silence risk this review found is NOT on the fallback path. It is the
+unchecked `pub get`, which silences every path including the correct one.
