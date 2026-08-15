@@ -269,10 +269,43 @@ comments:
 
     WHAT A HUMAN MUST CHECK BY HAND. No validator declares a `*.md` glob, so the engine reads none of the rule body. By hand: (1) `realPath`/`realFiles`/`filesBySpelling` and the `manifests` catch in the front matter; (2) "The path each finding is reported at", above all the three paragraphs stating what the count measures and what it rests on; (3) the timing paragraph and the corpus caption; (4) "Entry resolution fails OPEN".
   timestamp: 2026-08-15T18:39:51.160630+00:00
+- actor: claude-code
+  id: 01m03bst27ptgrvhndkds607r3
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs. Two new acceptance tests, each watched RED against the OLD rule body byte for byte and then GREEN: `..._places_a_file_the_two_readings_spell_differently` (was `[]` against `outside/util.ts:2`) and `..._says_the_manifest_it_could_not_read_out_loud` (was 0 diagnostics against 1). All three review findings flipped to `- [x]`.
+    - next: /test
+
+    ### test — green
+    - evidence: `cargo nextest run --workspace`: 14235 run, 14235 passed, 0 skipped. `cargo nextest run -p swissarmyhammer-validators`: 758 run, 758 passed. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - next: /commit
+
+    ### commit — changed
+    - evidence: bc820561f fix(validators): match dead-code-typescript spellings by real path, and state the manifest it cannot read (^yxky1aj)
+    - next: /review
+
+    ### review — clean
+    - evidence: engine `review sha bc820561f~1..bc820561f` reported 0 findings over 2 files, 9 validator runs attempted, 0 failed, 0 skipped. No validator declares a `*.md` glob, so the engine read none of the rule body.
+    - checked by hand, and each one measured rather than reasoned: the example diagnostic in the rule body is byte for byte what the shipped script writes over the sibling-prefix tree; every one of this workspace's 58 reported paths stands on disk; the `tsc`-writes-no-configuration half of "Entry resolution fails OPEN" reaches the report through `main`'s catch, message text confirmed; the four decline reasons against the four `decline` call sites; the eleven acceptance tests still eleven.
+    - corrected by hand before the commit, both my own false claims: a doc comment said an `include` glob reaches NEITHER reading of a linked file — `tsc` does list it, only ts-morph drops it; and a probe doc said the link target stands outside every `include` glob, when that probe states its program with `files` and has no glob at all.
+    - NOT self-certified. The rule body is a thousand lines the engine cannot read, and every round of this card has found something there by hand. The card stays in `review` for that reading rather than going to done.
+    - next: a human reads the rule body — the node program in the front matter (`realPath`, `realFiles`, `filesBySpelling`, the `manifests` catch), "The path each finding is reported at" above all its three paragraphs on what the count measures, the timing paragraph, the corpus caption, and "Entry resolution fails OPEN".
+  timestamp: 2026-08-15T18:43:58.663539+00:00
+- actor: claude-code
+  id: 01m03bt12pagnqarnht13jxe83
+  text: |-
+    ### finish iteration 6 — clean
+    - implement: changed — 3 files (round 6, the three findings of the 12:58 section)
+    - test: green — cargo nextest --workspace, 14235 passed, 0 skipped
+    - commit: bc820561f
+    - review: clean — engine 0 findings over 2 files, 9 validator runs; hand-check of the rule body found and fixed 2 claims of my own before the commit
+
+    The card stays in `review` on purpose. It is NOT stuck and it is NOT done: the engine cannot read the rule body, so a person reads it once and moves the card. The prior round left it here for the same reason and that reading is what raised the three findings this round closed.
+  timestamp: 2026-08-15T18:44:05.846597+00:00
 depends_on:
 - 01M034AGX0RXH2RCCPPM6BA1BF
-position_column: doing
-position_ordinal: '8280'
+position_column: review
+position_ordinal: '80'
 title: dead-code-typescript prefixes a project path onto an absolute path, so the finding names a file that is nowhere
 ---
 `builtin/validators/code-hygiene/rules/dead-code-typescript.md` runs `ts-prune` inside each project directory and puts the project's path back on the front of every finding.
