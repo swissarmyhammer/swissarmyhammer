@@ -483,14 +483,44 @@ alone, so the swap gives up 28 and gains 4.
 
 The 4 knip names alone all stand in `zod`. One is
 `packages/docs/components/tabs.tsx:61` `Tab`, which the local module re-exports
-and every `.mdx` page takes from `fumadocs-ui` instead. Three are members of
-`StandardSchemaV1` in `packages/zod/src/v4/core/standard-schema.ts` — `Types` at
-86, `InferInput` at 89 and `InferOutput` at 92 — which nothing outside that file
-names. This rule reports none of the 4. The one export it does report in that
-second file, `StandardSchemaWithJSON` at 157, is the one finding with the
-corrupted path.
+and every `.mdx` page takes from `fumadocs-ui` instead. Three are members of the
+`StandardSchemaV1` namespace in `packages/zod/src/v4/core/standard-schema.ts` —
+`Types` at 86, `InferInput` at 89 and `InferOutput` at 92. This rule reports none
+of the 4. The one export it does report in that second file,
+`StandardSchemaWithJSON` at 157, is the one finding with the corrupted path.
 
-Three causes hold the other 28 back, and no option reaches any of them:
+knip names 6 members of that ONE namespace, and the tables above split them: 3
+are counted genuinely dead and 3 are counted false positives. **The criterion is
+whether any declaration names the member at all, its own file included.** A
+member some other declaration in the same file names is live, and knip reporting
+it is the false positive; a member nothing names anywhere is dead. Each of the 6
+was read at the source and searched for over the whole checkout:
+
+| the member knip names | named at | counted |
+|---|---|---|
+| `Result` at 50 | 46, in the same namespace | false positive |
+| `SuccessResult` at 53 | 50, in the same namespace | false positive |
+| `Issue` at 72 | 68, in the same namespace | false positive |
+| `Types` at 86 | nowhere | genuinely dead |
+| `InferInput` at 89 | nowhere | genuinely dead |
+| `InferOutput` at 92 | nowhere | genuinely dead |
+
+The two groups hold no symbol in common, so the counts stand. Three near-misses
+were each read rather than counted: `StandardSchemaV1.Result` at
+`packages/zod/src/v3/types.ts:247`, and `StandardSchemaV1.InferInput` and
+`.InferOutput` at `packages/zod/src/v3/tests/standard-schema.test.ts:19` and
+`:21`, all import `../standard-schema.js`, which is the SEPARATE `v3`
+declaration of the same name. The `Types`, `InferInput` and `InferOutput` at
+141, 144 and 147 belong to a third namespace of the same file,
+`StandardJSONSchemaV1`. Nothing outside
+`packages/zod/src/v4/core/standard-schema.ts` names any of the 6.
+
+The 3 false positives have ONE cause, and it is a PRECISION defect rather than a
+recall one: **`ignoreExportsUsedInFile` does not reach `namespaceMembers`**, so
+the lever that drops every other used-in-own-file export leaves these standing.
+It holds back no genuinely dead symbol, so it is not one of the causes below.
+
+Two causes hold the other 28 back, and no option reaches either:
 
 - **knip will not enumerate the exports of a module no entry reaches.** It
   writes one `files` entry carrying a name and NO ROW, and stops. Measured on a
@@ -515,9 +545,8 @@ Three causes hold the other 28 back, and no option reaches any of them:
   answers `No exports found`, because a `package.json` script names the module.
   The one lever, `includeEntryExports`, is all or nothing: it takes zod to 362
   and zustand to 13.
-- **`ignoreExportsUsedInFile` does not reach `namespaceMembers`.** All 3
-  remaining zod false positives are namespace members used on the next lines of
-  their own file.
+
+27 + 1 exhausts the 28.
 
 The first cause is fatal for THIS rule. Its claim is "every exported symbol no
 other module in the project imports", reported as `path:line`, and the everyday
