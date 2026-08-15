@@ -537,20 +537,24 @@ Re-measured with dependencies installed and knip tuned — given the entry list
 `exclude`, and `ignoreExportsUsedInFile` — both of knip's losses go away, so it
 was not rejected a second time on a configuration nobody tried:
 
-| workspace | `dead-code-typescript` | knip tuned | genuinely dead, this rule | genuinely dead, knip |
-|---|---|---|---|---|
-| zod | 76 | 7 | 28 | 4 |
-| zustand | 1 | 0 | 0 | 0 |
-| redux | 6 | 1 | 1 | 1 |
+| workspace | `dead-code-typescript` | knip tuned | genuinely dead, this rule | genuinely dead, knip | both name | union |
+|---|---|---|---|---|---|---|
+| zod | 76 | 7 | 28 | 4 | 0 | 32 |
+| zustand | 1 | 0 | 0 | 0 | 0 | 0 |
+| redux | 6 | 1 | 1 | 1 | 1 | 1 |
+| all three | 83 | 8 | 29 | 5 | 1 | 33 |
 
-knip wins precision — 100 % against 35 % — and it is 20 times faster. RECALL
-decided it: of the 30 genuinely dead symbols the two tools jointly name, this
-rule names 29 and tuned knip names 2. knip resolves reachability FIRST, so a
-module no entry reaches becomes ONE positionless `files` entry whose exports are
-never enumerated, and over zod that swallows 27 dead symbols into 6 lines with
-no names. No configuration changes it. `dead-code-typescript` reports
-`path:line` on changed files, and an author adding a module nothing imports yet
-is exactly the shape knip cannot report by symbol.
+knip wins precision — 5 of its 8 findings are genuinely dead, 63 %, against 29
+of this rule's 83, 35 % — and it is faster on every workspace, 0.4 s against
+10.8 s on zod. RECALL decided it: of the 33 genuinely dead symbols the two tools
+jointly name, this rule names 29 and tuned knip names 5, and the two agree on
+ONE symbol, `redux` `scripts/mangleErrors.mts:187` `default`. So the swap gives
+up 28 symbols and gains 4. knip resolves reachability FIRST, so a module no
+entry reaches becomes ONE positionless `files` entry whose exports are never
+enumerated, and over zod that swallows 27 of the 28 into six lines with no
+names. No configuration changes it. `dead-code-typescript` reports `path:line`
+on changed files, and an author adding a module nothing imports yet is exactly
+the shape knip cannot report by symbol.
 
 Two facts recorded against a future re-opening. knip's staging marker EXPIRES,
 which `// ts-prune-ignore-next` never does: a custom JSDoc tag under

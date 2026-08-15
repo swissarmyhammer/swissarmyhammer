@@ -461,11 +461,36 @@ Every finding of both tools was then read by hand:
 | redux | this rule | 6 | 1 | 5 | 0 | 0 |
 | redux | knip tuned | 1 | 1 | 0 | 0 | 0 |
 
-knip wins PRECISION outright, 100 % against 35 %, and it is 20 times faster. It
-loses RECALL, and recall is what decided this. **Of the 30 genuinely dead
-symbols the two tools jointly name, this rule names 29 and tuned knip names 2.**
+knip wins PRECISION: 5 of its 8 findings are genuinely dead, 63 %, against 29 of
+this rule's 83, 35 %, and no knip finding is wrong against one of this rule's.
+It is faster on every workspace, and 0.4 s against 10.8 s on zod. It loses
+RECALL, and recall is what decided this.
 
-Three causes, and no option reaches any of them:
+The two finding lists were then compared symbol by symbol, which is what the
+counts above cannot show on their own:
+
+| workspace | genuinely dead, this rule | genuinely dead, knip | both name | this rule alone | knip alone | union |
+|---|---|---|---|---|---|---|
+| zod | 28 | 4 | 0 | 28 | 4 | 32 |
+| zustand | 0 | 0 | 0 | 0 | 0 | 0 |
+| redux | 1 | 1 | 1 | 0 | 0 | 1 |
+| all three | 29 | 5 | 1 | 28 | 4 | 33 |
+
+**Of the 33 genuinely dead symbols the two tools jointly name, this rule names
+29 and tuned knip names 5.** The two agree on ONE symbol, `redux`
+`scripts/mangleErrors.mts:187` `default`. Every other symbol belongs to one list
+alone, so the swap gives up 28 and gains 4.
+
+The 4 knip names alone all stand in `zod`. One is
+`packages/docs/components/tabs.tsx:61` `Tab`, which the local module re-exports
+and every `.mdx` page takes from `fumadocs-ui` instead. Three are members of
+`StandardSchemaV1` in `packages/zod/src/v4/core/standard-schema.ts` — `Types` at
+86, `InferInput` at 89 and `InferOutput` at 92 — which nothing outside that file
+names. This rule reports none of the 4. The one export it does report in that
+second file, `StandardSchemaWithJSON` at 157, is the one finding with the
+corrupted path.
+
+Three causes hold the other 28 back, and no option reaches any of them:
 
 - **knip will not enumerate the exports of a module no entry reaches.** It
   writes one `files` entry carrying a name and NO ROW, and stops. Measured on a
@@ -473,12 +498,23 @@ Three causes, and no option reaches any of them:
   three dead exports: `--include exports,types,namespaceMembers,enumMembers`
   answers `{"issues":[]}` at exit 0, adding `files` answers one entry carrying
   `"exports":[]`, and this rule names all three at rows 2, 5 and 10. Over `zod`
-  that shape swallows 27 dead symbols into 6 module lines with no names.
-- **A dead export inside a module that IS an entry is invisible.** `zod`
-  `packages/tsc/generate.ts` `VALIBOT` is dead and knip answers `No exports
-  found`, because a `package.json` script names the module. The one lever,
-  `includeEntryExports`, is all or nothing: it takes zod to 362 and zustand
-  to 13.
+  that shape swallows 27 of the 28 into six module lines with no names:
+
+  | the module `zod` never reaches | dead symbols this rule names |
+  |---|---|
+  | `packages/zod/src/v4/core/zsf.ts` | 15 |
+  | `packages/zod/src/v3/tests/language-server.source.ts` | 7 |
+  | `packages/bench/memory/retainers.ts` | 2 |
+  | `packages/treeshake/zod-full.ts` | 1 |
+  | `packages/treeshake/zod-mini-full.ts` | 1 |
+  | `packages/treeshake/zod3-full.ts` | 1 |
+  | all six | 27 |
+
+- **A dead export inside a module that IS an entry is invisible.** That is the
+  28th symbol: `zod` `packages/tsc/generate.ts` `VALIBOT` is dead and knip
+  answers `No exports found`, because a `package.json` script names the module.
+  The one lever, `includeEntryExports`, is all or nothing: it takes zod to 362
+  and zustand to 13.
 - **`ignoreExportsUsedInFile` does not reach `namespaceMembers`.** All 3
   remaining zod false positives are namespace members used on the next lines of
   their own file.
@@ -547,8 +583,9 @@ before the hint runs — beside carrying a TSDoc release-stage meaning that stat
 the opposite of "a consumer lands next".
 
 The expiry did not carry the decision, because the section above shows the swap
-costing 27 of 29 genuinely dead symbols. It is recorded here because it is the
-strongest argument for re-opening the question.
+giving up 28 of the 29 genuinely dead symbols this rule names, against 4 it
+would gain. It is recorded here because it is the strongest argument for
+re-opening the question.
 
 ## The rule owns its own gate
 
@@ -598,9 +635,9 @@ Which files a program holds is the project's decision, and
 configuration for the FILE LIST. So the run reads the list and never rewrites
 it, and an author whose project excludes its tests answers with the marker.
 
-Measured over the 12 `tsconfig.json` projects of the four corpus workspaces:
-each one holds every test file that stands beside the sources it names. The
-acceptance test
+Measured over the 16 `tsconfig.json` projects the corpus table counts — 9, 2, 3
+and 2 — each one holds every test file that stands beside the sources it names.
+The acceptance test
 `the_shipped_typescript_dead_code_tool_rule_reads_the_program_the_project_states`
 holds both rows of the table.
 
