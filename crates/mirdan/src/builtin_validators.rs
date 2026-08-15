@@ -145,10 +145,64 @@ mod tests {
     /// build script skips it, so the guards below must skip it too.
     const BUILD_ARTIFACT_DIR: &str = "target";
 
+    /// The directory a set stores its tool-rule fixtures in.
+    const FIXTURES_DIR: &str = "fixtures";
+
     /// The directory the build script embeds, and the source of truth every
     /// guard below is held against.
     fn builtin_validators_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builtin/validators")
+    }
+
+    /// The path of every entry `dir` holds.
+    ///
+    /// Each failure names the directory it read. A bare
+    /// `No such file or directory` states nothing about which directory a
+    /// guard below could not reach.
+    fn entry_paths_of(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|error| panic!("cannot read the directory {}: {error}", dir.display()));
+        entries
+            .map(|entry| {
+                entry
+                    .unwrap_or_else(|error| {
+                        panic!("cannot read an entry of {}: {error}", dir.display())
+                    })
+                    .path()
+            })
+            .collect()
+    }
+
+    /// The last component of `path`, as the directory stores it.
+    ///
+    /// The name is taken with its own spelling. The embedded name carries that
+    /// spelling through to the store, so a roster entry must match it character
+    /// for character; a match that ignored case would pass an entry the store
+    /// never writes under that spelling.
+    fn stored_name_of(path: &std::path::Path) -> String {
+        path.file_name()
+            .expect("every directory entry has a file name")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    /// Every set that ships tool-rule fixtures, read from disk.
+    ///
+    /// A set ships fixtures when its directory holds a `fixtures/`
+    /// subdirectory. [`build.rs`] embeds the whole of `builtin/validators/`
+    /// and no list gates it, so every file under such a subdirectory reaches a
+    /// deployed store. The one directory it passes over is the build artifact
+    /// directory, which is why a `target` of that name stands for no set here
+    /// either.
+    fn fixture_shipping_sets_on_disk() -> std::collections::BTreeSet<String> {
+        let mut sets = std::collections::BTreeSet::new();
+        for path in entry_paths_of(&builtin_validators_dir()) {
+            let name = stored_name_of(&path);
+            if name != BUILD_ARTIFACT_DIR && path.join(FIXTURES_DIR).is_dir() {
+                sets.insert(name);
+            }
+        }
+        sets
     }
 
     /// The filename of every fixture the `set` ships on disk.
@@ -157,35 +211,12 @@ mod tests {
     /// embeds, so the answer is the set of fixtures a deployed store receives.
     /// A roster below names files, so this rejects a nested layout it could
     /// never name.
-    ///
-    /// The name is taken as the directory stores it. The embedded name carries
-    /// that spelling through to the store, so a roster entry must match it
-    /// character for character; a match that ignored case would pass an entry
-    /// the store never writes under that spelling.
     fn fixture_filenames_on_disk(set: &str) -> std::collections::BTreeSet<String> {
-        let fixtures_dir = builtin_validators_dir().join(set).join("fixtures");
-        let entries = std::fs::read_dir(&fixtures_dir).unwrap_or_else(|error| {
-            panic!(
-                "cannot read the fixtures directory {}: {error}",
-                fixtures_dir.display()
-            )
-        });
+        let fixtures_dir = builtin_validators_dir().join(set).join(FIXTURES_DIR);
 
         let mut filenames = std::collections::BTreeSet::new();
-        for entry in entries {
-            let path = entry
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "cannot read an entry of {}: {error}",
-                        fixtures_dir.display()
-                    )
-                })
-                .path();
-            let name = path
-                .file_name()
-                .expect("every directory entry has a file name")
-                .to_string_lossy()
-                .to_string();
+        for path in entry_paths_of(&fixtures_dir) {
+            let name = stored_name_of(&path);
             if path.is_dir() {
                 assert_eq!(
                     name, BUILD_ARTIFACT_DIR,
@@ -364,10 +395,59 @@ mod tests {
     /// never reach the store has every one of its rules reported fixture-less,
     /// and each falls silently back to its prompt rule — or, for a rule that
     /// supersedes nothing, to no rule at all.
+    ///
+    /// The set names are held against the directory tree by
+    /// [`test_every_fixture_shipping_set_stands_in_the_rosters`], and each
+    /// roster is held against its own directory by
+    /// [`test_fixture_rosters_and_the_fixtures_directory_agree`]. The two
+    /// answer different questions: the first says WHICH sets must carry a
+    /// roster, and the second says WHICH FILES each roster must name.
     const FIXTURE_ROSTERS: &[(&str, &[&str])] = &[
         ("code-hygiene", CODE_HYGIENE_FIXTURES),
         ("manifests", MANIFESTS_FIXTURES),
     ];
+
+    /// `FIXTURE_ROSTERS` and the sets that ship a `fixtures/` directory agree
+    /// in BOTH directions.
+    ///
+    /// [`test_fixture_rosters_and_the_fixtures_directory_agree`] walks the
+    /// rosters, so a set that carries NO roster is not among the entries it
+    /// walks and it can never see one. That is the omission defect the
+    /// per-file guard answers, one level up: the roster of rosters is
+    /// internally consistent, and wrong only by what it leaves out. A new set
+    /// under `builtin/validators/` that ships fixtures is embedded by the
+    /// build script and reaches a deployed store, so the set list is read from
+    /// the directory tree rather than written by hand.
+    #[test]
+    fn test_every_fixture_shipping_set_stands_in_the_rosters() {
+        let sets = fixture_shipping_sets_on_disk();
+        let on_disk: std::collections::BTreeSet<&str> = sets.iter().map(String::as_str).collect();
+        let listed: std::collections::BTreeSet<&str> =
+            FIXTURE_ROSTERS.iter().map(|&(set, _)| set).collect();
+
+        // Two empty sets agree, so a tree that read as shipping no fixture at
+        // all would carry this test to a pass having compared nothing.
+        assert!(
+            !on_disk.is_empty(),
+            "{} holds no set that ships a `fixtures/` directory, so the two \
+             comparisons below hold nothing and this test cannot fail",
+            builtin_validators_dir().display()
+        );
+
+        assert_no_names_outside(
+            &on_disk,
+            &listed,
+            "these sets ship a `fixtures/` directory and `FIXTURE_ROSTERS` names none of \
+             them, so every fixture they ship reaches a deployed store with no roster \
+             holding it",
+        );
+        assert_no_names_outside(
+            &listed,
+            &on_disk,
+            "`FIXTURE_ROSTERS` names these sets and no set directory on disk ships a \
+             `fixtures/` directory for them",
+        );
+    }
 
     /// Each fixture roster and the directory it stands for agree in BOTH
     /// directions.
