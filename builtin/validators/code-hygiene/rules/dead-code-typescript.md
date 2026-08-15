@@ -161,14 +161,16 @@ tool:
             dir: path.dirname(file),
             manifest: JSON.parse(fs.readFileSync(file, "utf8")),
           });
-        } catch {
-          continue;
+        } catch (failure) {
+          decline(
+            `the manifest ${reportedPath(file, workspaceRoot)} does not parse, so the entry modules it publishes stay under the gate: ${failure}`,
+          );
         }
       }
       return found;
     }
 
-    /** States one item this run judged and could not place. */
+    /** States one thing this run could not read or place, on the report's channel. */
     function decline(message) {
       process.stderr.write(`${DIAGNOSTIC_MARKER} ${message}\n`);
     }
@@ -224,14 +226,49 @@ tool:
         .filter((line) => line !== "");
     }
 
+    /** The real path of `file`, or `file` itself when the run cannot read it. */
+    function realPath(file) {
+      try {
+        return fs.realpathSync(file);
+      } catch {
+        return file;
+      }
+    }
+
+    /**
+     * Each file of the program by its real path, with every spelling ts-prune
+     * can write for it.
+     *
+     * The two readings of the program spell a file differently: `tsc
+     * --listFilesOnly` prints the path it globbed, and ts-prune reports
+     * `fs.realpathSync(result.file)` — `ts-prune/lib/analyzer.js`. A file the
+     * list reached through a symbolic link therefore stands under two
+     * spellings, and holding both is what puts the file ts-prune reported into
+     * the list its spelling is matched against. Two entries of the list that
+     * resolve to ONE real file are one file here, so a link beside its own
+     * target is not a collision.
+     */
+    function realFiles(files, projectDir) {
+      const byReal = new Map();
+      for (const file of files) {
+        const real = realPath(file);
+        const spellings = byReal.get(real) || new Set();
+        spellings.add(reportedAs(file, projectDir));
+        spellings.add(reportedAs(real, projectDir));
+        byReal.set(real, spellings);
+      }
+      return byReal;
+    }
+
     /** The files of the program that carry each spelling ts-prune can write. */
     function filesBySpelling(files, projectDir) {
       const carried = new Map();
-      for (const file of files) {
-        const spelling = reportedAs(file, projectDir);
-        const standing = carried.get(spelling);
-        if (standing) standing.push(file);
-        else carried.set(spelling, [file]);
+      for (const [real, spellings] of realFiles(files, projectDir)) {
+        for (const spelling of spellings) {
+          const standing = carried.get(spelling);
+          if (standing) standing.push(real);
+          else carried.set(spelling, [real]);
+        }
       }
       return carried;
     }
@@ -258,9 +295,14 @@ tool:
      * spelling is what the presenter wrote. That cut throws text away, so no
      * arithmetic on the line reads the path back. The run spells each file of
      * the PROGRAM the same way instead, and answers with the file that carries
-     * the spelling ts-prune wrote. One such file is the file of the finding.
-     * No such file, or two, is an item this run cannot place, so it declines
-     * the item and says which one.
+     * the spelling ts-prune wrote.
+     *
+     * `standing` counts the real files of the program that carry the spelling,
+     * each of them spelled both the way `tsc` listed it and the way its real
+     * path spells it. So the file ts-prune reported is itself one of the
+     * candidates, and one candidate means that candidate is it. No candidate,
+     * or two, is an item this run cannot place, so it declines the item and
+     * says which one.
      */
     function placeFindings(config, workspaceRootArgument, listPath) {
       const projectDir = process.cwd();
@@ -829,12 +871,27 @@ So the run never reads the cut back. It reads the FILE LIST of the program
 instead — `tsc -p tsconfig.json --listFilesOnly` prints the absolute path of
 every file the project's own program holds, and stops before the type check —
 and it spells each of those files the way the presenter spells it. The file
-whose spelling meets the reported one is the file of the finding. That is a
-fact about the program rather than an arithmetic on a path: ts-prune builds its
-program from the same `tsconfig.json` `tsc` read, so a spelling ONE file of
-that list carries names the file ts-prune reported and no other. Where the two
-readings of the program disagree, the run declines rather than guesses, and the
-list below states each way they can.
+whose spelling meets the reported one is the file of the finding.
+
+The two readings of the program spell one file two ways, and the run holds
+both. `tsc` prints the path it globbed or was given, and ts-prune reports
+`fs.realpathSync(result.file)` — `ts-prune/lib/analyzer.js`. A `files` entry
+that is a symbolic link is one shape where the two differ: `tsc` lists
+`src/link.ts`, and ts-prune reports the export at the path behind the link. So
+the run spells each listed file BOTH ways — as `tsc` wrote it, and as its real
+path spells it — and counts the REAL files of the list that carry the reported
+spelling. Two listed entries that resolve to one real file are one file here,
+so a link listed beside its own target is not a collision.
+
+That count is a count of the PROGRAM and not of the filesystem: a file that
+merely stands on disk carries no spelling here. One file carrying the spelling
+is the file of the finding when `tsc` listed that file, and `tsc` and ts-prune
+build their program from the same `tsconfig.json`, so the list holds what
+ts-prune read. A file ts-prune reported that `tsc` listed under NEITHER
+spelling stands outside what this count can see: the run then reads no
+candidate and declines, unless some other file of the list wears the same cut
+spelling. That is the whole of what the count rests on, stated rather than
+assumed.
 
 `reportedAs` in the node script is the presenter's own operation, copied rather
 than modelled, and BOTH jobs of that script read it: the `--ignore` pattern has
@@ -875,25 +932,36 @@ wrote its drops at the project's own `tsconfig.json`, and the rule's own
 and `**/*.cjs` — select no `.json` path, so the workspace retain discarded
 every one of them on every run.
 
-The placement states an item on that channel for three reasons, and each one is
-a fact rather than a judgment:
+The placement writes such a line where the node script calls `decline`, and
+each reason is a fact rather than a judgment:
 
 - Two files of the program carry the spelling. The `consumersrc` shape above is
   one.
-- No file of the program carries it. The list `tsc` wrote and the file ts-prune
-  read then disagree — a file the program reaches through a symbolic link is
-  one way that happens, because ts-prune reports `fs.realpathSync(result.file)`.
+- No file of the program carries it. Nothing `tsc` listed spells, as listed or
+  by its real path, the way ts-prune spelled the file it read.
 - The program lists no file at all. That is one line for the whole project
   rather than one for each of its findings.
+- The job broke. `main` catches what it threw and names the job, the directory
+  and the failure, so a `place` that could not run says so rather than writing
+  nothing.
 
 The entry job writes on the same channel, and "Entry resolution fails OPEN"
-below states what that line carries.
+below states what its lines carry.
 
-Measured over this workspace, the shipped script before this change against the
-shipped script after it, the lowest of three runs each: 58 findings and 58
-findings, the same bytes on stdout, 0 items declined, 0 bytes on stderr, and
-5.6 s against 6.3 s. The second `tsc` call is what those 0.7 s buy, and the
-answer it buys is the file list this section turns on.
+Measured over this workspace, the lowest of three runs each, three shipped
+scripts: the shell placement this replaced at 5.5 s, the file-list placement at
+6.2 s, and the file-list placement reading the real path of each listed file as
+well at 6.2 s. All three answered 58 findings, the same bytes on stdout, 0
+items declined and 0 bytes on stderr.
+
+Those 0.7 s are what the WHOLE placement costs over the shell loop it replaced
+— a `tsc -p tsconfig.json --listFilesOnly` and a `node "$work/prune.js" place`
+for each of this workspace's two projects, against the per-finding shell loop
+that went. This measurement does not divide that 0.7 s between the three, and
+it does not say which of them carries it. Reading the real path of each listed
+file beside them moved the reading by 0.03 s, under the spread of the three
+runs the file-list placement itself answered, so this measurement does not tell
+that cost from noise either.
 
 **The three library rows below were measured under the EARLIER placement**, and
 those checkouts no longer stand on the machine that measured them, so this
@@ -908,11 +976,12 @@ shipped run answers, and it is stated for the row that was re-measured:
 | this workspace | 58 | 0 | 0 |
 
 The placement reads the same rows ts-prune wrote and writes one row for each row
-it places, so it adds no row. A row goes missing two ways, and both are legible:
-the run declines the item, and it states each one it declines; or two projects
-that reported the same file now spell it alike and `sort -u` collapses a pair
-the earlier spelling held apart. So a re-measurement reads a difference off the
-report and off the duplicate rows, rather than off a diff of two lists.
+it places, so it adds no row. Where a row leaves the list, the report says so:
+the run states each item it declines, and `sort -u` collapses two rows that
+come to spell one file alike — which the real-path spelling can newly do, where
+one project reaches a file through a link and another reaches it directly. So a
+re-measurement reads a difference off the report and off the duplicate rows,
+rather than off a diff of two lists.
 
 The one finding of zod's 76 that this section is about is
 `packages/zod/src/v4/core/standard-schema.ts:157` `StandardSchemaWithJSON`,
@@ -930,15 +999,17 @@ stands in a module the package publishes, so the carve-out already silences
 them, and the shipped run leaks the one finding that stands outside a published
 module.
 
-The acceptance tests
-`the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project_directory`,
-`the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding`
-and
-`the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_declines_out_loud`
-hold a module the program reaches from outside the project, hold two sibling
-packages whose names begin with the project's own, and hold the declined item
-beside the sentence it states. The first drives the outside module through the
-engine as well, where the run answered NO finding before this change.
+Four acceptance tests hold this section.
+`..._names_a_module_outside_the_project_directory` holds a module the program
+reaches from outside the project, and drives it through the engine as well,
+where the run answered NO finding before this change.
+`..._names_no_file_that_is_not_the_file_of_the_finding` holds two sibling
+packages whose names begin with the project's own.
+`..._says_the_finding_it_declines_out_loud` holds the declined item beside the
+sentence it states. `..._places_a_file_the_two_readings_spell_differently`
+holds a `files` entry that is a symbolic link, which is the shape the two
+spellings are read for; on the placement before this one that run declined the
+item and reported nothing.
 
 `tsc --showConfig` is what reads the tsconfig, because `paths` usually stands in
 a file the project EXTENDS: `redux` writes its table in `tsconfig.base.json`, and
@@ -948,13 +1019,27 @@ the trailing commas a `tsconfig.json` may hold and a `JSON.parse` may not —
 `redux/tsconfig.json` opens with a comment and `zod/packages/zod/tsconfig.json`
 ends with a trailing comma.
 
-Entry resolution fails OPEN. A `tsc` run that writes no configuration, and a
-manifest that does not parse, leave the pattern empty, the run then states
-`--ignore '$^'`, and every export of that project stays under the gate. A failure
-adds findings and never takes one away, so it cannot answer clean for a broken
-read. The node script states that failure with the `sah-diagnostic:` marker, so
-the report carries it; an unmarked line on stderr reaches a `tracing` record
-and no reader of the review.
+Entry resolution fails OPEN, and each failure is stated with the
+`sah-diagnostic:` marker so the report carries it; an unmarked line on stderr
+reaches a `tracing` record and no reader of the review.
+
+A `tsc` run that writes no configuration a `JSON.parse` can read takes the
+whole job with it: the parse throws, `main` catches it and states `the entries
+job broke in <directory>: <failure>`, the pattern is empty, the run states
+`--ignore '$^'`, and every export of that project stays under the gate. A
+manifest that does not parse is NARROWER. The
+other manifests still build the pattern, and only the entry modules of that one
+package fall out of it, so every export of them reports as dead. That reads on
+the report exactly like a module nothing imports, which is why the run names
+the manifest it could not read: nothing else on any channel tells the author
+why a published entry module is on the list.
+
+Either failure adds findings and never takes one away, so neither can answer
+clean for a broken read. The acceptance test
+`..._says_the_manifest_it_could_not_read_out_loud` stages one manifest that
+parses beside one that does not, and holds both halves: the entry of the whole
+package spared, the entry of the broken package reported, and the manifest
+named.
 
 `sort -u` collapses the duplicate a nested `tsconfig.json` produces when two
 projects hold the same file. The entry pattern is computed for each project, so
@@ -977,7 +1062,7 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The nine acceptance tests in
+move neither count. The eleven acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
 
@@ -989,7 +1074,7 @@ stages that shape as a probe repository, and it is the test that pins the
 property the knip decision turned on.
 
 Nor can it hold the path question. A fixture stands loose in one directory, so
-no fixture is a module one project reaches from outside itself, and no fixture
-stands in a package whose name begins with another package's. The three
-acceptance tests named in "How the run is shaped" stage sibling packages for
-that.
+no fixture is a module one project reaches from outside itself, no fixture
+stands in a package whose name begins with another package's, and no fixture is
+a symbolic link. The four acceptance tests named in "How the run is shaped"
+stage those trees instead.

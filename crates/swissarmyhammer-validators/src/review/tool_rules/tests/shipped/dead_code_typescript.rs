@@ -533,6 +533,160 @@ const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
              file that is not the file of the finding",
 };
 
+/// Where the link that carries a module into the program stands, as the
+/// work-list holds it.
+const TYPESCRIPT_LINK_PATH: &str = "src/link.ts";
+
+/// Where the module the link stands for is held, as the work-list holds it.
+///
+/// The probe's tsconfig states its program with `files` and never names this
+/// path, so the file reaches the program through the link alone.
+const TYPESCRIPT_LINK_TARGET_PATH: &str = "outside/util.ts";
+
+/// The link the two-readings probe stages, stated the way the repository holds
+/// it — relative to the directory the link stands in.
+const TYPESCRIPT_LINKED_FILE_LINKS: &[(&str, &str)] =
+    &[(TYPESCRIPT_LINK_PATH, "../outside/util.ts")];
+
+/// A tsconfig that names each root of its program one by one, one of them a
+/// symbolic link.
+///
+/// `files` is what puts a link in the program ts-prune reads. ts-morph adds
+/// each `files` entry by path, and the analyzer then reports
+/// `fs.realpathSync` of it. Its `include` walk drops a symbolic link instead:
+/// measured over the same tree stated with `include`, ts-morph's program held
+/// `src/index.ts` alone, while `tsc` listed the link either way. So `files` is
+/// the shape that lets the two readings be compared at all.
+const TYPESCRIPT_LINKED_FILE_TSCONFIG: &str = concat!(
+    "{\n",
+    "  \"compilerOptions\": {\n",
+    "    \"target\": \"ES2021\",\n",
+    "    \"module\": \"ESNext\",\n",
+    "    \"moduleResolution\": \"bundler\",\n",
+    "    \"noEmit\": true,\n",
+    "    \"strict\": true,\n",
+    "    \"skipLibCheck\": true\n",
+    "  },\n",
+    "  \"files\": [\"src/index.ts\", \"src/link.ts\"]\n",
+    "}\n",
+);
+
+/// A probe whose program holds one file the two readings spell differently.
+///
+/// Measured with ts-prune 0.10.3 and tsc 5.9.3 over this tree, the project's
+/// own directory the working directory: `tsc --listFilesOnly` prints
+/// `src/index.ts` and `src/link.ts`, and ts-prune reports
+/// `outside/util.ts:2 - trulyDead`. So the file the finding is about stands in
+/// the list under a spelling the list never prints, and the run has to spell
+/// each listed file BOTH ways to find it.
+const TYPESCRIPT_LINKED_FILE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &["outside/util.ts:2"],
+    },
+    staged: &[
+        (
+            TYPESCRIPT_PROBE_TSCONFIG_PATH,
+            TYPESCRIPT_LINKED_FILE_TSCONFIG,
+        ),
+        (TYPESCRIPT_PROBE_ENTRY_PATH, TYPESCRIPT_PROBE_ENTRY),
+        (TYPESCRIPT_LINK_TARGET_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "the run spells each file of the program the way `tsc` listed it AND the way its \
+             real path spells it, so the file ts-prune reported stands among the candidates its \
+             own spelling is matched against",
+};
+
+/// Where the manifest of the package the probe's project publishes stands, as
+/// the work-list holds it.
+const TYPESCRIPT_APP_MANIFEST_PATH: &str = "packages/app/package.json";
+
+/// Where the tsconfig of the probe's one project stands, as the work-list holds
+/// it.
+const TYPESCRIPT_APP_TSCONFIG_PATH: &str = "packages/app/tsconfig.json";
+
+/// Where the entry module of the probe's own package stands, as the work-list
+/// holds it.
+const TYPESCRIPT_APP_ENTRY_PATH: &str = "packages/app/src/index.ts";
+
+/// Where the ordinary module of the probe's own package stands, as the
+/// work-list holds it.
+const TYPESCRIPT_APP_LIB_PATH: &str = "packages/app/src/lib.ts";
+
+/// Where the manifest that does not parse stands, as the work-list holds it.
+///
+/// It stands beside the project rather than above it, because ts-prune reads a
+/// configuration out of every `package.json` on the way UP from its working
+/// directory and dies on one it cannot parse.
+const TYPESCRIPT_BROKEN_MANIFEST_PATH: &str = "packages/other/package.json";
+
+/// Where the entry module of the package whose manifest does not parse stands,
+/// as the work-list holds it.
+const TYPESCRIPT_BROKEN_PACKAGE_ENTRY_PATH: &str = "packages/other/src/index.ts";
+
+/// A manifest that stops halfway through its second field.
+const TYPESCRIPT_BROKEN_MANIFEST: &str = concat!("{\n", "  \"name\": \"other-probe\",\n");
+
+/// A manifest that publishes its entry module as source, and names the package.
+const TYPESCRIPT_APP_MANIFEST: &str = concat!(
+    "{\n",
+    "  \"name\": \"app-probe\",\n",
+    "  \"version\": \"0.0.0\",\n",
+    "  \"exports\": {\n",
+    "    \".\": {\n",
+    "      \"source\": \"./src/index.ts\",\n",
+    "      \"default\": \"./dist/index.js\"\n",
+    "    }\n",
+    "  }\n",
+    "}\n",
+);
+
+/// A tsconfig whose program reaches the sources of the package standing beside
+/// it.
+const TYPESCRIPT_TWO_PACKAGE_TSCONFIG: &str = concat!(
+    "{\n",
+    "  \"compilerOptions\": {\n",
+    "    \"target\": \"ES2021\",\n",
+    "    \"module\": \"ESNext\",\n",
+    "    \"moduleResolution\": \"bundler\",\n",
+    "    \"noEmit\": true,\n",
+    "    \"strict\": true,\n",
+    "    \"skipLibCheck\": true\n",
+    "  },\n",
+    "  \"include\": [\"src\", \"../other/src\"]\n",
+    "}\n",
+);
+
+/// A probe holding one manifest that parses beside one that does not.
+///
+/// The entry module of the package whose manifest parses is spared, and the
+/// entry module of the package whose manifest does not is reported like any
+/// other dead export. That is the whole cost of the failure, and the author
+/// cannot read it off the report unless the run states the manifest it could
+/// not read.
+const TYPESCRIPT_BROKEN_MANIFEST_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &["packages/app/src/lib.ts:2", "packages/other/src/index.ts:2"],
+    },
+    staged: &[
+        (TYPESCRIPT_APP_MANIFEST_PATH, TYPESCRIPT_APP_MANIFEST),
+        (
+            TYPESCRIPT_APP_TSCONFIG_PATH,
+            TYPESCRIPT_TWO_PACKAGE_TSCONFIG,
+        ),
+        (TYPESCRIPT_APP_ENTRY_PATH, TYPESCRIPT_PROBE_ENTRY),
+        (TYPESCRIPT_APP_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+        (TYPESCRIPT_BROKEN_MANIFEST_PATH, TYPESCRIPT_BROKEN_MANIFEST),
+        (TYPESCRIPT_BROKEN_PACKAGE_ENTRY_PATH, TYPESCRIPT_PROBE_ENTRY),
+    ],
+    reason: "a manifest that does not parse takes its own package's entry modules out of the \
+             carve-out and leaves every other package's in, so the entry of the broken package \
+             reports and the entry of the whole one does not",
+};
+
 /// Acceptance: an export the package manifest publishes is not dead.
 ///
 /// This is the `dead-code` carve-out for the exported public API. The manifest
@@ -681,7 +835,11 @@ fn the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file
 /// run that declined some other item cannot pass.
 #[test]
 fn the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_declines_out_loud() {
-    let declined = drive_shipped_staged_tree_diagnostics(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
+    let declined = drive_shipped_staged_tree_read(
+        &TYPESCRIPT_SIBLING_PREFIX_PROBE,
+        NO_PROBE_LINKS,
+        script_diagnostics,
+    );
 
     assert_eq!(
         declined.len(),
@@ -691,6 +849,76 @@ fn the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_declines_out_l
     assert!(
         declined[0].contains(TYPESCRIPT_DECLINED_SPELLING),
         "the diagnostic must name the finding it declined; it said '{}'",
+        declined[0]
+    );
+}
+
+/// Acceptance: the file ts-prune reported is among the candidates its own
+/// spelling is matched against, whichever way the file list spells it.
+///
+/// The two readings of the program spell one file two ways. `tsc
+/// --listFilesOnly` prints the path it globbed or was given, and ts-prune
+/// reports `fs.realpathSync(result.file)` — `ts-prune/lib/analyzer.js`. A
+/// count of the listed files that carry a spelling is therefore a count of what
+/// EXISTS, not a count of what is right: with the reported file left out of the
+/// list, one other file carrying its spelling would place the finding at a file
+/// it is not about.
+///
+/// The run spells each listed file both ways, so the reported file stands among
+/// its own candidates. One candidate then means that candidate is it, and a
+/// second real file carrying the spelling declines the item rather than
+/// choosing.
+///
+/// Two listed entries that resolve to ONE real file are one candidate here, so
+/// a link listed beside its own target is not a collision.
+#[cfg(unix)]
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_places_a_file_the_two_readings_spell_differently() {
+    let reported = drive_shipped_staged_tree_read(
+        &TYPESCRIPT_LINKED_FILE_PROBE,
+        TYPESCRIPT_LINKED_FILE_LINKS,
+        finding_rows,
+    );
+    let declined = drive_shipped_staged_tree_read(
+        &TYPESCRIPT_LINKED_FILE_PROBE,
+        TYPESCRIPT_LINKED_FILE_LINKS,
+        script_diagnostics,
+    );
+
+    assert_shipped_tree_rows(&TYPESCRIPT_LINKED_FILE_PROBE, &reported);
+    assert!(
+        declined.is_empty(),
+        "the run must place the finding rather than decline it; it stated {declined:?}"
+    );
+}
+
+/// Acceptance: a manifest the run could not read is stated out loud.
+///
+/// Entry resolution fails OPEN, and the manifest half of that failure is
+/// narrow: the other manifests still build the `--ignore` pattern, and the
+/// entry modules of the one package fall out of it. Every export of those
+/// modules then reports as dead, which reads on the report exactly like a
+/// module nothing imports.
+///
+/// So the run has to say which manifest it could not read. Nothing else on any
+/// channel tells the author why a published entry module reports.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_says_the_manifest_it_could_not_read_out_loud() {
+    let declined = drive_shipped_staged_tree_read(
+        &TYPESCRIPT_BROKEN_MANIFEST_PROBE,
+        NO_PROBE_LINKS,
+        script_diagnostics,
+    );
+
+    verify_shipped_tree_reports(&TYPESCRIPT_BROKEN_MANIFEST_PROBE);
+    assert_eq!(
+        declined.len(),
+        1,
+        "the run must state the one manifest it could not read; it stated {declined:?}"
+    );
+    assert!(
+        declined[0].contains(TYPESCRIPT_BROKEN_MANIFEST_PATH),
+        "the diagnostic must name the manifest it could not read; it said '{}'",
         declined[0]
     );
 }

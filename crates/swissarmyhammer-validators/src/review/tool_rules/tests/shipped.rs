@@ -198,6 +198,32 @@ fn stage_probe_files<'a>(repo: &Path, files: impl IntoIterator<Item = (&'a str, 
     }
 }
 
+/// The links a probe stages when its shape needs none.
+const NO_PROBE_LINKS: &[(&str, &str)] = &[];
+
+/// Makes a symbolic link inside `repo` at each `(path, target)` pair of
+/// `links`, making the directory of the link first.
+///
+/// The target is written verbatim, so a probe states the link the way a
+/// repository holds it — relative to the directory the link stands in.
+#[cfg(unix)]
+fn stage_probe_links(repo: &Path, links: &[(&str, &str)]) {
+    for (path, target) in links {
+        let link = repo.join(path);
+        std::fs::create_dir_all(link.parent().expect("a staged link has a parent")).unwrap();
+        std::os::unix::fs::symlink(target, &link).unwrap();
+    }
+}
+
+/// Answers the same on a platform this suite stages no link on.
+#[cfg(not(unix))]
+fn stage_probe_links(_repo: &Path, links: &[(&str, &str)]) {
+    assert!(
+        links.is_empty(),
+        "a probe stages a symbolic link on unix alone"
+    );
+}
+
 /// The RESOLVED root of the probe repository `repo`.
 ///
 /// A tool prints the resolved path of each file it reads, and on macOS a
@@ -784,7 +810,7 @@ fn shipped_script_findings(
     staged: &[(&str, &str)],
     files: &[&str],
 ) -> Result<Vec<String>, ScriptFailure> {
-    drive_shipped_script(loader, rule, staged, files, finding_rows)
+    drive_shipped_script(loader, rule, staged, NO_PROBE_LINKS, files, finding_rows)
 }
 
 /// Each item `outcome` declined, in the order the run stated them.
@@ -801,16 +827,21 @@ fn script_diagnostics(outcome: &ScriptOutcome, _repo_root: &Path) -> Vec<String>
 ///
 /// `read` runs while the repository still stands, because the repository root
 /// is what turns a tool-reported path into the path the work-list holds.
+///
+/// `links` are the symbolic links the repository holds beside `staged`. A probe
+/// of a file the two readings of a program spell differently needs one.
 fn drive_shipped_script<T>(
     loader: &ValidatorLoader,
     rule: &str,
     staged: &[(&str, &str)],
+    links: &[(&str, &str)],
     files: &[&str],
     read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Result<Vec<T>, ScriptFailure> {
     let shipped = required_shipped_tool_rule(loader, rule);
     let repo = tempfile::tempdir().unwrap();
     stage_probe_files(repo.path(), staged.iter().copied());
+    stage_probe_links(repo.path(), links);
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
@@ -950,25 +981,25 @@ fn drive_shipped_staged_tree(probe: &ShippedStagedTree) -> Result<Vec<String>, S
     drive_shipped_staged_tree_with(probe, &[])
 }
 
-/// Drives the shipped script of `probe` over the tree it stages, and answers
-/// each item that run declined.
+/// Drives the shipped script of `probe` over the tree it stages, with the
+/// symbolic links `links` made inside it, and answers what `read` takes off
+/// the outcome.
 ///
-/// A probe of an item the run could not judge reads this. The rows a probe
-/// states hold the findings alone, so a run that declined an item in silence
-/// passes them.
-fn drive_shipped_staged_tree_diagnostics(probe: &ShippedStagedTree) -> Vec<String> {
+/// [`finding_rows`] reads what the run judged, and [`script_diagnostics`] reads
+/// what it could NOT judge. The rows a probe states hold the findings alone, so
+/// a run that declined an item in silence passes them, and a probe of a
+/// declined item reads the diagnostics instead.
+fn drive_shipped_staged_tree_read<T>(
+    probe: &ShippedStagedTree,
+    links: &[(&str, &str)],
+    read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
+) -> Vec<T> {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
 
-    drive_shipped_script(
-        &loader,
-        probe.run.rule,
-        probe.staged,
-        &paths,
-        script_diagnostics,
-    )
-    .expect("the shipped script must judge the probe package and exit 0")
+    drive_shipped_script(&loader, probe.run.rule, probe.staged, links, &paths, read)
+        .expect("the shipped script must judge the probe package and exit 0")
 }
 
 /// Holds the run of `probe` to breaking with an error that names every
@@ -1003,8 +1034,13 @@ fn verify_shipped_tree_reports(probe: &ShippedStagedTree) {
     let reported = drive_shipped_staged_tree(probe)
         .expect("the shipped script must judge the probe package and exit 0");
 
+    assert_shipped_tree_rows(probe, &reported);
+}
+
+/// Holds `reported` to being exactly the `path:line` entries `probe` names.
+fn assert_shipped_tree_rows(probe: &ShippedStagedTree, reported: &[String]) {
     assert_eq!(
-        sorted_names(&reported),
+        sorted_names(reported),
         sorted_names(&expected_script_findings(probe.run.expected)),
         "{}",
         probe.reason
