@@ -900,6 +900,52 @@ fn drive_shipped_script<T>(
     files: &[&str],
     read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Result<Vec<T>, ScriptFailure> {
+    let ShippedScriptRun {
+        _work,
+        repo_root,
+        outcome,
+        ..
+    } = drive_shipped_script_whole(loader, rule, staging, files);
+
+    Ok(read(&outcome?, &repo_root))
+}
+
+/// The whole of what ONE run of a shipped script said.
+///
+/// [`run_script`] answers `Err` for a run that exited nonzero before it reads
+/// stdout at all, which is the engine's own contract and right for the engine.
+/// It leaves a probe unable to read the rows such a run placed. This drives one
+/// run and reads both halves off it, each with the engine's own code:
+/// [`read_script_output`] answers exactly what the engine would answer, and
+/// [`finding_rows`] spells each placed row the way a probe states it.
+struct ShippedScriptRun {
+    /// The work directory the probe repository stands in, held so the
+    /// repository outlives every reading of the run.
+    _work: tempfile::TempDir,
+
+    /// The root of the probe repository, which is what turns a tool-reported
+    /// path into the path the work-list holds.
+    repo_root: PathBuf,
+
+    /// The answer the engine reads off this run.
+    outcome: Result<ScriptOutcome, ScriptFailure>,
+
+    /// Each `path:line` row the run wrote to stdout, whatever its exit status.
+    placed: Vec<String>,
+}
+
+/// Stages `staging` in a temporary repository, drives the shipped script of
+/// `rule` there with the argument list a run over `files` carries, and answers
+/// the whole of what that run said.
+///
+/// The arguments come from [`script_args`] and the scope from the SHIPPED rule,
+/// exactly as [`shipped_script_findings`] states.
+fn drive_shipped_script_whole(
+    loader: &ValidatorLoader,
+    rule: &str,
+    staging: &ShippedStaging<'_>,
+    files: &[&str],
+) -> ShippedScriptRun {
     let shipped = required_shipped_tool_rule(loader, rule);
     let work = tempfile::tempdir().unwrap();
     let repo = work.path().join(PROBE_REPOSITORY_DIRECTORY);
@@ -911,9 +957,38 @@ fn drive_shipped_script<T>(
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
-    let outcome = run_script(&shipped.script, &repo_root, &args)?;
+    let (outcome, placed) = match run_shell(&shipped.script, Some(&repo_root), &args) {
+        Err(error) => (Err(ScriptFailure::Start(error)), Vec::new()),
+        Ok(output) => {
+            let placed = finding_rows(&placed_outcome(&output), &repo_root);
+            (read_script_output(&output), placed)
+        }
+    };
 
-    Ok(read(&outcome, &repo_root))
+    ShippedScriptRun {
+        _work: work,
+        repo_root,
+        outcome,
+        placed,
+    }
+}
+
+/// Each finding the stdout of `output` carried, whatever the run's exit status.
+///
+/// A run the engine broke on wrote its stdout all the same, and the contract
+/// those bytes keep is the one [`parse_tool_stdout`] holds a completed run to.
+/// Stdout no reader of that contract can read is stated as a panic rather than
+/// counted as no row, because a run that wrote unreadable bytes wrote
+/// something.
+fn placed_outcome(output: &Output) -> ScriptOutcome {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let findings = parse_tool_stdout(&stdout)
+        .unwrap_or_else(|error| panic!("the stdout of the run must keep the contract: {error}"));
+
+    ScriptOutcome {
+        findings,
+        ..ScriptOutcome::default()
+    }
 }
 
 /// The entries of `expected` as the owned strings [`shipped_script_findings`]
@@ -1028,6 +1103,25 @@ fn drive_shipped_staged_tree_with(
     probe: &ShippedStagedTree,
     extra: &[(&str, &str)],
 ) -> Result<Vec<String>, ScriptFailure> {
+    let ShippedScriptRun {
+        _work,
+        repo_root,
+        outcome,
+        ..
+    } = drive_shipped_staged_tree_whole(probe, extra);
+
+    Ok(finding_rows(&outcome?, &repo_root))
+}
+
+/// Drives the shipped script of `probe` over the tree it stages, with `extra`
+/// staged beside it, and answers the whole of what that run said.
+///
+/// The work-list names the probe's own files and never `extra`, because a file
+/// staged to shape the RUN is not a file the change touched.
+fn drive_shipped_staged_tree_whole(
+    probe: &ShippedStagedTree,
+    extra: &[(&str, &str)],
+) -> ShippedScriptRun {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
@@ -1038,7 +1132,12 @@ fn drive_shipped_staged_tree_with(
         .chain(extra.iter().copied())
         .collect();
 
-    shipped_script_findings(&loader, probe.run.rule, &staged, &paths)
+    drive_shipped_script_whole(
+        &loader,
+        probe.run.rule,
+        &ShippedStaging::of(&staged),
+        &paths,
+    )
 }
 
 /// Drives the shipped script of `probe` over the tree it stages, and answers
@@ -1094,14 +1193,28 @@ fn drive_shipped_staged_tree_read_with<T>(
 }
 
 /// Holds the run of `probe` to breaking with an error that names every
-/// fragment the probe expects.
+/// fragment the probe expects, and to placing no finding.
 ///
 /// A run that reports no finding and exits 0 over a tree the tool never judged
 /// reads exactly like a clean tree, so a broken run must state what broke.
+///
+/// It must place nothing either. A run that wrote the rows of the part it DID
+/// judge and broke over the rest states findings for a tree half of which no
+/// tool read, and the engine drops those rows without a word. That half is
+/// read off the same run: [`drive_shipped_staged_tree_whole`] keeps the stdout
+/// a broken run wrote, which [`run_script`] answers `Err` before reading.
 fn verify_shipped_tree_breaks(probe: &ShippedStagedTree) {
-    let failure = drive_shipped_staged_tree(probe).expect_err(probe.reason);
+    let ShippedScriptRun {
+        outcome, placed, ..
+    } = drive_shipped_staged_tree_whole(probe, &[]);
+    let failure = outcome.expect_err(probe.reason);
 
     assert_shipped_failure_names(&failure, probe.run.expected);
+    assert!(
+        placed.is_empty(),
+        "a run that breaks must place no finding; it placed {placed:?}: {}",
+        probe.reason
+    );
 }
 
 /// Holds `failure` to naming every fragment `expected` carries.

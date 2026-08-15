@@ -1214,7 +1214,13 @@ above. Nothing the run did place reaches stdout for such a run either, because
 the row file is read after the loop and only when no project stands in the
 unread list. The acceptance test
 `..._breaks_on_a_project_ts_prune_cannot_read` holds rows 2 and 3 of the table
-above.
+above, all three facts of each. It reads the nonzero exit and the named project
+off the error the engine answers for the run, and the 0 findings off the stdout
+of that same run. The engine answers a nonzero exit before it reads stdout at
+all, so the helper the test calls drives the run itself and reads both halves
+off one output. Row 3 is where the second half carries the weight: a run that
+broke and still wrote the readable project's row would pass the exit half and
+state a measured tree.
 
 Measured over this workspace, the shipped script, three runs one after another:
 58 findings, exit 0, 0 items declined and 0 bytes on stderr each time, in

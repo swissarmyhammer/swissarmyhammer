@@ -44,6 +44,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
+use std::process::Output;
 
 use swissarmyhammer_common::command::command_failure_detail;
 
@@ -897,14 +898,26 @@ pub(crate) struct ScriptOutcome {
 /// a nonzero exit is a broken tool, not a clean run. A completed run's stderr
 /// is read for [`TOOL_DIAGNOSTIC_MARKER`] lines, and the rest of it — the
 /// tool's own chatter — reaches a `tracing` record rather than the report.
+/// [`read_script_output`] is that reading, split out so a caller holding the
+/// output of a run it made itself answers exactly what this function would.
 pub(crate) fn run_script(
     script: &str,
     dir: &Path,
     args: &[&OsStr],
 ) -> Result<ScriptOutcome, ScriptFailure> {
     let output = run_shell(script, Some(dir), args).map_err(ScriptFailure::Start)?;
+    read_script_output(&output)
+}
+
+/// What one COMPLETED run of a tool-rule script said.
+///
+/// The reading half of [`run_script`], which states the contract this holds
+/// the run to. A nonzero exit answers before the stdout is read at all, so the
+/// findings such a run placed reach no caller: a broken tool judged the code
+/// nowhere, and its rows are not a partial answer.
+pub(crate) fn read_script_output(output: &Output) -> Result<ScriptOutcome, ScriptFailure> {
     if !output.status.success() {
-        return Err(ScriptFailure::Exit(command_failure_detail(&output)));
+        return Err(ScriptFailure::Exit(command_failure_detail(output)));
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {

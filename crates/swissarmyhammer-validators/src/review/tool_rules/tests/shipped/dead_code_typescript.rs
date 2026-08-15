@@ -837,7 +837,8 @@ fn the_shipped_typescript_dead_code_tool_rule_answers_the_staging_marker() {
 /// takes those callers out of the graph, and the export only a test imports
 /// then reports.
 ///
-/// Measured over 12 `tsconfig.json` projects of the four corpus workspaces:
+/// Measured over the 16 `tsconfig.json` projects of the four corpus workspaces
+/// — 9, 2, 3 and 2, which is the count the rule body's corpus table states:
 /// each one holds every test file that stands beside its sources.
 #[test]
 fn the_shipped_typescript_dead_code_tool_rule_reads_the_program_the_project_states() {
