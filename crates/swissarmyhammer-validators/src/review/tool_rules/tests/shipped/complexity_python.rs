@@ -369,3 +369,238 @@ const PYTHON_LENGTH_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 fn the_shipped_python_function_length_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_LENGTH_EMPTY_RUN_PROBE);
 }
+
+/// The statement gate the shipped `function-length-python` rule states.
+///
+/// 250 code lines times 0.72, the measured median statements-per-line of the
+/// long functions of the corpus the rule body names.
+const PYTHON_STATEMENT_GATE: usize = 180;
+
+/// The statement count of a probe function that must report: over the gate,
+/// plus a margin so a later ruff that counts one statement differently does
+/// not move the probe across the gate.
+const OVER_THE_GATE_STATEMENTS: usize = PYTHON_STATEMENT_GATE + 10;
+
+/// The row count of a probe data shape.
+///
+/// The shape must stand over the 250 code lines the `function-length` prompt
+/// rule states, or it could not tell a line gate from a statement gate. Each
+/// row is one line, and the shape carries a few lines of its own around them.
+const PYTHON_DATA_SHAPE_ROWS: usize = 300;
+
+/// The head of the Python declaration of `name`, as the source writes it.
+///
+/// `PLR0915` anchors each finding on the NAME of the function, and a Python
+/// name stands on the `def` line, so this is the text [`declaration_line`]
+/// reads that line from.
+fn python_declaration_head(name: &str) -> String {
+    format!("def {name}(")
+}
+
+/// The `path:line` entry the run must report for the declaration of `name` in
+/// `source`, staged at `path`.
+fn python_expected_row(path: &str, source: &str, name: &str) -> String {
+    expected_row(path, source, &python_declaration_head(name))
+}
+
+/// A Python function of `statements` statements, one assignment for each step.
+///
+/// This is the shape the gate exists for: every line of the body is a
+/// statement, so its statement count and its line count are the same number.
+fn python_procedure(name: &str, statements: usize) -> String {
+    let body: String = (0..statements)
+        .map(|step| format!("    value = {step}\n"))
+        .collect();
+    format!("def {name}():\n{body}\n\n")
+}
+
+/// A Python function whose whole body is one mapping literal of `rows` rows.
+///
+/// `function-length` exempts a function that is "mostly configuration/data".
+/// The literal is ONE expression however many rows it holds, and `PLR0915`
+/// counts statements.
+fn python_data_table(name: &str, rows: usize) -> String {
+    let body: String = (0..rows)
+        .map(|row| format!("        \"key{row}\": {row},\n"))
+        .collect();
+    format!("def {name}():\n    return {{\n{body}    }}\n\n\n")
+}
+
+/// A Python class holding one `__init__` that sets `fields` fields, with
+/// `annotation` written after the `def` line's colon.
+///
+/// `function-length` exempts "Initialization functions that set many fields".
+/// Each `self.x = ...` is one statement, so this shape is the one the gate
+/// cannot tell from a procedure.
+fn python_field_setting_class(class: &str, fields: usize, annotation: &str) -> String {
+    let body: String = (0..fields)
+        .map(|field| format!("        self.field_{field} = {field}\n"))
+        .collect();
+    format!("class {class}:\n    def __init__(self):{annotation}\n{body}\n\n")
+}
+
+/// The annotation an author writes to exempt one function.
+const PYTHON_LENGTH_ANNOTATION: &str = "  # noqa: PLR0915";
+
+/// No annotation at all, which is what the bare position of a probe carries.
+const PYTHON_NO_ANNOTATION: &str = "";
+
+/// Where the file of the test carve-out probe stands inside the probe
+/// repository.
+///
+/// The name is one pytest collects from, so a run that read the PATH would
+/// silence the helper standing beside the test.
+const PYTHON_LENGTH_SUITE_PATH: &str = "suite/staged_test.py";
+
+/// Acceptance: the shipped Python function-length tool rule reads a test from
+/// its DEFINITION, through the real ruff pipeline.
+///
+/// `function-length` exempts "Functions explicitly marked as tests", and
+/// `cognitive-complexity` names the mark for the whole set: "Identify a test
+/// from its attribute or framework naming convention at the definition, never
+/// from the file name. A complex helper named `build_request` in a file called
+/// `foo_test.rs` is still a complex function and is still listed."
+///
+/// ruff writes no name into its message, and it anchors each `PLR0915` finding
+/// on the NAME of the function it measured, so the script reads the definition
+/// out of that range. The three declarations share one file, so the name is the
+/// one difference between them: `test_dense` stands over the gate and is a test
+/// by its name, `build_request` stands over the gate and is a helper, and
+/// `option_table` holds 300 rows of data in one statement. The run must report
+/// the helper and no other.
+#[test]
+fn the_shipped_python_function_length_tool_rule_reads_a_test_from_its_definition() {
+    let source = format!(
+        "{}{}{}",
+        python_procedure("test_dense", OVER_THE_GATE_STATEMENTS),
+        python_procedure("build_request", OVER_THE_GATE_STATEMENTS),
+        python_data_table("option_table", PYTHON_DATA_SHAPE_ROWS),
+    );
+    let expected = python_expected_row(PYTHON_LENGTH_SUITE_PATH, &source, "build_request");
+
+    verify_staged_rows_report(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_FUNCTION_LENGTH_RULE,
+        &[(PYTHON_LENGTH_SUITE_PATH, &source)],
+        &[&expected],
+        "the helper reports because the carve-out reads the name at the definition; a run \
+         that read the path alone would silence it beside the test",
+    );
+}
+
+/// Where the bare initializer of the field-setting probe stands.
+const PYTHON_BARE_INITIALIZER_PATH: &str = "bare/editor.py";
+
+/// Where the annotated initializer of the field-setting probe stands.
+///
+/// Neither position takes a path a carve-out could read, so the annotation is
+/// the one difference between the two.
+const PYTHON_ANNOTATED_INITIALIZER_PATH: &str = "annotated/editor.py";
+
+/// Acceptance: the shipped Python function-length tool rule REPORTS a
+/// field-setting initializer, and the annotation answers it, through the real
+/// ruff pipeline.
+///
+/// `function-length` exempts "Initialization functions that set many fields".
+/// `PLR0915` counts each `self.x = ...` as one statement, so an initializer
+/// over the gate reports like any other function, and this test holds the gap
+/// measured rather than left to be discovered. The rule body states why no
+/// mechanism answers it: the widest field setter of the corpus sets 55 fields
+/// against a gate of 180.
+///
+/// The two positions hold the same class of 190 field-setting statements, so
+/// the `# noqa: PLR0915` is the one difference between them.
+#[test]
+fn the_shipped_python_function_length_tool_rule_reports_a_field_setting_initializer() {
+    let bare = python_field_setting_class("Editor", OVER_THE_GATE_STATEMENTS, PYTHON_NO_ANNOTATION);
+    let annotated =
+        python_field_setting_class("Editor", OVER_THE_GATE_STATEMENTS, PYTHON_LENGTH_ANNOTATION);
+    let expected = python_expected_row(PYTHON_BARE_INITIALIZER_PATH, &bare, "__init__");
+
+    verify_staged_rows_report(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_FUNCTION_LENGTH_RULE,
+        &[
+            (PYTHON_BARE_INITIALIZER_PATH, &bare),
+            (PYTHON_ANNOTATED_INITIALIZER_PATH, &annotated),
+        ],
+        &[&expected],
+        "an initializer that sets more fields than the gate allows reports like any other \
+         function, and the annotation on its `def` line is the answer",
+    );
+}
+
+/// Acceptance: the shipped Python function-length tool rule REPORTS a
+/// generated file, through the real ruff pipeline.
+///
+/// `function-length` exempts generated code. ruff holds no generated-file
+/// heuristic — measured, no option of its 166 names one — and Python states no
+/// header convention for one either, which is the verdict the sibling
+/// `complexity-python` already records for the same language.
+///
+/// The two positions hold the same function over the gate, so the header is
+/// the one difference between them, and the run must report both.
+#[test]
+fn the_shipped_python_function_length_tool_rule_reports_a_generated_file() {
+    let declarations = python_procedure("long_procedure", OVER_THE_GATE_STATEMENTS);
+    let generated = format!("{}{declarations}", PYTHON_GENERATED_HEAD.concat());
+    let expected = [
+        python_expected_row(PYTHON_PLAIN_POSITION.path, &declarations, "long_procedure"),
+        python_expected_row(PYTHON_GENERATED_POSITION.path, &generated, "long_procedure"),
+    ];
+
+    verify_staged_rows_report(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_FUNCTION_LENGTH_RULE,
+        &[
+            (PYTHON_PLAIN_POSITION.path, &declarations),
+            (PYTHON_GENERATED_POSITION.path, &generated),
+        ],
+        &[&expected[0], &expected[1]],
+        "a generated Python file reports like any other file, because ruff reads no header \
+         and Python states no header convention to read",
+    );
+}
+
+/// What the one error of a Python file ruff could not parse must name.
+const PYTHON_LENGTH_UNMEASURED_ERROR_PREFIX: &str =
+    "function-length-python: ruff could not measure";
+
+/// Where the Python file ruff cannot parse stands inside the probe repository.
+const PYTHON_LENGTH_UNPARSABLE_PATH: &str = "unparsable.py";
+
+/// What the one error of an unparsable Python file must name.
+const PYTHON_LENGTH_UNPARSABLE_ERROR: &[&str] = &[
+    PYTHON_LENGTH_UNMEASURED_ERROR_PREFIX,
+    PYTHON_LENGTH_UNPARSABLE_PATH,
+];
+
+/// The `function-length-python` probe over a Python file ruff cannot parse.
+const PYTHON_LENGTH_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
+    run: ShippedRun {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_FUNCTION_LENGTH_RULE,
+        expected: PYTHON_LENGTH_UNPARSABLE_ERROR,
+    },
+    prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
+    change_purpose: "a Python file the parser cannot read",
+    path: PYTHON_LENGTH_UNPARSABLE_PATH,
+    source: Some(PYTHON_COMPLEXITY_UNPARSABLE_SOURCE.as_bytes()),
+    support: NO_SUPPORT_FILES,
+};
+
+/// Acceptance: the shipped Python function-length tool rule BREAKS on a Python
+/// file it cannot parse, through the real ruff pipeline.
+///
+/// ruff writes a file it cannot parse onto the SAME report stream as a
+/// finding, under `"code": "invalid-syntax"`, and it exits 1 either way.
+/// Measured with ruff 0.14.5 over a file whose `if` body never opens: one row
+/// of that code, and no statement count for the file. A script that read every
+/// row as a finding reported the parse failure as a function-length finding,
+/// and a script that dropped every other code would read the file as clean.
+/// The script names the file on stderr and exits 1 instead, so the engine reads
+/// a broken run.
+#[test]
+fn the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
+    verify_shipped_run_breaks(&PYTHON_LENGTH_UNPARSABLE_PROBE);
+}

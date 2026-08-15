@@ -800,6 +800,24 @@ fn expected_script_findings(expected: &[&str]) -> Vec<String> {
     expected.iter().map(|entry| (*entry).to_string()).collect()
 }
 
+/// The 1-based line the text `head` first stands on inside `source`.
+///
+/// A probe whose shape runs to hundreds of lines builds its source at run
+/// time, so the row each finding stands on has to be read out of the source
+/// that was built rather than written as a number a later edit would move.
+fn declaration_line(source: &str, head: &str) -> usize {
+    let at = source
+        .find(head)
+        .unwrap_or_else(|| panic!("the probe source must hold `{head}`"));
+    source[..at].matches('\n').count() + 1
+}
+
+/// The `path:line` entry a run must report for the declaration `head` opens,
+/// inside `source` staged at `path`.
+fn expected_row(path: &str, source: &str, head: &str) -> String {
+    format!("{path}:{}", declaration_line(source, head))
+}
+
 /// Sorted names, for a set comparison that does not depend on read order.
 fn sorted_names(names: &[String]) -> Vec<String> {
     let mut sorted = names.to_vec();

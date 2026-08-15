@@ -1,8 +1,10 @@
 """The failing fixture of the `function-length-python` tool rule.
 
-It holds one function over the statement gate: `mix_state` runs 202 statements
-against the gate of 180. The tool must report it. A tool upgrade that stops
-reporting the shape makes the doctor mark the rule unusable.
+It holds two shapes over the statement gate. `mix_state` runs 202 statements
+against the gate of 180. `Editor.__init__` runs 190, one for each field it
+sets, which is the shape `function-length` exempts and no ruff option
+reproduces. The tool must report both. A tool upgrade that stops reporting
+either shape makes the doctor mark the rule unusable.
 """
 
 WORD_SIZE = 64
@@ -217,3 +219,205 @@ def mix_state(seed):
     state = (state * 31 + 99) % MODULUS
     state = ((state << 37) | (state >> (WORD_SIZE - 37))) % MODULUS
     return state
+
+
+class Editor:
+    """A window that holds one field for each option it was opened with.
+
+    `function-length` exempts "Initialization functions that set many fields",
+    and no ruff option reproduces that carve-out: `PLR0915` counts each
+    `self.x = ...` as one statement. The tool must report this initializer.
+    """
+
+    def __init__(self):
+        """Set every field the window holds, one statement for each."""
+        self.field_0 = 0
+        self.field_1 = 1
+        self.field_2 = 2
+        self.field_3 = 3
+        self.field_4 = 4
+        self.field_5 = 5
+        self.field_6 = 6
+        self.field_7 = 7
+        self.field_8 = 8
+        self.field_9 = 9
+        self.field_10 = 10
+        self.field_11 = 11
+        self.field_12 = 12
+        self.field_13 = 13
+        self.field_14 = 14
+        self.field_15 = 15
+        self.field_16 = 16
+        self.field_17 = 17
+        self.field_18 = 18
+        self.field_19 = 19
+        self.field_20 = 20
+        self.field_21 = 21
+        self.field_22 = 22
+        self.field_23 = 23
+        self.field_24 = 24
+        self.field_25 = 25
+        self.field_26 = 26
+        self.field_27 = 27
+        self.field_28 = 28
+        self.field_29 = 29
+        self.field_30 = 30
+        self.field_31 = 31
+        self.field_32 = 32
+        self.field_33 = 33
+        self.field_34 = 34
+        self.field_35 = 35
+        self.field_36 = 36
+        self.field_37 = 37
+        self.field_38 = 38
+        self.field_39 = 39
+        self.field_40 = 40
+        self.field_41 = 41
+        self.field_42 = 42
+        self.field_43 = 43
+        self.field_44 = 44
+        self.field_45 = 45
+        self.field_46 = 46
+        self.field_47 = 47
+        self.field_48 = 48
+        self.field_49 = 49
+        self.field_50 = 50
+        self.field_51 = 51
+        self.field_52 = 52
+        self.field_53 = 53
+        self.field_54 = 54
+        self.field_55 = 55
+        self.field_56 = 56
+        self.field_57 = 57
+        self.field_58 = 58
+        self.field_59 = 59
+        self.field_60 = 60
+        self.field_61 = 61
+        self.field_62 = 62
+        self.field_63 = 63
+        self.field_64 = 64
+        self.field_65 = 65
+        self.field_66 = 66
+        self.field_67 = 67
+        self.field_68 = 68
+        self.field_69 = 69
+        self.field_70 = 70
+        self.field_71 = 71
+        self.field_72 = 72
+        self.field_73 = 73
+        self.field_74 = 74
+        self.field_75 = 75
+        self.field_76 = 76
+        self.field_77 = 77
+        self.field_78 = 78
+        self.field_79 = 79
+        self.field_80 = 80
+        self.field_81 = 81
+        self.field_82 = 82
+        self.field_83 = 83
+        self.field_84 = 84
+        self.field_85 = 85
+        self.field_86 = 86
+        self.field_87 = 87
+        self.field_88 = 88
+        self.field_89 = 89
+        self.field_90 = 90
+        self.field_91 = 91
+        self.field_92 = 92
+        self.field_93 = 93
+        self.field_94 = 94
+        self.field_95 = 95
+        self.field_96 = 96
+        self.field_97 = 97
+        self.field_98 = 98
+        self.field_99 = 99
+        self.field_100 = 100
+        self.field_101 = 101
+        self.field_102 = 102
+        self.field_103 = 103
+        self.field_104 = 104
+        self.field_105 = 105
+        self.field_106 = 106
+        self.field_107 = 107
+        self.field_108 = 108
+        self.field_109 = 109
+        self.field_110 = 110
+        self.field_111 = 111
+        self.field_112 = 112
+        self.field_113 = 113
+        self.field_114 = 114
+        self.field_115 = 115
+        self.field_116 = 116
+        self.field_117 = 117
+        self.field_118 = 118
+        self.field_119 = 119
+        self.field_120 = 120
+        self.field_121 = 121
+        self.field_122 = 122
+        self.field_123 = 123
+        self.field_124 = 124
+        self.field_125 = 125
+        self.field_126 = 126
+        self.field_127 = 127
+        self.field_128 = 128
+        self.field_129 = 129
+        self.field_130 = 130
+        self.field_131 = 131
+        self.field_132 = 132
+        self.field_133 = 133
+        self.field_134 = 134
+        self.field_135 = 135
+        self.field_136 = 136
+        self.field_137 = 137
+        self.field_138 = 138
+        self.field_139 = 139
+        self.field_140 = 140
+        self.field_141 = 141
+        self.field_142 = 142
+        self.field_143 = 143
+        self.field_144 = 144
+        self.field_145 = 145
+        self.field_146 = 146
+        self.field_147 = 147
+        self.field_148 = 148
+        self.field_149 = 149
+        self.field_150 = 150
+        self.field_151 = 151
+        self.field_152 = 152
+        self.field_153 = 153
+        self.field_154 = 154
+        self.field_155 = 155
+        self.field_156 = 156
+        self.field_157 = 157
+        self.field_158 = 158
+        self.field_159 = 159
+        self.field_160 = 160
+        self.field_161 = 161
+        self.field_162 = 162
+        self.field_163 = 163
+        self.field_164 = 164
+        self.field_165 = 165
+        self.field_166 = 166
+        self.field_167 = 167
+        self.field_168 = 168
+        self.field_169 = 169
+        self.field_170 = 170
+        self.field_171 = 171
+        self.field_172 = 172
+        self.field_173 = 173
+        self.field_174 = 174
+        self.field_175 = 175
+        self.field_176 = 176
+        self.field_177 = 177
+        self.field_178 = 178
+        self.field_179 = 179
+        self.field_180 = 180
+        self.field_181 = 181
+        self.field_182 = 182
+        self.field_183 = 183
+        self.field_184 = 184
+        self.field_185 = 185
+        self.field_186 = 186
+        self.field_187 = 187
+        self.field_188 = 188
+        self.field_189 = 189

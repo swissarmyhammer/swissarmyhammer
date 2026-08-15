@@ -135,23 +135,18 @@ fn go_dense_test(name: &str, statements: usize) -> String {
     source
 }
 
-/// The 1-based line the declaration of `name` stands on inside `source`.
+/// The head of the Go declaration of `name`, as the source writes it.
 ///
-/// funlen anchors each finding on the line its `func` keyword stands on, so a
-/// probe that builds its source states the expected line from the source it
-/// built rather than from a number a later edit would move.
-fn go_declaration_line(source: &str, name: &str) -> usize {
-    let head = format!("func {name}(");
-    let at = source
-        .find(&head)
-        .unwrap_or_else(|| panic!("the probe source must declare `{name}`"));
-    source[..at].matches('\n').count() + 1
+/// funlen anchors each finding on the line its `func` keyword stands on, so
+/// this is the text [`declaration_line`] reads that line from.
+fn go_declaration_head(name: &str) -> String {
+    format!("func {name}(")
 }
 
 /// The `path:line` entry the run must report for the declaration of `name` in
 /// `source`, staged at `path`.
 fn go_expected_row(path: &str, source: &str, name: &str) -> String {
-    format!("{path}:{}", go_declaration_line(source, name))
+    expected_row(path, source, &go_declaration_head(name))
 }
 
 /// Where the file holding the three length shapes stands inside the probe
