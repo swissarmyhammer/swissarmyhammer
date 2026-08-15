@@ -509,8 +509,10 @@ The two groups hold no symbol in common, so the counts stand. Three near-misses
 were each read rather than counted: `StandardSchemaV1.Result` at
 `packages/zod/src/v3/types.ts:247`, and `StandardSchemaV1.InferInput` and
 `.InferOutput` at `packages/zod/src/v3/tests/standard-schema.test.ts:19` and
-`:21`, all import `../standard-schema.js`, which is the SEPARATE `v3`
-declaration of the same name. The `Types`, `InferInput` and `InferOutput` at
+`:21`, each import a specifier that resolves to
+`packages/zod/src/v3/standard-schema.ts` — `types.ts` writes
+`./standard-schema.js` and the test file writes `../standard-schema.js` — which
+is the SEPARATE `v3` declaration of the same name. The `Types`, `InferInput` and `InferOutput` at
 141, 144 and 147 belong to a third namespace of the same file,
 `StandardJSONSchemaV1`. Nothing outside
 `packages/zod/src/v4/core/standard-schema.ts` names any of the 6.
