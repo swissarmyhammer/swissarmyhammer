@@ -711,6 +711,72 @@ const TYPESCRIPT_BROKEN_MANIFEST_PROBE: ShippedStagedTree = ShippedStagedTree {
              reports and the entry of the whole one does not",
 };
 
+/// The opening of the line the run writes when ts-prune judged no export of one
+/// project.
+///
+/// The rule's own name opens it, the way every shipped script that breaks a run
+/// opens the line it writes, so the reader of the error knows which gate
+/// stopped and why.
+const TYPESCRIPT_BROKEN_RUN_LINE: &str = "dead-code-typescript: ts-prune exited";
+
+/// A `tsconfig.json` of bytes that are not JSON.
+///
+/// ts-prune builds its module graph through `@ts-morph/common`, which throws on
+/// such a file, so the run judges no export of the project that states it.
+const TYPESCRIPT_BROKEN_TSCONFIG: &str = "this is not a tsconfig\n";
+
+/// A probe whose one project states a `tsconfig.json` ts-prune cannot read.
+///
+/// The module beside it holds one export nothing imports, so a run that judged
+/// the project would report a finding. The run judges nothing instead, and the
+/// probe holds it to saying so rather than to answering an empty list.
+const TYPESCRIPT_BROKEN_TSCONFIG_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[TYPESCRIPT_BROKEN_RUN_LINE, TYPESCRIPT_PROBE_TSCONFIG_PATH],
+    },
+    staged: &[
+        (TYPESCRIPT_PROBE_TSCONFIG_PATH, TYPESCRIPT_BROKEN_TSCONFIG),
+        (TYPESCRIPT_PROBE_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "ts-prune judged no export of a project whose tsconfig it cannot read, so the run \
+             breaks and names that project rather than answering a clean workspace",
+};
+
+/// Where the tsconfig of the second project of the two-project probe stands, as
+/// the work-list holds it.
+const TYPESCRIPT_OTHER_TSCONFIG_PATH: &str = "packages/other/tsconfig.json";
+
+/// Where the module of the second project of the two-project probe stands, as
+/// the work-list holds it.
+const TYPESCRIPT_OTHER_LIB_PATH: &str = "packages/other/src/lib.ts";
+
+/// A probe holding one project ts-prune reads beside one it cannot.
+///
+/// `packages/app` states a whole tsconfig and holds one export nothing imports,
+/// so the run places a finding for it. `packages/other` states a tsconfig
+/// ts-prune cannot read, so the run judges no export of that package at all.
+/// Every file of `packages/other` would then read as clean, and the probe holds
+/// the run to breaking rather than to answering the findings of the package it
+/// did judge.
+const TYPESCRIPT_BROKEN_PROJECT_BESIDE_A_WHOLE_ONE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[TYPESCRIPT_BROKEN_RUN_LINE, TYPESCRIPT_OTHER_TSCONFIG_PATH],
+    },
+    staged: &[
+        (TYPESCRIPT_APP_TSCONFIG_PATH, TYPESCRIPT_PROBE_TSCONFIG),
+        (TYPESCRIPT_APP_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+        (TYPESCRIPT_OTHER_TSCONFIG_PATH, TYPESCRIPT_BROKEN_TSCONFIG),
+        (TYPESCRIPT_OTHER_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "one project ts-prune could not read leaves every export of that project unjudged, \
+             so the run breaks and names it rather than answering the findings of the project \
+             it did judge",
+};
+
 /// Acceptance: an export the package manifest publishes is not dead.
 ///
 /// This is the `dead-code` carve-out for the exported public API. The manifest
@@ -990,4 +1056,28 @@ fn the_shipped_typescript_dead_code_tool_rule_says_the_file_outside_the_workspac
         "the diagnostic must name the file it declined; it said '{}'",
         declined[0]
     );
+}
+
+/// Acceptance: a project ts-prune judged no export of breaks the run.
+///
+/// ts-prune answers status 0 for a clean project and for a project holding
+/// findings alike, and it answers a nonzero status for a project it could not
+/// read. Measured with ts-prune 0.10.3: a `tsconfig.json` of bytes that are not
+/// JSON exits 1 with 0 bytes on stdout and a node stack on stderr. The rule
+/// body carries the whole table.
+///
+/// The earlier shape of this script threw that status away. Its per-project
+/// pipe ended in the node placement and its loop ended in `sort -u`, and a
+/// shell pipeline takes the status of its LAST command, so a project ts-prune
+/// never read answered 0 findings at exit 0 — which the engine reads as "the
+/// tool judged the code".
+///
+/// The second probe is the shape a monorepo makes reach this. One project the
+/// run judged fills the row list while another project was never judged at all,
+/// so a run that wrote those rows and exited 0 would answer clean for every file
+/// of the broken package.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_breaks_on_a_project_ts_prune_cannot_read() {
+    verify_shipped_tree_breaks(&TYPESCRIPT_BROKEN_TSCONFIG_PROBE);
+    verify_shipped_tree_breaks(&TYPESCRIPT_BROKEN_PROJECT_BESIDE_A_WHOLE_ONE_PROBE);
 }

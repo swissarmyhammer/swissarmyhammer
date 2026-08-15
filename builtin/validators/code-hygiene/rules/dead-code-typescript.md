@@ -386,21 +386,38 @@ tool:
     }
     PRUNE_JOBS
     root="$(pwd -P)"
-    find . -name node_modules -prune -o -name .git -prune -o -name 'tsconfig.json' -print |
-      while IFS= read -r config; do
-        dir="${config%/*}"
-        (cd "$dir" && tsc -p tsconfig.json --showConfig) > "$work/config.json" 2>/dev/null
-        (cd "$dir" && tsc -p tsconfig.json --listFilesOnly) > "$work/files.txt" 2>/dev/null
-        entries="$(cd "$dir" && node "$work/prune.js" entries "$root" "$work/config.json")"
-        [ -n "$entries" ] || entries='$^'
-        (cd "$dir" && ts-prune -p tsconfig.json --ignore "$entries" --skip '$^') |
-          grep -v ' (used in module)$' |
-          grep -v '\.d\.ts:' |
-          sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#\1:\2: unused export '\3'; nothing in the project imports it#p" |
-          (cd "$dir" && node "$work/prune.js" place "${config#./}" "$root" "$work/files.txt")
-      done | sort -u
+    find . -name node_modules -prune -o -name .git -prune -o -name 'tsconfig.json' -print \
+      > "$work/projects.txt"
+    : > "$work/rows.txt"
+    : > "$work/unread.txt"
+    while IFS= read -r config; do
+      dir="${config%/*}"
+      (cd "$dir" && tsc -p tsconfig.json --showConfig) > "$work/config.json" 2>/dev/null
+      (cd "$dir" && tsc -p tsconfig.json --listFilesOnly) > "$work/files.txt" 2>/dev/null
+      entries="$(cd "$dir" && node "$work/prune.js" entries "$root" "$work/config.json")"
+      [ -n "$entries" ] || entries='$^'
+      (cd "$dir" && ts-prune -p tsconfig.json --ignore "$entries" --skip '$^') \
+        > "$work/prune.out" 2> "$work/prune.err"
+      status=$?
+      cat "$work/prune.err" >&2
+      if [ "$status" -ne 0 ]; then
+        printf 'dead-code-typescript: ts-prune exited %s for %s and judged no export of it\n' \
+          "$status" "${config#./}" >&2
+        printf '%s\n' "${config#./}" >> "$work/unread.txt"
+        continue
+      fi
+      grep -v ' (used in module)$' "$work/prune.out" |
+        grep -v '\.d\.ts:' |
+        sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#\1:\2: unused export '\3'; nothing in the project imports it#p" |
+        (cd "$dir" && node "$work/prune.js" place "${config#./}" "$root" "$work/files.txt") \
+        >> "$work/rows.txt"
+    done < "$work/projects.txt"
+    if [ -s "$work/unread.txt" ]; then
+      exit 1
+    fi
+    sort -u "$work/rows.txt"
   doctor:
-    check_command: "which ts-prune tsc node find grep sed sort mktemp"
+    check_command: "which ts-prune tsc node find grep sed sort cat mktemp"
     check_version_command: "npm list -g --depth 0 ts-prune | grep -o 'ts-prune@.*'"
   install:
     commands:
@@ -1111,15 +1128,110 @@ named.
 
 `sort -u` collapses the duplicate a nested `tsconfig.json` produces when two
 projects hold the same file. The entry pattern is computed for each project, so
-the duplicate rows agree.
+the duplicate rows agree. It reads the row file the loop wrote rather than a
+pipe, so it stands last with no command above it and the script takes its own
+status.
 
-Ending the loop in `sort` normalizes the exit status. The pipe of each project
-ends in the node script, which writes what it can place, states what it cannot,
-and exits 0 for both.
+### A run cannot answer zero for a project ts-prune never read
+
+`ts-prune` runs one time for each project of the workspace, and it keeps one
+status for a run it made and another for a run it could not make. Measured with
+ts-prune 0.10.3, tsc 5.9.3 and node v25.2.1, each run as
+`ts-prune -p tsconfig.json --ignore '$^' --skip '$^'`, which is the command line
+this script writes for a project that names no entry module, with the project's
+own directory the working directory. The table is the record of the ten runs
+that were made, and not a roster of every status ts-prune can answer with:
+
+| the run | status | stdout | stderr |
+|---|---|---|---|
+| a project whose every export another module imports | 0 | 0 bytes | 0 bytes |
+| a project holding two exports nothing imports | 0 | 2 rows | 0 bytes |
+| a `tsconfig.json` whose `include` reaches no file | 0 | 0 bytes | 0 bytes |
+| a `tsconfig.json` naming a `compilerOptions.target` that is not a target | 0 | 2 rows | 0 bytes |
+| a `tsconfig.json` whose `extends` names a file that is not there | 0 | 2 rows | 0 bytes |
+| a `tsconfig.json` of bytes that are not JSON | 1 | 0 bytes | a `@ts-morph/common` stack |
+| a `tsconfig.json` whose root value is `[]` | 1 | 0 bytes | a `@ts-morph/common` stack |
+| no file at the path `-p` names | 1 | 0 bytes | a `@ts-morph/common` stack |
+| a `tsconfig.json` no read permission admits | 1 | 0 bytes | a stack naming `EACCES` |
+| a `package.json` cosmiconfig reads on the way up, of bytes that are not JSON | 1 | 0 bytes | a cosmiconfig stack |
+
+No byte count stands in the table for a row that answered a stack, because a
+node stack carries the absolute path of the checkout and a run from another
+directory writes another number for the same shape. `0 bytes` and a count of
+rows do not move.
+
+The first five rows are runs ts-prune made, and status 0 covers a clean project
+and a project with findings alike. The last five are runs it made none of: each
+one throws out of `@ts-morph/common` or out of cosmiconfig before a module graph
+exists, so 0 bytes on stdout there is the silence of a project ts-prune never
+read. The status separates the two for every shape measured here, so this script
+tests the status and needs no test on the report and none on stderr. That is
+where it differs from the three shipped swiftlint rules, each of which has one
+status carrying both answers and must read the report beside it.
+
+The earlier shape of this script threw that status away. Each project's pipe
+ended in the node placement and the loop ended in `sort -u`, and a shell
+pipeline takes the status of its LAST command. Measured over three trees, the
+earlier shape beside the shipped one, each project holding one export nothing
+imports:
+
+| the tree | the earlier pipe | the shipped script |
+|---|---|---|
+| one project ts-prune read | 1 finding, exit 0 | 1 finding, exit 0 |
+| one project whose `tsconfig.json` is not JSON | 0 findings, exit 0 | 0 findings, exit 1, the project named |
+| two projects, one ts-prune read and one it did not | 1 finding, exit 0 | 0 findings, exit 1, the broken project named |
+
+Row 2 is the whole defect. The engine reads exit 0 as "the tool judged the
+code", so a project ts-prune never opened read as a clean tree.
+
+Row 3 is the shape a monorepo makes reach it, and it is why the run BREAKS
+rather than declining the project on the `sah-diagnostic:` channel.
+`builtin/validators/README.md` gives that channel to "a script that judged the
+code and could not judge ONE item", and a project is not one item: ts-prune
+judged no export of it at all, so every file under it would read as clean while
+the rows of the project beside it made the run look measured. A repository
+carrying one `tsconfig.json` is the ordinary case, and there the broken project
+and the whole tree are the same thing — "a tool that refused to start reports as
+a clean file", which is the trap the README names word for word. So the run
+answers both the same way, and the number of projects a repository happens to
+hold moves nothing.
+
+The run reads every project before it stops, so the stderr names each project
+ts-prune could not read rather than the first one alone. Each such project takes
+one line of the run's own, under ts-prune's own stderr:
+
+```
+dead-code-typescript: ts-prune exited 1 for packages/other/tsconfig.json and judged no export of it
+```
+
+The script forwards ts-prune's own stderr for every project it reads, whole or
+broken. On a run that completes, that text carries no `sah-diagnostic:` marker,
+so a `tracing` record takes it and no reader of the review does.
+
+A nonzero exit hands the engine the whole of stderr and no finding, so on a run
+that breaks ts-prune's own words reach the diagnosing agent beside the line
+above. Nothing the run did place reaches stdout for such a run either, because
+the row file is read after the loop and only when no project stands in the
+unread list. The acceptance test
+`..._breaks_on_a_project_ts_prune_cannot_read` holds rows 2 and 3 of the table
+above.
+
+Measured over this workspace, the shipped script, three runs one after another:
+58 findings, exit 0, 0 items declined and 0 bytes on stderr each time, in
+10.21 s, 7.54 s and 7.47 s. 58 is the count the table under "How the run is
+shaped" states, so the status gate takes no finding away. The three placements
+timed in that section were each read before this change, so those readings are
+compared with each other and never with the three above.
 
 `mktemp -d` makes the directory the node script is written into, and
-`trap 'rm -rf "$work"' EXIT` removes it. The scope is `workspace`, so this
-script takes no file argument.
+`trap 'rm -rf "$work"' EXIT` removes it. The same directory holds everything the
+loop writes: the project list the `find` wrote, the resolved configuration and
+the file list of the project standing, the stdout and the stderr of that
+project's ts-prune run, the rows the placement wrote, and the list of the
+projects ts-prune could not read. The trap covers a clean run, a run with
+findings and a broken run alike, and it leaves the exit status of the script
+alone. The scope is `workspace`, so this script takes no file argument and
+writes no zero-argument guard, which is what that scope asks of it.
 
 ## What the fixture pair holds, and what it cannot
 
@@ -1130,7 +1242,7 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The twelve acceptance tests in
+move neither count. The thirteen acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
 

@@ -131,8 +131,40 @@ comments:
     - evidence: `cargo fmt --check` exit 0, no diff. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings, 0 errors. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` exit 0 — 3519 tests run: 3519 passed (21 slow), 0 failed, 0 skipped. The 8 `shipped::function_length_python::*` tool-rule tests all pass, together with `shipped::function_length::every_shipped_function_length_tool_rule_passes_its_fixtures`.
     - next: review the change.
   timestamp: 2026-08-15T20:18:29.148825+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m03h8zyhmdevzvm42945amcm
+  text: |-
+    ### commit — changed
+    - evidence: 05a2b1d74 fix(validators): state each path ruff declined in function-length-python (^d3j6sbt)
+    - 11 files changed, 586 insertions(+), 25 deletions(-); local commit only, not pushed
+    - next: review
+  timestamp: 2026-08-15T20:19:39.089958+00:00
+- actor: claude-code
+  id: 01m03hs8gg5ggjeyyq50x9x00f
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` over 05a2b1d74 — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 2 files reviewed, 0 skipped.
+    - hand checks against `builtin/validators/README.md`, because the engine reads no `.md` prose:
+      - Each of the three table rows in `### A path ruff cannot read` was measured again with ruff 0.14.5 against the shipped command line. Each row matches word for word: `[]` on stdout, the named `warning: Failed to lint ` line on stderr, exit 0.
+      - Every branch that declines an item states it. The shipped script over `clean.py absent.py notutf8.py noread.py` writes one finding on stdout, three `sah-diagnostic:` lines on stderr, and exits 0. A file that does not parse exits 1. The two together exit 1 with both statements on stderr. No branch drops an item in silence.
+      - The prose names the three rows as a measurement, not as a closed set, so it states no false exhaustive claim. The head `warning: Failed to lint ` holds past the three rows: a symbolic link loop writes `warning: Failed to lint loop.py: Too many levels of symbolic links (os error 62)`, and the shipped script states it under the marker.
+      - The zero-argument guard holds the three lines `builtin/validators/README.md` states word for word, first in the script, with no line over them. `no_shipped_workspace_scope_script_holds_the_zero_argument_guard` and the two rosters beside it pass.
+    - tests: 8 of 8 `function_length_python` acceptance tests pass, the three new decline tests among them. 3 of 3 `scope_roster` guards pass.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-15T20:28:32.144831+00:00
+- actor: claude-code
+  id: 01m03hv6caj6dzve0m8t6cgc0n
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files (builtin/validators/code-hygiene/rules/function-length-python.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs)
+    - test: green — cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean; cargo nextest run -E 'rdeps(swissarmyhammer-validators)' 3519 passed, 0 failed, 0 skipped
+    - commit: 05a2b1d74 fix(validators): state each path ruff declined in function-length-python (^d3j6sbt)
+    - review: clean — review sha HEAD~1..HEAD, 0 findings, 9 validators attempted, 2 files reviewed
+    - note: the card proposed the pre-marker escape (a `[ ! -r "$file" ]` test that exits 1 before ruff runs, copied from complexity-python). That shape is superseded by the `sah-diagnostic:` carrier that landed on ^m6ba1bf as 9fcdd8387. Each declined path is ONE item inside a run that judged the other files, so exit 1 would throw away every finding the run did make. The run now writes a marked stderr line for each declined path and exits 0.
+    - next: card done; batch moves to the next card in scope
+  timestamp: 2026-08-15T20:29:35.498998+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9180
 title: function-length-python reads a file ruff cannot open as a clean file
 ---
 `builtin/validators/code-hygiene/rules/function-length-python.md` breaks on a file ruff cannot PARSE, since ^kmxvk6r. It still reads a file ruff cannot OPEN as a clean file.
