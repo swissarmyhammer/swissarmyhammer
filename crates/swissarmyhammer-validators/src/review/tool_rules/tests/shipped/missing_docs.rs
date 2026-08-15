@@ -23,7 +23,7 @@ fn every_shipped_missing_docs_tool_rule_passes_its_fixtures() {
 }
 
 /// The materialized name of the `missing-docs-dart` fail fixture.
-const DART_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-dart.fail.dart";
+const DART_MISSING_DOCS_FAIL_FIXTURE: &str = concat!(missing_docs_rule!(dart), ".fail.dart");
 
 /// Where the `missing-docs-dart` fail fixture stands inside the probe
 /// repository, as the work-list holds it.
@@ -55,7 +55,7 @@ const DART_MISSING_DOCS_FAIL_LINES: &[&str] = &[
 /// the real `dart analyze` pipeline must report inside it.
 const DART_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
     run: ShippedRun {
-        project_types: &["flutter"],
+        project_types: FLUTTER_PROJECT_TYPES,
         rule: DART_MISSING_DOCS_RULE,
         expected: DART_MISSING_DOCS_FAIL_LINES,
     },
@@ -152,7 +152,7 @@ const DART_STAGED_REPORTED: &[&str] = &[DART_STAGED_LIBRARY_PATH, DART_STAGED_LI
 /// pipeline must report.
 const DART_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
     run: ShippedRun {
-        project_types: &["flutter"],
+        project_types: FLUTTER_PROJECT_TYPES,
         rule: DART_MISSING_DOCS_RULE,
         expected: DART_STAGED_REPORTED,
     },
@@ -441,7 +441,18 @@ const DART_ANALYZE_SUBCOMMAND: &str = "analyze";
 ///
 /// It stands under `lib/`, because that is the one position
 /// `public_member_api_docs` reads.
-const DART_BROKEN_RUN_PATH: &str = "lib/broken_run.dart";
+///
+/// The path stands in a macro beside the constant that holds it because
+/// `concat!` takes literals, and each row of `DART_BROKEN_RUN_ROWS` is this
+/// path with a row number after it.
+macro_rules! dart_broken_run_path {
+    () => {
+        "lib/broken_run.dart"
+    };
+}
+
+/// The path `dart_broken_run_path` names, as one constant the probes hold.
+const DART_BROKEN_RUN_PATH: &str = dart_broken_run_path!();
 
 /// One undocumented public class holding one undocumented method.
 ///
@@ -454,10 +465,13 @@ const DART_BROKEN_RUN_STAGED: &[(&str, &str)] = &[(DART_BROKEN_RUN_PATH, DART_BR
 
 /// Each `path:line` entry the probe reports when both `dart` runs stand: the
 /// class on row 1 and the method on row 2 of [`DART_BROKEN_RUN_SOURCE`].
-const DART_BROKEN_RUN_ROWS: &[&str] = &["lib/broken_run.dart:1", "lib/broken_run.dart:2"];
+const DART_BROKEN_RUN_ROWS: &[&str] = &[
+    concat!(dart_broken_run_path!(), ":1"),
+    concat!(dart_broken_run_path!(), ":2"),
+];
 
 /// The words the error of a `dart pub get` that could not run must carry.
-const DART_PUB_GET_BROKEN_ERROR: &[&str] = &["missing-docs-dart", "dart pub get exited"];
+const DART_PUB_GET_BROKEN_ERROR: &[&str] = &[DART_MISSING_DOCS_RULE, "dart pub get exited"];
 
 /// The probe of a `dart pub get` that cannot run, and the words its error must
 /// carry.
@@ -473,7 +487,7 @@ const DART_PUB_GET_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
 };
 
 /// The words the error of a `dart analyze` that could not run must carry.
-const DART_ANALYZE_BROKEN_ERROR: &[&str] = &["missing-docs-dart", "dart analyze exited"];
+const DART_ANALYZE_BROKEN_ERROR: &[&str] = &[DART_MISSING_DOCS_RULE, "dart analyze exited"];
 
 /// The probe of a `dart analyze` that cannot run, and the words its error must
 /// carry.
@@ -576,7 +590,7 @@ fn the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs()
 const DART_ABSENT_PATH: &str = "lib/absent.dart";
 
 /// What the script writes for a file it cannot read.
-const DART_CANNOT_READ_MESSAGE: &str = "missing-docs-dart cannot read";
+const DART_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(dart), " cannot read");
 
 /// What the one error of an absent file must name.
 const DART_ABSENT_ERROR: &[&str] = &[DART_CANNOT_READ_MESSAGE, DART_ABSENT_PATH];
@@ -609,7 +623,7 @@ fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
 }
 
 /// The materialized name of the `missing-docs-go` fail fixture.
-const GO_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-go.fail.go";
+const GO_MISSING_DOCS_FAIL_FIXTURE: &str = concat!(missing_docs_rule!(go), ".fail.go");
 
 /// Where the `missing-docs-go` fail fixture stands inside the probe
 /// repository, as the work-list holds it.
@@ -651,7 +665,7 @@ const GO_MISSING_DOCS_FAIL_ITEMS: &[&str] = &[
 /// the real revive pipeline must report inside it.
 const GO_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
     run: ShippedRun {
-        project_types: &["go"],
+        project_types: GO_PROJECT_TYPES,
         rule: GO_MISSING_DOCS_RULE,
         expected: GO_MISSING_DOCS_FAIL_ITEMS,
     },
@@ -776,7 +790,7 @@ const GO_STAGED_REPORTED: &[&str] = &[GO_STAGED_ORDINARY_PATH, GO_STAGED_ORDINAR
 /// report.
 const GO_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
     run: ShippedRun {
-        project_types: &["go"],
+        project_types: GO_PROJECT_TYPES,
         rule: GO_MISSING_DOCS_RULE,
         expected: GO_STAGED_REPORTED,
     },
@@ -908,7 +922,7 @@ const GO_UNPARSABLE_ERROR: &[&str] = &[GO_INVALID_FILE_PREFIX, GO_UNPARSABLE_PAT
 /// The `missing-docs-go` probe over a Go file revive cannot parse.
 const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
-        project_types: &["go"],
+        project_types: GO_PROJECT_TYPES,
         rule: GO_MISSING_DOCS_RULE,
         expected: GO_UNPARSABLE_ERROR,
     },
@@ -934,7 +948,7 @@ fn the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
 }
 
 /// The materialized name of the `missing-docs-python` fail fixture.
-const PYTHON_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-python.fail.py";
+const PYTHON_MISSING_DOCS_FAIL_FIXTURE: &str = concat!(missing_docs_rule!(python), ".fail.py");
 
 /// Where the fail fixture stands inside the probe repository, as the work-list
 /// holds it.
@@ -964,7 +978,7 @@ const PYTHON_MISSING_DOCS_FAIL_ITEMS: &[&str] = &[
 /// ruff pipeline must report inside it.
 const PYTHON_MISSING_DOCS_FAIL_PROBE: ShippedFailFixture = ShippedFailFixture {
     run: ShippedRun {
-        project_types: &["python"],
+        project_types: PYTHON_PROJECT_TYPES,
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_MISSING_DOCS_FAIL_ITEMS,
     },
@@ -1094,7 +1108,7 @@ const PYTHON_STAGED_REPORTS: &[&str] = &[
 /// report over them.
 const PYTHON_MISSING_DOCS_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
     run: ShippedRun {
-        project_types: &["python"],
+        project_types: PYTHON_PROJECT_TYPES,
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_STAGED_REPORTS,
     },
@@ -1144,7 +1158,7 @@ const PYTHON_UNPARSABLE_ERROR: &[&str] = &[PYTHON_INVALID_SYNTAX_CODE, PYTHON_UN
 /// The `missing-docs-python` probe over a Python file ruff cannot parse.
 const PYTHON_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
-        project_types: &["python"],
+        project_types: PYTHON_PROJECT_TYPES,
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_UNPARSABLE_ERROR,
     },
@@ -1172,7 +1186,7 @@ fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() 
 const PYTHON_ABSENT_PATH: &str = "absent.py";
 
 /// What the script writes for a file it cannot read.
-const PYTHON_CANNOT_READ_MESSAGE: &str = "missing-docs-python cannot read";
+const PYTHON_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(python), " cannot read");
 
 /// What the one error of an absent file must name.
 const PYTHON_ABSENT_ERROR: &[&str] = &[PYTHON_CANNOT_READ_MESSAGE, PYTHON_ABSENT_PATH];
@@ -1180,7 +1194,7 @@ const PYTHON_ABSENT_ERROR: &[&str] = &[PYTHON_CANNOT_READ_MESSAGE, PYTHON_ABSENT
 /// The `missing-docs-python` probe over a path that holds no file.
 const PYTHON_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
     run: ShippedRun {
-        project_types: &["python"],
+        project_types: PYTHON_PROJECT_TYPES,
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: PYTHON_ABSENT_ERROR,
     },
@@ -1231,7 +1245,7 @@ const PYTHON_READ_FINDINGS: &[&str] = &[
 /// The `missing-docs-python` probe over a run that is given no file.
 const PYTHON_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
     run: ShippedRun {
-        project_types: &["python"],
+        project_types: PYTHON_PROJECT_TYPES,
         rule: PYTHON_MISSING_DOCS_RULE,
         expected: NO_FINDINGS,
     },
@@ -1260,7 +1274,7 @@ fn the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given() 
 }
 
 /// The materialized name of the `missing-docs-swift` fail fixture.
-const SWIFT_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-swift.fail.swift";
+const SWIFT_MISSING_DOCS_FAIL_FIXTURE: &str = concat!(missing_docs_rule!(swift), ".fail.swift");
 
 /// Where the `missing-docs-swift` fail fixture stands inside the probe
 /// repository, as the work-list holds it.
@@ -1597,7 +1611,7 @@ fn the_shipped_swift_missing_docs_tool_rule_keeps_its_own_rule_options() {
 const SWIFT_ABSENT_PATH: &str = "Sources/Absent.swift";
 
 /// What the script writes for a file it cannot read.
-const SWIFT_CANNOT_READ_MESSAGE: &str = "missing-docs-swift cannot read";
+const SWIFT_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(swift), " cannot read");
 
 /// What the one error of an absent file must name.
 const SWIFT_ABSENT_ERROR: &[&str] = &[SWIFT_CANNOT_READ_MESSAGE, SWIFT_ABSENT_PATH];
@@ -1648,7 +1662,10 @@ public var value: Int = 0\n\
 /// What the one error of a file swiftlint cannot decode must name: the rule's
 /// own line, and swiftlint's own message, which carries the path.
 const SWIFT_UNDECODABLE_ERROR: &[&str] = &[
-    "missing-docs-swift: swiftlint could not read the contents of a file this run names",
+    concat!(
+        missing_docs_rule!(swift),
+        ": swiftlint could not read the contents of a file this run names"
+    ),
     "Could not read contents of",
     "Latin1.swift",
 ];
@@ -1899,11 +1916,13 @@ fn the_shipped_typescript_missing_docs_tool_rule_reads_only_the_files_it_is_give
 }
 
 /// The materialized name of the `missing-docs-typescript` fail fixture.
-const TYPESCRIPT_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-typescript.fail.ts";
+const TYPESCRIPT_MISSING_DOCS_FAIL_FIXTURE: &str =
+    concat!(missing_docs_rule!(typescript), ".fail.ts");
 
 /// Where the `missing-docs-typescript` fail fixture stands inside the probe
 /// repository, as the work-list holds it.
-const TYPESCRIPT_MISSING_DOCS_FIXTURE_PATH: &str = "src/missing-docs-typescript-fail.ts";
+const TYPESCRIPT_MISSING_DOCS_FIXTURE_PATH: &str =
+    concat!("src/", missing_docs_rule!(typescript), "-fail.ts");
 
 /// Every item the `missing-docs-typescript` fail fixture leaves undocumented,
 /// trimmed as the fixture writes it.

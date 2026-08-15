@@ -18,6 +18,37 @@
 //! tool-rule rosters, and the helpers that build a work-list and hold a run to
 //! its finding.
 
+/// The name of one shipped missing-docs tool rule, as a literal.
+///
+/// The name stands in a macro beside the constant that holds it because
+/// `concat!` takes literals, and a test builds several `&'static str`
+/// constants that spell a rule's name inside a longer string: the name of its
+/// fail fixture, and the line its script writes for a file it cannot read. A
+/// constant cannot feed `concat!`, so those would each restate the name.
+///
+/// The macro stands above the `mod` declarations because `macro_rules!` is
+/// scoped by position, and a module declared above a macro cannot see it.
+macro_rules! missing_docs_rule {
+    (rust) => {
+        "missing-docs-rust"
+    };
+    (python) => {
+        "missing-docs-python"
+    };
+    (dart) => {
+        "missing-docs-dart"
+    };
+    (go) => {
+        "missing-docs-go"
+    };
+    (swift) => {
+        "missing-docs-swift"
+    };
+    (typescript) => {
+        "missing-docs-typescript"
+    };
+}
+
 mod execute;
 mod plan;
 mod preconditions;
@@ -69,7 +100,7 @@ const SUPERSEDES_FUNCTION_LENGTH: &[&str] = &[FUNCTION_LENGTH_PROMPT_RULE];
 
 /// The shipped missing-docs tool rule for Rust, the one the pipeline
 /// acceptance test drives end to end.
-const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
+const RUST_MISSING_DOCS_RULE: &str = missing_docs_rule!(rust);
 
 /// The shipped missing-docs tool rule for Python. ruff has no filter on a
 /// name, so the rule reads the definition line of each finding and carves out
@@ -78,7 +109,7 @@ const RUST_MISSING_DOCS_RULE: &str = "missing-docs-rust";
 /// undocumented, one holds the carve-out to the item's own name at four
 /// staged positions, and one holds the run to breaking on a file ruff cannot
 /// read.
-const PYTHON_MISSING_DOCS_RULE: &str = "missing-docs-python";
+const PYTHON_MISSING_DOCS_RULE: &str = missing_docs_rule!(python);
 
 /// The shipped missing-docs tool rule for Dart. `public_member_api_docs` reads
 /// only a package's `lib/` directory, so the rule stages each changed file
@@ -86,14 +117,14 @@ const PYTHON_MISSING_DOCS_RULE: &str = "missing-docs-python";
 /// end: one names every member its fail fixture leaves undocumented, and one
 /// holds the probe's exclude list to the positions the project's own analyzer
 /// reads.
-const DART_MISSING_DOCS_RULE: &str = "missing-docs-dart";
+const DART_MISSING_DOCS_RULE: &str = missing_docs_rule!(dart);
 
 /// The shipped missing-docs tool rule for Go. revive carves out a generated
 /// file, a `_test.go` file and a `package main` file for itself, so three more
 /// acceptance tests drive it end to end: one names every item its fail fixture
 /// leaves undocumented, one holds those three carve-outs to the positions
 /// revive reads, and one holds the run to breaking on a file it cannot parse.
-const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
+const GO_MISSING_DOCS_RULE: &str = missing_docs_rule!(go);
 
 /// The shipped missing-docs tool rule for Swift. swiftlint reads the
 /// project's own `.swiftlint.yml` as the parent of the rule's own config, so
@@ -102,12 +133,12 @@ const GO_MISSING_DOCS_RULE: &str = "missing-docs-go";
 /// one holds a run whose every file that list excludes, one holds the rule's
 /// own options against a project that states other ones, and one holds the run
 /// to breaking on a file it cannot read.
-const SWIFT_MISSING_DOCS_RULE: &str = "missing-docs-swift";
+const SWIFT_MISSING_DOCS_RULE: &str = missing_docs_rule!(swift);
 
 /// The shipped missing-docs tool rule for TypeScript and JavaScript. A
 /// second acceptance test holds its script to reading only the files it is
 /// given.
-const TYPESCRIPT_MISSING_DOCS_RULE: &str = "missing-docs-typescript";
+const TYPESCRIPT_MISSING_DOCS_RULE: &str = missing_docs_rule!(typescript);
 
 /// Every shipped missing-docs tool rule, with the project type it serves
 /// and the prompt rules it supersedes.

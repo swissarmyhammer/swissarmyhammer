@@ -107,6 +107,59 @@ comments:
     - evidence: 3 files — builtin/validators/code-hygiene/rules/missing-docs-dart.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
     - next: /review
   timestamp: 2026-08-15T02:16:04.442228+00:00
+- actor: claude-code
+  id: 01m01m2mdjq4zk973bez7s5bjy
+  text: |
+    ### review — findings
+    - scope: `review sha b804e667b~1..b804e667b` — diffs only, 2 files reviewed, 0 not reviewed
+    - evidence: 2 findings — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:457, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:460
+    - prior round: the one finding of 2026-08-14 20:49 is checked
+    - both findings land on added lines; the one hunk of that file is `@@ -426,0 +427,184 @@`
+    - hand review of the rule body (the engine reads no `*.md`, ^j169agt): `set -e` reaches all 18 commands, measured by stubbing mktemp, sort, cp, mkdir and awk to exit 9 — each stops the run at 0 rows. No pipeline and no subshell is left. The status gate `-gt 3` accepts 0 to 3 at 2 rows and breaks 4, 5, 64 and 127 at exit 1, so 64 is genuinely excluded. Status 3 is load-bearing, checked on its own: an unresolved `package:` import makes raw `dart analyze` exit 3 and the script still reports both rows.
+    - dropped for a false premise: 3
+    - next: reuse `DART_BROKEN_RUN_PATH` in `DART_BROKEN_RUN_ROWS`, and name the rule string once for both error arrays
+  timestamp: 2026-08-15T02:30:07.538666+00:00
+- actor: claude-code
+  id: 01m01mseymc2z89mmvstrpxdnw
+  text: |
+    Pulled back from review. Both findings worked, and the cause swept over the whole file.
+
+    **Both premises checked before acting, and both hold.** Line 457 spelled `lib/broken_run.dart` twice although `DART_BROKEN_RUN_PATH` names it four lines above. Lines 460 and 476 each spelled `missing-docs-dart`, which `DART_MISSING_DOCS_RULE` in `tests.rs` already names. No conflict to record.
+
+    **The sweep.** Two detectors over the whole file, each comparing a constant VALUE against every string literal:
+    - substring of a `&str` constant inside a literal: 125 raw hits.
+    - an inline `&[&str]` slice literal equal to a slice constant: 10 hits.
+
+    The 125 fall out to 12 real restatements. 113 are coincidental substrings of a short generic value: `pub` inside `public` and `pubspec`, `go` and `dart` as a file extension, `documented.py` inside `undocumented.py`, which means the opposite. Two more were the second line of a constant's own definition. So the file held **24 restatements**, of which the review named 3 sites:
+
+    | what a literal restated | sites |
+    |---|---|
+    | `DART_BROKEN_RUN_PATH` in the two `path:line` rows | 2 (the finding) |
+    | `DART_MISSING_DOCS_RULE` in the two error lists | 2 (the finding) |
+    | a rule name inside a fail fixture NAME | 5 |
+    | a rule name inside a fixture PATH | 1 |
+    | a rule name inside the line a script writes for a file it cannot read | 3 |
+    | a rule name inside swiftlint's undecodable-file line | 1 |
+    | `FLUTTER_PROJECT_TYPES`, `GO_PROJECT_TYPES`, `PYTHON_PROJECT_TYPES` as `project_types: &["..."]` | 10 |
+
+    All 24 are gone. Both detectors now answer 0 over the file.
+
+    **How.** `concat!` takes literals, so a constant cannot feed it, and a `&'static [&'static str]` field cannot hold a value built at runtime. `stuttering_name_go.rs` already answers this shape with `go_carve_out_source!`, and this follows it:
+    - `missing_docs_rule!(dart|go|python|rust|swift|typescript)` in `tests.rs`, one arm per shipped rule. Each rule-name constant is now its arm, and every longer string spelling a rule name is `concat!` over it. It stands above the `mod` declarations, because `macro_rules!` is scoped by position and a module declared above a macro cannot see it.
+    - `dart_broken_run_path!()` in `missing_docs.rs`, feeding both `DART_BROKEN_RUN_PATH` and the two rows.
+
+    The reviewer's second remedy, a lazily-evaluated constant, was rejected on measurement: `ShippedRun.expected` is `&'static [&'static str]` and every probe is a `const` item, so a `LazyLock<Vec<String>>` cannot reach it without a lifetime parameter on four probe structs and every one of their 40-odd users.
+
+    **One restatement left standing, named here rather than hidden.** `SHIPPED_RULES_THAT_READ_A_GO_FILE` spells 26 fully-qualified rule ids, and 13 of them open with `code-hygiene/`. It is the expected value of a matcher test, its doc tells the next reader to add a name to it by hand, and 13 of the 26 name sets and rules that have no constant anywhere. Composing half the list from macros would leave one list in two spellings. It is pre-existing test code that this commit does not touch.
+
+    **Verification.** `cargo nextest run -p swissarmyhammer-validators` 760 passed, 0 failed, 0 skipped. Every shipped test really ran its tool: `require_tool_installed` PANICS on a missing tool rather than skipping, and `dart`, `revive`, `ruff` and `swiftlint` are all installed here, so each renamed fixture, fixture path and error line was exercised end to end. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+    ARCHITECTURE.md needs no update: the change stays inside the test tree of `swissarmyhammer-validators` and creates no module and no dependency edge.
+
+    ### implement — changed
+    - evidence: 2 files — crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs
+    - next: /review
+  timestamp: 2026-08-15T02:42:35.604248+00:00
 position_column: doing
 position_ordinal: '8280'
 title: missing-docs-dart probe resolves no dependency, so every Flutter @override build() reports
@@ -161,3 +214,67 @@ SUPERSET. Checked against the shipped script, that reasoning HOLDS:
 
 The silence risk this review found is NOT on the fallback path. It is the
 unchecked `pub get`, which silences every path including the correct one.
+
+## Review Findings (2026-08-14 21:18)
+
+> Scope: `review sha b804e667b~1..b804e667b` — reviewed the diffs only — lines this change added or modified. 2 file(s) reviewed, 0 not reviewed.
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:457` `code-hygiene/magic-numbers` — The path "lib/broken_run.dart" is hardcoded in test row strings; it is already extracted as DART_BROKEN_RUN_PATH on line 444 and should be reused to avoid maintenance drift. Refactor DART_BROKEN_RUN_ROWS to construct strings using DART_BROKEN_RUN_PATH, or use a lazily-evaluated constant to build the rows with the path constant at runtime.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:460` `code-hygiene/magic-numbers` — The rule name "missing-docs-dart" is hardcoded in the error message; it appears again on line 476 and should be extracted to a shared named constant. Extract "missing-docs-dart" to a constant (e.g., const DART_RULE_NAME: &str = "missing-docs-dart";) and reference it in both error arrays.
+
+Both findings land on lines this commit ADDED. The one hunk of that file is
+`@@ -426,0 +427,184 @@`, so every line from 427 to 610 is new.
+
+### The rule body, read by hand
+
+The engine read the two Rust files and NO `.md` file. No validator declares a
+`*.md` glob (^j169agt), so the 166-line delta of the rule body entered no
+candidate set again. The two questions below were measured against the SHIPPED
+bytes, extracted from the `run:` block, on Dart SDK 3.11.0. Both answers are
+clean, so neither raises a finding.
+
+**`set -e` reaches all eighteen commands.** No pipeline and no subshell stands
+in the script now. Every `|` that is left is either a `||` that captures a
+status the run then tests, or the literal `|` inside `awk -F'|'` and the awk
+program. The only parentheses left are inside that awk program. The two
+reshapes the commit names are both real: `awk ... | sort -u` is now two
+commands writing two files, and `dart pub get` runs under `--directory`
+instead of `(cd "$package" && ...)`.
+
+Measured, with each command replaced by one that exits 9:
+
+| stubbed command | script exit | rows |
+|---|---|---|
+| `mktemp` | 9 | 0 |
+| `sort` | 9 | 0 |
+| `cp` | 9 | 0 |
+| `mkdir` | 9 | 0 |
+| `awk` | 9 | 0 |
+
+Each one stops the run. The two `dart` calls are covered by the status they
+capture and test. So no swept command can fail without stopping the run.
+
+**The tolerated status range is not too broad.** The gate is
+`[ "$analysis_status" -gt 3 ]`, so 4 through 255 all break. Measured through
+the shipped script, with `dart analyze` forced to each status:
+
+| analyze status | script exit | rows |
+|---|---|---|
+| 0, 1, 2, 3 | 0 | 2 |
+| 4, 5, 64, 127 | 1 | 0 |
+
+64, the usage error, is genuinely excluded. Nothing else passes.
+
+Status 3 is load-bearing, and that claim was checked on its own rather than
+taken from the commit message. A file importing `package:flutter/material.dart`
+with no package config above it makes the raw `dart analyze` exit 3, and the
+shipped script still reports both rows at exit 0. A gate that rejected 3 would
+break every project that has not run `pub get`.
+
+Three concerns were formed and then dropped for a false premise: the status of
+`dirname` inside `mkdir -p "$(dirname "$copy")"` (`dirname` cannot fail on a
+non-empty argument, and `mkdir` then fails loudly anyway); `dart` eating the
+stdin of the `while read config` loop and dropping a group (the two-group
+acceptance test and the measured runs both complete every group); and
+`rm -rf ""` from the EXIT trap if the `pwd -P` assignment fails (it removes
+nothing).
