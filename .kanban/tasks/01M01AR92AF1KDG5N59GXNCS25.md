@@ -205,6 +205,94 @@ comments:
     - evidence: `cargo fmt --check` exit 0, no diff. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings. `cargo nextest run --workspace` — 14240 tests run, 14240 passed, 0 failed, 0 skipped (25 slow, 2 leaky) in 261.489s. The 13 shipped `dead_code_typescript` tests are in the run; `cargo nextest list -p swissarmyhammer-validators` confirms them by name.
     - next: review
   timestamp: 2026-08-15T21:30:50.168663+00:00
+- actor: claude-code
+  id: 01m03p6fwgpnbq3y2hsav4qqnj
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` — 3 files reviewed, 9 validators attempted, 0 findings from the engine. By-hand prose check of commit 17f72ce80 answered 1 finding — builtin/validators/code-hygiene/rules/dead-code-typescript.md:1217
+    - next: the body claims the acceptance test holds "all three facts" of rows 2 and 3; it holds `0 findings` and `the project named`, not `exit 1`. `expect_err` separates only success from failure, and `command_failure_detail` answers `output.status` only when stderr is empty while this run always writes to stderr. Either word the claim as the nonzero exit, the named project and the 0 findings, or read the status number with a path that keeps `output.status`. Task stays in `review`.
+  timestamp: 2026-08-15T21:45:39.984486+00:00
+- actor: claude-code
+  id: 01m03p7ekqpt0y58frxcnv8kzh
+  text: |
+    ### finish iteration 2 — findings
+    - implement: changed — 4 files (builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs)
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14240 passed, 0 failed, 0 skipped
+    - commit: 17f72ce80 test(validators): hold a broken tool-rule run to placing no finding (^gxncs25)
+    - review: findings — 1 finding, builtin/validators/code-hygiene/rules/dead-code-typescript.md:1217. The engine answered 0 findings over 3 files with 9 validators attempted. The finding is in the prose the engine reads no byte of.
+    - detail: iteration 1's finding IS answered — `verify_shipped_tree_breaks` now reads the `0 findings` half off the same run through `drive_shipped_script_whole`. The new wording overshot: it claims the test holds "all three facts of each" of rows 2 and 3, and the `exit 1` fact reaches no assertion. `expect_err` does not separate `ScriptFailure::Exit` from `ScriptFailure::Start`, and `command_failure_detail` (crates/swissarmyhammer-common/src/command.rs:66-73) answers the status only when stderr is empty — this script always writes to stderr, so the status number never reaches the text the test reads. A script changed to exit 2 keeps the test green.
+    - guardrail: this is the SECOND round of a finding on the same coverage claim, at a different line with a different missing fact. Not yet the third.
+    - next: iteration 3 works the open finding
+  timestamp: 2026-08-15T21:46:11.447952+00:00
+- actor: claude-code
+  id: 01m03q1mcd39mqq67e1tdekbtw
+  text: |-
+    Picked up for the open finding of the 2026-08-15 16:40 round. The fix chosen is the one that makes the CLAIM true — the test now reads the exit status NUMBER — rather than the one that weakens the prose. The finding named both options and the round before it established that weakening leaves a table row uncovered.
+
+    WHY THE NUMBER REACHED NO ASSERTION, read before the edit:
+
+    - `read_script_output` (`crates/swissarmyhammer-validators/src/review/tool_rules.rs`) answers one `ScriptFailure::Exit` for EVERY nonzero status, carrying `command_failure_detail`.
+    - `command_failure_detail` (`crates/swissarmyhammer-common/src/command.rs`) answers `format!("exited with {}", output.status)` ONLY when stderr is empty, and otherwise answers the stderr alone. This script always writes its `dead-code-typescript: ts-prune exited 1 for ...` line to stderr, so the error string is the stderr and carries no status.
+    - So no text the engine hands on can hold a script to exit 1 rather than exit 2. The number has to come off the `Output` itself.
+
+    WHAT WAS DONE:
+
+    1. `ShippedScriptRun` (`tests/shipped.rs`) gains `status: Option<i32>` — `output.status.code()` for a run that happened, `None` for a shell that would not start. `drive_shipped_script_whole` fills it off the SAME `Output` it already reads `outcome` and `placed` off, so no second run and no third interpretation of the contract.
+    2. `verify_shipped_tree_breaks` holds a breaking run to `Some(BROKEN_RUN_EXIT_STATUS)`, a named constant of 1, beside the two assertions it already made. `assert_eq!` on `Option<i32>` also separates `ScriptFailure::Exit` from `ScriptFailure::Start`, which `expect_err` did not.
+    3. No existing assertion was weakened. `verify_shipped_tree_breaks_without_run_of` was NOT changed: its probes break with a stubbed `PATH`, its doc claims the error alone, and no rule prose states a status for it.
+
+    REQUIREMENT 4, THE SHARED HELPER, MEASURED: `verify_shipped_tree_breaks` has 10 call sites over 5 shipped rules — `unused-dependencies-rust` (1), `missing-docs-rust` (4), `dead-code-typescript` (2), `stuttering-name-go` (1), `dead-code-rust` (2). Every one of the 10 is now held to the same number and every one passes: `cargo nextest run -p swissarmyhammer-validators -E 'test(shipped::)'` ran 175 tests, 175 passed. So `exit 1` is the status EVERY shipped script answers for a broken run, and the rule body says the helper holds them all.
+
+    `builtin/validators/README.md` asks for "exit nonzero", not for 1, so the constant is documented as what the shipped set measures rather than as a contract the README states.
+  timestamp: 2026-08-15T22:00:29.325721+00:00
+- actor: claude-code
+  id: 01m03q27wp42jmy4bknd8xb48v
+  text: |-
+    RED WATCHED FIRST, induced the way the last round induced it.
+
+    The new assertion is about behaviour that already holds, so the shipped script's break branch was temporarily changed from `exit 1` to `exit 2` and the test run against it. `the_shipped_typescript_dead_code_tool_rule_breaks_on_a_project_ts_prune_cannot_read` FAILED with:
+
+        assertion `left == right` failed: a run that breaks must exit 1: ts-prune judged no
+        export of a project whose tsconfig it cannot read, so the run breaks and names that
+        project rather than answering a clean workspace
+          left: Some(2)
+         right: Some(1)
+
+    That is exactly the failure the finding names. The two OLD assertions — the named project and the 0 findings — both PASSED on the sabotaged script, so the new one is the only thing between `exit 2` and a green test.
+
+    The sabotage was reverted. `git diff builtin/` over the reverted state answered 0 lines, so the `run:` block is byte-identical to HEAD, and the only `.md` hunk of this change is the prose paragraph at 1215-1228.
+
+    REQUIREMENT 2, THE WHOLE FILE: every other coverage claim in `dead-code-typescript.md` was checked BY HAND against what its named test asserts. Every one HOLDS, and none overshoots:
+
+    - line 762 `..._names_every_export_of_a_module_nothing_imports` "holds the probe above" — `TYPESCRIPT_ORPHAN_MODULE_PROBE` expects `src/orphan.ts:2`, `:5` and `:10`, one row for each of the three exports the probe's orphan module holds. HOLDS.
+    - line 846 `..._keeps_its_own_gate_beside_a_project_config` "holds row 2" — `TYPESCRIPT_PROJECT_CONFIG_PROBE` stages a `package.json` carrying `"ts-prune": {"ignore":"src","skip":"src"}` and expects `src/lib.ts:2`, one finding. Row 2 of that table is 1 finding. HOLDS.
+    - line 878 `..._reads_the_program_the_project_states` "holds both rows of the table" — the test drives `TYPESCRIPT_TESTS_IN_PROGRAM_PROBE`, expecting `src/lib.ts:5` alone (row 1, "the export nothing imports"), and `TYPESCRIPT_TESTS_OUT_OF_PROGRAM_PROBE`, expecting `src/lib.ts:2` and `:5` (row 2, "both exports"). HOLDS.
+    - line 1079 "Five acceptance tests hold this section" — five are named, and each exists and stages the tree the sentence names. The claim that `..._names_a_module_outside_the_project_directory` "drives it through the engine as well" holds: the test calls `verify_shipped_staged_positions_report`, which runs `plan_tool_rules` and reads the planned run.
+    - line 1123 `..._says_the_manifest_it_could_not_read_out_loud` "holds both halves" — `TYPESCRIPT_BROKEN_MANIFEST_PROBE` expects `packages/app/src/lib.ts:2` and `packages/other/src/index.ts:2`, so the whole package's entry is spared and the broken package's entry reports, and the test also holds the run to exactly one diagnostic naming the manifest. HOLDS.
+    - line 1251 "The thirteen acceptance tests" — 13 `#[test]` functions in `dead_code_typescript.rs`. HOLDS.
+    - line 1265 "The five acceptance tests named in 'How the run is shaped'" — the same five as line 1079. HOLDS.
+
+    The status tables at lines 1145-1156 and 1178-1182 are MEASUREMENTS rather than coverage claims, and the `exit 1` cell of rows 2 and 3 is now the one an acceptance test holds as well.
+  timestamp: 2026-08-15T22:00:49.302070+00:00
+- actor: claude-code
+  id: 01m03q2ft2gtg1jm1rrsy72m00
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md (prose alone, the `run:` block byte-identical to HEAD), crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs. `cargo fmt` clean, no diff after it. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` 3520 tests run, 3520 passed, 0 failed, 0 skipped. `cargo nextest run -p swissarmyhammer-validators -E 'test(shipped::)'` 175 run, 175 passed — all 10 breaking probes of the 5 shipped rules held to the new status assertion.
+    - finding: the one open finding is answered and checked. The claim is TRUE rather than weakened: the test reads the exit status NUMBER off the run itself, and a script changed to exit 2 goes RED (watched).
+    - next: /review
+  timestamp: 2026-08-15T22:00:57.410531+00:00
+- actor: claude-code
+  id: 01m03qe77z9zppgbef2n1t9kmh
+  text: |-
+    ### test — green
+    - `cargo fmt --check` — exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+    - `cargo nextest run --workspace` — 14240 tests run, 14240 passed (28 slow), 0 failed, 0 skipped. Exit 0. Duration 231.105s.
+    - Targeted re-check of the changed area: `cargo nextest run --package swissarmyhammer-validators -E 'test(the_shipped)'` — 158 tests run, 158 passed, 0 failed. Confirmed `the_shipped_typescript_dead_code_tool_rule_breaks_on_a_project_ts_prune_cannot_read` (uses the new `status: Option<i32>` field and `BROKEN_RUN_EXIT_STATUS` assertion in `verify_shipped_tree_breaks`) passed, along with the other 4 shipped rules that call the shared helper.
+    - No files changed by this step. Task left in `doing`. No commit made.
+    - next: hand off to review.
+  timestamp: 2026-08-15T22:07:21.855293+00:00
 position_column: doing
 position_ordinal: '8280'
 title: dead-code-typescript answers zero findings when ts-prune crashes
@@ -254,3 +342,25 @@ Both calls were right.
 
 - No rule named `complexity-swift` ships. The swiftlint rules are `dead-code-swift`, `function-length-swift`, `magic-numbers-swift` and `missing-docs-swift`, and each carries the shape the card points at.
 - The zero-argument guard is forbidden at `workspace` scope. `builtin/validators/README.md:221` states such a script "writes no `"$@"` and no zero-argument guard", and two coverage guards hold every workspace-scope rule to both statements.
+
+## Review Findings (2026-08-15 16:40)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. The engine reviewed 3 files, attempted 9 validators and answered 0 findings (2 `.kanban/` files excluded by `.reviewignore`). The rule body is prose the engine reads no byte of, so every claim the commit added or changed was checked BY HAND against what the named tests actually assert.
+
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:1217` `hand/tool-rule-contract` — the body now states the test "holds rows 2 and 3 of the table above, all three facts of each", and the test holds two of the three facts, not three. Each row's "the shipped script" cell states `0 findings`, `exit 1`, and `the project named`. `0 findings` is now held — `verify_shipped_tree_breaks` (`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1213`) asserts `placed.is_empty()` off the stdout of the same run. `the project named` is held by `assert_shipped_failure_names`. `exit 1` is NOT held: the test reads `outcome.expect_err(probe.reason)`, which separates only success from failure and does not even separate `ScriptFailure::Exit` from `ScriptFailure::Start`, and the status number reaches no assertion, because `command_failure_detail` (`crates/swissarmyhammer-common/src/command.rs:66-73`) answers `output.status` ONLY when stderr is empty, while this run always writes its `dead-code-typescript: ts-prune exited 1 for ...` line to stderr, so the error string is the stderr alone and carries no status. `read_script_output` (`crates/swissarmyhammer-validators/src/review/tool_rules.rs:918-921`) collapses every nonzero status into one `ScriptFailure::Exit`, so no probe driven through it can hold the script to exit 1 rather than exit 2 — a script changed to exit 2 keeps this test green and falsifies both rows. Either word the second fact the way the very next sentence already words it — the nonzero exit, the named project and the 0 findings — and state that the exit-status NUMBER is a measurement the status table records rather than something an acceptance test holds, or read the number with a path that keeps `output.status`.
+
+### What was checked BY HAND and HOLDS
+
+- `run_script` (`tool_rules.rs:903-910`) truly delegates to `read_script_output` (`:918-933`); no reading logic is left duplicated. The only edit inside the moved body is `&output` → `output`, so the branches and the messages are the ones HEAD carried.
+- "The engine answers a nonzero exit before it reads stdout at all" holds: `tool_rules.rs:919-921` returns before the stdout read at `:926`.
+- "the helper the test calls drives the run itself and reads both halves off one output" holds: `drive_shipped_staged_tree_whole` (`shipped.rs:1146-1164`) calls `drive_shipped_script_whole`, which calls `run_shell` ONCE and derives `placed` (`placed_outcome`/`finding_rows`) and `outcome` (`read_script_output`) off that one `Output`. No second run and no re-derived value.
+- "holds rows 2 and 3" holds: `dead_code_typescript.rs:1081-1084` drives `TYPESCRIPT_BROKEN_TSCONFIG_PROBE` (row 2) and `TYPESCRIPT_BROKEN_PROJECT_BESIDE_A_WHOLE_ONE_PROBE` (row 3).
+- "Row 3 is where the second half carries the weight" holds: that probe stages `packages/app` with a dead export beside the broken `packages/other` (`dead_code_typescript.rs:769-774`), so a written app row makes `placed` non-empty and fires the new assertion.
+- `finding_rows` (`shipped.rs:790-802`) filters nothing, so `placed.is_empty()` is genuinely zero rows on stdout.
+- The `shipped.rs:1195-1205` doc — "and to placing no finding", and "[`drive_shipped_staged_tree_whole`] keeps the stdout a broken run wrote, which [`run_script`] answers `Err` before reading" — states what the code does.
+- `placed_outcome` doc "stated as a panic rather than counted as no row" matches its `unwrap_or_else(|error| panic!(..))`.
+- `drive_shipped_script_whole` doc "arguments come from [`script_args`] and the scope from the SHIPPED rule" matches `script_args(shipped.scope, files)`, and the rewrite of `drive_shipped_staged_tree_with` is equivalent to the `shipped_script_findings` call it replaced.
+- `drive_shipped_staged_tree_whole` doc "The work-list names the probe's own files and never `extra`" holds: `paths` is built from `probe.staged` alone.
+- `dead_code_typescript.rs:840-841` "the 16 `tsconfig.json` projects of the four corpus workspaces — 9, 2, 3 and 2, which is the count the rule body's corpus table states" holds: the corpus table at `dead-code-typescript.md:443-448` states 9, 2, 3 and 2, which sum to 16, and the body already reads 16 at `:876-877`. The `12` this commit replaced was false.
+- "thirteen acceptance tests" still holds: 13 `#[test]` functions in `dead_code_typescript.rs`.
+- The `run:` block is untouched. The only `.md` hunk is `@@ -1214,7 +1214,13 @@`, prose alone, so the probe-tree measurements and the 58-findings workspace reading of the round before stand unchanged and were not re-measured.

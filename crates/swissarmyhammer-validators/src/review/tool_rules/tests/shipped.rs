@@ -932,6 +932,16 @@ struct ShippedScriptRun {
 
     /// Each `path:line` row the run wrote to stdout, whatever its exit status.
     placed: Vec<String>,
+
+    /// The status the script exited with, or `None` when the shell never
+    /// started it and when a signal ended it.
+    ///
+    /// The engine keeps no status: [`read_script_output`] answers
+    /// [`ScriptFailure::Exit`] carrying [`command_failure_detail`], which is
+    /// the script's own stderr for every run that wrote any. A script that
+    /// states its own broken run on stderr therefore hands the number to no
+    /// reader, so a probe that holds a run to a status reads it here.
+    status: Option<i32>,
 }
 
 /// Stages `staging` in a temporary repository, drives the shipped script of
@@ -957,11 +967,11 @@ fn drive_shipped_script_whole(
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
-    let (outcome, placed) = match run_shell(&shipped.script, Some(&repo_root), &args) {
-        Err(error) => (Err(ScriptFailure::Start(error)), Vec::new()),
+    let (outcome, placed, status) = match run_shell(&shipped.script, Some(&repo_root), &args) {
+        Err(error) => (Err(ScriptFailure::Start(error)), Vec::new(), None),
         Ok(output) => {
             let placed = finding_rows(&placed_outcome(&output), &repo_root);
-            (read_script_output(&output), placed)
+            (read_script_output(&output), placed, output.status.code())
         }
     };
 
@@ -970,6 +980,7 @@ fn drive_shipped_script_whole(
         repo_root,
         outcome,
         placed,
+        status,
     }
 }
 
@@ -1192,11 +1203,31 @@ fn drive_shipped_staged_tree_read_with<T>(
     .expect("the shipped script must judge the probe package and exit 0")
 }
 
+/// The status a shipped tool-rule script exits with when it breaks.
+///
+/// `builtin/validators/README.md` asks a script that judged nothing to "exit
+/// nonzero yourself", and every shipped script writes `exit 1` for that. The
+/// NUMBER is what a rule body states when it records `exit 1` for a broken
+/// shape, and it is what no caller of [`run_script`] can read: that function
+/// collapses every nonzero status into one [`ScriptFailure::Exit`] carrying
+/// [`command_failure_detail`], which is the script's own stderr for every run
+/// that wrote any.
+const BROKEN_RUN_EXIT_STATUS: i32 = 1;
+
 /// Holds the run of `probe` to breaking with an error that names every
-/// fragment the probe expects, and to placing no finding.
+/// fragment the probe expects, to exiting [`BROKEN_RUN_EXIT_STATUS`], and to
+/// placing no finding.
 ///
 /// A run that reports no finding and exits 0 over a tree the tool never judged
 /// reads exactly like a clean tree, so a broken run must state what broke.
+///
+/// The STATUS is read off the run itself rather than off the error, and it is
+/// read as a number rather than as "nonzero". An error text separates a script
+/// that broke from no other shape: [`run_script`] answers the same
+/// [`ScriptFailure::Exit`] for every nonzero status, and its detail is the
+/// stderr alone for a script that stated its broken run there. Every breaking
+/// probe of every shipped rule is held to the one number, so a script changed
+/// to exit 2 breaks its own rule's test.
 ///
 /// It must place nothing either. A run that wrote the rows of the part it DID
 /// judge and broke over the rest states findings for a tree half of which no
@@ -1205,11 +1236,20 @@ fn drive_shipped_staged_tree_read_with<T>(
 /// a broken run wrote, which [`run_script`] answers `Err` before reading.
 fn verify_shipped_tree_breaks(probe: &ShippedStagedTree) {
     let ShippedScriptRun {
-        outcome, placed, ..
+        outcome,
+        placed,
+        status,
+        ..
     } = drive_shipped_staged_tree_whole(probe, &[]);
     let failure = outcome.expect_err(probe.reason);
 
     assert_shipped_failure_names(&failure, probe.run.expected);
+    assert_eq!(
+        status,
+        Some(BROKEN_RUN_EXIT_STATUS),
+        "a run that breaks must exit {BROKEN_RUN_EXIT_STATUS}: {}",
+        probe.reason
+    );
     assert!(
         placed.is_empty(),
         "a run that breaks must place no finding; it placed {placed:?}: {}",
