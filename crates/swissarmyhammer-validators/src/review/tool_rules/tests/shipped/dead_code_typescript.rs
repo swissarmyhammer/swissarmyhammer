@@ -383,9 +383,9 @@ const TYPESCRIPT_OUTSIDE_MODULE_PROBE: ShippedStagedTree = ShippedStagedTree {
         (TYPESCRIPT_CONSUMER_LIB_PATH, TYPESCRIPT_PROBE_LIB),
         (TYPESCRIPT_OUTSIDE_LIB_PATH, TYPESCRIPT_PROBE_LIB),
     ],
-    reason: "ts-prune writes a path relative to the project for a file inside it and an \
-             absolute path for a file outside it, so the run may complete the first spelling \
-             alone",
+    reason: "the presenter's cut leaves a file inside the project under the project directory \
+             and a file the cut never touched at its whole absolute path less the leading \
+             separator, and the run rebuilds each from the working directory ts-prune used",
 };
 
 /// The head the staged module of the outside-module probe carries: none. The
@@ -406,9 +406,10 @@ const TYPESCRIPT_OUTSIDE_MODULE_POSITIONS: &[ShippedStagedFile] = &[ShippedStage
 /// of the run, so a path that names no file is dropped without a word. This
 /// probe is what states that the finding reaches the author.
 ///
-/// One position is named, and the module inside the project stands beside it as
-/// support, because the two findings reach the engine in the order `sort` puts
-/// their two spellings in and a locale decides that order.
+/// One position is named — the module OUTSIDE the project, which is the whole
+/// of what this probe measures. The module inside the project stands beside it
+/// as support, so it shapes the run the tool makes and reaches no work-list
+/// position of its own.
 const TYPESCRIPT_OUTSIDE_MODULE_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
     run: ShippedRun {
         project_types: NODEJS_PROJECT_TYPES,
@@ -428,6 +429,103 @@ const TYPESCRIPT_OUTSIDE_MODULE_POSITIONS_PROBE: ShippedStagedPositions = Shippe
     ],
     reason: "a finding whose path names no file is dropped by the engine, so the outside \
              module reports only when its path names the file it stands at",
+};
+
+/// Where the module of the sibling package whose directory name EXTENDS the
+/// project's stands, as the work-list holds it.
+///
+/// `packages/consumer-bench` begins with `packages/consumer`, and the cut the
+/// presenter makes needs no separator after the match, so ts-prune spells this
+/// module `-bench/src/lib.ts`.
+const TYPESCRIPT_SIBLING_BENCH_LIB_PATH: &str = "packages/consumer-bench/src/lib.ts";
+
+/// Where the module of the sibling package whose directory name extends the
+/// project's with the FIRST SEGMENT of a path inside it stands, as the
+/// work-list holds it.
+///
+/// `packages/consumersrc` is `packages/consumer` followed by `src`, so the
+/// presenter spells this module `src/lib.ts` — the spelling of a REAL file of
+/// the project, standing at a row that file does not hold the same export on.
+const TYPESCRIPT_SIBLING_CUT_LIB_PATH: &str = "packages/consumersrc/lib.ts";
+
+/// Where the module that imports the project's live export stands, as the
+/// work-list holds it.
+const TYPESCRIPT_CONSUMER_OTHER_PATH: &str = "packages/consumer/src/other.ts";
+
+/// A module whose one export another module of the same project imports.
+///
+/// The export is alive, so the run reports nothing at row 2 of this file. That
+/// row is where a misread of the sibling's spelling lands.
+const TYPESCRIPT_PROBE_IMPORTED_LIB: &str = concat!(
+    "/** An export the project's own module imports. */\n",
+    "export const usedHere = 1;\n",
+);
+
+/// A module that imports the live export and exports one name nothing imports.
+///
+/// `trulyDead` stands on row 4, under the import, the blank line and its
+/// documentation line, so a probe that stages this module expects
+/// `src/other.ts:4`.
+const TYPESCRIPT_PROBE_IMPORTING_LIB: &str = concat!(
+    "import { usedHere } from \"./lib\";\n",
+    "\n",
+    "/** An export nothing in the project imports. */\n",
+    "export const trulyDead = usedHere;\n",
+);
+
+/// A tsconfig whose program reaches two sibling packages whose directory names
+/// BEGIN with this project's own directory name.
+///
+/// One extends it with `-bench`, which stands nowhere inside the project. The
+/// other extends it with `src`, which is the first segment of every source
+/// path the project holds.
+const TYPESCRIPT_SIBLING_PREFIX_TSCONFIG: &str = concat!(
+    "{\n",
+    "  \"compilerOptions\": {\n",
+    "    \"target\": \"ES2021\",\n",
+    "    \"module\": \"ESNext\",\n",
+    "    \"moduleResolution\": \"bundler\",\n",
+    "    \"noEmit\": true,\n",
+    "    \"strict\": true,\n",
+    "    \"skipLibCheck\": true\n",
+    "  },\n",
+    "  \"include\": [\"src\", \"../consumer-bench/src\", \"../consumersrc\"]\n",
+    "}\n",
+);
+
+/// A probe whose project stands beside two packages whose names begin with its
+/// own.
+///
+/// Measured with ts-prune 0.10.3 over this tree, the project's own directory
+/// the working directory: `src/lib.ts:2`, `src/other.ts:4` and
+/// `-bench/src/lib.ts:2`. The first row is the `packages/consumersrc` module
+/// wearing the spelling of `packages/consumer/src/lib.ts`, whose row 2 holds
+/// the LIVE export instead.
+const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[
+            "packages/consumer/src/other.ts:4",
+            "packages/consumer-bench/src/lib.ts:2",
+        ],
+    },
+    staged: &[
+        (
+            TYPESCRIPT_CONSUMER_TSCONFIG_PATH,
+            TYPESCRIPT_SIBLING_PREFIX_TSCONFIG,
+        ),
+        (TYPESCRIPT_CONSUMER_LIB_PATH, TYPESCRIPT_PROBE_IMPORTED_LIB),
+        (
+            TYPESCRIPT_CONSUMER_OTHER_PATH,
+            TYPESCRIPT_PROBE_IMPORTING_LIB,
+        ),
+        (TYPESCRIPT_SIBLING_BENCH_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+        (TYPESCRIPT_SIBLING_CUT_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "the cut the presenter makes needs no separator after the match, so the run rebuilds \
+             each spelling the cut can have made and reports the finding only where exactly one \
+             of them stands as a file; it never names a file that is not the file of the finding",
 };
 
 /// Acceptance: an export the package manifest publishes is not dead.
@@ -521,13 +619,12 @@ fn the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_not
 /// Acceptance: a module the program reaches from OUTSIDE the project directory
 /// is named at the path it stands at.
 ///
-/// ts-prune cuts its own working directory off the front of each path it
-/// reports, and cuts one leading separator after that. A file INSIDE the
-/// project therefore comes back relative to the project, and a file outside it
-/// comes back as the whole absolute path less that separator. The run puts the
-/// project's path in front of the first spelling and must leave the second
-/// alone, which is the reading `reportedAs` in the rule's own node script
-/// already makes.
+/// ts-prune cuts the first occurrence of its own working directory out of each
+/// path it reports, and cuts one leading separator after that. A file INSIDE
+/// the project therefore comes back under the project directory, and a file the
+/// cut never touched comes back as the whole absolute path less that separator.
+/// The run rebuilds both from the working directory ts-prune used, which is the
+/// operation `reportedAs` in the rule's own node script copies as well.
 ///
 /// Measured over `zod` at `4e1720c` with the dependencies installed: 1 of the
 /// 76 findings named `packages/bench/<the absolute path of the checkout>/
@@ -539,4 +636,24 @@ fn the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_not
 fn the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project_directory() {
     verify_shipped_tree_reports(&TYPESCRIPT_OUTSIDE_MODULE_PROBE);
     verify_shipped_staged_positions_report(&TYPESCRIPT_OUTSIDE_MODULE_POSITIONS_PROBE);
+}
+
+/// Acceptance: the run never names a file that is not the file of the finding,
+/// whatever the presenter's cut left of the path.
+///
+/// The presenter writes `result.file.replace(process.cwd(), "").replace(/^\//,
+/// "")`. `String.replace` given a STRING cuts the first occurrence of that
+/// text and needs no separator after it, so a sibling package whose directory
+/// name BEGINS with the project's own comes back cut at a position no path
+/// stands at: `packages/consumer-bench/src/lib.ts` reaches the pipe as
+/// `-bench/src/lib.ts`, and `packages/consumersrc/lib.ts` reaches it as
+/// `src/lib.ts` — the spelling of a real, LIVE file of the project.
+///
+/// The run rebuilds every spelling the cut can have made from the working
+/// directory ts-prune used, and reports the finding at the one that stands as
+/// a file. Two spellings that both stand are a path the run cannot confirm, so
+/// it names the finding on stderr and reports nothing for it.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding() {
+    verify_shipped_tree_reports(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
 }

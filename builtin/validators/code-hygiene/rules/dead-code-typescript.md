@@ -128,15 +128,16 @@ tool:
     /**
      * How ts-prune spells the path of a file in its report.
      *
-     * The presenter cuts the working directory out of the absolute path and
-     * then cuts one leading separator, so a file OUTSIDE the project keeps its
-     * whole absolute path minus that separator.
+     * This is the presenter's own operation, copied rather than modelled:
+     * `result.file.replace(process.cwd(), "").replace(/^\//, "")`. The first
+     * replace takes a STRING, so it cuts the FIRST occurrence of the working
+     * directory wherever that text stands and needs no separator after the
+     * match. A reading that anchors the cut, or that demands a separator, names
+     * a spelling ts-prune never writes and the pattern then misses the line.
      */
     function reportedAs(absolute, projectDir) {
-      if (absolute.startsWith(`${projectDir}${path.sep}`)) {
-        return path.relative(projectDir, absolute);
-      }
-      return absolute.replace(new RegExp(`^${quote(path.sep)}`), "");
+      const cut = absolute.replace(projectDir, "");
+      return cut.replace(new RegExp(`^${quote(path.sep)}`), "");
     }
 
     /** Every package manifest of the workspace, with the directory of each. */
@@ -200,12 +201,11 @@ tool:
       );
     }
     ENTRY_MODULES
-    root="$PWD"
+    root="$(pwd -P)"
     find . -name node_modules -prune -o -name .git -prune -o -name 'tsconfig.json' -print |
       while IFS= read -r config; do
         dir="${config%/*}"
-        prefix=""
-        [ "$dir" = "." ] || prefix="${dir#./}/"
+        cwd="$(cd "$dir" && pwd -P)"
         (cd "$dir" && tsc -p tsconfig.json --showConfig) > "$work/config.json" 2>/dev/null
         entries="$(cd "$dir" && node "$work/entries.js" "$root" "$work/config.json")"
         [ -n "$entries" ] || entries='$^'
@@ -214,16 +214,36 @@ tool:
           grep -v '\.d\.ts:' |
           sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#\1:\2: unused export '\3'; nothing in the project imports it#p" |
           while IFS= read -r finding; do
-            # The same reading `reportedAs` above makes. ts-prune writes a path
-            # relative to its own working directory for a file INSIDE the
-            # project, and the absolute path less its leading separator for a
-            # file outside it. The project's path completes the first spelling,
-            # and the separator the presenter cut gives the second one back.
-            if [ -f "$dir/${finding%%:*}" ]; then
-              printf '%s%s\n' "$prefix" "$finding"
-            else
-              printf '/%s\n' "$finding"
+            # The presenter cuts the FIRST occurrence of its own working
+            # directory out of the absolute path — a `String.replace` given a
+            # string, so the cut is not anchored and needs no separator after
+            # the match — and then cuts one leading separator. Three spellings
+            # therefore reach this loop, and the working directory ts-prune ran
+            # in is what rebuilds each of them: the path under that directory,
+            # the path with that directory written straight back on for a
+            # sibling whose name merely BEGINS with it, and the absolute path
+            # the cut never touched.
+            cut="${finding%%:*}"
+            stands=""
+            found=0
+            for candidate in "$cwd/$cut" "$cwd$cut" "/$cut"; do
+              [ -f "$candidate" ] || continue
+              stands="$candidate"
+              found=$((found + 1))
+            done
+            # No spelling that stands, or two that both stand, is a path the
+            # run cannot confirm: the cut threw away what told those files
+            # apart. Naming the wrong file is worse than naming none, so the
+            # finding is refused and said out loud.
+            if [ "$found" -ne 1 ]; then
+              printf 'dead-code-typescript: %s of %s stands at %s files; the finding is dropped: %s\n' \
+                "$cut" "$cwd" "$found" "$finding" >&2
+              continue
             fi
+            case "$stands" in
+              "$root"/*) printf '%s:%s\n' "${stands#"$root"/}" "${finding#*:}" ;;
+              *) printf '%s:%s\n' "$stands" "${finding#*:}" ;;
+            esac
           done
       done | sort -u
   doctor:
@@ -592,8 +612,8 @@ and a fail-closed test has to read stderr either way.
 The swap would have taken the path defect away structurally: knip runs once at
 the workspace root and writes each path relative to it, so the per-project
 arithmetic this rule performs has no counterpart at all. This rule answers that
-one by reading ts-prune's two spellings apart, and "How the run is shaped"
-states the measurement.
+one by rebuilding every spelling the presenter's cut can have made, and "How the
+run is shaped" states the measurement and the one shape that rebuild leaves.
 
 `ts-prune` being archived is a real risk and it is not answered by keeping it.
 The successor is named, the corpus is kept, and the tables above are directly
@@ -714,45 +734,78 @@ still gets checked. The engine keeps only the findings in the changed files.
 ### The path each finding is rebuilt at
 
 ts-prune's presenter writes
-`result.file.replace(process.cwd(), "").replace(/^\//, "")`. A file INSIDE the
-project therefore comes back relative to the project, and a file the program
-reaches from OUTSIDE it comes back as the whole ABSOLUTE path less its leading
-separator. The run reads the two spellings apart: the project's path completes a
-relative one, and the separator the presenter cut gives an absolute one back.
-`reportedAs` in the node script makes that same reading for the entry carve-out,
-and the two have to agree or the `--ignore` pattern would name a spelling the
-pipe never writes.
+`result.file.replace(process.cwd(), "").replace(/^\//, "")`. That first
+`replace` is given a STRING, so it cuts the FIRST occurrence of the working
+directory wherever that text stands and needs no separator after the match.
+Three spellings come out of it, and only the working directory ts-prune ran in
+tells them apart:
 
-Putting the project's path in front of BOTH spellings names a file that stands
+| the file the program holds | what the presenter writes |
+|---|---|
+| inside the project directory | the path under that directory |
+| in a sibling directory whose name BEGINS with the project's | the rest of that name and then the path: `packages/zod-bench/src/x.ts` under the project `packages/zod` comes out as `-bench/src/x.ts` |
+| anywhere else | the whole absolute path less its leading separator |
+
+The run rebuilds all three from that working directory and reports the finding
+at the one that stands as a file.
+
+`reportedAs` in the node script is the same presenter operation, copied rather
+than modelled, because the `--ignore` pattern has to name the spelling ts-prune
+writes. The pipe and the pattern never meet: `runner.js` applies `--ignore` to
+the presented line INSIDE ts-prune —
+`presented.filter(function (file) { return !file.match(config.ignore); })` —
+before a byte reaches stdout, so no rewriting the pipe does can reach that
+decision. Both sides copy the presenter, and neither reads the other.
+
+Putting the project's path in front of EVERY spelling names a file that stands
 nowhere. The engine keeps a workspace-scope finding only when its path meets a
-file of the run, so such a finding is dropped without a word — a silent miss
-rather than a wrong finding. Measured over the corpus with the dependencies
+file of the run, so such a finding is dropped without a word — a silent miss.
+Testing one completed path against the filesystem instead is worse: where the
+cut fell inside a sibling's name it lands on a REAL file the finding is not
+about, which is a wrong finding. Measured over the corpus with the dependencies
 installed:
 
-| workspace | findings | naming a file that is nowhere, before | after |
+| workspace | findings | naming a file that is nowhere | refused |
 |---|---|---|---|
-| zod | 76 | 1 | 0 |
+| zod | 76 | 0 | 0 |
 | zustand | 1 | 0 | 0 |
 | redux | 6 | 0 | 0 |
+| this workspace | 58 | 0 | 0 |
 
-The count does not move, and one more finding of zod's 76 now reaches the
-author. It is `packages/zod/src/v4/core/standard-schema.ts:157`
-`StandardSchemaWithJSON`, which `packages/bench` reaches: that project's program
-holds `packages/zod/src`, and the run wrote
-`packages/bench/<the absolute path of the checkout>/packages/zod/src/…` for it.
+The count does not move, and one finding of zod's 76 is respelled. It is
+`packages/zod/src/v4/core/standard-schema.ts:157` `StandardSchemaWithJSON`,
+which `packages/bench` reaches: that project's program holds
+`packages/zod/src`. That finding has been spelled three ways.
+`packages/bench/<the absolute path of the checkout>/packages/zod/src/…` named
+no file at all. The absolute path of the checkout named the right file on the
+machine that ran it and no file on any other. The path above names it
+everywhere.
 
 One leak is what the entry carve-out leaves. With the carve-out off, the same
 project reaches `packages/zod/src/index.ts` as well, and its 284 findings carry
-the same corrupted spelling — 285 of that run's 1944 rows. Every one of the 284
+the same cut spelling — 285 of that run's 1944 rows. Every one of the 284
 stands in a module the package publishes, so the carve-out already silences
 them, and the shipped run leaks the one finding that stands outside a published
 module.
 
-The acceptance test
+**One shape the rebuild cannot close, and the run refuses rather than guesses.**
+Two files of one program can wear the SAME spelling. A sibling directory
+`packages/consumersrc` beside the project `packages/consumer` makes
+`packages/consumersrc/lib.ts` come out as `src/lib.ts`, which is also what the
+project's own `packages/consumer/src/lib.ts` comes out as. The cut threw the
+text that told them apart away, and nothing left on the line brings it back. So
+the run reports no finding at a spelling two files answer: it writes each such
+line on stderr, naming the project and the count, and reports neither. That is
+the residue, and it is a dropped finding rather than a wrong one. Measured over
+the four workspaces of the table above: 0 refused of their 141 findings.
+
+The acceptance tests
 `the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project_directory`
-holds both spellings over a probe repository, and holds the outside module
-through the engine as well, where the run answered NO finding before this
-change.
+and
+`the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding`
+hold all three spellings over probe repositories, hold the refusal, and hold the
+outside module through the engine as well, where the run answered NO finding
+before this change.
 
 `tsc --showConfig` is what reads the tsconfig, because `paths` usually stands in
 a file the project EXTENDS: `redux` writes its table in `tsconfig.base.json`, and
@@ -787,7 +840,7 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The seven acceptance tests in
+move neither count. The eight acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
 
@@ -799,5 +852,6 @@ stages that shape as a probe repository, and it is the test that pins the
 property the knip decision turned on.
 
 Nor can it hold the path arithmetic. A fixture stands loose in one directory, so
-no fixture is a module one project reaches from outside itself. The acceptance
-test named in "How the run is shaped" stages a second package for that.
+no fixture is a module one project reaches from outside itself, and no fixture
+stands in a package whose name begins with another package's. The two acceptance
+tests named in "How the run is shaped" stage sibling packages for that.
