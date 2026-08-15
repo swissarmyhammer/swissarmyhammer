@@ -16,7 +16,8 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     cat > "$work/definition.py" <<'REPORTED_DEFINITION'
-    """Writes each `PLR0915` finding whose definition is not a test.
+    """States each file `ruff` declined, then writes each `PLR0915` finding
+    whose definition is not a test.
 
     `ruff` writes no function name into its message. It anchors each `PLR0915`
     diagnostic on the NAME of the function it measured, so `location` and
@@ -41,6 +42,13 @@ tool:
 
     # What the script calls itself on stderr.
     RULE_NAME = "function-length-python"
+
+    # What opens the line `ruff` writes for a file it could not read, and what
+    # stands after it: the path, then `: `, then the reason.
+    DECLINED_HEAD = "warning: Failed to lint "
+
+    # The marker `builtin/validators/README.md` states a declined item by.
+    DIAGNOSTIC_MARKER = "sah-diagnostic:"
 
 
     def source_lines(path, cache):
@@ -72,8 +80,26 @@ tool:
         return lines[start["row"] - 1][start["column"] - 1:end["column"] - 1]
 
 
+    def declined(path):
+        """Each file `ruff` said it could not read, as `file: reason`.
+
+        `ruff` states such a file on stderr and exits as it would without it,
+        so this is the one place the run learns the file was never judged. The
+        read replaces a byte it cannot decode rather than failing, because a
+        path itself can hold one.
+        """
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+        return [line[len(DECLINED_HEAD):] for line in lines if line.startswith(DECLINED_HEAD)]
+
+
     def main():
-        """Writes one JSON object for each finding the carve-out keeps."""
+        """States each declined file, then writes one JSON object for each
+        finding the carve-out keeps."""
+        for file in declined(sys.argv[2]):
+            sys.stderr.write(
+                "{} ruff could not read {}\n".format(DIAGNOSTIC_MARKER, file)
+            )
         with open(sys.argv[1], encoding="utf-8") as handle:
             report = handle.read().strip()
         findings = json.loads(report) if report else []
@@ -112,7 +138,7 @@ tool:
       printf 'function-length-python: ruff exited %s and judged no code\n' "$status" >&2
       exit 1
     fi
-    python3 "$work/definition.py" "$work/report.json"
+    python3 "$work/definition.py" "$work/report.json" "$work/ruff.err"
   doctor:
     check_command: "which ruff python3 mktemp"
     check_version_command: "ruff --version"
@@ -238,7 +264,7 @@ stays.
 The filter program keeps the rows whose code is `PLR0915`. ruff writes a file
 it cannot parse onto the same report under `"code": "invalid-syntax"`, and
 those rows belong to the parser rather than to this rule. The section "A file
-ruff cannot parse" below states what the run does with them.
+ruff could not measure" below states what the run does with them.
 
 To exempt one function, write `# noqa: PLR0915` on its `def` line in the code.
 
@@ -438,7 +464,14 @@ same script over the two files reports 2. The acceptance test
 holds both halves: the run with no argument, and the run over the two
 files.
 
-## A file ruff cannot parse
+## A file ruff could not measure
+
+The run reads two statements ruff makes about a file it could not measure: a
+row of another code on the report, and a `Failed to lint` line on stderr. The
+run answers each one differently, and the two sections below state each answer
+against what was measured for it.
+
+### A file ruff cannot parse
 
 `ruff` writes a file it cannot parse onto the SAME report as a finding, under
 `"code": "invalid-syntax"`, and it exits 1 either way. Measured with ruff
@@ -460,7 +493,64 @@ run rather than a clean file. The acceptance test
 `the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse`
 holds that.
 
-The script tests ruff's own exit status beside it. Measured with ruff 0.14.5:
-0 for a report with no row, 1 for a report with one row or more. Any other
-status writes ruff's stderr and its report to stderr and exits 1, so a ruff
-that refuses its command line never reads as a clean tree.
+### A path ruff cannot read
+
+`ruff` states a path it could not read on stderr, and it exits as it would
+without that path. Measured with ruff 0.14.5, one path for each run, against
+the shipped command line:
+
+| the path | the report | stderr | exit |
+|---|---|---|---|
+| a path that holds no file | `[]` | `warning: Failed to lint absent.py: No such file or directory (os error 2)` | 0 |
+| a file whose bytes are not UTF-8 | `[]` | `warning: Failed to lint notutf8.py: stream did not contain valid UTF-8` | 0 |
+| a file with no read permission | `[]` | `warning: Failed to lint noread.py: Permission denied (os error 13)` | 0 |
+
+Each row is a path the tool declined. ruff judges every other file the run was
+handed, so neither the report nor the status carries the decline. An earlier
+shape of this run read the report alone, and the engine then read a path ruff
+never opened as a clean file.
+
+The filter program therefore reads ruff's stderr for a line opening
+`warning: Failed to lint `, and writes what stands after that head under the
+marker `builtin/validators/README.md` states, at exit 0:
+
+    sah-diagnostic: ruff could not read absent.py: No such file or directory (os error 2)
+
+The engine renders each marked line in the report, and no file filter drops it,
+because a diagnostic is about the RUN and has no path to be kept by.
+
+`exit 1` is the answer this rule does NOT give here. A nonzero exit fails the
+WHOLE run, so one path the tool could not open throws away every finding the
+run did make, and the engine then reads no diagnostic either — it reads a
+broken run. Measured with the shipped script over one file of 190 statements
+handed to the run beside all three paths of the table: one finding on stdout,
+three marked lines on stderr, exit 0. That finding is what an `exit 1` here
+would cost.
+
+A test of the PATH cannot answer all three rows. Measured against the three
+staged paths: `[ ! -r "$file" ]` is true for the path that holds no file and
+for the file with no read permission, and FALSE for the file whose bytes are
+not UTF-8 — the mode lets a reader open that one. A run gated on that test
+would read the third file as clean. The answer has to come from what ruff
+itself said, which is the shape the three swiftlint rules already take: each
+reads swiftlint's own stderr message rather than a file name.
+
+Three acceptance tests hold the three rows, one for each —
+`the_shipped_python_function_length_tool_rule_declines_a_path_that_holds_no_file`,
+`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
+Each stages one function of 190 statements beside the path, and holds the run
+to reporting that finding AND to stating one diagnostic that names the path. A
+run that lost either half fails them.
+
+### Both answers in one run
+
+Measured with the shipped script over a file that does not parse beside a path
+that holds no file: the marked line and the parse failure both stand on stderr,
+and the run exits 1. The engine reads a broken run there, and the whole of
+stderr is the error detail it states, so the marked line reaches the reader
+inside that error rather than as a diagnostic of its own.
+
+The script tests ruff's own exit status beside all of it. Measured with ruff
+0.14.5: 0 for a report with no row, 1 for a report with one row or more. Any
+other status writes ruff's stderr and its report to stderr and exits 1, so a
+ruff that refuses its command line never reads as a clean tree.

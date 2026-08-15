@@ -335,3 +335,97 @@ const PYTHON_LENGTH_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
 fn the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
     verify_shipped_run_breaks(&PYTHON_LENGTH_UNPARSABLE_PROBE);
 }
+
+/// Where the file the run CAN judge stands, beside each path it cannot read.
+const PYTHON_LENGTH_JUDGED_PATH: &str = "judged.py";
+
+/// Where the path the run cannot read stands inside the probe repository.
+///
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const PYTHON_LENGTH_UNREADABLE_PATH: &str = "unreadable.py";
+
+/// A Python file whose bytes are not UTF-8.
+///
+/// The declaration parses; the string literal holds two bytes that open no
+/// UTF-8 sequence, so a reader opens the file and cannot decode it.
+const PYTHON_LENGTH_UNDECODABLE_SOURCE: &[u8] = b"def short_function():\n    return '\xff\xfe'\n";
+
+/// A Python file the tool could read if the mode let it.
+///
+/// The source is ordinary and stands under the gate, so a run that DID read it
+/// would report no finding — which is the clean answer this rule must not give
+/// for a file it never read.
+const PYTHON_LENGTH_FORBIDDEN_SOURCE: &str = "def short_function():\n    return 1\n";
+
+/// Holds the shipped Python function-length run to judging `judged.py` and to
+/// stating the one path it could not read, through the real ruff pipeline.
+///
+/// The judged file carries one function over the gate, so the run has a finding
+/// to lose. Losing it is what a nonzero exit over a declined item costs, and
+/// staying silent about the path is what reads that path as a clean file.
+fn verify_python_length_declines(path: &str, unreadable: &ShippedUnreadableFile) {
+    let judged = python_procedure("long_procedure", OVER_THE_GATE_STATEMENTS);
+    let expected = python_expected_row(PYTHON_LENGTH_JUDGED_PATH, &judged, "long_procedure");
+
+    verify_unreadable_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_FUNCTION_LENGTH_RULE,
+        &[(PYTHON_LENGTH_JUDGED_PATH, &judged)],
+        path,
+        unreadable,
+        &[&expected],
+    );
+}
+
+/// Acceptance: the shipped Python function-length tool rule DECLINES a path
+/// that holds no file, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a path, against the shipped command
+/// line: `[]` on stdout, `warning: Failed to lint absent.py: No such file or
+/// directory (os error 2)` on stderr, and exit 0. The status gate accepts 0, so
+/// a script that read the report alone reported no finding and exited 0, and
+/// the engine read a path ruff never opened as a clean file.
+#[test]
+fn the_shipped_python_function_length_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_python_length_declines(
+        PYTHON_LENGTH_UNREADABLE_PATH,
+        &ShippedUnreadableFile::Absent,
+    );
+}
+
+/// Acceptance: the shipped Python function-length tool rule DECLINES a file
+/// whose bytes are not UTF-8, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file, against the shipped command
+/// line: `[]` on stdout, `warning: Failed to lint notutf8.py: stream did not
+/// contain valid UTF-8` on stderr, and exit 0.
+///
+/// A readability test on the path admits this file — the mode lets the tool
+/// open it — so the answer has to come from what ruff itself said.
+#[test]
+fn the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_python_length_declines(
+        PYTHON_LENGTH_UNREADABLE_PATH,
+        &ShippedUnreadableFile::Undecodable(PYTHON_LENGTH_UNDECODABLE_SOURCE),
+    );
+}
+
+/// Acceptance: the shipped Python function-length tool rule DECLINES a file it
+/// may not read, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file, against the shipped command
+/// line: `[]` on stdout, `warning: Failed to lint noread.py: Permission denied
+/// (os error 13)` on stderr, and exit 0.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_python_function_length_tool_rule_declines_a_file_it_may_not_read() {
+    verify_python_length_declines(
+        PYTHON_LENGTH_UNREADABLE_PATH,
+        &ShippedUnreadableFile::Forbidden(PYTHON_LENGTH_FORBIDDEN_SOURCE),
+    );
+}

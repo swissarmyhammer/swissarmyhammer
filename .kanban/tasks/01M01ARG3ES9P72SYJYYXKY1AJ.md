@@ -361,10 +361,23 @@ comments:
     - NOT self-certified. The rule body is a thousand lines the engine cannot read, and every round of this card has found something there by hand, including this one. The card stays in `review` for that reading.
     - next: a human reads the rule body — `workspacePrefix`, `insideWorkspace`, `reportedPath` and the new decline in `placeFindings`; "The path each finding is reported at", above all the paragraph on what the row carries and the five decline reasons; the timing table and the paragraphs under it; the five acceptance tests named at the end of that section.
   timestamp: 2026-08-15T19:35:41.794998+00:00
+- actor: claude-code
+  id: 01m03fg84s32qgnpwg2g26a1kw
+  text: |
+    ### review — clean
+
+    - evidence: `review sha cff0fdf22~2..HEAD` — 0 findings over 4 files, 9 validator runs. All 19 prior findings checked. Hand-check of `builtin/validators/code-hygiene/rules/dead-code-typescript.md` found no behavior defect.
+    - verified the RED/GREEN claim myself. Staged the round-6 tree by hand — workspace root `<work>/repo`, `files: ["src/index.ts", "src/link.ts"]`, `src/link.ts` a link on `../../outside/util.ts` — and ran the shipped bytes of both revisions. `5d5f81d59~1` wrote `/private/tmp/.../probe/outside/util.ts:2: unused export 'trulyDead'` on stdout and nothing on stderr, which the engine drops without a word. `HEAD` wrote nothing on stdout and one `sah-diagnostic: the file this finding is about stands outside the workspace, at ...` on stderr.
+    - verified the placement is unchanged for a file INSIDE the workspace. The same tree with the link one segment up answered `outside/util.ts:2: ...` on both revisions, md5 `c087fab8f1944416848ab6d2e8858f5f` both. Over this workspace both revisions answered 58 findings, stdout md5 `63c367c26288b1296146971cf705d7db` both, 0 bytes on stderr both.
+    - verified the decline is exact. `insideWorkspace` is the complement of what `normalize_tool_path` (`tool_rules.rs:977`) can strip, so an item it declines is one the workspace retain (`tool_rules.rs:955-960`) could never keep, and an item it passes carries a repo-relative path the retain can match. The decline can only trade a silent drop for an announced one.
+    - verified the five decline reasons against the four `decline` sites of the placement, the timing table arithmetic (0.45, 1.32, 0.68, 0.55, 0.31 all correct), and the five acceptance test names. 12 tests in the module, 171 in `shipped`, all green.
+    - 6 findings dropped for a false premise.
+    - next: one prose point filed apart as ^jcgp8bc — the 0.55 s is stated as a cost without saying it stands under the 1.32 s spread of the second row, while the 0.31 s is called noise for exactly that reason.
+  timestamp: 2026-08-15T19:48:39.705215+00:00
 depends_on:
 - 01M034AGX0RXH2RCCPPM6BA1BF
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9080
 title: dead-code-typescript prefixes a project path onto an absolute path, so the finding names a file that is nowhere
 ---
 `builtin/validators/code-hygiene/rules/dead-code-typescript.md` runs `ts-prune` inside each project directory and puts the project's path back on the front of every finding.

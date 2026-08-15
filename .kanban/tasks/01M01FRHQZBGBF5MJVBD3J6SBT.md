@@ -1,8 +1,138 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffde80
+comments:
+- actor: claude-code
+  id: 01m03g2ajcdwhwvdf3h8h2v5wp
+  text: |-
+    Picked up. Moved to `doing`.
+
+    ## The card's proposed `exit 1` shape is superseded
+
+    The card proposes the shape the sibling `complexity-python` holds: a `[ ! -r "$file" ]` test that names the path and exits 1 before the tool runs. That proposal predates the diagnostic carrier, which landed on `^m6ba1bf` as commit 9fcdd8387. `builtin/validators/README.md` now states the channel:
+
+        printf 'sah-diagnostic: no compile database covers %s\n' "$file" >&2
+
+    A script that judged the code and could not judge ONE item writes a line opening `sah-diagnostic:` and still exits 0. The engine reads each marked line and the report states it. No file filter drops it, because a diagnostic is about the RUN and carries no path to be kept by.
+
+    Why the marker and not `exit 1`: each of the three rows of the card's table is ONE ITEM the tool declined inside a run that judged the other files. `exit 1` fails the WHOLE run, so one unreadable path throws away every finding the run did make. The README states that plainly: "Do not exit nonzero for a declined item." Measured below, a run over four files — one over the gate and three the tool cannot read — reports the one finding at exit 1 (ruff's finding status), so the findings are there to throw away.
+
+    The card's binding requirement is unchanged: the run must not read a file ruff could not open as a clean file. Only the MECHANISM changes — an announced decline, never a whole-run failure, and never silence.
+
+    ## What I measured, with the installed ruff 0.14.5
+
+    One file for each run, against the shipped command line
+    `ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json <file>`:
+
+    | the file | stdout | stderr | exit |
+    |---|---|---|---|
+    | one function of 190 statements | one `PLR0915` row | nothing | 1 |
+    | one function of 1 statement | `[]` | nothing | 0 |
+    | a path that holds no file | `[]` | `warning: Failed to lint absent.py: No such file or directory (os error 2)` | 0 |
+    | a file that is not UTF-8 | `[]` | `warning: Failed to lint notutf8.py: stream did not contain valid UTF-8` | 0 |
+    | a file with no read permission | `[]` | `warning: Failed to lint noread.py: Permission denied (os error 13)` | 0 |
+
+    Every one of the card's three defect rows is confirmed at exit 0.
+
+    Two measurements the card does not hold, taken for the fix:
+
+    - The four paths in ONE run (the function over the gate plus the three unreadable ones): 1 finding row on stdout, three `warning: Failed to lint ...` lines on stderr, exit 1. So one run states each declined path on its own line, and the finding stands beside them.
+    - A directory that holds no Python file: `[]` on stdout, `warning: No Python files found under the given path(s)` on stderr, exit 0. That is a different message from `Failed to lint`, so an anchor on `warning: Failed to lint ` reads the declined FILE alone and leaves that shape out.
+
+    ## What the engine does with the marker
+
+    `crates/swissarmyhammer-validators/src/review/tool_rules.rs` holds `TOOL_DIAGNOSTIC_MARKER = "sah-diagnostic:"`. `marked_diagnostics` keeps a stderr line that opens with it, trims the rest, and drops an empty message. `execute_tool_runs` turns each into a `ToolDiagnostic` on the outcome — but only on the Ok arm, so a nonzero exit drops every diagnostic with the findings. That is the second reason the decline must exit 0.
+
+    ## Where the tests go
+
+    `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs` holds `the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse`. The new tests stand beside it. The harness in `.../tests/shipped.rs` already reads a declined item — `script_diagnostics` — and the three `dead-code-typescript` diagnostic tests are the pattern.
+  timestamp: 2026-08-15T19:58:32.012120+00:00
+- actor: claude-code
+  id: 01m03gz22fdhfedah77vtcq030
+  text: |-
+    Implementation landed.
+
+    ## What the run does now
+
+    `builtin/validators/code-hygiene/rules/function-length-python.md` captures ruff's stderr already, in `$work/ruff.err`, and threw it away on the success path. The shell now hands that file to the filter program as its second argument, and the filter reads each line opening `warning: Failed to lint `, then writes what stands after that head under the marker, at exit 0:
+
+        sah-diagnostic: ruff could not read absent.py: No such file or directory (os error 2)
+
+    Two constants carry the two strings — `DECLINED_HEAD` and `DIAGNOSTIC_MARKER` — and `declined(path)` is the one function that reads them. The declines are written FIRST in `main()`, before the parse-failure branch, so a run that then exits 1 still carries them inside the error detail (measured below).
+
+    The anchor is `warning: Failed to lint `, not `warning: `. Measured: a directory holding no Python file writes `warning: No Python files found under the given path(s)` at exit 0, and that is not a declined FILE — the narrower anchor leaves it out.
+
+    ## What I measured with the SHIPPED script, after the change
+
+    Driven by loading the rule's own `tool.run` block and running it with bash over a probe directory:
+
+    | the run | stdout | stderr | exit |
+    |---|---|---|---|
+    | a file of 190 statements, a path that holds no file, a file that is not UTF-8, a file with no read permission | one `PLR0915` finding | three `sah-diagnostic:` lines, one for each path | 0 |
+    | a file of 1 statement | nothing | nothing | 0 |
+    | no argument at all | nothing | nothing | 0 |
+    | a file that does not parse, alone | nothing | `function-length-python: ruff could not measure <path>: invalid-syntax ...` | 1 |
+    | a file that does not parse beside a path that holds no file | nothing | the marked line AND the parse-failure line | 1 |
+
+    Row 1 is the whole point: the finding stands and the three declines are announced. Row 5 states the cost of the parse branch's `exit 1`, which is the new card `^s8d7fva`.
+
+    Also measured, for the prose: `[ ! -r "$file" ]` is TRUE for the path that holds no file and for the file with no read permission, and FALSE for the file whose bytes are not UTF-8. The card's proposed test would have read that third file as clean, which is the second reason it is superseded.
+
+    ## The three acceptance tests, watched RED
+
+    `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs`, beside `..._breaks_on_a_file_it_cannot_parse`:
+
+    - `the_shipped_python_function_length_tool_rule_declines_a_path_that_holds_no_file`
+    - `the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_decode`
+    - `the_shipped_python_function_length_tool_rule_declines_a_file_it_may_not_read` (`#[cfg(unix)]`, it sets a mode)
+
+    All three failed first, and all three failed on the same assertion for the same reason: `the run must state the one path it declined; it stated []`. The rows assertion passed in the RED run, which proves the old script reported the finding and said NOTHING about the path.
+
+    Each test stages one function of 190 statements beside the path, and holds the run to BOTH halves: it reports that finding, and it states exactly one diagnostic naming the path. One half alone passes a defect the other catches — silence reads the path as clean, and a lost finding is what `exit 1` costs.
+
+    ## The harness
+
+    `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs`:
+
+    - `ShippedUnreadableFile` — `Absent`, `Undecodable(bytes)`, `Forbidden(source)`: the three ways a path the work-list names refuses a reader.
+    - `forbid_probe_read` takes every permission off the file and then READS IT BACK, requiring the read to fail. A user the mode does not bind would otherwise make the probe measure a readable file while stating it measured an unreadable one.
+    - `verify_unreadable_file_is_declined` drives the shipped script twice over one staging — once for `finding_rows`, once for `script_diagnostics` — which is the shape the three `dead-code-typescript` diagnostic tests already use.
+    - `drive_shipped_script` took a new staging step, because no `(path, text)` pair can state bytes that are not UTF-8, a mode, or a file that is not written. Clippy then reported `too_many_arguments (8/7)`; rather than allow it, the four staging inputs became one `ShippedStaging` shape with a `ShippedStaging::of(staged)` constructor for the common case, which took the function to 5 arguments.
+
+    ## The rule body
+
+    The section "A file ruff cannot parse" is now "## A file ruff could not measure", with "### A file ruff cannot parse" and "### A path ruff cannot read" under it — the heading had to describe what the code does once the code answered more than parsing. The reference to it from "Selection in the pipe is attribution" was restated. Every sentence of the new prose was hand-checked against the shipped script, and the author's own read caught three claims that were not what the code does:
+
+    - "the two are answered differently, because the first is a run that judged nothing for that file and the second is one path declined" — false: neither shape carries a statement count for that file. Restated to say the run answers each differently, with no invented principle.
+    - "Each row is ONE path the tool declined inside a run that judged the rest" — a one-path run has no rest. Restated against what ruff does with the OTHER files it was handed.
+    - "A test of the PATH cannot answer this" — it answers two of the three rows. Restated with the measurement of all three.
+
+    ## Verification
+
+    - `cargo nextest run -p swissarmyhammer-validators` — 762 passed, 0 failed, 0 skipped. The coverage guards that read the shipped script (`zero_argument`, `temp_directory`, `scope_roster`) and the fixture-pair runs of every rule are inside that number.
+    - `cargo fmt --check` — clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+
+    ## Discovered work
+
+    `^s8d7fva` — the parse branch still exits 1 for one file ruff could not parse, which throws away every finding of that run. The README states the same answer for it as for a declined path. The card carries the measurement and the test to rewrite.
+  timestamp: 2026-08-15T20:14:13.583861+00:00
+- actor: claude-code
+  id: 01m03gzbfe9m2k0mrcpre4vegs
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — builtin/validators/code-hygiene/rules/function-length-python.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs. `cargo nextest run -p swissarmyhammer-validators`: 762 passed, 0 failed, 0 skipped. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. Three new acceptance tests watched RED first, each failing on `the run must state the one path it declined; it stated []`.
+    - next: /review
+  timestamp: 2026-08-15T20:14:23.214233+00:00
+- actor: claude-code
+  id: 01m03h6vmwra4nqtsdg8srpw10
+  text: |
+    ### test — green
+    - evidence: `cargo fmt --check` exit 0, no diff. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings, 0 errors. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` exit 0 — 3519 tests run: 3519 passed (21 slow), 0 failed, 0 skipped. The 8 `shipped::function_length_python::*` tool-rule tests all pass, together with `shipped::function_length::every_shipped_function_length_tool_rule_passes_its_fixtures`.
+    - next: review the change.
+  timestamp: 2026-08-15T20:18:29.148825+00:00
+position_column: doing
+position_ordinal: '8280'
 title: function-length-python reads a file ruff cannot open as a clean file
 ---
 `builtin/validators/code-hygiene/rules/function-length-python.md` breaks on a file ruff cannot PARSE, since ^kmxvk6r. It still reads a file ruff cannot OPEN as a clean file.

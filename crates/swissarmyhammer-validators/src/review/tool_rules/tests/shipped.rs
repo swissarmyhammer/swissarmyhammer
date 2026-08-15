@@ -823,12 +823,53 @@ fn shipped_script_findings(
     drive_shipped_script(
         loader,
         rule,
-        staged,
-        NO_PROBE_LINKS,
-        NO_PROBE_OUTSIDE,
+        &ShippedStaging::of(staged),
         files,
         finding_rows,
     )
+}
+
+/// The staging a probe does beyond the files it named: none.
+///
+/// Most probes state every file of their repository as a `(path, text)` pair,
+/// so there is nothing left for [`drive_shipped_script`] to prepare.
+fn stage_nothing_more(_repo: &Path) {}
+
+/// Everything a probe puts in its work directory before its script runs.
+///
+/// One shape rather than four parameters, because the four are one subject:
+/// what the run finds on disk.
+struct ShippedStaging<'a> {
+    /// Each file of the probe repository, with the text it holds.
+    staged: &'a [(&'a str, &'a str)],
+
+    /// Each symbolic link made inside the repository, as `(path, target)`.
+    links: &'a [(&'a str, &'a str)],
+
+    /// Each file staged BESIDE the repository, in the work directory the
+    /// repository stands in.
+    outside: &'a [(&'a str, &'a str)],
+
+    /// The staging no `(path, text)` pair can state, run on the repository
+    /// after every file above stands in it.
+    ///
+    /// A file the tool cannot READ is the shape that needs one: the probe
+    /// writes bytes that are not UTF-8, or takes every permission off the
+    /// file, or writes no file at all.
+    prepare: &'a dyn Fn(&Path),
+}
+
+impl<'a> ShippedStaging<'a> {
+    /// The staging of a probe that states every file of its repository as
+    /// text: no link, no file beside the repository, and nothing to prepare.
+    fn of(staged: &'a [(&'a str, &'a str)]) -> Self {
+        Self {
+            staged,
+            links: NO_PROBE_LINKS,
+            outside: NO_PROBE_OUTSIDE,
+            prepare: &stage_nothing_more,
+        }
+    }
 }
 
 /// Each item `outcome` declined, in the order the run stated them.
@@ -855,9 +896,7 @@ fn script_diagnostics(outcome: &ScriptOutcome, _repo_root: &Path) -> Vec<String>
 fn drive_shipped_script<T>(
     loader: &ValidatorLoader,
     rule: &str,
-    staged: &[(&str, &str)],
-    links: &[(&str, &str)],
-    outside: &[(&str, &str)],
+    staging: &ShippedStaging<'_>,
     files: &[&str],
     read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Result<Vec<T>, ScriptFailure> {
@@ -865,9 +904,10 @@ fn drive_shipped_script<T>(
     let work = tempfile::tempdir().unwrap();
     let repo = work.path().join(PROBE_REPOSITORY_DIRECTORY);
     std::fs::create_dir_all(&repo).unwrap();
-    stage_probe_files(&repo, staged.iter().copied());
-    stage_probe_links(&repo, links);
-    stage_probe_files(work.path(), outside.iter().copied());
+    stage_probe_files(&repo, staging.staged.iter().copied());
+    stage_probe_links(&repo, staging.links);
+    stage_probe_files(work.path(), staging.outside.iter().copied());
+    (staging.prepare)(&repo);
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
@@ -1042,9 +1082,11 @@ fn drive_shipped_staged_tree_read_with<T>(
     drive_shipped_script(
         &loader,
         probe.run.rule,
-        probe.staged,
-        links,
-        outside,
+        &ShippedStaging {
+            links,
+            outside,
+            ..ShippedStaging::of(probe.staged)
+        },
         &paths,
         read,
     )
@@ -1328,6 +1370,132 @@ fn verify_supported_rows_report(
         sorted_names(&reported),
         sorted_names(&expected_script_findings(expected)),
         "{reason}"
+    );
+}
+
+/// How a path the work-list names refuses the tool that opens it.
+///
+/// A `files`-scope run is handed paths, and the engine reads the work-list
+/// rather than the disk, so a path can reach the tool and refuse it. Each way
+/// it refuses is ONE item of a run that judged the other files, and the run has
+/// to say so: a run that reports no finding for such a path and exits 0 reads
+/// exactly like a clean pass over it.
+enum ShippedUnreadableFile {
+    /// The path holds no file at all — the work-list names a file the change
+    /// deleted, or a path spelled another way than the disk holds it.
+    Absent,
+
+    /// The file holds these bytes, which are not text the tool can decode. No
+    /// `&str` holds them, which is why the shape carries bytes.
+    Undecodable(&'static [u8]),
+
+    /// The file holds this source, and its mode lets nobody read it.
+    Forbidden(&'static str),
+}
+
+/// The mode that lets nobody read, write or run a file.
+#[cfg(unix)]
+const UNREADABLE_MODE: u32 = 0o000;
+
+/// Takes every permission off the file at `path`.
+///
+/// The probe then reads the file back and requires the read to FAIL. A user the
+/// mode does not bind opens the file whatever its mode says, and a probe that
+/// skipped this check would measure a readable file while stating it measured
+/// an unreadable one.
+#[cfg(unix)]
+fn forbid_probe_read(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(UNREADABLE_MODE)).unwrap();
+    assert!(
+        std::fs::read(path).is_err(),
+        "the probe must stage {} as a file this user cannot read",
+        path.display()
+    );
+}
+
+/// Answers the same on a platform this suite stages no mode on.
+///
+/// The probe that forbids a read stands under `#[cfg(unix)]`, so this arm is
+/// reached by no test and states that rather than staging a readable file.
+#[cfg(not(unix))]
+fn forbid_probe_read(path: &Path) {
+    panic!(
+        "a probe forbids a read on unix alone; {} stays readable here",
+        path.display()
+    );
+}
+
+/// Stages the refusing path `path` inside `repo`, the way `unreadable` states.
+fn stage_probe_unreadable(repo: &Path, path: &str, unreadable: &ShippedUnreadableFile) {
+    match unreadable {
+        ShippedUnreadableFile::Absent => {}
+        ShippedUnreadableFile::Undecodable(bytes) => stage_probe_bytes(repo, path, bytes),
+        ShippedUnreadableFile::Forbidden(source) => {
+            stage_probe_bytes(repo, path, source.as_bytes());
+            forbid_probe_read(&repo.join(path));
+        }
+    }
+}
+
+/// Drives the shipped script of `rule` over every file of `judged` and the
+/// path `path`, which refuses a reader the way `unreadable` states, and holds
+/// that run to two answers at one time: it reports exactly the `path:line` rows
+/// `expected` names, and it states ONE diagnostic that names `path`.
+///
+/// Both halves are the test, because each one alone passes a defect the other
+/// catches. A run that reports the rows and says nothing about `path` reads a
+/// file the tool never judged as a clean file. A run that states the diagnostic
+/// and loses the rows threw away every finding it did make, which is what a
+/// nonzero exit over a declined item costs.
+///
+/// `builtin/validators/README.md` states the channel the second half reads: a
+/// script that judged the code and could not judge ONE item writes a line
+/// opening `sah-diagnostic:` on stderr and still exits 0.
+fn verify_unreadable_file_is_declined(
+    project_types: &[&str],
+    rule: &str,
+    judged: &[(&str, &str)],
+    path: &str,
+    unreadable: &ShippedUnreadableFile,
+    expected: &[&str],
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+    let named: Vec<&str> = judged
+        .iter()
+        .map(|(file, _)| *file)
+        .chain(std::iter::once(path))
+        .collect();
+    let prepare = |repo: &Path| stage_probe_unreadable(repo, path, unreadable);
+    let staging = ShippedStaging {
+        prepare: &prepare,
+        ..ShippedStaging::of(judged)
+    };
+    let drive = |read: fn(&ScriptOutcome, &Path) -> Vec<String>| {
+        drive_shipped_script(&loader, rule, &staging, &named, read)
+            .expect("a script handed a path it cannot read must judge the rest and exit 0")
+    };
+
+    let reported = drive(finding_rows);
+    let declined = drive(script_diagnostics);
+
+    assert_eq!(
+        sorted_names(&reported),
+        sorted_names(&expected_script_findings(expected)),
+        "the run must report every finding of the files it could read, or one path it could \
+         not read throws away the work the run did do"
+    );
+    assert_eq!(
+        declined.len(),
+        1,
+        "the run must state the one path it declined; it stated {declined:?}"
+    );
+    assert!(
+        declined[0].contains(path),
+        "the diagnostic must name the path it declined; it said '{}'",
+        declined[0]
     );
 }
 
