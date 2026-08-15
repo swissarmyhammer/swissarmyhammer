@@ -184,6 +184,246 @@ fn the_shipped_dart_missing_docs_tool_rule_reads_only_the_package_library() {
     verify_shipped_staged_positions_report(&DART_MISSING_DOCS_POSITIONS_PROBE);
 }
 
+/// The head of the `@override` every Dart package-config probe stages, as the
+/// source writes it.
+///
+/// `public_member_api_docs` carves out a member that overrides a member the
+/// analyzer CAN resolve, so this line reports exactly when the run failed to
+/// resolve the framework the package depends on.
+const DART_OVERRIDE_HEAD: &str = "String build() =>";
+
+/// The head of the undocumented method every Dart package-config probe stages.
+///
+/// It overrides nothing, so it reports whether or not the run resolved the
+/// package. It is the control that tells a resolved run from a run that never
+/// reached the lint.
+const DART_UNDOCUMENTED_HEAD: &str = "void undocumented()";
+
+/// One application package of the Dart package-config probe, with the
+/// framework package it path-depends on.
+///
+/// The application library overrides a documented framework method and holds
+/// one undocumented method of its own, so the project's own analyzer reports
+/// the undocumented method alone.
+struct DartPackageConfigProbe {
+    /// The library file the work-list names, and its source.
+    changed: (String, String),
+
+    /// The framework package and the two manifests: every file the package
+    /// needs that the change did not touch.
+    support: Vec<(String, String)>,
+
+    /// The `.dart_tool/package_config.json` `dart pub get` writes, which is
+    /// the one file that resolves the framework import.
+    package_config: (String, String),
+}
+
+/// The package-config probe for the application package `name`.
+///
+/// Both packages stand under `packages/`, which is the layout of a Dart
+/// monorepo: `packages/<name>` is the application, `packages/<name>_framework`
+/// is the framework it path-depends on, and the package config of the
+/// application names the framework by a relative root.
+///
+/// Two probes built with different names share no package, no library and no
+/// package config, so a run that read one probe's config for the other
+/// probe's file could not resolve the import and would report the override.
+fn dart_package_config_probe(name: &str) -> DartPackageConfigProbe {
+    let framework = format!("{name}_framework");
+    DartPackageConfigProbe {
+        changed: (
+            format!("packages/{name}/lib/screen.dart"),
+            format!(
+                "import 'package:{framework}/{framework}.dart';\n\
+                 \n\
+                 /// A documented screen.\n\
+                 class Screen extends Widget {{\n\
+                 \x20 @override\n\
+                 \x20 String build() => 'screen';\n\
+                 \n\
+                 \x20 void undocumented() {{}}\n\
+                 }}\n"
+            ),
+        ),
+        support: vec![
+            (
+                format!("packages/{framework}/pubspec.yaml"),
+                format!("name: {framework}\n{DART_PROBE_ENVIRONMENT}"),
+            ),
+            (
+                format!("packages/{framework}/lib/{framework}.dart"),
+                DART_PROBE_FRAMEWORK_LIBRARY.to_string(),
+            ),
+            (
+                format!("packages/{name}/pubspec.yaml"),
+                format!(
+                    "name: {name}\n\
+                     {DART_PROBE_ENVIRONMENT}\
+                     dependencies:\n\
+                     \x20 {framework}:\n\
+                     \x20   path: ../{framework}\n"
+                ),
+            ),
+        ],
+        package_config: (
+            format!("packages/{name}/.dart_tool/package_config.json"),
+            format!(
+                "{{\n\
+                 \x20 \"configVersion\": 2,\n\
+                 \x20 \"packages\": [\n\
+                 \x20   {{ \"name\": \"{framework}\", \"rootUri\": \"../../{framework}\", \
+                 \"packageUri\": \"lib/\", \"languageVersion\": \"3.0\" }},\n\
+                 \x20   {{ \"name\": \"{name}\", \"rootUri\": \"../\", \
+                 \"packageUri\": \"lib/\", \"languageVersion\": \"3.0\" }}\n\
+                 \x20 ]\n\
+                 }}\n"
+            ),
+        ),
+    }
+}
+
+/// The SDK constraint every package of a Dart package-config probe declares.
+const DART_PROBE_ENVIRONMENT: &str = "environment:\n  sdk: '>=3.0.0 <5.0.0'\n";
+
+/// The framework library every Dart package-config probe stages. Every member
+/// of it is documented, so it contributes no finding of its own and the
+/// documentation of `build` is what carves out the override that answers it.
+const DART_PROBE_FRAMEWORK_LIBRARY: &str = concat!(
+    "/// A documented base class.\n",
+    "abstract class Widget {\n",
+    "  /// A documented base method.\n",
+    "  String build();\n",
+    "}\n",
+);
+
+/// Each `(path, source)` pair of `files` as the borrowed pair the shipped
+/// probe helpers take.
+fn borrowed_files(files: &[(String, String)]) -> Vec<(&str, &str)> {
+    files
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect()
+}
+
+/// The name of the one application package the two single-package Dart
+/// package-config acceptance tests stage.
+const DART_SINGLE_PACKAGE: &str = "app";
+
+/// Acceptance: the shipped Dart missing-docs tool rule reads the package
+/// config of the file it is given, so an `@override` of a resolved member
+/// stays silent, through the real `dart analyze` pipeline.
+///
+/// This is the half no fixture can reach. The doctor materializes a fixture as
+/// a loose file with no project around it, so no fixture can carry a
+/// dependency, and the override carve-out needs the analyzer to RESOLVE the
+/// overridden member.
+///
+/// The probe package holds two undocumented-looking members and they differ in
+/// one way: `build` overrides a documented framework method, and
+/// `undocumented` overrides nothing. Reporting the second alone states that
+/// the analyzer resolved the framework — the answer the project's own
+/// `dart analyze` gives. Reporting both is the answer a probe that declares no
+/// dependency gives, and it is the defect this test holds shut.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reads_the_package_config_of_the_file() {
+    let probe = dart_package_config_probe(DART_SINGLE_PACKAGE);
+    let (path, source) = &probe.changed;
+    let mut support = probe.support.clone();
+    support.push(probe.package_config.clone());
+    let expected = expected_row(path, source, DART_UNDOCUMENTED_HEAD);
+
+    verify_supported_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        &[(path.as_str(), source.as_str())],
+        &borrowed_files(&support),
+        &[&expected],
+        "the package config resolves the framework, so the override carries the \
+         documentation of the member it overrides and the undocumented method \
+         stands alone",
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule still reports when the
+/// package holds no package config, through the real `dart analyze` pipeline.
+///
+/// A project that has never run `dart pub get` or `flutter pub get` has no
+/// `.dart_tool/package_config.json` for the run to name. The run must not
+/// break there, and it must not fall silent either: a run that answered no
+/// finding would read exactly like a documented package.
+///
+/// So the run falls back to the probe package alone, which resolves nothing
+/// outside the file. The answer is a SUPERSET — the override reports beside
+/// the undocumented method — and this test holds both rows, so the fallback
+/// can never be mistaken for a clean file.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reports_the_override_with_no_package_config() {
+    let probe = dart_package_config_probe(DART_SINGLE_PACKAGE);
+    let (path, source) = &probe.changed;
+    let override_row = expected_row(path, source, DART_OVERRIDE_HEAD);
+    let undocumented_row = expected_row(path, source, DART_UNDOCUMENTED_HEAD);
+
+    verify_supported_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        &[(path.as_str(), source.as_str())],
+        &borrowed_files(&probe.support),
+        &[&override_row, &undocumented_row],
+        "with no package config to name, the framework does not resolve, the analyzer \
+         sees no override, and the run reports a superset rather than nothing",
+    );
+}
+
+/// The two application packages the Dart monorepo acceptance test stages.
+const DART_MONOREPO_PACKAGES: &[&str] = &["alpha", "beta"];
+
+/// Acceptance: the shipped Dart missing-docs tool rule reads one package
+/// config for each package of a monorepo, through the real `dart analyze`
+/// pipeline.
+///
+/// A monorepo holds one `.dart_tool/package_config.json` for each package, and
+/// `dart analyze` takes one `--packages` for one run. So the run groups the
+/// files it is given by the config that resolves them, and makes one probe
+/// package for each group.
+///
+/// Neither package's config names the other's framework. A run that read one
+/// config for both files would leave one framework unresolved and report that
+/// package's override, so the two rows this test names are what states that
+/// each file was read against its own package.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reads_one_package_config_for_each_package() {
+    let probes: Vec<DartPackageConfigProbe> = DART_MONOREPO_PACKAGES
+        .iter()
+        .map(|name| dart_package_config_probe(name))
+        .collect();
+    let named: Vec<(String, String)> = probes.iter().map(|probe| probe.changed.clone()).collect();
+    let support: Vec<(String, String)> = probes
+        .iter()
+        .flat_map(|probe| {
+            probe
+                .support
+                .iter()
+                .cloned()
+                .chain(std::iter::once(probe.package_config.clone()))
+        })
+        .collect();
+    let expected: Vec<String> = named
+        .iter()
+        .map(|(path, source)| expected_row(path, source, DART_UNDOCUMENTED_HEAD))
+        .collect();
+    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+
+    verify_supported_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        &borrowed_files(&named),
+        &borrowed_files(&support),
+        &expected,
+        "each file is read against the package config of its own package, so neither \
+         override reports",
+    );
+}
+
 /// The materialized name of the `missing-docs-go` fail fixture.
 const GO_MISSING_DOCS_FAIL_FIXTURE: &str = "missing-docs-go.fail.go";
 

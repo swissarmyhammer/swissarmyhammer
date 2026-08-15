@@ -1162,11 +1162,44 @@ fn verify_staged_rows_report(
     expected: &[&str],
     reason: &str,
 ) {
+    verify_supported_rows_report(
+        project_types,
+        rule,
+        staged,
+        NO_SUPPORT_FILES,
+        expected,
+        reason,
+    );
+}
+
+/// Drives the shipped script of `rule` over the files of `named`, with every
+/// file of `support` staged in the same repository and named by no argument,
+/// and holds the run to reporting exactly the `path:line` rows `expected`
+/// names.
+///
+/// The engine hands a `files`-scope script the files the change touched and no
+/// other, so a file the tool needs in order to RESOLVE the change — a
+/// manifest, a lock file, a package config — stands in `support`. A probe that
+/// named such a file would state a run the engine never makes, and the script
+/// would take a file of another language as a file to judge.
+fn verify_supported_rows_report(
+    project_types: &[&str],
+    rule: &str,
+    named: &[(&str, &str)],
+    support: &[(&str, &str)],
+    expected: &[&str],
+    reason: &str,
+) {
     let loader = builtin_loader();
     require_tool_installed(&loader, project_types, rule);
-    let staged_files: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+    let named_files: Vec<&str> = named.iter().map(|(path, _)| *path).collect();
+    let staged: Vec<(&str, &str)> = named
+        .iter()
+        .copied()
+        .chain(support.iter().copied())
+        .collect();
 
-    let reported = shipped_script_findings(&loader, rule, staged, &staged_files)
+    let reported = shipped_script_findings(&loader, rule, &staged, &named_files)
         .expect("a script given its own files must judge them and exit 0");
 
     assert_eq!(
