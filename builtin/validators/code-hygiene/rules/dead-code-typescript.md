@@ -212,7 +212,19 @@ tool:
         (cd "$dir" && ts-prune -p tsconfig.json --ignore "$entries" --skip '$^') |
           grep -v ' (used in module)$' |
           grep -v '\.d\.ts:' |
-          sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#${prefix}\1:\2: unused export '\3'; nothing in the project imports it#p"
+          sed -n "s#^\([^:]*\):\([0-9]*\) - \(.*\)\$#\1:\2: unused export '\3'; nothing in the project imports it#p" |
+          while IFS= read -r finding; do
+            # The same reading `reportedAs` above makes. ts-prune writes a path
+            # relative to its own working directory for a file INSIDE the
+            # project, and the absolute path less its leading separator for a
+            # file outside it. The project's path completes the first spelling,
+            # and the separator the presenter cut gives the second one back.
+            if [ -f "$dir/${finding%%:*}" ]; then
+              printf '%s%s\n' "$prefix" "$finding"
+            else
+              printf '/%s\n' "$finding"
+            fi
+          done
       done | sort -u
   doctor:
     check_command: "which ts-prune tsc node find grep sed sort mktemp"
@@ -487,7 +499,9 @@ and every `.mdx` page takes from `fumadocs-ui` instead. Three are members of the
 `StandardSchemaV1` namespace in `packages/zod/src/v4/core/standard-schema.ts` —
 `Types` at 86, `InferInput` at 89 and `InferOutput` at 92. This rule reports none
 of the 4. The one export it does report in that second file,
-`StandardSchemaWithJSON` at 157, is the one finding with the corrupted path.
+`StandardSchemaWithJSON` at 157, was the one finding with the corrupted path,
+and the hand-check counted it wrong for that path alone. "How the run is shaped"
+below states the change that gave it the path it stands at.
 
 knip names 6 members of that ONE namespace, and the tables above split them: 3
 are counted genuinely dead and 3 are counted false positives. **The criterion is
@@ -575,9 +589,11 @@ The last row is why the swap would NOT have answered the open card about this
 rule answering zero for a tool that broke. Both tools are silent for that shape,
 and a fail-closed test has to read stderr either way.
 
-What the swap WOULD have fixed is the path defect: knip runs once at the
-workspace root and writes each path relative to it, so the per-project prefix
-arithmetic this rule performs has no counterpart at all.
+The swap would have taken the path defect away structurally: knip runs once at
+the workspace root and writes each path relative to it, so the per-project
+arithmetic this rule performs has no counterpart at all. This rule answers that
+one by reading ts-prune's two spellings apart, and "How the run is shaped"
+states the measurement.
 
 `ts-prune` being archived is a real risk and it is not answered by keeping it.
 The successor is named, the corpus is kept, and the tables above are directly
@@ -691,10 +707,52 @@ the code.
 
 The scope is `workspace` because "nothing imports it" is a whole-project
 question. The script finds every `tsconfig.json` outside `node_modules`, runs the
-tool in that project's own directory, and puts the project's path back on the
-front of each finding. That is how a monorepo whose root carries no
-`tsconfig.json` still gets checked. The engine keeps only the findings in the
-changed files.
+tool in that project's own directory, and rebuilds each finding at the path the
+file stands at. That is how a monorepo whose root carries no `tsconfig.json`
+still gets checked. The engine keeps only the findings in the changed files.
+
+### The path each finding is rebuilt at
+
+ts-prune's presenter writes
+`result.file.replace(process.cwd(), "").replace(/^\//, "")`. A file INSIDE the
+project therefore comes back relative to the project, and a file the program
+reaches from OUTSIDE it comes back as the whole ABSOLUTE path less its leading
+separator. The run reads the two spellings apart: the project's path completes a
+relative one, and the separator the presenter cut gives an absolute one back.
+`reportedAs` in the node script makes that same reading for the entry carve-out,
+and the two have to agree or the `--ignore` pattern would name a spelling the
+pipe never writes.
+
+Putting the project's path in front of BOTH spellings names a file that stands
+nowhere. The engine keeps a workspace-scope finding only when its path meets a
+file of the run, so such a finding is dropped without a word — a silent miss
+rather than a wrong finding. Measured over the corpus with the dependencies
+installed:
+
+| workspace | findings | naming a file that is nowhere, before | after |
+|---|---|---|---|
+| zod | 76 | 1 | 0 |
+| zustand | 1 | 0 | 0 |
+| redux | 6 | 0 | 0 |
+
+The count does not move, and one more finding of zod's 76 now reaches the
+author. It is `packages/zod/src/v4/core/standard-schema.ts:157`
+`StandardSchemaWithJSON`, which `packages/bench` reaches: that project's program
+holds `packages/zod/src`, and the run wrote
+`packages/bench/<the absolute path of the checkout>/packages/zod/src/…` for it.
+
+One leak is what the entry carve-out leaves. With the carve-out off, the same
+project reaches `packages/zod/src/index.ts` as well, and its 284 findings carry
+the same corrupted spelling — 285 of that run's 1944 rows. Every one of the 284
+stands in a module the package publishes, so the carve-out already silences
+them, and the shipped run leaks the one finding that stands outside a published
+module.
+
+The acceptance test
+`the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project_directory`
+holds both spellings over a probe repository, and holds the outside module
+through the engine as well, where the run answered NO finding before this
+change.
 
 `tsc --showConfig` is what reads the tsconfig, because `paths` usually stands in
 a file the project EXTENDS: `redux` writes its table in `tsconfig.base.json`, and
@@ -729,12 +787,17 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The six acceptance tests in
+move neither count. The seven acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
 
 It cannot hold the module-level claim either. A fixture directory is flat and
 every fixture stands in the same program, so no fixture can be a module NOTHING
-imports while another is the entry that spares it. The sixth acceptance test
+imports while another is the entry that spares it. The acceptance test
+`the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_nothing_imports`
 stages that shape as a probe repository, and it is the test that pins the
 property the knip decision turned on.
+
+Nor can it hold the path arithmetic. A fixture stands loose in one directory, so
+no fixture is a module one project reaches from outside itself. The acceptance
+test named in "How the run is shaped" stages a second package for that.

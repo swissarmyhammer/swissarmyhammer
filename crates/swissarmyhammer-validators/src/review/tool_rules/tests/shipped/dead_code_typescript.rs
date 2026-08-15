@@ -332,6 +332,104 @@ const TYPESCRIPT_TESTS_OUT_OF_PROGRAM_PROBE: ShippedStagedTree = ShippedStagedTr
              and the export only a test imports then reports",
 };
 
+/// Where the tsconfig of the consumer project stands, as the work-list holds
+/// it.
+const TYPESCRIPT_CONSUMER_TSCONFIG_PATH: &str = "packages/consumer/tsconfig.json";
+
+/// Where the module INSIDE the consumer project stands, as the work-list holds
+/// it.
+const TYPESCRIPT_CONSUMER_LIB_PATH: &str = "packages/consumer/src/lib.ts";
+
+/// Where the module OUTSIDE the consumer project stands, as the work-list
+/// holds it.
+const TYPESCRIPT_OUTSIDE_LIB_PATH: &str = "packages/shared/src/lib.ts";
+
+/// A tsconfig whose program reaches a module OUTSIDE the project directory.
+///
+/// `include` names the project's own sources beside the source directory of a
+/// package standing next to it. A monorepo writes that shape whenever one
+/// package's program reads another package's source, and `zod` writes it:
+/// `packages/bench` builds a program holding `packages/zod/src`.
+const TYPESCRIPT_OUTSIDE_MODULE_TSCONFIG: &str = concat!(
+    "{\n",
+    "  \"compilerOptions\": {\n",
+    "    \"target\": \"ES2021\",\n",
+    "    \"module\": \"ESNext\",\n",
+    "    \"moduleResolution\": \"bundler\",\n",
+    "    \"noEmit\": true,\n",
+    "    \"strict\": true,\n",
+    "    \"skipLibCheck\": true\n",
+    "  },\n",
+    "  \"include\": [\"src\", \"../shared/src\"]\n",
+    "}\n",
+);
+
+/// A probe whose one project reaches a module inside itself and a module
+/// outside itself.
+const TYPESCRIPT_OUTSIDE_MODULE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[
+            "packages/consumer/src/lib.ts:2",
+            "packages/shared/src/lib.ts:2",
+        ],
+    },
+    staged: &[
+        (
+            TYPESCRIPT_CONSUMER_TSCONFIG_PATH,
+            TYPESCRIPT_OUTSIDE_MODULE_TSCONFIG,
+        ),
+        (TYPESCRIPT_CONSUMER_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+        (TYPESCRIPT_OUTSIDE_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "ts-prune writes a path relative to the project for a file inside it and an \
+             absolute path for a file outside it, so the run may complete the first spelling \
+             alone",
+};
+
+/// The head the staged module of the outside-module probe carries: none. The
+/// POSITION is the whole of what this probe measures.
+const TYPESCRIPT_NO_HEAD: &[&str] = &[];
+
+/// The one position the work-list of the outside-module probe names: the module
+/// the program reaches from outside the project.
+const TYPESCRIPT_OUTSIDE_MODULE_POSITIONS: &[ShippedStagedFile] = &[ShippedStagedFile {
+    path: TYPESCRIPT_OUTSIDE_LIB_PATH,
+    head: TYPESCRIPT_NO_HEAD,
+}];
+
+/// The outside module, read through the whole engine rather than through the
+/// script alone.
+///
+/// The engine keeps a workspace-scope finding only when its path meets a file
+/// of the run, so a path that names no file is dropped without a word. This
+/// probe is what states that the finding reaches the author.
+///
+/// One position is named, and the module inside the project stands beside it as
+/// support, because the two findings reach the engine in the order `sort` puts
+/// their two spellings in and a locale decides that order.
+const TYPESCRIPT_OUTSIDE_MODULE_POSITIONS_PROBE: ShippedStagedPositions = ShippedStagedPositions {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[TYPESCRIPT_OUTSIDE_LIB_PATH],
+    },
+    prompt_rule: DEAD_CODE_PROMPT_RULE,
+    change_purpose: "one export nothing imports, in a module the project reaches from outside",
+    declarations: TYPESCRIPT_PROBE_LIB,
+    staged: TYPESCRIPT_OUTSIDE_MODULE_POSITIONS,
+    support: &[
+        (
+            TYPESCRIPT_CONSUMER_TSCONFIG_PATH,
+            TYPESCRIPT_OUTSIDE_MODULE_TSCONFIG,
+        ),
+        (TYPESCRIPT_CONSUMER_LIB_PATH, TYPESCRIPT_PROBE_LIB),
+    ],
+    reason: "a finding whose path names no file is dropped by the engine, so the outside \
+             module reports only when its path names the file it stands at",
+};
+
 /// Acceptance: an export the package manifest publishes is not dead.
 ///
 /// This is the `dead-code` carve-out for the exported public API. The manifest
@@ -418,4 +516,27 @@ fn the_shipped_typescript_dead_code_tool_rule_reads_the_program_the_project_stat
 #[test]
 fn the_shipped_typescript_dead_code_tool_rule_names_every_export_of_a_module_nothing_imports() {
     verify_shipped_tree_reports(&TYPESCRIPT_ORPHAN_MODULE_PROBE);
+}
+
+/// Acceptance: a module the program reaches from OUTSIDE the project directory
+/// is named at the path it stands at.
+///
+/// ts-prune cuts its own working directory off the front of each path it
+/// reports, and cuts one leading separator after that. A file INSIDE the
+/// project therefore comes back relative to the project, and a file outside it
+/// comes back as the whole absolute path less that separator. The run puts the
+/// project's path in front of the first spelling and must leave the second
+/// alone, which is the reading `reportedAs` in the rule's own node script
+/// already makes.
+///
+/// Measured over `zod` at `4e1720c` with the dependencies installed: 1 of the
+/// 76 findings named `packages/bench/<the absolute path of the checkout>/
+/// packages/zod/src/v4/core/standard-schema.ts`, a file that stands nowhere.
+/// The engine keeps a workspace-scope finding only when its path meets a file
+/// of the run, so that finding was dropped without a word — a silent miss
+/// rather than a wrong finding.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project_directory() {
+    verify_shipped_tree_reports(&TYPESCRIPT_OUTSIDE_MODULE_PROBE);
+    verify_shipped_staged_positions_report(&TYPESCRIPT_OUTSIDE_MODULE_POSITIONS_PROBE);
 }
