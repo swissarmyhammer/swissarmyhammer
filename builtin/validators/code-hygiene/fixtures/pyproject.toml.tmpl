@@ -1,0 +1,16 @@
+# The package manifest of the fixture directory.
+#
+# `dead-code-python` reads the entry points a manifest states, because an entry
+# point names an object a packaging tool calls from outside the tree. The
+# passing fixture holds `published_command` and this manifest names it; the
+# failing fixture holds `unpublished_command` and no manifest names that one.
+#
+# Only the object after the colon is read, so the module spelling here never
+# has to import.
+
+[project]
+name = "code-hygiene-fixtures"
+version = "0.0.0"
+
+[project.scripts]
+dead-code-python = "dead_code_python:published_command"

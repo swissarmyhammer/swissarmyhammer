@@ -7,7 +7,9 @@ one. A tool upgrade that stops reporting a kind makes the doctor mark the rule
 unusable.
 
 The module declares no `__all__`, so nothing here is the module's exported
-surface and vulture sees every caller these names could have.
+surface and vulture sees every caller these names could have. No manifest names
+`unpublished_command`, and `TestFailCase` inherits from nothing a test runner
+loads, so neither carries a caller outside this tree either.
 """
 
 import json
@@ -46,6 +48,19 @@ def stops_early():
     """Return a value, then strand the statement below it."""
     return 4
     print("stranded")
+
+
+def unpublished_command():
+    """A function no entry point of any manifest names."""
+    return 5
+
+
+class TestFailCase:
+    """A class named like a test case that no test runner loads."""
+
+    def check_nothing(self):
+        """A method nothing calls, under a class nothing loads."""
+        return 6
 
 
 def dead_code_fail_root():

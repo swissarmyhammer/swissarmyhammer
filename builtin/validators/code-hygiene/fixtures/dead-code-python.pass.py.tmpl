@@ -7,11 +7,16 @@ reports one anyway makes the doctor mark the rule unusable.
 The comment beside each marker names the change that lands the consumer, which
 is what tells a reader staged work from a leftover.
 
-The module's own root is exempt the other way: `__all__` names it, which is how
-Python declares an exported surface whose callers live outside the module.
+Three names here carry no marker, because the workspace already states that
+each one has a caller outside this tree. `__all__` names the module's own root,
+which is how Python declares an exported surface. `pyproject.toml` names
+`published_command` as an entry point, which is how a package declares an
+object a packaging tool calls. `PassCase` inherits from `unittest.TestCase`,
+which is how a module declares a class the test runner loads.
 """
 
 import json  # noqa: V104  the first caller lands in the next change
+import unittest
 
 __all__ = ["dead_code_pass_root"]
 
@@ -49,6 +54,23 @@ def stops_early():
     """Return a value, then strand the statement below it."""
     return 4
     print("staged")  # noqa: V201  the guard above it lands in the next change
+
+
+def published_command():
+    """A function the manifest of this directory names as an entry point."""
+    return 5
+
+
+class PassCase(unittest.TestCase):
+    """A class the test runner loads, because it inherits from `TestCase`."""
+
+    def test_nothing(self):
+        """A test the runner calls by name.
+
+        It reads no name of this module, so `published_command` above keeps
+        the manifest as its only stated caller.
+        """
+        self.assertIsNone(None)
 
 
 def dead_code_pass_root():

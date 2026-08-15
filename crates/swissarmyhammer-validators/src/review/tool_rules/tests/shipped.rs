@@ -27,6 +27,7 @@ mod complexity_rust;
 mod complexity_swift;
 mod complexity_typescript;
 mod dead_code;
+mod dead_code_python;
 mod dead_code_rust;
 mod dead_code_swift;
 mod dead_code_typescript;

@@ -1,8 +1,64 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffb780
+comments:
+- actor: claude-code
+  id: 01m01c4z6by7f38w58hkx7p67p
+  text: |-
+    Research done. Corpus cloned to the scratchpad and measured. Four findings change the plan.
+
+    **1. vulture 2.14 already reads TWO of the three facts, not one.** `core.py` shows it:
+    - `_assigns_special_variable__all__` accepts a LIST **or a TUPLE**, so `psf/requests`, which states a tuple `__all__`, IS read. The rule body's claim that "neither library declares in `__all__`" is wrong for requests.
+    - `_add_aliases` does `if alias is not None: self.used_names.add(name_and_alias.name)`. Any aliased import marks the name used, so the PEP 484 explicit re-export `from .views import MethodView as MethodView` is already read. Probe: a name behind the redundant alias is silent; the same name behind a plain import reports.
+    - `_ignore_import` drops every import in an `__init__.py`.
+    - `_ignore_class` drops a class with `Test` in its name IN a test file; `_ignore_function`/`_ignore_method` drop `test_*` and the pytest setup names there.
+
+    So a whitelist naming `__init__.py` re-exports moves ZERO findings. Measured 100 -> 100 over the two package directories.
+
+    **2. The one surface fact vulture does NOT read is the entry point.** Probe: a function named in `[project.scripts]` still reports. That is the gap the run has to close.
+
+    **3. The rule body's 118/114/100 table was measured over the two PACKAGE DIRECTORIES, not the repositories.** Reproduced exactly: `src/requests` + `src/flask` copied side by side gives 100 findings with the shipped flags, and `MethodView`, `HTTPDigestAuth`, `get_namespace`, `iter_lines` and `from_key_val_list` are all in it. Over the WHOLE repositories the same names are silent, because each library's own tests are callers. Whole-repo counts at the pinned commits: requests 89, flask 105, fastapi 1318, django 3255.
+
+    **4. Carve-out 2 is the big one.** Decorators on the reported items: fastapi has 685 `@*.get`, 277 `@*.post`, 37 `@*.put`, 27 `@*.websocket`, 11 `@*.exception_handler`; django has 57 `@*.register_lookup`, 50 `@*.tag`, 23 `@receiver`, 21 `@*.display`, 19 `@*.filter`.
+
+    Carve-out 3's stated gaps do not appear in the corpus: 0 `Test*` class findings over 4184 `.py` files, and no repo writes a bare `from pytest import fixture`. Vulture's native test-file handling covers them. The residue is a TestCase subclass OUTSIDE a test file, which the run can close by reading the class statement.
+
+    Tool survey (real installs, same probe): `dead` 2.1.0 reads entry points but only from `setup.py`/`setup.cfg`, never `pyproject.toml`, where all four corpus repos state theirs; it also needs `git ls-files` and has no decorator lever. `deadcode` 2.4.1 reads `__all__` but NOT the re-export alias, and it crashes on Python 3.14. `ruff` has no cross-module unused-symbol rule at all. vulture stays.
+  timestamp: 2026-08-15T00:11:35.499342+00:00
+- actor: claude-code
+  id: 01m01d46e8xqc5273c1fr5hv0m
+  text: |-
+    Implementation landed. The decision on the public-surface carve-out follows ^108bh4y: read the facts the package states, and add no marker to correct code.
+
+    **The decision.** Python states its surface in three places. Vulture 2.14 already reads two of them — `__all__` as a list or a tuple, and the PEP 484 explicit re-export `from .m import N as N` — and the rule body now states both with the `core.py` function that reads each and a probe that proves it. The one fact vulture reads nowhere is the ENTRY POINT, so the run reads that: `[project.scripts]`, `[project.gui-scripts]` and every `[project.entry-points]` group of each `pyproject.toml`, `[options.entry_points]` of each `setup.cfg`, and the `entry_points=` literal of each `setup.py`, written into a vulture whitelist module. No marker is demanded of any correct name.
+
+    **A defect the entry-point probe uncovered.** Vulture reads `[tool.vulture]` out of the project's own `pyproject.toml` and merges it UNDER the command line, so any option the run did not state was the project's. Measured over a probe holding one dead function: `ignore_names = ["*"]` reported 0 at exit 0; `min_confidence = 100` beside `make_whitelist = true` reported 0 at exit 0; and a `pyproject.toml` that is not TOML at all made vulture exit 1 on a traceback, which the pipe read as a clean tree. The run now writes a `[tool.vulture]` table of its own and passes `--config`, states `--min-confidence 60`, and became a script that accepts vulture's status 0 and 3 and breaks on anything else.
+
+    **Whole-corpus before and after**, each repository read as a workspace:
+
+    | repository | commit | .py | before | after | dropped |
+    |---|---|---|---|---|---|
+    | psf/requests | 8068356 | 37 | 89 | 89 | 0 |
+    | pallets/flask | 2a8a38b | 83 | 105 | 98 | 7 |
+    | fastapi/fastapi | a1fa70d | 1136 | 1318 | 272 | 1046 |
+    | django/django | 3436cf9 | 2928 | 3255 | 2952 | 303 |
+    | this workspace's Python | HEAD | 3 | 11 | 11 | 0 |
+
+    flask's 7 are route handlers under `@app.get` / `@app.post` inside its own tests — Flask 3's HTTP-method shortcuts, which the old `@*.route` never covered. fastapi's 1046 are 775 in `tests/` and 271 in `docs_src/`. django's 303 are 147 classes, 120 functions, 34 methods and 2 properties under the Django registration roster.
+
+    The old table's 100 reproduces exactly over `src/requests` + `src/flask` side by side, and stays 100 after the change, because `MethodView`, `HTTPDigestAuth`, `get_namespace`, `iter_lines` and `from_key_val_list` are stated nowhere. The rule body says so plainly and names the three answers an author has.
+
+    TDD: watched the fixture pair go RED first (the pass fixture reported exactly 2: `published_command` and `PassCase`), then the acceptance tests RED (4 of 6 failed with the expected diffs; the two facts vulture already reads passed from the start, which is the point of that test).
+  timestamp: 2026-08-15T00:28:38.728527+00:00
+- actor: claude-code
+  id: 01m01d4dv21jn2y787erhg5sep
+  text: |-
+    ### implement — changed
+    - evidence: 6 files — builtin/validators/code-hygiene/rules/dead-code-python.md, builtin/validators/code-hygiene/fixtures/pyproject.toml.tmpl (new), builtin/validators/code-hygiene/fixtures/dead-code-python.fail.py.tmpl, builtin/validators/code-hygiene/fixtures/dead-code-python.pass.py.tmpl, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_python.rs (new), crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/temp_directory.rs. `cargo nextest run -p swissarmyhammer-validators` 749/749 pass; `-p mirdan -p swissarmyhammer-cli` 1224/1224 pass; `cargo fmt --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - next: /review
+  timestamp: 2026-08-15T00:28:46.306179+00:00
+position_column: doing
+position_ordinal: '8280'
 title: dead-code-python reports a package's whole public API when it declares no __all__
 ---
 `builtin/validators/code-hygiene/rules/dead-code-python.md` runs `vulture` and declares `supersedes: [dead-code]`.
