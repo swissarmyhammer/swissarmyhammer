@@ -207,10 +207,32 @@ comments:
 
     WHAT A HUMAN MUST CHECK BY HAND. No validator declares a `*.md` glob, so the engine reads none of the rule body. By hand: (1) the node program in the front matter, above all `placeFindings` and `reportedPath`; (2) the rewritten "The path each finding is reported at" section, which drops the four-shape table and makes no exhaustive claim about path shapes — it names one shape, `packages/consumersrc`, as an example; (3) the corpus table caption stating which rows were measured under which placement.
   timestamp: 2026-08-15T17:42:00.424639+00:00
+- actor: claude-code
+  id: 01m0394z7x6tp1wbzh29e8v623
+  text: |-
+    ### implement — changed
+    - evidence: 4 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_swift.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs. New acceptance test `the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_declines_out_loud` reads the DIAGNOSTIC; watched RED (`[]` against 1) on the shipped bytes, then GREEN. `..._names_no_file_that_is_not_the_file_of_the_finding` lost the tsconfig drop row from `expected`, RED then GREEN. All four review findings flipped to `- [x]` under the re-scope.
+    - next: /test
+
+    ### test — green
+    - evidence: `cargo nextest run --workspace`: 14233 run, 14233 passed, 0 skipped. `cargo nextest run -p swissarmyhammer-validators`: 756 run, 756 passed. `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+    - next: /commit
+
+    ### commit — changed
+    - evidence: ba36dc365 fix(validators): place dead-code-typescript findings from the program file list (^yxky1aj); d7c34df97 docs(validators): correct the dead-code-typescript timing claim and three unconditional ones (^yxky1aj)
+    - next: /review
+
+    ### review — clean
+    - evidence: engine `review sha ba36dc365~1..d7c34df97` reported 0 findings over 3 files, 9 validator runs attempted, 0 failed, 0 skipped. No validator declares a `*.md` glob, so the engine read none of the rule body.
+    - checked by hand, and the two it caught are FIXED in d7c34df97 rather than carried: (1) `6.2 s against 7.3 s` compared a COLD run of the old script with a warm run of the new one and read as the new placement being faster; re-measured, lowest of three runs each, 5.6 s before and 6.3 s after, and the body now states the 0.7 s the second `tsc` call costs. (2) Three claims were wider than the code — the placement premise (ts-prune builds its program from the same `tsconfig.json` `tsc` read), the ways a count can fall (`sort -u` collapsing a pair the earlier spelling held apart, beside a declined item), and "three things reach that line" (three reasons the PLACEMENT states an item; the entry job writes on the same channel).
+    - checked by hand and confirmed: the example diagnostic in the rule body is byte-for-byte the line the shipped script writes over the sibling-prefix tree; the `sah-diagnostic:` contract against `builtin/validators/README.md`; the workspace retain in `tool_rules.rs` reaching `outcome.findings` alone; the nine acceptance tests still nine; `doctor.check_command` still names every command the script runs.
+    - NOT self-certified: the rule body is 1000 lines the engine cannot read, and every round of this card found something there by hand. The card stays in `review` for that reading rather than going to done.
+    - next: a human reads the rule body — the node program in the front matter, "The path each finding is reported at", and the corpus table caption.
+  timestamp: 2026-08-15T17:57:38.685865+00:00
 depends_on:
 - 01M034AGX0RXH2RCCPPM6BA1BF
-position_column: doing
-position_ordinal: '8280'
+position_column: review
+position_ordinal: '80'
 title: dead-code-typescript prefixes a project path onto an absolute path, so the finding names a file that is nowhere
 ---
 `builtin/validators/code-hygiene/rules/dead-code-typescript.md` runs `ts-prune` inside each project directory and puts the project's path back on the front of every finding.
