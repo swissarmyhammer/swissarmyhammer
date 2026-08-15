@@ -272,6 +272,8 @@ mod tests {
         "complexity-go.pass.go.tmpl",
         "function-length-go.fail.go.tmpl",
         "function-length-go.pass.go.tmpl",
+        "function-length-dart.fail.dart.tmpl",
+        "function-length-dart.pass.dart.tmpl",
         "stuttering-name-go.fail.go.tmpl",
         "stuttering-name-go.pass.go.tmpl",
     ];

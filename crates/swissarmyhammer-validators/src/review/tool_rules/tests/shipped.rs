@@ -31,6 +31,7 @@ mod dead_code_python;
 mod dead_code_rust;
 mod dead_code_swift;
 mod dead_code_typescript;
+mod function_length_dart;
 mod function_length_go;
 mod magic_numbers;
 mod missing_docs;

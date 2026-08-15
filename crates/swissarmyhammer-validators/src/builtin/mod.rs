@@ -323,6 +323,7 @@ mod tests {
         ),
         ("complexity-go", &["cognitive-complexity"]),
         ("function-length-go", &["function-length"]),
+        ("function-length-dart", &["function-length"]),
     ];
 
     /// `code-hygiene` carries exactly its prompt rules plus its tool rules, and

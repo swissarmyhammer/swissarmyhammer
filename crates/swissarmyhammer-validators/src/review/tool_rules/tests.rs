@@ -317,14 +317,23 @@ const GO_COMPLEXITY_RULE: &str = "complexity-go";
 /// generated-code carve-out golangci-lint makes for itself.
 const GO_FUNCTION_LENGTH_RULE: &str = "function-length-go";
 
+/// The shipped function-length tool rule for Dart. `dart_code_linter` computes
+/// a `source-lines-of-code` metric that counts the code lines the prompt rule
+/// defines, and takes its gate as a command-line flag. It carries the length
+/// gate alone: Dart keeps the `cognitive-complexity` prompt rule, because the
+/// same tool's complexity and nesting metrics each report a large population
+/// of the shapes that rule carves out. `VALIDATOR.md` records the survey.
+const DART_FUNCTION_LENGTH_RULE: &str = "function-length-dart";
+
 /// Every shipped complexity tool rule, with the project type it serves and
 /// the prompt rules it supersedes.
 ///
 /// This is the one roster whose rows do not share a `supersedes` list. One
 /// run decides both gates for Rust, TypeScript and Swift, so those rules
 /// replace both prompt rules; Python and Go name one tool for each gate, so
-/// each takes one rule for each. Dart keeps the `complexity` probe and both
-/// prompt rules, because its only metrics tool is commercial.
+/// each takes one rule for each. Dart takes the LENGTH gate alone, and keeps
+/// the `complexity` probe and the `cognitive-complexity` prompt rule, because
+/// no Dart metric reproduces either of that rule's two gates.
 const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     (
         "rust",
@@ -353,6 +362,11 @@ const SHIPPED_COMPLEXITY_RULES: &[(&str, &str, &[&str])] = &[
     ),
     ("go", GO_COMPLEXITY_RULE, SUPERSEDES_COGNITIVE_COMPLEXITY),
     ("go", GO_FUNCTION_LENGTH_RULE, SUPERSEDES_FUNCTION_LENGTH),
+    (
+        "flutter",
+        DART_FUNCTION_LENGTH_RULE,
+        SUPERSEDES_FUNCTION_LENGTH,
+    ),
 ];
 
 /// The builtin `manifests` set, the one that matches dependency manifests

@@ -155,11 +155,11 @@ each one belongs to `dart run custom_lint`, the command that rule runs:
 configuration, and a failed `dart pub get` would leave a clean-looking run. Both
 are recorded in the rule file.
 
-## Complexity and length: seven tool rules, and a probe that stays
+## Complexity and length: eight tool rules, and a probe that stays
 
 `cognitive-complexity` and `function-length` are two prompt rules over one
 concern — a function a reader cannot hold in their head. A linter decides both
-for the languages that have one, so seven tool rules supersede them.
+for the languages that have one, so eight tool rules supersede them.
 
 Three languages settle both gates in one run, so each of those rules names both
 prompt rules:
@@ -184,6 +184,10 @@ Two languages name one tool for each gate, so each takes one rule for each:
   through golangci-lint at `statements: 160`, the statement count 250 code lines
   of Go measures out to.
 
+Dart takes the LENGTH gate alone. `function-length-dart` runs
+`dart_code_linter` 4.2.0 at `--source-lines-of-code=250`, and no rule carries the
+branching gate for Dart. The survey below states why.
+
 A tool measures its own way, and three of the five complexity gates are the
 published Sonar cognitive complexity the `complexity` probe computes:
 `sonarjs/cognitive-complexity`, `gocognit` and `complexipy` are that algorithm,
@@ -205,13 +209,87 @@ charges a function for its nesting inside the one score. Swift drops it, because
 swiftlint's `nesting` rule measures nested type and function declarations rather
 than nested conditions.
 
-Dart takes no COMPLEXITY tool rule; see the rejection recorded below. It keeps
-the `complexity` probe and both prompt rules. Dart does take a magic-number tool
-rule, and the section above records it.
+Dart drops the branching gate whole, and the survey below states the
+measurement. That is the same shape of trade `complexity-swift` makes for
+nesting, one gate larger.
 
 The `complexity` probe stays. Dart, every other language, and every workspace
 whose tool doctor cannot find keep the probe and the prompt rules. That is the
 designed fallback, not a gap.
+
+### The complexity and length survey for Dart
+
+Dart was the last language with no gate of either kind, so the whole tool space
+was read before the verdict. Every measurement was taken on Dart SDK 3.11.0 with
+Flutter 3.41.2, over 3931 `.dart` files — `dart-lang/http` at `a9176ac`,
+`dart-lang/shelf` at `fb3f931` and `flutter/packages` at `a3e763e` — carrying
+63241 functions.
+
+Nothing in the stock toolchain measures either concern, and no preset can add
+one. **`dart analyze`** at SDK 3.11.0 has no metric layer at all; its nearest
+lint, `lines_longer_than_80_chars`, reads a line's WIDTH. **`lints` 6.1.0**,
+**`flutter_lints` 6.0.0**, **`very_good_analysis` 10.3.0**, **`lint` 2.8.0**,
+**`altive_lints` 4.1.0** and **`pedantic_mono` 1.38.1** are each a selection
+from those same SDK rules — the first four declare no dependency at all — so
+none of them can carry a check the SDK does not hold.
+
+Four tools DO compute the metrics, and one of the four is usable.
+
+- **`dart_code_metrics` 5.7.6** (2023-07-16) is discontinued, and it pins
+  `analyzer >=5.1.0 <5.14.0` against a current analyzer of 14.x.
+- **`dcm`** is its commercial successor. The rejection below still holds.
+- **`solid_lints` 0.3.3** carries `cyclomatic_complexity` and
+  `function_lines_of_code`, and its complexity rule is BROKEN. Its `run`
+  registers `addDeclaration` INSIDE the `addBlockFunctionBody` callback, so a
+  body's listener is added part way through the AST walk and then fires once for
+  every Declaration visited AFTER it, each time re-measuring the captured body.
+  Measured over one file holding five functions of 16 `if` statements: the first
+  reports 12 times, the second 10, the third 8, the fourth 6 and the fifth 4 —
+  the count is the number of declarations that follow, which is a fact about
+  file layout. The fatal row: a file whose ONLY declaration is one function of 20
+  `if` statements reports NOTHING, and adding `int trailing(int x) => x;` after
+  it makes the same function report. A dirty file reads as clean.
+- **`dart_code_linter` 4.2.0** (2026-08-11, Bancolombia, MIT) is the maintained
+  fork, on `analyzer >=10.0.0 <15.0.0`. It takes every threshold as a CLI flag,
+  writes JSON, and reports each function once. It is what `function-length-dart`
+  runs.
+
+Nothing outside the Dart ecosystem reaches it either. **lizard** has no Dart
+parser. **PMD** supports Dart for copy-paste detection alone and has no Dart
+rule engine. **scc**, **tokei** and **cloc** count lines per FILE and resolve no
+function boundary. **semgrep** matches patterns and aggregates no metric.
+**SonarQube**'s Dart analyzer does compute cognitive complexity, and it needs a
+server and `sonar-scanner`.
+
+So one tool computes all three metrics. `source-lines-of-code` is taken, and the
+other two are rejected on what they measure.
+
+**`cyclomatic-complexity` — rejected.** `cognitive-complexity` exempts
+"Configuration parsing with many options, where the score comes from a long flat
+list of simple cases rather than from nesting", and Dart's dominant idioms ARE
+that list: a `copyWith` of N optional parameters writes N `??` operators, an `==`
+writes N `&&`, and a `lerp` writes N ternaries. Cyclomatic complexity charges one
+for each. At the gate of 15 the corpus reports 356 findings outside test files,
+and **188 of them stand at nesting level 2 or less** — `InputDecoration.copyWith`
+scores 59 at nesting 1 and is 59 named parameters each defaulted with `??`,
+`ThemeData.==` scores 85, `DatePickerThemeData.lerp` 87. The published Sonar
+cognitive metric scores a sequence of `&&` once rather than once per operator, so
+it rates these near zero. No threshold separates them: the flat shapes run to
+149.
+
+**`maximum-nesting-level` — rejected.** The metric reads a widget tree three
+constructors deep as 1 and a collection literal four deep as 1, both correct, and
+it raises the depth by one for EVERY closure body. Dart is closure-heavy. The
+prompt rule's gate is CONDITION-nesting depth 4 or more; at that gate the corpus
+reports 229 findings outside test files and only 98 of them have a condition
+depth of 4 or more, so **131 of 229 come from closures rather than conditions**.
+34 have condition depth 0 or 1 — `_TabScaffoldExampleState.build` reaches level 6
+through nested builder callbacks with no condition at all.
+
+Under this set's contract a tool finding is a requirement, so either gate would
+make hundreds of suppressions mandatory on code the prompt rule calls correct.
+That is the trade `complexity-swift` refused for `switch` arms and
+`function-length-go` refused for test paths.
 
 ## Commented-out code: no tool rule, and the prompt rule as the whole answer
 
@@ -485,11 +563,16 @@ asks for. And the build is not a full one: measured on `Alamofire` at HEAD,
 `swift build --build-tests` takes 5 s warm and the scan itself 1 s, and the
 build is the project's own incremental cargo-equivalent, not a clean rebuild.
 
-### DCM — rejected, and this is why Dart has no complexity tool rule
+### DCM — rejected, and this is why Dart runs a fork rather than the product
 
-Dart's complexity and length metrics. It is the only Dart tool that computes
-them, and it is not one this set can ship, so Dart keeps the `complexity` probe
-and both prompt rules. That is a recorded verdict, not an oversight.
+Dart's complexity and length metrics. It is not a tool this set can ship.
+
+The claim this section used to open with — that DCM is the ONLY Dart tool that
+computes those metrics — is wrong as written. `dart_code_linter` 4.2.0 is a
+maintained MIT fork of the same code base, it is free, it needs no key, and
+`function-length-dart` runs it. The complexity survey above records that
+measurement, and it records why the two metrics beside `source-lines-of-code`
+are still rejected — on what they MEASURE, rather than on how they install.
 
 `dart_code_metrics` on pub.dev is discontinued at 5.7.6 and declares no
 replacement package; its homepage now points at `dcm.dev`, which is a commercial
