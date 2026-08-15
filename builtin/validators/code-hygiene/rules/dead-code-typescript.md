@@ -1222,8 +1222,20 @@ the engine answers the same failure for every nonzero status, and the text it
 hands on is the script's own stderr for a run that wrote any — this run writes
 the line above there. It answers a nonzero exit before it reads stdout at all as
 well, so the helper the test calls drives the run itself and reads all three
-facts off one output. That helper holds every breaking probe of every shipped
-rule to the same number. Row 3 is where the 0 findings carries the weight: a run
+facts off one output.
+
+How far that status assertion reaches was measured over every breaking probe the
+shipped acceptance tests carry. There are 37 of them, across 36 tests and 13
+shipped rules, and all 37 exit 1. Twenty are held to the NUMBER, over 7 rules:
+the 10 that call `verify_shipped_tree_breaks`, which the two probes above are
+two of, the 6 that call `verify_shipped_tree_breaks_without_run_of`, and the 4
+`function-length-rust` probes that call `verify_rust_function_length_breaks`.
+Each of those reads the status off the output of the run it drove. The other 17,
+over 10 rules, are held to the error text alone. They call
+`verify_shipped_run_breaks`, which drives the ENGINE rather than the script, and
+the engine keeps no status, so a script changed to exit 2 leaves those 17 green.
+
+Row 3 is where the 0 findings carries the weight: a run
 that broke and still wrote the readable project's row would pass the other two
 facts and state a measured tree.
 

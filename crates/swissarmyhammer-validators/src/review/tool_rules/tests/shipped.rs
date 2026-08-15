@@ -1212,7 +1212,49 @@ fn drive_shipped_staged_tree_read_with<T>(
 /// collapses every nonzero status into one [`ScriptFailure::Exit`] carrying
 /// [`command_failure_detail`], which is the script's own stderr for every run
 /// that wrote any.
+///
+/// HOW FAR THE ASSERTION REACHES, measured over every breaking probe the
+/// shipped acceptance tests carry. There are 37 of them across 36 tests and 13
+/// shipped rules, and all 37 were measured exiting 1 — the stubbed-`PATH`
+/// probes as well, because a script that reads the status of its own step
+/// states the broken run in its own words rather than handing the tool's 127
+/// on. TWENTY are held to this number, over 7 rules: the 10 that call
+/// [`verify_shipped_tree_breaks`], the 6 that call
+/// [`verify_shipped_tree_breaks_without_run_of`], and the 4 that call
+/// `verify_rust_function_length_breaks`. Each of those reads the status off the
+/// `Output` of the run it drove.
+///
+/// The other SEVENTEEN, over 10 rules, are NOT held to it. They call
+/// [`verify_shipped_run_breaks`], which drives [`execute_tool_runs`] rather
+/// than the script: the engine answers a [`ToolRunError`] carrying the detail
+/// alone and keeps no status, so those probes hold the error text and a script
+/// changed to exit 2 leaves them green.
 const BROKEN_RUN_EXIT_STATUS: i32 = 1;
+
+/// Holds a broken run to the two facts every probe that reads the script's own
+/// output holds it to: an error that names every fragment `expected` carries,
+/// and an exit of [`BROKEN_RUN_EXIT_STATUS`].
+///
+/// The STATUS is read off the run itself rather than off the error, and it is
+/// read as a number rather than as "nonzero". An error text separates a script
+/// that broke from no other shape: [`run_script`] answers the same
+/// [`ScriptFailure::Exit`] for every nonzero status, and its detail is the
+/// stderr alone for a script that stated its broken run there. So a script
+/// changed to exit 2 breaks its own rule's test only where this assertion
+/// reaches, and [`BROKEN_RUN_EXIT_STATUS`] states how far that is.
+fn assert_shipped_break(
+    failure: &ScriptFailure,
+    status: Option<i32>,
+    expected: &[&str],
+    reason: &str,
+) {
+    assert_shipped_failure_names(failure, expected);
+    assert_eq!(
+        status,
+        Some(BROKEN_RUN_EXIT_STATUS),
+        "a run that breaks must exit {BROKEN_RUN_EXIT_STATUS}: {reason}"
+    );
+}
 
 /// Holds the run of `probe` to breaking with an error that names every
 /// fragment the probe expects, to exiting [`BROKEN_RUN_EXIT_STATUS`], and to
@@ -1220,14 +1262,6 @@ const BROKEN_RUN_EXIT_STATUS: i32 = 1;
 ///
 /// A run that reports no finding and exits 0 over a tree the tool never judged
 /// reads exactly like a clean tree, so a broken run must state what broke.
-///
-/// The STATUS is read off the run itself rather than off the error, and it is
-/// read as a number rather than as "nonzero". An error text separates a script
-/// that broke from no other shape: [`run_script`] answers the same
-/// [`ScriptFailure::Exit`] for every nonzero status, and its detail is the
-/// stderr alone for a script that stated its broken run there. Every breaking
-/// probe of every shipped rule is held to the one number, so a script changed
-/// to exit 2 breaks its own rule's test.
 ///
 /// It must place nothing either. A run that wrote the rows of the part it DID
 /// judge and broke over the rest states findings for a tree half of which no
@@ -1243,13 +1277,7 @@ fn verify_shipped_tree_breaks(probe: &ShippedStagedTree) {
     } = drive_shipped_staged_tree_whole(probe, &[]);
     let failure = outcome.expect_err(probe.reason);
 
-    assert_shipped_failure_names(&failure, probe.run.expected);
-    assert_eq!(
-        status,
-        Some(BROKEN_RUN_EXIT_STATUS),
-        "a run that breaks must exit {BROKEN_RUN_EXIT_STATUS}: {}",
-        probe.reason
-    );
+    assert_shipped_break(&failure, status, probe.run.expected, probe.reason);
     assert!(
         placed.is_empty(),
         "a run that breaks must place no finding; it placed {placed:?}: {}",
@@ -1381,6 +1409,12 @@ fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
 ///
 /// [`verify_shipped_tree_breaks_without`] carries the rest of the contract: why
 /// the stub breaks for one run alone, and what `PATH` the caller must guard.
+///
+/// The stub exits [`COMMAND_NOT_FOUND_STATUS`], and the SHIPPED script is held
+/// to [`BROKEN_RUN_EXIT_STATUS`] all the same: a script that reads the status
+/// of its own step states the broken run in its own words rather than handing
+/// the tool's number on. Measured over every probe here, that is what each one
+/// does.
 #[cfg(unix)]
 fn verify_shipped_tree_breaks_without_run_of(
     probe: &ShippedStagedTree,
@@ -1408,10 +1442,12 @@ fn verify_shipped_tree_breaks_without_run_of(
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
     let _path = PathGuard::prepend(stubs);
 
-    let failure = drive_shipped_staged_tree_with(probe, &[(BROKEN_COMMAND_MARKER, "")])
-        .expect_err(probe.reason);
+    let ShippedScriptRun {
+        outcome, status, ..
+    } = drive_shipped_staged_tree_whole(probe, &[(BROKEN_COMMAND_MARKER, "")]);
+    let failure = outcome.expect_err(probe.reason);
 
-    assert_shipped_failure_names(&failure, probe.run.expected);
+    assert_shipped_break(&failure, status, probe.run.expected, probe.reason);
 }
 
 /// Drives the shipped script of `probe` two times over the same probe

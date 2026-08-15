@@ -144,6 +144,38 @@ fn rust_function_length_findings_under(manifest: &str, files: &[(&str, &str)]) -
     sorted_names(&reported)
 }
 
+/// Holds a run of the shipped Rust function-length script over `staged` to
+/// breaking with an error that names `fragment`, and to exiting
+/// [`BROKEN_RUN_EXIT_STATUS`].
+///
+/// The work-list names every staged path, and the status is read off the run
+/// itself. [`shipped_script_findings`] answers the engine's own `Result`, and
+/// that carries no number: the engine collapses every nonzero status into one
+/// failure whose text is the script's stderr. So a probe that holds this script
+/// to exit 1 rather than exit 2 drives the run whole and reads the status
+/// beside the error.
+fn verify_rust_function_length_breaks<'a>(
+    staged: &'a [(&'a str, &'a str)],
+    fragment: &str,
+    reason: &str,
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
+    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+
+    let ShippedScriptRun {
+        outcome, status, ..
+    } = drive_shipped_script_whole(
+        &loader,
+        RUST_FUNCTION_LENGTH_RULE,
+        &ShippedStaging::of(staged),
+        &paths,
+    );
+    let failure = outcome.expect_err(reason);
+
+    assert_shipped_break(&failure, status, &[fragment], reason);
+}
+
 /// The `path:line` entry [`shipped_script_findings`] answers a finding at row
 /// `row` of `path` with.
 ///
@@ -429,8 +461,6 @@ const RUST_BAD_MEMBER_LIB_PATH: &str = "bad/src/lib.rs";
 /// one that fills the findings file.
 #[test]
 fn the_shipped_rust_function_length_tool_rule_breaks_on_a_workspace_member_it_cannot_compile() {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
     let good = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let bad = format!(
         "{RUST_UNCOMPILABLE_SOURCE}{}",
@@ -443,15 +473,10 @@ fn the_shipped_rust_function_length_tool_rule_breaks_on_a_workspace_member_it_ca
         (RUST_BAD_MEMBER_MANIFEST_PATH, RUST_BAD_MEMBER_MANIFEST),
         (RUST_BAD_MEMBER_LIB_PATH, bad.as_str()),
     ];
-    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-
-    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
-        .expect_err("a workspace member the compiler refuses must break the run");
-
-    let detail = failure.to_string();
-    assert!(
-        detail.contains(RUST_UNLINTABLE_LINE),
-        "the run must break with '{RUST_UNLINTABLE_LINE}'; got '{detail}'"
+    verify_rust_function_length_breaks(
+        &staged,
+        RUST_UNLINTABLE_LINE,
+        "a workspace member the compiler refuses must break the run",
     );
 }
 
@@ -501,23 +526,16 @@ const RUST_BUILD_SCRIPT_BROKEN_LINE: &str =
 /// RAN, and that entry is what a broken build script leaves out.
 #[test]
 fn the_shipped_rust_function_length_tool_rule_breaks_on_a_build_script_that_breaks() {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
     let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_BUILD_SCRIPT_MANIFEST),
         (RUST_BUILD_SCRIPT_PATH, RUST_BROKEN_BUILD_SCRIPT),
         (RUST_PROBE_LIB_PATH, source.as_str()),
     ];
-    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-
-    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
-        .expect_err("a build script that breaks must break the run");
-
-    let detail = failure.to_string();
-    assert!(
-        detail.contains(RUST_BUILD_SCRIPT_BROKEN_LINE),
-        "the run must break with '{RUST_BUILD_SCRIPT_BROKEN_LINE}'; got '{detail}'"
+    verify_rust_function_length_breaks(
+        &staged,
+        RUST_BUILD_SCRIPT_BROKEN_LINE,
+        "a build script that breaks must break the run",
     );
 }
 
@@ -569,8 +587,6 @@ const RUST_BAD_MEMBER_BUILD_SCRIPT_PATH: &str = "bad/build.rs";
 /// the one that fills the findings file.
 #[test]
 fn the_shipped_rust_function_length_tool_rule_breaks_on_a_member_build_script_that_breaks() {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
     let source = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
         (RUST_PROBE_MANIFEST_PATH, RUST_TWO_MEMBER_ROOT_MANIFEST),
@@ -583,15 +599,10 @@ fn the_shipped_rust_function_length_tool_rule_breaks_on_a_member_build_script_th
         (RUST_BAD_MEMBER_BUILD_SCRIPT_PATH, RUST_BROKEN_BUILD_SCRIPT),
         (RUST_BAD_MEMBER_LIB_PATH, source.as_str()),
     ];
-    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-
-    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
-        .expect_err("a member build script that breaks must break the run");
-
-    let detail = failure.to_string();
-    assert!(
-        detail.contains(RUST_BUILD_SCRIPT_BROKEN_LINE),
-        "the run must break with '{RUST_BUILD_SCRIPT_BROKEN_LINE}'; got '{detail}'"
+    verify_rust_function_length_breaks(
+        &staged,
+        RUST_BUILD_SCRIPT_BROKEN_LINE,
+        "a member build script that breaks must break the run",
     );
 }
 
@@ -626,8 +637,6 @@ const RUST_GOOD_MEMBER_DENY_MANIFEST: &str = concat!(
 #[test]
 fn the_shipped_rust_function_length_tool_rule_breaks_on_a_broken_build_script_beside_a_denied_lint()
 {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, RUST_PROJECT_TYPES, RUST_FUNCTION_LENGTH_RULE);
     let good = long_rust_function(DENY_LEVEL_UNWRAP_LINE, LONG_PROBE_FUNCTION_NAME);
     let bad = long_rust_function("", LONG_PROBE_FUNCTION_NAME);
     let staged = [
@@ -644,15 +653,10 @@ fn the_shipped_rust_function_length_tool_rule_breaks_on_a_broken_build_script_be
         (RUST_BAD_MEMBER_BUILD_SCRIPT_PATH, RUST_BROKEN_BUILD_SCRIPT),
         (RUST_BAD_MEMBER_LIB_PATH, bad.as_str()),
     ];
-    let paths: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
-
-    let failure = shipped_script_findings(&loader, RUST_FUNCTION_LENGTH_RULE, &staged, &paths)
-        .expect_err("a build script that breaks must break the run, whatever else reported");
-
-    let detail = failure.to_string();
-    assert!(
-        detail.contains(RUST_BUILD_SCRIPT_BROKEN_LINE),
-        "the run must break with '{RUST_BUILD_SCRIPT_BROKEN_LINE}'; got '{detail}'"
+    verify_rust_function_length_breaks(
+        &staged,
+        RUST_BUILD_SCRIPT_BROKEN_LINE,
+        "a build script that breaks must break the run, whatever else reported",
     );
 }
 

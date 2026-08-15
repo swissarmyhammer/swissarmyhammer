@@ -293,6 +293,137 @@ comments:
     - No files changed by this step. Task left in `doing`. No commit made.
     - next: hand off to review.
   timestamp: 2026-08-15T22:07:21.855293+00:00
+- actor: claude-code
+  id: 01m03qtjzhfmt2c5qszanasatz
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (961943cae) — engine 0 findings over 1 file, 9 validators attempted, 2 `.kanban/` files excluded. Hand check of the changed prose: 1 finding — `builtin/validators/code-hygiene/rules/dead-code-typescript.md:1225`, same cause at `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1228-1230`.
+    - next: the exit-1 claim of the round before now HOLDS; the new claim "every breaking probe of every shipped rule" overshoots — the helper carries 10 probes of 5 rules, while `verify_shipped_tree_breaks_without_run_of` (6 sites) and `function_length_rust.rs:449,515,589,650` hold no status. Narrow the words, or hold those probes to `BROKEN_RUN_EXIT_STATUS` too. Task stays in `review`.
+  timestamp: 2026-08-15T22:14:07.089115+00:00
+- actor: claude-code
+  id: 01m03qw9jmz1k8g3znc17rs6jf
+  text: |
+    ### finish iteration 3 — findings
+    - implement: changed — 2 files (builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs). RED watched first with a sabotaged `exit 2`; the two older assertions PASSED on the sabotaged script, so the new status assertion is the only gate.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14240 passed, 0 failed, 0 skipped
+    - commit: 961943cae test(validators): tie the exit-1 fact to an assertion in shipped tests (^gxncs25)
+    - review: findings — 1 finding, builtin/validators/code-hygiene/rules/dead-code-typescript.md:1225 and the same claim at crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1228-1230. The engine answered 0 findings over 1 file with 9 validators attempted.
+    - detail: iteration 2's finding IS answered and holds. `ShippedScriptRun` carries `status: Option<i32>` off the same `Output`, and `verify_shipped_tree_breaks` asserts `Some(BROKEN_RUN_EXIT_STATUS)`. The new sentence overshoots: it states the helper holds "every breaking probe of every shipped rule" to the one number. The helper has 10 call sites over 5 rules. TEN OTHER breaking probes reach no status assertion — `verify_shipped_tree_breaks_without_run_of` carries six sites and asserts the name alone, and `function_length_rust.rs:449,515,589,650` call `shipped_script_findings(..).expect_err(..)` straight. `function-length-rust` changed to exit 2 keeps those four tests green.
+
+    ### Guardrail state — read before iteration 4
+
+    Three rounds, three findings, and they are NOT the same finding:
+
+    1. iteration 1 — `dead-code-typescript.md:1216`, the claim "holds rows 2 and 3" while the test never read the `0 findings` half. ANSWERED, holds.
+    2. iteration 2 — `dead-code-typescript.md:1217`, the claim "all three facts of each" while the `exit 1` fact reached no assertion. ANSWERED, holds.
+    3. iteration 3 — `dead-code-typescript.md:1225`, the claim "every breaking probe of every shipped rule" while ten breaking probes reach no status assertion.
+
+    Each round answers the round before it, and each round writes a NEW prose claim that reaches further than the assertions. The guardrail asks for the same file:line and the same message three times. That did not occur, so the loop continues.
+
+    The CAUSE is one thing: prose written wider than the code measured. Iteration 4 must measure the reach FIRST and then write the sentence to that measurement, rather than write the sentence and then look.
+    - next: iteration 4 works the open finding
+  timestamp: 2026-08-15T22:15:02.996154+00:00
+- actor: claude-code
+  id: 01m03rrxf1r2fxsf7mvrppr3qh
+  text: |-
+    Picked up for the open finding of the 2026-08-15 17:08 round. The guardrail entry says the cause is one thing: prose written wider than the code measured. So this round MEASURED FIRST and wrote the sentence last.
+
+    THE MEASUREMENT, taken before a single word was written.
+
+    `read_script_output` was temporarily instrumented with one `eprintln!` of `output.status.code()` on the nonzero branch — the one function EVERY breaking probe's run passes through, whatever helper drives it. Then `cargo nextest run -p swissarmyhammer-validators -E 'test(/shipped/) and test(/break/)' --no-capture`.
+
+    RESULT: 36 breaking tests, 37 broken script runs, and **all 37 answered exit status 1**. `grep -o 'SAHMEASURE status=...' | sort | uniq -c` answers one line: `37 SAHMEASURE status=Some(1)`. The instrumentation was reverted.
+
+    That includes the stubbed-`PATH` probes, which the round before guessed might answer another status. They do not. The stub exits 127, and the SHIPPED script reads the status of its own step and states the broken run in its own words at exit 1. So the 127 never reaches the script's own status.
+
+    THE ROSTER, counted mechanically rather than by eye. The finding named 20 sites. There are 37, because it did not know about a THIRD breaking family:
+
+    | the path | sites | rules | status held before | now |
+    |---|---|---|---|---|
+    | `verify_shipped_tree_breaks` | 10 | 5 | YES | YES |
+    | `verify_shipped_tree_breaks_without_run_of` | 6 | 5 | no | YES |
+    | `verify_rust_function_length_breaks` (was 4 straight `shipped_script_findings(..).expect_err(..)`) | 4 | 1 | no | YES |
+    | `verify_shipped_run_breaks` | 17 | 10 | no | no — see below |
+
+    10 + 6 + 4 + 17 = 37 sites across 36 tests, which is exactly the 37 runs measured. 13 shipped rules carry a breaking probe.
+
+    WHAT WAS DONE. The card's preferred branch — every probe exits 1, so extend the assertion — was taken for the two families the finding named:
+
+    1. `assert_shipped_break` is new, and holds a broken run to the named fragments AND `Some(BROKEN_RUN_EXIT_STATUS)`. `verify_shipped_tree_breaks` now calls it beside its own `placed.is_empty()`, so NO existing assertion was weakened.
+    2. `verify_shipped_tree_breaks_without_run_of` now drives `drive_shipped_staged_tree_whole` rather than `drive_shipped_staged_tree_with`, and calls `assert_shipped_break`. Six sites gain the number.
+    3. `verify_rust_function_length_breaks` is new in `function_length_rust.rs`. The four sites each carried the SAME copied 8-line block — `shipped_script_findings(..).expect_err(..)`, `failure.to_string()`, `assert!(detail.contains(..))` — and each now calls the one helper, which reads the status off the run's own `Output`. That removes the copy as well as the gap.
+
+    WHY THE 17 ARE NOT HELD, stated rather than papered over. `verify_shipped_run_breaks` drives `execute_tool_runs` — the ENGINE — and not the script. The engine answers a `ToolRunError` that carries the detail string alone and keeps no status at all; that is its documented contract and the whole reason `BROKEN_RUN_EXIT_STATUS` exists. Reading the number there needs either a second run of the same probe (which the iteration-2 round rejected: both halves must come off ONE output, and one of these probes takes 22 s) or a new status field on the engine's public `ToolOutcome`, which no card authorizes and which contradicts the contract the engine states. So the 17 keep the error text, and BOTH the rule prose and the `BROKEN_RUN_EXIT_STATUS` doc now say so in those words, with the counts.
+  timestamp: 2026-08-15T22:30:40.865162+00:00
+- actor: claude-code
+  id: 01m03rsmaavb19ea4eckzp4ht5
+  text: |-
+    RED WATCHED FIRST, and this round the gap was reproduced BEFORE the assertion was written rather than after.
+
+    STEP 1 — the defect, shown. The five `exit 1` statements in the `run:` block of `function-length-rust.md` were changed to `exit 2` (the file was copied aside first). Against the tests AS THEY STOOD:
+
+        Summary [1.480s] 6 tests run: 6 passed, 757 skipped
+
+    All six breaking tests of `function-length-rust` stayed GREEN on a script that exits 2. That is the finding's own sentence, reproduced: "`function-length-rust` changed to exit 2 on a broken build script keeps all four of those tests green."
+
+    STEP 2 — the assertions added, sabotage still in place. Same command:
+
+        Summary [1.488s] 6 tests run: 1 passed, 5 failed, 757 skipped
+
+    with each failure reading:
+
+        thread '...breaks_on_a_member_build_script_that_breaks' panicked at
+        crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1235:5:
+        assertion `left == right` failed: a run that breaks must exit 1: a member build
+        script that breaks must break the run
+          left: Some(2)
+         right: Some(1)
+
+    Five went RED for exactly the right reason. The five are the 4 straight sites plus `..._breaks_when_the_filter_cannot_read_the_report`, which is the `verify_shipped_tree_breaks_without` family.
+
+    The SIXTH, `..._breaks_on_a_workspace_it_cannot_compile`, still PASSED on the sabotaged script. It is a `verify_shipped_run_breaks` probe, and it is the boundary of the reach — so the RED run itself DEMONSTRATES the limit the new prose states, rather than the prose asserting it on trust.
+
+    STEP 3 — reverted. `git diff builtin/` answers 0 lines over the reverted state, so the `run:` block is byte-identical to HEAD. Re-run: 6 tests, 6 passed.
+
+    The only `.md` hunk of this change is `@@ -1222,8 +1222,20 @@` in `dead-code-typescript.md` — prose alone, no `run:` byte.
+
+    REQUIREMENT 4, THE WHOLE FILE. Every OTHER coverage claim in `dead-code-typescript.md` was re-checked against what its named test asserts, and each HOLDS. Nothing in `dead_code_typescript.rs` changed this round, and the one shared helper it uses, `verify_shipped_tree_breaks`, kept all three of its assertions.
+
+    - "thirteen acceptance tests" (twice: the fixture-pair section and the corpus section) — `grep -c '^#\[test\]'` answers 13.
+    - Every test the body names by its elided `..._` suffix EXISTS, checked one by one: `names_every_export_of_a_module_nothing_imports`, `keeps_its_own_gate_beside_a_project_config`, `reads_the_program_the_project_states`, `names_a_module_outside_the_project_directory`, `names_no_file_that_is_not_the_file_of_the_finding`, `says_the_finding_it_declines_out_loud`, `places_a_file_the_two_readings_spell_differently`, `says_the_file_outside_the_workspace_out_loud`, `says_the_manifest_it_could_not_read_out_loud`, `breaks_on_a_project_ts_prune_cannot_read` — 10 named, each one match.
+    - "Five acceptance tests hold this section" and "the five acceptance tests named in 'How the run is shaped'" name the same five, and all five exist.
+    - "holds rows 2 and 3 of the table above, all three facts of each" still HOLDS: `verify_shipped_tree_breaks` still asserts the named project, `Some(BROKEN_RUN_EXIT_STATUS)` and `placed.is_empty()`.
+    - The status tables and the three-tree table are MEASUREMENTS of the shipped script, and the script did not change, so they stand from the first round.
+
+    THE NEW SENTENCE, and every number in it verified mechanically with `rg -c` rather than by reading: 10 + 6 + 4 = 20 held over 7 rules, 17 not held over 10 rules, 37 total over 13 rules and 36 tests. The 37 matches the 37 measured runs exactly, so the roster is closed — no breaking probe is unaccounted for.
+  timestamp: 2026-08-15T22:31:04.266297+00:00
+- actor: claude-code
+  id: 01m03rt1b994k384170nabsdaf
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — `builtin/validators/code-hygiene/rules/dead-code-typescript.md` (prose alone; `git diff builtin/` carries one hunk, `@@ -1222,8 +1222,20 @@`, and the `run:` block is byte-identical to HEAD), `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_rust.rs`.
+    - measurement (taken FIRST, before any sentence): `read_script_output` instrumented with one `eprintln!` of `output.status.code()`, then `cargo nextest run -p swissarmyhammer-validators -E 'test(/shipped/) and test(/break/)' --no-capture` — 36 tests, 37 broken runs, `37 SAHMEASURE status=Some(1)`, every one exit 1. Instrumentation reverted. Roster counted with `rg -c`: 10 `verify_shipped_tree_breaks` + 6 `verify_shipped_tree_breaks_without_run_of` + 4 straight `expect_err` + 17 `verify_shipped_run_breaks` = 37 sites, closing exactly on the 37 measured runs.
+    - RED: sabotaged the five `exit 1` of `function-length-rust.md` to `exit 2`. Before the change 6 tests passed; after it 1 passed and 5 FAILED on `assertion left == right ... left: Some(2) right: Some(1)`. Sabotage reverted, `git diff builtin/` 0 lines, 6 tests pass.
+    - finding: the one open finding is answered. The claim is now written TO the measurement: 20 breaking probes over 7 rules are held to the number, and the 17 that drive `execute_tool_runs` are held to the error text alone, because the engine keeps no status. Both the rule prose and the `BROKEN_RUN_EXIT_STATUS` doc state the same counts and the same reason. No existing assertion was weakened.
+    - tests: `cargo fmt --check` exit 0. `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 3520 tests run, 3520 passed, 0 failed, 0 skipped, in 115.3s.
+    - next: /review
+  timestamp: 2026-08-15T22:31:17.609005+00:00
+- actor: claude-code
+  id: 01m03tb10kfz3b9qm2w94tr0fg
+  text: |-
+    ### test — green
+
+    - Command: `cargo fmt --check`. Result: exit 0. No diff.
+    - Command: `cargo clippy --workspace --all-targets -- -D warnings`. Result: exit 0. No warnings.
+    - Command: `cargo nextest run --workspace`. Result: 14240 tests run. 14240 passed. 0 failed. 0 skipped.
+    - Command: `cargo nextest run -p swissarmyhammer-validators -E 'test(/function_length_rust/)'`. Result: 14 tests run. 14 passed. This confirms all four sites in `tests/shipped/function_length_rust.rs` pass through the shared helper.
+    - Command: `cargo nextest run -p swissarmyhammer-validators -E 'test(/shipped/)'`. Result: 177 tests run. 177 passed.
+    - Check: `crates/swissarmyhammer-validators/src/review/tool_rules.rs` has no `eprintln!`. The old debug print is gone.
+    - Check: no `SAHMEASURE` string in any source file. It appears only in `.shell/log` and in the two kanban task record files. These are log and history files, not code.
+    - Check: `git diff HEAD -- builtin/validators/code-hygiene/rules/dead-code-typescript.md` shows the change starts after the file's last code fence (line 1205). The `run:` block is untouched.
+
+    next: hand off for review. Task stays in `doing`. No commit made.
+  timestamp: 2026-08-15T22:58:02.899234+00:00
 position_column: doing
 position_ordinal: '8280'
 title: dead-code-typescript answers zero findings when ts-prune crashes
@@ -364,3 +495,23 @@ Both calls were right.
 - `dead_code_typescript.rs:840-841` "the 16 `tsconfig.json` projects of the four corpus workspaces — 9, 2, 3 and 2, which is the count the rule body's corpus table states" holds: the corpus table at `dead-code-typescript.md:443-448` states 9, 2, 3 and 2, which sum to 16, and the body already reads 16 at `:876-877`. The `12` this commit replaced was false.
 - "thirteen acceptance tests" still holds: 13 `#[test]` functions in `dead_code_typescript.rs`.
 - The `run:` block is untouched. The only `.md` hunk is `@@ -1214,7 +1214,13 @@`, prose alone, so the probe-tree measurements and the 58-findings workspace reading of the round before stand unchanged and were not re-measured.
+
+## Review Findings (2026-08-15 17:08)
+
+> Scope: `review sha HEAD~1..HEAD` — commit 961943cae alone — reviewed the diffs only — lines this change added or modified. The engine reviewed 1 file, attempted 9 validators and answered 0 findings (2 `.kanban/` files excluded by `.reviewignore`). The rule body is prose the engine reads no byte of, so every claim the commit added or changed was checked BY HAND against what the named tests actually assert.
+
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:1225` `hand/tool-rule-contract` — the body states "That helper holds every breaking probe of every shipped rule to the same number", and the helper holds ten breaking probes of five shipped rules, not every one. `verify_shipped_tree_breaks` (`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1237`) is called from `dead_code_typescript.rs:1082-1083`, `dead_code_rust.rs:164,231`, `missing_docs_rust.rs:402,435,511,621`, `unused_dependencies.rs:171` and `stuttering_name_go.rs:251` — 10 sites, 5 rules. Ten other breaking probes reach no status assertion at all. `verify_shipped_tree_breaks_without_run_of` (`shipped.rs:1385-1412`) reads `drive_shipped_staged_tree_with(..).expect_err(probe.reason)` and asserts `assert_shipped_failure_names` alone — no status and no `placed` — and carries `function_length_rust.rs:849`, `unused_dependencies.rs:223`, `dead_code_rust.rs:356`, `missing_docs_rust.rs:712` and `missing_docs.rs:542,568`. `function_length_rust.rs:449,515,589,650` call `shipped_script_findings(..).expect_err(..)` straight and assert only that the detail carries `RUST_BUILD_SCRIPT_BROKEN_LINE`. The stated consequence is therefore false where it is checkable: `function-length-rust` changed to exit 2 on a broken build script keeps all four of those tests green, because `run_script` answers the same `ScriptFailure::Exit` for every nonzero status and the detail — the unchanged stderr — carries no number. The same words carry the same claim at `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1228-1230`: "Every breaking probe of every shipped rule is held to the one number, so a script changed to exit 2 breaks its own rule's test." Either state the reach the helper has — every breaking probe that CALLS `verify_shipped_tree_breaks`, ten of them across five rules — or hold the remaining breaking probes to `BROKEN_RUN_EXIT_STATUS` as well, at which point the words stand as written.
+
+### What was checked BY HAND and HOLDS
+
+- The `run:` block is byte-identical to HEAD~1. The `.md` file carries exactly one hunk, `@@ -1214,13 +1214,18 @@`, prose alone (12 insertions, 7 deletions), so every measurement of the two rounds before stands and none was re-measured.
+- "all three facts of each" now holds. Rows 2 and 3 of the table at `dead-code-typescript.md:1181-1182` each state `0 findings`, `exit 1` and the project named. `verify_shipped_tree_breaks` (`shipped.rs:1237-1256`) now asserts all three: `assert_shipped_failure_names(&failure, probe.run.expected)`, `assert_eq!(status, Some(BROKEN_RUN_EXIT_STATUS))` and `assert!(placed.is_empty())`.
+- "It reads the named project off the error the engine answers for the run, and the exit status and the 0 findings off that same run itself" holds. `drive_shipped_script_whole` (`shipped.rs:967-983`) calls `run_shell` ONCE and derives all three off that one `Output`: `outcome` from `read_script_output(&output)`, `placed` from `finding_rows(&placed_outcome(&output), ..)`, and `status` from `output.status.code()`.
+- "The status is held as the NUMBER 1 rather than as \"nonzero\", so a script changed to exit 2 fails the test" holds for THIS test: `BROKEN_RUN_EXIT_STATUS` is `1` and the assertion is `assert_eq!`, not a nonzero test.
+- "The error carries no number to read: the engine answers the same failure for every nonzero status, and the text it hands on is the script's own stderr for a run that wrote any" holds. `read_script_output` (`tool_rules.rs:940-943`) answers `Err(ScriptFailure::Exit(command_failure_detail(output)))` for every `!status.success()`, and `command_failure_detail` (`swissarmyhammer-common/src/command.rs:90-97`) answers the trimmed stderr whenever it is non-empty and `exited with {status}` only when it is empty. This run always writes its `dead-code-typescript: ts-prune exited 1 for ...` line, so the detail is the stderr alone.
+- "It answers a nonzero exit before it reads stdout at all as well" holds: `tool_rules.rs:941-943` returns before the stdout read at `:948`.
+- "Row 3 is where the 0 findings carries the weight" holds unchanged from the round before: the row-3 probe stages a readable `packages/app` holding a dead export beside the broken `packages/other`.
+- The `status` field doc (`shipped.rs:936-941`) states what the code does: `output.status.code()` answers `None` for a signal, and the `Err` arm of the `run_shell` match (`shipped.rs:971`) writes `None` for a shell that never started the script.
+- "every shipped script writes `exit 1` for that" (`shipped.rs:1209`) holds: every `exit <digit>` statement in every `run:` block under `builtin/validators` is `exit 0` or `exit 1`. The four `exit 2` strings in those files stand in prose and in status tables that record what a TOOL answered, never in a script.
+- "it is what no caller of [`run_script`] can read" (`shipped.rs:1211-1213`) holds: `run_script` answers `Result<ScriptOutcome, ScriptFailure>`, and `ScriptFailure::Exit` carries a `String` alone.
+- The `.kanban/` half of the diff is the review record of the round before, excluded by `.reviewignore`.
