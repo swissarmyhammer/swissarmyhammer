@@ -82,6 +82,57 @@ comments:
     - evidence: 2 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs. New acceptance test `the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding`, watched RED on the shipped bytes then GREEN. `cargo nextest run -p swissarmyhammer-validators`: 747 run, 747 passed, 0 skipped. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. Corpus with dependencies installed, before → after: zod 76 → 76, zustand 1 → 1, redux 6 → 6, this workspace 58 → 58; 0 paths naming no file, 0 refused.
     - next: /review
   timestamp: 2026-08-15T16:06:10.044110+00:00
+- actor: claude-code
+  id: 01m032wgvqvx6w0ye1f3g4ezdt
+  text: |-
+    ### commit — changed
+    - evidence: a4a4160fe fix(validators): rebuild dead-code-typescript paths from ts-prune's cwd, not an anchored guess (^yxky1aj)
+    - next: none
+  timestamp: 2026-08-15T16:08:10.359001+00:00
+- actor: claude-code
+  id: 01m0347zsa0bhgemvyrb3nw40a
+  text: |
+    ### review — findings
+
+    - evidence: engine `review sha a4a4160fe~1..a4a4160fe` reported 0 findings over 1 file (`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs`, 9 runs attempted, 0 failed, 0 skipped). 2 findings by hand on the rule body the engine cannot read — `builtin/validators/code-hygiene/rules/dead-code-typescript.md:220`, `builtin/validators/code-hygiene/rules/dead-code-typescript.md:239`. Both land on lines this commit adds.
+    - checked by hand: the classifier enumeration against ts-prune 0.10.3 `lib/presenter.js`; the residue claim and its 141 (76 zod + 1 zustand + 6 redux + 58 this workspace, the table at rule body line 769); whether the fix can drop a finding that reported correctly before.
+    - round 2 of this card. Round 1's fix made round 2's defect. Item 220 and item 239 are both new causes this commit makes: the fourth spelling and the refusal path did not exist before it.
+    - next: another round. Close item 239 first — a silent refusal is the failure mode this work removes.
+  timestamp: 2026-08-15T16:31:54.666442+00:00
+- actor: claude-code
+  id: 01m034yadwz44ca0p7hz458cxw
+  text: |-
+    Round 3. Both findings worked, and the scope stayed on the two files the findings name plus the test helper each needed.
+
+    FINDING 239 FIRST, because a silent drop is the failure this work removes.
+
+    THE CHANNEL. The drop now travels STDOUT, the same channel a finding travels, at `packages/<project>/tsconfig.json:1`. Measured, driving the shipped bytes over the sibling-prefix probe:
+
+        packages/consumer/tsconfig.json:1: dead-code-typescript dropped one finding. 2 files of this program stand at the spelling `src/lib.ts`. The run cannot tell which file the finding is about. The dropped line is `src/lib.ts:2: unused export 'trulyDead'; nothing in the project imports it`
+
+    WHY THE TSCONFIG, and not a source file. The tsconfig always stands as a file, so the line names a path the run can confirm for BOTH drop shapes — the 2-candidate collision and the 0-candidate fourth spelling, which has no candidate to name at all. It is also the file that made the program: the `include` list is what put the colliding sibling in the graph, so it is where the author acts. Reporting at the standing candidates was rejected: for the collision those are real source files whose row does not hold the export, and `..._names_no_file_that_is_not_the_file_of_the_finding` is the test that forbids exactly that.
+
+    `run_script_findings` and `tool_rules.rs` were NOT touched, as the card states. The engine's workspace-scope path filter still applies, so the drop reaches the report when the project's own tsconfig is one of the changed files. The rule body says that in those words rather than claiming more. The carrier on `ToolOutcome` stays with ^m6ba1bf.
+
+    WATCHED RED, both halves. The sibling-prefix probe's `expected` gained `packages/consumer/tsconfig.json:1`, and a new test `the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_drops_out_loud` reads the CLAIM rather than the row. Before the script change: rows `["packages/consumer-bench/src/lib.ts:2", "packages/consumer/src/other.ts:4"]` against the three the probe names, and 0 claims starting with the drop sentence against 1. Both then GREEN. The row alone would pass a run that wrote some other sentence there, which is why the claim is read.
+
+    THE TEST HELPER. `shipped_script_findings` collapsed each finding to `path:line` and threw the claim away, and it has 11 callers, so its signature was left alone. The staging and run body moved into `drive_shipped_script(loader, rule, staged, files, read)`; `shipped_script_findings` passes `finding_rows` and the new `drive_shipped_staged_tree_claims` passes `finding_claims`. No duplicated staging body.
+
+    FINDING 220. Three exhaustive claims were false and all three now state what the code does. The loop comment no longer says "Three spellings therefore reach this loop" — it says the working directory rebuilds THREE of the spellings the cut makes and names the fourth, the one a nested copy makes, as the shape no rebuild reaches. The table gained a fourth row: the old "anywhere else" row is now "outside the project, and its path holds the project path nowhere", beside "…at a LATER position", with the worked example `/mnt/backup/w/packages/a/src/x.ts` under `/w/packages/a` coming out as `mnt/backup/src/x.ts`. The residue paragraph opens "Two shapes the rebuild cannot close" and states both.
+
+    THE FOURTH SPELLING IS NOT RECONSTRUCTED, as the card orders. It is dropped, and now the drop is announced.
+
+    THE SWEEP, beyond the two lines the findings name. Four more places carried the same two causes: the knip-section line "the one shape that rebuild leaves"; the table column header `refused`, now `dropped`, to match the word the script and the prose use; "The eight acceptance tests" (nine now); and "The two acceptance tests named in 'How the run is shaped'" (three now). The knip decision record and the corpus tables are otherwise untouched.
+
+    THE CORPUS NUMBERS WERE NOT RE-MEASURED, and they do not need to be. The corpus checkouts are not on this machine. Nothing changes for a finding the run CAN place — the `found -eq 1` path is byte for byte what it was — and the table already records 0 dropped over all four workspaces, so no drop line is emitted for any of them and every count stands. Reported as reasoning, not as a fresh measurement.
+  timestamp: 2026-08-15T16:44:06.460301+00:00
+- actor: claude-code
+  id: 01m034yhr82h79m3k15w51qnsv
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — builtin/validators/code-hygiene/rules/dead-code-typescript.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs. New acceptance test `the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_drops_out_loud`, watched RED on the shipped bytes then GREEN, beside the drop row added to the sibling-prefix probe. `cargo nextest run -p swissarmyhammer-validators`: 748 run, 748 passed, 0 skipped. `cargo fmt --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean. Both review findings flipped to `- [x]`.
+    - next: /review
+  timestamp: 2026-08-15T16:44:13.960661+00:00
 position_column: doing
 position_ordinal: '8280'
 title: dead-code-typescript prefixes a project path onto an absolute path, so the finding names a file that is nowhere
@@ -106,3 +157,12 @@ The engine read one file, `crates/swissarmyhammer-validators/src/review/tool_rul
 - [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:222` `hand-check/path-arithmetic` — The test `[ -f "$dir/${finding%%:*}" ]` gives the wrong class for a path the presenter cut at the wrong position. For the project `packages/a` and the outside file `packages/ab/src/lib.ts`, the presenter writes `b/src/lib.ts`. If `packages/a/b/src/lib.ts` is present, the test is true, and the run puts the finding on a real file that is not the file of the finding. If it is absent, the run writes `/b/src/lib.ts`, which stands nowhere. Build the path from the working directory ts-prune used, or refuse a path the run cannot confirm.
 - [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:722` `hand-check/accuracy` — The new prose says that `reportedAs` and the pipe "have to agree or the `--ignore` pattern would name a spelling the pipe never writes". `runner.js` applies `--ignore` to the presented line inside ts-prune, before stdout: `presented.filter(function (file) { return !file.match(config.ignore); })`. The pipe never sees that decision, and the pipe rewrites every line it passes. `reportedAs` must agree with the presenter, not with the pipe. Name the presenter as the one authority that both sides copy.
 - [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs:345` `hand-check/coverage` — The probe stages `packages/consumer` and `packages/shared`. Neither name is a prefix of the other, thus the probe does not hold the shape the two items above name. Stage a second package whose name starts with the name of the project package, for example `packages/consumer-bench`, and hold the path the run reports.
+
+## Review Findings (2026-08-15 11:08)
+
+> Scope: `review sha a4a4160fe~1..a4a4160fe` — reviewed the diffs only — lines this change added or modified. 1 file(s) reviewed, 0 not reviewed.
+
+The engine read one file, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/dead_code_typescript.rs`, and reported no finding from 9 validator runs. No validator declares a `*.md` glob, thus the engine did not read the rule body `builtin/validators/code-hygiene/rules/dead-code-typescript.md`, which is the other file this commit changes. The items below come from a check by hand of that rule body against the installed `ts-prune` 0.10.3 presenter and against the tool-rule runner. Each item is on a line that this commit adds.
+
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:220` `hand-check/path-arithmetic` — The comment says three spellings reach the loop, the table at line 747 gives "anywhere else" the whole absolute path less its leading separator, and the paragraph at line 791 says one shape only stays open. A fourth spelling is reachable. `String.replace` given a string cuts the FIRST occurrence of that text wherever it stands, and the working directory can stand at a position after the first character of the path. For the working directory `/w/packages/a` and the file `/mnt/backup/w/packages/a/src/x.ts`, the presenter writes `mnt/backup/src/x.ts`. None of `$cwd/$cut`, `$cwd$cut` and `/$cut` builds that path again, so `found` is 0 and the run refuses the finding. A nested copy of an absolute tree — a backup mount, a bind mount, a staged copy — makes that shape. State the fourth shape in the comment and in the table, and put it with the residue at line 791, which says one shape only.
+- [x] `builtin/validators/code-hygiene/rules/dead-code-typescript.md:239` `hand-check/observability` — The refusal is silent. The comment at line 237 says the finding is "said out loud", and the prose at line 795 says the run "writes each such line on stderr, naming the project and the count". Nothing reads that stderr on a run that exits 0. `crates/swissarmyhammer-common/src/command.rs:56` sets `.stderr(Stdio::piped())`, so the bytes do not reach the terminal. `crates/swissarmyhammer-validators/src/review/tool_rules.rs:770-776` reads `output.stderr` only inside the `!output.status.success()` branch; on the success path it reads `output.stdout` alone and drops the buffer. A normal run of this rule exits 0. So a refused finding reaches no author, no log and no report — the same silent drop this rule was written to remove, and the shape `shipped.rs:931` names: a run that reports no finding and exits 0 reads exactly like a clean tree. `verify_shipped_tree_reports` holds the refusal only by the absence of the row from `expected`; no test holds the announcement. Carry the refusal out of the script on a path the author reads, and hold it with a test.

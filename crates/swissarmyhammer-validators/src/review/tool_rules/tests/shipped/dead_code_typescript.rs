@@ -493,6 +493,20 @@ const TYPESCRIPT_SIBLING_PREFIX_TSCONFIG: &str = concat!(
     "}\n",
 );
 
+/// The row the run reports a DROPPED finding at.
+///
+/// The project's own tsconfig is the file whose program made the spelling, and
+/// it always stands as a file, so the drop travels the channel a finding
+/// travels rather than a pipe nothing reads.
+const TYPESCRIPT_CONSUMER_DROP_ROW: &str = "packages/consumer/tsconfig.json:1";
+
+/// The words the claim of a dropped finding opens with.
+const TYPESCRIPT_DROP_CLAIM_HEAD: &str = "dead-code-typescript dropped one finding.";
+
+/// The spelling two files of the sibling-prefix probe both answer, which is
+/// the finding that run drops.
+const TYPESCRIPT_DROPPED_SPELLING: &str = "src/lib.ts:2";
+
 /// A probe whose project stands beside two packages whose names begin with its
 /// own.
 ///
@@ -500,7 +514,8 @@ const TYPESCRIPT_SIBLING_PREFIX_TSCONFIG: &str = concat!(
 /// the working directory: `src/lib.ts:2`, `src/other.ts:4` and
 /// `-bench/src/lib.ts:2`. The first row is the `packages/consumersrc` module
 /// wearing the spelling of `packages/consumer/src/lib.ts`, whose row 2 holds
-/// the LIVE export instead.
+/// the LIVE export instead. Two files answer that spelling, so the run drops
+/// it and reports the drop at [`TYPESCRIPT_CONSUMER_DROP_ROW`].
 const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
     run: ShippedRun {
         project_types: NODEJS_PROJECT_TYPES,
@@ -508,6 +523,7 @@ const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
         expected: &[
             "packages/consumer/src/other.ts:4",
             "packages/consumer-bench/src/lib.ts:2",
+            TYPESCRIPT_CONSUMER_DROP_ROW,
         ],
     },
     staged: &[
@@ -652,8 +668,44 @@ fn the_shipped_typescript_dead_code_tool_rule_names_a_module_outside_the_project
 /// The run rebuilds every spelling the cut can have made from the working
 /// directory ts-prune used, and reports the finding at the one that stands as
 /// a file. Two spellings that both stand are a path the run cannot confirm, so
-/// it names the finding on stderr and reports nothing for it.
+/// the run drops that finding and reports the drop at the project's own
+/// tsconfig.
 #[test]
 fn the_shipped_typescript_dead_code_tool_rule_names_no_file_that_is_not_the_file_of_the_finding() {
     verify_shipped_tree_reports(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
+}
+
+/// Acceptance: a finding the run drops is said out loud, on stdout.
+///
+/// A drop written on stderr reaches nobody. `run_shell` pipes stderr, so no
+/// terminal inherits it, and the runner reads that buffer only for a run that
+/// exits NONZERO. This rule exits 0 on a normal run, so a drop written there
+/// reaches no author, no log and no report — a run that dropped a finding then
+/// reads exactly like a clean tree.
+///
+/// stdout is the channel every finding travels, so the drop travels it too.
+/// The run writes it at the project's own tsconfig, which is the file whose
+/// program made the spelling and always stands as a file.
+///
+/// The row alone is not the whole of it. This test reads the CLAIM, so a run
+/// that wrote some other sentence at that row cannot pass.
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_says_the_finding_it_drops_out_loud() {
+    let claims = drive_shipped_staged_tree_claims(&TYPESCRIPT_SIBLING_PREFIX_PROBE);
+
+    let dropped: Vec<&String> = claims
+        .iter()
+        .filter(|claim| claim.starts_with(TYPESCRIPT_DROP_CLAIM_HEAD))
+        .collect();
+
+    assert_eq!(
+        dropped.len(),
+        1,
+        "the run must say the one finding it drops out loud; it reported {claims:?}"
+    );
+    assert!(
+        dropped[0].contains(TYPESCRIPT_DROPPED_SPELLING),
+        "the drop must name the line it dropped; it said '{}'",
+        dropped[0]
+    );
 }

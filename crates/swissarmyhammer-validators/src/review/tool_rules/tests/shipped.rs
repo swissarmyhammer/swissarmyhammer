@@ -783,6 +783,33 @@ fn shipped_script_findings(
     staged: &[(&str, &str)],
     files: &[&str],
 ) -> Result<Vec<String>, ScriptFailure> {
+    drive_shipped_script(loader, rule, staged, files, finding_rows)
+}
+
+/// The claim each finding of `findings` carries.
+///
+/// A row states WHERE a finding stands. Only the claim states WHAT the run
+/// said there, so a probe of a sentence the author reads reads this.
+fn finding_claims(findings: &[Finding], _repo_root: &Path) -> Vec<String> {
+    findings
+        .iter()
+        .map(|finding| finding.claim.clone())
+        .collect()
+}
+
+/// Stages `staged` in a temporary repository, drives the shipped script of
+/// `rule` there with the argument list a run over `files` carries, and answers
+/// what `read` takes off the findings it reported.
+///
+/// `read` runs while the repository still stands, because the repository root
+/// is what turns a tool-reported path into the path the work-list holds.
+fn drive_shipped_script<T>(
+    loader: &ValidatorLoader,
+    rule: &str,
+    staged: &[(&str, &str)],
+    files: &[&str],
+    read: impl Fn(&[Finding], &Path) -> Vec<T>,
+) -> Result<Vec<T>, ScriptFailure> {
     let shipped = required_shipped_tool_rule(loader, rule);
     let repo = tempfile::tempdir().unwrap();
     stage_probe_files(repo.path(), staged.iter().copied());
@@ -791,7 +818,7 @@ fn shipped_script_findings(
 
     let findings = run_script_findings(&shipped.script, &repo_root, &args)?;
 
-    Ok(finding_rows(&findings, &repo_root))
+    Ok(read(&findings, &repo_root))
 }
 
 /// The entries of `expected` as the owned strings [`shipped_script_findings`]
@@ -923,6 +950,27 @@ fn drive_shipped_staged_tree_with(
 /// what that run reported.
 fn drive_shipped_staged_tree(probe: &ShippedStagedTree) -> Result<Vec<String>, ScriptFailure> {
     drive_shipped_staged_tree_with(probe, &[])
+}
+
+/// Drives the shipped script of `probe` over the tree it stages, and answers
+/// the CLAIM each finding of that run carries.
+///
+/// A probe of a SENTENCE the author reads reads this. The rows a probe states
+/// hold where a finding stands, and a run that says the wrong thing at the
+/// right row passes them.
+fn drive_shipped_staged_tree_claims(probe: &ShippedStagedTree) -> Vec<String> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
+    let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
+
+    drive_shipped_script(
+        &loader,
+        probe.run.rule,
+        probe.staged,
+        &paths,
+        finding_claims,
+    )
+    .expect("the shipped script must judge the probe package and exit 0")
 }
 
 /// Holds the run of `probe` to breaking with an error that names every
