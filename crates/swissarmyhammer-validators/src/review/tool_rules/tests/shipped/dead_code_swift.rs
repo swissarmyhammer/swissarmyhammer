@@ -116,7 +116,7 @@ fn swift_dead_code_findings(staged: &[(&str, &str)]) -> Vec<String> {
     let loader = builtin_loader();
     let repo = tempfile::tempdir().expect("temp dir");
     stage_probe_files(repo.path(), staged.iter().copied());
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let _cwd = CurrentDirGuard::new(&repo_root).expect("cwd guard");
 
     require_tool_installed(&loader, SWIFT_PROJECT_TYPES, SWIFT_DEAD_CODE_RULE);

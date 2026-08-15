@@ -12,19 +12,40 @@
 
 use super::*;
 
+/// The opening of every probe tsconfig: the object, the `compilerOptions` it
+/// holds, and the options every probe states.
+///
+/// The options say what the program IS — no emit, a bundler resolution, and
+/// library checks skipped so a probe needs no `node_modules`. What each probe
+/// varies is which files the program HOLDS, and that stands in the `include`,
+/// `files` or `exclude` line after this opening.
+///
+/// The opening stands in a macro beside the constants that hold it because
+/// `concat!` takes literals. It closes on the last option rather than on a
+/// newline, so a probe that states an option of its own writes a comma after
+/// it.
+macro_rules! typescript_probe_tsconfig_head {
+    () => {
+        concat!(
+            "{\n",
+            "  \"compilerOptions\": {\n",
+            "    \"target\": \"ES2021\",\n",
+            "    \"module\": \"ESNext\",\n",
+            "    \"moduleResolution\": \"bundler\",\n",
+            "    \"noEmit\": true,\n",
+            "    \"strict\": true,\n",
+            "    \"skipLibCheck\": true",
+        )
+    };
+}
+
 /// The tsconfig of a probe project whose program holds every file under `src`.
 ///
 /// `include` names the source directory alone, which is what a project states
 /// when its tests stand beside its sources.
 const TYPESCRIPT_PROBE_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"include\": [\"src\"]\n",
     "}\n",
@@ -116,14 +137,8 @@ const TYPESCRIPT_BUILD_OUTPUT_MANIFEST: &str = concat!(
 /// The internal alias is the control: its key is no package name of this
 /// workspace, so the run must leave every file it names under the gate.
 const TYPESCRIPT_SELF_PATHS_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true,\n",
+    typescript_probe_tsconfig_head!(),
+    ",\n",
     "    \"paths\": {\n",
     "      \"paths-probe\": [\"./src/index.ts\"],\n",
     "      \"@internal/*\": [\"./src/*\"]\n",
@@ -287,14 +302,8 @@ const TYPESCRIPT_PROBE_TEST: &str = concat!(
 
 /// A tsconfig whose program leaves the test module out.
 const TYPESCRIPT_NO_TESTS_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"include\": [\"src\"],\n",
     "  \"exclude\": [\"src/**/*.test.ts\"]\n",
@@ -351,14 +360,8 @@ const TYPESCRIPT_OUTSIDE_LIB_PATH: &str = "packages/shared/src/lib.ts";
 /// package's program reads another package's source, and `zod` writes it:
 /// `packages/bench` builds a program holding `packages/zod/src`.
 const TYPESCRIPT_OUTSIDE_MODULE_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"include\": [\"src\", \"../shared/src\"]\n",
     "}\n",
@@ -480,14 +483,8 @@ const TYPESCRIPT_PROBE_IMPORTING_LIB: &str = concat!(
 /// other extends it with `src`, which is the first segment of every source
 /// path the project holds.
 const TYPESCRIPT_SIBLING_PREFIX_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"include\": [\"src\", \"../consumer-bench/src\", \"../consumersrc\"]\n",
     "}\n",
@@ -537,10 +534,13 @@ const TYPESCRIPT_SIBLING_PREFIX_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// work-list holds it.
 const TYPESCRIPT_LINK_PATH: &str = "src/link.ts";
 
-/// Where the module the link stands for is held, as the work-list holds it.
+/// Where the module the link stands for is held, relative to the directory it
+/// is staged in.
 ///
 /// The probe's tsconfig states its program with `files` and never names this
-/// path, so the file reaches the program through the link alone.
+/// path, so the file reaches the program through the link alone. One probe
+/// stages it INSIDE the repository, where the work-list holds it, and one
+/// stages it BESIDE the repository, outside the workspace altogether.
 const TYPESCRIPT_LINK_TARGET_PATH: &str = "outside/util.ts";
 
 /// The link the two-readings probe stages, stated the way the repository holds
@@ -558,14 +558,8 @@ const TYPESCRIPT_LINKED_FILE_LINKS: &[(&str, &str)] =
 /// `src/index.ts` alone, while `tsc` listed the link either way. So `files` is
 /// the shape that lets the two readings be compared at all.
 const TYPESCRIPT_LINKED_FILE_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"files\": [\"src/index.ts\", \"src/link.ts\"]\n",
     "}\n",
@@ -596,6 +590,42 @@ const TYPESCRIPT_LINKED_FILE_PROBE: ShippedStagedTree = ShippedStagedTree {
     reason: "the run spells each file of the program the way `tsc` listed it AND the way its \
              real path spells it, so the file ts-prune reported stands among the candidates its \
              own spelling is matched against",
+};
+
+/// The one file the outside-workspace probe stages BESIDE its repository.
+const TYPESCRIPT_OUTSIDE_WORKSPACE_STAGED: &[(&str, &str)] =
+    &[(TYPESCRIPT_LINK_TARGET_PATH, TYPESCRIPT_PROBE_LIB)];
+
+/// The link the outside-workspace probe stages, stated the way the repository
+/// holds it — relative to the directory the link stands in.
+///
+/// Two segments up out of `src/` is one segment above the workspace root, so
+/// the file the link stands for is a file the workspace root is no prefix of.
+const TYPESCRIPT_OUTSIDE_WORKSPACE_LINKS: &[(&str, &str)] =
+    &[(TYPESCRIPT_LINK_PATH, "../../outside/util.ts")];
+
+/// A probe whose program holds one file standing outside the workspace.
+///
+/// The run reports each finding at the REAL path of the file it is about, and
+/// the engine keeps a workspace-scope finding only when that path meets a file
+/// of the run — repo-relative every one. A real path the workspace root is no
+/// prefix of therefore meets nothing, and a row written there leaves the report
+/// without a word. So the run declines the item instead, and says so.
+const TYPESCRIPT_OUTSIDE_WORKSPACE_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: NODEJS_PROJECT_TYPES,
+        rule: TYPESCRIPT_DEAD_CODE_RULE,
+        expected: &[],
+    },
+    staged: &[
+        (
+            TYPESCRIPT_PROBE_TSCONFIG_PATH,
+            TYPESCRIPT_LINKED_FILE_TSCONFIG,
+        ),
+        (TYPESCRIPT_PROBE_ENTRY_PATH, TYPESCRIPT_PROBE_ENTRY),
+    ],
+    reason: "a finding whose file stands outside the workspace is declined out loud, because a \
+             row written at such a path is one the engine drops without a word",
 };
 
 /// Where the manifest of the package the probe's project publishes stands, as
@@ -645,14 +675,8 @@ const TYPESCRIPT_APP_MANIFEST: &str = concat!(
 /// A tsconfig whose program reaches the sources of the package standing beside
 /// it.
 const TYPESCRIPT_TWO_PACKAGE_TSCONFIG: &str = concat!(
-    "{\n",
-    "  \"compilerOptions\": {\n",
-    "    \"target\": \"ES2021\",\n",
-    "    \"module\": \"ESNext\",\n",
-    "    \"moduleResolution\": \"bundler\",\n",
-    "    \"noEmit\": true,\n",
-    "    \"strict\": true,\n",
-    "    \"skipLibCheck\": true\n",
+    typescript_probe_tsconfig_head!(),
+    "\n",
     "  },\n",
     "  \"include\": [\"src\", \"../other/src\"]\n",
     "}\n",
@@ -919,6 +943,51 @@ fn the_shipped_typescript_dead_code_tool_rule_says_the_manifest_it_could_not_rea
     assert!(
         declined[0].contains(TYPESCRIPT_BROKEN_MANIFEST_PATH),
         "the diagnostic must name the manifest it could not read; it said '{}'",
+        declined[0]
+    );
+}
+
+/// Acceptance: a finding whose file stands outside the workspace is stated out
+/// loud rather than written at a path the report never carries.
+///
+/// The run reports each finding at the REAL path of the file it is about, which
+/// for a `files` entry that is a symbolic link is the path behind the link. That
+/// path can stand outside the workspace altogether.
+///
+/// A row written there reaches no reader. `normalize_tool_path` cannot strip a
+/// root the path does not begin with, so the row keeps its absolute path, and
+/// the engine keeps a workspace-scope finding only when its normalized path
+/// meets a file of the run — repo-relative every one. The row is dropped without
+/// a word.
+///
+/// So the run declines the item and says which file it was about. A lost finding
+/// the author reads about is what this rule trades a silent one for.
+#[cfg(unix)]
+#[test]
+fn the_shipped_typescript_dead_code_tool_rule_says_the_file_outside_the_workspace_out_loud() {
+    let reported = drive_shipped_staged_tree_read_with(
+        &TYPESCRIPT_OUTSIDE_WORKSPACE_PROBE,
+        TYPESCRIPT_OUTSIDE_WORKSPACE_LINKS,
+        TYPESCRIPT_OUTSIDE_WORKSPACE_STAGED,
+        finding_rows,
+    );
+    let declined = drive_shipped_staged_tree_read_with(
+        &TYPESCRIPT_OUTSIDE_WORKSPACE_PROBE,
+        TYPESCRIPT_OUTSIDE_WORKSPACE_LINKS,
+        TYPESCRIPT_OUTSIDE_WORKSPACE_STAGED,
+        script_diagnostics,
+    );
+
+    assert_shipped_tree_rows(&TYPESCRIPT_OUTSIDE_WORKSPACE_PROBE, &reported);
+    assert_eq!(
+        declined.len(),
+        1,
+        "the run must state the one file it could not report inside the workspace; it stated \
+         {declined:?}"
+    );
+    assert!(
+        declined[0].contains(TYPESCRIPT_LINK_TARGET_PATH),
+        "the diagnostic must name the file it declined; it said '{}'",
         declined[0]
     );
 }

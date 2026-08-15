@@ -273,19 +273,36 @@ tool:
       return carried;
     }
 
+    /** `workspaceRoot` with a separator after it, so a test names a whole directory. */
+    function workspacePrefix(workspaceRoot) {
+      return workspaceRoot.endsWith(path.sep)
+        ? workspaceRoot
+        : workspaceRoot + path.sep;
+    }
+
+    /**
+     * Whether `file` stands inside the workspace at `workspaceRoot`.
+     *
+     * This test is anchored and it demands a separator, because the run WRITES
+     * this path rather than reading one: nothing here has to guess where a cut
+     * fell.
+     */
+    function insideWorkspace(file, workspaceRoot) {
+      return file.startsWith(workspacePrefix(workspaceRoot));
+    }
+
     /**
      * The path the report names `file` at.
      *
      * A file of the workspace is named the way the work-list holds it, and a
-     * file outside the workspace keeps its whole path. This test is anchored
-     * and it demands a separator, because the run WRITES this path rather than
-     * reading one: nothing here has to guess where a cut fell.
+     * file outside the workspace keeps its whole path. The report carries the
+     * whole path in the message of a declined item alone, never as the path of
+     * a finding.
      */
     function reportedPath(file, workspaceRoot) {
-      const under = workspaceRoot.endsWith(path.sep)
-        ? workspaceRoot
-        : workspaceRoot + path.sep;
-      return file.startsWith(under) ? file.slice(under.length) : file;
+      return insideWorkspace(file, workspaceRoot)
+        ? file.slice(workspacePrefix(workspaceRoot).length)
+        : file;
     }
 
     /**
@@ -303,6 +320,13 @@ tool:
      * candidates, and one candidate means that candidate is it. No candidate,
      * or two, is an item this run cannot place, so it declines the item and
      * says which one.
+     *
+     * The row carries the REAL path, which is where the export text stands. A
+     * real path outside the workspace is one the report has no row for: the
+     * engine keeps a workspace-scope finding only when its path meets a file of
+     * the run, and every file of a run stands under the workspace root. So such
+     * an item is declined as well, rather than written at a path that leaves
+     * the report without a word.
      */
     function placeFindings(config, workspaceRootArgument, listPath) {
       const projectDir = process.cwd();
@@ -329,6 +353,12 @@ tool:
         if (standing.length !== 1) {
           decline(
             `${standing.length} files of the program of ${config} carry the spelling \`${spelling}\`, so the run cannot tell which file this finding is about: \`${finding}\``,
+          );
+          continue;
+        }
+        if (!insideWorkspace(standing[0], workspaceRoot)) {
+          decline(
+            `the file this finding is about stands outside the workspace, at \`${standing[0]}\`, and the report carries a file of the workspace alone: \`${finding}\``,
           );
           continue;
         }
@@ -893,6 +923,16 @@ candidate and declines, unless some other file of the list wears the same cut
 spelling. That is the whole of what the count rests on, stated rather than
 assumed.
 
+The row the run writes carries that REAL path, because that is where the export
+text stands. For the `files` entry that is a symbolic link above, the report
+reads the file behind the link and never `src/link.ts`, where that file stands
+inside the workspace.
+
+A real path OUTSIDE the workspace has no row at all. The engine keeps a
+workspace-scope finding only when its path meets a file of the run, and every
+file of a run stands under the workspace root, so a row written at such a path
+would leave the report without a word. The run declines that item instead.
+
 `reportedAs` in the node script is the presenter's own operation, copied rather
 than modelled, and BOTH jobs of that script read it: the `--ignore` pattern has
 to name the spelling ts-prune writes, and the placement has to read the
@@ -908,11 +948,12 @@ and the engine keeps a workspace-scope finding only when its path meets a file
 of the run, so such a finding was dropped without a word — a silent miss.
 Completing one path and testing it against the filesystem instead named a REAL
 file the finding was not about wherever the cut fell inside a sibling's name —
-a wrong finding. The file list answers both: every path the run writes is a
-path `tsc` listed for the program, so no line of the report is a path the run
-made up.
+a wrong finding. The file list answers both, up to the residue the count states
+above. Every path the run writes is a path `tsc` listed for the program, or the
+real path of such a path: one is what `tsc` printed, the other is what the
+filesystem answers for it, and neither is a path the run made up.
 
-**An item the file list does not place at exactly one file is DECLINED.**
+**An item the run cannot report at a file of the workspace is DECLINED.**
 
 The run reports no finding for that item, and states it on stderr, on a line
 the engine reads:
@@ -941,32 +982,50 @@ each reason is a fact rather than a judgment:
   by its real path, the way ts-prune spelled the file it read.
 - The program lists no file at all. That is one line for the whole project
   rather than one for each of its findings.
-- The job broke. `main` catches what it threw and names the job, the directory
-  and the failure, so a `place` that could not run says so rather than writing
-  nothing.
+- The one file that carries it stands outside the workspace. The row would
+  carry that whole path, and the engine keeps no finding at such a path, so the
+  row would leave the report without a word. A `files` entry that is a symbolic
+  link onto a file standing outside the workspace is one shape that reaches
+  this.
+- The job broke. The `try` around the `main()` call catches what it threw and
+  names the job, the directory and the failure, so a `place` that could not run
+  says so rather than writing nothing. `main` itself holds no `try`.
 
 The entry job writes on the same channel, and "Entry resolution fails OPEN"
 below states what its lines carry.
 
-Measured over this workspace, the lowest of three runs each, three shipped
-scripts: the shell placement this replaced at 5.5 s, the file-list placement at
-6.2 s, and the file-list placement reading the real path of each listed file as
-well at 6.2 s. All three answered 58 findings, the same bytes on stdout, 0
-items declined and 0 bytes on stderr.
+Measured over this workspace, three shipped scripts run one after another and
+that cycle repeated three times, warm, on a machine running other work beside
+them:
 
-Those 0.7 s are what the WHOLE placement costs over the shell loop it replaced
-— a `tsc -p tsconfig.json --listFilesOnly` and a `node "$work/prune.js" place`
-for each of this workspace's two projects, against the per-finding shell loop
-that went. This measurement does not divide that 0.7 s between the three, and
-it does not say which of them carries it. Reading the real path of each listed
-file beside them moved the reading by 0.03 s, under the spread of the three
-runs the file-list placement itself answered, so this measurement does not tell
-that cost from noise either.
+| placement | the three readings | lowest | spread |
+|---|---|---|---|
+| the shell placement this replaced | 6.31 s, 6.72 s, 6.76 s | 6.31 s | 0.45 s |
+| the file-list placement | 6.86 s, 6.96 s, 8.18 s | 6.86 s | 1.32 s |
+| the same, reading the real path of each listed file as well | 7.17 s, 7.37 s, 7.85 s | 7.17 s | 0.68 s |
 
-**The three library rows below were measured under the EARLIER placement**, and
-those checkouts no longer stand on the machine that measured them, so this
-change re-measured this workspace alone. The `declined` column is what the
-shipped run answers, and it is stated for the row that was re-measured:
+All three answered 58 findings, the same bytes on stdout, 0 items declined and 0
+bytes on stderr.
+
+The 0.55 s between the first two lowest readings is what the WHOLE placement
+costs over the shell loop it replaced — a `tsc -p tsconfig.json --listFilesOnly`
+and a `node "$work/prune.js" place` for each of this workspace's two projects,
+against the per-finding shell loop that went. This measurement does not divide
+that 0.55 s between them, and it does not say which of them carries it. Reading
+the real path of each listed file beside them adds a further 0.31 s at the
+lowest reading, under each of the three spreads above, so this measurement does
+not tell that cost from noise either.
+
+A reading moves between sessions. The table under "The exported public API,
+which the manifests answer" reads 6.2 s for this workspace, taken in an earlier
+one. The three readings above are therefore compared with each other, never with
+a reading of another session.
+
+**The three library rows below were measured under the SHELL placement**, the
+first row of the timing table above, and those checkouts no longer stand on the
+machine that measured them, so this change re-measured this workspace alone. The
+`declined` column is what the shipped run answers, and it is stated for the row
+that was re-measured:
 
 | workspace | findings | naming a file that is nowhere | declined |
 |---|---|---|---|
@@ -976,12 +1035,13 @@ shipped run answers, and it is stated for the row that was re-measured:
 | this workspace | 58 | 0 | 0 |
 
 The placement reads the same rows ts-prune wrote and writes one row for each row
-it places, so it adds no row. Where a row leaves the list, the report says so:
-the run states each item it declines, and `sort -u` collapses two rows that
-come to spell one file alike — which the real-path spelling can newly do, where
-one project reaches a file through a link and another reaches it directly. So a
-re-measurement reads a difference off the report and off the duplicate rows,
-rather than off a diff of two lists.
+it places, so it adds no row. A row can leave the list without the report
+stating it. The run states each item it declines. `sort -u` collapses two rows
+that come to spell one file alike and says nothing — which the
+real-path spelling can do where one project reaches a file through a link and
+another reaches it directly. So a re-measurement reads a declined item off the
+report and a collapse off the duplicate rows, rather than off a diff of two
+lists.
 
 The one finding of zod's 76 that this section is about is
 `packages/zod/src/v4/core/standard-schema.ts:157` `StandardSchemaWithJSON`,
@@ -999,17 +1059,24 @@ stands in a module the package publishes, so the carve-out already silences
 them, and the shipped run leaks the one finding that stands outside a published
 module.
 
-Four acceptance tests hold this section.
+Five acceptance tests hold this section, and each names the placement it reads
+against rather than an earlier state of the file.
 `..._names_a_module_outside_the_project_directory` holds a module the program
-reaches from outside the project, and drives it through the engine as well,
-where the run answered NO finding before this change.
+reaches from outside the project, and drives it through the engine as well: the
+placement that put the project's path in front of EVERY spelling answered no
+finding there.
 `..._names_no_file_that_is_not_the_file_of_the_finding` holds two sibling
 packages whose names begin with the project's own.
 `..._says_the_finding_it_declines_out_loud` holds the declined item beside the
 sentence it states. `..._places_a_file_the_two_readings_spell_differently`
 holds a `files` entry that is a symbolic link, which is the shape the two
-spellings are read for; on the placement before this one that run declined the
-item and reported nothing.
+spellings are read for: the file-list placement that read no real path declined
+that item and reported nothing.
+`..._says_the_file_outside_the_workspace_out_loud` holds the same shape with the
+link's target standing beside the repository rather than inside it, and reads
+the diagnostic: the file-list placement that read the real path and wrote it
+whatever it was put that row on stdout at its whole absolute path, which is no
+file of the run, so the engine dropped it without a word.
 
 `tsc --showConfig` is what reads the tsconfig, because `paths` usually stands in
 a file the project EXTENDS: `redux` writes its table in `tsconfig.base.json`, and
@@ -1024,8 +1091,9 @@ Entry resolution fails OPEN, and each failure is stated with the
 reaches a `tracing` record and no reader of the review.
 
 A `tsc` run that writes no configuration a `JSON.parse` can read takes the
-whole job with it: the parse throws, `main` catches it and states `the entries
-job broke in <directory>: <failure>`, the pattern is empty, the run states
+whole job with it: the parse throws, the `try` around the `main()` call catches
+it and states `the entries job broke in <directory>: <failure>`, the pattern is
+empty, the run states
 `--ignore '$^'`, and every export of that project stays under the gate. A
 manifest that does not parse is NARROWER. The
 other manifests still build the pattern, and only the entry modules of that one
@@ -1062,7 +1130,7 @@ five behind the marker.
 It cannot hold either carve-out above. Doctor counts only the findings a run
 reports ABOUT the fixture under test, and both carve-outs take findings off a
 DIFFERENT file — the package's entry module — so a manifest in `fixtures/` would
-move neither count. The eleven acceptance tests in
+move neither count. The twelve acceptance tests in
 `tests/shipped/dead_code_typescript.rs` drive the shipped script over probe
 repositories instead, and each one names the fact it holds.
 
@@ -1076,5 +1144,5 @@ property the knip decision turned on.
 Nor can it hold the path question. A fixture stands loose in one directory, so
 no fixture is a module one project reaches from outside itself, no fixture
 stands in a package whose name begins with another package's, and no fixture is
-a symbolic link. The four acceptance tests named in "How the run is shaped"
+a symbolic link. The five acceptance tests named in "How the run is shaped"
 stage those trees instead.

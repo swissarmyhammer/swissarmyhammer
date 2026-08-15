@@ -392,7 +392,7 @@ fn the_shipped_go_rules_that_run_revives_exported_rule_split_its_findings() {
     require_tool_installed(&loader, GO_PROJECT_TYPES, GO_MISSING_DOCS_RULE);
     let repo = tempfile::tempdir().expect("temp dir");
     stage_probe_files(repo.path(), [(GO_SPLIT_PATH, GO_SPLIT_SOURCE)]);
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let files = [GO_SPLIT_PATH];
 
     let names = claims_of_shipped_script(&loader, GO_STUTTERING_NAME_RULE, &repo_root, &files);

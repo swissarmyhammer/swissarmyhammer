@@ -224,16 +224,26 @@ fn stage_probe_links(_repo: &Path, links: &[(&str, &str)]) {
     );
 }
 
-/// The RESOLVED root of the probe repository `repo`.
+/// The files a probe stages beside its repository when its shape needs none.
+const NO_PROBE_OUTSIDE: &[(&str, &str)] = &[];
+
+/// The directory the probe repository stands in, inside the work directory
+/// each run is given.
+///
+/// The repository stands one level down so that a probe can stage a file
+/// BESIDE it — a file the workspace root is no prefix of, which is the shape a
+/// symbolic link out of the workspace reaches.
+const PROBE_REPOSITORY_DIRECTORY: &str = "repo";
+
+/// The RESOLVED root of the probe repository standing at `repo`.
 ///
 /// A tool prints the resolved path of each file it reads, and on macOS a
 /// temporary directory stands behind a symbolic link. The engine strips the
 /// repository root off each reported path, so the root it is given has to be
 /// the resolved form or no path matches and every finding keeps an absolute
 /// path.
-fn probe_repository_root(repo: &tempfile::TempDir) -> PathBuf {
-    repo.path()
-        .canonicalize()
+fn probe_repository_root(repo: &Path) -> PathBuf {
+    repo.canonicalize()
         .expect("resolve the probe repository path")
 }
 
@@ -285,7 +295,7 @@ fn verify_shipped_fail_fixture_reports_each<W, E, M>(
     for (fixture, path) in probe.support {
         copy_shipped_fixture(&loader, repo.path(), fixture, path);
     }
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let work = build_work(&content);
 
     let plan = plan_tool_rules(&work, &loader, probe.run.project_types, None);
@@ -413,7 +423,7 @@ fn verify_shipped_staged_positions_report(probe: &ShippedStagedPositions) {
             .map(|(path, content)| (*path, content.as_str())),
     );
     stage_probe_files(repo.path(), probe.support.iter().copied());
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
@@ -533,7 +543,7 @@ fn drive_shipped_named_path(probe: &ShippedNamedPath) -> (tempfile::TempDir, Too
         stage_probe_bytes(repo.path(), probe.path, bytes);
     }
     stage_probe_files(repo.path(), probe.support.iter().copied());
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let work = tool_rule_work(
         probe.change_purpose,
         CODE_HYGIENE_SET,
@@ -588,7 +598,7 @@ fn verify_shipped_hollow_directory_answers_clean(probe: &ShippedNamedPath) {
     let (repo, outcome) = drive_shipped_named_path(probe);
 
     assert!(
-        probe_repository_root(&repo).join(probe.path).is_dir(),
+        probe_repository_root(repo.path()).join(probe.path).is_dir(),
         "the probe must stage {} as a directory, or the run measures a file",
         probe.path
     );
@@ -810,7 +820,15 @@ fn shipped_script_findings(
     staged: &[(&str, &str)],
     files: &[&str],
 ) -> Result<Vec<String>, ScriptFailure> {
-    drive_shipped_script(loader, rule, staged, NO_PROBE_LINKS, files, finding_rows)
+    drive_shipped_script(
+        loader,
+        rule,
+        staged,
+        NO_PROBE_LINKS,
+        NO_PROBE_OUTSIDE,
+        files,
+        finding_rows,
+    )
 }
 
 /// Each item `outcome` declined, in the order the run stated them.
@@ -830,18 +848,26 @@ fn script_diagnostics(outcome: &ScriptOutcome, _repo_root: &Path) -> Vec<String>
 ///
 /// `links` are the symbolic links the repository holds beside `staged`. A probe
 /// of a file the two readings of a program spell differently needs one.
+///
+/// `outside` are files staged BESIDE the repository, in the work directory the
+/// repository stands in. The workspace root is no prefix of their paths, which
+/// is what a link out of the workspace reaches.
 fn drive_shipped_script<T>(
     loader: &ValidatorLoader,
     rule: &str,
     staged: &[(&str, &str)],
     links: &[(&str, &str)],
+    outside: &[(&str, &str)],
     files: &[&str],
     read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Result<Vec<T>, ScriptFailure> {
     let shipped = required_shipped_tool_rule(loader, rule);
-    let repo = tempfile::tempdir().unwrap();
-    stage_probe_files(repo.path(), staged.iter().copied());
-    stage_probe_links(repo.path(), links);
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path().join(PROBE_REPOSITORY_DIRECTORY);
+    std::fs::create_dir_all(&repo).unwrap();
+    stage_probe_files(&repo, staged.iter().copied());
+    stage_probe_links(&repo, links);
+    stage_probe_files(work.path(), outside.iter().copied());
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
@@ -905,7 +931,7 @@ fn rows_of_runs_started_together(
     let shipped = required_shipped_tool_rule(&loader, run.rule);
     let repo = tempfile::tempdir().expect("temp dir");
     stage_probe_files(repo.path(), staged.iter().copied());
-    let repo_root = probe_repository_root(&repo);
+    let repo_root = probe_repository_root(repo.path());
     let args = script_args(shipped.scope, files);
     let released = std::sync::Barrier::new(runs);
 
@@ -994,12 +1020,35 @@ fn drive_shipped_staged_tree_read<T>(
     links: &[(&str, &str)],
     read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
 ) -> Vec<T> {
+    drive_shipped_staged_tree_read_with(probe, links, NO_PROBE_OUTSIDE, read)
+}
+
+/// Drives the shipped script of `probe` over the tree it stages, with the
+/// symbolic links `links` made inside it and the files `outside` staged beside
+/// it, and answers what `read` takes off the outcome.
+///
+/// The work-list names the probe's own files and never `outside`, because a
+/// file standing outside the workspace is no file the change touched.
+fn drive_shipped_staged_tree_read_with<T>(
+    probe: &ShippedStagedTree,
+    links: &[(&str, &str)],
+    outside: &[(&str, &str)],
+    read: impl Fn(&ScriptOutcome, &Path) -> Vec<T>,
+) -> Vec<T> {
     let loader = builtin_loader();
     require_tool_installed(&loader, probe.run.project_types, probe.run.rule);
     let paths: Vec<&str> = probe.staged.iter().map(|(path, _)| *path).collect();
 
-    drive_shipped_script(&loader, probe.run.rule, probe.staged, links, &paths, read)
-        .expect("the shipped script must judge the probe package and exit 0")
+    drive_shipped_script(
+        &loader,
+        probe.run.rule,
+        probe.staged,
+        links,
+        outside,
+        &paths,
+        read,
+    )
+    .expect("the shipped script must judge the probe package and exit 0")
 }
 
 /// Holds the run of `probe` to breaking with an error that names every
