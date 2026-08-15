@@ -123,10 +123,10 @@ fn swift_dead_code_findings(staged: &[(&str, &str)]) -> Vec<String> {
     let shipped = required_shipped_tool_rule(&loader, SWIFT_DEAD_CODE_RULE);
     let args = script_args(shipped.scope, NO_SCRIPT_FILES);
 
-    let reported = run_script_findings(&shipped.script, &repo_root, &args)
+    let reported = run_script(&shipped.script, &repo_root, &args)
         .expect("the shipped Swift dead-code script must judge the probe package and exit 0");
 
-    sorted_names(&finding_rows(&reported, &repo_root))
+    sorted_names(&finding_rows(&reported.findings, &repo_root))
 }
 
 /// Acceptance: the shipped Swift dead-code tool rule keeps the test targets in

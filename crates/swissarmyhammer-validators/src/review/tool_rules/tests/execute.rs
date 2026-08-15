@@ -42,11 +42,15 @@ async fn a_tool_run_task_that_panics_reports_every_run_it_carried() {
         task: tokio::task::spawn_blocking(|| panic!("the run loop broke")),
     };
 
-    let (findings, errors) = in_flight.finish().await.into_parts();
+    let (findings, errors, diagnostics) = in_flight.finish().await.into_parts();
 
     assert!(
         findings.is_empty(),
         "a task that did not finish reports no findings: {findings:?}"
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "a task that did not finish judged nothing, so it declined nothing: {diagnostics:?}"
     );
     let reported: Vec<(&str, &str)> = errors
         .iter()
@@ -208,4 +212,120 @@ fn execute_emits_no_planned_event_when_there_are_no_runs() {
 
     assert_eq!(outcome, ToolOutcome::default());
     assert!(rx.try_recv().is_err(), "no events for an empty plan");
+}
+
+/// A marked stderr line from a run that exited 0 reaches the outcome.
+///
+/// A rule that judged the code and could not judge ONE item exits 0 — failing
+/// the whole run over one item is worse — so the marked line is the only
+/// channel it has left.
+#[test]
+fn execute_reports_a_marked_stderr_line_as_a_diagnostic() {
+    let repo = tempfile::tempdir().unwrap();
+    let script = r#"printf 'sah-diagnostic: no compile database covers src/lib.rs\n' >&2"#;
+    let run = run_of(script, ToolScope::Files, &["src/lib.rs"]);
+
+    let outcome = execute_tool_runs(&[run], repo.path(), None);
+
+    assert!(outcome.errors().is_empty());
+    assert!(outcome.findings().is_empty());
+    assert_eq!(outcome.diagnostics().len(), 1);
+    assert_eq!(outcome.diagnostics()[0].validator(), "docs");
+    assert_eq!(outcome.diagnostics()[0].rule(), "docs-tool");
+    assert_eq!(
+        outcome.diagnostics()[0].message(),
+        "no compile database covers src/lib.rs"
+    );
+}
+
+/// A run that declined an item is observably different from a run that found
+/// nothing. Both exit 0 with no finding, so without the diagnostic the
+/// declined item reads exactly like a clean pass over the thing the rule
+/// refused to judge.
+#[test]
+fn a_run_that_declines_an_item_differs_from_a_run_that_found_nothing() {
+    let repo = tempfile::tempdir().unwrap();
+    let clean = run_of("true", ToolScope::Files, &["src/lib.rs"]);
+    let declining = run_of(
+        r#"printf 'sah-diagnostic: no compile database covers src/lib.rs\n' >&2"#,
+        ToolScope::Files,
+        &["src/lib.rs"],
+    );
+
+    let found_nothing = execute_tool_runs(&[clean], repo.path(), None);
+    let declined_one = execute_tool_runs(&[declining], repo.path(), None);
+
+    assert!(found_nothing.findings().is_empty());
+    assert!(declined_one.findings().is_empty());
+    assert!(found_nothing.errors().is_empty());
+    assert!(declined_one.errors().is_empty());
+    assert_ne!(
+        found_nothing, declined_one,
+        "a declined item must not read as a clean pass"
+    );
+    assert!(found_nothing.diagnostics().is_empty());
+    assert_eq!(declined_one.diagnostics().len(), 1);
+}
+
+/// Unmarked stderr is the tool's own chatter — progress, a deprecation notice,
+/// a lock wait — and never a statement to the author. Three shipped rules
+/// forward a linter's raw stderr on the success path, so reading every byte as
+/// a diagnostic makes the report block a log dump.
+#[test]
+fn execute_reads_no_diagnostic_from_unmarked_stderr() {
+    let repo = tempfile::tempdir().unwrap();
+    let script = r#"printf 'Linting Swift files at paths\nDone linting!\n' >&2"#;
+    let run = run_of(script, ToolScope::Files, &["src/lib.rs"]);
+
+    let outcome = execute_tool_runs(&[run], repo.path(), None);
+
+    assert!(outcome.errors().is_empty());
+    assert!(outcome.diagnostics().is_empty());
+}
+
+/// A `scope: workspace` run keeps only the findings in its matched files, and
+/// a matched file is the changed-file list through the rule's OWN globs. The
+/// natural anchor for a diagnostic is a manifest or a lint configuration, and
+/// a rule that lints source never declares a glob for one, so a diagnostic
+/// cannot pass through that filter at all.
+#[test]
+fn a_workspace_scope_diagnostic_survives_the_matched_file_filter() {
+    let repo = tempfile::tempdir().unwrap();
+    let script = r#"printf 'sah-diagnostic: tsconfig.json names no include list\n' >&2"#;
+    let run = run_of(script, ToolScope::Workspace, &["src/lib.rs"]);
+
+    let outcome = execute_tool_runs(&[run], repo.path(), None);
+
+    assert!(outcome.errors().is_empty());
+    assert_eq!(outcome.diagnostics().len(), 1);
+    assert_eq!(
+        outcome.diagnostics()[0].message(),
+        "tsconfig.json names no include list"
+    );
+}
+
+/// A broken run reports a tool error and reads no findings, and a marked line
+/// on the same stderr is part of the failure detail rather than a diagnostic:
+/// the run judged nothing, so it declined nothing.
+#[test]
+fn a_broken_run_reports_no_diagnostic() {
+    let repo = tempfile::tempdir().unwrap();
+    let script = r#"printf 'sah-diagnostic: the item was declined\n' >&2; exit 3"#;
+    let run = run_of(script, ToolScope::Files, &["src/lib.rs"]);
+
+    let outcome = execute_tool_runs(&[run], repo.path(), None);
+
+    assert_eq!(outcome.errors().len(), 1);
+    assert!(outcome.diagnostics().is_empty());
+}
+
+#[test]
+fn a_tool_diagnostic_displays_the_rule_the_validator_and_the_message() {
+    let diagnostic =
+        ToolDiagnostic::for_test("docs", "docs-tool", "no compile database covers src/lib.rs");
+
+    assert_eq!(
+        diagnostic.to_string(),
+        "tool rule `docs-tool` in validator `docs` declined an item: no compile database covers src/lib.rs"
+    );
 }

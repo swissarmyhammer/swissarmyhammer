@@ -274,8 +274,10 @@ impl ReviewReport {
 ///
 /// `tools` carries the run's tool-rule facts: each broken tool run is
 /// rendered as a tool error (its raw stderr, never findings and never a clean
-/// result) and counted in [`ReviewCounts::tool_errors`]; each tool rule on its
-/// prompt fallback is noted so the reader knows the prompt rule ran instead.
+/// result) and counted in [`ReviewCounts::tool_errors`]; each item a completed
+/// run declined is stated, so a declined item never reads as a clean pass over
+/// it; and each tool rule on its prompt fallback is noted so the reader knows
+/// the prompt rule ran instead.
 ///
 /// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
 /// caller) — it is collected once up front so a caller need not materialize a
@@ -363,6 +365,7 @@ pub fn synthesize(
 
     render_excluded_files(&mut markdown, excluded);
     render_tool_errors(&mut markdown, tools);
+    render_tool_diagnostics(&mut markdown, tools);
     render_tool_fallbacks(&mut markdown, tools);
 
     // An empty result names its cause, every time. A full exclusion is a
@@ -632,6 +635,23 @@ fn render_tool_errors(markdown: &mut String, tools: &ToolReport) {
             error.rule()
         );
         for line in error.detail().lines() {
+            let _ = writeln!(markdown, "> {line}");
+        }
+    }
+}
+
+/// Render each item a completed tool run declined. The rule judged the code
+/// and exited 0, so nothing else in the report says the item went unjudged,
+/// and a declined item would otherwise read as a clean pass over it.
+fn render_tool_diagnostics(markdown: &mut String, tools: &ToolReport) {
+    for diagnostic in tools.diagnostics() {
+        let _ = writeln!(
+            markdown,
+            "\n> ⚠️ tool rule '{}/{}' declined an item — it judged the rest of the code, and this it could not judge:",
+            diagnostic.validator(),
+            diagnostic.rule()
+        );
+        for line in diagnostic.message().lines() {
             let _ = writeln!(markdown, "> {line}");
         }
     }
@@ -1015,7 +1035,7 @@ pub async fn run_review(
     // needed. Tool findings are already CONFIRMED — deterministic tool output
     // skips the adversarial verify pass — so they join the verified stream
     // directly.
-    let (tool_findings, tool_errors) = tool_runs.finish().await.into_parts();
+    let (tool_findings, tool_errors, tool_diagnostics) = tool_runs.finish().await.into_parts();
     // A tool rule reads whole files, so under a diff subject it reports
     // pre-existing instances the verify guard would have refuted had they come
     // from an agent. They never reach verify, so the same boundary is applied
@@ -1032,7 +1052,12 @@ pub async fn run_review(
         &FleetTally::new(TasksAttempted(attempted), TasksFailed(failed)),
         &skipped,
         work.excluded(),
-        &ToolReport::new(tool_attempted, tool_errors, tool_fallbacks),
+        &ToolReport::new(
+            tool_attempted,
+            tool_errors,
+            tool_fallbacks,
+            tool_diagnostics,
+        ),
         &ReviewedScope::new(
             &requested_scope,
             work.distinct_files().count(),
@@ -2056,7 +2081,7 @@ mod tests {
 
     // ---- tool-rule facts in the report ------------------------------------
 
-    use crate::review::tool_rules::{ToolFallback, ToolRunError};
+    use crate::review::tool_rules::{ToolDiagnostic, ToolFallback, ToolRunError};
 
     #[test]
     fn a_tool_error_renders_the_rule_and_its_raw_stderr_and_counts() {
@@ -2067,6 +2092,7 @@ mod tests {
                 "docs-tool",
                 "line one of stderr\nline two of stderr",
             )],
+            vec![],
             vec![],
         );
 
@@ -2108,6 +2134,7 @@ mod tests {
                 &[],
                 "tool missing: no ruff",
             )],
+            vec![],
         );
 
         let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
@@ -2141,6 +2168,7 @@ mod tests {
                 &["function-length", "missing-docs"],
                 "tool missing: no linter",
             )],
+            vec![],
         );
 
         let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
@@ -2167,6 +2195,66 @@ mod tests {
         assert!(
             report.markdown.contains("Nothing in scope to review."),
             "an empty run with inert tools is an empty scope: {}",
+            report.markdown
+        );
+    }
+
+    /// A rule that declined an item states it in the report. The rule judged
+    /// the code and exited 0, so nothing else in the report says the item went
+    /// unjudged.
+    #[test]
+    fn a_tool_diagnostic_renders_the_rule_and_its_message() {
+        let tools = ToolReport::new(
+            1,
+            vec![],
+            vec![],
+            vec![ToolDiagnostic::for_test(
+                "docs",
+                "docs-tool",
+                "no compile database covers src/lib.rs",
+            )],
+        );
+
+        let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
+
+        assert!(
+            report
+                .markdown
+                .contains("tool rule 'docs/docs-tool' declined an item"),
+            "the diagnostic block must name the rule: {}",
+            report.markdown
+        );
+        assert!(
+            report
+                .markdown
+                .contains("> no compile database covers src/lib.rs"),
+            "the diagnostic message must render, quoted: {}",
+            report.markdown
+        );
+    }
+
+    /// A run whose only tool-rule fact is a diagnostic is not inert. Without
+    /// this the report says "Nothing in scope to review." over a rule that
+    /// judged the code and declined one item — the exact reading the
+    /// diagnostic exists to prevent.
+    #[test]
+    fn a_tool_report_holding_only_a_diagnostic_is_not_inert() {
+        let tools = ToolReport::new(
+            1,
+            vec![],
+            vec![],
+            vec![ToolDiagnostic::for_test(
+                "docs",
+                "docs-tool",
+                "no compile database covers src/lib.rs",
+            )],
+        );
+
+        let report = synthesize_working(vec![], &FleetTally::default(), &[], &[], &tools, NOW);
+
+        assert!(
+            !report.markdown.contains("Nothing in scope to review."),
+            "a declined item must never read as an empty scope: {}",
             report.markdown
         );
     }

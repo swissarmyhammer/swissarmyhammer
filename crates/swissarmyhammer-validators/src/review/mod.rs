@@ -56,8 +56,9 @@ pub use tool_install::{
 };
 pub use tool_output::parse_tool_stdout;
 pub use tool_rules::{
-    execute_tool_runs, plan_tool_rules, start_tool_runs, ToolFallback, ToolOutcome, ToolPlan,
-    ToolReport, ToolRun, ToolRunError, ToolRunsInFlight, ToolSuppression,
+    execute_tool_runs, plan_tool_rules, start_tool_runs, ToolDiagnostic, ToolFallback, ToolOutcome,
+    ToolPlan, ToolReport, ToolRun, ToolRunError, ToolRunsInFlight, ToolSuppression,
+    TOOL_DIAGNOSTIC_MARKER,
 };
 pub use tree_sitter_probes::{
     ParsedRevision, Revision, TreeSitterProbe, TreeSitterProbeContext,

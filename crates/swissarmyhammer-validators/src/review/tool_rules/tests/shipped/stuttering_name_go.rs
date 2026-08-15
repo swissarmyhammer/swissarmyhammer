@@ -362,9 +362,13 @@ fn claims_of_shipped_script(
 ) -> Vec<String> {
     let shipped = required_shipped_tool_rule(loader, rule);
     let args = script_args(shipped.scope, files);
-    let reported = run_script_findings(&shipped.script, repo_root, &args)
+    let reported = run_script(&shipped.script, repo_root, &args)
         .expect("each shipped script must judge the probe file and exit 0");
-    let mut claims: Vec<String> = reported.into_iter().map(|finding| finding.claim).collect();
+    let mut claims: Vec<String> = reported
+        .findings
+        .into_iter()
+        .map(|finding| finding.claim)
+        .collect();
     claims.sort();
     claims
 }

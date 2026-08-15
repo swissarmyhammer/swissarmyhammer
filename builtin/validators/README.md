@@ -257,6 +257,26 @@ findings are read. A pipe that ends in `jq` or `sed` exits 0 even when the
 linter before it exits 1 on findings; that is the behavior you want, so do
 not add `pipefail` for linters that exit nonzero on findings.
 
+A script that judged the code and could not judge ONE item says so on stderr,
+on a line that opens `sah-diagnostic:`, and it still exits 0. The engine reads
+each marked line and the report states it. Write one where the run is sound
+and one thing inside it is not: a path no compile database covers, a manifest
+the tool could not resolve, a configuration the tool read differently than the
+rule asked for.
+
+    printf 'sah-diagnostic: no compile database covers %s\n' "$file" >&2
+
+Do not exit nonzero for a declined item. A nonzero exit fails the WHOLE run,
+so one unjudged path throws away every finding the run did make. Do not stay
+silent either: a run that reports no finding and exits 0 over an item it never
+judged reads exactly like a clean pass over that item.
+
+The marker is what makes the line a statement. Everything else a script writes
+to stderr while exiting 0 is the tool's own chatter — progress, a deprecation
+notice, a lock wait, a build script — and the engine drops it from the report.
+That is why a script may forward a linter's raw stderr on the success path
+without filling the report with it.
+
 The same exit status hides a linter that BROKE. A linter can keep one status
 for findings and another status for a failure, and the pipe drops both. So a
 pipe is safe only where the tool exits nonzero for findings alone. Where the

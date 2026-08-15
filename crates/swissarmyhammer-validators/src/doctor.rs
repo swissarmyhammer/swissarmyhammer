@@ -35,7 +35,7 @@ use crate::error::AvpError;
 use crate::review::scope::{as_borrowed_strings, detected_project_type_keys};
 use crate::review::tool_health::{tool_rule_health, HealthProof, ToolHealthCache};
 use crate::review::tool_rules::{
-    normalize_tool_path, project_tool_rules, run_script_findings, script_args, ScriptFailure,
+    normalize_tool_path, project_tool_rules, run_script, script_args, ScriptFailure,
 };
 use crate::validators::types::{
     FixHint, Rule, RuleSet, Supersedes, ToolSpec, ValidatorMatch, ValidatorSource,
@@ -489,20 +489,31 @@ fn run_fixture(spec: &ToolSpec, fixture: &Path) -> Result<usize, String> {
     let fixture_dir = scratch.path();
 
     let args = script_args(spec.scope, std::slice::from_ref(&fixture_name));
-    let findings =
-        run_script_findings(&spec.run, fixture_dir, &args).map_err(|failure| match failure {
-            ScriptFailure::Start(e) => {
-                format!("tool failed to run on {}: {e}", fixture_label(fixture))
-            }
-            ScriptFailure::Exit(detail) => {
-                format!("tool broke on {}: {detail}", fixture_label(fixture))
-            }
-            ScriptFailure::Contract(detail) => format!(
-                "tool stdout on {} broke the contract: {detail}",
-                fixture_label(fixture)
-            ),
-        })?;
-    let about_fixture = findings
+    let outcome = run_script(&spec.run, fixture_dir, &args).map_err(|failure| match failure {
+        ScriptFailure::Start(e) => {
+            format!("tool failed to run on {}: {e}", fixture_label(fixture))
+        }
+        ScriptFailure::Exit(detail) => {
+            format!("tool broke on {}: {detail}", fixture_label(fixture))
+        }
+        ScriptFailure::Contract(detail) => format!(
+            "tool stdout on {} broke the contract: {detail}",
+            fixture_label(fixture)
+        ),
+    })?;
+    // A fixture run can decline an item too, and the fixture verdict is a
+    // count of findings alone. The doctor row has nowhere to render a
+    // diagnostic, so it reaches the reader through `tracing` rather than being
+    // dropped.
+    for message in &outcome.diagnostics {
+        tracing::warn!(
+            fixture = %fixture_label(fixture),
+            message = %message,
+            "a tool rule declined an item while proving a fixture"
+        );
+    }
+    let about_fixture = outcome
+        .findings
         .iter()
         .filter(|finding| {
             Path::new(&normalize_tool_path(&finding.file, fixture_dir)).file_name()

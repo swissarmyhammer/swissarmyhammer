@@ -816,9 +816,9 @@ fn drive_shipped_script<T>(
     let repo_root = probe_repository_root(&repo);
     let args = script_args(shipped.scope, files);
 
-    let findings = run_script_findings(&shipped.script, &repo_root, &args)?;
+    let outcome = run_script(&shipped.script, &repo_root, &args)?;
 
-    Ok(read(&findings, &repo_root))
+    Ok(read(&outcome.findings, &repo_root))
 }
 
 /// The entries of `expected` as the owned strings [`shipped_script_findings`]
@@ -885,9 +885,9 @@ fn rows_of_runs_started_together(
             .map(|_| {
                 threads.spawn(|| {
                     released.wait();
-                    let reported = run_script_findings(&shipped.script, &repo_root, &args)
+                    let reported = run_script(&shipped.script, &repo_root, &args)
                         .expect("each run must judge the probe repository and exit 0");
-                    sorted_names(&finding_rows(&reported, &repo_root))
+                    sorted_names(&finding_rows(&reported.findings, &repo_root))
                 })
             })
             .collect();

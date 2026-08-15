@@ -21,6 +21,15 @@
 //!   script judged the code; a nonzero exit is a [`ToolRunError`] carrying the
 //!   raw stderr, and no findings are read.
 //!
+//! A run that judged the code and could not judge ONE item says so with a
+//! stderr line opening [`TOOL_DIAGNOSTIC_MARKER`], and still exits 0 — failing
+//! the whole run over one item is worse. Each marked line becomes a
+//! [`ToolDiagnostic`]. It rides beside the findings rather than among them
+//! because it is about the RUN and not about a reviewed file: the
+//! matched-file filter a `scope: workspace` run applies would drop it, since
+//! the anchor a rule would name is a manifest or a lint configuration and a
+//! rule that lints source declares no glob for one.
+//!
 //! [`project_tool_rules`] is the third selection: the workspace-wide one, for
 //! the surfaces that have no work-list — the doctor's tool-rule rows and the
 //! `sah init` pre-install.
@@ -52,6 +61,14 @@ use crate::validators::{RuleSet, ValidatorLoader};
 /// Why a tool finding is confirmed without the adversarial verify pass.
 const TOOL_FINDING_REASON: &str =
     "a deterministic tool reported this finding; tool findings skip adversarial verification";
+
+/// What opens a stderr line a tool-rule script means for the author.
+///
+/// A script runs a third-party tool, and that tool writes progress, a
+/// deprecation notice, a lock wait and build-script output to the same stream.
+/// None of it is a statement to the author, and the engine cannot tell one
+/// from the other by reading it. The marker is what makes a line deliberate.
+pub const TOOL_DIAGNOSTIC_MARKER: &str = "sah-diagnostic:";
 
 /// The prompt rules the fleet must skip, per `(validator, file)`.
 ///
@@ -230,6 +247,69 @@ impl ToolRunError {
     }
 }
 
+/// Something a tool rule stated about a run it completed.
+///
+/// A rule that judged the code and could not judge ONE item writes a line
+/// opening [`TOOL_DIAGNOSTIC_MARKER`] on stderr and exits 0. That is not a
+/// finding — there is no path with something to fix — and it is not a broken
+/// run either, so it is neither of the other two report facts. Without it a
+/// declined item reads exactly like a clean pass over the thing the rule
+/// refused to judge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDiagnostic {
+    /// The owning validator (RuleSet) name.
+    validator: String,
+    /// The tool rule's name.
+    rule: String,
+    /// What the rule stated, with the marker removed.
+    message: String,
+}
+
+impl ToolDiagnostic {
+    /// The owning validator (RuleSet) name.
+    pub fn validator(&self) -> &str {
+        &self.validator
+    }
+
+    /// The tool rule's name.
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// What the rule stated, with the marker removed.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Build a diagnostic for tests, mirroring [`SkippedFile::for_test`]'s
+    /// pattern so synthesis tests can render one without a real tool run.
+    ///
+    /// [`SkippedFile::for_test`]: crate::review::scope::SkippedFile
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(validator: &str, rule: &str, message: &str) -> Self {
+        Self {
+            validator: validator.to_string(),
+            rule: rule.to_string(),
+            message: message.to_string(),
+        }
+    }
+}
+
+/// A diagnostic is a report fact, not an error — the rule judged the code and
+/// exited 0 — so it carries `Display` without `std::error::Error`, exactly as
+/// [`ToolFallback`] does.
+impl std::fmt::Display for ToolDiagnostic {
+    /// The diagnostic as one line: which rule declined, in which validator,
+    /// and what it said.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tool rule `{}` in validator `{}` declined an item: {}",
+            self.rule, self.validator, self.message
+        )
+    }
+}
+
 /// The planned tool-rule work for one review run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolPlan {
@@ -270,6 +350,8 @@ pub struct ToolOutcome {
     findings: Vec<VerifiedFinding>,
     /// Every run that broke (nonzero exit or stdout-contract violation).
     errors: Vec<ToolRunError>,
+    /// Every item a completed run declined, in run order.
+    diagnostics: Vec<ToolDiagnostic>,
 }
 
 impl ToolOutcome {
@@ -283,9 +365,14 @@ impl ToolOutcome {
         &self.errors
     }
 
-    /// Consume the outcome into `(findings, errors)`.
-    pub fn into_parts(self) -> (Vec<VerifiedFinding>, Vec<ToolRunError>) {
-        (self.findings, self.errors)
+    /// Every item a completed run declined.
+    pub fn diagnostics(&self) -> &[ToolDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Consume the outcome into `(findings, errors, diagnostics)`.
+    pub fn into_parts(self) -> (Vec<VerifiedFinding>, Vec<ToolRunError>, Vec<ToolDiagnostic>) {
+        (self.findings, self.errors, self.diagnostics)
     }
 }
 
@@ -298,15 +385,23 @@ pub struct ToolReport {
     errors: Vec<ToolRunError>,
     /// Every tool rule on its prompt fallback — the report notes each one.
     fallbacks: Vec<ToolFallback>,
+    /// Every item a completed run declined — the report states each one.
+    diagnostics: Vec<ToolDiagnostic>,
 }
 
 impl ToolReport {
     /// Assemble the report facts from the run's plan and outcome parts.
-    pub fn new(attempted: usize, errors: Vec<ToolRunError>, fallbacks: Vec<ToolFallback>) -> Self {
+    pub fn new(
+        attempted: usize,
+        errors: Vec<ToolRunError>,
+        fallbacks: Vec<ToolFallback>,
+        diagnostics: Vec<ToolDiagnostic>,
+    ) -> Self {
         Self {
             attempted,
             errors,
             fallbacks,
+            diagnostics,
         }
     }
 
@@ -325,11 +420,19 @@ impl ToolReport {
         &self.fallbacks
     }
 
+    /// Every item a completed run declined.
+    pub fn diagnostics(&self) -> &[ToolDiagnostic] {
+        &self.diagnostics
+    }
+
     /// Whether no tool rule did anything this run — nothing attempted, no
-    /// errors, no fallbacks. Used to keep the "Nothing in scope to review."
-    /// line honest.
+    /// errors, no fallbacks, nothing declined. Used to keep the "Nothing in
+    /// scope to review." line honest.
     pub fn is_inert(&self) -> bool {
-        self.attempted == 0 && self.errors.is_empty() && self.fallbacks.is_empty()
+        self.attempted == 0
+            && self.errors.is_empty()
+            && self.fallbacks.is_empty()
+            && self.diagnostics.is_empty()
     }
 }
 
@@ -584,11 +687,16 @@ pub fn execute_tool_runs(
         }
 
         match run_tool_script(run, repo_root) {
-            Ok(findings) => {
+            Ok(script) => {
+                let ScriptOutcome {
+                    findings,
+                    diagnostics,
+                } = script;
                 tracing::info!(
                     validator = %run.validator,
                     rule = %run.rule,
                     findings = findings.len(),
+                    diagnostics = diagnostics.len(),
                     "tool run judged the code"
                 );
                 emit_progress(
@@ -599,6 +707,19 @@ pub fn execute_tool_runs(
                     },
                 );
                 outcome.findings.extend(findings.into_iter().map(confirm));
+                for message in diagnostics {
+                    tracing::warn!(
+                        validator = %run.validator,
+                        rule = %run.rule,
+                        message = %message,
+                        "tool run judged the code and declined one item"
+                    );
+                    outcome.diagnostics.push(ToolDiagnostic {
+                        validator: run.validator.clone(),
+                        rule: run.rule.clone(),
+                        message,
+                    });
+                }
             }
             Err(detail) => {
                 tracing::warn!(
@@ -709,6 +830,8 @@ impl ToolRunsInFlight {
                             detail: detail.clone(),
                         })
                         .collect(),
+                    // The task judged nothing, so it declined nothing.
+                    diagnostics: Vec::new(),
                 }
             }
         }
@@ -751,8 +874,18 @@ pub(crate) fn script_args<S: AsRef<OsStr>>(scope: ToolScope, files: &[S]) -> Vec
     }
 }
 
+/// What one tool-rule script run said: the findings it reported on stdout, and
+/// the items it declined on stderr.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ScriptOutcome {
+    /// The findings the script's stdout carried, in the order it wrote them.
+    pub findings: Vec<Finding>,
+    /// The marked stderr lines, with [`TOOL_DIAGNOSTIC_MARKER`] removed.
+    pub diagnostics: Vec<String>,
+}
+
 /// Run a tool-rule script in `dir` with `args` as its positional parameters,
-/// and parse its stdout into findings.
+/// and read what it said.
 ///
 /// The ONE way a tool-rule script is run for its findings. The doctor's
 /// fixture checks ([`crate::doctor`]) prove a rule works by calling this, and
@@ -761,31 +894,59 @@ pub(crate) fn script_args<S: AsRef<OsStr>>(scope: ToolScope, files: &[S]) -> Vec
 /// another.
 ///
 /// Exit 0 means the script judged the code, whether or not it found anything;
-/// a nonzero exit is a broken tool, not a clean run.
-pub(crate) fn run_script_findings(
+/// a nonzero exit is a broken tool, not a clean run. A completed run's stderr
+/// is read for [`TOOL_DIAGNOSTIC_MARKER`] lines, and the rest of it — the
+/// tool's own chatter — reaches a `tracing` record rather than the report.
+pub(crate) fn run_script(
     script: &str,
     dir: &Path,
     args: &[&OsStr],
-) -> Result<Vec<Finding>, ScriptFailure> {
+) -> Result<ScriptOutcome, ScriptFailure> {
     let output = run_shell(script, Some(dir), args).map_err(ScriptFailure::Start)?;
     if !output.status.success() {
         return Err(ScriptFailure::Exit(command_failure_detail(&output)));
     }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        tracing::debug!(stderr = %stderr, "a tool-rule script wrote to stderr and exited 0");
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_tool_stdout(&stdout).map_err(|e| ScriptFailure::Contract(e.to_string()))
+    let findings =
+        parse_tool_stdout(&stdout).map_err(|e| ScriptFailure::Contract(e.to_string()))?;
+    Ok(ScriptOutcome {
+        findings,
+        diagnostics: marked_diagnostics(&stderr),
+    })
 }
 
-/// Run one tool rule's script and parse its stdout into tagged findings.
+/// The messages a completed run marked on its `stderr`, in the order it wrote
+/// them.
+///
+/// A line counts only when it opens with [`TOOL_DIAGNOSTIC_MARKER`], and an
+/// empty message after the marker states nothing, so it is left out.
+fn marked_diagnostics(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(TOOL_DIAGNOSTIC_MARKER))
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty())
+        .collect()
+}
+
+/// Run one tool rule's script and read what it said, tagging each finding.
 ///
 /// The script runs with bash at `repo_root`. `scope: files` passes the run's
 /// matched files as the script's arguments; `scope: workspace` passes none and
 /// keeps only the findings in the run's matched files afterwards. Exit 0 means
 /// the script judged the code; a nonzero exit (or stdout that violates the
 /// contract) is the error string — the raw stderr, or the parse problem.
-fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<Vec<Finding>, String> {
+///
+/// The matched-file filter reaches the findings alone. A diagnostic is about
+/// the run rather than about a reviewed file, so it has no path to be kept by.
+fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<ScriptOutcome, String> {
     let args = script_args(run.spec.scope, &run.files);
-    let mut findings =
-        run_script_findings(&run.spec.run, repo_root, &args).map_err(|failure| match failure {
+    let mut outcome =
+        run_script(&run.spec.run, repo_root, &args).map_err(|failure| match failure {
             ScriptFailure::Exit(detail) | ScriptFailure::Contract(detail) => detail,
             // The shell that would not start: its own `Display` says it best.
             start => start.to_string(),
@@ -793,17 +954,17 @@ fn run_tool_script(run: &ToolRun, repo_root: &Path) -> Result<Vec<Finding>, Stri
 
     if run.spec.scope == ToolScope::Workspace {
         let matched: BTreeSet<&str> = run.files.iter().map(String::as_str).collect();
-        findings.retain(|finding| {
+        outcome.findings.retain(|finding| {
             matched.contains(normalize_tool_path(&finding.file, repo_root).as_str())
         });
     }
 
-    for finding in &mut findings {
+    for finding in &mut outcome.findings {
         finding.file = normalize_tool_path(&finding.file, repo_root);
         finding.validator = run.validator.clone();
         finding.rule = Some(run.rule.clone());
     }
-    Ok(findings)
+    Ok(outcome)
 }
 
 /// Normalize a tool-reported path onto the repo-relative form the work-list
