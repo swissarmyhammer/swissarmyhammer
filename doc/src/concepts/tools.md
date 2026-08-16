@@ -72,7 +72,7 @@ Tools sit beneath skills and agents in the stack. Here's the relationship:
 - A **skill** (e.g., `/test`) defines the workflow.
 - An **agent mode** (e.g., tester) shapes how the AI approaches the task.
 - **Tools** (e.g., shell, files) are what the agent actually calls to do the work.
-- **Validators** (e.g., command-safety) check each tool invocation before it executes.
+- **Validators** (e.g., code-security) check the changed files when the review pipeline runs.
 
 The agent has access to all tools and chooses which to use based on context. The skill and agent mode influence these choices through their instructions, but tools themselves are general-purpose.
 

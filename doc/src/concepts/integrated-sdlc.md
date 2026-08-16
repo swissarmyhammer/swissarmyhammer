@@ -19,12 +19,12 @@ SwissArmyHammer assembles four kinds of building blocks — skills, agents, tool
 │         (what to work with — capabilities)   │
 ├─────────────────────────────────────────────┤
 │                Validators                    │
-│   code-quality  security  test-integrity     │
+│   code-hygiene  code-security  test-integrity│
 │         (what's acceptable — guardrails)     │
 └─────────────────────────────────────────────┘
 ```
 
-Each layer has a distinct responsibility, and the layers compose vertically. A skill like `/implement` activates the **implementer** agent mode, which uses **tools** (file editing, shell execution, code context) to write code, while **validators** (code quality, security rules) check every change as it happens.
+Each layer has a distinct responsibility, and the layers compose vertically. A skill like `/implement` activates the **implementer** agent mode, which uses **tools** (file editing, shell execution, code context) to write code, and the **validators** whose globs match the changed files — `code-hygiene`, `code-security` and their siblings — then judge that code when the review pipeline runs.
 
 ## A Concrete Example
 
@@ -33,7 +33,7 @@ Here's what happens when you type `/plan` in your AI coding agent:
 1. The **plan skill** activates. It defines the workflow: research the codebase, identify what needs to change, decompose work into discrete tasks.
 2. The **planner agent** mode shapes how the AI thinks. It's instructed to be thorough in research, conservative in scope, and to produce kanban cards as output.
 3. The planner uses **tools** to do the work: `code_context` to understand the codebase structure, `shell` to run analysis commands, `kanban` to create task cards, `question` to ask clarifying questions.
-4. **Validators** aren't heavily involved during planning, but command-safety validators still ensure no destructive shell commands are run during research.
+4. **Validators** do not run during planning. They match changed files, and planning changes none — the `code-security` set's `command-safety` rule reads the shell commands a diff embeds, not the commands the planner runs.
 
 The result: a kanban board with well-scoped cards, ready for `/implement` to pick up.
 
@@ -45,11 +45,11 @@ The skills form a natural development cycle:
 
 | Phase | Skill | Agent Mode | Primary Tools | Validators |
 |-------|-------|------------|---------------|------------|
-| **Plan** | `/plan` | planner | code-context, kanban, shell | command-safety |
-| **Implement** | `/implement` | implementer | files, shell, code-context, kanban | code-quality, security, command-safety |
-| **Test** | `/test` | tester | shell, files | test-integrity, command-safety |
-| **Review** | `/review` | reviewer | files, git, code-context | code-quality, security |
-| **Commit** | `/commit` | committer | git, shell | command-safety |
+| **Plan** | `/plan` | planner | code-context, kanban, shell | none — planning changes no file |
+| **Implement** | `/implement` | implementer | files, shell, code-context, kanban | code-hygiene, code-security |
+| **Test** | `/test` | tester | shell, files | test-integrity, code-hygiene |
+| **Review** | `/review` | reviewer | files, git, code-context | code-hygiene, code-security, completeness, duplication, reuse |
+| **Commit** | `/commit` | committer | git, shell | none — committing changes no file |
 
 Each phase is independent — you can run `/test` without `/plan`, or `/review` without `/implement`. But when used together, they form a complete cycle where each phase's output feeds the next.
 
@@ -79,9 +79,11 @@ Each agent mode is a markdown document that instructs the AI how to approach its
 
 Tools are MCP (Model Context Protocol) endpoints that the agent calls to interact with the outside world. File operations, shell execution, code intelligence, kanban management — these are all tools. Skills and agents don't hard-code tool usage; they decide which tools to use based on the task at hand.
 
-### Validators Run Continuously
+### Validators Run Over the Changed Files
 
-Validators are Claude Code hooks that fire on every tool call. When the agent writes a file, the code-hygiene validator checks for commented-out code, overlong functions, and undocumented public APIs. When it runs a shell command, the command-safety validator ensures it's not destructive. This happens transparently — the agent gets feedback and can self-correct before problems land.
+The review pipeline collects the changed files and runs each validator whose `match.files` globs match them. The `code-hygiene` set checks for commented-out code, overlong functions, and undocumented public APIs; the `code-security` set's `command-safety` rule reads the shell commands the diff embeds. Findings come back with each validator's severity, and blocking findings gate the change.
+
+Per-tool-call dispatch is gone. Validators no longer run as Claude Code hooks on `PreToolUse`, `PostToolUse`, or `Stop`, and the legacy `trigger` key that named such an event has been removed from the rule schema.
 
 ## Extensibility
 
@@ -90,6 +92,6 @@ Every layer is extensible:
 - **Skills** are markdown files. Drop a new one into `.claude/skills/` or install one via `mirdan install`.
 - **Agent modes** are markdown files in the modes directory. Customize existing ones or create new specialized roles.
 - **Tools** are MCP server endpoints. SwissArmyHammer's built-in tools cover the common cases; add more via MCP server configuration.
-- **Validators** are AVP rule sets. Add project-specific rules under `.avp/validators/` or install shared ones via `mirdan install`.
+- **Validators** are AVP rule sets. Add project-specific rules under `./.validators/` or install shared ones via `mirdan install`.
 
 The package manager (`mirdan`) ties extensibility to shareability — anything you create can be published to a registry and installed by others.

@@ -4,53 +4,80 @@ Validators are the guardrails of SwissArmyHammer. They are rules-as-data quality
 
 ## What a Validator Is
 
-A validator is an AVP (Agent Validator Protocol) rule set: a collection of rules organized under a `VALIDATOR.md` file. Each rule is a markdown document that describes what to check and how to report violations. AVP processes these rules against the agent's tool calls and file changes in real time.
+A validator is an AVP (Agent Validator Protocol) rule set: a collection of rules organized under a `VALIDATOR.md` file. Each rule is a markdown document that describes what to check and how to report violations. The review pipeline processes these rules against the changed files it was given.
 
 ## Built-in Validators
 
-SwissArmyHammer ships with a set of built-in validators, grouped below by the
-area they cover. The groups are illustrative rather than exhaustive — the
+SwissArmyHammer ships with a set of built-in validators. Each heading below
+names a validator set — one directory of `builtin/validators/` — and each
+bullet names a rule that set holds, so you can find the rule file by the name
+you read here. The lists are illustrative rather than exhaustive — the
 authoritative list is the builtin validator tree itself, which evolves over
 time.
 
-### Code Quality
+### `code-hygiene`
 
 Enforces structural code quality rules:
 
-- **Function length** — catches functions that are too long
-- **Naming consistency** — enforces naming conventions
-- **No commented-out code** — prevents dead code from accumulating
-- **No hard-coded values** — catches embedded credentials and config
-- **No magic numbers** — requires named constants
-- **No string equality** — flags fragile string comparisons
-- **No log truncation** — ensures complete error logging
-- **Missing docs** — flags undocumented public APIs
+- `function-length` — catches functions that are too long
+- `magic-numbers` — requires named constants for repeated literals and repeated configuration
+- `missing-docs` — flags public functions and types with no documentation comment
+- `no-commented-code` — flags large blocks of commented-out code
+- `dead-code` — flags added symbols with no inbound callers, orphaned modules, and unreachable branches
+- `data-driven` — flags a match or if-chain over a known set that is really a table
 
-### Security Rules
+Four of these — `dead-code`, `function-length`, `magic-numbers` and
+`missing-docs` — also ship a per-language **tool rule** beside the prompt
+rule. A tool rule runs a language tool instead of an LLM, and it replaces the
+prompt rule for the files it matches: `function-length-rust`,
+`magic-numbers-python` and `missing-docs-typescript` are three of them. The
+set holds one tool rule that replaces no prompt rule — `stuttering-name-go`,
+which flags an exported Go name that repeats its package name.
+`builtin/validators/README.md` states the whole tool rule contract.
+
+### `code-security`
 
 Catches security vulnerabilities:
 
-- **Input validation** — ensures user input is validated at boundaries
-- **No secrets** — prevents credentials, tokens, and keys from being committed
+- `no-secrets` — flags hardcoded secrets, API keys, and credentials
+- `injection` — flags SQL injection, XSS, command injection, and other input validation defects
+- `command-safety` — flags destructive shell commands in the diff, such as `rm -rf /`, `DROP TABLE`, and force pushes
 
-### Command Safety
-
-Guards against destructive shell commands:
-
-- **Safe commands** — blocks `rm -rf /`, `DROP TABLE`, force pushes, and other dangerous operations
-
-### Test Integrity
+### `test-integrity`
 
 Prevents test cheating:
 
-- **No test cheating** — catches mocking of the thing under test, assertion-free tests, and other patterns that make tests pass without testing anything
+- `no-test-cheating` — flags skipped, disabled, or inappropriately mocked tests
+- `no-hard-code` — flags a hard-coded return value written to make a test appear to pass
 
-### Manifests
+### `completeness`
+
+Checks that a change reaches every site it must:
+
+- `invariant-propagation` — a localized change to a token, flag, format, or case must reach every site that handles it
+- `inverse-operation-coverage` — a change to one direction of a paired operation must exercise the inverse
+- `case-sensitivity-coverage` — a change to case-sensitive matching needs one regression test through the changed path
+- `public-output-contract` — do not reformat user-facing output, drop an intended side effect, or break a public declaration callers depend on
+
+### `duplication` and `reuse`
+
+- `duplication` — flags verbatim and near-verbatim copied blocks; the set also holds the `rust` and `swift` carve-out rules
+- `reuse` — flags reimplementations of existing shared code
+
+### `manifests`
 
 Checks dependency manifests rather than source code, so it runs only when a
 manifest changed:
 
-- **Unused dependencies (Rust)** — flags a dependency a `Cargo.toml` declares that no source file of the package names
+- `unused-dependencies-rust` — flags a dependency a `Cargo.toml` declares that no source file of the package names
+
+### Language sets
+
+`rust`, `python`, `js-ts`, `swift`, `dart`, and `numpy` each hold the rules for
+one language or library. A naming or logging rule lives here rather than in
+`code-hygiene`, because each one is written for a single language: `js-ts`
+holds `naming-and-style`, `swift` holds `naming-clarity`, `casing`, and
+`doc-parameter-naming`, and `python` holds `logging`.
 
 ## How Validators Work
 
@@ -60,8 +87,8 @@ The review pipeline collects the changed files, matches each validator's `match.
 Changed files
     │
     ├─ Loader matches validators by file glob
-    │    ├─ Code quality validator checks the changed source
-    │    ├─ Security validator checks for secrets
+    │    ├─ code-hygiene checks the changed source
+    │    ├─ code-security checks for secrets
     │    └─ Findings collected with each validator's severity
     │
     └─ Blocking findings (error severity) gate the change
@@ -71,7 +98,7 @@ Matching is on file globs only — a validator with no `match.files` applies to 
 
 ## Setting Up Validators
 
-Built-in validators are always available. Project-specific validators go in `./.validators/`, and user-wide validators in `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`).
+Built-in validators are always available. Project-specific validators go in `./.validators/` under the workspace root, and user-wide validators in `~/.validators/`.
 
 ## Configuring the Review Tool
 
@@ -108,8 +135,8 @@ The `VALIDATOR.md` frontmatter declares:
 
 ```yaml
 ---
-name: dead-code
-description: Flags symbols with no inbound callers
+name: my-team-rules
+description: The rules this team adds on top of the built-in sets
 match:
   files:
     - "@file_groups/source_code"
@@ -142,7 +169,7 @@ This lets teams codify their standards as installable packages — new projects 
 |----------|-------|
 | Built-in (embedded in binary) | Always available |
 | Project `./.validators/` | Project-specific rules |
-| Global `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`) | User-wide rules |
+| User `~/.validators/` | User-wide rules |
 | Installed via Mirdan | Project or global |
 
 Precedence is builtin → user → project: a project rule set overrides a user rule set of the same name, which overrides the built-in.

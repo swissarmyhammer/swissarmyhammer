@@ -2,8 +2,7 @@
 name: rust
 description: >-
   Rust review guidelines (dtolnay school) — error handling, type safety, API
-  design, trait impls, future-proofing, and documentation idioms applied to
-  changed Rust files.
+  design, and trait implementations applied to changed Rust files.
 metadata:
   version: "{{version}}"
 match:

@@ -6,10 +6,10 @@ and maintained by `sah init`.
 ## What's here
 
 Each subdirectory is one **validator set** — a named bundle of code-review rules
-(for example `rust/`, `naming/`, `code-security/`). A set is a folder with a
-`VALIDATOR.md` (the set manifest) plus a `rules/` directory of rule files. The
-review engine reads this directory directly — validators are **not** symlinked
-into agent directories.
+(for example `rust/`, `code-hygiene/`, `code-security/`). A set is a folder
+with a `VALIDATOR.md` (the set manifest) plus a `rules/` directory of rule
+files. The review engine reads this directory directly — validators are
+**not** symlinked into agent directories.
 
 The set manifest carries the shared metadata, including the `match` block:
 
@@ -130,8 +130,13 @@ Write one name, or a list of names:
       - missing-docs
 
 One tool run can replace more than one prompt rule, and the list is how a rule
-says so. No shipped rule names two today: each shipped tool rule replaces
-exactly one prompt rule.
+says so. No shipped rule names two today. A shipped tool rule replaces one
+prompt rule or none: every shipped tool rule but `stuttering-name-go` and
+`unused-dependencies-rust` names exactly one, and those two declare no
+`supersedes` key at all — no shipped prompt rule reads a Go NAME, and no
+shipped prompt rule asks whether a declared dependency is used. A rule that
+supersedes nothing replaces no rule and degrades to no rule: a machine without
+the tool gets no answer to the question rather than a worse one.
 
 The `tool` block keys:
 
