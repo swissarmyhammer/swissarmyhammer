@@ -392,11 +392,21 @@ of two tool rules tree-wide — the other is the `manifests` set's
 `supersedes` on a rule that carries a `tool` block and nowhere else, so a prompt
 rule declares no `supersedes` key and enters neither count.
 
-No shipped prompt rule reads a Go NAME: the prompt rules written about naming
-are `swift/casing`, `swift/naming-clarity`, `swift/doc-parameter-naming` and
-`js-ts/naming-and-style`, and none of the four reads a `.go` file. A machine
-without `revive` therefore gets no answer to this question rather than a worse
-one.
+No shipped prompt rule reads a Go NAME, and the check for that is a `match`
+block rather than a reading of what each rule is about. Seven of the thirteen
+shipped sets declare their own globs, and no glob among them names Go — `dart`
+matches `**/*.dart`, `js-ts` matches `**/*.js`, `**/*.jsx`, `**/*.ts` and
+`**/*.tsx`, `numpy` and `python` each match `**/*.py`, `rust` matches `**/*.rs`,
+`swift` matches `**/*.swift`, and `manifests` matches `**/Cargo.toml`. A `.go`
+file therefore reaches the other six sets alone — `code-hygiene`,
+`code-security`, `completeness`, `duplication`, `reuse` and `test-integrity` —
+each through the `*.go` entry of `@file_groups/source_code`, whose patterns
+match at any depth. Those six sets hold 19 prompt rules between them, which is
+one directory listing filtered on the `tool` frontmatter key, and
+`stuttering-name-go` is the only rule of the six that reads a name at all. A
+reader checks that with a command rather than by deciding what a rule is about.
+A machine without `revive` therefore gets no answer to this question rather than
+a worse one.
 
 | Rule | Tool | Inline suppression |
 |---|---|---|

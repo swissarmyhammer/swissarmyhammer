@@ -224,6 +224,137 @@ comments:
 
     No stale text was restored to make anything pass. Did not commit; task left in `doing`.
   timestamp: 2026-08-16T13:59:14.342999+00:00
+- actor: claude-code
+  id: 01m05dzkwg7yvcgwfww075d1ng
+  text: |-
+    ### commit — changed
+    - evidence: 12300d8eb fix(validators): put the tool qualifier back on two counts (^epe1z67); 6 files changed, 170 insertions(+), 15 deletions(-)
+    - next: none
+  timestamp: 2026-08-16T14:00:34.960918+00:00
+- actor: claude-code
+  id: 01m05eaqgrsaky4btetxnf2a9r
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (commit 12300d8eb) returned findings 0, confirmed 0, refuted 0 — it matched 0 of the 4 changed prose files and skipped the 2 `.kanban/` files by `.reviewignore`, so the claims were verified by hand against the tree. 1 finding — builtin/validators/code-hygiene/VALIDATOR.md:395. The two corrected counts, the `supersedes` mechanism claim, and the `integrated-sdlc.md` glob claim are all true as written; the naming enumeration is still not exhaustive and omits `swift/fluent-usage`.
+    - next: replace the closed enumeration at VALIDATOR.md:395 with the structural fact — no shipped language set covers Go, and the six sets that match `**/*.go` hold no prompt rule about what a name is.
+  timestamp: 2026-08-16T14:06:39.128890+00:00
+- actor: claude-code
+  id: 01m05ecv27g44q95yy98wyb8yg
+  text: |
+    ### finish iteration 2 — findings
+    - implement: changed — 4 files. Counts measured before writing: 84 rule files, 23 declare `supersedes`, 61 do not, 25 tool rules, 23 of those declare it, 2 do not. Found and fixed 4 further instances of the same cause beyond the finding.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14105 passed, 0 failed, 0 skipped; cargo build -p mirdan succeeds and the traced OUT_DIR embed carries the corrected text with the stale wording absent; every count independently re-counted by the tester.
+    - commit: 12300d8eb fix(validators): put the tool qualifier back on two counts (^epe1z67) — 6 files changed, 170 insertions, 15 deletions
+    - review: findings — 1 finding, builtin/validators/code-hygiene/VALIDATOR.md:395.
+
+    ### Everything the finding of iteration 1 asked for is now CORRECT
+
+    The reviewer re-measured with its own script rather than reading the tester's numbers: 84 rule files, 23 with `supersedes`, 61 without, 25 tool rules, 23 of those with it, 2 without, and `code-hygiene` at 30 rules — 24 tool and 6 prompt. "The only TOOL rule of this set" and "one of two tool rules tree-wide" both hold exactly.
+
+    The mechanism claim holds too: `tool_rules.rs:507` reads `let Some(spec) = &rule.tool else { continue; };`, so a rule with `tool: None` never reaches the suppression walk. 0 of 59 shipped prompt rules declare `supersedes`.
+
+    The `integrated-sdlc.md` correction is accurate against all 13 set match blocks and both file-group YAMLs. The 170/15 resolves: 149 insertions are the board record, leaving 21/14 of real prose.
+
+    ### The new finding — a CLOSED enumeration that is not exhaustive
+
+    `builtin/validators/code-hygiene/VALIDATOR.md:395` states "the prompt rules written about naming are `swift/casing`, `swift/naming-clarity`, `swift/doc-parameter-naming` and `js-ts/naming-and-style`, and none of the four reads a `.go` file".
+
+    `swift/fluent-usage` is a fifth prompt rule about naming and is omitted — every bullet of it dictates what a declaration is called. `rust/api-design` and `js-ts/react-components` are omitted too. The word "four" CLOSES the list, so the sentence is false as written.
+
+    The conclusion survives: none of the omitted rules reads a `.go` file either.
+
+    ### The prescription — remove the cause, do not add a fifth name
+
+    The reviewer is explicit, and this is the important part. "Rules written about naming" has NO mechanical test. It must be recounted by judgment every time a rule is added, so it will go stale again. Adding `swift/fluent-usage` fixes this instance and leaves the cause.
+
+    The fix is to state a structurally checkable fact instead: no shipped language set covers Go, and the sets that match `**/*.go` through `@file_groups/source_code` hold no prompt rule about what a name is.
+
+    ### Guardrail state
+
+    Two rounds, two findings, both in `code-hygiene/VALIDATOR.md`, both of the same CLASS — a claim wider than what the tree supports — but at different lines with different content:
+
+    1. iteration 1 — line 389, a dropped `tool` qualifier making two counts false. ANSWERED, verified correct.
+    2. iteration 2 — line 395, a closed four-item enumeration missing a fifth member.
+
+    Not the same file:line and not the same message, so the guardrail is not tripped. The loop continues, and iteration 3 must fix the CAUSE rather than the instance.
+    - next: iteration 3 works the open finding
+  timestamp: 2026-08-16T14:07:48.295563+00:00
+- actor: claude-code
+  id: 01m05f2qngh8n36a18n8wkfj7e
+  text: |-
+    Worked the one open finding. Removed the CAUSE — a membership test that needs judgment — rather than the instance, and applied the same standard to every other closed enumeration this card wrote over 21cb8b128 and 12300d8eb.
+
+    ## The replacement statement, and how it was verified
+
+    The old sentence asked the reader to decide which rules are "written about naming". No command answers that, so the list went stale two rounds running. The new sentence asks which sets a `.go` file REACHES, which one command answers.
+
+    `builtin/validators/code-hygiene/VALIDATOR.md`, the "## Naming" section, now reads:
+
+    > No shipped prompt rule reads a Go NAME, and the check for that is a `match` block rather than a reading of what each rule is about. Seven of the thirteen shipped sets declare their own globs, and no glob among them names Go — `dart` matches `**/*.dart`, `js-ts` matches `**/*.js`, `**/*.jsx`, `**/*.ts` and `**/*.tsx`, `numpy` and `python` each match `**/*.py`, `rust` matches `**/*.rs`, `swift` matches `**/*.swift`, and `manifests` matches `**/Cargo.toml`. A `.go` file therefore reaches the other six sets alone — `code-hygiene`, `code-security`, `completeness`, `duplication`, `reuse` and `test-integrity` — each through the `*.go` entry of `@file_groups/source_code`, whose patterns match at any depth. Those six sets hold 19 prompt rules between them, which is one directory listing filtered on the `tool` frontmatter key, and `stuttering-name-go` is the only rule of the six that reads a name at all. A reader checks that with a command rather than by deciding what a rule is about. A machine without `revive` therefore gets no answer to this question rather than a worse one.
+
+    Every number was read off the tree before it was written, from the FRONTMATTER of each `VALIDATOR.md` rather than from the file body:
+
+    - 13 sets ship (`ls -d builtin/validators/*/`).
+    - 7 declare their own `match.files` globs: `dart` `**/*.dart`; `js-ts` `**/*.js` `**/*.jsx` `**/*.ts` `**/*.tsx`; `manifests` `**/Cargo.toml`; `numpy` `**/*.py`; `python` `**/*.py`; `rust` `**/*.rs`; `swift` `**/*.swift`. Grepped all 7 frontmatter blocks for `.go`: zero hits.
+    - The other 6 declare `@file_groups/...`: `code-hygiene`, `code-security`, `duplication` and `reuse` take `source_code`; `completeness` and `test-integrity` take `source_code` plus `test_files`.
+    - 19 prompt rules across those 6 — `ls .../rules/*.md | xargs grep -L '^tool:' | wc -l`. They are `code-hygiene`'s `data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs`, `no-commented-code`; `code-security`'s `command-safety`, `injection`, `no-secrets`; `completeness`'s `case-sensitivity-coverage`, `invariant-propagation`, `inverse-operation-coverage`, `public-output-contract`; `duplication`'s `duplication`, `rust`, `swift`; `reuse`'s `reuse`; `test-integrity`'s `no-hard-code`, `no-test-cheating`. Each carries an empty rule-level `match`, so a rule-level narrowing takes none of them out of Go's reach.
+
+    One correction to the reviewer's own wording, made rather than copied. The group's Go entry is `*.go`, not `**/*.go`. It still matches at any depth, because `GLOB_MATCH_OPTIONS` in `crates/swissarmyhammer-validators/src/validators/types.rs` sets `require_literal_separator: false`, so `*` crosses `/`. The prose states the pattern the YAML actually holds and says why it reaches a nested path.
+
+    The residual "reads a name at all" now sits over 19 named rules a reader can list with one command. It is no longer a judgment over 84 files, and the count 19 is the tripwire: a rule added to any of the six breaks the number mechanically.
+
+    ## The other closed enumerations of the same class, found and fixed
+
+    Re-read every sentence the two commits wrote and tested each list for the defect: closed by a count word or by "the"/"all"/"none", with a membership test that needs judgment.
+
+    1. **`builtin/validators/README.md`, the `supersedes` section.** It carried "those two declare no `supersedes` key at all — no shipped prompt rule reads a Go NAME, and no shipped prompt rule asks whether a declared dependency is used." Two "none of the ..." claims over all 59 shipped prompt rules, each answered by judgment. Both now follow from a `match` block: a `Cargo.toml` reaches the `manifests` set alone, and `builtin/validators/manifests/rules/` holds `unused-dependencies-rust.md` and NOTHING ELSE, so there is no prompt rule in the only set that file reaches. The Go half points at the derivation in `code-hygiene/VALIDATOR.md` rather than repeating it. Verified: `manifests` is the only set whose `match.files` names `Cargo.toml`; `source_code.yaml` and `test_files.yaml` declare no `*.toml` pattern.
+
+    2. **`doc/src/concepts/integrated-sdlc.md`, the phase table.** The Validators column named a different set list for each phase — `code-hygiene, code-security` for Implement, `test-integrity, code-hygiene` for Test, `code-hygiene, code-security, completeness, duplication, reuse` for Review. Membership is pure judgment, and the mechanism refutes it: the engine picks a set by glob, not by phase, which the SAME page states two sections down. The three middle cells now read "every set whose globs match the changed files", and a sentence under the table says the column names no set because the engine picks none by phase, with `rust` for a `.rs` change and `js-ts` for a `.tsx` one as the example. The Plan and Commit cells were left alone — the review settled the Plan glob correction, and Commit changes no file.
+
+    ## Checked against the same standard and deliberately left alone
+
+    - `README.md` "every shipped tool rule but `stuttering-name-go` and `unused-dependencies-rust` names exactly one", and "No shipped rule names two today" — closed, but membership is `grep '^supersedes:'` crossed with `grep '^tool:'`. Mechanical, and settled by the review.
+    - `code-hygiene/VALIDATOR.md:389` — the "only TOOL rule of this set" and "one of two tool rules tree-wide" counts. Mechanical, settled by the review. Not touched.
+    - `doc/src/concepts/validators.md:77`, the Language sets paragraph — the reviewer ruled this one open, and re-reading confirms it: no count word, no "the naming rules are", and the section preamble says the lists are illustrative rather than exhaustive. `swift/fluent-usage` being absent does not make it false. Left.
+    - `doc/src/concepts/validators.md` per-set bullet lists, and the "Four of these — `dead-code`, `function-length`, `magic-numbers` and `missing-docs`" sentence — each is a directory listing or a `supersedes` value set. Mechanical. Left.
+    - `swift/VALIDATOR.md` and `rust/VALIDATOR.md` descriptions — each enumerates its own `rules/` directory. Mechanical, settled by the review. Left.
+    - `doc/src/concepts/tools.md` — writes "e.g.", so it closes nothing. Left.
+    - The 84/23/61/25/23/2 counts, the `code-hygiene` 24 tool + 6 prompt split, the `tool_rules.rs:507` mechanism claim and the `integrated-sdlc.md` glob correction were NOT re-churned, per the card.
+
+    ## Embed confirmed
+
+    `builtin/validators/**` is shipped content, so the embed is the load-bearing check. Touched `crates/mirdan/build.rs` to force the build script to rerun, then traced the fresh OUT_DIR by `-newer`: `target/debug/build/mirdan-2dd4355981eab855/out/builtin_validators.rs`. It carries "Seven of the thirteen", "reaches the other six sets alone", "19 prompt rules between them" and "reaches the `manifests` set alone", and it holds ZERO copies of "the prompt rules written about naming are", "none of the four reads" or "no shipped prompt rule reads a Go NAME, and no".
+
+    No stray dotdir was created. `crates/swissarmyhammer-mcp-proxy/.kanban` is the git-tracked fixture already recorded on this card. `git status` shows exactly three prose files dirty.
+
+    ### implement — changed
+    - evidence: 3 files — builtin/validators/code-hygiene/VALIDATOR.md, builtin/validators/README.md, doc/src/concepts/integrated-sdlc.md. Measured 13 sets / 7 with own globs, none naming Go / 6 reaching `.go` through `@file_groups/source_code` / 19 prompt rules across those 6 / `manifests` holding 1 rule and it a tool rule. `cargo fmt --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings; `cargo nextest run --workspace` 14105 passed, 0 failed, 0 skipped; `cargo build -p mirdan` OK with the corrected text confirmed in the traced OUT_DIR embed and the stale text absent.
+    - next: /review. Left in `doing`, not committed.
+  timestamp: 2026-08-16T14:19:45.712201+00:00
+- actor: claude-code
+  id: 01m05fg5s7mzd7w4r8d1758scf
+  text: |-
+    ### test — green
+
+    **Gates**
+    - `cargo fmt --check`: exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, zero warnings. Compiled mirdan, mirdan-app, swissarmyhammer-tools, mirdan-cli, swissarmyhammer-agent, kanban-app, kanban-cli, code-context-cli, swissarmyhammer, shelltool-cli, swissarmyhammer-mcp-proxy, swissarmyhammer-cli.
+    - `cargo nextest run --workspace`: 14105 tests run, 14105 passed (24 slow), 0 skipped, 0 failed.
+    - `cargo build -p mirdan`: exit 0. Traced OUT_DIR to `target/debug/build/mirdan-fe0ade5ce9f852e6/out/builtin_validators.rs` (mtime 09:21, newer than the edited sources at 09:12). Extracted the exact embedded blocks for `README.md` (lines 6-498) and `code-hygiene/VALIDATOR.md` (lines 498-1120) and confirmed: the new wording is present verbatim (`Seven of the thirteen shipped sets declare their own globs...`, `Those six sets hold 19 prompt rules between them...`, `Neither has a prompt rule to name, and both times that follows from a match block...`), and the stale wording (`the prompt rules written about naming are`, `no shipped prompt rule asks whether a declared dependency is used`, `swift/casing`) is absent from both blocks. (`swift/casing`/`js-ts/naming-and-style`/"asks whether a declared dependency is used" phrases DO still appear elsewhere in the embed, but only inside two other, untouched rule files — `code-hygiene/rules/missing-docs-go.md` and `code-hygiene/rules/stuttering-name-go.md` — confirmed by locating the nearest preceding `("<file>", r#"---` tuple marker before each match; those files were not part of this iteration's edit.)
+
+    **Independent verification of every number in the card**
+    - 13 validator sets ship: counted `VALIDATOR.md` under `builtin/validators/*/` — 13 files, matches.
+    - 7 sets declare their own `match.files` globs: `dart` (`**/*.dart`), `js-ts` (`**/*.js`,`**/*.jsx`,`**/*.ts`,`**/*.tsx`), `manifests` (`**/Cargo.toml`), `numpy` (`**/*.py`), `python` (`**/*.py`), `rust` (`**/*.rs`), `swift` (`**/*.swift`) — read all 13 `VALIDATOR.md` match blocks directly; no glob among the 7 names Go — confirmed.
+    - The other 6 (`code-hygiene`, `code-security`, `completeness`, `duplication`, `reuse`, `test-integrity`) use `@file_groups/source_code` — confirmed by the same read.
+    - 19 prompt rules across those 6 sets: counted every `rules/*.md` file under the six sets and classified by presence/absence of a `tool:` frontmatter key. code-hygiene 6 prompt (`data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs`, `no-commented-code`), code-security 3 (`command-safety`, `injection`, `no-secrets`), completeness 4 (`case-sensitivity-coverage`, `invariant-propagation`, `inverse-operation-coverage`, `public-output-contract`), duplication 3 (`duplication`, `rust`, `swift`), reuse 1 (`reuse`), test-integrity 2 (`no-hard-code`, `no-test-cheating`). Total 6+3+4+3+1+2 = 19 — matches exactly.
+    - `Cargo.toml` reaches `manifests` alone, and `manifests/rules/` holds exactly one file, `unused-dependencies-rust.md`, which carries a `tool:` key at its line 9 — confirmed via `ls` and `grep`.
+    - `builtin/file_groups/source_code.yaml` Go entry is `"*.go"` (not `**/*.go`) — confirmed by direct read. `GLOB_MATCH_OPTIONS` in `crates/swissarmyhammer-validators/src/validators/types.rs` sets `require_literal_separator: false` — confirmed by grep; this is also referenced/echoed at `crates/swissarmyhammer-validators/src/builtin/mod.rs` line ~485 ("patterns under `require_literal_separator: false`, so a leading `**/`...").
+
+    **Frontmatter check**
+    - `builtin/validators/code-hygiene/VALIDATOR.md` frontmatter parses as valid YAML with `name`, `description`, `metadata`, `match`, `probes` keys intact — verified with a Python `yaml.safe_load` round-trip.
+
+    No files were modified. Task left in `doing`. Not committed.
+  timestamp: 2026-08-16T14:27:06.151466+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Two more stale claims found beside the complexity scorer sweep
@@ -262,3 +393,18 @@ So a shipped tool rule can replace one prompt rule or none. The first half of th
 > Scope: `review sha HEAD~1..HEAD` (commit 21cb8b128) — reviewed the diffs only. The `review` engine matched 0 of the 7 changed prose files and returned an empty report; the claims the commit writes were therefore verified directly against the validator tree and the crate source.
 
 - [x] `builtin/validators/code-hygiene/VALIDATOR.md:389` `code-hygiene/stuttering-name-go` — The replacement sentence "It supersedes nothing. It is the only rule of this set to do that, and one of two tree-wide — the other is the `manifests` set's `unused-dependencies-rust`." drops the `tool` qualifier, so both counts it writes are false as written. Seven rules of `code-hygiene` declare no `supersedes` frontmatter key — `data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs`, `no-commented-code` and `stuttering-name-go` — not one; and 61 of the tree's 84 rule files declare none, not two. Both counts are true only of TOOL rules. Write "the only tool rule of this set" and "one of two tool rules tree-wide", matching the scoping the same commit's `builtin/validators/README.md` already uses ("every shipped tool rule but `stuttering-name-go` and `unused-dependencies-rust` names exactly one"). Apply the `tool` qualifier to every count in this section, not only the one sentence quoted.
+
+## Review Findings (2026-08-16 09:05)
+
+> Scope: `review sha HEAD~1..HEAD` (commit 12300d8eb) — reviewed the diffs only. The `review` engine matched 0 of the 4 changed prose files: it saw only the two `.kanban/` files, both excluded by `.reviewignore`, and returned an empty report. Every claim the commit writes was therefore verified directly against the validator tree, the two file-group YAMLs and the crate source.
+
+- [x] `builtin/validators/code-hygiene/VALIDATOR.md:395` `code-hygiene/stuttering-name-go` — The replacement enumeration "the prompt rules written about naming are `swift/casing`, `swift/naming-clarity`, `swift/doc-parameter-naming` and `js-ts/naming-and-style`, and none of the four reads a `.go` file" is still not exhaustive, which repeats the defect the last round reported. `swift/fluent-usage` is a fifth prompt rule written about naming, and it is omitted: every bullet of `builtin/validators/swift/rules/fluent-usage.md` dictates what a declaration is CALLED — base names form a grammatical phrase at the call site, the preposition attaches to the argument label rather than the base name, factory methods begin with `make`, mutating and non-mutating pairs follow the verb/noun rule (`sort()`/`sorted()`, `union(z)`/`formUnion(z)`), and side-effect-free operations are noun phrases. Apple's API Design Guidelines, which the `swift` set's own `description` names as its source, carries "Strive for Fluent Usage" as a subsection of Naming. Two more prompt rules carry naming requirements and are omitted as well: `rust/api-design` ("No `get_` prefix on getters", "Conversion naming: `as_`, `to_`, `into_`") and `js-ts/react-components` ("Named prop interfaces", "`Component` + `ComponentProps` naming convention"). The list already admits a rule that is only half naming, because `js-ts/naming-and-style` spends half its bullets on `for...of`, `.find()` and `Array#reduce`. The count word "four" closes the list, so the sentence is false as written, although its conclusion survives — none of the omitted rules reads a `.go` file either. Do not answer this by adding a fifth name. The category "rules written about naming" has no mechanical test and must be counted again each time a rule is added, which is why it has now been wrong two times. State the structural fact instead: no shipped LANGUAGE set covers Go — `rust`, `python`, `js-ts`, `swift`, `dart` and `numpy` match `**/*.rs`, `**/*.py`, `**/*.{js,jsx,ts,tsx}`, `**/*.swift`, `**/*.dart` and `**/*.py` — and the six sets that DO match `**/*.go` through `@file_groups/source_code` (`code-hygiene`, `code-security`, `completeness`, `duplication`, `reuse` and `test-integrity`) hold no prompt rule about what a name is. Apply this treatment to every closed enumeration of rule names in this section, not only the sentence quoted.
+
+Checked against the tree this round, and true as written:
+
+- `builtin/validators/code-hygiene/VALIDATOR.md:389` — "the only TOOL rule of this set to do that, and one of two tool rules tree-wide". Measured over the 84 rule files: 23 declare `supersedes` and 61 do not; 25 carry a `tool` block, 23 of those declare `supersedes` and 2 do not — `code-hygiene/stuttering-name-go` and `manifests/unused-dependencies-rust`. `code-hygiene` holds 30 rules, 24 tool and 6 prompt, and `stuttering-name-go` is its only tool rule without `supersedes`. Both counts now match their wording exactly.
+- `builtin/validators/code-hygiene/VALIDATOR.md:391` and `builtin/validators/README.md:63` — "the engine reads `supersedes` on a rule that carries a `tool` block and nowhere else". `matched_tool_rules` in `crates/swissarmyhammer-validators/src/review/tool_rules.rs:507` runs `let Some(spec) = &rule.tool else { continue; }`, so a rule with `tool: None` never reaches the suppression walk at `tool_rules.rs:638`; the doctor path builds `ToolRuleStatus` from a rule that already carries a `spec`. No shipped prompt rule declares `supersedes` — 0 of 59 — so "a prompt rule never carries the key" holds for shipped content.
+- `builtin/validators/README.md:60` — "A TOOL rule that supersedes nothing replaces no prompt rule and degrades to no rule" is true of the mechanism, and it repairs the previous wording, which was false of a prompt rule such as `dead-code` or `no-commented-code`.
+- `doc/src/concepts/integrated-sdlc.md:36` — "planning writes only kanban cards — `.md` and `.jsonl` files that no shipped validator glob matches". All 13 set `match` blocks were read: `code-hygiene`, `code-security`, `duplication` and `reuse` match `@file_groups/source_code`; `completeness` and `test-integrity` match that group plus `@file_groups/test_files`; `dart`, `js-ts`, `numpy`, `python`, `rust` and `swift` match extension globs; `manifests` matches `**/Cargo.toml`. Neither `builtin/file_groups/source_code.yaml` nor `builtin/file_groups/test_files.yaml` carries `*.md` or `*.jsonl`, and no set glob does.
+- `doc/src/concepts/validators.md:77` — "A naming or logging **prompt rule** lives here rather than in `code-hygiene`" is true: the 6 prompt rules of `code-hygiene` are `data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs` and `no-commented-code`, and none is a naming or logging rule. The sentence lists what each language set holds without closing the list, so the `swift/fluent-usage` omission does not make it false.
+- Change size: 170 insertions and 15 deletions resolve to 149 insertions in `.kanban/tasks/01M058VCBCKFTB36T32EPE1Z67.{md,jsonl}`, which recorded the previous round, and 21 insertions against 14 deletions over the four prose files — 5/3 in `README.md`, 9/5 in `code-hygiene/VALIDATOR.md`, 2/2 in `integrated-sdlc.md`, 5/4 in `validators.md`. No unexplained bulk.

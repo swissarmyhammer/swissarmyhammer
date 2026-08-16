@@ -133,12 +133,16 @@ One tool run can replace more than one prompt rule, and the list is how a rule
 says so. No shipped rule names two today. A shipped tool rule replaces one
 prompt rule or none: every shipped tool rule but `stuttering-name-go` and
 `unused-dependencies-rust` names exactly one, and those two declare no
-`supersedes` key at all — no shipped prompt rule reads a Go NAME, and no
-shipped prompt rule asks whether a declared dependency is used. A TOOL rule that
-supersedes nothing replaces no prompt rule and degrades to no rule: a machine
-without the tool gets no answer to the question rather than a worse one. A
-prompt rule never carries the key — the engine reads `supersedes` on a rule that
-carries a `tool` block and nowhere else.
+`supersedes` key at all. Neither has a prompt rule to name, and both times that
+follows from a `match` block rather than from a survey of what each rule is
+about: a `Cargo.toml` reaches the `manifests` set alone, whose `rules/`
+directory holds `unused-dependencies-rust` and nothing else, and
+`code-hygiene/VALIDATOR.md` derives the Go half the same way from the six sets a
+`.go` file reaches. A TOOL rule that supersedes nothing replaces no prompt rule
+and degrades to no rule: a machine without the tool gets no answer to the
+question rather than a worse one. A prompt rule never carries the key — the
+engine reads `supersedes` on a rule that carries a `tool` block and nowhere
+else.
 
 The `tool` block keys:
 
