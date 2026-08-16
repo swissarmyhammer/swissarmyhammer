@@ -866,7 +866,7 @@ fn the_shipped_swift_magic_numbers_tool_rule_reads_only_the_files_it_is_given() 
 /// A Python function that compares against an unnamed literal. `PLR2004`
 /// reports the literal in the comparison and stays silent about the one the
 /// `return` carries, so each file holds one finding.
-const PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE: &str = r#"def gate(value):
+const PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE: &str = r#"def gate(value):
     if value == 42:
         return 7
     return 0
@@ -875,8 +875,8 @@ const PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE: &str = r#"def gate(value):
 /// Every Python file staged in the probe repository the magic-numbers script
 /// is given none of.
 const PYTHON_MAGIC_NUMBERS_UNREAD_FILES: &[(&str, &str)] = &[
-    ("top.py", PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE),
-    ("deep/nested/other.py", PYTHON_MAGIC_NUMBERS_UNREAD_SOURCE),
+    ("top.py", PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE),
+    ("deep/nested/other.py", PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE),
 ];
 
 /// Each finding the Python magic-numbers script reports over the two files it
@@ -905,6 +905,357 @@ const PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
 #[test]
 fn the_shipped_python_magic_numbers_tool_rule_reads_only_the_files_it_is_given() {
     verify_shipped_run_reads_only_its_arguments(&PYTHON_MAGIC_NUMBERS_EMPTY_RUN_PROBE);
+}
+
+/// Where the Python file the magic-numbers run CAN judge stands, beside each
+/// item it cannot judge.
+const PYTHON_MAGIC_NUMBERS_JUDGED_PATH: &str = "judged.py";
+
+/// The comparison the one finding of the judged file stands on.
+const PYTHON_MAGIC_NUMBERS_COMPARISON: &str = "if value == 42:";
+
+/// The `path:line` row the run must report for the judged file.
+///
+/// That row is what a nonzero exit over a declined item costs, so every probe
+/// of a declined item holds the run to it.
+fn python_magic_numbers_judged_row() -> String {
+    expected_row(
+        PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+        PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+        PYTHON_MAGIC_NUMBERS_COMPARISON,
+    )
+}
+
+/// A Python file that does not parse: the parameter list of `broken` never
+/// closes.
+const PYTHON_MAGIC_NUMBERS_UNPARSABLE_SOURCE: &str = "def broken(\n";
+
+/// Where the file ruff cannot parse stands inside the probe repository.
+const PYTHON_MAGIC_NUMBERS_UNPARSABLE_PATH: &str = "broken.py";
+
+/// Acceptance: the shipped Python magic-numbers tool rule DECLINES a Python
+/// file it cannot parse, through the real ruff pipeline.
+///
+/// ruff writes a file it cannot parse onto the SAME report as a finding, under
+/// `"code": "invalid-syntax"`. Measured with ruff 0.14.5 over `def broken(`
+/// beside a function that compares against `42`: two rows on the report — the
+/// `PLR2004` of the file it read AND the parse failure — at exit 1, and nothing
+/// on stderr. ruff judged the other file, so the finding is there to lose.
+///
+/// The `.[]` of the pipe this rule replaced carried no `select`, so the parse
+/// row became a magic-numbers FINDING that named a defect ruff never reported.
+/// Measured with that pipe over the same two files: 2 findings at exit 0, one
+/// of them `invalid-syntax unexpected EOF while parsing`. A filter that selects
+/// `PLR2004` and drops the rest instead reads the unparsable file as clean, and
+/// an `exit 1` fails the WHOLE run, so the finding of the file ruff DID judge
+/// goes away with the file it did not. The parse failure is one declined item
+/// of a sound run, so the script states it under the `sah-diagnostic:` marker
+/// at exit 0.
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_cannot_parse() {
+    let expected = python_magic_numbers_judged_row();
+
+    verify_unjudged_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MAGIC_NUMBERS_RULE,
+        &[
+            (
+                PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+                PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+            ),
+            (
+                PYTHON_MAGIC_NUMBERS_UNPARSABLE_PATH,
+                PYTHON_MAGIC_NUMBERS_UNPARSABLE_SOURCE,
+            ),
+        ],
+        PYTHON_MAGIC_NUMBERS_UNPARSABLE_PATH,
+        &[&expected],
+    );
+}
+
+/// Where the path the magic-numbers run cannot read stands inside the probe
+/// repository.
+///
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const PYTHON_MAGIC_NUMBERS_UNREADABLE_PATH: &str = "unreadable.py";
+
+/// A Python file whose bytes are not UTF-8.
+///
+/// The literal holds two bytes that open no UTF-8 sequence, so a reader opens
+/// the file and cannot decode it. The assignment is no comparison, so a run
+/// that DID read the file would report nothing.
+const PYTHON_MAGIC_NUMBERS_UNDECODABLE_SOURCE: &[u8] = b"VALUE = '\xff\xfe'\n";
+
+/// A Python file the tool could read if the mode let it.
+///
+/// The assignment names its own value and stands in no comparison, so a run
+/// that DID read the file would report no finding — which is the clean answer
+/// this rule must not give for a file it never read.
+const PYTHON_MAGIC_NUMBERS_FORBIDDEN_SOURCE: &str = "LIMIT = 42\n";
+
+/// Holds the shipped Python magic-numbers run to judging `judged.py` and to
+/// stating the one path it could not read, through the real ruff pipeline.
+///
+/// The judged file carries one unnamed comparison literal, so the run has a
+/// finding to lose. Losing it is what a nonzero exit over a declined item
+/// costs, and staying silent about the path is what reads that path as a clean
+/// file.
+fn verify_python_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
+    let expected = python_magic_numbers_judged_row();
+
+    verify_unreadable_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MAGIC_NUMBERS_RULE,
+        &[(
+            PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+            PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+        )],
+        PYTHON_MAGIC_NUMBERS_UNREADABLE_PATH,
+        unreadable,
+        &[&expected],
+    );
+}
+
+/// Acceptance: the shipped Python magic-numbers tool rule DECLINES a path that
+/// holds no file, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a path beside `judged.py`, against the
+/// shipped command line: the report holds the `PLR2004` of the other file and
+/// nothing for this path, `warning: Failed to lint absent.py: No such file or
+/// directory (os error 2)` stands on stderr, and ruff exits 1 as it would
+/// without the path. The report reads exactly like a clean file, so the answer
+/// has to come from what ruff itself said.
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Python magic-numbers tool rule DECLINES a file whose
+/// bytes are not UTF-8, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file beside `judged.py`, against the
+/// shipped command line: the report holds the `PLR2004` of the other file,
+/// `warning: Failed to lint notutf8.py: stream did not contain valid UTF-8`
+/// stands on stderr, and ruff exits 1 as it would without the file.
+///
+/// The pipe this rule replaced read the report alone. Measured with that pipe
+/// over the same two files: one finding at exit 0, and ruff's own UNMARKED
+/// `Failed to lint` line on stderr, which the engine drops as tool chatter. The
+/// file read as CLEAN.
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Undecodable(
+        PYTHON_MAGIC_NUMBERS_UNDECODABLE_SOURCE,
+    ));
+}
+
+/// Acceptance: the shipped Python magic-numbers tool rule DECLINES a file it
+/// may not read, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file beside `judged.py`, against the
+/// shipped command line: the report holds the `PLR2004` of the other file,
+/// `warning: Failed to lint noread.py: Permission denied (os error 13)` stands
+/// on stderr, and ruff exits 1 as it would without the file.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_may_not_read() {
+    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Forbidden(
+        PYTHON_MAGIC_NUMBERS_FORBIDDEN_SOURCE,
+    ));
+}
+
+/// Where the directory nobody may read stands inside the probe repository.
+///
+/// The name carries the Python extension, because the engine hands a
+/// `files`-scope run the paths its work-list holds, and a path the rule's own
+/// file pattern refuses reaches no run at all.
+const PYTHON_MAGIC_NUMBERS_UNREADABLE_DIRECTORY: &str = "unread.py";
+
+/// What ruff says for a directory it may not read, with its `warning: ` head
+/// taken off.
+///
+/// The line names NO path. ruff walks the path it is given, and a directory it
+/// may not open stops the walk before it reaches a file of its own to name.
+const PYTHON_MAGIC_NUMBERS_DIRECTORY_REFUSAL: &str =
+    "Encountered error: Permission denied (os error 13)";
+
+/// Acceptance: the shipped Python magic-numbers tool rule DECLINES a directory
+/// it may not read, through the real ruff pipeline.
+///
+/// A directory refuses ruff under another head than a file does. Measured with
+/// ruff 0.14.5 over `judged.py` beside a mode-000 directory: the report holds
+/// the `PLR2004` of the file it judged, ruff exits 1, and stderr carries
+/// `warning: Encountered error: Permission denied (os error 13)` — a head that
+/// is NOT `warning: Failed to lint `, and a line that carries no path. That is
+/// why the script forwards the WHOLE stderr channel rather than one head.
+///
+/// The probe takes every permission off the directory, which is a mode, so it
+/// runs on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_python_magic_numbers_tool_rule_declines_a_directory_it_may_not_read() {
+    let expected = python_magic_numbers_judged_row();
+    let judged = [(
+        PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+        PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+    )];
+    let prepare =
+        |repo: &Path| forbid_probe_directory(&repo.join(PYTHON_MAGIC_NUMBERS_UNREADABLE_DIRECTORY));
+    let restore = |repo: &Path| {
+        restore_probe_directory(&repo.join(PYTHON_MAGIC_NUMBERS_UNREADABLE_DIRECTORY))
+    };
+    let staging = ShippedStaging {
+        prepare: &prepare,
+        restore: &restore,
+        ..ShippedStaging::of(&judged)
+    };
+
+    verify_declined_item_is_stated(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MAGIC_NUMBERS_RULE,
+        &staging,
+        &[
+            PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+            PYTHON_MAGIC_NUMBERS_UNREADABLE_DIRECTORY,
+        ],
+        PYTHON_MAGIC_NUMBERS_DIRECTORY_REFUSAL,
+        &[&expected],
+    );
+}
+
+/// The name the shipped Python magic-numbers script calls the linter by.
+const PYTHON_MAGIC_NUMBERS_TOOL_BINARY_NAME: &str = "ruff";
+
+/// A stubbed ruff that refuses its command line: it writes its own error to
+/// stderr, writes no report at all, and exits 2.
+///
+/// This is the shape the real ruff takes for a selector it cannot read and for
+/// an output format it cannot read — measured, each one wrote 0 bytes to stdout
+/// and exited 2.
+const PYTHON_MAGIC_NUMBERS_REFUSED_ANSWER: &str = concat!(
+    "  printf 'error: invalid value for --select <RULE_CODE>\\n' >&2\n",
+    "  exit 2"
+);
+
+/// What the run must say when ruff refuses its command line.
+const PYTHON_MAGIC_NUMBERS_REFUSED_MESSAGE: &str = "ruff exited 2 and judged no code";
+
+/// Why a status outside the two findings statuses breaks the run.
+const PYTHON_MAGIC_NUMBERS_REFUSED_REASON: &str =
+    "ruff writes no report for a command line it refuses, so a pipe ending in `jq` reads \
+     that run as a clean tree";
+
+/// Acceptance: the shipped Python magic-numbers tool rule BREAKS on a ruff that
+/// refuses its command line.
+///
+/// ruff exits 0 for a file with no finding and 1 for a file with one. Every
+/// other status is a run that judged nothing: measured with ruff 0.14.5,
+/// `--select ZZ999` and `--output-format zzz` each wrote 0 bytes of report and
+/// exited 2.
+///
+/// The shape this rule replaced was one pipe, and a pipeline takes the status
+/// of its LAST command. Measured with a stub of this shape against that pipe:
+/// exit 0 and 0 bytes on stdout — a broken tool reading as a clean tree.
+///
+/// The probe leads `PATH` with a stub, which is process state, so it stands
+/// under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_python_magic_numbers_tool_rule_breaks_on_a_status_it_cannot_read() {
+    let run = drive_shipped_script_with_stub(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MAGIC_NUMBERS_RULE,
+        &[(
+            PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+            PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+        )],
+        &[PYTHON_MAGIC_NUMBERS_JUDGED_PATH],
+        PYTHON_MAGIC_NUMBERS_TOOL_BINARY_NAME,
+        PYTHON_MAGIC_NUMBERS_REFUSED_ANSWER,
+    );
+    let failure = run.outcome.expect_err(PYTHON_MAGIC_NUMBERS_REFUSED_REASON);
+
+    assert_shipped_break(
+        &failure,
+        run.status,
+        &[PYTHON_MAGIC_NUMBERS_REFUSED_MESSAGE],
+        PYTHON_MAGIC_NUMBERS_REFUSED_REASON,
+    );
+    assert!(
+        run.placed.is_empty(),
+        "a run that breaks must place no finding; it placed {:?}: \
+         {PYTHON_MAGIC_NUMBERS_REFUSED_REASON}",
+        run.placed
+    );
+}
+
+/// What the run must say when `jq` could not read what ruff wrote.
+const PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_MESSAGE: &str =
+    "magic-numbers-python: jq could not read the ruff report";
+
+/// Why a report `jq` cannot read must break the run rather than pass it.
+const PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_REASON: &str =
+    "a report the filter could not read leaves the run with no measurement at all, so it \
+     must break in the rule's own words rather than exit on the filter's status";
+
+/// A stubbed ruff that exits 1 and writes a report that stops in the middle of
+/// its first entry.
+///
+/// Status 1 is the status ruff exits with for a file that HAS findings, so the
+/// broken-run gate lets it through. The report is what the filter then cannot
+/// read.
+const PYTHON_MAGIC_NUMBERS_TRUNCATED_REPORT_ANSWER: &str =
+    "  printf '[\\n  {\\n    \"code\": \"PLR2004\"'\n  exit 1";
+
+/// Acceptance: the shipped Python magic-numbers tool rule BREAKS when ruff
+/// writes a report the filter cannot read.
+///
+/// The broken-run gate reads the STATUS, and ruff keeps status 1 for a file
+/// with findings, so a malformed report at status 1 passes the gate. The filter
+/// then fails, and a filter that runs bare under `set -e` takes the whole script
+/// down with its own status, which names no rule at all. Each filter step
+/// therefore reads its own status, and one gate states the break in the rule's
+/// own words.
+///
+/// The probe leads `PATH` with a stub, which is process state, so it stands
+/// under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_python_magic_numbers_tool_rule_breaks_on_a_report_the_filter_cannot_read() {
+    let run = drive_shipped_script_with_stub(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MAGIC_NUMBERS_RULE,
+        &[(
+            PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
+            PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+        )],
+        &[PYTHON_MAGIC_NUMBERS_JUDGED_PATH],
+        PYTHON_MAGIC_NUMBERS_TOOL_BINARY_NAME,
+        PYTHON_MAGIC_NUMBERS_TRUNCATED_REPORT_ANSWER,
+    );
+    let failure = run
+        .outcome
+        .expect_err(PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_REASON);
+
+    assert_shipped_break(
+        &failure,
+        run.status,
+        &[PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_MESSAGE],
+        PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_REASON,
+    );
+    assert!(
+        run.placed.is_empty(),
+        "a run that breaks must place no finding; it placed {:?}: \
+         {PYTHON_MAGIC_NUMBERS_FILTER_BROKEN_REASON}",
+        run.placed
+    );
 }
 
 /// A TypeScript function that compares against an unnamed literal and returns
