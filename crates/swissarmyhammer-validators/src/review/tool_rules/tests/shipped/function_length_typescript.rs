@@ -340,6 +340,126 @@ fn typescript_length_empty_run_probe() -> ShippedEmptyRun {
     }
 }
 
+/// The head of the declaration each probe function opens with.
+///
+/// eslint reports at the head of the function it measures, so this is the text
+/// [`declaration_line`] reads the reported row from.
+const TYPESCRIPT_LENGTH_DECLARATION_HEAD: &str = "export function branch(";
+
+/// Where the file the run CAN judge stands, beside the item it cannot judge.
+const TYPESCRIPT_LENGTH_JUDGED_PATH: &str = "judged.ts";
+
+/// Where the TypeScript file eslint cannot parse stands.
+const TYPESCRIPT_LENGTH_UNPARSABLE_PATH: &str = "unparsable.ts";
+
+/// A TypeScript file eslint cannot parse: the body of `broken` never closes.
+const TYPESCRIPT_LENGTH_UNPARSABLE_SOURCE: &str = concat!(
+    "export function broken(value: number): number {\n",
+    "  return value;\n",
+);
+
+/// Acceptance: the shipped TypeScript function-length tool rule DECLINES a
+/// TypeScript file it cannot parse, through the real eslint pipeline.
+///
+/// eslint marks such a file with a message carrying `fatal: true`, and it
+/// judges every other file of the same run beside it. Measured with eslint
+/// 10.8.0 over `judged.ts` and a file whose function body never closes: the
+/// report carried the length message of `judged.ts` AND one message reading
+/// `Parsing error: '}' expected.` with `ruleId: null` and `fatal: true`, at
+/// exit 1 and 0 bytes of stderr.
+///
+/// The earlier shape of this run selected the owned rule id and ended in `jq`.
+/// A fatal message carries a null rule id, so the select dropped it and the
+/// file eslint never read reported as a clean file at exit 0. An `exit 1`
+/// answers no better: it fails the WHOLE run, so the length finding of the file
+/// eslint DID judge goes away with it. The parse failure is one declined item
+/// of a sound run, so the script states it under the `sah-diagnostic:` marker
+/// at exit 0.
+#[test]
+fn the_shipped_typescript_function_length_tool_rule_declines_a_file_it_cannot_parse() {
+    let judged = TYPESCRIPT_LENGTH_UNREAD_SOURCE.as_str();
+    let expected = expected_row(
+        TYPESCRIPT_LENGTH_JUDGED_PATH,
+        judged,
+        TYPESCRIPT_LENGTH_DECLARATION_HEAD,
+    );
+
+    verify_unjudged_file_is_declined(
+        NODEJS_PROJECT_TYPES,
+        TYPESCRIPT_FUNCTION_LENGTH_RULE,
+        &[
+            (TYPESCRIPT_LENGTH_JUDGED_PATH, judged),
+            (
+                TYPESCRIPT_LENGTH_UNPARSABLE_PATH,
+                TYPESCRIPT_LENGTH_UNPARSABLE_SOURCE,
+            ),
+        ],
+        TYPESCRIPT_LENGTH_UNPARSABLE_PATH,
+        &[&expected],
+    );
+}
+
+/// The name the shipped script calls the linter by.
+const TYPESCRIPT_TOOL_BINARY_NAME: &str = "eslint";
+
+/// A stubbed eslint that refuses its command line: it writes its own error to
+/// stderr, writes no report at all, and exits 2.
+///
+/// This is the shape the real eslint takes for a path that holds no file, for a
+/// file nobody may read, and for a pattern that matches nothing — measured,
+/// each one wrote 0 bytes to stdout and exited 2.
+const TYPESCRIPT_REFUSED_ANSWER: &str = concat!(
+    "  printf 'No files matching the pattern were found.\\n' >&2\n",
+    "  exit 2"
+);
+
+/// What the run must say when eslint refuses its command line.
+const TYPESCRIPT_REFUSED_MESSAGE: &str = "eslint exited 2 and judged no code";
+
+/// Why a status outside the two findings statuses breaks the run.
+const TYPESCRIPT_REFUSED_REASON: &str =
+    "eslint writes no report for a command line it refuses, so a pipe ending in `jq` \
+     reads that run as a clean file";
+
+/// Acceptance: the shipped TypeScript function-length tool rule BREAKS on an
+/// eslint that refuses its command line.
+///
+/// eslint answers 0 for a run whose messages are all warnings and 1 for a run
+/// carrying a message of error severity, and this rule's own findings are
+/// warnings. Every other status is a run that judged nothing: measured, an
+/// absent path, a file nobody may read and a pattern that matches nothing each
+/// exit 2 with 0 bytes of report.
+///
+/// The probe leads `PATH` with a stub, which is process state, so it stands
+/// under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_typescript_function_length_tool_rule_breaks_on_a_status_it_cannot_read() {
+    let judged = TYPESCRIPT_LENGTH_UNREAD_SOURCE.as_str();
+    let run = drive_shipped_script_with_stub(
+        NODEJS_PROJECT_TYPES,
+        TYPESCRIPT_FUNCTION_LENGTH_RULE,
+        &[(TYPESCRIPT_LENGTH_JUDGED_PATH, judged)],
+        &[TYPESCRIPT_LENGTH_JUDGED_PATH],
+        TYPESCRIPT_TOOL_BINARY_NAME,
+        TYPESCRIPT_REFUSED_ANSWER,
+    );
+    let failure = run.outcome.expect_err(TYPESCRIPT_REFUSED_REASON);
+
+    assert_shipped_break(
+        &failure,
+        run.status,
+        &[TYPESCRIPT_REFUSED_MESSAGE],
+        TYPESCRIPT_REFUSED_REASON,
+    );
+    assert!(
+        run.placed.is_empty(),
+        "a run that breaks must place no finding; it placed {:?}: {TYPESCRIPT_REFUSED_REASON}",
+        run.placed
+    );
+}
+
 /// Acceptance: the shipped TypeScript function-length tool rule reads only the
 /// files it is given, through the real eslint pipeline.
 ///

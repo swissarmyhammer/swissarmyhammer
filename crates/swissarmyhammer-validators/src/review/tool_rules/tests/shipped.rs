@@ -1302,6 +1302,67 @@ fn verify_shipped_tree_breaks(probe: &ShippedStagedTree) {
     );
 }
 
+/// Drives the shipped script of `rule` over every file of `staged`, and holds
+/// that run to breaking with an error that names every fragment `expected`
+/// carries, to exiting [`BROKEN_RUN_EXIT_STATUS`], and to placing no finding.
+///
+/// This is the borrowed counterpart of [`verify_shipped_tree_breaks`], the way
+/// [`verify_staged_rows_report`] is the borrowed counterpart of
+/// [`verify_shipped_tree_reports`]. A probe whose shape is a function of several
+/// hundred lines builds its source at run time, so it can state no `'static`
+/// tree.
+fn verify_staged_tree_breaks(
+    project_types: &[&str],
+    rule: &str,
+    staged: &[(&str, &str)],
+    expected: &[&str],
+    reason: &str,
+) {
+    let named: Vec<&str> = staged.iter().map(|(path, _)| *path).collect();
+
+    verify_staging_breaks(
+        project_types,
+        rule,
+        &ShippedStaging::of(staged),
+        &named,
+        expected,
+        reason,
+    );
+}
+
+/// Drives the shipped script of `rule` over the staging `staging` with the
+/// argument list a run over `named` carries, and holds that run to breaking
+/// with an error that names every fragment `expected` carries, to exiting
+/// [`BROKEN_RUN_EXIT_STATUS`], and to placing no finding.
+///
+/// A probe of a path the tool cannot READ needs the staging rather than the
+/// file list, because no `(path, text)` pair states a file nobody may read.
+fn verify_staging_breaks(
+    project_types: &[&str],
+    rule: &str,
+    staging: &ShippedStaging<'_>,
+    named: &[&str],
+    expected: &[&str],
+    reason: &str,
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+
+    let ShippedScriptRun {
+        outcome,
+        placed,
+        status,
+        ..
+    } = drive_shipped_script_whole(&loader, rule, staging, named);
+    let failure = outcome.expect_err(reason);
+
+    assert_shipped_break(&failure, status, expected, reason);
+    assert!(
+        placed.is_empty(),
+        "a run that breaks must place no finding; it placed {placed:?}: {reason}"
+    );
+}
+
 /// Holds `failure` to naming every fragment `expected` carries.
 fn assert_shipped_failure_names(failure: &ScriptFailure, expected: &[&str]) {
     let detail = failure.to_string();

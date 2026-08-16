@@ -15,6 +15,7 @@ supersedes: function-length
 tool:
   scope: files
   run: |
+    set -e
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
@@ -245,12 +246,33 @@ tool:
       }
     ];
     ESLINT_CONFIG
-    NODE_PATH="$modules" eslint --no-config-lookup --config "$config" --format json "$@" |
-      jq -c '.[] | .filePath as $file | .messages[]
-             | select(.ruleId == "code-hygiene/max-lines-per-function")
-             | {file: $file, line: .line, message: .message}'
+    status=0
+    NODE_PATH="$modules" eslint --no-config-lookup --config "$config" --format json "$@" \
+      > "$work/report.json" 2> "$work/eslint.err" || status=$?
+    if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+      cat "$work/eslint.err" "$work/report.json" >&2
+      printf 'function-length-typescript: eslint exited %s and judged no code\n' "$status" >&2
+      exit 1
+    fi
+    filtered=0
+    jq -r '.[] | .filePath as $file | .messages[] | select(.fatal)
+           | "sah-diagnostic: eslint marked \($file) fatal and said: \(.message)"' "$work/report.json" \
+      > "$work/unjudged.txt" || filtered=$?
+    jq -c '.[] | .filePath as $file | .messages[]
+           | select(.ruleId == "code-hygiene/max-lines-per-function")
+           | {file: $file, line: .line, message: .message}' "$work/report.json" \
+      > "$work/reported.json" || filtered=$?
+    if [ "$filtered" -ne 0 ]; then
+      printf 'function-length-typescript: jq could not read the eslint report\n' >&2
+      exit 1
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+      printf 'sah-diagnostic: eslint declined an item and said: %s\n' "$line" >&2
+    done < "$work/eslint.err"
+    cat "$work/unjudged.txt" >&2
+    cat "$work/reported.json"
   doctor:
-    check_command: "which eslint jq mktemp"
+    check_command: "which eslint jq cat mktemp"
     check_version_command: "eslint --version"
   install:
     commands:
@@ -520,8 +542,9 @@ TypeScript syntax, so a `.ts` file without it is a parse error instead of a
 finding. The install command pins `typescript` to 5.9.3 because
 `typescript-eslint` accepts `typescript` below 6.1.0.
 
-`check_command` names each command the script runs: `eslint`, `jq`, and the
-`mktemp` that makes the directory the configuration stands in.
+`check_command` names each command the script runs: `eslint`, `jq`, the `cat`
+that writes the configuration and forwards each answer, and the `mktemp` that
+makes the directory the configuration stands in.
 `typescript-eslint` and `eslint-plugin-sonarjs` are node modules rather than
 commands, so `which` cannot name them; the fixture pair is what proves both
 resolved. Measured with `NODE_PATH` pointed at an empty directory: eslint exits
@@ -570,10 +593,18 @@ fixture then produces no findings, and the doctor marks the rule unusable and
 falls it back to the prompt rule — the same safe end as a plugin that does not
 resolve.
 
-The `jq` filter selects the one owned rule id and drops everything else eslint
-emits on the same stream. That matters here beyond tidiness: a project file
-carrying `eslint-disable` comments for plugins the temporary config does not
-load turns each one into a "Definition for rule ... was not found" message.
+The filter selects the one owned rule id as the findings, and it drops each
+message that belongs to another rule. That matters here beyond tidiness: a
+project file carrying `eslint-disable` comments for plugins the temporary config
+does not load turns each one into a "Definition for rule ... was not found"
+message. Measured over one file carrying two such comments: eslint wrote
+`Definition for rule '@typescript-eslint/no-explicit-any' was not found.` under
+that rule id at severity 2, and `Unused eslint-disable directive (no problems
+were reported from 'code-hygiene/max-lines-per-function').` under a null rule id
+at severity 1, and it judged the file's function lengths beside both. The one
+message the filter does NOT drop is the message eslint marks `fatal`, which is
+the section "A file eslint could not judge" below.
+
 Selection here is attribution, not exemption: to exempt one function, write
 `// eslint-disable-next-line code-hygiene/max-lines-per-function` above it in
 the code.
@@ -595,11 +626,104 @@ Measured over two TypeScript files, each holding one function of 266 lines:
 
 ## The temporary directory the configuration stands in
 
-`mktemp -d` makes the directory the eslint configuration is written into, and
-`trap 'rm -rf "$work"' EXIT` removes it. The trap covers each way the script
-leaves, and it leaves the exit status of the pipe alone. Measured over one file:
-one run raised the count of entries under `TMPDIR` by 1 before the trap, and
-leaves that count unchanged after it.
+`mktemp -d` makes the directory the eslint configuration, the eslint report and
+eslint's own stderr are written into, and `trap 'rm -rf "$work"' EXIT` removes
+it. The trap covers each way the script leaves — a clean run, a finding, a
+declined item and a broken run — and it leaves the exit status of the script
+alone.
+
+Measured with a `TMPDIR` of its own, over one file: the directory this script
+makes is gone after the run, and the one entry left under `TMPDIR` is node's own
+`node-compile-cache`, which node writes and this script never makes. A second
+run leaves that same one entry, and so does a run the status gate broke.
+
+## A file eslint could not judge
+
+The script reads eslint's own status and its own report, because each one
+carries a shape a pipe ending in `jq` reads as a clean file. Measured with
+eslint 10.8.0 against the shipped command line, over `judged.ts`, which holds
+one function of 302 lines against the gate of 250:
+
+| the run | exit | the report | stderr |
+|---|---|---|---|
+| `judged.ts` alone | 0 | one `code-hygiene/max-lines-per-function` message | 0 bytes |
+| a file that does not parse beside it | 1 | that message AND one `fatal` message | 0 bytes |
+| a file whose bytes are not UTF-8 beside it | 0 | that message, and an empty message list for the file | 0 bytes |
+| a file whose `eslint-disable` comments name rules the config does not load | 1 | that message AND two messages of other rules | 0 bytes |
+| a path that holds no file | 2 | 0 bytes | `No files matching the pattern "absent.ts" were found.` |
+| a file nobody may read | 2 | 0 bytes | `Error: EACCES: permission denied, open ...` |
+| a directory that matches no file | 2 | 0 bytes | `No files matching the pattern "emptydir" were found.` |
+
+0 and 1 are the two statuses a measured run answers with. eslint exits 1 for a
+message of error severity, and this rule's own findings are warnings, so a run
+that reports every finding it made can answer either number. Every other status
+is a broken run: the script forwards eslint's own stderr and its own report,
+names the status, and exits 1. Rows 5 to 7 are what that gate is for. Each of
+the three wrote 0 bytes of report, so the earlier pipe ending in `jq` read a
+file eslint never opened as a clean file.
+
+### The mark eslint puts on what it could not read
+
+eslint states what it could not read as a message carrying `fatal: true`. Read
+over the whole `lib/` tree of eslint 10.8.0, three places write that field and
+no other:
+
+| where | what it marks | is the file linted? |
+|---|---|---|
+| `services/parser-service.js` | a source its parser refused | no |
+| `services/processor-service.js` | a source a processor refused | no |
+| `linter/linter.js`, through `file-report.js` `addFatal` | an inline `/* eslint ... */` comment it could not read | yes |
+
+The shipped config declares no processor, so the second row cannot be reached
+from this rule. The first and third rows were each driven. Measured over
+`judged.ts` beside a file whose function body never closes: the report carried
+the length message of `judged.ts` AND one message reading
+`Parsing error: '}' expected.` with `ruleId: null`, `fatal: true` and
+`severity: 2`, at exit 1 — so eslint judged the file it could read while
+refusing the one it could not. Measured over `judged.ts` beside a file carrying
+`/* eslint code-hygiene/max-lines-per-function: [ */` above a function of 302
+lines: eslint marked the comment fatal AND reported the length of the function
+under it.
+
+So `fatal` names an item eslint declined, and the run stays sound either way.
+The script therefore keeps the length messages as findings and writes each
+`fatal` message under the marker `builtin/validators/README.md` states, at
+exit 0, in eslint's own words:
+
+    sah-diagnostic: eslint marked <repo>/unparsable.ts fatal and said: Parsing error: '}' expected.
+
+A null rule id is NOT that mark. Measured on the same channel: the message
+`Unused eslint-disable directive (no problems were reported from
+'code-hygiene/max-lines-per-function').` carries a null rule id at severity 1,
+and eslint judged that file. `fatal` is the one field that separates the two,
+which is why the filter reads the field rather than a message text.
+
+Measured with the shipped script over `judged.ts` and the file that does not
+parse: one finding on stdout, one marked line on stderr, exit 0. The acceptance
+test
+`the_shipped_typescript_function_length_tool_rule_declines_a_file_it_cannot_parse`
+holds both halves, and a run that lost either one fails it.
+
+A file whose bytes are not UTF-8 needs no decline. node decodes such a byte as
+`U+FFFD` rather than refusing the file, so eslint parses what it read. Measured
+over `judged.ts` beside a file holding two bytes that open no UTF-8 sequence:
+the length finding stood, the other file's message list was empty, and the run
+exited 0.
+
+### The stderr channel, which a sound run leaves empty
+
+The script states each line eslint wrote to stderr under the same marker, whole,
+with no head read or stripped. A sound run writes 0 bytes there: measured over
+`judged.ts` alone, over `judged.ts` beside the file that does not parse, over
+`judged.ts` beside the file whose bytes are not UTF-8, and over `judged.ts`
+beside the file carrying the two `eslint-disable` comments, each run wrote 0
+bytes to stderr. Every measured shape that DOES write there exits 2, which the
+status gate reads first, so no measured decline reaches the marker on that
+channel today.
+
+The loop stands for the shape this rule has not met yet. A head written down
+here would answer for the one shape it was written for and stay silent for every
+other, which is the lesson `missing-docs-python` records for ruff's own stderr.
 
 ## The carve-outs the prompt rule states
 

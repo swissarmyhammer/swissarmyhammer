@@ -10,6 +10,7 @@ supersedes: function-length
 tool:
   scope: workspace
   run: |
+    set -e
     cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
@@ -37,13 +38,37 @@ tool:
       max-issues-per-linter: 0
       max-same-issues: 0
     FUNLEN_CONFIG
+    status=0
     GOLANGCI_LINT_CACHE="$cache" \
     golangci-lint run --config "$config" --path-mode abs --show-stats=false \
-      --output.json.path stdout ./... 2>/dev/null |
-      jq -c '(.Issues // [])[] | select(.FromLinter == "funlen")
-             | {file: .Pos.Filename, line: .Pos.Line, message: .Text}'
+      --output.json.path stdout ./... > "$work/report.json" 2> "$work/lint.err" || status=$?
+    if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+      cat "$work/lint.err" "$work/report.json" >&2
+      printf 'function-length-go: golangci-lint exited %s and measured no function\n' "$status" >&2
+      exit 1
+    fi
+    filtered=0
+    jq -r '(.Issues // [])[] | select(.FromLinter != "funlen")
+           | "\(.Pos.Filename):\(.Pos.Line): \(.FromLinter) \(.Text)"' "$work/report.json" \
+      > "$work/unmeasured.txt" || filtered=$?
+    jq -c '(.Issues // [])[] | select(.FromLinter == "funlen")
+           | {file: .Pos.Filename, line: .Pos.Line, message: .Text}' "$work/report.json" \
+      > "$work/reported.json" || filtered=$?
+    if [ "$filtered" -ne 0 ]; then
+      printf 'function-length-go: jq could not read the golangci-lint report\n' >&2
+      exit 1
+    fi
+    if [ -s "$work/unmeasured.txt" ]; then
+      cat "$work/lint.err" "$work/unmeasured.txt" >&2
+      printf 'function-length-go: golangci-lint reported a row of another linter, which drops every funlen row of the same run\n' >&2
+      exit 1
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+      printf 'sah-diagnostic: golangci-lint declined an item and said: %s\n' "$line" >&2
+    done < "$work/lint.err"
+    cat "$work/reported.json"
   doctor:
-    check_command: "which golangci-lint go jq mktemp"
+    check_command: "which golangci-lint go jq cat mktemp"
     check_version_command: "golangci-lint --version"
   install:
     commands:
@@ -209,11 +234,13 @@ temporary directory, so every path would point outside the workspace.
 
 `allow-serial-runners` makes a second instance WAIT for the lock. `golangci-lint`
 takes one file lock for each run, and by default a second instance stops with
-`Error: parallel golangci-lint is running` on stderr and writes nothing to
-stdout. The script drops stderr, so that run would read as a clean file rather
-than as a failure. The lock stands in the cache directory, which the line above
-names for the workspace, so the runs of ONE workspace share it — and this set
-ships two rules that drive golangci-lint over one workspace. Measured over one
+`Error: parallel golangci-lint is running` on stderr, writes nothing to stdout,
+and exits 3. The earlier shape of this run dropped stderr and ended in `jq`, so
+that run read as a clean file rather than as a failure; the status gate below
+now breaks it, and the key is what keeps it measuring at all. The lock stands in
+the cache directory, which the line above names for the workspace, so the runs
+of ONE workspace share it — and this set ships two rules that drive
+golangci-lint over one workspace. Measured over one
 workspace holding a probe module of one function above the gate, each row three
 rounds from a cold cache and three rounds from a warm one:
 
@@ -256,10 +283,11 @@ The scope is `workspace` because golangci-lint loads packages, not loose files,
 and `./...` loads the whole module. The engine keeps only the findings in the
 changed files.
 
-Selection in the pipe is attribution, not exemption. `golangci-lint` also emits
-`typecheck` diagnostics on the same stream, and the `jq` filter drops them; they
-belong to the build, not to this rule. Every exemption this rule makes stands in
-the configuration, where golangci-lint decides it.
+Selection in the filter is attribution, not exemption. The filter keeps the
+`funlen` rows as findings, and it reads a row of any other linter as a broken
+run rather than dropping it — the section "A run that measured no function"
+below states why. Every exemption this rule makes stands in the configuration,
+where golangci-lint decides it.
 
 ## The temporary directory the configuration stands in
 
@@ -273,6 +301,120 @@ Measured over a Go module of one file: the first run raised the count of entries
 under `TMPDIR` by 2 before the trap, one for the cache and one for the
 configuration, and each run after it raised the count by 1. After the trap the
 configuration is gone and the cache stays.
+
+## A run that measured no function
+
+The script reads golangci-lint's own status and its own report, because each one
+carries a shape a pipe ending in `jq` reads as a clean tree. Measured with
+golangci-lint 2.12.2 against the shipped command line, over a probe module
+holding one function of 170 statements:
+
+| the run | exit | the report | stderr |
+|---|---|---|---|
+| every function under the gate | 0 | `Issues: []` | 0 bytes |
+| one function over the gate | 1 | one `funlen` row | 0 bytes |
+| a `.go` file nobody may read, the cache cold | 7 | `Issues: []` | one `level=error` line |
+| the same file, the cache already holding the other package | 1 | the `funlen` row | one `level=error` line |
+| a `.go` file that does not parse | 1 | one `typecheck` row ALONE | 0 bytes |
+| a workspace holding no `go.mod` | 7 | `Issues: []` | one `level=error` line |
+| a module holding no `.go` file | 5 | 0 bytes | one `level=error` line |
+| a `--config` golangci-lint cannot read | 3 | 0 bytes | `Error: can't load config: ...` |
+| eight runs together, no `allow-serial-runners` | 3, for three of the eight | 0 bytes | `Error: parallel golangci-lint is running` |
+
+golangci-lint names its own statuses in `pkg/exitcodes`: 0 `Success`,
+1 `IssuesFound`, 2 `WarningInTest`, 3 `Failure`, 4 `Timeout`, 5 `NoGoFiles`,
+6 `NoConfigFileDetected`, 7 `ErrorWasLogged`. So 0 and 1 are the two statuses a
+measured run answers with, and the script exits 1 for every other one. It
+forwards golangci-lint's own stderr and its own report first, then names the
+status, so a golangci-lint that refused its command line never reads as a clean
+tree.
+
+The gate costs no finding at status 7. `setupExitCode` sets that status only
+while the status is still `Success`, so a run that exits 7 reported no finding
+at all.
+
+### A file that does not parse, which costs the WHOLE run
+
+golangci-lint reports a file it cannot parse as a `typecheck` row. Its
+`invalid_issue` processor then answers with the typecheck rows ALONE —
+`if len(tcIssues) > 0 { return tcIssues, nil }` — so one Go file that does not
+parse drops every `funlen` row of the same run.
+
+Measured with golangci-lint 2.12.2 over a probe module holding the function of
+170 statements in one package and a file whose call never closes in another: the
+report carried the `typecheck` row and no `funlen` row, at exit 1 and 0 bytes of
+stderr. The same probe with the second package removed reported the `funlen`
+row. Four more shapes answered the same way as the first: a second sound package
+beside the broken one, the broken file inside the SAME package, the broken file
+as a `_test.go`, and a file whose bytes are not UTF-8, which golangci-lint
+reports as `typecheck illegal UTF-8 encoding`.
+
+A row of another linter is therefore a run that measured no function, and the
+script exits 1 naming that row. `sah-diagnostic:` is the answer for a declined
+ITEM of a sound run, and this run is not sound: nothing it measured reached the
+report. The acceptance test
+`the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_cannot_parse`
+stages the function of 170 statements beside a file that does not parse, and
+holds the run to breaking, to naming the file, and to placing no finding.
+
+The configuration enables one linter, and two can write a row. Measured on the
+same report: `Report.Linters` carries 121 entries, and `Enabled: true` stands on
+`funlen` and on `typecheck` and on no other. So the filter reads any row that is
+not `funlen` as this same broken run, rather than naming `typecheck` and staying
+silent for a row this rule never met.
+
+### A file it cannot read, which the CACHE answers for
+
+golangci-lint refuses a `.go` file it cannot open another way. It writes
+`level=error msg="[linters_context] typechecking error: open <path>: permission
+denied"` to stderr, and it writes no row for that file. What the RUN then
+reports for the OTHER packages depends on its cache. Measured with golangci-lint
+2.12.2 over ONE workspace holding the function of 170 statements beside a
+package whose one file carries mode 000, run three times in this order:
+
+| the run | exit | the report |
+|---|---|---|
+| the file unreadable, the cache cold | 7 | `Issues: []` |
+| the file readable | 1 | the `funlen` row |
+| the file unreadable again | 1 | the `funlen` row |
+
+A package golangci-lint cannot load costs the run every finding it measured
+FRESH, and `saveIssuesToCache` runs only for a run that met no error, so row 3
+answers out of the cache row 2 filled. Row 1 is therefore a run that measured
+nothing, which the status gate above breaks. Row 3 is a run that judged the code
+and could not judge ONE item.
+
+The script writes each line golangci-lint put on stderr under the marker
+`builtin/validators/README.md` states, at exit 0:
+
+    sah-diagnostic: golangci-lint declined an item and said: level=error msg="[linters_context] typechecking error: open <repo>/noread/x.go: permission denied"
+
+The whole line is forwarded, and no head is read or stripped. golangci-lint
+writes a LOG on that channel rather than a decline channel of its own, so a head
+written into this rule would answer for the one shape it was written for and
+stay silent for every other. That is the lesson `missing-docs-python` records
+for ruff's own stderr.
+
+A sound run writes 0 bytes there. Measured against the shipped command line: a
+clean module, a module with one finding, a module holding a file that does not
+parse, and eight runs started together over one workspace each wrote 0 bytes to
+stderr. The one measured shape that writes at a findings status is the declined
+read above. A configuration that names a deprecated linter writes `level=warning`
+lines there as well — measured with `wsl` added to the shipped `enable` list,
+three warning lines at exit 1 — and the shipped configuration names no
+deprecated linter.
+
+Two acceptance tests hold the two rows.
+`the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read`
+stages the function of 170 statements beside a file nobody may read, over a
+fresh workspace whose cache is therefore cold, and holds the run to breaking and
+to placing no finding.
+`the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read` holds
+the other row: it hands the script the bytes the warm run answered with, and
+holds the run to reporting the finding AND to stating one diagnostic that names
+the file. The second test stages those bytes rather than the workspace, because
+the cache state that makes row 3 is what one earlier run left behind, and a
+probe over a fresh workspace always reads a cold one.
 
 ## The carve-outs the prompt rule states
 

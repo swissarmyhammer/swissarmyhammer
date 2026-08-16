@@ -328,6 +328,240 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in() {
     }
 }
 
+/// Where the package holding the file golangci-lint cannot parse stands.
+const GO_UNPARSABLE_PATH: &str = "broken/broken.go";
+
+/// A Go file golangci-lint cannot parse: the call in the return never closes.
+const GO_UNPARSABLE_SOURCE: &str = concat!(
+    "package broken\n\n",
+    "func Broken() int {\n\treturn undefinedSymbol(\n}\n",
+);
+
+/// What the run must say for a file golangci-lint could not parse: the row the
+/// tool wrote, and the rule's own sentence.
+const GO_UNPARSABLE_ERRORS: &[&str] = &[
+    GO_UNPARSABLE_PATH,
+    "golangci-lint reported a row of another linter",
+];
+
+/// Why a file golangci-lint cannot parse breaks the run.
+const GO_UNPARSABLE_REASON: &str =
+    "one Go file that does not parse drops every funlen row of the same run, so the run \
+     measured no function and must say so rather than read as a clean tree";
+
+/// Acceptance: the shipped Go function-length tool rule BREAKS on a Go file it
+/// cannot parse, through the real funlen pipeline.
+///
+/// golangci-lint reports such a file as a `typecheck` row, and its
+/// `invalid_issue` processor then answers with the typecheck rows ALONE. So the
+/// probe's function of 170 statements gets no `funlen` row of its own, and the
+/// run measured no function at all.
+///
+/// The earlier shape of this run dropped stderr and ended in `jq`, which reads
+/// exactly like a clean tree: no finding, exit 0. `sah-diagnostic:` is the
+/// answer for a declined ITEM of a SOUND run, and this run is not sound, so the
+/// script names the row and exits 1 instead.
+#[test]
+fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
+    let source = format!(
+        "{GO_PACKAGE_CLAUSE}{}",
+        go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS)
+    );
+
+    verify_staged_tree_breaks(
+        GO_PROJECT_TYPES,
+        GO_FUNCTION_LENGTH_RULE,
+        &[
+            (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
+            (GO_SHAPES_PATH, &source),
+            (GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE),
+        ],
+        GO_UNPARSABLE_ERRORS,
+        GO_UNPARSABLE_REASON,
+    );
+}
+
+/// What the run must say for a workspace holding no module: the status
+/// golangci-lint answered with, and the rule's own words for it.
+const GO_NO_MODULE_ERRORS: &[&str] = &["golangci-lint exited", "measured no function"];
+
+/// Why a workspace holding no module breaks the run.
+const GO_NO_MODULE_REASON: &str =
+    "golangci-lint loads a module, so a workspace holding none is a run that measured \
+     nothing, and its report is an empty issue list a pipe reads as a clean tree";
+
+/// Acceptance: the shipped Go function-length tool rule BREAKS on a workspace
+/// that holds no Go module, through the real funlen pipeline.
+///
+/// Measured with golangci-lint 2.12.2 over a `.go` file with no `go.mod` beside
+/// it: `Issues: []` on stdout, `typechecking error: pattern ./...: directory
+/// prefix . does not contain main module or its selected dependencies` on
+/// stderr, and exit 7. The report reads exactly like a clean tree, so the
+/// STATUS is the only thing that separates the two, and the earlier pipe ending
+/// in `jq` threw it away.
+#[test]
+fn the_shipped_go_function_length_tool_rule_breaks_on_a_workspace_holding_no_module() {
+    let source = format!(
+        "{GO_PACKAGE_CLAUSE}{}",
+        go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS)
+    );
+
+    verify_staged_tree_breaks(
+        GO_PROJECT_TYPES,
+        GO_FUNCTION_LENGTH_RULE,
+        &[(GO_SHAPES_PATH, &source)],
+        GO_NO_MODULE_ERRORS,
+        GO_NO_MODULE_REASON,
+    );
+}
+
+/// Where the file nobody may read stands inside the probe module.
+///
+/// It holds a package of its own, because a file the tool cannot open is a
+/// package golangci-lint cannot load.
+const GO_UNREADABLE_PATH: &str = "noread/unreadable.go";
+
+/// What the file nobody may read holds.
+///
+/// The source is ordinary and stands under the gate, so a run that DID read it
+/// would report no finding — which is the clean answer this rule must not give
+/// for a file it never read.
+const GO_UNREADABLE_SOURCE: &str = "package noread\n\nfunc Short() int {\n\treturn 1\n}\n";
+
+/// What the run must say for a Go file golangci-lint could not read on a cold
+/// cache: the path the tool named, and the rule's own words for the status.
+const GO_UNREADABLE_ERRORS: &[&str] = &[
+    GO_UNREADABLE_PATH,
+    "golangci-lint exited",
+    "measured no function",
+];
+
+/// Why a file golangci-lint cannot read breaks a run that measured nothing
+/// else.
+const GO_UNREADABLE_REASON: &str =
+    "a package golangci-lint cannot load costs the run every finding it measured fresh, \
+     so a run holding no cached answer measured nothing and must say so";
+
+/// Acceptance: the shipped Go function-length tool rule BREAKS on a Go file it
+/// may not read, through the real funlen pipeline.
+///
+/// golangci-lint refuses such a file with
+/// `level=error msg="[linters_context] typechecking error: open <path>:
+/// permission denied"` on stderr, and a package it cannot load costs the run
+/// every finding it measured fresh. Measured with golangci-lint 2.12.2 over one
+/// workspace holding one function of 170 statements beside such a file, the
+/// cache cold: `Issues: []` on the report at exit 7, so the run measured
+/// nothing at all.
+///
+/// The earlier shape of this run dropped stderr and ended in `jq`, so that run
+/// read as a clean tree. The probe takes every permission off the file, which
+/// is a mode, so it runs on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read() {
+    let source = format!(
+        "{GO_PACKAGE_CLAUSE}{}",
+        go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS)
+    );
+    let staged = [
+        (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
+        (GO_SHAPES_PATH, source.as_str()),
+    ];
+    let named: Vec<&str> = staged
+        .iter()
+        .map(|(path, _)| *path)
+        .chain(std::iter::once(GO_UNREADABLE_PATH))
+        .collect();
+    let unreadable = ShippedUnreadableFile::Forbidden(GO_UNREADABLE_SOURCE);
+    let prepare = |repo: &Path| stage_probe_unreadable(repo, GO_UNREADABLE_PATH, &unreadable);
+    let staging = ShippedStaging {
+        prepare: &prepare,
+        ..ShippedStaging::of(&staged)
+    };
+
+    verify_staging_breaks(
+        GO_PROJECT_TYPES,
+        GO_FUNCTION_LENGTH_RULE,
+        &staging,
+        &named,
+        GO_UNREADABLE_ERRORS,
+        GO_UNREADABLE_REASON,
+    );
+}
+
+/// The name the shipped script calls the linter by.
+const GO_TOOL_BINARY_NAME: &str = "golangci-lint";
+
+/// The line a stubbed golangci-lint answers a run whose cache already holds the
+/// finding, and which met one file it could not read.
+///
+/// Every byte of it is the answer the real golangci-lint 2.12.2 gave, measured
+/// over one workspace run three times: the file unreadable on a cold cache, the
+/// file readable, and the file unreadable again. The third run reported the
+/// `funlen` row out of the cache the second run filled, wrote the
+/// `[linters_context]` line to stderr, and exited 1.
+///
+/// The stub stands in for the CACHE, which no probe can stage: a run over a
+/// fresh workspace always reads a cold cache, and a run over a warm one answers
+/// out of what another run put there.
+const GO_DECLINED_ANSWER: &str = concat!(
+    "  printf '{\"Issues\":[{\"FromLinter\":\"funlen\",\"Text\":\"Function %s has too many ",
+    "statements (170 > 160)\",\"Pos\":{\"Filename\":\"%s/shapes/shapes.go\",\"Line\":3}}]}\\n' ",
+    "\"'LongProcedure'\" \"$PWD\"\n",
+    "  printf 'level=error msg=\"[linters_context] typechecking error: open ",
+    "%s/noread/unreadable.go: permission denied\"\\n' \"$PWD\" >&2\n",
+    "  exit 1"
+);
+
+/// Acceptance: the shipped Go function-length tool rule DECLINES a Go file it
+/// may not read, over a run that still reported its findings.
+///
+/// A run whose cache already holds the answer for every package it CAN load
+/// reports those findings beside the `[linters_context]` line for the package
+/// it cannot. That run judged the code and could not judge ONE item, which is
+/// the shape `builtin/validators/README.md` states a `sah-diagnostic:` line at
+/// exit 0 for: an `exit 1` there would throw away every finding the run did
+/// make.
+///
+/// The stub answers with the bytes the real golangci-lint 2.12.2 wrote for that
+/// run, because the cache state that produces it is not something a probe over
+/// a fresh workspace can stage. The probe leads `PATH` with the stub, which is
+/// process state, so it stands under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
+    let run = drive_shipped_script_with_stub(
+        GO_PROJECT_TYPES,
+        GO_FUNCTION_LENGTH_RULE,
+        &[(GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST)],
+        NO_SCRIPT_FILES,
+        GO_TOOL_BINARY_NAME,
+        GO_DECLINED_ANSWER,
+    );
+    let outcome = run
+        .outcome
+        .expect("a script handed an item it cannot judge must judge the rest and exit 0");
+
+    assert_eq!(
+        sorted_names(&finding_rows(&outcome, &run.repo_root)),
+        vec![format!("{GO_SHAPES_PATH}:3")],
+        "the run must report every finding it made, or one file it could not read throws \
+         away the work the run did do"
+    );
+    let stated = script_diagnostics(&outcome, &run.repo_root);
+    assert_eq!(
+        stated.len(),
+        1,
+        "the run must state the one item it declined; it stated {stated:?}"
+    );
+    assert!(
+        stated[0].contains(GO_UNREADABLE_PATH),
+        "the diagnostic must name the file it declined; it said '{}'",
+        stated[0]
+    );
+}
+
 /// How many runs of the shipped script the lock probe starts together.
 ///
 /// golangci-lint takes ONE file lock, and the lock stands in the cache
@@ -355,15 +589,18 @@ const GO_FUNCTION_LENGTH_LOCK_RUN: ShippedRun = ShippedRun {
 ///
 /// `run: allow-serial-runners: true` makes a second instance WAIT for the
 /// lock. Without the key it stops with `Error: parallel golangci-lint is
-/// running` on stderr and writes nothing to stdout, and the script drops
-/// stderr — so the run reads as a clean file rather than as a failure, and the
-/// review is told the code is clean by a run that judged nothing.
+/// running` on stderr, writes nothing to stdout, and exits 3 — so the run
+/// judges nothing, and the key is what keeps every run measuring.
 ///
 /// Measured with golangci-lint 2.12.2 over this probe, three rounds from a
 /// cold cache and three from a warm one: without the key 3 of 8 runs reported
-/// nothing in each of the six rounds, and the same runs with stderr kept
-/// carried the lock error on each of those three. With the key all eight
-/// reported the one finding, in each of the six rounds.
+/// nothing in each of the six rounds, and each of those three carried the lock
+/// error on stderr at exit 3. With the key all eight reported the one finding,
+/// in each of the six rounds.
+///
+/// The status gate the rule now carries turns that stop into a broken run
+/// rather than a clean file, so a clashing run fails this test on the status
+/// rather than on the empty row list.
 #[test]
 fn the_shipped_go_function_length_tool_rule_reports_while_another_run_holds_the_lock() {
     let source = format!(
@@ -385,7 +622,7 @@ fn the_shipped_go_function_length_tool_rule_reports_while_another_run_holds_the_
     assert!(
         reported.iter().all(|run| *run == expected),
         "every run started together must report {expected:?}, because a second instance \
-         waits for the lock rather than stopping; a run that stopped wrote its reason to \
-         the stderr the script drops and reads here as a clean file: {reported:?}"
+         waits for the lock rather than stopping; a run that stopped judged nothing at \
+         all: {reported:?}"
     );
 }
