@@ -62,13 +62,6 @@ pub mod package_type;
 pub mod publish;
 /// Client and types for the Mirdan package registry.
 pub mod registry;
-/// Shipped-content snapshot of retired builtin validator content, at both
-/// grains: a whole retired set (the nine single-rule sets merged into
-/// `code-security` and `code-hygiene`) and a retired rule file inside a set
-/// that still ships. Used by the refresh-prune mechanism in [`install`] to
-/// remove retired content from a deployed store only when the user never
-/// modified it.
-pub mod retired_validators;
 /// Registry search for skills and validators.
 pub mod search;
 /// Generic JSON settings-file primitives shared by install components.
