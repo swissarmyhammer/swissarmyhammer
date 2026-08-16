@@ -859,17 +859,30 @@ struct ShippedStaging<'a> {
     /// writes bytes that are not UTF-8, or takes every permission off the
     /// file, or writes no file at all.
     prepare: &'a dyn Fn(&Path),
+
+    /// What [`Self::prepare`] staged that the temporary directory cannot
+    /// remove, given back to the repository after the run and before the
+    /// directory drops.
+    ///
+    /// A DIRECTORY nobody may read is the shape that needs one. A file nobody
+    /// may read is unlinked through its parent, so the repository drops
+    /// cleanly; a directory nobody may read cannot be listed, so
+    /// `remove_dir_all` stops there and [`tempfile::TempDir`] leaves the whole
+    /// tree behind on every run of that test.
+    restore: &'a dyn Fn(&Path),
 }
 
 impl<'a> ShippedStaging<'a> {
     /// The staging of a probe that states every file of its repository as
-    /// text: no link, no file beside the repository, and nothing to prepare.
+    /// text: no link, no file beside the repository, nothing to prepare and
+    /// nothing to give back.
     fn of(staged: &'a [(&'a str, &'a str)]) -> Self {
         Self {
             staged,
             links: NO_PROBE_LINKS,
             outside: NO_PROBE_OUTSIDE,
             prepare: &stage_nothing_more,
+            restore: &stage_nothing_more,
         }
     }
 }
@@ -976,6 +989,7 @@ fn drive_shipped_script_whole(
             (read_script_output(&output), placed, output.status.code())
         }
     };
+    (staging.restore)(&repo);
 
     ShippedScriptRun {
         _work: work,
@@ -1454,6 +1468,35 @@ fn verify_shipped_tree_breaks_with_stub(
     assert_shipped_break(&failure, status, probe.run.expected, probe.reason);
 }
 
+/// Drives the shipped script of `rule` over the files of `staged`, with the
+/// argument list a run over `named` carries, while `binary` answers `answer`
+/// for that one run, and answers the whole of what the run said.
+///
+/// This is the `files`-scope counterpart of
+/// [`verify_shipped_tree_breaks_with_stub`]. A `files`-scope script takes its
+/// paths as arguments, so a probe of a broken step stages the files the run is
+/// given rather than a project tree.
+///
+/// [`lead_path_with_stub`] carries why the stub answers for ONE run, and what
+/// `PATH` the caller must guard.
+#[cfg(unix)]
+fn drive_shipped_script_with_stub(
+    project_types: &[&str],
+    rule: &str,
+    staged: &[(&str, &str)],
+    named: &[&str],
+    binary: &str,
+    answer: &str,
+) -> ShippedScriptRun {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+    let _path = lead_path_with_stub(binary, &stubbed_run_condition(""), answer);
+    let mut marked: Vec<(&str, &str)> = staged.to_vec();
+    marked.push((STUBBED_RUN_MARKER, ""));
+
+    drive_shipped_script_whole(&loader, rule, &ShippedStaging::of(&marked), named)
+}
+
 /// The test a stub makes to answer for ONE run: [`STUBBED_RUN_MARKER`] stands
 /// in the working directory, and `narrowed` holds beside it.
 #[cfg(unix)]
@@ -1628,6 +1671,11 @@ enum ShippedUnreadableFile {
 #[cfg(unix)]
 const UNREADABLE_MODE: u32 = 0o000;
 
+/// The mode that lets the owner read, write and enter a directory, and every
+/// other user read and enter it.
+#[cfg(unix)]
+const READABLE_MODE: u32 = 0o755;
+
 /// Takes every permission off the file at `path`.
 ///
 /// The probe then reads the file back and requires the read to FAIL. A user the
@@ -1644,6 +1692,39 @@ fn forbid_probe_read(path: &Path) {
         "the probe must stage {} as a file this user cannot read",
         path.display()
     );
+}
+
+/// Makes a directory at `path` that nobody may read, and gives back the mode
+/// that lets the probe repository drop.
+///
+/// The probe then lists the directory back and requires the listing to FAIL,
+/// for the reason [`forbid_probe_read`] states.
+///
+/// A DIRECTORY refuses a tool another way than a file does. A tool walks the
+/// path it is given, so it never reaches a file to name, and it says so
+/// without a path of its own.
+#[cfg(unix)]
+fn forbid_probe_directory(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(path).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(UNREADABLE_MODE)).unwrap();
+    assert!(
+        std::fs::read_dir(path).is_err(),
+        "the probe must stage {} as a directory this user cannot read",
+        path.display()
+    );
+}
+
+/// Gives the readable mode back to the directory at `path`.
+///
+/// [`ShippedStaging::restore`] carries why: a directory nobody may read stops
+/// `remove_dir_all`, so the temporary tree stays on disk after every run.
+#[cfg(unix)]
+fn restore_probe_directory(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(READABLE_MODE)).unwrap();
 }
 
 /// Answers the same on a platform this suite stages no mode on.

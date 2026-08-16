@@ -15,7 +15,6 @@ tool:
       exit 0
     fi
     codes="D100,D101,D102,D103,D104,D106,D107"
-    declined_head="warning: Failed to lint "
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     status=0
@@ -25,19 +24,23 @@ tool:
       printf 'missing-docs-python: ruff exited %s and judged no code\n' "$status" >&2
       exit 1
     fi
-    while IFS= read -r line; do
-      case "$line" in
-        "$declined_head"*)
-          printf 'sah-diagnostic: ruff could not read %s\n' "${line#"$declined_head"}" >&2
-          ;;
-      esac
-    done < "$work/ruff.err"
+    filtered=0
     jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
            | .code as $code | select($selected | index($code) | not)
-           | "sah-diagnostic: ruff could not measure \(.filename): \(.code // "no code") \(.message)"' "$work/ruff.json" >&2
+           | "sah-diagnostic: ruff could not measure \(.filename): \(.code // "no code") \(.message)"' "$work/ruff.json" \
+      > "$work/unmeasured.txt" || filtered=$?
     jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
            | .code as $code | select($selected | index($code))
-           | [.filename, .location.row, .code, .message] | @tsv' "$work/ruff.json" > "$work/reported.tsv"
+           | [.filename, .location.row, .code, .message] | @tsv' "$work/ruff.json" \
+      > "$work/reported.tsv" || filtered=$?
+    if [ "$filtered" -ne 0 ]; then
+      printf 'missing-docs-python: jq could not read the ruff report\n' >&2
+      exit 1
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+      printf 'sah-diagnostic: ruff declined an item and said: %s\n' "$line" >&2
+    done < "$work/ruff.err"
+    cat "$work/unmeasured.txt" >&2
     awk -F'\t' '
       function scan(file,   text, count, result) {
         count = 0
@@ -219,10 +222,30 @@ Measured beside a `pyproject.toml` that holds `[[[ not toml`: with
 `--isolated` ruff exits 1 and judges the Python file; without `--isolated`
 ruff exits 2 and writes `Failed to parse ... pyproject.toml`.
 
+**A report `jq` cannot read is a broken run too, and the status gate misses
+it.** The gate reads ruff's number, and ruff keeps status 1 for a file that HAS
+findings, so a report ruff wrote malformed at status 0 or 1 goes straight
+through. A filter that then runs bare under `set -e` takes the whole script
+down with jq's own status. Measured with a stub ruff that exits 1 and writes a
+report stopping inside its first entry: the script exited 5, wrote 0 bytes to
+stdout, and wrote `jq: parse error: Unfinished JSON term at EOF` alone — no
+marker, and no word about which rule broke. That is the defect this rule was
+rewritten to remove, standing on the filter step.
+
+So each filter step reads its own status into `filtered`, and one gate states
+the break in the rule's own words. Measured with the same stub after the gate:
+exit 1, 0 bytes on stdout, jq's own message, and
+`missing-docs-python: jq could not read the ruff report`. A stub ruff that
+writes `{ not json` at status 0 reads the same way, and so does a `jq` that
+cannot run at all. `missing-docs-rust` and `function-length-rust` carry this
+shape as well. The acceptance test
+`the_shipped_python_missing_docs_tool_rule_breaks_on_a_report_the_filter_cannot_read`
+holds it.
+
 ## A file ruff could not measure
 
 The run reads two statements ruff makes about a file it could not measure: a
-row of another code on the report, and a `Failed to lint` line on stderr. Each
+row of another code on the report, and a line on stderr. Each
 one is ONE item of a run that judged every other file it was handed, so the run
 answers both the same way — a line opening `sah-diagnostic:` at exit 0 — and the
 two sections below state what was measured for each. `builtin/validators/README.md`
@@ -279,22 +302,54 @@ without that path. Measured with ruff 0.14.5, one path for each run beside
 | a path that holds no file | the `D103` row alone | `warning: Failed to lint absent.py: No such file or directory (os error 2)` | 1 |
 | a file whose bytes are not UTF-8 | the `D103` row alone | `warning: Failed to lint notutf8.py: stream did not contain valid UTF-8` | 1 |
 | a file with no read permission | the `D103` row alone | `warning: Failed to lint noread.py: Permission denied (os error 13)` | 1 |
+| a broken symbolic link | the `D103` row alone | `warning: Failed to lint brokenlink.py: No such file or directory (os error 2)` | 1 |
+| a symbolic link that points at itself | the `D103` row alone | `warning: Failed to lint looplink.py: Too many levels of symbolic links (os error 62)` | 1 |
+| a directory with no read permission | the `D103` row alone | `warning: Encountered error: Permission denied (os error 13)` | 1 |
+| a directory that holds no Python file | the `D103` row alone | nothing | 1 |
 
 Each row is a path the tool declined. ruff judges every other file the run was
 handed, so neither the report nor the status carries the decline, and a script
 that read the report alone let the engine read a path ruff never opened as a
 clean file.
 
-The script therefore reads ruff's stderr for a line opening
-`warning: Failed to lint `, and writes what stands after that head under the
-marker `builtin/validators/README.md` states, at exit 0:
+ruff writes those lines under more than one HEAD, and one head names no path
+at all. `Failed to lint ` opens a line about a file ruff reached and could not
+read. `Encountered error: ` opens a line about a WALK that stopped before it
+reached a file to name, which is what a directory nobody may read does.
+`No Python files found under the given path(s)` says the walk reached no file
+at all, and a run given that directory ALONE writes it at exit 0. So a scan
+written for one head answered for the rows of that head and stayed silent for
+every other row.
 
-    sah-diagnostic: ruff could not read absent.py: No such file or directory (os error 2)
+The script therefore reads EVERY line ruff writes to stderr, and states each
+one whole under the marker `builtin/validators/README.md` asks for, at exit 0:
 
-The head is stripped as a quoted value, so the reason keeps every `: ` it
-holds and a path that carries one is never cut short. The engine renders each
-marked line in the report, and no file filter drops it, because a diagnostic is
-about the RUN and has no path to be kept by.
+    sah-diagnostic: ruff declined an item and said: warning: Failed to lint absent.py: No such file or directory (os error 2)
+    sah-diagnostic: ruff declined an item and said: warning: Encountered error: Permission denied (os error 13)
+
+The line is forwarded, and no head is stripped or enumerated. ruff's own words
+carry the path where ruff knows one, and name what stopped the run where it
+does not, so a reason that holds a `: ` of its own is never cut short and a
+ruff release that writes a head this rule never met still says its piece.
+
+A sound run writes nothing on that channel, which is what makes the whole of it
+readable this way. Measured against the shipped command line: `judged.py`
+alone, `judged.py` beside a documented module, a file carrying `# noqa`, a file
+opening with a byte-order mark, a file holding JSON, and the same file named
+two times each write 0 bytes to stderr. Only a run that declined an item writes
+any.
+
+The engine renders each marked line in the report, and no file filter drops it,
+because a diagnostic is about the RUN and has no path to be kept by.
+
+`while IFS= read -r line` alone loses the LAST line where no newline closes it:
+`read` answers nonzero for a partial line, so a loop that reads the status
+alone never runs its body for that line. Measured over two decline lines with a
+stub ruff: 2 diagnostics with the closing newline, and 1 without it — the last
+decline lost, and its path then read as clean. The loop therefore runs for a
+partial last line as well, and the acceptance test
+`the_shipped_python_missing_docs_tool_rule_reads_a_decline_with_no_closing_newline`
+holds it.
 
 A pre-flight test of the PATH is the answer this rule used to give, and it was
 wrong twice over. It exited 1, which costs the run every finding it did make;
@@ -312,11 +367,23 @@ absent path beside the unparsable file: exit 1, `missing-docs-python cannot read
 absent.py` on stderr, and NOTHING about the parse failure — the guard ran before
 ruff, so the run never learned the second file does not parse.
 
-Three acceptance tests hold the three rows, one for each —
+Taking the guard away for the `Failed to lint ` head ALONE cost the directory
+row. `[ ! -r "$file" ]` is true for a directory nobody may read, so the guard
+did stop that path, by breaking the run and losing every finding with it.
+Measured with the shipped script between the two shapes, over `judged.py`
+beside a mode-000 directory: exit 0, the `D103` reported, and 0 bytes on
+stderr — an unread directory returning as a fully judged clean tree, which is
+worse than the exit 1 it replaced. Reading the whole channel is what answers
+both: the directory is stated, and the `D103` stands.
+
+Four acceptance tests hold four rows, one for each —
 `the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file`,
-`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
-Each stages `judged.py` beside the path, and holds the run to reporting that
-finding AND to stating one diagnostic that names the path.
+`..._declines_a_file_it_cannot_decode`, `..._declines_a_file_it_may_not_read`
+and `..._declines_a_directory_it_may_not_read`. Each stages `judged.py` beside
+the path, and holds the run to reporting that finding AND to stating one
+diagnostic. The first three hold the diagnostic to naming the path, and the
+fourth to carrying ruff's own words, because the line for a directory names no
+path.
 
 ### The scan of the definition line, which fails open
 
@@ -343,20 +410,32 @@ files: three findings on stdout, one marked line on stderr, and exit 0.
 `@tsv` naming that file with a doubled backslash on the FINDING row as well is a
 defect of its own, and `^b2kq9hy` covers it.
 
+The acceptance test
+`the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve`
+holds the fail-open over that same pair. It holds the run to exit 0, to the row
+of `judged.py`, to a count of three findings, and to one diagnostic naming a
+FRAGMENT of the other file's name. The count and the fragment are what keep the
+probe clear of the doubled path, so `^b2kq9hy` stays free to pick either
+spelling.
+
 ### Every answer in one run
 
 Measured with the shipped script over `judged.py` handed to the run beside the
-unparsable file AND all three refusing paths: one finding on stdout, four marked
-lines on stderr — three reads and one measure — and exit 0. No decline costs
-another, and none costs the finding, because none exits nonzero.
+unparsable file, all three refusing paths AND the directory nobody may read:
+one finding on stdout, five marked lines on stderr — four declines and one
+measure — and exit 0. No decline costs another, and none costs the finding,
+because none exits nonzero.
 
 The two kinds of line name the file differently, and each names it the way ruff
-did. ruff's stderr writes the path the command line gave it, so a read line
+did. ruff's stderr writes the path the command line gave it, so a decline line
 carries `absent.py`; ruff's report writes an absolute path, so a measure line
 carries the whole path.
 
-The broken-run gate stands beside all of it, so a ruff that refuses its command
-line still never reads as a clean tree.
+Two gates stand beside all of it, and each one breaks the run rather than
+answering zero: a ruff status over 1, and a report `jq` could not read. Neither
+one reaches a ruff that REFUSED one argument and judged the rest, because that
+run keeps status 1 and writes a readable report. The stderr channel is what
+answers that shape, and it answers every head ruff writes there.
 
 ## A run answers for the files it is given, and for no other
 

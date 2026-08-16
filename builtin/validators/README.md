@@ -98,7 +98,7 @@ A tool rule binds one tool to one language. Example:
 That is the frontmatter of `rules/magic-numbers-python.md`, all 25 lines of
 it, and its `run` is the zero-argument guard this contract states plus one
 pipe. A rule whose tool needs several steps writes a script rather than one
-pipe; `rules/missing-docs-python.md` is one of those, and its script is 51
+pipe; `rules/missing-docs-python.md` is one of those, and its script is 52
 lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
