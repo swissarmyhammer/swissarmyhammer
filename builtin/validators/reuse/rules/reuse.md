@@ -36,7 +36,7 @@ Using those candidates and your reading of the diff, flag:
 - FFI/compatibility shims and intentional forks where the existing function's
   contract genuinely does not fit.
 - Single-call-site helpers are not a reuse concern. A helper extracted to keep a
-  function under the length/complexity limits is warranted even with exactly one
-  caller — never flag toward inlining it; inlining would recreate the over-long
-  function, and flip-flopping between extract and inline across review rounds is
-  always a validator error.
+  function under the length limit is warranted even with exactly one caller —
+  never flag toward inlining it; inlining would recreate the over-long function,
+  and flip-flopping between extract and inline across review rounds is always a
+  validator error.

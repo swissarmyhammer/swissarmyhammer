@@ -17,7 +17,6 @@ time.
 
 Enforces structural code quality rules:
 
-- **Cognitive complexity** — flags overly complex functions
 - **Function length** — catches functions that are too long
 - **Naming consistency** — enforces naming conventions
 - **No commented-out code** — prevents dead code from accumulating

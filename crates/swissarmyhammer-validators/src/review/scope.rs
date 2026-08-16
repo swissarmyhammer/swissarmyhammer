@@ -1301,8 +1301,8 @@ fn sources_under_review(
 /// Build the shared probe-result cache from a single [`run_probes`] call over the
 /// whole change set with the union of every validator's declared probes.
 ///
-/// Entity-bound probes read `change_entities`; file-bound probes (`complexity`,
-/// the tree-sitter family) read the current source of every matched file, so
+/// Entity-bound probes read `change_entities`; file-bound probes — the
+/// tree-sitter family — read the current source of every matched file, so
 /// they measure the whole review boundary rather than only the entities the
 /// diff touched. Diff-aware tree-sitter probes also read each file's base
 /// revision, which is why `before_by_path` — already computed for the blame

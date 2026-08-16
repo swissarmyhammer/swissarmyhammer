@@ -288,10 +288,10 @@ failure is then the same as the status of a finding. The script must then test
 the REPORT beside the status, and accept the shared status only for the report
 shape a measured run writes. Measured with swiftlint 0.65.0: a run that
 breaches `warning_threshold:` exits 2 and writes a JSON array that holds one
-entry for each finding and one entry more for the threshold — over three
-fixtures, 2 entries for magic numbers, 2 for complexity and 3 for missing
-docs; a run beside a project `swiftlint_version:` that names a version that
-is not installed exits 2, writes 0 bytes and lints no file. The three shipped
+entry for each finding and one entry more for the threshold — 2 entries over
+the magic-numbers fixture and 3 over the missing-docs fixture; a run beside a
+project `swiftlint_version:` that names a version that is not installed exits
+2, writes 0 bytes and lints no file. The three shipped
 swiftlint rules accept status 2 only when the report holds a JSON array of one
 entry or more. A script that accepted every status 2 reported 0 findings and
 exited 0 for the second shape, and the engine read a dirty file as clean.

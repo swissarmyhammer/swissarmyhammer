@@ -12,8 +12,8 @@
 //!
 //! Grammars and language routing come from
 //! [`swissarmyhammer_sem::parser::plugins::code::parse_code`] — the same table
-//! the entity extractor and the complexity scorer read. This module adds no
-//! grammar list of its own.
+//! the entity extractor and the test census read. This module adds no grammar
+//! list of its own.
 //!
 //! Each `(file, revision)` under review is parsed **once per review** by the
 //! shared parse cache, before any probe runs, and every probe that reads that
@@ -620,8 +620,9 @@ const ASSERTION_CENSUS_PROBE_NAME: &str = "assertion-census";
 ///
 /// A test is identified from the marker at its **definition** — the attribute,
 /// the framework name+signature convention, the call-based definition — through
-/// the same roster the complexity scorer's test exemption reads. The file name
-/// is never consulted, so a helper beside the tests is not one of them.
+/// the `DefinitionSpec` roster the `swissarmyhammer-sem` code plugin holds. The
+/// file name is never consulted, so a helper beside the tests is not one of
+/// them.
 ///
 /// The rows are [`ProbeKind::Candidate`] and never a guard-able fact. The
 /// measurement is exact, but whether it makes the test *cheating* is the

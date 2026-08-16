@@ -1969,8 +1969,11 @@ fn the_swift_package_root_restores_the_directory_before_it_removes_it() {
 /// prompt rules that rule must supersede — empty for a rule that must leave
 /// its prompt rule running. For each row, the helper reads the doctor row
 /// and asserts what the row supersedes. The list belongs to the row rather
-/// than to the call because one roster — the complexity rules — mixes rules
-/// that replace one prompt rule with a rule that replaces two.
+/// than to the call so one helper serves every roster, whatever each one
+/// supersedes: most rosters name one prompt rule for every row, while
+/// `SHIPPED_STUTTERING_NAME_RULES` and `SHIPPED_UNUSED_DEPENDENCY_RULES` name
+/// `SUPERSEDES_NOTHING`. No roster mixes the two today; a row that carries its
+/// own list is what would let one do so without a second helper.
 ///
 /// Every row keeps one contract, the same one the single-rule acceptance
 /// tests keep: [`require_tool_installed`] gets the tool through the rule's

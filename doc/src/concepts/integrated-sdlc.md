@@ -81,7 +81,7 @@ Tools are MCP (Model Context Protocol) endpoints that the agent calls to interac
 
 ### Validators Run Continuously
 
-Validators are Claude Code hooks that fire on every tool call. When the agent writes a file, the code-quality validator checks for cognitive complexity, magic numbers, and naming issues. When it runs a shell command, the command-safety validator ensures it's not destructive. This happens transparently — the agent gets feedback and can self-correct before problems land.
+Validators are Claude Code hooks that fire on every tool call. When the agent writes a file, the code-hygiene validator checks for commented-out code, overlong functions, and undocumented public APIs. When it runs a shell command, the command-safety validator ensures it's not destructive. This happens transparently — the agent gets feedback and can self-correct before problems land.
 
 ## Extensibility
 
