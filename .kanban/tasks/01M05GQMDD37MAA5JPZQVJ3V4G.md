@@ -577,6 +577,200 @@ comments:
 
     Left in `doing`. Not committed.
   timestamp: 2026-08-16T16:29:42.621116+00:00
+- actor: claude-code
+  id: 01m05pjxsatga4r0mx4y4qvsjw
+  text: |-
+    ### commit — changed
+    - evidence: 2d4198b5f fix(validators): decline on BOTH machete walk marks, strip the quoted path (^qvj3v4g) — 5 files changed, 846 insertions(+), 118 deletions(-)
+    - next: none
+  timestamp: 2026-08-16T16:30:56.298509+00:00
+- actor: claude-code
+  id: 01m05qe7nbzh262kz0bs0a0phz
+  text: |-
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (2d4198b5f) — engine 0 findings / 0 confirmed / 0 refuted over 9 attempted validators, 0 failed. 1 hand-measured finding on changed lines: `builtin/validators/manifests/rules/unused-dependencies-rust.md:131`, `:207`, `:410` — the `1.6 s` and `0.4 s` timing claims this commit rewrote do not reproduce (measured 1.34-1.37 s over 5 samples, and 0.25-0.28 s over 11 samples across all three forms of a whole-tree run).
+    - both prior findings verified FIXED by running: the ACL walk failure declines at exit 0 with the `serde` finding kept and 1 marked line; `a: b/Cargo.toml` answers `could not read a: b/Cargo.toml: TOML parse error at line 6, column 14` with no repeated path fragment.
+    - two-mark gate probed all three ways: status 2 without the sentence breaks (exit 1), status 3 with the sentence breaks (exit 1), status 2 with the sentence declines (exit 0). `cargo-machete` absent from PATH breaks at 127.
+    - `${reason#"$scan": }` proved load-bearing against a `[a]/Cargo.toml` path; unquoted repeats the path.
+    - whole workspace BYTE-IDENTICAL old vs new, 122 findings, 36 packages, exit 0, md5 2fba4fbdf53af8dc0532cbc18fdc1980.
+    - doc counts recounted call site by call site: 36 probes / 35 tests / 12 rules / 20 held over 7 rules / 16 not over 9 — every number holds. Line accounting 846/118 accounted in full.
+    - DISPUTED INSTRUCTION ADJUDICATED: the implementer is RIGHT. With a `[workspace]` table machete writes `can't load root workspace at : ...`; without one it writes `can't load root workspace: ...`. The prior instruction was measured against a manifest without the table while the acceptance probes carry it. The refusal is correct and is not a finding.
+    - next: restore the measured timing values at the four call sites, or state the machine and load the 1.6 s / 0.4 s samples came from. Task stays in `review`.
+  timestamp: 2026-08-16T16:45:51.147971+00:00
+- actor: claude-code
+  id: 01m05qfvyp3x97er1mwhwj6pgf
+  text: |
+    ### finish iteration 2 — findings
+    - implement: changed — 3 files. Reproduced both findings first, watched RED on the new probes, then fixed.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14108 passed, 0 failed, 0 skipped; embed traced and confirmed byte for byte.
+    - commit: 2d4198b5f fix(validators): decline on BOTH machete walk marks, strip the quoted path (^qvj3v4g) — 5 files changed, 846 insertions, 118 deletions
+    - review: findings — 1 finding, builtin/validators/manifests/rules/unused-dependencies-rust.md:131, :207, :410.
+
+    ### BOTH prior findings are fixed, verified by RUNNING
+
+    The walk failure declines and continues: reproduced with the macOS ACL, the `serde` finding survives on stdout, one marked line names the refused manifest, exit 0. The old script over the same probe loses the finding at exit 1.
+
+    The `a: b/Cargo.toml` case answers with no repeated path fragment.
+
+    The two-mark gate is right in all three directions — status 2 without the sentence breaks, status 3 WITH the sentence breaks (the control holds), status 2 with the sentence declines. And the quoting is load-bearing: against `[a]/Cargo.toml` the shipped `${reason#"$scan": }` strips correctly, while the same script with the quotes removed repeats the path, because `[a]` is then read as a bracket expression.
+
+    Whole-workspace stdout is byte-identical, md5 `2fba4fbdf53af8dc0532cbc18fdc1980`.
+
+    ### The disputed instruction — the IMPLEMENTER was right
+
+    Iteration 2's review told the implementer to delete a ` at :` segment as a sentence machete never writes. The implementer measured the opposite and declined to follow it. This round the reviewer measured it both ways itself:
+
+    - WITH a `[workspace]` table the manifest declares: `can't load root workspace at : No such file or directory (os error 2): ...` — the segment IS written.
+    - WITHOUT the table: no ` at :` segment.
+
+    `UNUSED_DEPENDENCY_PACKAGE_MANIFEST` carries `[workspace]`, so the probes meet the ` at :` form. The earlier instruction was measured against a manifest without the table.
+
+    Recorded plainly because it matters to how this loop works: **a correct refusal to follow a wrong instruction is not a finding.** The implementer measured, disagreed, said so on the card, and was right.
+
+    ### The one open finding — two timing numbers moved the wrong way
+
+    This commit rewrote `1.3 s` to `1.6 s` at three call sites and `0.3 s` to `0.4 s` at one. Measured: 1.36, 1.36, 1.36, 1.34, 1.37 over five warm samples, and 0.25-0.28 s over eleven samples of the single whole-tree run. **The pre-change values were the accurate pair.**
+
+    Every other number the commit wrote is exact, which is what makes these two stand out in a document whose whole job is measured fact.
+
+    ### Guardrail state
+
+    Two rounds, findings both times, but never the same finding: iteration 1 raised `:251` and `:44` and both are now ANSWERED and verified; iteration 2 raises `:131`/`:207`/`:410`, different lines and different content. Not tripped. Iteration 3 is a narrow numeric correction.
+    - next: iteration 3 corrects the four timing call sites to the measured values
+  timestamp: 2026-08-16T16:46:44.694408+00:00
+- actor: claude-code
+  id: 01m05rcwrj73d3bfwgyvkjq0nw
+  text: |
+    ## I measured it myself first, and my numbers agree with the reviewer
+
+    Machine: Apple M5 Max, macOS 27.0, cargo-machete 0.9.2. The script is the rule's
+    own `run:` block, extracted verbatim (lines 12-64 of the rule file, dedented) and
+    driven with `bash` at the workspace root.
+
+    Background load moved a lot through the whole session. `corespotlightd` was
+    indexing and spiked between 10 % and 860 % CPU; the 1-minute load average moved
+    between 5 and 22. That is the whole story of this finding, so I recorded the load
+    beside each batch.
+
+    ### Batch A — 8 warm samples, load average 6.3 to 7.6
+
+        1.54 1.38 1.35 1.34 1.35 1.48 1.47 1.49
+
+    ### Batch B — 12 warm samples, load average rising to 19
+
+    Script: `1.63 1.66 1.59 1.60 1.71 1.65 1.60 2.01 1.58 1.62` (10 of the 12 read
+    back). Whole-tree run, 6 samples of each of the three forms:
+
+    | the form | samples |
+    |---|---|
+    | `cargo-machete .` | 0.42 0.40 0.40 0.43 0.40 0.39 |
+    | `cargo-machete` with no argument | 0.41 0.26 0.41 0.38 0.42 0.41 |
+    | `cargo machete .` | 0.42 0.42 0.45 0.39 0.42 0.45 |
+
+    ### Batch C — 20 pairs, run alternately, load average 13 to 22
+
+    Script `1.56 1.64 1.86 1.83 1.61 1.72 1.81 1.56 1.56 1.63 1.58 1.48 1.50 1.56
+    1.48 1.52 1.50 1.46 1.44 1.45`; whole-tree `0.43 0.41 0.40 0.39 0.40 0.40 0.41
+    0.40 0.35 0.37 0.27 0.35 0.26 0.26 0.29 0.27 0.36 0.27 0.26 0.31`. Both fell
+    steadily through the batch as Spotlight let go.
+
+    ### Batch D — 30 pairs, run alternately, the quietest window I could get
+
+    Script `1.32` to `1.49`, median **1.34 s**. Whole-tree `0.26` to `0.42`, median
+    **0.27 s**. The first 23 pairs, taken before load came back, hold to 1.32-1.35 s
+    and 0.26-0.29 s with no exception.
+
+    ### What the samples say
+
+    **The reviewer is right, and my numbers are its numbers.** The reviewer measured
+    1.36 1.36 1.36 1.34 1.37 and 0.25-0.28; my quiet window gives 1.32-1.35 and
+    0.26-0.29. The pre-change pair, 1.3 s and 0.3 s, is what this tree costs.
+
+    **And the 1.6 s / 0.4 s pair is not invented — it is this same tree under load.**
+    Batches B and C reproduce it exactly: 1.58-1.71 s for the script and 0.39-0.45 s
+    for the whole-tree run, on the same binary, the same script and the same
+    workspace, with Spotlight indexing beside it. The last pass measured a busy
+    machine and wrote the reading down as a bare figure. That is the whole defect.
+
+    ### What I wrote
+
+    `1.3 s` at the table row and at the closing sentence, `1.3 s` and `0.3 s` in the
+    cost paragraph — the values the tree measures. Then, because a bare figure is
+    what let a loaded reading pass as fact, the cost paragraph now states the sample
+    count, the range and the median, and says plainly that the tails belong to
+    whatever else the machine was doing:
+
+        Measured over 30 warm samples of each, run alternately so that both met the
+        same machine: 1.32 s to 1.49 s for the script and 0.26 s to 0.42 s for the
+        whole-tree run, median 1.34 s and 0.27 s. Both tails belong to whatever else
+        the machine was doing, so read the medians.
+
+    A reader who now measures 1.6 s can see it is the tail of a known range, not a
+    contradiction of the document.
+
+    Nothing else in the file was touched. The `run:` block is byte for byte what it
+    was, and the diff is three timing sites plus the one paragraph rewrap they
+    forced.
+  timestamp: 2026-08-16T17:02:35.794426+00:00
+- actor: claude-code
+  id: 01m05rdb8c8c0dq7rde35yah9e
+  text: |
+    ### implement — changed
+
+    - evidence: 1 file —
+      `builtin/validators/manifests/rules/unused-dependencies-rust.md`.
+
+      MEASURED FIRST, my own samples, before any edit. 30 warm pairs of the shipped
+      script and the whole-tree run, taken alternately: script 1.32 s to 1.49 s,
+      median 1.34 s; whole-tree 0.26 s to 0.42 s, median 0.27 s. The 23 pairs of the
+      30 taken in the quiet window hold to 1.32-1.35 s and 0.26-0.29 s. Three
+      earlier batches (8, 12 and 20 samples) reproduce the 1.6 s / 0.4 s pair, but
+      only while `corespotlightd` was indexing at 300-860 % CPU and the load average
+      stood at 13 to 22. My numbers agree with the reviewer's 1.36 / 0.25-0.28. The
+      pre-change pair is the accurate one.
+
+      WROTE: `1.3 s` at the table row, `1.3 s` and `0.3 s` in the cost paragraph,
+      `1.3 s` at the closing sentence. The cost paragraph now also states the sample
+      count, the range and the median, because a bare figure is what let a loaded
+      reading pass as measured fact.
+
+      The `run:` block is byte for byte unchanged. The diff is the three timing
+      sites plus the rewrap of the one paragraph they touched.
+
+      `cargo fmt --all --check` exit 0.
+      `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings.
+      `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 3523 tests run,
+      3523 passed (25 slow), 0 failed, 0 skipped.
+      `cargo build -p mirdan` with `build.rs` touched to force a fresh run: exit 0,
+      and `target/debug/build/mirdan-2dd4355981eab855/out/builtin_validators.rs`
+      carries all three corrected sites inside the
+      `manifests/rules/unused-dependencies-rust.md` entry, with no `1.6 s` or
+      `0.4 s` left in it (the four remaining hits in that file belong to other
+      rules).
+
+    - next: `/review`. The card stands in `doing` with the finding checked, and
+      nothing is committed.
+  timestamp: 2026-08-16T17:02:50.636017+00:00
+- actor: claude-code
+  id: 01m05rvf2aw0yn38zn6rgdk7zw
+  text: |-
+    ### test — green
+
+    **Scope check**: only tracked file changed is `builtin/validators/manifests/rules/unused-dependencies-rust.md` (`git status --porcelain` shows nothing else tracked; other `.kanban/*` entries are untracked files from concurrent board activity). `git diff` on the file shows 3 hunks, all in prose sections (the results table row, the "One machete process..." paragraph, the final "Measured over this whole workspace..." line). The `run: |` block (lines 11-64) has zero diff lines inside it.
+
+    **Gates**:
+    - `cargo fmt --check` — exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+    - `cargo nextest run --workspace` — 14108 tests run: 14108 passed (25 slow), 0 failed, 0 skipped. Exit 0.
+    - `cargo build -p mirdan` — succeeds. Traced OUT_DIR: the freshest `mirdan-*/out/builtin_validators.rs` fingerprint dirs (rebuilt at 12:04, after the source file's 11:56 mtime, by the clippy/build pass above) embed the `unused-dependencies-rust.md` content byte-for-byte identical to the working-tree file (22,783 bytes, exact match) — zero occurrences of `1.6 s` or `0.4 s`. Two stale out-dirs from an earlier 11:32 build still hold the old `1.6 s`/`0.4 s` text, confirming the check is discriminating and not a false pass.
+
+    **Own timing samples** (5 warm samples each, alternated, machine load noted): first checked `ps aux` for load — `corespotlightd` was at 108% CPU (elevated from the earlier bad round's 300-860%, but not idle) when the timing block started; by the time sampling finished, `corespotlightd` had dropped out of the top-CPU list entirely (indexing done). Samples:
+    - extracted `run:` script over the workspace: 1.337, 1.338, 1.375, 1.360, 1.354 s → median 1.354 s, range 1.337-1.375 s. Falls inside the written range 1.32 s-1.49 s.
+    - single whole-tree `cargo-machete .`: 0.278, 0.284, 0.291, 0.283, 0.322 s → median 0.284 s, range 0.278-0.322 s. Falls inside the written range 0.26 s-0.42 s.
+    - Output content matched claims: 122 findings, 36 unique packages, 0 declined manifests, matching the doc's "no manifest declined" line.
+
+    All figures in the file are supportable on this machine right now.
+  timestamp: 2026-08-16T17:10:33.290405+00:00
 position_column: doing
 position_ordinal: '8280'
 title: unused-dependencies-rust writes findings to stdout, then exits 1 on a later manifest and discards them
@@ -639,3 +833,33 @@ The `sha` op reviews added and modified lines only. These sit on lines this comm
 - `builtin/validators/manifests/rules/unused-dependencies-rust.md:234` and `:177` — both state machete answers `error when handling Cargo.toml: can't load root workspace at :`. Measured: `error when handling Cargo.toml: can't load root workspace: No such file or directory (os error 2): No such file or directory (os error 2): No such file or directory (os error 2)`. There is no ` at :` segment; `cargo_toml` emits ` at {path}` only when the workspace error carries a path, and this one does not.
 - `builtin/validators/manifests/rules/unused-dependencies-rust.md:158` — "the two definitions pick out the same 63 files here". Measured: 64 files named `Cargo.toml`, 63 declaring `[package]`. They differ by the virtual workspace root `./Cargo.toml`.
 - The script tests machete's status and its `error when handling ` stderr line, never that stdout carried one of machete's two sentences. A stub exiting 0 or 1 with unparseable, partial, or empty stdout ends exit 0 with no finding and no marked line. Real machete 0.9.2 cannot reach this — both `Ok` branches of `run_machete` print one of the two sentences first — so it needs a shim, a wrapper, or a future machete.
+
+## Review Findings (2026-08-16 11:43)
+
+> Scope: `review sha HEAD~1..HEAD` (2d4198b5f) — reviewed the diffs only — lines this change added or modified. The validator fleet returned 0 findings over 9 attempted validators, 0 refuted. The item below comes from hand measurement against cargo-machete 0.9.2, and lands on lines this commit changed.
+
+- [x] `builtin/validators/manifests/rules/unused-dependencies-rust.md:131` `hand/measurement` — this commit rewrote both timing numbers of the rule body AWAY from what the tree measures, in a document whose stated job is measured fact. `1.6 s` stands at three call sites — `:131`, `:207`, `:410` — each changed from `1.3 s`; measured over five warm samples of the shipped script across this workspace: 1.36, 1.36, 1.36, 1.34, 1.37, median 1.36 s. `0.4 s` for "a single whole-tree run" stands at `:207`, changed from `0.3 s`; measured 0.25-0.28 s over eleven samples spanning all three forms of that run — `cargo-machete .`, `cargo-machete` with no argument, and `cargo machete .` — so no reading of a whole-tree run reaches 0.4 s. The pre-change values were the accurate pair, and the prior review pass recorded the same 1.36 s. Every other number this commit wrote is exact. Restore the measured values at all four call sites, or state the machine and the load the 1.6 s and 0.4 s samples were taken under.
+
+### The disputed instruction — the implementer is RIGHT, and this is NOT a finding
+
+The prior pass instructed that `:234` and `:177` state a ` at :` segment machete never writes. The implementer measured the opposite and declined the instruction. Measured both ways here with cargo-machete 0.9.2, handing it the bare name `Cargo.toml`, using the acceptance probes' own manifest:
+
+- WITH a `[workspace]` table: `error when handling Cargo.toml: can't load root workspace at : No such file or directory (os error 2): No such file or directory (os error 2): No such file or directory (os error 2)` — the ` at :` segment IS written, and the tail is `No such file or directory (os error 2)`, word for word what `:271` now states.
+- WITHOUT the table, the same manifest otherwise: `error when handling Cargo.toml: can't load root workspace: No such file or directory (os error 2): ...` — no ` at :` segment.
+
+`UNUSED_DEPENDENCY_PACKAGE_MANIFEST` carries `"\n[workspace]\n"`, so the acceptance probes meet the ` at :` form, exactly as `:273` states. The earlier instruction was measured against a manifest without the table. The refusal to follow it is correct, and the paragraph at `:268-273` is accurate as written. A correct refusal of a wrong instruction is not a finding.
+
+### Measured and CONFIRMED in this pass
+
+By hand, cargo-machete 0.9.2, the script extracted verbatim from the rule's `run:` block and driven with `bash`.
+
+- **Prior finding 1 is fixed.** The walk failure declines and the run continues. Reproduced with the macOS ACL `chmod +a "$(whoami) deny readattr"`: machete exits 2 with `Error: Errors when walking over directories:` and `zwalkfail/Cargo.toml: IO error for operation on zwalkfail/Cargo.toml: Permission denied (os error 13)`. Through the script with a package declaring an unused `serde` staged before it: the `serde` finding on stdout, exactly 1 marked line, exit 0. The old script over the same probe: the finding, machete's 4 raw lines, then `unused-dependencies-rust: cargo machete exited 2 over zwalkfail/Cargo.toml`, exit 1 — the row's "4" is exact.
+- **Prior finding 2 is fixed.** With a package staged at `a: b/Cargo.toml`, machete writes `error when handling a: b/Cargo.toml: TOML parse error at line 6, column 14` and the script answers `sah-diagnostic: cargo machete could not read a: b/Cargo.toml: TOML parse error at line 6, column 14`. The path fragment no longer repeats inside the reason.
+- **The quoting is load-bearing.** Staged at `[a]/Cargo.toml`: the shipped `${reason#"$scan": }` answers `could not read [a]/Cargo.toml: TOML parse error at line 6, column 14`; the same script with only the quotes removed answers `could not read [a]/Cargo.toml: [a]/Cargo.toml: TOML parse error at line 6, column 14`, because `[a]` is then read as a bracket expression that never matches the literal `[`.
+- **The two-mark gate is right in all three directions.** Status 2 WITHOUT the sentence: no finding, `unused-dependencies-rust: cargo machete exited 2 over Cargo.toml`, exit 1. Status 3 WITH the sentence: no finding, `cargo machete exited 3 over Cargo.toml`, exit 1 — the control holds. Status 2 WITH the sentence: 1 marked line, exit 0. `cargo-machete` absent from PATH: no finding, `exited 127 over Cargo.toml`, exit 1.
+- **All four walk constructions** exit 2 and write the sentence, and only the ACL one reaches machete: `find` lists neither a path that holds no file nor anything inside a mode-000 directory, and `grep -q '^\[package\]'` fails on the broken symbolic link before the loop calls the tool. The three stderr tails are `No such file or directory (os error 2)`, `Permission denied (os error 13)`, `No such file or directory (os error 2)`, matching rows `:253-255`. Two walk failures staged alone: no finding, two marked lines, exit 0.
+- **Whole workspace unchanged.** `cmp` of old against new stdout is silent — BYTE-IDENTICAL. 122 findings, 36 distinct packages, exit 0 for both, zero stderr lines, md5 `2fba4fbdf53af8dc0532cbc18fdc1980`, matching the commit message.
+- **File counts exact**: 68 `*.toml` in the script's find scope, 64 named `Cargo.toml`, 63 declaring `[package]`, and the four under another name are exactly `.config/nextest.toml`, `dist-workspace.toml`, `.cargo/config.toml`, `doc/book.toml`.
+- **Doc counts at `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1219-1230` recounted call site by call site, and every number holds**: 36 breaking probes across 35 tests — the one test driving two probes is `the_shipped_typescript_dead_code_tool_rule_breaks_on_a_project_ts_prune_cannot_read`. 20 held: 9 `verify_shipped_tree_breaks`, 7 reaching `verify_shipped_tree_breaks_with_stub` (1 direct, 2 through `verify_shipped_tree_breaks_without_run_of`, 4 through `verify_shipped_tree_breaks_without`, so 6 through `_without_run_of`), and 4 `verify_rust_function_length_breaks` — over 7 rules. 16 not held, all `verify_shipped_run_breaks`, over 9 rules. Union 12 rules, overlap 4.
+- **The six acceptance tests** the table at `:398-403` names all exist, and `cargo nextest run -p swissarmyhammer-validators -E 'test(the_shipped_rust_unused_dependency) or test(every_shipped_unused_dependency)'` reports 7 tests run, 7 passed, 0 failed, 0 skipped of those selected.
+- **Line accounting**: 846 insertions = 9 + 347 (the card's own `.jsonl` and `.md`) + 152 + 115 + 223; 118 deletions = 0 + 1 + 62 + 37 + 18. 356 of the 846 are kanban bookkeeping, leaving 490/117 across the three content files.

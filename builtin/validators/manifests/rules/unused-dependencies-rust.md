@@ -128,7 +128,7 @@ measurement below says how often it comes up.
 
 | Tree | Findings | Time |
 |---|---|---|
-| this workspace, 63 package manifests | **122** across 36 packages | 1.6 s |
+| this workspace, 63 package manifests | **122** across 36 packages | 1.3 s |
 | `BurntSushi/ripgrep` at HEAD | **1** | under 1 s |
 | `tokio-rs/tracing` at HEAD | **6** | under 1 s |
 
@@ -204,11 +204,14 @@ manifest whose key is the dependency. Both spellings resolve —
 find still reports, on line 1.
 
 One machete process runs for each manifest rather than one for the whole tree,
-which costs 1.6 s over this workspace against 0.4 s for a single whole-tree
-run. That buys the uniform per-manifest path above, and it is well under the
-6.7 s the `dead-code-rust` orphan scan already spends on the same tree. It buys
-one thing more: a manifest machete refuses is one process of 63, so the other
-62 keep their answers.
+which costs 1.3 s over this workspace against 0.3 s for a single whole-tree
+run. Measured over 30 warm samples of each, run alternately so that both met the
+same machine: 1.32 s to 1.49 s for the script and 0.26 s to 0.42 s for the
+whole-tree run, median 1.34 s and 0.27 s. Both tails belong to whatever else the
+machine was doing, so read the medians. That buys the uniform per-manifest path
+above, and it is well under the 6.7 s the `dead-code-rust` orphan scan already
+spends on the same tree. It buys one thing more: a manifest machete refuses is
+one process of 63, so the other 62 keep their answers.
 
 ## The script names the binary, not the cargo subcommand
 
@@ -407,4 +410,4 @@ line fails both of them.
 
 Measured over this whole workspace, the shipped shape and the shape before the
 walk reading landed answer alike, byte for byte: the same 122 findings across 36
-packages, no manifest declined, exit 0, in 1.6 s.
+packages, no manifest declined, exit 0, in 1.3 s.
