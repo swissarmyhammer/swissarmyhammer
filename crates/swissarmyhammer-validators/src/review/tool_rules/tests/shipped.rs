@@ -1214,17 +1214,17 @@ fn drive_shipped_staged_tree_read_with<T>(
 /// that wrote any.
 ///
 /// HOW FAR THE ASSERTION REACHES, measured over every breaking probe the
-/// shipped acceptance tests carry. There are 37 of them across 36 tests and 13
-/// shipped rules, and all 37 were measured exiting 1 — the stubbed-`PATH`
+/// shipped acceptance tests carry. There are 35 of them across 34 tests and 12
+/// shipped rules, and all 35 were measured exiting 1 — the stubbed-`PATH`
 /// probes as well, because a script that reads the status of its own step
 /// states the broken run in its own words rather than handing the tool's 127
-/// on. TWENTY are held to this number, over 7 rules: the 10 that call
+/// on. NINETEEN are held to this number, over 7 rules: the 9 that call
 /// [`verify_shipped_tree_breaks`], the 6 that call
 /// [`verify_shipped_tree_breaks_without_run_of`], and the 4 that call
 /// `verify_rust_function_length_breaks`. Each of those reads the status off the
 /// `Output` of the run it drove.
 ///
-/// The other SEVENTEEN, over 10 rules, are NOT held to it. They call
+/// The other SIXTEEN, over 9 rules, are NOT held to it. They call
 /// [`verify_shipped_run_breaks`], which drives [`execute_tool_runs`] rather
 /// than the script: the engine answers a [`ToolRunError`] carrying the detail
 /// alone and keeps no status, so those probes hold the error text and a script

@@ -1,9 +1,10 @@
 //! Acceptance tests for the shipped unused-dependency tool rules.
 //!
 //! One test holds the roster to its fixture pair. The tests under it drive
-//! Rust through the real tool: one holds the finding it reports, and two hold
-//! it to breaking rather than answering zero for a manifest machete could not
-//! read.
+//! Rust through the real tool: one holds the finding it reports, one holds it
+//! to STATING the manifest machete could not read while the findings of the
+//! manifests it did read survive, and one holds it to breaking rather than
+//! answering zero when machete cannot run at all.
 
 use super::*;
 
@@ -133,42 +134,61 @@ const UNPARSABLE_MANIFEST: &str = concat!(
     "\n[dependencies\nserde = \"1\"\n",
 );
 
-/// The line the script writes when machete could not read a manifest.
-const MACHETE_UNREADABLE_LINE: &str =
-    "unused-dependencies-rust: cargo machete could not read Cargo.toml";
+/// Where the manifest machete cannot read stands inside the probe repository.
+///
+/// The script walks the manifests it found in sorted order, and this name
+/// sorts AFTER `Cargo.toml` under a byte order and under a case-folding order
+/// alike. So the run reads the manifest it can measure first, writes that
+/// finding to stdout, and only then meets the manifest that refuses — which is
+/// the order that costs a finding when the refusal ends the whole run.
+const UNPARSABLE_MANIFEST_PATH: &str = "unparsable/Cargo.toml";
 
-/// What the one error of a manifest machete cannot read must name: the
-/// script's own line, and machete's own words beside it.
-const MACHETE_UNREADABLE_ERROR: &[&str] = &[MACHETE_UNREADABLE_LINE, "error when handling"];
+/// The dependency entry [`UNUSED_DEPENDENCY_PACKAGE_MANIFEST`] declares and no
+/// source names, which is the line the one finding must land on.
+const UNUSED_DEPENDENCY_ENTRY: &str = "serde = \"1\"";
 
-/// The `unused-dependencies-rust` probe over a manifest machete cannot read.
-const UNPARSABLE_MANIFEST_PROBE: ShippedStagedTree = ShippedStagedTree {
-    run: ShippedRun {
-        project_types: RUST_PROJECT_TYPES,
-        rule: RUST_UNUSED_DEPENDENCIES_RULE,
-        expected: MACHETE_UNREADABLE_ERROR,
-    },
-    staged: &[
-        (UNUSED_DEPENDENCY_MANIFEST_PATH, UNPARSABLE_MANIFEST),
-        (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
-    ],
-    reason: "a manifest machete could not read must break the run, because the dependencies \
-             it declares were never measured",
-};
-
-/// Acceptance: the shipped Rust unused-dependency tool rule BREAKS on a
+/// Acceptance: the shipped Rust unused-dependency tool rule DECLINES a
 /// manifest machete cannot read, through the real `cargo machete` pipeline.
 ///
 /// Machete answers this shape at exit 0 and writes `didn't find any unused
 /// dependencies` to stdout, the same sentence a clean package gets, with
-/// `error when handling <path>` on stderr. An earlier shape of this script
-/// ended each manifest in a pipe, so it read that stdout as a measured run and
-/// reported nothing. Measured with machete 0.9.2 over this probe: the pipe
-/// shape wrote 0 findings and exited 0; the script tests the status and stderr
-/// of each run, and exits 1 with a line that names the manifest.
+/// `error when handling <path>` on stderr. So the script cannot read the
+/// status alone, and it tests stderr beside it.
+///
+/// What it does with that answer is this test. Measured with machete 0.9.2
+/// over this probe: the package the run CAN read reports `serde` at exit 1,
+/// and the manifest that refuses is a separate machete process that judged
+/// nothing. One manifest of a run that measured the rest is ONE declined item,
+/// so the script states it under the `sah-diagnostic:` marker and exits 0.
+///
+/// Both halves are the test. A run that keeps the finding and says nothing
+/// about the refusing manifest reads a package no tool measured as a clean
+/// package. A run that states the refusal and loses the finding threw away the
+/// work it did do — measured with the earlier shape of this script, which
+/// exited 1 there: the `serde` finding stood on stdout and the engine read
+/// none of it.
 #[test]
-fn the_shipped_rust_unused_dependency_tool_rule_breaks_on_a_manifest_it_cannot_read() {
-    verify_shipped_tree_breaks(&UNPARSABLE_MANIFEST_PROBE);
+fn the_shipped_rust_unused_dependency_tool_rule_declines_a_manifest_it_cannot_read() {
+    let expected = expected_row(
+        UNUSED_DEPENDENCY_MANIFEST_PATH,
+        UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        UNUSED_DEPENDENCY_ENTRY,
+    );
+
+    verify_unjudged_file_is_declined(
+        RUST_PROJECT_TYPES,
+        RUST_UNUSED_DEPENDENCIES_RULE,
+        &[
+            (
+                UNUSED_DEPENDENCY_MANIFEST_PATH,
+                UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+            ),
+            (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
+            (UNPARSABLE_MANIFEST_PATH, UNPARSABLE_MANIFEST),
+        ],
+        UNPARSABLE_MANIFEST_PATH,
+        &[&expected],
+    );
 }
 
 /// The name the script calls machete by, which cargo resolves on `PATH`.
