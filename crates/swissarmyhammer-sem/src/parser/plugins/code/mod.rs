@@ -1,5 +1,5 @@
-//! Tree-sitter code plugins: entity extraction, complexity, duplication,
-//! commented code and public surface.
+//! Tree-sitter code plugins: entity extraction, function definitions, the test
+//! census, duplication, commented code and public surface.
 //!
 //! # No shared tree-sitter helper module: the decision, not an omission
 //!
@@ -16,21 +16,21 @@
 //!
 //! | site | signature | answer when the text is absent |
 //! |---|---|---|
-//! | `complexity::node_text` | `(Node, &str) -> Option<&str>` | `None` |
+//! | `definitions::node_text` | `(Node, &str) -> Option<&str>` | `None` |
 //! | `duplication::node_text` | `(Node, &str) -> &str` | `""` |
 //! | `entity_extractor::node_text` | `(Node, &[u8]) -> &str` | `""`, through `utf8_text` |
 //! | `swissarmyhammer_treesitter::ParsedFile::node_text` | a method, `-> Option<&str>` | `None` |
 //!
-//! The `Option` and the `""` are not two spellings of one answer. `complexity`
+//! The `Option` and the `""` are not two spellings of one answer. `definitions`
 //! compares the text against test markers, so `""` there would read as "this is
-//! not a test" and would score a test function as complex code. `duplication`
+//! not a test" and would hide a test from the census. `duplication`
 //! must still hash and compare a chunk whose slice it cannot read, so `""` is
 //! the answer it needs. `entity_extractor` takes bytes and validates UTF-8;
 //! the two `&str` copies slice text that is already valid UTF-8 and can miss on
 //! a codepoint boundary instead. One contract cannot serve all four sites.
 //!
 //! `spec_for_language` has four copies. Each reads a DIFFERENT static table of a
-//! DIFFERENT type: `ALL_SPECS`/`ComplexitySpec`, `COMMENT_SPECS`/`CommentSpec`,
+//! DIFFERENT type: `DEFINITION_SPECS`/`DefinitionSpec`, `COMMENT_SPECS`/`CommentSpec`,
 //! `SURFACE_SPECS`/`SurfaceSpec`, and `LANGUAGE_SPECS`/`LanguageSpec`. Two
 //! tables hold references and two hold values. Each body is one
 //! `.iter().find()` line. A shared version needs a trait, four impls of it, and
@@ -41,7 +41,7 @@
 //!
 //! `is_test_definition` has two copies that share a name and nothing else. The
 //! `duplication` copy takes a `TestSpec` and ORs four `marked_by_*` helpers. The
-//! `complexity` copy takes a `ComplexitySpec` and reads a name, then a defining
+//! `definitions` copy takes a `DefinitionSpec` and reads a name, then a defining
 //! call's target, then attributes.
 //!
 //! Three more named counterparts sit in OTHER crates —
@@ -50,14 +50,15 @@
 //! in any of them.
 //!
 //! Recorded on 2026-08-14 for ^4dyewvd, against the seven pairs a `review file`
-//! run raised on `complexity.rs`.
+//! run raised on `complexity.rs`, whose surviving half is now `definitions.rs`.
 
 mod commented_code;
-mod complexity;
+mod definitions;
 mod duplication;
 mod entity_extractor;
 mod languages;
 mod public_surface;
+mod test_census;
 
 /// All file extensions the code parser handles, in the canonical
 /// dotted-lowercase form (e.g. `".rs"`) — the single extension list other
@@ -67,17 +68,9 @@ pub use languages::get_all_code_extensions;
 /// predicate that owns the dotted-lowercase matching convention.
 pub use languages::is_code_file;
 
-/// Cognitive complexity computed from the parse, so a reviewer compares numbers
-/// instead of counting nesting by eye. See [`complexity`].
+/// Where a file hides code inside its comments, so a reviewer reads blocks
+/// instead of skimming for them, computed by the `commented_code` module.
 pub use commented_code::{commented_code_blocks, commented_code_extensions, CommentedCodeBlock};
-pub use complexity::{
-    cognitive_complexity, FileComplexity, FunctionComplexity, COGNITIVE_COMPLEXITY_THRESHOLD,
-    NESTING_DEPTH_THRESHOLD,
-};
-/// What each test function in a file actually measures — zero assertions, a
-/// skip marker, an empty body — so a reviewer reads rows instead of counting
-/// assertion calls by eye. See [`complexity::test_census`].
-pub use complexity::{test_census, TestCensus, TestDefect};
 /// The tokens and the exemptions one file contributes to the verbatim
 /// duplicate gate, so the detector pairs code and never pairs test code. See
 /// [`duplication`].
@@ -91,6 +84,10 @@ pub use duplication::{
 pub use public_surface::{
     PublicSurface, SurfaceChange, SurfaceChangeKind, SurfaceSymbol, Visibility,
 };
+/// What each test function in a file actually measures — zero assertions, a
+/// skip marker, an empty body — so a reviewer reads rows instead of counting
+/// assertion calls by eye, computed by the `test_census` module.
+pub use test_census::{test_census, TestCensus, TestDefect};
 
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
@@ -134,7 +131,7 @@ impl SemanticParserPlugin for CodeParserPlugin {
 ///
 /// Carries the parse tree together with the language config the roster
 /// routed the file to, so everything computed from a parse — entities,
-/// complexity, review probes — reads the SAME grammar table rather than
+/// definitions, review probes — reads the SAME grammar table rather than
 /// keeping a roster of its own.
 ///
 /// Cloning is cheap: a `tree_sitter::Tree` is reference counted.

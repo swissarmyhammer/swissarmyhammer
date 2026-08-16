@@ -375,7 +375,7 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
 /// The text `node` spans, empty when the span is not valid UTF-8.
 ///
 /// This copy takes BYTES and VALIDATES the UTF-8. The same-named copies in
-/// `complexity` and `duplication` take `&str` and slice it, which fails on a
+/// `definitions` and `duplication` take `&str` and slice it, which fails on a
 /// codepoint boundary instead. The four contracts, and why one cannot serve
 /// them all, are recorded in the `parser::plugins::code` module doc.
 fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {

@@ -2,20 +2,20 @@
 //!
 //! A test that asserts nothing, a test the runner skips, and a test whose body
 //! is an empty pair of braces all pass every time. They read as coverage and
-//! prove nothing. This module finds them the same way
-//! [`cognitive_complexity`](super::cognitive_complexity) finds a complex
-//! function: as a pure measurement over a tree-sitter parse, so the review rule
-//! compares rows instead of counting calls by eye.
+//! prove nothing. This module finds them as a pure measurement over a
+//! tree-sitter parse, so the review rule compares rows instead of counting
+//! calls by eye.
 //!
 //! # What a test is
 //!
-//! A test is whatever [`is_test_definition`](super::is_test_definition) says it
-//! is — an attribute at the definition (`#[test]`, `@Test`), a framework
+//! A test is whatever
+//! [`is_test_definition`] says it is — an attribute at the definition
+//! (`#[test]`, `@Test`), a framework
 //! name+signature convention (`func TestX(t *testing.T)`, `def test_foo`), or a
 //! call-based definition (ExUnit's `test "..." do`, jest's `it("...", () =>
-//! {})`). That is the SAME judgement the complexity scorer's test exemption
-//! uses, read off the one [`ComplexitySpec`] roster, and it never consults the
-//! file name. A helper in a file called `foo_test.rs` is not a test here.
+//! {})`). That judgement is read off the one [`DefinitionSpec`] roster, and it
+//! never consults the file name. A helper in a file called `foo_test.rs` is not
+//! a test here.
 //!
 //! # What a body is worth
 //!
@@ -26,15 +26,16 @@
 //! A language absent from that roster is **not measured** — `test_census`
 //! returns `None` — and a caller must report "not computed" rather than "no
 //! suspect tests". The distinction is not academic: Elixir's `test "..." do` IS
-//! a test definition the scorer recognizes, yet the language has no row here, so
-//! mapping its vocabulary would be needed before a `.exs` file could ever read
-//! as clean.
+//! a test definition the [`definitions`](mod@super::definitions) roster recognizes,
+//! yet the language has no row here, so mapping its vocabulary would be needed
+//! before a `.exs` file could ever read as clean.
 
 use tree_sitter::Node;
 
-use super::{
-    child_by_field_or_kind, for_each_function, function_header, function_name, is_test_definition,
-    node_text, spec_for_language, ComplexitySpec, MAX_TRAVERSAL_DEPTH,
+use super::definitions::{
+    attribute_marker_name, child_by_field_or_kind, defining_call, definition_attributes,
+    for_each_function, function_header, function_name, is_test_definition, node_text,
+    spec_for_language, DefinitionSpec, MAX_TRAVERSAL_DEPTH,
 };
 use crate::parser::plugins::code::ParsedCode;
 
@@ -111,17 +112,17 @@ pub struct TestCensus {
 /// `source` must be the text the parse was made from; the node ranges index
 /// into it.
 pub fn test_census(parsed: &ParsedCode, source: &str) -> Option<Vec<TestCensus>> {
-    let complexity = spec_for_language(parsed.language())?;
+    let definitions = spec_for_language(parsed.language())?;
     let census = census_spec_for_language(parsed.language())?;
     let mut measured = Vec::new();
     for_each_function(
         parsed.tree().root_node(),
         source,
-        complexity,
+        definitions,
         0,
         &mut |node| {
-            if is_test_definition(node, source, complexity) {
-                measured.push(measure_test(node, source, complexity, census));
+            if is_test_definition(node, source, definitions) {
+                measured.push(measure_test(node, source, definitions, census));
             }
         },
     );
@@ -131,11 +132,11 @@ pub fn test_census(parsed: &ParsedCode, source: &str) -> Option<Vec<TestCensus>>
 /// One language's test vocabulary: how an assertion, a skip, a comment, and a
 /// swallowed failure are spelled in it.
 ///
-/// One row read as data, beside the [`ComplexitySpec`] row that finds the test
+/// One row read as data, beside the [`DefinitionSpec`] row that finds the test
 /// definitions themselves. A language is mapped here only once both halves
 /// work for it.
 struct TestCensusSpec {
-    /// The language id, mirroring the [`ComplexitySpec::language`] it pairs with.
+    /// The language id, mirroring the [`DefinitionSpec`] row it pairs with.
     language: &'static str,
     /// The field (or, through [`child_by_field_or_kind`], the child kind)
     /// holding a definition's body. A definition with no such child has an
@@ -309,13 +310,13 @@ fn census_spec_for_language(language: &str) -> Option<&'static TestCensusSpec> {
 fn measure_test(
     node: Node<'_>,
     source: &str,
-    complexity: &ComplexitySpec,
+    definitions: &DefinitionSpec,
     census: &TestCensusSpec,
 ) -> TestCensus {
     TestCensus {
-        name: function_name(node, source, complexity),
+        name: function_name(node, source, definitions),
         start_line: node.start_position().row + 1,
-        defects: body_defects(node, source, complexity, census),
+        defects: body_defects(node, source, definitions, census),
     }
 }
 
@@ -326,12 +327,12 @@ fn measure_test(
 fn body_defects(
     node: Node<'_>,
     source: &str,
-    complexity: &ComplexitySpec,
+    definitions: &DefinitionSpec,
     census: &TestCensusSpec,
 ) -> Vec<TestDefect> {
-    let statements = body_statements(node, complexity, census);
+    let statements = body_statements(node, definitions, census);
     let mut defects = Vec::new();
-    if is_skipped(node, source, complexity, census) {
+    if is_skipped(node, source, definitions, census) {
         defects.push(TestDefect::Skipped);
     }
     if statements.is_empty() {
@@ -361,14 +362,14 @@ fn body_defects(
 /// them.
 fn body_statements<'t>(
     node: Node<'t>,
-    complexity: &ComplexitySpec,
+    definitions: &DefinitionSpec,
     census: &TestCensusSpec,
 ) -> Vec<Node<'t>> {
     let Some(body) = child_by_field_or_kind(node, census.body_field) else {
         return Vec::new();
     };
-    let header = function_header(node, complexity);
-    let signature = [complexity.name_field, complexity.parameters_field]
+    let header = function_header(node, definitions);
+    let signature = [definitions.name_field, definitions.parameters_field]
         .map(|field| header.child_by_field_name(field).map(|child| child.id()));
     let mut cursor = body.walk();
     let statements = body
@@ -390,13 +391,13 @@ fn body_statements<'t>(
 fn is_skipped(
     node: Node<'_>,
     source: &str,
-    complexity: &ComplexitySpec,
+    definitions: &DefinitionSpec,
     census: &TestCensusSpec,
 ) -> bool {
-    let marked = super::definition_attributes(node, complexity)
+    let marked = definition_attributes(node, definitions)
         .into_iter()
-        .filter_map(|attribute| super::attribute_marker_name(attribute, source))
-        .chain(super::defining_call(node, complexity, source).map(|(_, target)| target))
+        .filter_map(|attribute| attribute_marker_name(attribute, source))
+        .chain(defining_call(node, definitions, source).map(|(_, target)| target))
         .any(|marker| word_matches(marker, census.skip_markers));
     marked || names_in(node, source, census).any(|name| word_matches(name, census.skip_words))
 }
@@ -452,7 +453,7 @@ fn word_matches(text: &str, words: &[&str]) -> bool {
 }
 
 /// Visit `node` and every descendant of it, stopping at
-/// [`MAX_TRAVERSAL_DEPTH`] for the same reason the scorer's walk does: a
+/// [`MAX_TRAVERSAL_DEPTH`] for the same reason [`for_each_function`] stops: a
 /// pathological tree must never take the native call stack down.
 fn for_each_descendant<'t>(node: Node<'t>, depth: u32, visit: &mut dyn FnMut(Node<'t>)) {
     if depth > MAX_TRAVERSAL_DEPTH {

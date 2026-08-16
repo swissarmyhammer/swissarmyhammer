@@ -896,7 +896,7 @@ fn annotated_sibling(marker: Node<'_>) -> Option<Node<'_>> {
 /// Whether `node` defines test code.
 ///
 /// Takes a [`TestSpec`] and ORs the four `marked_by_*` readings. The
-/// `complexity` function of the same name takes a `ComplexitySpec` and reads a
+/// `definitions` function of the same name takes a `DefinitionSpec` and reads a
 /// name, then a defining call's target, then attributes. The two share a name
 /// and nothing else — see the `parser::plugins::code` module doc.
 fn is_test_definition(node: Node<'_>, spec: &TestSpec, source: &str) -> bool {
@@ -1075,7 +1075,7 @@ fn last_path_segment(text: &str) -> &str {
 /// The source text of `node`.
 ///
 /// This copy answers `""` for a span it cannot read, because a chunk must still
-/// hash and compare whatever the slice gave. The `complexity` copy answers
+/// hash and compare whatever the slice gave. The `definitions` copy answers
 /// `Option`, because `""` there would read as "not a test". The two contracts
 /// disagree on purpose — see the `parser::plugins::code` module doc.
 fn node_text<'a>(node: Node<'_>, source: &'a str) -> &'a str {

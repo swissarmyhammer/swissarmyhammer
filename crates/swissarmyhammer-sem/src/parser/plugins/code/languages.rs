@@ -4,7 +4,7 @@ use tree_sitter::Language;
 /// which tree-sitter grammar parses them, and which node kinds carry meaning.
 ///
 /// The roster is the single table every consumer of a parse reads — the entity
-/// extractor, the complexity scorer, and the review probes all route a file to
+/// extractor, the definition roster, and the review probes all route a file to
 /// its grammar through [`get_language_config`] rather than keeping a list of
 /// their own. Adding a language is adding one config and one entry in the
 /// roster it is looked up from.
