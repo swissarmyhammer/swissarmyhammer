@@ -1146,73 +1146,159 @@ const PYTHON_UNPARSABLE_SOURCE: &str = "def broken(\n";
 /// Where the unparsable file stands inside the probe repository.
 const PYTHON_UNPARSABLE_PATH: &str = "broken.py";
 
-/// The code ruff writes for a Python file it cannot parse. The run's error
-/// detail must carry it, so the agent reading the error learns what broke.
-const PYTHON_INVALID_SYNTAX_CODE: &str = "invalid-syntax";
+/// Where the file the run CAN judge stands, beside each item it cannot judge.
+const PYTHON_JUDGED_PATH: &str = "judged.py";
 
-/// What the one error of an unparsable file must name.
-const PYTHON_UNPARSABLE_ERROR: &[&str] = &[PYTHON_INVALID_SYNTAX_CODE, PYTHON_UNPARSABLE_PATH];
-
-/// The `missing-docs-python` probe over a Python file ruff cannot parse.
-const PYTHON_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_MISSING_DOCS_RULE,
-        expected: PYTHON_UNPARSABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Python file the parser cannot read",
-    path: PYTHON_UNPARSABLE_PATH,
-    source: Some(PYTHON_UNPARSABLE_SOURCE.as_bytes()),
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Python missing-docs tool rule BREAKS on a Python
-/// file it cannot parse, through the real ruff pipeline.
+/// A Python file the run judges. The module carries a docstring and the
+/// function under it carries none, so `D103` is its one finding.
 ///
-/// ruff reports such a file under the code `invalid-syntax`, beside the codes
-/// the rule selects. A filter that selected the seven documentation codes alone
-/// dropped that record, and the file read as clean — a run answering zero for a
-/// reason other than a clean file. The script counts each record outside the
-/// seven codes, writes each one to stderr, and exits nonzero.
-#[test]
-fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_run_breaks(&PYTHON_UNPARSABLE_PROBE);
+/// The module docstring is what holds the count at one: a module with no
+/// docstring reports `D100` beside the function, and one row states as much
+/// about a lost finding as two do.
+const PYTHON_JUDGED_SOURCE: &str = concat!(
+    "\"\"\"A documented module.\"\"\"\n",
+    "\n",
+    "\n",
+    "def undocumented_function() -> None:\n",
+    "    return None\n",
+);
+
+/// The definition line the one finding of the judged file stands on.
+const PYTHON_JUDGED_DECLARATION: &str = "def undocumented_function() -> None:";
+
+/// The `path:line` row the run must report for the judged file.
+fn python_missing_docs_judged_row() -> String {
+    expected_row(
+        PYTHON_JUDGED_PATH,
+        PYTHON_JUDGED_SOURCE,
+        PYTHON_JUDGED_DECLARATION,
+    )
 }
 
-/// Where the file that is never written stands inside the probe repository.
-const PYTHON_ABSENT_PATH: &str = "absent.py";
-
-/// What the script writes for a file it cannot read.
-const PYTHON_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(python), " cannot read");
-
-/// What the one error of an absent file must name.
-const PYTHON_ABSENT_ERROR: &[&str] = &[PYTHON_CANNOT_READ_MESSAGE, PYTHON_ABSENT_PATH];
-
-/// The `missing-docs-python` probe over a path that holds no file.
-const PYTHON_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_MISSING_DOCS_RULE,
-        expected: PYTHON_ABSENT_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Python file that is not there",
-    path: PYTHON_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Python missing-docs tool rule BREAKS on a file it
-/// cannot read, through the real ruff pipeline.
+/// Acceptance: the shipped Python missing-docs tool rule DECLINES a Python
+/// file it cannot parse, through the real ruff pipeline.
 ///
-/// ruff answers a path that is not there with an empty report and an exit status
-/// of 0, and it puts the failure on stderr alone. That report reads exactly like
-/// a clean file. The script therefore tests each file it is given before it
-/// starts, and exits nonzero with the name of the file it cannot read.
+/// ruff writes a file it cannot parse onto the SAME report as a finding, under
+/// `"code": "invalid-syntax"`. Measured with ruff 0.14.5 over `def broken(`
+/// beside a module whose function carries no docstring: three rows on the
+/// report — `D100` and `D103` of the file it read AND the parse failure — at
+/// exit 1, and nothing on stderr. ruff judged the other file, so the finding is
+/// there to lose.
+///
+/// A filter that selected the seven documentation codes alone dropped the parse
+/// row, and the unparsable file then read as clean. An `exit 1` answers that no
+/// better: it fails the WHOLE run, so the documentation findings of the file
+/// ruff DID judge go away with the file it did not. Measured with the shipped
+/// script before this fix over the same two files: nothing on stdout, one
+/// unmarked line on stderr, exit 1. The parse failure is one declined item of a
+/// sound run, so the script states it under the `sah-diagnostic:` marker at
+/// exit 0.
 #[test]
-fn the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&PYTHON_ABSENT_PROBE);
+fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_parse() {
+    let expected = python_missing_docs_judged_row();
+
+    verify_unjudged_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MISSING_DOCS_RULE,
+        &[
+            (PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE),
+            (PYTHON_UNPARSABLE_PATH, PYTHON_UNPARSABLE_SOURCE),
+        ],
+        PYTHON_UNPARSABLE_PATH,
+        &[&expected],
+    );
+}
+
+/// Where the path the run cannot read stands inside the probe repository.
+///
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const PYTHON_UNREADABLE_PATH: &str = "unreadable.py";
+
+/// A Python file whose bytes are not UTF-8.
+///
+/// The module carries a docstring, so a run that DID read it would report
+/// nothing; the string literal holds two bytes that open no UTF-8 sequence, so
+/// a reader opens the file and cannot decode it.
+const PYTHON_UNDECODABLE_SOURCE: &[u8] =
+    b"\"\"\"A documented module.\"\"\"\n\nVALUE = '\xff\xfe'\n";
+
+/// A Python file the tool could read if the mode let it.
+///
+/// The module carries a docstring and holds no other item, so a run that DID
+/// read it would report no finding — which is the clean answer this rule must
+/// not give for a file it never read.
+const PYTHON_FORBIDDEN_SOURCE: &str = "\"\"\"A documented module.\"\"\"\n";
+
+/// Holds the shipped Python missing-docs run to judging `judged.py` and to
+/// stating the one path it could not read, through the real ruff pipeline.
+///
+/// The judged file carries one undocumented function, so the run has a finding
+/// to lose. Losing it is what a nonzero exit over a declined item costs, and
+/// staying silent about the path is what reads that path as a clean file.
+fn verify_python_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
+    let expected = python_missing_docs_judged_row();
+
+    verify_unreadable_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MISSING_DOCS_RULE,
+        &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
+        PYTHON_UNREADABLE_PATH,
+        unreadable,
+        &[&expected],
+    );
+}
+
+/// Acceptance: the shipped Python missing-docs tool rule DECLINES a path that
+/// holds no file, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a path, against the shipped command
+/// line: the report holds the findings of the other file and nothing for this
+/// path, `warning: Failed to lint absent.py: No such file or directory (os
+/// error 2)` stands on stderr, and ruff exits as it would without the path. The
+/// empty report reads exactly like a clean file, so the answer has to come from
+/// what ruff itself said.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_python_missing_docs_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Python missing-docs tool rule DECLINES a file whose
+/// bytes are not UTF-8, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file, against the shipped command
+/// line: the report holds the findings of the other file, `warning: Failed to
+/// lint notutf8.py: stream did not contain valid UTF-8` stands on stderr, and
+/// ruff exits as it would without the file.
+///
+/// This is the shape a readability test on the PATH admits — the mode lets the
+/// tool open the file — so the run this replaced reported the other file,
+/// exited 0, and said nothing an engine reads about this one. Measured with the
+/// shipped script before this fix: two findings on stdout, ruff's own unmarked
+/// `Failed to lint` line on stderr, exit 0, and the engine drops an unmarked
+/// line as tool chatter. The file read as CLEAN.
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_python_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
+        PYTHON_UNDECODABLE_SOURCE,
+    ));
+}
+
+/// Acceptance: the shipped Python missing-docs tool rule DECLINES a file it may
+/// not read, through the real ruff pipeline.
+///
+/// Measured with ruff 0.14.5 over such a file, against the shipped command
+/// line: the report holds the findings of the other file, `warning: Failed to
+/// lint noread.py: Permission denied (os error 13)` stands on stderr, and ruff
+/// exits as it would without the file.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_python_missing_docs_declines(&ShippedUnreadableFile::Forbidden(PYTHON_FORBIDDEN_SOURCE));
 }
 
 /// An undocumented Python module at the root of the probe repository. ruff

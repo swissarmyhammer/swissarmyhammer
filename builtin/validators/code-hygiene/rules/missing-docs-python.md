@@ -15,27 +15,26 @@ tool:
       exit 0
     fi
     codes="D100,D101,D102,D103,D104,D106,D107"
+    declined_head="warning: Failed to lint "
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
-    for file in "$@"; do
-      if [ ! -r "$file" ]; then
-        printf 'missing-docs-python cannot read %s\n' "$file" >&2
-        exit 1
-      fi
-    done
     status=0
-    ruff check --isolated --no-cache --select "$codes" --output-format json "$@" > "$work/ruff.json" || status=$?
+    ruff check --isolated --no-cache --select "$codes" --output-format json "$@" > "$work/ruff.json" 2> "$work/ruff.err" || status=$?
     if [ "$status" -gt 1 ]; then
-      cat "$work/ruff.json" >&2
+      cat "$work/ruff.err" "$work/ruff.json" >&2
+      printf 'missing-docs-python: ruff exited %s and judged no code\n' "$status" >&2
       exit 1
     fi
+    while IFS= read -r line; do
+      case "$line" in
+        "$declined_head"*)
+          printf 'sah-diagnostic: ruff could not read %s\n' "${line#"$declined_head"}" >&2
+          ;;
+      esac
+    done < "$work/ruff.err"
     jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
            | .code as $code | select($selected | index($code) | not)
-           | "\(.filename):\(.location.row): \(.code // "no code") \(.message)"' "$work/ruff.json" > "$work/unread.txt"
-    if [ -s "$work/unread.txt" ]; then
-      cat "$work/unread.txt" >&2
-      exit 1
-    fi
+           | "sah-diagnostic: ruff could not measure \(.filename): \(.code // "no code") \(.message)"' "$work/ruff.json" >&2
     jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
            | .code as $code | select($selected | index($code))
            | [.filename, .location.row, .code, .message] | @tsv' "$work/ruff.json" > "$work/reported.tsv"
@@ -44,8 +43,7 @@ tool:
         count = 0
         result = (getline text < file)
         if (result < 0) {
-          printf "missing-docs-python cannot read %s\n", file > "/dev/stderr"
-          exit 1
+          printf "sah-diagnostic: missing-docs-python could not read %s, so every finding of that file stands\n", file > "/dev/stderr"
         }
         while (result > 0) {
           source[file, ++count] = text
@@ -197,49 +195,168 @@ This is the prompt rule's private carve-out, reproduced by the language.
 
 ## A run cannot answer zero for a broken tool
 
-ruff states a failure in three ways, and the earlier pipe read none of them.
+**ruff exits 2 for a selector it cannot read.** A pipeline takes the exit
+status of its LAST command, and that command was `jq`, so the run exited 0
+with no output. The script holds no pipe. It writes each report to a file, and
+`set -e` makes each step's own failure the exit status of the script. A ruff
+status over 1 exits the script 1. Measured: `--select ZZ999` exits 2. A status
+of 1 is not a failure — ruff exits 0 for a clean file and 1 for a file with
+findings.
 
-- **ruff exits 2 for a selector it cannot read.** A pipeline takes the exit
-  status of its LAST command, and that command was `jq`, so the run exited 0
-  with no output. The script holds no pipe. It writes each report to a file, and
-  `set -e` makes each step's own failure the exit status of the script. A ruff
-  status over 1 exits the script 1. Measured: `--select ZZ999` exits 2. A status
-  of 1 is not a failure — ruff exits 0 for a clean file and 1 for a file with
-  findings.
+ruff writes its own diagnostic to stderr, and the script forwards that file
+before it exits, so the agent gets ruff's words. Measured on `--select ZZ999`:
+ruff writes 0 bytes to stdout and 93 bytes to stderr, the text `error: invalid
+value 'ZZ999' for '--select <RULE_CODE>'`. The `cat` of the stdout file adds
+nothing in that case. It stands to forward a partial report ruff wrote before
+it stopped. The script names the status beside it, so a reader learns the run
+broke rather than reading ruff's line alone. Measured against a stub ruff:
+status 2 and status 101 each exit the script 1, with the stub's own stderr and
+`missing-docs-python: ruff exited <status> and judged no code`.
 
-  ruff writes its own diagnostic to stderr, and the engine reads the script's
-  stderr, so the agent gets ruff's words. Measured on `--select ZZ999`: ruff
-  writes 0 bytes to stdout and 93 bytes to stderr, the text `error: invalid
-  value 'ZZ999' for '--select <RULE_CODE>'`. The `cat` of the stdout file adds
-  nothing in that case. It stands to forward a partial report ruff wrote before
-  it stopped.
+ruff exits 2 for a configuration file it cannot read as well, and this script
+never meets that. `--isolated` makes ruff read no configuration file at all.
+Measured beside a `pyproject.toml` that holds `[[[ not toml`: with
+`--isolated` ruff exits 1 and judges the Python file; without `--isolated`
+ruff exits 2 and writes `Failed to parse ... pyproject.toml`.
 
-  ruff exits 2 for a configuration file it cannot read as well, and this script
-  never meets that. `--isolated` makes ruff read no configuration file at all.
-  Measured beside a `pyproject.toml` that holds `[[[ not toml`: with
-  `--isolated` ruff exits 1 and judges the Python file; without `--isolated`
-  ruff exits 2 and writes `Failed to parse ... pyproject.toml`.
-- **ruff exits 0 for a file it cannot read.** Measured: a path that is not
-  there prints `[]`, exits 0, and writes `warning: Failed to lint ...` to
-  stderr. The empty report reads as a clean file. The script therefore tests
-  each file it is given before it starts, and exits 1 with the name of the file
-  it cannot read. The acceptance test
-  `the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read`
-  holds that behaviour.
-- **ruff reports a Python file it cannot PARSE under the code
-  `invalid-syntax`, and exits 1.** A filter that selects the seven codes drops
-  that record, and the file then reads as clean. The script counts each record
-  outside the seven codes, writes each one to stderr, and exits 1. Measured
-  over a file that holds `def broken(`: the script reports no finding and exits
-  1, with `invalid-syntax unexpected EOF while parsing` on stderr. The
-  acceptance test
-  `the_shipped_python_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse`
-  holds that behaviour.
+## A file ruff could not measure
 
-The scan in the filter reads each file ruff reports. Measured with a path that
-is not there: the scan writes `missing-docs-python cannot read ...` to stderr
-and exits 1. A row the scan does not hold keeps its finding, so a short read
-can add a finding and can drop none.
+The run reads two statements ruff makes about a file it could not measure: a
+row of another code on the report, and a `Failed to lint` line on stderr. Each
+one is ONE item of a run that judged every other file it was handed, so the run
+answers both the same way — a line opening `sah-diagnostic:` at exit 0 — and the
+two sections below state what was measured for each. `builtin/validators/README.md`
+states the reason: "Do not exit nonzero for a declined item. A nonzero exit
+fails the WHOLE run, so one unjudged path throws away every finding the run did
+make."
+
+The probe every measurement below was taken over holds `judged.py`, a module
+with a docstring whose one function carries none, so ruff reports exactly one
+`D103` on it. That finding is what a nonzero exit costs.
+
+### A file ruff cannot parse
+
+ruff writes a file it cannot parse onto the SAME report as a finding, under
+`"code": "invalid-syntax"`, and it judges every other file of the same run
+beside it. Measured with ruff 0.14.5 against the shipped command line, over
+`judged.py` and a file holding `def broken(`:
+
+| the run | the report | stderr | exit |
+|---|---|---|---|
+| the unparsable file alone | one `invalid-syntax` row | nothing | 1 |
+| `judged.py` alone | one `D103` row | nothing | 1 |
+| both together | one `D103` row AND one `invalid-syntax` row | nothing | 1 |
+
+The third row is the whole reason. ruff read the docstrings of the file it
+could parse while refusing the file it could not, so the parse failure is one
+item of a run that stayed sound.
+
+A filter that selects the seven codes drops the `invalid-syntax` row, and the
+file then reads as clean. The earlier shape of this script wrote each row of
+another code to stderr and exited 1 instead, which is the answer the README
+refuses. Measured with that shape over the two files: nothing on stdout, one
+unmarked line on stderr, exit 1 — the `D103` finding lost.
+
+So the filter keeps the seven codes as findings and writes each row of another
+code under the marker at exit 0, naming the file and the parser's own message.
+ruff writes an absolute path on its report, so the line carries one:
+
+    sah-diagnostic: ruff could not measure <repo>/broken.py: invalid-syntax unexpected EOF while parsing
+
+Measured with the shipped script over the two files: one finding on stdout, one
+marked line on stderr, exit 0. The acceptance test
+`the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_parse`
+holds both halves, and a run that lost either one fails it.
+
+### A path ruff cannot read
+
+ruff states a path it could not read on stderr, and it exits as it would
+without that path. Measured with ruff 0.14.5, one path for each run beside
+`judged.py`, against the shipped command line:
+
+| the path | the report | stderr | exit |
+|---|---|---|---|
+| a path that holds no file | the `D103` row alone | `warning: Failed to lint absent.py: No such file or directory (os error 2)` | 1 |
+| a file whose bytes are not UTF-8 | the `D103` row alone | `warning: Failed to lint notutf8.py: stream did not contain valid UTF-8` | 1 |
+| a file with no read permission | the `D103` row alone | `warning: Failed to lint noread.py: Permission denied (os error 13)` | 1 |
+
+Each row is a path the tool declined. ruff judges every other file the run was
+handed, so neither the report nor the status carries the decline, and a script
+that read the report alone let the engine read a path ruff never opened as a
+clean file.
+
+The script therefore reads ruff's stderr for a line opening
+`warning: Failed to lint `, and writes what stands after that head under the
+marker `builtin/validators/README.md` states, at exit 0:
+
+    sah-diagnostic: ruff could not read absent.py: No such file or directory (os error 2)
+
+The head is stripped as a quoted value, so the reason keeps every `: ` it
+holds and a path that carries one is never cut short. The engine renders each
+marked line in the report, and no file filter drops it, because a diagnostic is
+about the RUN and has no path to be kept by.
+
+A pre-flight test of the PATH is the answer this rule used to give, and it was
+wrong twice over. It exited 1, which costs the run every finding it did make;
+and `[ ! -r "$file" ]` cannot answer all three rows. Measured against the three
+staged paths: the test is true for the path that holds no file and for the file
+with no read permission, and FALSE for the file whose bytes are not UTF-8 — the
+mode lets a reader open that one. Measured with the shipped script before the
+fix: `judged.py` beside the absent path exited 1 with no finding, `judged.py`
+beside the non-UTF-8 file exited 0 with the finding and ruff's own UNMARKED
+`Failed to lint` line, which the engine drops as tool chatter, so that file read
+as CLEAN.
+
+The guard hid the other decline as well. Measured with that shape over the
+absent path beside the unparsable file: exit 1, `missing-docs-python cannot read
+absent.py` on stderr, and NOTHING about the parse failure — the guard ran before
+ruff, so the run never learned the second file does not parse.
+
+Three acceptance tests hold the three rows, one for each —
+`the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file`,
+`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
+Each stages `judged.py` beside the path, and holds the run to reporting that
+finding AND to stating one diagnostic that names the path.
+
+### The scan of the definition line, which fails open
+
+The scan in the filter re-reads each file ruff reported, to read the definition
+line the test carve-out needs. That read can fail where ruff's own read did not,
+and a failed scan is one more declined item: the finding is real, and only the
+carve-out is unanswerable.
+
+The scan therefore states the file under the marker and reads no line for it. A
+row the scan does not hold keeps its finding, so a short read can add a finding
+and can drop none — which is what this rule's prose always claimed and its code
+did not do.
+
+The failure is reachable through the shipped pipeline, and it was measured
+there. `jq @tsv` escapes a backslash, so a Python file named `back\slash.py`
+reaches awk as `back\\slash.py`, which awk cannot open. Measured with the shipped
+script before the fix, over that file beside `judged.py`: nothing on stdout,
+`missing-docs-python cannot read <repo>/back\\slash.py` on stderr, exit 1 — the
+`D103` of `judged.py` lost with it. Measured after the fix over the same two
+files: three findings on stdout, one marked line on stderr, and exit 0.
+
+    sah-diagnostic: missing-docs-python could not read <repo>/back\\slash.py, so every finding of that file stands
+
+`@tsv` naming that file with a doubled backslash on the FINDING row as well is a
+defect of its own, and `^b2kq9hy` covers it.
+
+### Every answer in one run
+
+Measured with the shipped script over `judged.py` handed to the run beside the
+unparsable file AND all three refusing paths: one finding on stdout, four marked
+lines on stderr — three reads and one measure — and exit 0. No decline costs
+another, and none costs the finding, because none exits nonzero.
+
+The two kinds of line name the file differently, and each names it the way ruff
+did. ruff's stderr writes the path the command line gave it, so a read line
+carries `absent.py`; ruff's report writes an absolute path, so a measure line
+carries the whole path.
+
+The broken-run gate stands beside all of it, so a ruff that refuses its command
+line still never reads as a clean tree.
 
 ## A run answers for the files it is given, and for no other
 
@@ -256,11 +373,13 @@ the two files reports 5. The acceptance test
 `the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given`
 holds both halves: the run with no argument, and the run over the two files.
 
-`mktemp -d` makes the working directory the script writes each report into, and
-`trap 'rm -rf "$work"' EXIT` removes it. The trap covers every way the script
-leaves: a clean run, a finding, and a failure. Measured: five runs over one file
-leave the count of directories under `TMPDIR` unchanged, and a run that exits 1
-on an unparsable file leaves it unchanged as well.
+`mktemp -d` makes the working directory the script writes ruff's report and
+ruff's stderr into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
+every way the script leaves: a clean run, a finding, a declined item, and a
+broken tool. Measured by counting the directories directly under `TMPDIR`: five
+runs over one file leave the count unchanged, a run that declines four items at
+exit 0 leaves it unchanged, and a run that exits 1 on a ruff that refused its
+command line leaves it unchanged.
 
 ## How to exempt one item
 
