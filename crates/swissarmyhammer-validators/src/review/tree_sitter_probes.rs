@@ -11,9 +11,11 @@
 //! # One roster, one parse
 //!
 //! Grammars and language routing come from
-//! [`swissarmyhammer_sem::parser::plugins::code::parse_code`] — the same table
-//! the entity extractor and the test census read. This module adds no grammar
-//! list of its own.
+//! [`swissarmyhammer_sem::parser::plugins::code::parse_code`], the only caller
+//! of the roster lookup `get_language_config`. Beside this module's parse
+//! cache, the code plugin's own `commented_code` and `duplication` modules call
+//! it, and so does the entity extraction of `CodeParserPlugin`. This module
+//! adds no grammar list of its own.
 //!
 //! Each `(file, revision)` under review is parsed **once per review** by the
 //! shared parse cache, before any probe runs, and every probe that reads that
