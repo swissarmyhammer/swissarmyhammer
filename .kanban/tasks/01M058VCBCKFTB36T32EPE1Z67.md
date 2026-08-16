@@ -91,6 +91,139 @@ comments:
 
     No stale text was restored. Did not commit; task left in `doing`.
   timestamp: 2026-08-16T13:35:10.630460+00:00
+- actor: claude-code
+  id: 01m05ck9sj0qejn7wzt58rtt55
+  text: |-
+    ### commit — changed
+    - evidence: 21cb8b128 docs(validators): remove two more stale claims from validator prose (^epe1z67); 9 files changed (7 prose + 2 new .kanban files for this task)
+    - next: none
+  timestamp: 2026-08-16T13:36:22.834584+00:00
+- actor: claude-code
+  id: 01m05cw168khnqsnsk3mx0bbp4
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (21cb8b128) returned 0 findings but matched 0 of the 7 changed prose files (only the 2 `.kanban` files were seen, both ignore-excluded), so the engine report was empty and every written claim was verified directly. 1 finding — builtin/validators/code-hygiene/VALIDATOR.md:389
+    - verified clean: 25 tool rules ship (frontmatter `tool:` key), 23 supersede exactly one prompt rule, 2 supersede none (`stuttering-name-go`, `unused-dependencies-rust`), none names two — README sentence holds. Every rule name written into the corrected prose exists under `builtin/validators/*/rules/` (all 13 sets covered, 84 rule files). User store is `~/.validators/` via `ValidatorsConfig::DIR_NAME` + `from_user_home` (crates/swissarmyhammer-directory/src/config.rs) — the `$XDG_DATA_HOME/validators/` text was correctly removed. Per-tool-call hook dispatch is genuinely retired (crates/swissarmyhammer-validators/src/lib.rs:3-4), and the `trigger` key claim checks out against `LEGACY_MANIFEST_KEYS` (crates/swissarmyhammer-validators/src/validators/parser.rs:335) — `trigger` is a real removed key, distinct from the still-live `triggerMatcher`. `unused-dependencies-rust` belongs to `manifests`; `code-hygiene` holds exactly one tool rule that supersedes nothing. Swift "no rule is scoped to a third-party library" holds — no detection clause in any swift rule. Rust description now lists exactly its 4 rules; swift lists exactly its 11. Three VALIDATOR.md frontmatter blocks changed (not four — the fourth builtin file is README.md, which carries no frontmatter); all three fences intact.
+    - line accounting: 226/66 is 129 insertions of `.kanban` card body + 97/66 of actual prose; the net +31 is the validators.md rule listing expanding from short lists to full per-set enumerations (+56/-29).
+    - next: qualify the `code-hygiene/VALIDATOR.md` counts with "tool rule", then re-review.
+  timestamp: 2026-08-16T13:41:08.936265+00:00
+- actor: claude-code
+  id: 01m05cxhf2yx55fejg9gqhw2pz
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 7 files, all prose. Root cause found and stated: every phantom bullet is a rule DELETED from builtin, proved with `git log --diff-filter=D` for no-string-equality, no-log-truncation, naming-consistency, no-magic-numbers and safe-commands. All 84 rule files were enumerated BEFORE anything was written. The sweep found 8 instances beyond the 2 the card named, and corrected two claims on the card itself that were stale.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14105 passed, 0 failed, 0 skipped; cargo build -p mirdan succeeds and the corrected prose was confirmed present in the traced OUT_DIR embed; the README include_str! round-trip test passes; every rule name in the corrected prose verified to exist.
+    - commit: 21cb8b128 docs(validators): remove two more stale claims from validator prose (^epe1z67) — 9 files changed, 226 insertions, 66 deletions
+    - review: findings — 1 finding, builtin/validators/code-hygiene/VALIDATOR.md:389.
+
+    ### The finding — a dropped qualifier makes two counts false
+
+    The replacement sentence reads "It supersedes nothing. It is the only rule of this set to do that, and one of two tree-wide". Both counts are false without the word `tool`:
+
+    - SEVEN `code-hygiene` rules declare no `supersedes` key (data-driven, dead-code, function-length, magic-numbers, missing-docs, no-commented-code, stuttering-name-go), not one.
+    - Tree-wide, 61 of 84 rule files declare none, not two.
+
+    Both counts hold only of TOOL rules. The same commit's README gets this right — "every shipped tool rule but ... names exactly one" — so the correct wording already exists a few files away. This is the card's own defect class, in SHIPPED validator content that reaches users.
+
+    ### The review engine gave ZERO signal on this card
+
+    Worth recording as a structural fact, not as a complaint. The engine matched 0 of the 7 changed prose files. It saw only the 2 `.kanban` files, which `.reviewignore` excludes. So its "0 findings" carried no information, and the single finding came entirely from verifying each written claim by hand against the tree.
+
+    Four of the seven files are `builtin/validators/**`, which is SHIPPED content embedded into the binary. An error there reaches every user. The engine reviews none of it.
+
+    ### Verified correct by the review
+
+    - 25 tool rules ship; 23 supersede exactly one; 2 supersede none; none names two. Enumerated independently, so the README sentence holds.
+    - Every rule name in the corrected prose exists under `builtin/validators/*/rules/`; all 13 sets and 84 rule files accounted for, and no name the tester missed.
+    - The user store really is `~/.validators/` via `ValidatorsConfig::DIR_NAME`, so removing the `$XDG_DATA_HOME` text was right.
+    - The per-tool-call hook path really is retired per `swissarmyhammer-validators/src/lib.rs:3-4`, so rewriting the hook description was in scope and accurate.
+    - The `trigger` key claim survives scrutiny: `LEGACY_MANIFEST_KEYS` confirms `trigger` is a genuinely removed key, distinct from the live `triggerMatcher`.
+    - Swift's "no rule is scoped to a third-party library" holds; the one `swift-nio` mention is attribution rather than a detection clause.
+    - Three `VALIDATOR.md` files changed, not four — `README.md` carries no frontmatter. All three frontmatter fences intact.
+    - 226/66 accounted for: 129 insertions are this card's board body, leaving 97/66 of real prose. The net +31 is validators.md expanding illustrative lists into full per-set enumerations.
+    - next: iteration 2 works the open finding
+  timestamp: 2026-08-16T13:41:58.370045+00:00
+- actor: claude-code
+  id: 01m05dh1m1xkpwk60jrc8qrmnp
+  text: |-
+    Worked the one open finding, then removed its CAUSE from the whole change rather than the quoted line alone.
+
+    ## The counts, measured again before writing
+
+    Enumerated `builtin/validators/*/rules/*.md` and tested each file for a `^supersedes:` key and a `^tool:` key.
+
+    - 84 rule files ship. 23 declare `supersedes`. 61 declare none.
+    - 25 tool rules ship. 23 of the 25 declare `supersedes`. 2 declare none.
+    - Every rule that declares `supersedes` is a tool rule. No prompt rule carries the key.
+    - `code-hygiene` holds 24 tool rules and 6 prompt rules. `stuttering-name-go` is the ONLY code-hygiene tool rule with no `supersedes`. The other rule with none tree-wide is `manifests/unused-dependencies-rust`.
+
+    So the finding's arithmetic holds: "only rule of this set" and "one of two tree-wide" are false, and both are true of TOOL rules.
+
+    Also traced WHY only a tool rule can carry the key, so the corrected prose states a mechanism and not a number that goes stale. `matched_tool_rules` in `crates/swissarmyhammer-validators/src/review/tool_rules.rs` skips a rule whose `tool` field is `None`, so `supersedes` on a prompt rule would never be read.
+
+    ## The one instance the finding names
+
+    `builtin/validators/code-hygiene/VALIDATOR.md`, the "## Naming" section. Both counts now carry the `tool` qualifier, and one sentence states the mechanism behind them: the engine reads `supersedes` on a rule with a `tool` block and nowhere else, so a prompt rule enters neither count.
+
+    ## Three more instances of the SAME cause, found by re-reading every sentence the card wrote
+
+    1. **`builtin/validators/code-hygiene/VALIDATOR.md`, same paragraph** — "the naming rules that ship are `swift/naming-clarity`, `swift/doc-parameter-naming` and `js-ts/naming-and-style`" is a false exhaustive claim. `swift/casing` reads names too — its own description is "UpperCamelCase types, lowerCamelCase members, uniform acronym casing, no Hungarian/k-prefix". The same commit's `doc/src/concepts/validators.md` already gets this right and lists `casing` among the swift naming rules. Corrected to name all four prompt rules written about naming, and "none of the three" is now "none of the four". The conclusion is unchanged: none of the four reads a `.go` file.
+
+    2. **`builtin/validators/README.md`** — "A rule that supersedes nothing replaces no rule and degrades to no rule" is the exact defect: a claim about tool rules stated as a claim about rules. It is FALSE of a prompt rule — `code-hygiene/dead-code` and `no-commented-code` supersede nothing and do not degrade to no rule, they ARE the rule and they run. Now "A TOOL rule that supersedes nothing replaces no prompt rule and degrades to no rule", with the mechanism sentence after it. The 25/23/2 counts in the sentence above were NOT touched; the review settled those.
+
+    3. **`doc/src/concepts/validators.md`, "Language sets"** — "A naming or logging rule lives here rather than in `code-hygiene`" is refuted by the same page four paragraphs above, which names `stuttering-name-go` as a code-hygiene rule that flags a Go NAME. Now qualified to "prompt rule", with a sentence stating that a naming TOOL rule can live in `code-hygiene` and one does.
+
+    ## One instance of the same SHAPE, in a different qualifier
+
+    `doc/src/concepts/integrated-sdlc.md` said "planning changes none" and "none — planning changes no file". Planning DOES change files: it writes `.kanban/tasks/*.md` and `*.jsonl` cards. The true claim needs the glob qualifier. Measured the match blocks of all 13 sets plus `builtin/file_groups/source_code.yaml` (33 patterns) and `test_files.yaml` (24 patterns): no shipped validator glob matches `.md` or `.jsonl`. The prose now says planning writes only kanban cards that no shipped validator glob matches, and the table cell says "no file a validator glob matches".
+
+    ## Checked and left alone
+
+    - `builtin/validators/rust/VALIDATOR.md` and `builtin/validators/swift/VALIDATOR.md` — the 4-rule and 11-rule description enumerations are exact, and the swift set holds no tool rule, so "Every rule here reads plain Swift" needs no qualifier. Settled by the review.
+    - `doc/src/concepts/tools.md` — one line, and it writes "e.g.", so it makes no exhaustive claim.
+    - README "No shipped rule names two today" — TRUE as written, because no prompt rule carries the key at all. Left alone rather than churned.
+    - The linter counts in the naming survey (revive's 12 `naming` rules, golangci-lint's 115 linters) are counts of LINTERS, not of validator rules, so the `tool` qualifier does not reach them.
+
+    ## Embed confirmed
+
+    `cargo build -p mirdan` reran the build script. The traced embed `target/debug/build/mirdan-2dd4355981eab855/out/builtin_validators.rs` carries "only TOOL rule of this set", "A TOOL rule that" and the four-rule naming list, and holds ZERO copies of the old "the only rule of this set to do that". `builtin/validators/**` is shipped content, so this was the load-bearing check.
+
+    No stray dotdir was created. `crates/swissarmyhammer-mcp-proxy/.kanban` is the git-tracked fixture already recorded on this card.
+
+    ### implement — changed
+    - evidence: 4 files — builtin/validators/code-hygiene/VALIDATOR.md, builtin/validators/README.md, doc/src/concepts/validators.md, doc/src/concepts/integrated-sdlc.md. Measured 84 rule files / 23 with `supersedes` / 61 without / 25 tool rules / 23 tool rules with `supersedes` / 2 without. `cargo fmt` clean; `cargo clippy --workspace --all-targets -- -D warnings` exit 0, zero warnings; `cargo nextest run --workspace` 14105 passed, 0 failed, 0 skipped; `cargo build -p mirdan` OK with the corrected text confirmed in the embed.
+    - next: /review. Left in `doing`, not committed.
+  timestamp: 2026-08-16T13:52:37.505171+00:00
+- actor: claude-code
+  id: 01m05dx556kd6cw54gk22sksxs
+  text: |-
+    ### test — green
+
+    Scope: iteration 2, 4 prose files — builtin/validators/code-hygiene/VALIDATOR.md, builtin/validators/README.md, doc/src/concepts/validators.md, doc/src/concepts/integrated-sdlc.md. No Rust source changed. Confirmed via `git diff --stat` that exactly these 4 files (plus kanban card files) are dirty.
+
+    Gates:
+    - `cargo fmt --check` — exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+    - `cargo nextest run --workspace` — 14105 tests run: 14105 passed, 0 failed, 0 skipped.
+    - `cargo build -p mirdan` — succeeded after touching `crates/mirdan/build.rs` to force a rerun. Traced the freshest OUT_DIR by mtime: `target/debug/build/mirdan-2dd4355981eab855/out/builtin_validators.rs` (confirmed newer than build.rs via `find -newer`).
+
+    Embed check (load-bearing): `crates/mirdan/build.rs` embeds only `../../builtin/validators` (confirmed by reading the build script), so only 2 of the 4 files — `builtin/validators/README.md` and `builtin/validators/code-hygiene/VALIDATOR.md` — reach the binary; `doc/src/concepts/*.md` correctly do NOT appear in the embed (`grep -c "doc/src/concepts"` → 0), matching the card's own framing.
+    - code-hygiene/VALIDATOR.md: embed contains verbatim "It is the only TOOL rule of this set to do that, and one of two tool rules tree-wide — the other is the `manifests` set's `unused-dependencies-rust`. Both counts are of tool rules only." and "the prompt rules written about naming are `swift/casing`, `swift/naming-clarity`, `swift/doc-parameter-naming` and `js-ts/naming-and-style`, and none of the four reads a `.go` file." Old wording ("only rule of this set to do that", "the naming rules that ship are ... and none of the three") absent — the one "none of the three" hit in the embed is an unrelated fixture comment about a different rule, not stale prose.
+    - README.md: embed contains verbatim "A TOOL rule that supersedes nothing replaces no prompt rule and degrades to no rule ... A prompt rule never carries the key — the engine reads `supersedes` on a rule that carries a `tool` block and nowhere else."
+
+    Independently re-counted every claim (did not trust the implementer's numbers):
+    - 84 total rule files under `builtin/validators/*/rules/*.md` — confirmed (`find ... | wc -l` → 84).
+    - 23 declare `supersedes:`, 61 do not — confirmed (`grep -l`/`grep -L` counts → 23 / 61).
+    - 25 declare `tool:` (tool rules) — confirmed.
+    - Of the 25 tool rules, 23 declare `supersedes` and exactly 2 do not: `builtin/validators/code-hygiene/rules/stuttering-name-go.md` and `builtin/validators/manifests/rules/unused-dependencies-rust.md` — confirmed via `comm` set difference, output was exactly those two paths.
+    - Zero prompt rules (no `tool:` key) declare `supersedes` — confirmed via `comm` set difference, empty output.
+    - `code-hygiene` holds 30 rule files total: 24 with `tool:`, 6 without — confirmed by direct listing.
+    - Naming enumeration now names 4 rules: `swift/naming-clarity`, `swift/doc-parameter-naming`, `swift/casing`, `js-ts/naming-and-style` — all 4 exist as files (checked each path individually).
+    - `integrated-sdlc.md` glob claim: enumerated all 13 `builtin/validators/*/VALIDATOR.md` `match:` blocks plus `builtin/file_groups/source_code.yaml` and `builtin/file_groups/test_files.yaml` — no glob pattern in any of the 15 sources matches `.md` or `.jsonl`.
+    - `code-hygiene/VALIDATOR.md` frontmatter: read the first 15 lines — `---` opens and closes the block, `name`, `description`, `metadata.version`, `match.files`, `probes` all present and unchanged; only body prose past the frontmatter differs.
+
+    No stale text was restored to make anything pass. Did not commit; task left in `doing`.
+  timestamp: 2026-08-16T13:59:14.342999+00:00
 position_column: doing
 position_ordinal: '8280'
 title: Two more stale claims found beside the complexity scorer sweep
@@ -123,3 +256,9 @@ So a shipped tool rule can replace one prompt rule or none. The first half of th
 - `cargo nextest run --workspace` green; fmt and clippy clean.
 
 #tool-validators
+
+## Review Findings (2026-08-16 08:40)
+
+> Scope: `review sha HEAD~1..HEAD` (commit 21cb8b128) — reviewed the diffs only. The `review` engine matched 0 of the 7 changed prose files and returned an empty report; the claims the commit writes were therefore verified directly against the validator tree and the crate source.
+
+- [x] `builtin/validators/code-hygiene/VALIDATOR.md:389` `code-hygiene/stuttering-name-go` — The replacement sentence "It supersedes nothing. It is the only rule of this set to do that, and one of two tree-wide — the other is the `manifests` set's `unused-dependencies-rust`." drops the `tool` qualifier, so both counts it writes are false as written. Seven rules of `code-hygiene` declare no `supersedes` frontmatter key — `data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs`, `no-commented-code` and `stuttering-name-go` — not one; and 61 of the tree's 84 rule files declare none, not two. Both counts are true only of TOOL rules. Write "the only tool rule of this set" and "one of two tool rules tree-wide", matching the scoping the same commit's `builtin/validators/README.md` already uses ("every shipped tool rule but `stuttering-name-go` and `unused-dependencies-rust` names exactly one"). Apply the `tool` qualifier to every count in this section, not only the one sentence quoted.

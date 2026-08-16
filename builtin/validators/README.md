@@ -134,9 +134,11 @@ says so. No shipped rule names two today. A shipped tool rule replaces one
 prompt rule or none: every shipped tool rule but `stuttering-name-go` and
 `unused-dependencies-rust` names exactly one, and those two declare no
 `supersedes` key at all — no shipped prompt rule reads a Go NAME, and no
-shipped prompt rule asks whether a declared dependency is used. A rule that
-supersedes nothing replaces no rule and degrades to no rule: a machine without
-the tool gets no answer to the question rather than a worse one.
+shipped prompt rule asks whether a declared dependency is used. A TOOL rule that
+supersedes nothing replaces no prompt rule and degrades to no rule: a machine
+without the tool gets no answer to the question rather than a worse one. A
+prompt rule never carries the key — the engine reads `supersedes` on a rule that
+carries a `tool` block and nowhere else.
 
 The `tool` block keys:
 

@@ -386,11 +386,15 @@ suppression the tool reads.
 with the name of its own package, because a caller outside the package then
 writes the word two times — `staged.StagedType`.
 
-It supersedes nothing. It is the only rule of this set to do that, and one of
-two tree-wide — the other is the `manifests` set's `unused-dependencies-rust`.
-No shipped prompt rule reads a Go NAME: the naming rules that ship are
-`swift/naming-clarity`, `swift/doc-parameter-naming` and
-`js-ts/naming-and-style`, and none of the three reads a `.go` file. A machine
+It supersedes nothing. It is the only TOOL rule of this set to do that, and one
+of two tool rules tree-wide — the other is the `manifests` set's
+`unused-dependencies-rust`. Both counts are of tool rules only. The engine reads
+`supersedes` on a rule that carries a `tool` block and nowhere else, so a prompt
+rule declares no `supersedes` key and enters neither count.
+
+No shipped prompt rule reads a Go NAME: the prompt rules written about naming
+are `swift/casing`, `swift/naming-clarity`, `swift/doc-parameter-naming` and
+`js-ts/naming-and-style`, and none of the four reads a `.go` file. A machine
 without `revive` therefore gets no answer to this question rather than a worse
 one.
 

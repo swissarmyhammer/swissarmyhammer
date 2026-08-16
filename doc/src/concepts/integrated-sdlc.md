@@ -33,7 +33,7 @@ Here's what happens when you type `/plan` in your AI coding agent:
 1. The **plan skill** activates. It defines the workflow: research the codebase, identify what needs to change, decompose work into discrete tasks.
 2. The **planner agent** mode shapes how the AI thinks. It's instructed to be thorough in research, conservative in scope, and to produce kanban cards as output.
 3. The planner uses **tools** to do the work: `code_context` to understand the codebase structure, `shell` to run analysis commands, `kanban` to create task cards, `question` to ask clarifying questions.
-4. **Validators** do not run during planning. They match changed files, and planning changes none — the `code-security` set's `command-safety` rule reads the shell commands a diff embeds, not the commands the planner runs.
+4. **Validators** do not run during planning. They match changed files by glob, and planning writes only kanban cards — `.md` and `.jsonl` files that no shipped validator glob matches. The `code-security` set's `command-safety` rule reads the shell commands a diff embeds, not the commands the planner runs.
 
 The result: a kanban board with well-scoped cards, ready for `/implement` to pick up.
 
@@ -45,7 +45,7 @@ The skills form a natural development cycle:
 
 | Phase | Skill | Agent Mode | Primary Tools | Validators |
 |-------|-------|------------|---------------|------------|
-| **Plan** | `/plan` | planner | code-context, kanban, shell | none — planning changes no file |
+| **Plan** | `/plan` | planner | code-context, kanban, shell | none — planning changes no file a validator glob matches |
 | **Implement** | `/implement` | implementer | files, shell, code-context, kanban | code-hygiene, code-security |
 | **Test** | `/test` | tester | shell, files | test-integrity, code-hygiene |
 | **Review** | `/review` | reviewer | files, git, code-context | code-hygiene, code-security, completeness, duplication, reuse |

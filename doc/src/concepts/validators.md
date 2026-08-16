@@ -74,10 +74,11 @@ manifest changed:
 ### Language sets
 
 `rust`, `python`, `js-ts`, `swift`, `dart`, and `numpy` each hold the rules for
-one language or library. A naming or logging rule lives here rather than in
-`code-hygiene`, because each one is written for a single language: `js-ts`
-holds `naming-and-style`, `swift` holds `naming-clarity`, `casing`, and
-`doc-parameter-naming`, and `python` holds `logging`.
+one language or library. A naming or logging **prompt rule** lives here rather
+than in `code-hygiene`, because each one is written for a single language:
+`js-ts` holds `naming-and-style`, `swift` holds `naming-clarity`, `casing`, and
+`doc-parameter-naming`, and `python` holds `logging`. A naming **tool rule** can
+live in `code-hygiene`, and one does — `stuttering-name-go`, listed above.
 
 ## How Validators Work
 
