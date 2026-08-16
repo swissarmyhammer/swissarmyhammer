@@ -1628,20 +1628,64 @@ fn stage_probe_unreadable(repo: &Path, path: &str, unreadable: &ShippedUnreadabl
     }
 }
 
-/// Drives the shipped script of `rule` over every file of `judged` and the
-/// path `path`, which refuses a reader the way `unreadable` states, and holds
-/// that run to two answers at one time: it reports exactly the `path:line` rows
-/// `expected` names, and it states ONE diagnostic that names `path`.
+/// Drives the shipped script of `rule` over the staging `staging` with the
+/// argument list a run over `named` carries, and holds that run to two answers
+/// at one time: it reports exactly the `path:line` rows `expected` names, and
+/// it states ONE diagnostic that names `declined`.
 ///
 /// Both halves are the test, because each one alone passes a defect the other
-/// catches. A run that reports the rows and says nothing about `path` reads a
-/// file the tool never judged as a clean file. A run that states the diagnostic
-/// and loses the rows threw away every finding it did make, which is what a
-/// nonzero exit over a declined item costs.
+/// catches. A run that reports the rows and says nothing about `declined` reads
+/// an item the tool never judged as a clean file. A run that states the
+/// diagnostic and loses the rows threw away every finding it did make, which is
+/// what a nonzero exit over a declined item costs.
 ///
 /// `builtin/validators/README.md` states the channel the second half reads: a
 /// script that judged the code and could not judge ONE item writes a line
 /// opening `sah-diagnostic:` on stderr and still exits 0.
+fn verify_declined_item_is_stated(
+    project_types: &[&str],
+    rule: &str,
+    staging: &ShippedStaging<'_>,
+    named: &[&str],
+    declined: &str,
+    expected: &[&str],
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+    let drive = |read: fn(&ScriptOutcome, &Path) -> Vec<String>| {
+        drive_shipped_script(&loader, rule, staging, named, read)
+            .expect("a script handed an item it cannot judge must judge the rest and exit 0")
+    };
+
+    let reported = drive(finding_rows);
+    let stated = drive(script_diagnostics);
+
+    assert_eq!(
+        sorted_names(&reported),
+        sorted_names(&expected_script_findings(expected)),
+        "the run must report every finding of the files it could judge, or one item it could \
+         not judge throws away the work the run did do"
+    );
+    assert_eq!(
+        stated.len(),
+        1,
+        "the run must state the one item it declined; it stated {stated:?}"
+    );
+    assert!(
+        stated[0].contains(declined),
+        "the diagnostic must name the item it declined; it said '{}'",
+        stated[0]
+    );
+}
+
+/// Drives the shipped script of `rule` over every file of `judged` and the
+/// path `path`, which refuses a reader the way `unreadable` states, and holds
+/// that run to reporting the rows `expected` names AND to stating one
+/// diagnostic that names `path`.
+///
+/// The refusing path takes staging no `(path, text)` pair can state, because
+/// the probe writes bytes that are not UTF-8, takes every permission off the
+/// file, or writes no file at all.
 fn verify_unreadable_file_is_declined(
     project_types: &[&str],
     rule: &str,
@@ -1650,8 +1694,6 @@ fn verify_unreadable_file_is_declined(
     unreadable: &ShippedUnreadableFile,
     expected: &[&str],
 ) {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, project_types, rule);
     let named: Vec<&str> = judged
         .iter()
         .map(|(file, _)| *file)
@@ -1662,29 +1704,34 @@ fn verify_unreadable_file_is_declined(
         prepare: &prepare,
         ..ShippedStaging::of(judged)
     };
-    let drive = |read: fn(&ScriptOutcome, &Path) -> Vec<String>| {
-        drive_shipped_script(&loader, rule, &staging, &named, read)
-            .expect("a script handed a path it cannot read must judge the rest and exit 0")
-    };
 
-    let reported = drive(finding_rows);
-    let declined = drive(script_diagnostics);
+    verify_declined_item_is_stated(project_types, rule, &staging, &named, path, expected);
+}
 
-    assert_eq!(
-        sorted_names(&reported),
-        sorted_names(&expected_script_findings(expected)),
-        "the run must report every finding of the files it could read, or one path it could \
-         not read throws away the work the run did do"
-    );
-    assert_eq!(
-        declined.len(),
-        1,
-        "the run must state the one path it declined; it stated {declined:?}"
-    );
-    assert!(
-        declined[0].contains(path),
-        "the diagnostic must name the path it declined; it said '{}'",
-        declined[0]
+/// Drives the shipped script of `rule` over every file of `staged`, and holds
+/// that run to reporting the rows `expected` names AND to stating one
+/// diagnostic that names `declined`.
+///
+/// `declined` is one of the staged files, and it is staged as ordinary text: a
+/// file the tool READS and cannot judge — source it cannot parse — refuses the
+/// tool rather than the reader, so the tool alone sees the difference. The tool
+/// measures every other file of the same run, so those findings must survive.
+fn verify_unjudged_file_is_declined(
+    project_types: &[&str],
+    rule: &str,
+    staged: &[(&str, &str)],
+    declined: &str,
+    expected: &[&str],
+) {
+    let named: Vec<&str> = staged.iter().map(|(file, _)| *file).collect();
+
+    verify_declined_item_is_stated(
+        project_types,
+        rule,
+        &ShippedStaging::of(staged),
+        &named,
+        declined,
+        expected,
     );
 }
 

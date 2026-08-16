@@ -293,50 +293,46 @@ fn the_shipped_python_function_length_tool_rule_reports_a_generated_file() {
 const PYTHON_LENGTH_UNPARSABLE_SOURCE: &str =
     concat!("def broken(value):\n", "    if value > 0:\n",);
 
-/// What the one error of a Python file ruff could not parse must name.
-const PYTHON_LENGTH_UNMEASURED_ERROR_PREFIX: &str =
-    "function-length-python: ruff could not measure";
-
 /// Where the Python file ruff cannot parse stands inside the probe repository.
 const PYTHON_LENGTH_UNPARSABLE_PATH: &str = "unparsable.py";
 
-/// What the one error of an unparsable Python file must name.
-const PYTHON_LENGTH_UNPARSABLE_ERROR: &[&str] = &[
-    PYTHON_LENGTH_UNMEASURED_ERROR_PREFIX,
-    PYTHON_LENGTH_UNPARSABLE_PATH,
-];
-
-/// The `function-length-python` probe over a Python file ruff cannot parse.
-const PYTHON_LENGTH_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: PYTHON_PROJECT_TYPES,
-        rule: PYTHON_FUNCTION_LENGTH_RULE,
-        expected: PYTHON_LENGTH_UNPARSABLE_ERROR,
-    },
-    prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
-    change_purpose: "a Python file the parser cannot read",
-    path: PYTHON_LENGTH_UNPARSABLE_PATH,
-    source: Some(PYTHON_LENGTH_UNPARSABLE_SOURCE.as_bytes()),
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Python function-length tool rule BREAKS on a Python
+/// Acceptance: the shipped Python function-length tool rule DECLINES a Python
 /// file it cannot parse, through the real ruff pipeline.
 ///
-/// ruff writes a file it cannot parse onto the SAME report stream as a
-/// finding, under `"code": "invalid-syntax"`, and it exits 1 either way.
-/// Measured with ruff 0.14.5 over a file whose `if` body never opens: one row
-/// of that code, and no statement count for the file. A script that read every
-/// row as a finding reported the parse failure as a function-length finding,
-/// and a script that dropped every other code would read the file as clean.
-/// The script names the file on stderr and exits 1 instead, so the engine reads
-/// a broken run.
+/// ruff writes a file it cannot parse onto the SAME report as a finding, under
+/// `"code": "invalid-syntax"`. Measured with ruff 0.14.5 over a file whose `if`
+/// body never opens beside one function of 190 statements: two rows on the
+/// report — the `PLR0915` count of the file it read AND the parse failure — at
+/// exit 1, and nothing on stderr. ruff measured the other file, so the finding
+/// is there to lose.
+///
+/// A script that read every row as a finding reported the parse failure as a
+/// function-length finding, and a script that dropped every other code would
+/// read the unparsable file as clean. An `exit 1` answers neither: it fails the
+/// WHOLE run, so the `PLR0915` finding of the file ruff DID measure goes away
+/// with it. The parse failure is one declined item of a sound run, so the
+/// script states it under the `sah-diagnostic:` marker at exit 0.
 #[test]
-fn the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_run_breaks(&PYTHON_LENGTH_UNPARSABLE_PROBE);
+fn the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_parse() {
+    let judged = python_procedure("long_procedure", OVER_THE_GATE_STATEMENTS);
+    let expected = python_expected_row(PYTHON_LENGTH_JUDGED_PATH, &judged, "long_procedure");
+
+    verify_unjudged_file_is_declined(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_FUNCTION_LENGTH_RULE,
+        &[
+            (PYTHON_LENGTH_JUDGED_PATH, &judged),
+            (
+                PYTHON_LENGTH_UNPARSABLE_PATH,
+                PYTHON_LENGTH_UNPARSABLE_SOURCE,
+            ),
+        ],
+        PYTHON_LENGTH_UNPARSABLE_PATH,
+        &[&expected],
+    );
 }
 
-/// Where the file the run CAN judge stands, beside each path it cannot read.
+/// Where the file the run CAN judge stands, beside each item it cannot judge.
 const PYTHON_LENGTH_JUDGED_PATH: &str = "judged.py";
 
 /// Where the path the run cannot read stands inside the probe repository.

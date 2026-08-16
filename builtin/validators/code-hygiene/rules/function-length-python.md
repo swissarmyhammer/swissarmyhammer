@@ -19,6 +19,12 @@ tool:
     """States each file `ruff` declined, then writes each `PLR0915` finding
     whose definition is not a test.
 
+    `ruff` declines a file two ways, and each one is ONE item of a run that
+    measured every other file it was handed: a path it could not read, which it
+    states on stderr, and a file it could not parse, which it states as a row of
+    its own code on the report. Both leave the run sound, so both are written
+    under the marker at exit 0.
+
     `ruff` writes no function name into its message. It anchors each `PLR0915`
     diagnostic on the NAME of the function it measured, so `location` and
     `end_location` select that identifier out of the source line, and the
@@ -39,9 +45,6 @@ tool:
     # The one rule this run measures with. `ruff` writes a file it cannot parse
     # onto the same report under a code of its own.
     MEASURED_CODE = "PLR0915"
-
-    # What the script calls itself on stderr.
-    RULE_NAME = "function-length-python"
 
     # What opens the line `ruff` writes for a file it could not read, and what
     # stands after it: the path, then `: `, then the reason.
@@ -102,16 +105,20 @@ tool:
             )
         with open(sys.argv[1], encoding="utf-8") as handle:
             report = handle.read().strip()
-        findings = json.loads(report) if report else []
-        unmeasured = [row for row in findings if row.get("code") != MEASURED_CODE]
-        for row in unmeasured:
+        rows = json.loads(report) if report else []
+        findings = []
+        for row in rows:
+            if row.get("code") == MEASURED_CODE:
+                findings.append(row)
+                continue
             sys.stderr.write(
-                "{}: ruff could not measure {}: {} {}\n".format(
-                    RULE_NAME, row["filename"], row.get("code"), row.get("message")
+                "{} ruff could not measure {}: {} {}\n".format(
+                    DIAGNOSTIC_MARKER,
+                    row["filename"],
+                    row.get("code"),
+                    row.get("message"),
                 )
             )
-        if unmeasured:
-            sys.exit(1)
         cache = {}
         for finding in findings:
             if reported_name(finding, cache).startswith(TEST_NAME_PREFIX):
@@ -467,16 +474,29 @@ files.
 ## A file ruff could not measure
 
 The run reads two statements ruff makes about a file it could not measure: a
-row of another code on the report, and a `Failed to lint` line on stderr. The
-run answers each one differently, and the two sections below state each answer
-against what was measured for it.
+row of another code on the report, and a `Failed to lint` line on stderr. Each
+one is ONE item of a run that measured every other file it was handed, so the
+run answers both the same way — a line opening `sah-diagnostic:` at exit 0 —
+and the two sections below state what was measured for each.
 
 ### A file ruff cannot parse
 
 `ruff` writes a file it cannot parse onto the SAME report as a finding, under
-`"code": "invalid-syntax"`, and it exits 1 either way. Measured with ruff
-0.14.5 over a file whose `if` body never opens: one row of that code, and no
-statement count for the file at all.
+`"code": "invalid-syntax"`, and it measures every other file of the same run
+beside it. Measured with ruff 0.14.5 against the shipped command line, over a
+file whose `if` body never opens, one function of 190 statements, and one
+function of 1:
+
+| the run | the report | stderr | exit |
+|---|---|---|---|
+| the unparsable file alone | one `invalid-syntax` row | nothing | 1 |
+| the file of 190 statements alone | one `PLR0915` row | nothing | 1 |
+| all three together | one `PLR0915` row AND one `invalid-syntax` row | nothing | 1 |
+
+The third row is the whole reason. ruff counted the statements of the long
+function while refusing the file it could not parse, so the parse failure is
+one item of a run that stayed sound — the shape
+`builtin/validators/README.md` calls a declined item.
 
 An earlier shape of this run piped every row into a finding, so a file that
 does not parse was reported as a function-length finding — 7 files of the
@@ -487,11 +507,24 @@ under `cpython Lib/test/test_lib2to3/data`, and
 selected `PLR0915` and dropped the rest instead would read each of those files
 as clean, which is worse: ruff measured no statement count there.
 
-So the filter program writes each row of another code to stderr, naming the
-file and the parser's own message, and exits 1. The engine then reads a broken
-run rather than a clean file. The acceptance test
-`the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse`
-holds that.
+A later shape wrote each row of another code to stderr and exited 1. That is
+the answer the README refuses: a nonzero exit fails the WHOLE run, so the
+finding of the file ruff DID measure goes away with the file it did not.
+Measured with that shape over the three files of the table: nothing on stdout,
+one line on stderr, exit 1 — the `PLR0915` finding lost.
+
+So the filter program keeps the `PLR0915` rows as findings and writes each row
+of another code under the marker at exit 0, naming the file and the parser's
+own message. ruff writes an absolute path on its report, so the line carries
+one:
+
+    sah-diagnostic: ruff could not measure <repo>/unparsable.py: invalid-syntax Expected an indented block after `if` statement
+
+Measured with the shipped script over the three files of the table: one finding
+on stdout, one marked line on stderr, exit 0. Over the unparsable file alone:
+nothing on stdout, the same marked line, exit 0. The acceptance test
+`the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_parse`
+holds both halves of the first run, and a run that lost either one fails it.
 
 ### A path ruff cannot read
 
@@ -544,11 +577,17 @@ run that lost either half fails them.
 
 ### Both answers in one run
 
-Measured with the shipped script over a file that does not parse beside a path
-that holds no file: the marked line and the parse failure both stand on stderr,
-and the run exits 1. The engine reads a broken run there, and the whole of
-stderr is the error detail it states, so the marked line reaches the reader
-inside that error rather than as a diagnostic of its own.
+Measured with the shipped script over one function of 190 statements handed to
+the run beside a file that does not parse AND all three paths of the table
+above: one finding on stdout, four marked lines on stderr — three reads and one
+measure — and exit 0. Neither decline costs the other, and neither costs the
+finding, because neither exits nonzero.
+
+The two kinds of line name the file differently, and each names it the way ruff
+did. ruff's stderr writes the path the command line gave it, so a read line
+carries `absent.py`; ruff's report writes an absolute path, so a measure line
+carries the whole path. A diagnostic is about the RUN and has no path to be
+kept by, so no file filter reads either one.
 
 The script tests ruff's own exit status beside all of it. Measured with ruff
 0.14.5: 0 for a report with no row, 1 for a report with one row or more. Any

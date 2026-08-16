@@ -1,8 +1,259 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffe680
+comments:
+- actor: claude-code
+  id: 01m05gmgay3b96yzsfbps2g03m
+  text: |
+    ## Measurements first, before any code
+
+    ruff 0.14.5 (`/Users/wballard/.local/bin/ruff`), the shipped command line
+    `ruff check --isolated --no-cache --config "lint.pylint.max-statements=180" --select PLR0915 --output-format json`,
+    over a probe tree of `judged.py` (one function of 190 statements), `unparsable.py`
+    (`def broken(value):` / `    if value > 0:` — the body never opens) and
+    `clean.py` (one function of 1 statement).
+
+    Raw ruff:
+
+    | the run | the report | stderr | exit |
+    |---|---|---|---|
+    | `unparsable.py` alone | one `invalid-syntax` row | nothing | 1 |
+    | `judged.py` alone | one `PLR0915` row | nothing | 1 |
+    | all three together | one `PLR0915` row for `judged.py` AND one `invalid-syntax` row for `unparsable.py` | nothing | 1 |
+
+    The third row is the finding: **ruff DOES measure the other files of the same
+    run.** It counted 190 statements for `judged.py` while refusing the file it
+    could not parse. Nothing about the run broke.
+
+    The shipped script as it stood, over the same three files: **nothing on stdout,
+    one line on stderr, exit 1.** The `PLR0915` finding of `judged.py` was thrown
+    away by the parse failure of another file.
+
+    Two more measurements the survey turned up and I confirmed:
+
+    1. The old stderr line opened `function-length-python:`, NOT `sah-diagnostic:`.
+       So even at exit 0 the engine would have dropped it as tool chatter —
+       `read_marked_diagnostics` keeps a line only when it opens with
+       `TOOL_DIAGNOSTIC_MARKER` after `trim`.
+    2. The old `for finding in findings:` loop at the bottom iterated EVERY row,
+       `invalid-syntax` rows included. It was safe only because `sys.exit(1)` ran
+       first. Moving to exit 0 required splitting the rows, not just moving the
+       exit.
+
+    ## The decision, against the README
+
+    `builtin/validators/README.md` draws the line at what the tool judged:
+
+    > Exit 0 means the script judged the code. A nonzero exit means the script
+    > broke — its stderr goes to the diagnosing agent, and no findings are read.
+
+    > A script that judged the code and could not judge ONE item says so on stderr,
+    > on a line that opens `sah-diagnostic:`, and it still exits 0.
+
+    > Do not exit nonzero for a declined item. A nonzero exit fails the WHOLE run,
+    > so one unjudged path throws away every finding the run did make. Do not stay
+    > silent either.
+
+    The measurement settles which shape this is. ruff judged the code — it reported
+    a real `PLR0915` count for `judged.py` in the same run — and could not judge one
+    item. That is a DECLINED ITEM, word for word, not a broken run. The broken-run
+    shape is already handled and stays: the shell status gate exits 1 only for a
+    ruff status other than 0 or 1, which is a ruff that judged nothing.
+
+    So: `sah-diagnostic:` at exit 0, and the `PLR0915` findings of every other file
+    stand.
+
+    ## What the fix is
+
+    `builtin/validators/code-hygiene/rules/function-length-python.md`, the embedded
+    filter program. It now splits the report rather than testing it:
+
+    - rows whose code is `PLR0915` become findings,
+    - every other row is written as
+      `sah-diagnostic: ruff could not measure <file>: <code> <message>`,
+    - no `sys.exit(1)`.
+
+    `RULE_NAME` is gone — it named the script on stderr and nothing writes that
+    line now. The two decline branches of this script finally answer the same class
+    of event the same way.
+
+    Measured with the fixed script:
+
+    | the run | stdout | stderr | exit |
+    |---|---|---|---|
+    | `judged.py` + `unparsable.py` + `clean.py` | 1 finding, `judged.py:1 PLR0915 Too many statements (190 > 180)` | 1 marked line naming `unparsable.py` | 0 |
+    | `unparsable.py` alone | nothing | the same 1 marked line | 0 |
+    | `judged.py` + `unparsable.py` + absent + non-UTF-8 + no-read | 1 finding | 4 marked lines — 3 reads and 1 measure | 0 |
+    | `clean.py` alone | nothing | nothing | 0 |
+
+    The two kinds of line spell the path differently, and each spells it the way
+    ruff did: ruff's stderr writes the path the command line gave (`absent.py`), and
+    ruff's report writes an absolute path, so the measure line carries the absolute
+    one.
+
+    ## The RED I watched
+
+    Wrote `..._declines_a_file_it_cannot_parse` first, over the shipped script as
+    it stood:
+
+    ```
+    thread 'review::tool_rules::tests::shipped::function_length_python::the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_parse'
+    panicked at crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs:1657:14:
+    a script handed an item it cannot judge must judge the rest and exit 0: Exit("function-length-python: ruff could not measure /private/var/folders/.../repo/unparsable.py: invalid-syntax Expected an indented block after `if` statement")
+    ```
+
+    Then fixed the script and watched it pass.
+
+    ## The harness
+
+    `verify_unreadable_file_is_declined` held the right assertions but staged the
+    declined path through `ShippedUnreadableFile`, which is about how a path refuses
+    a READER. An unparsable file refuses the PARSER, not the reader, so adding a
+    variant there would have been wrong. Instead the assertion core came out as
+    `verify_declined_item_is_stated`, and both shapes call it:
+
+    - `verify_unreadable_file_is_declined` — the path takes staging no `(path, text)`
+      pair can state.
+    - `verify_unjudged_file_is_declined` — the declined file is ordinary staged
+      text, and the tool alone sees the difference.
+
+    `the_shipped_python_function_length_tool_rule_breaks_on_a_file_it_cannot_parse`
+    is gone with the behaviour it locked in. `ShippedNamedPath` and
+    `verify_shipped_run_breaks` keep 15 other callers, so nothing is dead.
+  timestamp: 2026-08-16T14:46:56.606275+00:00
+- actor: claude-code
+  id: 01m05gn6y21cen1jthm6d3pvfy
+  text: |
+    ## Sibling survey — read, not fixed
+
+    The card asks me to read the sibling rules before closing. I read the `tool.run`
+    script of every rule that carries one (25 of 84 rule files). Only 2 of the 25
+    write `sah-diagnostic:` at all: this rule, for a path ruff could not READ, and
+    `dead-code-typescript`.
+
+    ### The other rules that RUN ruff
+
+    - `builtin/validators/code-hygiene/rules/missing-docs-python.md` — the SAME
+      defect, three times over. An `invalid-syntax` row lands in `$work/unread.txt`
+      and `if [ -s "$work/unread.txt" ]; then cat ...; exit 1; fi`. A pre-flight
+      `for file in "$@"; do if [ ! -r "$file" ]; then ...; exit 1; fi; done` breaks
+      the batch before ruff runs at all — and the rule body of THIS card already
+      records that such a test cannot answer the non-UTF-8 file. A third `exit 1`
+      sits inside the awk filter, after ruff judged every file, for a source line it
+      could not re-read; the rule's own prose at "A row the scan does not hold keeps
+      its finding" claims a fail-open the code does not have. Two acceptance tests
+      lock the current break.
+    - `builtin/validators/code-hygiene/rules/magic-numbers-python.md` — a bare pipe
+      `ruff ... | jq -c '.[] | {file:..., line:..., message: "\(.code) \(.message)"}'`
+      with no status test. An `invalid-syntax` row becomes a magic-numbers FINDING;
+      a ruff exit 2 reads as a clean tree; an unreadable path reads as a clean file
+      SILENTLY, which is the other half of the README prohibition.
+
+    `dead-code-python` names ruff only in its prose tool survey — it runs vulture,
+    and its status gate is sound.
+
+    ### The six `function-length-*` rules, against a file the tool cannot PARSE
+
+    | rule | tool | its answer | discards the other files? |
+    |---|---|---|---|
+    | python | ruff | was `sys.exit(1)`, now the marker at exit 0 | fixed by this card |
+    | dart | dart_code_linter + `dart analyze` | `exit 1` after a SYNTACTIC_ERROR cross-check | YES |
+    | rust | clippy | `exit 1` on any rustc `E####` | YES, but a Rust file that will not parse stops the crate compiling, so clippy measured nothing anyway — scope is `workspace` |
+    | swift | swiftlint | no signal exists; the file reads CLEAN | no — silent decline |
+    | go | golangci-lint | `typecheck` issue dropped by `jq`, stderr sent to `/dev/null` | no — silent decline |
+    | typescript | eslint | a fatal parse message carries `ruleId: null` and the `jq` select drops it | no — silent decline |
+
+    `function-length-dart` also breaks the whole run for three other per-file
+    declines: an unreadable path, a non-UTF-8 file, and a file the linter wrote no
+    record for.
+
+    ### Every other rule that exits nonzero for ONE declined item while the tool judged the rest
+
+    - `builtin/validators/code-hygiene/rules/missing-docs-go.md` and
+      `builtin/validators/code-hygiene/rules/stuttering-name-go.md` — the same block
+      in both: one revive record with `RuleName == ""` and the batch is thrown away.
+    - `builtin/validators/code-hygiene/rules/missing-docs-swift.md` and
+      `builtin/validators/code-hygiene/rules/magic-numbers-swift.md` — an unreadable
+      path (pre-flight) and `Could not read contents of`.
+    - `builtin/validators/code-hygiene/rules/missing-docs-dart.md` — an unreadable
+      path, pre-flight.
+    - `builtin/validators/manifests/rules/unused-dependencies-rust.md` — the worst
+      of them: it writes findings to stdout INSIDE the manifest loop and then exits
+      1 on a later manifest cargo-machete could not read, so every finding already
+      written is discarded.
+    - `builtin/validators/code-hygiene/rules/dead-code-typescript.md` — breaks for
+      one tsconfig project ts-prune could not read, but that one is ARGUED rather
+      than accidental: its body says a project is not one item, and its measured
+      cost is already in its own table.
+
+    `dead-code-swift` and `magic-numbers-dart` also exit nonzero, but for whole-run
+    setup failures where nothing was judged, so they do not breach the contract.
+
+    Fixed only what this card covers. The rest wants its own cards.
+  timestamp: 2026-08-16T14:47:19.746743+00:00
+- actor: claude-code
+  id: 01m05gs63zsz9pveej39mrrmbb
+  text: |
+    ### implement — changed
+
+    - evidence: 3 files —
+      `builtin/validators/code-hygiene/rules/function-length-python.md`,
+      `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs`,
+      `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs`.
+
+      MEASURED (ruff 0.14.5, shipped command line, probe of `judged.py` at 190
+      statements + `unparsable.py` + `clean.py`): raw ruff answers one `PLR0915` row
+      AND one `invalid-syntax` row at exit 1 with nothing on stderr — ruff DOES
+      measure the other files. The shipped script answered nothing on stdout, one
+      line on stderr, exit 1: the finding lost.
+
+      RED, watched first: `a script handed an item it cannot judge must judge the
+      rest and exit 0: Exit("function-length-python: ruff could not measure
+      /private/var/folders/.../repo/unparsable.py: invalid-syntax Expected an
+      indented block after `if` statement")`.
+
+      GREEN, measured after: 1 finding on stdout, 1 marked line on stderr, exit 0.
+      Beside all three refusing paths as well: 1 finding, 4 marked lines, exit 0.
+
+      `cargo fmt` clean. `cargo clippy --workspace --all-targets -- -D warnings`
+      clean. `cargo nextest run -E 'rdeps(swissarmyhammer-validators)'` — 3520 tests
+      run, 3520 passed, 0 failed, 0 skipped.
+      `cargo build -p mirdan` succeeds and `target/debug/libmirdan.rlib` carries the
+      new filter (`findings.append(row)`, `"{} ruff could not measure ..."`) with no
+      `RULE_NAME` and no `unmeasured` of this rule left in it.
+
+    - next: `/review`. The card is left in `doing`, nothing committed.
+
+    - also raised, not fixed: `^hqe8qwv` (missing-docs-python, three exit-1
+      declines), `^r73ddrr` (magic-numbers-python bare pipe), `^nc2bcjr`
+      (function-length-dart, four exit-1 declines), `^jttzhnd` (missing-docs-go and
+      stuttering-name-go revive record), `^qvj3v4g` (unused-dependencies-rust
+      discards written findings), `^z69hh5a` (three rules with a pre-flight
+      readability guard), `^rfjsx87` (function-length-go and -typescript read an
+      unparsable file as clean).
+  timestamp: 2026-08-16T14:49:29.983164+00:00
+- actor: claude-code
+  id: 01m05h7xbh2aycyeqb016srznv
+  text: |
+    ### test — green
+
+    Verified all required gates on branch `review`, uncommitted changes to `builtin/validators/code-hygiene/rules/function-length-python.md`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_python.rs`.
+
+    **Gates:**
+    - `cargo fmt --check` — exit 0, no diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, zero warnings.
+    - `cargo nextest run --workspace` — 14105 tests run: 14105 passed (26 slow, 2 leaky), 0 skipped, 0 failed. Scoped confirm: `cargo nextest run --package swissarmyhammer-validators shipped::function_length_python` — 8 tests run: 8 passed, 0 failed (the_shipped_python_function_length_tool_rule_reads_a_test_from_its_definition, _reports_a_generated_file, _reports_a_field_setting_initializer, _reads_only_the_files_it_is_given, _declines_a_path_that_holds_no_file, _declines_a_file_it_may_not_read, _declines_a_file_it_cannot_parse, _declines_a_file_it_cannot_decode).
+    - `cargo build -p mirdan` — exit 0. Traced the embed: `target/debug/build/mirdan-2dd4355981eab855/out/builtin_validators.rs` (freshly generated by `crates/mirdan/build.rs`, which embeds all of `builtin/validators/`) carries the corrected script verbatim — `DIAGNOSTIC_MARKER = "sah-diagnostic:"`, the `declined()`/`main()` logic writing `sah-diagnostic: ruff could not read {file}` and `sah-diagnostic: ruff could not measure {file}: {code} {message}`, and the broken-run gate `if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]` still present with `printf 'function-length-python: ruff exited %s and judged no code\n' "$status"` (that prefix is legitimately retained — it is the broken-run failure message, not a per-item decline). No stale per-item `function-length-python:` decline prefix remains in the embed.
+
+    **Behaviour checks (ruff 0.14.5, installed at `/Users/wballard/.local/bin/ruff`), run by extracting the shipped `run:` block and executing it directly over a probe tree:**
+    - Probe of `long.py` (190-statement function, over the 180 gate), `clean.py` (short, under gate), `unparsable.py` (`if` with no body) run together: exit 0. stdout carried exactly one finding — `{"file": ".../long.py", "line": 1, "message": "PLR0915 Too many statements (190 > 180)"}`. stderr carried exactly one line — `sah-diagnostic: ruff could not measure .../unparsable.py: invalid-syntax Expected an indented block after \`if\` statement`. No `invalid-syntax` row appeared as a finding on stdout.
+    - `unparsable.py` alone: stdout empty (no invalid-syntax finding leaked through), stderr the one `sah-diagnostic:` decline line, exit 0.
+    - Broken-run gate: stubbed `ruff` on `PATH` to exit 2 (neither 0 nor 1) and print `stub ruff: simulated crash` on stderr. Script exited 1 (nonzero), stdout empty (no finding placed), stderr carried the stub's crash line plus `function-length-python: ruff exited 2 and judged no code`. Confirms a genuinely broken run still fails the whole run rather than being swallowed into a silent success.
+
+    No findings, no conflicts. Task left in `doing` per instruction; nothing committed.
+  timestamp: 2026-08-16T14:57:32.529429+00:00
+position_column: doing
+position_ordinal: '8280'
 title: function-length-python fails the whole run for one file ruff cannot parse
 ---
 `builtin/validators/code-hygiene/rules/function-length-python.md` exits 1 when ruff writes a row of `"code": "invalid-syntax"` onto the report. One file the parser could not read therefore throws away every finding the run did make.
