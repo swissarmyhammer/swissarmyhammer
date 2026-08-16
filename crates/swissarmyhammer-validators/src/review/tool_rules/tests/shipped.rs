@@ -47,6 +47,8 @@ use super::*;
 use std::path::PathBuf;
 
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
+#[cfg(unix)]
+use swissarmyhammer_common::test_utils::PathGuard;
 
 use crate::doctor::FIXTURE_TEMPLATE_SUFFIX;
 use crate::review::scope::{FileWork, ProbeNames, RuleNames};
@@ -1214,13 +1216,14 @@ fn drive_shipped_staged_tree_read_with<T>(
 /// that wrote any.
 ///
 /// HOW FAR THE ASSERTION REACHES, measured over every breaking probe the
-/// shipped acceptance tests carry. There are 35 of them across 34 tests and 12
-/// shipped rules, and all 35 were measured exiting 1 — the stubbed-`PATH`
+/// shipped acceptance tests carry. There are 36 of them across 35 tests and 12
+/// shipped rules, and all 36 were measured exiting 1 — the stubbed-`PATH`
 /// probes as well, because a script that reads the status of its own step
-/// states the broken run in its own words rather than handing the tool's 127
-/// on. NINETEEN are held to this number, over 7 rules: the 9 that call
-/// [`verify_shipped_tree_breaks`], the 6 that call
-/// [`verify_shipped_tree_breaks_without_run_of`], and the 4 that call
+/// states the broken run in its own words rather than handing the tool's own
+/// number on. TWENTY are held to this number, over 7 rules: the 9 that call
+/// [`verify_shipped_tree_breaks`], the 7 that call
+/// [`verify_shipped_tree_breaks_with_stub`] — 6 of those through
+/// [`verify_shipped_tree_breaks_without_run_of`] — and the 4 that call
 /// `verify_rust_function_length_breaks`. Each of those reads the status off the
 /// `Output` of the run it drove.
 ///
@@ -1330,9 +1333,9 @@ const EXECUTABLE_MODE: u32 = 0o755;
 /// The name the shipped scripts call the report filter by.
 const FILTER_BINARY_NAME: &str = "jq";
 
-/// The file a probe stages to make the stubbed command break for its own run
+/// The file a probe stages to make the stubbed command answer for its own run
 /// alone.
-const BROKEN_COMMAND_MARKER: &str = ".sah-broken-command";
+const STUBBED_RUN_MARKER: &str = ".sah-stubbed-run";
 
 /// The one directory every stubbed command of this test binary stands in.
 ///
@@ -1382,17 +1385,8 @@ fn resolved_binary(binary: &str) -> String {
 /// answers nothing and exits [`COMMAND_NOT_FOUND_STATUS`], so the SHIPPED
 /// script runs its own step and finds it broken.
 ///
-/// `PATH` is process state, and every other test of this binary drives a
-/// shipped script through the same commands. So the stub breaks for ONE run:
-/// it exits nonzero only when [`BROKEN_COMMAND_MARKER`] stands in the working
-/// directory, which this probe alone stages, and it hands every other run
-/// through to the real binary. Measured with the plain stub instead: the whole
-/// tool-rule suite reported 8 failures, among them four Go tests whose fixture
-/// pair broke on `exit status: 127` and three Rust clippy tests whose fixtures
-/// broke on `jq could not read the clippy report`.
-///
-/// The caller still stands under `#[serial_test::serial(env)]`, because the
-/// `PATH` it leads is process state whatever the stub then does.
+/// [`lead_path_with_stub`] carries why the stub answers for ONE run, and what
+/// `PATH` the caller must guard.
 #[cfg(unix)]
 fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
     verify_shipped_tree_breaks_without_run_of(probe, binary, None);
@@ -1407,8 +1401,8 @@ fn verify_shipped_tree_breaks_without(probe: &ShippedStagedTree, binary: &str) {
 /// reads a status of its own for each call, so a probe of one of the two has to
 /// leave the other one standing.
 ///
-/// [`verify_shipped_tree_breaks_without`] carries the rest of the contract: why
-/// the stub breaks for one run alone, and what `PATH` the caller must guard.
+/// [`lead_path_with_stub`] carries the rest of the contract: why the stub
+/// answers for one run alone, and what `PATH` the caller must guard.
 ///
 /// The stub exits [`COMMAND_NOT_FOUND_STATUS`], and the SHIPPED script is held
 /// to [`BROKEN_RUN_EXIT_STATUS`] all the same: a script that reads the status
@@ -1421,33 +1415,81 @@ fn verify_shipped_tree_breaks_without_run_of(
     binary: &str,
     subcommand: Option<&str>,
 ) {
-    use std::os::unix::fs::PermissionsExt;
-    use swissarmyhammer_common::test_utils::PathGuard;
-
-    let real = resolved_binary(binary);
-    let named = match subcommand {
+    let narrowed = match subcommand {
         None => String::new(),
         Some(word) => format!(" && [ \"$1\" = \"{word}\" ]"),
     };
+
+    verify_shipped_tree_breaks_with_stub(
+        probe,
+        binary,
+        &narrowed,
+        &format!("  exit {COMMAND_NOT_FOUND_STATUS}"),
+    );
+}
+
+/// Holds the run of `probe` to breaking when `binary` answers `answer` for the
+/// run this probe stages, with an error that names every fragment the probe
+/// expects and an exit of [`BROKEN_RUN_EXIT_STATUS`].
+///
+/// `answer` is the shell body the stub runs for that one run — the whole of
+/// what the tool says and the status it exits with — so a probe of a tool that
+/// fails in its OWN words stages those words rather than a bare status.
+/// `narrowed` is the extra test the stub makes beside the marker, and the empty
+/// string answers for every run of the binary inside the marked run.
+#[cfg(unix)]
+fn verify_shipped_tree_breaks_with_stub(
+    probe: &ShippedStagedTree,
+    binary: &str,
+    narrowed: &str,
+    answer: &str,
+) {
+    let _path = lead_path_with_stub(binary, &stubbed_run_condition(narrowed), answer);
+
+    let ShippedScriptRun {
+        outcome, status, ..
+    } = drive_shipped_staged_tree_whole(probe, &[(STUBBED_RUN_MARKER, "")]);
+    let failure = outcome.expect_err(probe.reason);
+
+    assert_shipped_break(&failure, status, probe.run.expected, probe.reason);
+}
+
+/// The test a stub makes to answer for ONE run: [`STUBBED_RUN_MARKER`] stands
+/// in the working directory, and `narrowed` holds beside it.
+#[cfg(unix)]
+fn stubbed_run_condition(narrowed: &str) -> String {
+    format!("[ -e \"./{STUBBED_RUN_MARKER}\" ]{narrowed}")
+}
+
+/// Leads `PATH` with a stub of `binary` that runs `answer` for the run
+/// `condition` picks out, hands every other run through to the real binary, and
+/// answers the guard that restores `PATH`.
+///
+/// `PATH` is process state, and every other test of this binary drives a
+/// shipped script through the same commands. So the stub answers for ONE run:
+/// [`stubbed_run_condition`] tests for a marker file the probe alone stages.
+/// Measured with a plain stub that answered every run instead: the whole
+/// tool-rule suite reported 8 failures, among them four Go tests whose fixture
+/// pair broke on `exit status: 127` and three Rust clippy tests whose fixtures
+/// broke on `jq could not read the clippy report`.
+///
+/// The caller still stands under `#[serial_test::serial(env)]`, because the
+/// `PATH` this leads is process state whatever the stub then does.
+#[cfg(unix)]
+fn lead_path_with_stub(binary: &str, condition: &str, answer: &str) -> PathGuard {
+    use std::os::unix::fs::PermissionsExt;
+
+    let real = resolved_binary(binary);
     let stubs = stub_directory();
     let stub = stubs.join(binary);
     std::fs::write(
         &stub,
-        format!(
-            "#!/bin/sh\nif [ -e \"./{BROKEN_COMMAND_MARKER}\" ]{named}; then\n  \
-             exit {COMMAND_NOT_FOUND_STATUS}\nfi\nexec \"{real}\" \"$@\"\n"
-        ),
+        format!("#!/bin/sh\nif {condition}; then\n{answer}\nfi\nexec \"{real}\" \"$@\"\n"),
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).unwrap();
-    let _path = PathGuard::prepend(stubs);
 
-    let ShippedScriptRun {
-        outcome, status, ..
-    } = drive_shipped_staged_tree_whole(probe, &[(BROKEN_COMMAND_MARKER, "")]);
-    let failure = outcome.expect_err(probe.reason);
-
-    assert_shipped_break(&failure, status, probe.run.expected, probe.reason);
+    PathGuard::prepend(stubs)
 }
 
 /// Drives the shipped script of `probe` two times over the same probe
@@ -1675,6 +1717,42 @@ fn verify_declined_item_is_stated(
         stated[0].contains(declined),
         "the diagnostic must name the item it declined; it said '{}'",
         stated[0]
+    );
+}
+
+/// Drives the shipped script of `rule` over every file of `staged`, and holds
+/// the ONE item that run declined to being stated word for word as `stated`.
+///
+/// [`verify_declined_item_is_stated`] holds the diagnostic to NAMING the item,
+/// which a diagnostic carrying a fragment of that name twice still passes. What
+/// the diagnostic SAYS takes a reading of the whole line, so a probe of the
+/// reason reads it here.
+///
+/// `stated` is the message with the `sah-diagnostic:` marker taken off, because
+/// that is what `marked_diagnostics` hands the engine.
+fn verify_declined_item_reads(
+    project_types: &[&str],
+    rule: &str,
+    staged: &[(&str, &str)],
+    stated: &str,
+) {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, project_types, rule);
+    let named: Vec<&str> = staged.iter().map(|(file, _)| *file).collect();
+
+    let diagnostics = drive_shipped_script(
+        &loader,
+        rule,
+        &ShippedStaging::of(staged),
+        &named,
+        script_diagnostics,
+    )
+    .expect("a script handed an item it cannot judge must judge the rest and exit 0");
+
+    assert_eq!(
+        diagnostics,
+        vec![stated.to_string()],
+        "the run must state the one item it declined, word for word"
     );
 }
 

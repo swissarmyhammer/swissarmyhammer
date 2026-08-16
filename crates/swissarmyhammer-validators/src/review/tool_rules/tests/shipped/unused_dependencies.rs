@@ -1,10 +1,12 @@
 //! Acceptance tests for the shipped unused-dependency tool rules.
 //!
 //! One test holds the roster to its fixture pair. The tests under it drive
-//! Rust through the real tool: one holds the finding it reports, one holds it
-//! to STATING the manifest machete could not read while the findings of the
-//! manifests it did read survive, and one holds it to breaking rather than
-//! answering zero when machete cannot run at all.
+//! Rust through the real tool: one holds the finding it reports, and two hold
+//! it to STATING a manifest machete could not judge — one it could not read,
+//! one it could not walk — while the findings of the manifests it did read
+//! survive. Two more hold it to breaking rather than answering zero: one when
+//! machete cannot run at all, and one when machete answers its own failure
+//! status over a shape that is not a walk failure.
 
 use super::*;
 
@@ -191,8 +193,211 @@ fn the_shipped_rust_unused_dependency_tool_rule_declines_a_manifest_it_cannot_re
     );
 }
 
+/// Where a manifest machete cannot read stands when its own path carries the
+/// `: ` that separates machete's path from machete's reason.
+///
+/// Measured with machete 0.9.2 over a package staged here: machete writes
+/// `error when handling a: b/Cargo.toml: TOML parse error at line 6, column
+/// 14`, so a script that strips to the FIRST `: ` takes `a: ` off the front and
+/// leaves `b/Cargo.toml: ` standing inside the reason.
+const COLON_MANIFEST_PATH: &str = "a: b/Cargo.toml";
+
+/// The one diagnostic a run over [`COLON_MANIFEST_PATH`] must state, with the
+/// `sah-diagnostic:` marker taken off as `marked_diagnostics` hands it on.
+const COLON_MANIFEST_DIAGNOSTIC: &str =
+    "cargo machete could not read a: b/Cargo.toml: TOML parse error at line 6, column 14";
+
+/// Acceptance: the shipped Rust unused-dependency tool rule states machete's
+/// reason with the path taken off, over a manifest whose path carries `: `.
+///
+/// The reason is machete's `error when handling ` line with the prefix and the
+/// path taken off, and the path is the value the script HANDED machete. A strip
+/// to the first `: ` reads the path off a separator instead, so it cuts a path
+/// carrying `: ` in the wrong place and states a reason that repeats the tail
+/// of the path.
+///
+/// Every path this workspace holds is free of `: `, so no run over a real tree
+/// tells the two readings apart. This probe stages the one that does.
+#[test]
+fn the_shipped_rust_unused_dependency_tool_rule_states_the_reason_with_the_path_taken_off() {
+    verify_declined_item_reads(
+        RUST_PROJECT_TYPES,
+        RUST_UNUSED_DEPENDENCIES_RULE,
+        &[(COLON_MANIFEST_PATH, UNPARSABLE_MANIFEST)],
+        COLON_MANIFEST_DIAGNOSTIC,
+    );
+}
+
+/// Where the manifest machete could not WALK stands inside the probe
+/// repository.
+///
+/// It sorts after `Cargo.toml` under a byte order and under a case-folding
+/// order alike, so the run measures the manifest it CAN read first and writes
+/// that finding to stdout before it meets this one — the order that costs a
+/// finding when a walk failure ends the whole run.
+const UNWALKABLE_MANIFEST_PATH: &str = "zunwalkable/Cargo.toml";
+
+/// A manifest that declares a package and parses as TOML.
+///
+/// The script finds this file the way it finds every manifest, by the
+/// `[package]` table on its first line, and machete then fails to WALK the path
+/// it was handed rather than failing to read the bytes.
+const UNWALKABLE_MANIFEST: &str = concat!(
+    "[package]\nname = \"unwalkable-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    "\n[dependencies]\nserde = \"1\"\n",
+);
+
 /// The name the script calls machete by, which cargo resolves on `PATH`.
 const MACHETE_BINARY_NAME: &str = "cargo-machete";
+
+/// The whole of what machete 0.9.2 answers for a path it could not walk, as
+/// the stub of one run replays it.
+///
+/// Measured against the real binary over three constructions — a path that
+/// holds no file, a manifest whose parent directory carries mode 000, and a
+/// `Cargo.toml` that is a broken symbolic link — and all three answer these
+/// four stderr lines and this status. `run_machete` collects a walk failure for
+/// each path it was given and bails after the loop, so the failure is PER
+/// INVOKED PATH, and a script that runs one machete process for each manifest
+/// reads it for one manifest alone.
+///
+/// The path is read off `$1` rather than written in, because the script decides
+/// what path it hands machete and the answer must name that same path.
+const MACHETE_WALK_FAILURE_ANSWER: &str = concat!(
+    "  echo \"Analyzing dependencies of crates in $1...\" >&2\n",
+    "  echo \"Done!\" >&2\n",
+    "  echo \"Error: Errors when walking over directories:\" >&2\n",
+    "  echo \"$1: IO error for operation on $1: Permission denied (os error 13)\" >&2\n",
+    "  exit 2",
+);
+
+/// Acceptance: the shipped Rust unused-dependency tool rule DECLINES a manifest
+/// machete could not WALK, and keeps the findings of the manifests it did read.
+///
+/// Machete answers this shape at its own failure status, 2, with nothing on
+/// stdout, so the script cannot read the `error when handling ` line the
+/// unparsable shape writes. It reads the status beside machete's own
+/// `Errors when walking over directories` sentence instead.
+///
+/// What it does with that answer is this test. The walk failure belongs to the
+/// ONE path machete was handed, and the next manifest gets a machete process of
+/// its own that measures normally. One manifest of a run that measured the rest
+/// is ONE declined item, so the script states it under the `sah-diagnostic:`
+/// marker and exits 0.
+///
+/// Both halves are the test. Measured with the earlier shape of this script,
+/// which broke the whole run on any status outside machete's own two: the
+/// `serde` finding stood on stdout, the run exited 1, and
+/// [`read_script_output`] answers `Err` before it reads stdout, so the finding
+/// reached no reader.
+///
+/// The walk failure is staged as a stub because the script's own `[package]`
+/// guard reads the manifest with `grep` before machete walks it, and every
+/// construction that makes the real binary fail its walk also makes that `grep`
+/// fail. The stub replays what the real binary answered, and
+/// [`the_shipped_rust_unused_dependency_tool_rule_breaks_when_machete_fails_over_no_walk`]
+/// is the control that keeps the reading narrow.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_unused_dependency_tool_rule_declines_a_manifest_it_cannot_walk() {
+    let expected = expected_row(
+        UNUSED_DEPENDENCY_MANIFEST_PATH,
+        UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        UNUSED_DEPENDENCY_ENTRY,
+    );
+    let staged = [
+        (
+            UNUSED_DEPENDENCY_MANIFEST_PATH,
+            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        ),
+        (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
+        (UNWALKABLE_MANIFEST_PATH, UNWALKABLE_MANIFEST),
+        (STUBBED_RUN_MARKER, ""),
+    ];
+    let named = [
+        UNUSED_DEPENDENCY_MANIFEST_PATH,
+        UNUSED_DEPENDENCY_LIB_PATH,
+        UNWALKABLE_MANIFEST_PATH,
+    ];
+    let narrowed = format!(" && [ \"$1\" = \"{UNWALKABLE_MANIFEST_PATH}\" ]");
+    let _path = lead_path_with_stub(
+        MACHETE_BINARY_NAME,
+        &stubbed_run_condition(&narrowed),
+        MACHETE_WALK_FAILURE_ANSWER,
+    );
+
+    verify_declined_item_is_stated(
+        RUST_PROJECT_TYPES,
+        RUST_UNUSED_DEPENDENCIES_RULE,
+        &ShippedStaging::of(&staged),
+        &named,
+        UNWALKABLE_MANIFEST_PATH,
+        &[&expected],
+    );
+}
+
+/// The line the script writes when machete answered its own failure status
+/// over a shape that is not a walk failure.
+const MACHETE_FAILURE_LINE: &str = "unused-dependencies-rust: cargo machete exited 2";
+
+/// What the one error of a machete that failed over no walk must name.
+const MACHETE_FAILURE_ERROR: &[&str] = &[MACHETE_FAILURE_LINE];
+
+/// The healthy probe package, read with a machete that fails over no walk.
+const MACHETE_FAILING_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: RUST_PROJECT_TYPES,
+        rule: RUST_UNUSED_DEPENDENCIES_RULE,
+        expected: MACHETE_FAILURE_ERROR,
+    },
+    staged: &[
+        (
+            UNUSED_DEPENDENCY_MANIFEST_PATH,
+            UNUSED_DEPENDENCY_PACKAGE_MANIFEST,
+        ),
+        (UNUSED_DEPENDENCY_LIB_PATH, UNUSED_DEPENDENCY_LIB_RS),
+    ],
+    reason: "a machete that failed over no walk must break the run",
+};
+
+/// What a machete that failed for a reason of its own answers, as the stub of
+/// one run replays it.
+///
+/// `main` maps every `Err` of `run_machete` to one `Error: ` line and status 2,
+/// and the walk failure is one such `Err` among others. So the status alone
+/// cannot say a manifest was declined, and this is the shape that proves the
+/// script reads machete's own sentence beside the status.
+const MACHETE_OTHER_FAILURE_ANSWER: &str = concat!(
+    "  echo \"Analyzing dependencies of crates in $1...\" >&2\n",
+    "  echo \"Error: serde not found in tables:\" >&2\n",
+    "  exit 2",
+);
+
+/// Acceptance: the shipped Rust unused-dependency tool rule BREAKS when machete
+/// answers its own failure status over a shape that is NOT a walk failure.
+///
+/// This is the control of
+/// [`the_shipped_rust_unused_dependency_tool_rule_declines_a_manifest_it_cannot_walk`].
+/// A fix that read status 2 alone would answer every failure of machete with a
+/// marked line and exit 0, and a run that judged nothing while reporting
+/// nothing reads exactly like a clean tree. The script therefore declines only
+/// the status machete pairs with its own `Errors when walking over directories`
+/// sentence, and breaks on every other failure it can answer.
+///
+/// This test writes the process environment, so it stands under
+/// `#[serial_test::serial(env)]` beside the two other stubbed probes.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_rust_unused_dependency_tool_rule_breaks_when_machete_fails_over_no_walk() {
+    verify_shipped_tree_breaks_with_stub(
+        &MACHETE_FAILING_PROBE,
+        MACHETE_BINARY_NAME,
+        "",
+        MACHETE_OTHER_FAILURE_ANSWER,
+    );
+}
 
 /// The line the script writes when machete answered a status neither a clean
 /// run nor a run with findings answers with.
@@ -222,20 +427,20 @@ const MACHETE_BROKEN_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// machete cannot run at all.
 ///
 /// Machete keeps one status for findings and another for a failure: it exits 1
-/// when it found unused dependencies, 0 when it found none, and 2 when it
-/// could not walk the path it was given. The script accepts the first two and
-/// breaks on every other status, so a machete a machine cannot run reaches the
-/// review as an error rather than as a clean tree. Measured over this probe
-/// package, which gives one finding, with machete replaced by a command that
-/// exits 127: the pipe shape wrote 0 findings and exited 0; the shipped shape
-/// writes no finding, that line, and exit 1.
+/// when it found unused dependencies, 0 when it found none, and 2 for every
+/// error it answers. A status outside those three is a machete that never ran,
+/// so the script breaks on it and reaches the review as an error rather than as
+/// a clean tree. Measured over this probe package, which gives one finding,
+/// with machete replaced by a command that exits 127: the pipe shape wrote 0
+/// findings and exited 0; the shipped shape writes no finding, that line, and
+/// exit 1.
 ///
-/// This is the one test of the module that writes the process environment, so
-/// it is the one that stands under `#[serial_test::serial(env)]`. The two tests
-/// above it read the tool a stubbed `PATH` hands them, because that stub breaks
-/// only for a run whose working directory holds the marker file this probe
-/// stages. The roster test at the head of the module writes the working
-/// directory instead, so it stands under the `cwd` key.
+/// This test writes the process environment, so it stands under
+/// `#[serial_test::serial(env)]` beside the two other stubbed probes. The tests
+/// that drive the real tool read the tool a stubbed `PATH` hands them, because
+/// each stub answers only for a run whose working directory holds the marker
+/// file its own probe stages. The roster test at the head of the module writes
+/// the working directory instead, so it stands under the `cwd` key.
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]
