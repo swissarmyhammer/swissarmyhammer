@@ -151,10 +151,17 @@ fn the_shipped_dart_function_length_tool_rule_drops_a_file_under_a_test_director
 /// The code-line gate the shipped `function-length-dart` rule states.
 const DART_LINE_GATE: usize = 250;
 
+/// How many code lines a probe function stands above the gate.
+///
+/// A later `dart_code_linter` can count one line another way. A probe this far
+/// above the gate stays above it when the new count is smaller by fewer lines
+/// than this.
+const DART_LINE_MARGIN: usize = 10;
+
 /// The code-line count of a probe function that must report: over the gate,
 /// plus a margin, so a later `dart_code_linter` that counts one line another
 /// way does not move the probe across the gate.
-const OVER_THE_GATE_LINES: usize = DART_LINE_GATE + 10;
+const OVER_THE_GATE_LINES: usize = DART_LINE_GATE + DART_LINE_MARGIN;
 
 /// The head of the Dart declaration of `name`, as the source writes it.
 ///

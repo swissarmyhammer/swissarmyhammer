@@ -59,6 +59,74 @@ comments:
 
     No findings. No blockers.
   timestamp: 2026-08-17T02:22:12.142229+00:00
+- actor: claude-code
+  id: 01m06rrzss227rxg9wt2tdgxyq
+  text: |-
+    ### review — findings
+    - evidence: 1 finding — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs:157 (scope: review sha HEAD~1..HEAD, commit 1e24346c2)
+    - next: Make a named constant for the line margin over the length gate. Remove the same cause from the whole file. Then run the review again.
+  timestamp: 2026-08-17T02:28:26.553739+00:00
+- actor: claude-code
+  id: 01m06rsm6c0azmt86htbgazccf
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 2 files. All four declines measured against real dart_code_linter 4.2.0 and Dart 3.11.0, and all four are DECLINED ITEMS: the tool measured the other files of the run in every one. Each now writes a marked line and continues at exit 0. A fifth shape, a report of 0 bytes, stays a broken run at exit 1, because it measured nothing. Four new acceptance tests each stage a file over the gate beside the declined item.
+    - test: green — the test step drove the shipped script over all five shapes itself. Each of the four gives the marked line at column 0 (checked with `od -c`), keeps the good file's finding, and exits 0; the fifth stays exit 1 with no marker; four sound shapes write 0 bytes to stderr. The "no record" branch is genuinely unreachable through the shipped script, and the rule body states that limit rather than claiming coverage. `cargo nextest run --workspace` 14136 passed, 0 failed, 0 skipped; fmt and clippy clean; the mirdan embed is byte-identical at 30286 bytes.
+    - commit: 1e24346c2
+    - review: findings — 1 confirmed of 9 validators attempted. `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs:157`, rule `magic-numbers/no-magic-numbers`: the literal 10 is a threshold margin and needs a name.
+  timestamp: 2026-08-17T02:28:47.436119+00:00
+- actor: claude-code
+  id: 01m06rxy4qew41239335fpqwrq
+  text: |-
+    Iteration 2, narrow. The one `magic-numbers/no-magic-numbers` finding is closed.
+
+    I read the whole `function_length_dart.rs` and searched it for every numeric
+    literal in code. Only ONE literal configured behaviour: the `10` in
+    `const OVER_THE_GATE_LINES: usize = DART_LINE_GATE + 10;`. Every other number in
+    the file is either prose in a doc comment (the corpus counts 3931/400/376/369,
+    the tool versions 4.2.0 and 0.3.3, the measured line counts 252/253/247/248/264)
+    or a value a declaration already names (`DART_LINE_GATE = 250`), or the carved-out
+    `0` and `1`.
+
+    The fix names it `DART_LINE_MARGIN` with a doc comment that states what it
+    measures: how many code lines a probe function stands above the gate, so a later
+    `dart_code_linter` that counts a line another way does not move the probe below
+    the gate. The sum stays 250 + 10 = 260, so the tests measure the same thing.
+
+    Note for a later card, NOT changed here because it stands outside this file:
+    `shipped/function_length_go.rs` holds the same shape,
+    `const OVER_THE_GATE_STATEMENTS: usize = GO_STATEMENT_GATE + 10;`, with the
+    margin unnamed.
+
+    Checks: `cargo fmt --check` clean; `cargo clippy -p swissarmyhammer-validators
+    --all-targets -- -D warnings` clean; `cargo nextest run -p
+    swissarmyhammer-validators -E 'test(function_length_dart)'` 6 passed, 0 failed.
+  timestamp: 2026-08-17T02:31:08.695175+00:00
+- actor: claude-code
+  id: 01m06ry2t0r3xd3h5j7524w27w
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs; 1 literal named: DART_LINE_MARGIN = 10; nextest 6 passed 0 failed; fmt clean; clippy clean
+    - next: /review
+  timestamp: 2026-08-17T02:31:13.472316+00:00
+- actor: claude-code
+  id: 01m06saasfgzqe9vq8j4y8mz0a
+  text: |
+    ### test — green
+
+    - The file has one changed name: `DART_LINE_MARGIN`. The value is `10`.
+    - `DART_LINE_GATE` stays at `250`. This is the same value as before the change.
+    - `OVER_THE_GATE_LINES` stays at `260`. Before the change, the code read `DART_LINE_GATE + 10`. After the change, the code reads `DART_LINE_GATE + DART_LINE_MARGIN`. The sum is the same: `250 + 10 = 260`.
+    - I checked the file for other number literals in code lines. I found `250` and `10` (both named), and one `0` in `(0..lines)`. This `0` sets the start of a range. It does not set a threshold. The carve-out rule allows `0` and `1`.
+    - I found `1` inside two Dart source strings (`"int shortFunction() => 1;\n"` and a similar line). These are Dart code held as text, not Rust threshold values. They do not need a name.
+    - I found no other number literal that sets test behavior.
+    - The file has no `.unwrap()`, no `.expect(`, and no `panic!(`.
+    - `cargo fmt --check`: clean, no output.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean, no warnings.
+    - `cargo nextest run --workspace`: 14136 tests run, 14136 passed, 0 failed, 0 skipped (36 slow, 1 leaky — not failures).
+    - I also ran the six `function_length_dart` tests alone as a check: 6 passed, 0 failed.
+    - next: send to review.
+  timestamp: 2026-08-17T02:37:54.863737+00:00
 position_column: doing
 position_ordinal: '8280'
 title: function-length-dart fails the whole run for four per-file declines
@@ -97,3 +165,12 @@ The work:
 - State each measurement in the rule body.
 
 Found while implementing `^s8d7fva`. #tool-validators #objectivity
+
+## Review Findings (2026-08-16 21:23)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 1 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs:157` `magic-numbers/no-magic-numbers` — The literal 10 is a threshold margin configuring test behavior and should be a named constant. Define a named constant: `const DART_LINE_MARGIN: usize = 10;` and use it in the calculation: `const OVER_THE_GATE_LINES: usize = DART_LINE_GATE + DART_LINE_MARGIN;`.
