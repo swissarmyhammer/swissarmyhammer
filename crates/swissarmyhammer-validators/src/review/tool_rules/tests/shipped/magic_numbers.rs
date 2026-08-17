@@ -391,6 +391,158 @@ fn the_shipped_dart_magic_numbers_tool_rule_reports_every_fail_fixture_line() {
     );
 }
 
+/// Where the Dart library that uses a declaration newer than a fixed floor
+/// stands inside the probe repository, as the work-list holds it.
+///
+/// It stands under `lib/`, which is where the probe package holds every file
+/// it copies, regardless of the path the review handed over.
+const DART_MAGIC_NUMBERS_LANGUAGE_VERSION_PATH: &str = "lib/magic_numbers_language_version.dart";
+
+/// A Dart library whose first declaration is an `extension type`, holding two
+/// unnamed literals, beside a plain top-level function holding a third.
+///
+/// `extension type` arrived in Dart 3.3. A probe package whose
+/// `environment: sdk:` states a floor below that version gives the analyzer a
+/// language version that refuses the declaration, and every literal inside it
+/// goes off the report.
+const DART_MAGIC_NUMBERS_LANGUAGE_VERSION_SOURCE: &str = concat!(
+    "extension type Meters(int value) {\n",
+    "  int get doubled => value + 4096;\n",
+    "\n",
+    "  void report() {\n",
+    "    print(value * 250);\n",
+    "  }\n",
+    "}\n",
+    "\n",
+    "int scale(int input) => input * 65535;\n",
+);
+
+/// The text of each unnamed literal
+/// [`DART_MAGIC_NUMBERS_LANGUAGE_VERSION_SOURCE`] holds, unique enough to
+/// locate its own line and no other.
+///
+/// The first two stand inside the `extension type` and the third stands
+/// inside the plain function beneath it.
+const DART_MAGIC_NUMBERS_LANGUAGE_VERSION_HEADS: &[&str] = &["4096", "250", "65535"];
+
+/// Acceptance: the shipped Dart magic-numbers tool rule reports every unnamed
+/// literal of a library that uses a declaration newer than a fixed floor,
+/// through the real `custom_lint` pipeline.
+///
+/// A package's language version is the LOWER bound of its `environment: sdk:`
+/// constraint, and the analyzer refuses syntax newer than that version. A
+/// fixed floor therefore hides real code as the language moves. The script
+/// therefore reads the version out of `dart --version` and writes
+/// `sdk: '^<version>'`, so the probe parses with the language version of the
+/// installed SDK.
+///
+/// Measured on Dart SDK 3.11.0 over this source, with `no_magic_number` on:
+///
+/// | the probe constraint | lines reported |
+/// |---|---|
+/// | `>=3.0.0 <5.0.0`, a floor three versions under the declaration | 9 alone |
+/// | `>=3.5.0 <4.0.0`, the earlier floor of this rule | 2, 5 and 9 |
+/// | `^3.11.0`, derived from `dart --version` | 2, 5 and 9 |
+///
+/// The earlier floor of this rule does not lose these two literals TODAY —
+/// `extension type` needs only Dart 3.3, comfortably under `3.5.0` — so the
+/// middle row and the last row read the same. A floor further behind the
+/// declaration, held here as the illustration `builtin/validators/README.md`
+/// asks a tool rule to carry, DOES lose them: the first row answers 9 alone
+/// and exits 0, reading exactly like a file with nothing left to name. This
+/// test holds the run to all three lines, so a stale floor can never come
+/// back unmeasured as Dart's language moves past `3.5.0`.
+#[test]
+fn the_shipped_dart_magic_numbers_tool_rule_reports_a_member_of_a_newer_declaration() {
+    let expected: Vec<String> = DART_MAGIC_NUMBERS_LANGUAGE_VERSION_HEADS
+        .iter()
+        .map(|head| {
+            expected_row(
+                DART_MAGIC_NUMBERS_LANGUAGE_VERSION_PATH,
+                DART_MAGIC_NUMBERS_LANGUAGE_VERSION_SOURCE,
+                head,
+            )
+        })
+        .collect();
+    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+
+    verify_staged_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MAGIC_NUMBERS_RULE,
+        &[(
+            DART_MAGIC_NUMBERS_LANGUAGE_VERSION_PATH,
+            DART_MAGIC_NUMBERS_LANGUAGE_VERSION_SOURCE,
+        )],
+        &expected,
+        "the probe package states the language version of the installed SDK, so the \
+         analyzer parses the extension type and reports its two literals beside the \
+         plain function's literal",
+    );
+}
+
+/// The binary the shipped Dart magic-numbers script calls to derive its
+/// probe's language version.
+const DART_MAGIC_NUMBERS_BINARY_NAME: &str = "dart";
+
+/// The word `dart --version` takes as its first argument.
+const DART_MAGIC_NUMBERS_VERSION_SUBCOMMAND: &str = "--version";
+
+/// Where the one file the no-version probe stages stands, as the work-list
+/// holds it.
+///
+/// The script never reaches `custom_lint` over this file — the break happens
+/// before the probe package is even built — so its content answers for
+/// nothing beyond giving the run one file to judge.
+const DART_MAGIC_NUMBERS_NO_VERSION_PATH: &str = "lib/no_version.dart";
+
+/// [`DART_MAGIC_NUMBERS_NO_VERSION_PATH`]'s source.
+const DART_MAGIC_NUMBERS_NO_VERSION_SOURCE: &str = "int scale(int value) => value * 4096;\n";
+
+/// The one file the no-version probe stages.
+const DART_MAGIC_NUMBERS_NO_VERSION_STAGED: &[(&str, &str)] = &[(
+    DART_MAGIC_NUMBERS_NO_VERSION_PATH,
+    DART_MAGIC_NUMBERS_NO_VERSION_SOURCE,
+)];
+
+/// The words the error of a `dart --version` that names no version must
+/// carry.
+const DART_MAGIC_NUMBERS_NO_VERSION_ERROR: &[&str] =
+    &[DART_MAGIC_NUMBERS_RULE, "dart --version names no version"];
+
+/// The probe of a `dart --version` that names no version, and the words its
+/// error must carry.
+const DART_MAGIC_NUMBERS_NO_VERSION_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MAGIC_NUMBERS_RULE,
+        expected: DART_MAGIC_NUMBERS_NO_VERSION_ERROR,
+    },
+    staged: DART_MAGIC_NUMBERS_NO_VERSION_STAGED,
+    reason: "a `dart --version` that names no version leaves the probe package unable to \
+             state the language version it parses with, and the run must not guess one",
+};
+
+/// Acceptance: the shipped Dart magic-numbers tool rule BREAKS when
+/// `dart --version` names no version.
+///
+/// The script reads the installed SDK's language version out of
+/// `dart --version` because a fixed floor would hide real code as the
+/// language moves. A `dart --version` this script cannot read a version out
+/// of leaves it with no constraint to derive, and the run must not guess one:
+/// it names the failure and exits, rather than writing a probe package whose
+/// `environment: sdk:` states a version nobody measured.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_dart_magic_numbers_tool_rule_breaks_when_dart_version_names_no_version() {
+    verify_shipped_tree_breaks_with_stub(
+        &DART_MAGIC_NUMBERS_NO_VERSION_PROBE,
+        DART_MAGIC_NUMBERS_BINARY_NAME,
+        &format!(" && [ \"$1\" = \"{DART_MAGIC_NUMBERS_VERSION_SUBCOMMAND}\" ]"),
+        "  printf '%s\\n' 'Dart CLI has no version line here'\n  exit 0",
+    );
+}
+
 /// The declarations every staged Swift position holds: one unnamed literal in
 /// a comparison.
 ///

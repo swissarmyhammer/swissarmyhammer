@@ -200,8 +200,24 @@ comments:
     evidence: cargo fmt --check (exit 0); cargo clippy --workspace --all-targets -- -D warnings (exit 0); cargo nextest run --workspace — 14137 passed, 0 failed, 0 skipped; cargo nextest run -p swissarmyhammer-validators shipped::missing_docs — 55 passed, 0 failed
     next: ready for review
   timestamp: 2026-08-17T04:53:00.638253+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m0716zn01aj0xp1j9d2vbgfd
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (checkpoint commit 1379a7380). 9 rules ran, 0 findings, 0 failed, 0 skipped. The 3 items of the 2026-08-16 23:29 section are all checked.
+    - next: The card moves to done.
+  timestamp: 2026-08-17T04:55:53.760540+00:00
+- actor: claude-code
+  id: 01m0717fp5zv01v12v0dm2msp1
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file (missing_docs.rs). 21 bare literal line numbers removed at 9 positions. 4 macros and several constants name them. Two positions now count the row out of the fixture.
+    - test: green — cargo nextest run --workspace, 14137 passed, 0 failed. fmt and clippy clean. The new function writes the same bytes as the old constant, proved byte for byte against git.
+    - commit: 1379a7380
+    - review: clean — 9 rules, 0 findings. All 3 prior findings checked.
+  timestamp: 2026-08-17T04:56:10.181423+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa180
 title: missing-docs-python reports a path with a doubled backslash, because jq @tsv escapes it
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-python.md` hands the report

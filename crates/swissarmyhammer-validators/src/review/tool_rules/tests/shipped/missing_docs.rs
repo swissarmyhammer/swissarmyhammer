@@ -584,9 +584,11 @@ const DART_WHOLE_RUN_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// Measured on Dart SDK 3.11.0 over a probe package holding one undocumented
 /// class and one undocumented method: 2 rows after a `dart pub get` that
 /// succeeds, and 0 rows at exit 0 after one that fails and writes no
-/// `.dart_tool`. An SDK outside the `>=3.0.0 <5.0.0` constraint the script
-/// declares reaches that state — `dart pub get` then exits 1 and writes
-/// nothing.
+/// `.dart_tool`. A probe whose `environment: sdk:` window leaves the installed
+/// SDK outside it reaches that state — measured with `sdk: '>=3.5.0 <3.6.0'`
+/// on Dart SDK 3.11.0, `dart pub get` exits 1 offline and online alike, and
+/// writes nothing. The script derives its constraint from `dart --version`, so
+/// no installed SDK stands outside it.
 ///
 /// The stub breaks the `pub` run and hands the `analyze` run through, so this
 /// probe measures the pub-get status alone.
@@ -677,6 +679,99 @@ const DART_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
     verify_shipped_run_breaks(&DART_ABSENT_PROBE);
+}
+
+/// Where the Dart library that uses a declaration newer than the earlier probe
+/// floor stands inside the probe repository.
+///
+/// It stands under `lib/`, which is the one position `public_member_api_docs`
+/// reads.
+const DART_LANGUAGE_VERSION_PATH: &str = "lib/language_version.dart";
+
+/// A Dart library whose first declaration is an `extension type`, beside a
+/// plain class holding the same two undocumented member kinds.
+///
+/// `extension type` arrived in Dart 3.3. A probe package whose
+/// `environment: sdk:` states a LOWER floor gives the analyzer a language
+/// version that refuses the declaration, and every member inside it goes off
+/// the report.
+///
+/// The plain class is what makes the loss readable. A run that lost the
+/// extension type still answers three rows, so silence is never the signal —
+/// the missing rows are.
+const DART_LANGUAGE_VERSION_SOURCE: &str = concat!(
+    "extension type Meters(int value) {\n",
+    "  int get doubled => value + value;\n",
+    "\n",
+    "  void report() {}\n",
+    "}\n",
+    "\n",
+    "class OtherClass {\n",
+    "  String otherField = 'plain';\n",
+    "\n",
+    "  void otherMethod() {}\n",
+    "}\n",
+);
+
+/// The head of each member [`DART_LANGUAGE_VERSION_SOURCE`] leaves
+/// undocumented.
+///
+/// The first three stand inside the `extension type` and the last three inside
+/// the plain class. The lint reports the extension type itself, its getter and
+/// its method, and reports nothing for the representation field `value`.
+const DART_LANGUAGE_VERSION_HEADS: &[&str] = &[
+    "extension type Meters",
+    "int get doubled",
+    "void report()",
+    "class OtherClass",
+    "String otherField",
+    "void otherMethod()",
+];
+
+/// Acceptance: the shipped Dart missing-docs tool rule reports every member of
+/// a library that uses a declaration newer than the earlier probe floor,
+/// through the real `dart analyze` pipeline.
+///
+/// A Dart package's LANGUAGE VERSION is the lower bound of its
+/// `environment: sdk:` constraint, and the analyzer refuses syntax newer than
+/// that version. The script therefore reads the version out of `dart --version`
+/// and writes `sdk: '^<version>'`, so the probe parses with the language
+/// version of the installed SDK.
+///
+/// Measured on Dart SDK 3.11.0 over this source, with `public_member_api_docs`
+/// on:
+///
+/// | the probe constraint | what the run reports |
+/// |---|---|
+/// | `>=3.0.0 <5.0.0`, the earlier fixed floor | rows 7, 8 and 10, beside one `EXPERIMENT_NOT_ENABLED` SYNTACTIC_ERROR naming `inline-class` |
+/// | `^3.11.0`, derived from `dart --version` | rows 1, 2, 4, 7, 8 and 10 |
+///
+/// The earlier floor loses the three members of the extension type and exits 0,
+/// which reads exactly like a documented declaration. This test holds the run
+/// to all six, so a fixed floor can never come back unmeasured.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration() {
+    let expected: Vec<String> = DART_LANGUAGE_VERSION_HEADS
+        .iter()
+        .map(|head| {
+            expected_row(
+                DART_LANGUAGE_VERSION_PATH,
+                DART_LANGUAGE_VERSION_SOURCE,
+                head,
+            )
+        })
+        .collect();
+    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+
+    verify_staged_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        &[(DART_LANGUAGE_VERSION_PATH, DART_LANGUAGE_VERSION_SOURCE)],
+        &expected,
+        "the probe package states the language version of the installed SDK, so the \
+         analyzer parses the extension type and reports its three members beside the \
+         three of the plain class",
+    );
 }
 
 /// The materialized name of the `missing-docs-go` fail fixture.

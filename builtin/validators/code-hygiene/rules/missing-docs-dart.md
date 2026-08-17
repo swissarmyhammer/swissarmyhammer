@@ -23,7 +23,14 @@ tool:
         exit 1
       fi
     done
-    printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '>=3.0.0 <5.0.0'" > "$work/probe-pubspec.yaml"
+    version_report="$(dart --version 2>&1)"
+    sdk_version="$(printf '%s\n' "$version_report" | sed -n 's/.*Dart SDK version: \([0-9][0-9.]*\).*/\1/p')"
+    if [ -z "$sdk_version" ]; then
+      printf '%s\n' "$version_report" >&2
+      printf 'missing-docs-dart: dart --version names no version, so the probe package cannot state the language version this SDK parses with\n' >&2
+      exit 1
+    fi
+    printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '^$sdk_version'" > "$work/probe-pubspec.yaml"
     cat > "$work/probe-options.yaml" <<'ANALYSIS_OPTIONS'
     analyzer:
       exclude:
@@ -106,7 +113,7 @@ tool:
         }' "$work/analysis"
     done < "$work/configs"
   doctor:
-    check_command: "which dart awk mktemp"
+    check_command: "which dart awk sed sort mktemp"
     check_version_command: "dart --version"
     fix_hint: "brew install dart-sdk"
 ---
@@ -354,9 +361,14 @@ a probe package holding one undocumented class and one undocumented method:
 | the same package with its `.dart_tool` taken away | 0 | 0 |
 | `sdk: '>=9.0.0 <10.0.0'`, so `pub get` exits 1 and writes no `.dart_tool` | 0 | 0 |
 
-An SDK outside the `>=3.0.0 <5.0.0` window the script declares reaches the third
-row. That silence defeats EVERY path of this rule, the `--packages` path and the
-fallback alike, so it is not a shape of the missing-config fallback below.
+A probe whose `environment: sdk:` window leaves the installed SDK outside it
+reaches the third row. Measured with `sdk: '>=3.5.0 <3.6.0'` on Dart SDK 3.11.0:
+`dart pub get --offline` and `dart pub get` each exit 1, each writes
+`Because sah_probe requires SDK version >=3.5.0 <3.6.0, version solving failed.`,
+and neither writes `.dart_tool`. That silence defeats EVERY path of this rule,
+the `--packages` path and the fallback alike, so it is not a shape of the
+missing-config fallback below. The script reads its constraint out of
+`dart --version`, so no installed SDK stands outside it.
 
 The run therefore reads the status of `dart pub get` AND tests that the package
 config stands, and it names the failure rather than analyzing a package the
@@ -467,6 +479,40 @@ write `// ignore: public_member_api_docs` above it in the code. Measured: the
 marker on the line above silences the finding, and
 `// ignore_for_file: public_member_api_docs` at the top of a file silences the
 whole file.
+
+### The probe package states the language version of the installed SDK
+
+A package's language version is the LOWER bound of its `environment: sdk:`
+constraint, and the analyzer refuses syntax newer than that version. A fixed
+floor therefore hides real code as the language moves. A declaration the floor
+does not know is a syntax error, every member inside it goes off the report, and
+the run still exits 0.
+
+Measured on Dart SDK 3.11.0 over one library. Its first declaration is an
+`extension type`, which arrived in Dart 3.3, and it holds a getter and a method.
+A plain class stands under it and holds a field and a method.
+
+| the probe constraint | what the run reports |
+|---|---|
+| `>=3.0.0 <5.0.0`, the earlier fixed floor | rows 7, 8 and 10, and `dart analyze` writes `This requires the 'inline-class' language feature to be enabled` as a SYNTACTIC_ERROR |
+| `^3.11.0`, read out of `dart --version` | rows 1, 2, 4, 7, 8 and 10 |
+
+The earlier floor loses the three members of the extension type and exits 0,
+which reads exactly like a documented declaration. That is the shape
+`builtin/validators/README.md` names as a tool that reads a dirty file as clean.
+The acceptance test
+`the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration`
+holds the run to all six rows.
+
+The script therefore reads the version out of `dart --version` with `sed` and
+writes `sdk: '^<version>'`. The caret keeps the constraint correct across a
+major version as well, because the version comes from the SDK that runs.
+`function-length-dart` states the same measurement for its own probe.
+
+A `dart` that answers no version takes the run to exit 1 with the line
+`missing-docs-dart: dart --version names no version, so the probe package cannot
+state the language version this SDK parses with`. The run must not guess a
+version, because a guessed floor is the defect this section removes.
 
 ## The run answers for its own arguments
 
