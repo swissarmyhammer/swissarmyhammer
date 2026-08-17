@@ -32,8 +32,10 @@ mod function_length_python;
 mod function_length_rust;
 mod function_length_swift;
 mod function_length_typescript;
+mod go_probe;
 mod golangci_cache;
 mod magic_numbers;
+mod magic_numbers_go;
 mod missing_docs;
 mod missing_docs_rust;
 mod scope_roster;
@@ -783,6 +785,16 @@ fn required_shipped_tool_rule(loader: &ValidatorLoader, rule: &str) -> ShippedTo
 
 /// The argument list a `workspace`-scope script receives: none.
 const NO_SCRIPT_FILES: &[&str] = &[];
+
+/// What a probe answers when it could not do its work.
+///
+/// A temporary directory, a subprocess and a file mode are each an expected
+/// failure of the machine rather than a bug in the probe, so a probe that
+/// meets one answers `Result` and lets the failure through. The box keeps each
+/// failure's own [`std::error::Error::source`] reachable rather than
+/// flattening it into a sentence, and a test that answers `Err` fails exactly
+/// as one that panicked did.
+type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// Each finding of `outcome` as the `path:line` row a probe states, with the
 /// path of the probe repository taken off.

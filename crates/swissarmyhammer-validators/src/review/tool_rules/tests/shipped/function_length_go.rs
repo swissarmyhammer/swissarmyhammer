@@ -16,17 +16,12 @@ use std::fs::FileTimes;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
+use super::go_probe::{
+    GO_ANOTHER_LINTER_ERROR, GO_BROKEN_STATUS_ERROR, GO_MODULE_MANIFEST, GO_MODULE_MANIFEST_PATH,
+    GO_PACKAGE_CLAUSE, GO_TOOL_BINARY_NAME, GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE,
+    GO_UNREADABLE_PATH, GO_UNREADABLE_SOURCE,
+};
 use super::golangci_cache::GOLANGCI_CACHE_DIRECTORY;
-
-/// What a probe of this file answers when it could not do its work.
-///
-/// A temporary directory, a subprocess and a file mode are each an expected
-/// failure of the machine rather than a bug in the probe, so the tests below
-/// answer `Result` and let the failure through. The box keeps each failure's
-/// own [`std::error::Error::source`] reachable rather than flattening it into
-/// a sentence, and a test that answers `Err` fails exactly as one that
-/// panicked did.
-type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// The statement gate the shipped rule states.
 ///
@@ -49,21 +44,6 @@ const PROCEDURE_FRAME_STATEMENTS: usize = 2;
 /// rule states, or it could not tell a line gate from a statement gate. Each
 /// row is one line, and the shape carries a few lines of its own around them.
 const DATA_SHAPE_ROWS: usize = 300;
-
-/// The module manifest of a probe repository, as the work-list holds the path.
-const GO_MODULE_MANIFEST_PATH: &str = "go.mod";
-
-/// The module manifest of a probe repository.
-///
-/// golangci-lint loads packages rather than files, so a probe repository with
-/// no manifest loads nothing. The `go` directive names an old release for the
-/// reason the shipped `go.mod` fixture states: it is the lowest version the
-/// probe needs, so the installed toolchain always satisfies it and never
-/// downloads another one.
-const GO_MODULE_MANIFEST: &str = "module function-length-probe\n\ngo 1.21\n";
-
-/// The package clause every probe file opens with.
-const GO_PACKAGE_CLAUSE: &str = "package probe\n\n";
 
 /// The header `go generate` states above a generated file, and the blank line
 /// under it.
@@ -383,21 +363,9 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in() {
     }
 }
 
-/// Where the package holding the file golangci-lint cannot parse stands.
-const GO_UNPARSABLE_PATH: &str = "broken/broken.go";
-
-/// A Go file golangci-lint cannot parse: the call in the return never closes.
-const GO_UNPARSABLE_SOURCE: &str = concat!(
-    "package broken\n\n",
-    "func Broken() int {\n\treturn undefinedSymbol(\n}\n",
-);
-
 /// What the run must say for a file golangci-lint could not parse: the row the
 /// tool wrote, and the rule's own sentence.
-const GO_UNPARSABLE_ERRORS: &[&str] = &[
-    GO_UNPARSABLE_PATH,
-    "golangci-lint reported a row of another linter",
-];
+const GO_UNPARSABLE_ERRORS: &[&str] = &[GO_UNPARSABLE_PATH, GO_ANOTHER_LINTER_ERROR];
 
 /// Why a file golangci-lint cannot parse breaks the run.
 const GO_UNPARSABLE_REASON: &str =
@@ -438,7 +406,7 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
 
 /// What the run must say for a workspace holding no module: the status
 /// golangci-lint answered with, and the rule's own words for it.
-const GO_NO_MODULE_ERRORS: &[&str] = &["golangci-lint exited", "measured no function"];
+const GO_NO_MODULE_ERRORS: &[&str] = &[GO_BROKEN_STATUS_ERROR, "measured no function"];
 
 /// Why a workspace holding no module breaks the run.
 const GO_NO_MODULE_REASON: &str =
@@ -470,26 +438,12 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_workspace_holding_no_mod
     );
 }
 
-/// Where the file nobody may read stands inside the probe module.
-///
-/// It holds a package of its own, and that package is the only one the probe
-/// workspace carries: a file the tool cannot open is a package golangci-lint
-/// cannot load, so a workspace holding that package alone measures nothing.
-const GO_UNREADABLE_PATH: &str = "noread/unreadable.go";
-
-/// What the file nobody may read holds.
-///
-/// The source is ordinary and stands under the gate, so a run that DID read it
-/// would report no finding — which is the clean answer this rule must not give
-/// for a file it never read.
-const GO_UNREADABLE_SOURCE: &str = "package noread\n\nfunc Short() int {\n\treturn 1\n}\n";
-
 /// What the run must say for a workspace whose one Go package golangci-lint
 /// could not read: the path the tool named, and the rule's own words for the
 /// status.
 const GO_UNREADABLE_ERRORS: &[&str] = &[
     GO_UNREADABLE_PATH,
-    "golangci-lint exited",
+    GO_BROKEN_STATUS_ERROR,
     "measured no function",
 ];
 
@@ -546,9 +500,6 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read() {
         GO_UNREADABLE_REASON,
     );
 }
-
-/// The name the shipped script calls the linter by.
-const GO_TOOL_BINARY_NAME: &str = "golangci-lint";
 
 /// The line a stubbed golangci-lint answers a run whose cache already holds the
 /// finding, and which met one file it could not read.
