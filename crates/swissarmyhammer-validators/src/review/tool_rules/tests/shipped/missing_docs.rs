@@ -909,40 +909,57 @@ const GO_UNPARSABLE_SOURCE: &str = concat!("package staged\n", "\n", "func Broke
 /// Where the unparsable file stands inside the probe repository.
 const GO_UNPARSABLE_PATH: &str = "broken.go";
 
-/// What revive puts at the front of the failure it writes for a file it could
-/// not parse. The run's error detail must carry it, so the agent reading the
-/// error learns which file broke.
-const GO_INVALID_FILE_PREFIX: &str = "invalid file";
+/// Where the Go file the run CAN judge stands, beside the file it cannot
+/// judge.
+const GO_JUDGED_PATH: &str = "judged.go";
 
-/// What the one error of an unparsable Go file must name.
-const GO_UNPARSABLE_ERROR: &[&str] = &[GO_INVALID_FILE_PREFIX, GO_UNPARSABLE_PATH];
+/// A Go file the run judges: one exported type that carries no doc comment.
+///
+/// The name does not open with the package name, so the `exported` rule of
+/// revive answers for it under the `comments` category alone and the count
+/// stays at one finding.
+const GO_JUDGED_SOURCE: &str = concat!("package staged\n", "\n", "type Plain struct{}\n");
 
-/// The `missing-docs-go` probe over a Go file revive cannot parse.
-const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: GO_PROJECT_TYPES,
-        rule: GO_MISSING_DOCS_RULE,
-        expected: GO_UNPARSABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Go file the parser cannot read",
-    path: GO_UNPARSABLE_PATH,
-    source: Some(GO_UNPARSABLE_SOURCE.as_bytes()),
-    support: NO_SUPPORT_FILES,
-};
+/// The declaration line the one finding of the judged Go file stands on.
+const GO_JUDGED_DECLARATION: &str = "type Plain struct{}";
 
-/// Acceptance: the shipped Go missing-docs tool rule BREAKS on a Go file it
+/// The `path:line` row the run must report for the judged Go file.
+fn go_missing_docs_judged_row() -> String {
+    expected_row(GO_JUDGED_PATH, GO_JUDGED_SOURCE, GO_JUDGED_DECLARATION)
+}
+
+/// Acceptance: the shipped Go missing-docs tool rule DECLINES a Go file it
 /// cannot parse, through the real revive pipeline.
 ///
-/// revive exits 0 for such a file and reports the failure with an empty
-/// `RuleName`, under the `validity` category rather than under `exported`. A
-/// pipe that selected the `exported` findings alone therefore dropped it, and
-/// the file read as clean — a run answering zero for a reason other than a
-/// clean file. The script counts the failures that belong to no rule, writes
-/// each one to stderr, and exits nonzero.
+/// revive exits 0 for such a file and writes the failure onto the SAME report
+/// as a finding, with an empty `RuleName` and the `validity` category rather
+/// than the rule name `exported`. A filter that selected the `exported`
+/// findings alone dropped that record, and the file then read as clean.
+///
+/// An `exit 1` answers that no better. Measured with revive 1.15.0 under the
+/// config this rule ships, over `func Broken( {` beside one undocumented
+/// exported type: two records on the report — the unnamed record of the file
+/// it could not parse AND the `exported` finding of the file it read — at
+/// exit 0, with 0 bytes on stderr. revive judged the other file, so its
+/// finding is there to lose, and the shipped script before this fix threw it
+/// away: nothing on stdout, one unmarked line on stderr, exit 1.
+///
+/// The unparsable file is therefore one declined item of a sound run, and the
+/// script states it under the `sah-diagnostic:` marker at exit 0.
 #[test]
-fn the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_run_breaks(&GO_UNPARSABLE_PROBE);
+fn the_shipped_go_missing_docs_tool_rule_declines_a_file_it_cannot_parse() {
+    let expected = go_missing_docs_judged_row();
+
+    verify_unjudged_file_is_declined(
+        GO_PROJECT_TYPES,
+        GO_MISSING_DOCS_RULE,
+        &[
+            (GO_JUDGED_PATH, GO_JUDGED_SOURCE),
+            (GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE),
+        ],
+        GO_UNPARSABLE_PATH,
+        &[&expected],
+    );
 }
 
 /// The materialized name of the `missing-docs-python` fail fixture.

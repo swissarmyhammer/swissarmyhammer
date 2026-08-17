@@ -50,8 +50,24 @@ comments:
 
     task: none other; recording on ^rfjsx87 per the step-record instruction.
   timestamp: 2026-08-16T19:46:53.191900+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m062b9377wt2cq1z98c54gb0
+  text: |
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit e7a22e4a4) — 0 findings, 0 confirmed, 5 refuted of 9 attempted. 3 files reviewed. 2 `.kanban/` files not reviewed, because `.reviewignore` holds them out.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-16T19:56:28.647475+00:00
+- actor: claude-code
+  id: 01m062c1t4kpfb5mvw70wvby0x
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files; both bare pipes become scripts. TypeScript states each eslint message that carries `fatal: true` under the marker at exit 0. Go BREAKS instead, because golangci-lint answers with the typecheck rows alone, so one file that does not parse costs the run every funlen row.
+    - test: green — cargo nextest run --workspace, 14120 passed, 0 failed, 0 skipped (run two times); the 14 new tests pass by name over 7 rounds; a sound run writes 0 bytes to the stderr of each tool; the mirdan build embeds both rule files byte-identically; no TMPDIR entry leaks; fmt and clippy clean
+    - commit: e7a22e4a4
+    - review: clean — 0 findings, 5 refuted of 9 attempted; card moved to done
+  timestamp: 2026-08-16T19:56:53.956548+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9a80
 title: function-length-go and function-length-typescript read a file the tool cannot parse as clean
 ---
 Two `function-length-*` rules drop the tool's own parse failure in the `jq`
@@ -104,3 +120,10 @@ what it recovered. That one needs a tool answer before a rule answer, so it is
 NOT part of this card.
 
 Found while implementing `^s8d7fva`. #tool-validators #objectivity
+
+## Review Findings (2026-08-16 14:48)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)

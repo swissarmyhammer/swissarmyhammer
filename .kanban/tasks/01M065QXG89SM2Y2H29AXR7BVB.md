@@ -50,8 +50,24 @@ comments:
     - `cargo clippy --workspace --all-targets -- -D warnings` — 0 warnings
     - next: ready for review
   timestamp: 2026-08-17T03:27:34.024069+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m06wcw9jdd76ek0kema9m3rj
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 23ac83b00) — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed. 1 file reviewed: `crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs`. 2 files not reviewed — the `.kanban/` rule of `.reviewignore` excludes them. No `## Review Findings` section was on the card before this pass, thus there is no unchecked item.
+    - next: card moved to done.
+  timestamp: 2026-08-17T03:31:44.050737+00:00
+- actor: claude-code
+  id: 01m06wdh6v2tz4xcvsfh81ec8a
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 1 file. Measured BEFORE the change with a temporary scaffold: `waited=126.13s nudges=41 write_errors=0 watcher_refreshes=2 diags=1`. The re-report ARRIVES; it is late, not missing, so this is a test defect and not a watcher defect. The wait now polls and stops at a ceiling the harness itself sets — `NEXTEST_HARD_KILL_SECS` less `POST_WAIT_RESERVE_SECS` less the time already spent — so no second count is picked from this machine. Both assertions stand, the failure message now names the wait, the nudges and the refreshes, several bare literals are named with doc comments, and one `.unwrap()` is gone.
+    - test: green — the load-bearing check is that a broken watcher still fails. The test step pointed the watcher at extension `zzz` so it could never see the file: the test FAILED cleanly at 241 s inside the 300 s kill, with 0 watcher refreshes, and the file was restored to the same sha-256. `NEXTEST_HARD_KILL_SECS` verified against `.config/nextest.toml` (60 s times 5). fmt and clippy clean. The implement step ran 3 rounds at `--test-threads=64`, 0 of 3 failed, 14136 passed each round, where the card measured 12 of 12 failures.
+    - commit: 23ac83b00
+    - review: clean — 0 findings over 9 validators; card moved to done
+  timestamp: 2026-08-17T03:32:05.467952+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9f80
 title: watcher_redreport_on_direct_disk_write fails under high nextest thread counts
 ---
 `crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs::watcher_redreport_on_direct_disk_write` fails reliably (3 of 3 rounds) when the full workspace suite runs at `cargo nextest run --workspace --test-threads=64` on an 18-core machine. It never fails at the default nextest thread count — two full clean runs of `cargo nextest run --workspace` (14127 passed, 0 failed) surfaced nothing.

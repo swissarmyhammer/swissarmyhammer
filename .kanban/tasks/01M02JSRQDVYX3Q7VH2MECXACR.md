@@ -126,8 +126,48 @@ comments:
     - No tree mutation: only read-only git commands used (`git status`, `git diff`, `git log`, `git show`).
     - Task left in `doing`, not committed, per instructions.
   timestamp: 2026-08-16T11:59:33.344549+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m057y92axnmxve60gy4jh946
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha HEAD~1..HEAD` (7c555aa20) — 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed. 22 files reviewed, 2 skipped by `.reviewignore` (`.kanban/`). No prior `## Review Findings` section on this card, so nothing was left unchecked. Task moved `review` -> `done`.
+
+    Deletion-completeness checks, which a diff-scoped op cannot answer on its own, were run separately and all pass:
+
+    - **Surviving name hits.** The two the card expects are present and correct: `clippy::cognitive_complexity` in `builtin/validators/code-hygiene/VALIDATOR.md` (the clippy lint) and the history prose in `plugins/code/mod.rs` line 53. Two further groups survive and are also correct, not scaffolding: the retired-set assertion lists in `crates/mirdan/src/builtin_validators.rs` and `crates/swissarmyhammer-validators/src/builtin/mod.rs`, which assert the `complexity` set is ABSENT, and stale prose in `crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs`, `review/scope.rs`, `review/tool_rules/tests/shipped.rs` and `doc/src/concepts/validators.md`. None of that prose is on a line this commit wrote, so it is out of scope for this review.
+    - **Insertions accounted.** 1,106 = 917 `definitions.rs` + 36 `test_census.rs` + 17 `mod.rs` + 4 (`duplication.rs`, `entity_extractor.rs`, `languages.rs`) + 132 `.kanban/`. A normalized diff of `definitions.rs` against the old `complexity.rs` with `ComplexitySpec` -> `DefinitionSpec` and `ALL_SPECS` -> `DEFINITION_SPECS` applied leaves 34 residual added lines, every one a declaration line the rename rewrote. Zero new logic.
+    - **The move is faithful.** git records `test_census.rs` at 92% similarity. Every change in it is the `complexity` -> `definitions` binding rename plus doc prose. No assertion was weakened or dropped.
+    - **Module boundary is coherent.** `definitions.rs` holds no scorer-shaped item: a grep for `score|nesting|threshold|cyclomatic|cognitive|complex` over the file returns nothing. Every item is `pub(super)` or private; the module exports no `pub` surface.
+    - **Deleted spec fields have no surviving reader.** `cargo clippy -p swissarmyhammer-sem -p swissarmyhammer-validators --all-targets` reports zero warnings and zero errors, so no consumer names a removed field and no kept field is unread (`dead_code` would fire on either).
+    - **Elixir row claim, probed.** Removed `&ELIXIR_SPEC` from `DEFINITION_SPECS` and ran both named tests: `swissarmyhammer-sem parser::plugins::code::test_census::tests::a_language_with_no_census_mapping_is_not_measured` PASS, and `swissarmyhammer-validators review::tree_sitter_probes::tests::a_language_with_no_census_mapping_reports_one_not_computed_row` PASS. Both assert only the "not measured" outcome, which `test_census` also returns when `spec_for_language` answers `None`, so neither test distinguishes a missing definition row from a missing census vocabulary. This matches the implementer's own written statement on this card — "Delete the row and both still pass, for the wrong reason." The row is kept on the grounds the module doc records, that it is the verified grammar mapping a census row is added on top of, not on test grounds. The probe was reverted by rewriting the file; `git diff` shows no source file modified.
+
+    - next: none. Card is done.
+  timestamp: 2026-08-16T12:14:59.658072+00:00
+- actor: claude-code
+  id: 01m057zkn6jyc3yjed1q3tr52m
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 18 files. Deleted complexity.rs and the complexity/ test tree (15 files, 5,524 lines); added definitions.rs; moved test_census.rs up; edited mod.rs, duplication.rs, entity_extractor.rs, languages.rs.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14105 passed, 0 failed, 0 skipped; cargo nextest run -p swissarmyhammer-sem 290 passed; cargo doc -p swissarmyhammer-sem --no-deps zero NEW warnings (8 pre-existing, each verified against git show HEAD).
+    - commit: 7c555aa20 refactor(sem): delete the cognitive-complexity scorer (^mecxacr) — 23 files changed, 1106 insertions, 5670 deletions
+    - review: CLEAN — 0 findings over 22 files, 9 validators attempted. Task moved to `done`.
+    - detail: the reviewer accounted for every one of the 1,106 insertions on a deletion commit — 917 definitions.rs + 36 test_census.rs + 17 mod.rs + 4 small edits + 132 board files. It normalized the old complexity.rs with the two renames applied and diffed it against definitions.rs: 34 residual added lines, every one a declaration the rename rewrote. NO genuinely new logic. The move is faithful at 92% git similarity with no assertion weakened. The boundary is coherent: definitions.rs matches nothing of `score|nesting|threshold|cyclomatic|cognitive|complex` and exports no `pub` surface. Clippy over both crates confirms in both directions that no consumer reads a deleted field and no kept field is unread.
+
+    ### The Elixir row — the record corrected
+
+    The parent orchestrator asked the reviewer to verify a claim it had compressed: that the Elixir row is "load-bearing for two live tests". The reviewer probed it and found BOTH tests still pass with `&ELIXIR_SPEC` removed, because each asserts only the "not measured" outcome, which `test_census` also returns when `spec_for_language` answers `None`. Neither test separates a missing definition row from a missing census vocabulary.
+
+    That is NOT a contradiction of the implementer, who wrote the precise version on this card: "Delete the row and both still pass, for the wrong reason." The compression was the orchestrator's. The row is kept on the grounds the module doc records — it is the verified grammar mapping that a census row is added on top of — and that reason stands on its own.
+
+    ### Out of scope here, carried to its own card
+
+    Stale prose naming "the complexity scorer" survives in `crates/swissarmyhammer-validators/src/review/tree_sitter_probes.rs`, `review/scope.rs`, `review/tool_rules/tests/shipped.rs` and `doc/src/concepts/validators.md`. None stands on a line this commit wrote, so it is correctly not a finding under a diff-scoped review. It is now its own card.
+
+    Two `"complexity"` hits in `crates/mirdan/src/builtin_validators.rs:97` and `crates/swissarmyhammer-validators/src/builtin/mod.rs:116` are load-bearing rather than stale: they stand in retired-set lists that assert the set is ABSENT. They must stay.
+  timestamp: 2026-08-16T12:15:43.270509+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9580
 title: Delete the cognitive-complexity scorer from swissarmyhammer-sem
 ---
 Delete the complexity scorer. Not "retire or split" — delete it. Complexity is not a measured concern any more; the only size gate is function length.

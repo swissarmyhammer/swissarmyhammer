@@ -376,8 +376,26 @@ comments:
 
     next: none. The step is green.
   timestamp: 2026-08-17T01:52:10.646876+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m06pwxrsr2ndcf78997121n4
+  text: |
+    ### review — clean
+    - scope: `review sha HEAD~1..HEAD` (commit 528f42cbd), 1 file reviewed, 2 files not reviewed (.reviewignore)
+    - evidence: 0 new findings from 9 attempted validator runs; 3 prior `rust/error-handling` findings verified closed
+    - verification: `function_length_go.rs` now has zero `.unwrap()` and zero `.expect(` calls. `ProbeResult<T>` alias carries the error out of each test. `stage_cache_directory` answers `std::io::Result<PathBuf>`. `unique_cache_name` answers `Result<String, SystemTimeError>`. LSP diagnostics on the file report 0 errors and 0 warnings.
+    - next: card moves to done
+  timestamp: 2026-08-17T01:55:38.393467+00:00
+- actor: claude-code
+  id: 01m06pxjanm036nhy12jzg6z2d
+  text: |-
+    ### finish iteration 4 — clean
+    - implement: changed — 1 file. The three findings named three lines; the same cause stood in EIGHT places of that file, and all eight are gone. Each is now `?` or `Err(...)` through a documented `ProbeResult<T>` alias, `std::io::Result<PathBuf>` on `stage_cache_directory`, and `Result<String, SystemTimeError>` on `unique_cache_name`. No assertion moved.
+    - test: green — the load-bearing check is that a converted test still FAILS on an `Err` answer. The test step broke each of the three converted tests in turn (a corrupt report, a search limit of 5, a NUL byte in a directory name), saw each FAIL, and restored the file to the same sha-256. `cargo nextest run --workspace` 14132 passed, 0 failed, 0 skipped; fmt and clippy clean; 0 matches for `.unwrap()`, `.expect(` and `panic!(`.
+    - commit: 528f42cbd
+    - review: clean — 0 new findings over 9 validator runs; all 3 prior findings verified closed; card moved to done
+  timestamp: 2026-08-17T01:55:59.445154+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9d80
 title: function-length-go golangci-lint cache key collides after thousands of accumulated runs
 ---
 `builtin/validators/code-hygiene/rules/function-length-go.md` names its golangci-lint result cache as `${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')` and never removes it — the rule body states this on purpose ("the cache stays"). Measured on this machine: 6609 such directories have accumulated under `$TMPDIR`.

@@ -252,8 +252,57 @@ comments:
 
     No findings, no conflicts. Task left in `doing` per instruction; nothing committed.
   timestamp: 2026-08-16T14:57:32.529429+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m05hqczvvegzpy83x3e86966
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (bb126a9fb) — findings 0, confirmed 0, refuted 0, attempted 9, failed 0. 2 files reviewed, 2 excluded by `.reviewignore` (`.kanban/`).
+    - hand check of the SHIPPED rule body against the shipped script, ruff 0.14.5, run under bash:
+      - "A file ruff cannot parse" table, all 3 rows exact: unparsable alone = one `invalid-syntax` row, empty stderr, exit 1; the 190-statement file alone = one `PLR0915` row, empty stderr, exit 1; all three together = one `PLR0915` row AND one `invalid-syntax` row, empty stderr, exit 1.
+      - Shipped script over the three files: 1 finding on stdout, 1 marked line on stderr, exit 0. Over the unparsable file alone: nothing on stdout, the same marked line, exit 0.
+      - "Both answers in one run": 190-statement file + unparsable file + the three unreadable paths = 1 finding, 4 marked lines (3 reads, 1 measure), exit 0. The 3-read variant = 1 finding, 3 marked lines, exit 0.
+      - "A path ruff cannot read" table, all 3 rows exact: `[]`, exit 0, and the stated `warning: Failed to lint ...` message for absent, non-UTF-8 and unreadable paths.
+    - marker and engine path: the decline line opens `sah-diagnostic:`. `marked_diagnostics` in `crates/swissarmyhammer-validators/src/review/tool_rules.rs` keeps only lines with that prefix at exit 0, and `render_tool_diagnostics` in `crates/swissarmyhammer-validators/src/review/synthesize.rs` writes each one into the report. No file filter drops it. The old prefix `function-length-python:` carried no marker, so the engine would have dropped it as chatter.
+    - broken-run gate still fires: ruff stubbed to exit 2 = exit 1 with `ruff exited 2 and judged no code`, no finding; ruff absent from PATH = 127 = exit 1, no finding; a report that is not JSON = exit 1. No broken run reads as a silent success.
+    - finding loop: the filter is a positive match on `PLR0915`, so an `invalid-syntax` row can no longer be a finding. Probed for other row codes with `--select PLR0915` over a directory, a broken `.ipynb`, an empty file and a binary file: `invalid-syntax` is the only non-`PLR0915` code ruff writes, and read failures carry no row at all. Nothing else can leak.
+    - RED watched: the pre-change rule file was written over the shipped path and `..._declines_a_file_it_cannot_parse` FAILED — `a script handed an item it cannot judge must judge the rest and exit 0: Exit("function-length-python: ruff could not measure .../unparsable.py: invalid-syntax ...")`. The file was restored by rewriting it; sha1 3219dbda87338c41c1bf1b2760196e191ee9c1c9 matches and `git diff` for the path is empty.
+    - tests: 8 `the_shipped_python_function_length_tool_rule` tests pass; 177 `shipped` tool-rule tests pass, 0 failed.
+    - line counts accounted: 433 added = 5 + 253 (kanban) + 65 (rule body) + 78 (shipped.rs) + 32 (function_length_python.rs); 95 deleted = 2 + 26 + 31 + 36.
+    - `builtin/validators/README.md` declined-item contract confirmed: a script that judged the code and could not judge ONE item writes a line opening `sah-diagnostic:` and still exits 0; "Do not exit nonzero for a declined item."
+    - next: none — task moved to done.
+  timestamp: 2026-08-16T15:06:00.059575+00:00
+- actor: claude-code
+  id: 01m05hs6hn3m9rf38nwrymk6hh
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files. Measured ruff 0.14.5 FIRST over a probe tree, then decided the shape from the README, then watched RED before the fix.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14105 passed, 0 failed, 0 skipped; cargo build -p mirdan succeeds with the corrected script traced into the embed. The tester re-ran the behaviour itself rather than reading: the probe tree gives 1 finding and 1 `sah-diagnostic:` decline at exit 0, the unparseable file alone gives 0 findings and no `invalid-syntax` row, and ruff stubbed to exit 2 still exits 1 with no finding placed.
+    - commit: bb126a9fb fix(validators): keep findings when one Python file breaks ruff (^s8d7fva) — 5 files changed, 433 insertions, 95 deletions
+    - review: CLEAN — 0 findings over 2 files, 9 validators attempted. Task moved to `done`.
+
+    ### What the measurement established
+
+    ruff itself reports one `PLR0915` row AND one `invalid-syntax` row when a run holds both a measurable file and an unparseable one, at exit 1 with empty stderr. So ruff DOES measure the other files. The shipped script was throwing that away: nothing on stdout, one line on stderr, exit 1.
+
+    `builtin/validators/README.md` names the shape exactly — the tool judged the code and could not judge one item, which is a DECLINED ITEM, and "Do not exit nonzero for a declined item. A nonzero exit fails the WHOLE run."
+
+    Two further defects the measurement caught that reading would not have:
+
+    1. The old stderr line opened `function-length-python:` rather than `sah-diagnostic:`, so the engine would have dropped it as tool chatter even at exit 0. The reviewer confirmed the mechanism: `marked_diagnostics` keeps only lines opening `sah-diagnostic:` at exit 0, and `render_tool_diagnostics` writes each into the report the agent reads.
+    2. The finding loop iterated EVERY row including `invalid-syntax`, safe only because the exit ran first. It is now a positive match on `PLR0915`.
+
+    ### What the review verified independently
+
+    It re-ran every table row rather than accepting the numbers, confirmed the decline reaches the diagnosing agent through the real engine path, and confirmed no broken run became a silent success — ruff stubbed to exit 2, ruff absent from PATH (127), and a report that is not JSON all still exit nonzero. It probed for other row codes over a directory, a broken `.ipynb`, an empty file and a binary file: `invalid-syntax` is the only non-`PLR0915` code ruff writes, so nothing else can leak through the finding loop. It reproduced the RED itself by writing the pre-change rule file back, then reverted by rewriting and confirmed the sha1 matches.
+
+    ### The sibling survey — 7 new cards
+
+    Only 2 of the 25 shipped tool scripts write `sah-diagnostic:` at all. The implementer surveyed the rest and raised each as its own card rather than widening this one: ^hqe8qwv, ^r73ddrr, ^nc2bcjr, ^jttzhnd, ^qvj3v4g, ^z69hh5a, ^rfjsx87.
+
+    The worst of them are worth naming here. `magic-numbers-python` is a bare pipe that turns a parse failure into a magic-numbers FINDING and reads a broken ruff as clean. `unused-dependencies-rust` writes findings to stdout inside its loop and then discards them with an exit 1 — the same defect this card fixed, in another rule.
+  timestamp: 2026-08-16T15:06:58.997194+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9780
 title: function-length-python fails the whole run for one file ruff cannot parse
 ---
 `builtin/validators/code-hygiene/rules/function-length-python.md` exits 1 when ruff writes a row of `"code": "invalid-syntax"` onto the report. One file the parser could not read therefore throws away every finding the run did make.

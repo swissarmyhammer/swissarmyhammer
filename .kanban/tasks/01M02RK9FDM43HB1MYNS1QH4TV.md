@@ -243,8 +243,37 @@ comments:
     - probe cleanup check: `git status --porcelain --untracked-files=all -- builtin/` returns empty. `builtin/validators/dart/` contains only git-tracked `rules/` and `VALIDATOR.md`, no `fixtures/` dir, no diff. No leftover probe files anywhere under `builtin/`.
     - task left in `doing`, no commit made.
   timestamp: 2026-08-15T23:52:04.459269+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m03xtvq6hsmdkjm5hvwcvzpb
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (f90283ab1 only) — 0 findings over 9 attempted validators, 0 failed, 0 skipped; 1 file reviewed, 2 not reviewed (`.kanban/`, `.reviewignore`). The one prior finding of 2026-08-15 18:35 is checked. `cargo test -p mirdan --lib builtin_validators::` — 8 passed, 0 failed.
+    - directed verification of the new guard, each probe watched RED and then reverted:
+      - A new fixture-shipping set on disk fails it. `builtin/validators/dart/fixtures/zz-guard-probe.pass.dart.tmpl` gives `these sets ship a `fixtures/` directory and `FIXTURE_ROSTERS` names none of them, so every fixture they ship reaches a deployed store with no roster holding it: ["dart"]`.
+      - A roster naming a set with no `fixtures/` directory fails it. `("rust", MANIFESTS_FIXTURES)` gives ``FIXTURE_ROSTERS` names these sets and no set directory on disk ships a `fixtures/` directory for them: ["rust"]`.
+      - The set list is correct about what counts as a set. 11 of the 13 set directories ship no `fixtures/` and are correctly excluded; the store's own `README.md` is a file, so `README.md/fixtures` is no directory and it forms no phantom set — the baseline 8 tests pass with it in place. `code-hygiene/fixtures/target/` holding a build artifact is tolerated.
+      - Extracting `entry_paths_of` and `stored_name_of` did NOT change `fixture_filenames_on_disk`. Its nested-directory assertion still fires: `code-hygiene/fixtures/zzprobedir` gives `a fixtures directory holds fixture files and the `target` build artifact directory alone; `code-hygiene/fixtures/zzprobedir` is neither, and a flat roster cannot name what it holds`.
+    - the hand-written per-set file rosters are sound. Deriving them from disk would put the directory on both sides of `test_fixture_rosters_and_the_fixtures_directory_agree` and hold nothing, which is the implementer's argument and it is correct. The split is coherent because each comparison keeps ONE hand-written side: membership is disk against `FIXTURE_ROSTERS`, filenames are `CODE_HYGIENE_FIXTURES`/`MANIFESTS_FIXTURES` against disk. Deriving membership loses no property — probe B is a deleted `fixtures/` directory, and it still fails.
+    - no third level of the defect. The change introduces no new list. `FIXTURES_DIR` is one constant, and the depth-1 scan matches the production contract `RuleSet::fixtures_dir() = base_path.join(FIXTURES_DIR_NAME)` in `crates/swissarmyhammer-validators/src/validators/types.rs`. A rename of that convention fails loudly through the `!on_disk.is_empty()` assertion the new test carries.
+    - tree restored: `git status --porcelain -- builtin/ crates/` is empty.
+    - next: none. Task moved to `done`.
+  timestamp: 2026-08-15T23:59:07.494076+00:00
+- actor: claude-code
+  id: 01m03xvyghvdmba0k2rerkx26j
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file (crates/mirdan/src/builtin_validators.rs). RED watched first in both directions: direction 1 named the new `dart` set, direction 2 named a roster entry with no `fixtures/` directory.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14242 passed, 0 failed, 0 skipped. The RED probe directories are fully removed; `git status --untracked-files=all -- builtin/` is empty.
+    - commit: f90283ab1 test(validators): derive the fixture roster from disk sets (^s1qh4tv)
+    - review: CLEAN — 0 findings over 1 file, 9 validators attempted, the prior finding checked. Task moved to `done`.
+    - detail: the reviewer ran four directed probes of its own and reverted each. Both directions fail as stated. The hand-written/derived split is sound, because each comparison keeps exactly ONE hand-written side: membership is disk against `FIXTURE_ROSTERS`, filenames are the per-set rosters against disk. Deriving both would put the directory on both sides and hold nothing. `fixture_shipping_sets_on_disk` excludes the 11 set directories that ship no fixtures, forms no phantom set from the store's own `README.md`, and skips `target` for the reason `build.rs` does. The helper extraction did not change the existing nested-directory assertion. No third level of the defect: the change introduces no new unheld list, and the depth-1 scan matches the production contract `RuleSet::fixtures_dir()`.
+
+    ### Closing note on this card
+
+    The card's headline was wrong and this is now recorded twice over. `CODE_HYGIENE_FIXTURES` is a test constant, not the install roster; `build.rs` embeds the whole directory, so all 55 fixtures always reached a deployed store. The real defect was that NOTHING measured the rosters against reality, at two levels. Both levels are now held in both directions.
+  timestamp: 2026-08-15T23:59:43.121207+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9380
 title: mirdan's fixture install roster is missing 9 files, so a deployed store cannot run two rules' fixtures
 ---
 `CODE_HYGIENE_FIXTURES` in `crates/mirdan/src/builtin_validators.rs:227-274` lists **46** entries. **55** fixture files exist on disk. Nine are never installed into a deployed `~/.validators/` store.

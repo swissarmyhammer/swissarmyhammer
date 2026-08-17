@@ -78,8 +78,24 @@ comments:
 
     No findings against this change. Two pre-existing, unrelated flakes were found and filed as separate cards (^axr7bvb, ^73pjv4j) rather than fixed here or silently dropped.
   timestamp: 2026-08-16T20:58:03.324843+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m0666gyd3t3sgftmzvcqbw85
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 662616642). counts: 0 findings, 0 confirmed, 0 refuted, 9 validator runs attempted, 0 failed. The board files are not in the review set, because `.reviewignore` holds `.kanban/`. No validator matches `*.md`, thus `builtin/validators/README.md` and `builtin/validators/code-hygiene/rules/magic-numbers-python.md` got no validator run. The two Rust test files got all 9 matching validators.
+    - next: no findings. The card moves to `done`.
+  timestamp: 2026-08-16T21:03:47.149251+00:00
+- actor: claude-code
+  id: 01m06679m4fs3w378k4xt3kj13
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files; the five-line pipe becomes a script. All three defects close: a status over 1 breaks the run, each jq step reads its own status, the PLR2004 rows are the findings, every other row is stated as a declined item, and every stderr line is forwarded whole under the marker at exit 0. The stderr enumeration is written OPEN, because it measured open — three heads appeared and two carry no path.
+    - test: green — cargo nextest run --workspace, 14127 passed, 0 failed, 0 skipped (run two times); a sound run writes 0 bytes to ruff stderr over five shapes; no TMPDIR entry leaks over four exit shapes; the mirdan build embeds the rule byte-identically at 19856 bytes; fmt and clippy clean. Two flakes that stand outside this change were found under 64-thread load and filed as ^73pjv4j and ^axr7bvb.
+    - commit: 662616642
+    - review: clean — 0 findings over HEAD~1..HEAD; card moved to done
+  timestamp: 2026-08-16T21:04:12.420536+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9c80
 title: 'magic-numbers-python is a bare pipe: it reports a parse failure as a finding and reads a broken ruff as clean'
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-python.md` runs its whole

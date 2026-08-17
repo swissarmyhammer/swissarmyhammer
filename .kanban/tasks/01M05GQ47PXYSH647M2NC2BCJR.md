@@ -127,8 +127,24 @@ comments:
     - I also ran the six `function_length_dart` tests alone as a check: 6 passed, 0 failed.
     - next: send to review.
   timestamp: 2026-08-17T02:37:54.863737+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m06sfg4v5t4axj4f7gay83m5
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 49a24c9dc). 0 findings, 9 validators attempted, 0 failed. The 1 prior finding is closed: `DART_LINE_MARGIN` is a named const with a doc comment that states the size of the margin, and `OVER_THE_GATE_LINES` reads `DART_LINE_GATE + DART_LINE_MARGIN` and stays at 260.
+    - next: none. The card moves to done.
+  timestamp: 2026-08-17T02:40:44.187292+00:00
+- actor: claude-code
+  id: 01m06sg4dfevt41y7ag4e0v4xc
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file. The literal 10 becomes `DART_LINE_MARGIN`, with a doc comment that says why the margin has that size. `OVER_THE_GATE_LINES` reads `DART_LINE_GATE + DART_LINE_MARGIN`. The whole file was read for the same cause; this was the only literal that sets behaviour. The same unnamed margin stands in `shipped/function_length_go.rs` and is noted on the card, outside this finding's file.
+    - test: green — every threshold is unchanged: the gate stays 250 and the sum stays 260, compared against `git show HEAD:`. `cargo nextest run --workspace` 14136 passed, 0 failed, 0 skipped; fmt and clippy clean; no `.unwrap()`, `.expect(` or `panic!(` in the file.
+    - commit: 49a24c9dc
+    - review: clean — 0 new findings over 9 validators; the prior finding verified closed; card moved to done
+  timestamp: 2026-08-17T02:41:04.943119+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9e80
 title: function-length-dart fails the whole run for four per-file declines
 ---
 `builtin/validators/code-hygiene/rules/function-length-dart.md` exits 1 for four

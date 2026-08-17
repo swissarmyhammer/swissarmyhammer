@@ -771,8 +771,58 @@ comments:
 
     All figures in the file are supportable on this machine right now.
   timestamp: 2026-08-16T17:10:33.290405+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m05sbragry4hxb43ygep47v1
+  text: |-
+    ### review — clean
+
+    - evidence: `review sha HEAD~1..HEAD` (83623c364) — 0 findings, 0 confirmed, 0 refuted. The fleet attempted 0 validators: no validator matches a standalone `.md` prose file, and the 2 `.kanban` files were excluded by `.reviewignore`. All three prior findings across the 2026-08-16 10:47 and 11:43 sections are checked. Task moves to `done`.
+    - Hand measurement, cargo-machete 0.9.2, 15 alternating warm samples of each run, taken at the workspace root. Machine load average 2.26 at start and 4.62 at end, top process `claude` at 9.1% CPU. No `corespotlightd` activity — a quiet machine.
+      - Script: min 1.31 s, max 1.36 s, median 1.33 s, mean 1.33 s.
+      - Whole-tree run: min 0.26 s, max 0.28 s, median 0.27 s, mean 0.27 s.
+      - The three `1.3 s` sites (`:131`, `:207`, `:413`) and the one `0.3 s` site (`:207`) are each supported. Written median 1.34 s against measured 1.33 s, a difference of 0.01 s, inside sample noise. Written median 0.27 s matches exactly.
+      - The written ranges 1.32-1.49 s and 0.26-0.42 s describe a stated 30-sample run, and the paragraph states the sample count and directs the reader to the medians. The measured minimum 1.31 s sits 0.01 s under the stated low, and the measured 0.26 s low matches exactly. A range from a named sample is not a claimed bound, so this is not a defect.
+    - The `run:` block is byte-for-byte unchanged. Lines 12-64 extracted from HEAD~1 and from HEAD, `cmp` silent. The first changed line of the file is 131, past the block's end at 64.
+    - Every other number in the changed hunks holds: 122 findings (counted from stdout), 36 packages (distinct manifests in the findings), 63 manifests (counted through the script's own find scope and its `^\[package\]` test). The `6.7 s` figure for the `dead-code-rust` orphan scan also sits on an added line; the whole shipped `dead-code-rust` script measures 9.65 s and 9.59 s warm, so a 6.7 s orphan half is consistent and the "well under" comparison holds by a wide margin.
+    - No re-churn. The commit is exactly three hunks, at `:131`, `:207-211` and `:410`. Both earlier fixes live in the `run:` block, which is untouched, and the disputed ` at :` paragraph at `:268-275` is untouched.
+    - No stale `1.6 s` or `0.4 s` remains anywhere in the tracked tree.
+    - next: none — the card is done.
+  timestamp: 2026-08-16T17:19:27.056049+00:00
+- actor: claude-code
+  id: 01m05sdarbpvkpm3y32d47fkrz
+  text: |
+    ### finish iteration 3 — clean
+    - implement: changed — 1 file, prose only. The implementer took its OWN 30 warm alternating samples before writing.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14108 passed, 0 failed, 0 skipped; embed traced byte-identical with no stale figure. The tester took five warm samples of its own and both medians fell inside the written range.
+    - commit: 83623c364 fix(validators): put the true timing figures back in unused-dependencies-rust (^qvj3v4g)
+    - review: CLEAN — 0 findings. Task moved to `done`.
+
+    ### The root cause of the wrong figures
+
+    `1.6 s` / `0.4 s` was not invented. It reproduces exactly — but only while `corespotlightd` was indexing at 300-860% CPU with a load average of 13 to 22. Three earlier batches of 8, 12 and 20 samples all show it. The earlier pass measured a busy machine and wrote the reading down as a bare figure.
+
+    The fix is not just the number. The cost paragraph now states the range, the median AND the sample count, because a bare figure is precisely what let a loaded reading pass as measured fact.
+
+    ### Three independent measurements now agree
+
+    - implementer, 30 alternating warm samples: script 1.32-1.49 s median 1.34 s; whole-tree 0.26-0.42 s median 0.27 s. The 23 quiet pairs hold to 1.32-1.35 s and 0.26-0.29 s.
+    - tester, 5 warm samples on a quiet machine: script median 1.354 s; whole-tree median 0.284 s.
+    - reviewer, 15 alternating warm samples at load average 2.26-4.62: script median 1.33 s (1.31-1.36); whole-tree median 0.27 s (0.26-0.28).
+
+    The reviewer noted its 1.31 s low sits 0.01 s under the written low and explicitly declined to raise it as a finding, because the paragraph states the sample count and points the reader at the medians, so the range is a described sample rather than a claimed bound. Recorded because declining to manufacture a finding is as much a judgment as raising one.
+
+    ### The card in summary — three iterations, all findings answered
+
+    1. iteration 1 — `:251` premise false (a walk failure IS per manifest, so the exit discarded findings) and `:44` expansion stripping to the wrong `: `. Both ANSWERED and verified by running.
+    2. iteration 2 — timing figures moved the wrong way. ANSWERED.
+    3. iteration 3 — CLEAN.
+
+    Also settled along the way: the implementer twice declined an instruction on measurement, and was right both times — the ` at :` sentence machete does write when the manifest declares `[workspace]`, and here the disagreement resolved by three parties measuring the same thing independently.
+
+    The `run:` block is byte-for-byte unchanged across this commit, and whole-workspace stdout stayed byte-identical throughout all three iterations: 122 findings, 36 packages, exit 0.
+  timestamp: 2026-08-16T17:20:18.699241+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9880
 title: unused-dependencies-rust writes findings to stdout, then exits 1 on a later manifest and discards them
 ---
 `builtin/validators/manifests/rules/unused-dependencies-rust.md` prints its
