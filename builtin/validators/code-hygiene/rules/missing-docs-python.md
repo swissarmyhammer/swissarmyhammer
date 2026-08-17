@@ -17,6 +17,138 @@ tool:
     codes="D100,D101,D102,D103,D104,D106,D107"
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
+    cat > "$work/reported.py" <<'REPORTED_FINDING'
+    """States each row `ruff` measured under another code, then writes each
+    selected finding whose definition line is not a test.
+
+    `ruff` writes its whole report as JSON, so this program reads that report
+    itself. No text hand-off stands between the report and the definition-line
+    scan, and a path holding a backslash, a tab or a newline reaches the scan
+    exactly as `ruff` spelled it.
+
+    The scan fails OPEN. A file this program cannot read states no line, so
+    every finding of that file stands.
+    """
+
+    import json
+    import re
+    import sys
+
+    # What pytest and unittest each collect a test FUNCTION by, at the
+    # definition. pytest 9.1.1 states `python_functions = ["test"]`, and the
+    # standard library states `unittest.TestLoader.testMethodPrefix` is `test`.
+    TEST_FUNCTION_DEFINITION = re.compile(r"^[ \t]*(async[ \t]+)?def[ \t]+test")
+
+    # What pytest collects a test CLASS by. pytest 9.1.1 states
+    # `python_classes = ["Test"]`.
+    TEST_CLASS_DEFINITION = re.compile(r"^[ \t]*class[ \t]+Test")
+
+    # The codes whose finding stands on a `def` line: a method and a function.
+    FUNCTION_CODES = ("D102", "D103")
+
+    # The codes whose finding stands on a `class` line: a class and a nested
+    # class.
+    CLASS_CODES = ("D101", "D106")
+
+    # The marker `builtin/validators/README.md` states a declined item by.
+    DIAGNOSTIC_MARKER = "sah-diagnostic:"
+
+    # The name this rule states its own broken run under.
+    RULE_NAME = "missing-docs-python"
+
+
+    def definition_line(path, row, cache):
+        """The source line at `row` of `path`, or an empty string.
+
+        A file this program cannot read is stated ONCE, under the marker, and
+        reads as no line at all. Every finding of that file then stands,
+        because an empty line matches no test definition.
+        """
+        if path not in cache:
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    cache[path] = handle.read().splitlines()
+            except (OSError, UnicodeDecodeError):
+                cache[path] = []
+                sys.stderr.write(
+                    "{} {} could not read {}, so every finding of that file "
+                    "stands\n".format(DIAGNOSTIC_MARKER, RULE_NAME, path)
+                )
+        lines = cache[path]
+        if row > len(lines):
+            return ""
+        return lines[row - 1]
+
+
+    def is_test(code, head):
+        """Whether the definition line `head` of a `code` finding is a test."""
+        if code in FUNCTION_CODES:
+            return TEST_FUNCTION_DEFINITION.match(head) is not None
+        if code in CLASS_CODES:
+            return TEST_CLASS_DEFINITION.match(head) is not None
+        return False
+
+
+    def report(path):
+        """Every row of the report at `path`, or a break in the rule's words.
+
+        `ruff` keeps status 1 for a file that HAS findings, so a malformed
+        report passes the status gate above. A report this program cannot read
+        leaves the run with no measurement at all, so it breaks, and it names
+        the rule that broke.
+        """
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read().strip()
+            return json.loads(text) if text else []
+        except (OSError, ValueError, UnicodeDecodeError) as reason:
+            sys.stderr.write(
+                "{}: the filter could not read the ruff report: {}\n".format(
+                    RULE_NAME, reason
+                )
+            )
+            sys.exit(1)
+
+
+    def main():
+        """States each unmeasured row, then writes each finding that is no test."""
+        selected = sys.argv[2].split(",")
+        findings = []
+        for row in report(sys.argv[1]):
+            if row.get("code") in selected:
+                findings.append(row)
+                continue
+            sys.stderr.write(
+                "{} ruff could not measure {}: {} {}\n".format(
+                    DIAGNOSTIC_MARKER,
+                    row["filename"],
+                    row.get("code") or "no code",
+                    row.get("message"),
+                )
+            )
+        cache = {}
+        for finding in findings:
+            head = definition_line(
+                finding["filename"], finding["location"]["row"], cache
+            )
+            if is_test(finding["code"], head):
+                continue
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "file": finding["filename"],
+                        "line": finding["location"]["row"],
+                        "message": "{} {}".format(
+                            finding["code"], finding["message"]
+                        ),
+                    }
+                )
+                + "\n"
+            )
+
+
+    main()
+    REPORTED_FINDING
     status=0
     ruff check --isolated --no-cache --select "$codes" --output-format json "$@" > "$work/ruff.json" 2> "$work/ruff.err" || status=$?
     if [ "$status" -gt 1 ]; then
@@ -24,46 +156,12 @@ tool:
       printf 'missing-docs-python: ruff exited %s and judged no code\n' "$status" >&2
       exit 1
     fi
-    filtered=0
-    jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
-           | .code as $code | select($selected | index($code) | not)
-           | "sah-diagnostic: ruff could not measure \(.filename): \(.code // "no code") \(.message)"' "$work/ruff.json" \
-      > "$work/unmeasured.txt" || filtered=$?
-    jq -r --arg codes "$codes" '($codes | split(",")) as $selected | .[]
-           | .code as $code | select($selected | index($code))
-           | [.filename, .location.row, .code, .message] | @tsv' "$work/ruff.json" \
-      > "$work/reported.tsv" || filtered=$?
-    if [ "$filtered" -ne 0 ]; then
-      printf 'missing-docs-python: jq could not read the ruff report\n' >&2
-      exit 1
-    fi
     while IFS= read -r line || [ -n "$line" ]; do
       printf 'sah-diagnostic: ruff declined an item and said: %s\n' "$line" >&2
     done < "$work/ruff.err"
-    cat "$work/unmeasured.txt" >&2
-    awk -F'\t' '
-      function scan(file,   text, count, result) {
-        count = 0
-        result = (getline text < file)
-        if (result < 0) {
-          printf "sah-diagnostic: missing-docs-python could not read %s, so every finding of that file stands\n", file > "/dev/stderr"
-        }
-        while (result > 0) {
-          source[file, ++count] = text
-          result = (getline text < file)
-        }
-        close(file)
-        scanned[file] = 1
-      }
-      {
-        if (!($1 in scanned)) { scan($1) }
-        head = (($1 SUBSEP $2) in source) ? source[$1, $2] : ""
-        if (($3 == "D102" || $3 == "D103") && head ~ /^[ \t]*(async[ \t]+)?def[ \t]+test/) { next }
-        if (($3 == "D101" || $3 == "D106") && head ~ /^[ \t]*class[ \t]+Test/) { next }
-        printf "%s:%s: %s %s\n", $1, $2, $3, $4
-      }' "$work/reported.tsv"
+    python3 "$work/reported.py" "$work/ruff.json" "$codes"
   doctor:
-    check_command: "which ruff jq awk mktemp"
+    check_command: "which ruff python3 mktemp"
     check_version_command: "ruff --version"
   install:
     commands:
@@ -196,6 +294,56 @@ inline suppression at the end of this file.
 `_private_method` and an undocumented `_private_function` each report nothing.
 This is the prompt rule's private carve-out, reproduced by the language.
 
+## The path on a finding, and the hand-off that changed it
+
+The filter reads ruff's JSON report itself, and writes each finding as one JSON
+object. No step flattens a path to text, so a path reaches the engine spelled
+the way ruff spelled it.
+
+The earlier shape did flatten it. `jq ... | @tsv` wrote each row, and
+`awk -F'\t'` read it. `@tsv` must escape the two characters that carry the
+shape of a TSV row, and it escapes a backslash beside them. Measured with jq
+1.8.2 over a report holding each of the three inside the `filename` AND inside
+the `message`:
+
+| the character | what `@tsv` writes | what `awk -F'\t'` then reads |
+|---|---|---|
+| a backslash | two backslashes | one field, its backslash doubled |
+| a tab | a backslash and `t` | one field, its tab gone |
+| a newline | a backslash and `n` | one row, its newline gone |
+
+The FIELDS survive, and the TEXT does not. Measured with ruff 0.14.5 and the
+earlier script over `judged.py` beside `back\slash.py`: three findings at exit
+0, two of them naming `back\\slash.py` — a path that stands on no disk — and
+one diagnostic saying the definition-line scan could not read that same doubled
+name. A file whose name holds a tab and a file whose name holds a newline each
+read the same way.
+
+`join("\t")` is the trade that goes the other way, and it is worse. Measured
+with jq 1.8.2 over one report of seven rows that holds all three names: the
+seven rows became NINE lines. The path holding a newline split its row in two,
+and the path holding a tab pushed every field of its row one place right, so
+awk read the file name as two fields and the code as the row number.
+
+So the answer is to take the text hand-off away rather than to spell it
+differently. `function-length-python` already reads ruff's report with a Python
+program, and this rule now does the same. The findings go out as one JSON
+object for each row — the second shape `builtin/validators/README.md` states —
+because `json.dumps` escapes a newline INSIDE the object, and the engine reads
+stdout one line at a time. A `path:line: message` row cannot carry a path that
+holds a newline at all.
+
+Measured with the shipped script over `judged.py` beside `back\slash.py`: three
+findings at exit 0, each naming the path ruff read, and 0 bytes on stderr — the
+scan opens that file now. The file whose name holds a tab and the file whose
+name holds a newline each read the same way: three findings, exit 0, 0 bytes on
+stderr. The acceptance test
+`the_shipped_python_missing_docs_tool_rule_reports_a_path_holding_a_backslash`
+holds the first of the three.
+
+`python3` therefore stands beside `ruff` in the doctor check, and `jq` and
+`awk` no longer do.
+
 ## A run cannot answer zero for a broken tool
 
 **ruff exits 2 for a selector it cannot read.** A pipeline takes the exit
@@ -222,23 +370,22 @@ Measured beside a `pyproject.toml` that holds `[[[ not toml`: with
 `--isolated` ruff exits 1 and judges the Python file; without `--isolated`
 ruff exits 2 and writes `Failed to parse ... pyproject.toml`.
 
-**A report `jq` cannot read is a broken run too, and the status gate misses
-it.** The gate reads ruff's number, and ruff keeps status 1 for a file that HAS
-findings, so a report ruff wrote malformed at status 0 or 1 goes straight
-through. A filter that then runs bare under `set -e` takes the whole script
-down with jq's own status. Measured with a stub ruff that exits 1 and writes a
-report stopping inside its first entry: the script exited 5, wrote 0 bytes to
-stdout, and wrote `jq: parse error: Unfinished JSON term at EOF` alone — no
-marker, and no word about which rule broke. That is the defect this rule was
-rewritten to remove, standing on the filter step.
+**A report the filter cannot read is a broken run too, and the status gate
+misses it.** The gate reads ruff's number, and ruff keeps status 1 for a file
+that HAS findings, so a report ruff wrote malformed at status 0 or 1 goes
+straight through. A filter that then reads the report with no guard takes the
+whole script down with its own status. Measured with a stub ruff that exits 1
+and writes a report stopping inside its first entry, against a filter that
+reads it with no guard: the script exited 1, wrote 0 bytes to stdout, and wrote
+a Python traceback naming the temporary copy of the filter — no marker, and no
+word about which rule broke.
 
-So each filter step reads its own status into `filtered`, and one gate states
-the break in the rule's own words. Measured with the same stub after the gate:
-exit 1, 0 bytes on stdout, jq's own message, and
-`missing-docs-python: jq could not read the ruff report`. A stub ruff that
-writes `{ not json` at status 0 reads the same way, and so does a `jq` that
-cannot run at all. `missing-docs-rust` and `function-length-rust` carry this
-shape as well. The acceptance test
+So the filter catches the report it cannot read, and states the break in the
+rule's own words. Measured with the same stub after the guard: exit 1, 0 bytes
+on stdout, and `missing-docs-python: the filter could not read the ruff report:
+Expecting ',' delimiter: line 3 column 19 (char 24)`. A stub ruff that writes
+`{ not json` at status 0 reads the same way. `missing-docs-rust` and
+`function-length-rust` carry this shape as well. The acceptance test
 `the_shipped_python_missing_docs_tool_rule_breaks_on_a_report_the_filter_cannot_read`
 holds it.
 
@@ -397,26 +544,21 @@ row the scan does not hold keeps its finding, so a short read can add a finding
 and can drop none — which is what this rule's prose always claimed and its code
 did not do.
 
-The failure is reachable through the shipped pipeline, and it was measured
-there. `jq @tsv` escapes a backslash, so a Python file named `back\slash.py`
-reaches awk as `back\\slash.py`, which awk cannot open. Measured with the shipped
-script before the fix, over that file beside `judged.py`: nothing on stdout,
-`missing-docs-python cannot read <repo>/back\\slash.py` on stderr, exit 1 — the
-`D103` of `judged.py` lost with it. Measured after the fix over the same two
-files: three findings on stdout, one marked line on stderr, and exit 0.
+    sah-diagnostic: missing-docs-python could not read <repo>/vanished.py, so every finding of that file stands
 
-    sah-diagnostic: missing-docs-python could not read <repo>/back\\slash.py, so every finding of that file stands
+The shipped pipeline reaches no such file of its own. The filter opens each
+path ruff wrote on the report, exactly as ruff spelled it, and ruff states on
+stderr every path it could not open itself. The earlier shape DID reach one:
+`jq @tsv` doubled the backslash of `back\slash.py`, so awk opened no file of
+that name. The section "The path on a finding, and the hand-off that changed
+it" states that measurement.
 
-`@tsv` naming that file with a doubled backslash on the FINDING row as well is a
-defect of its own, and `^b2kq9hy` covers it.
-
-The acceptance test
+So the fail-open answers a ruff that reports a file no reader can follow it to.
+Measured with a stub ruff that reports one `D103` of a path holding no file
+beside the `D103` of `judged.py`: two findings on stdout, one marked line on
+stderr, and exit 0. The acceptance test
 `the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve`
-holds the fail-open over that same pair. It holds the run to exit 0, to the row
-of `judged.py`, to a count of three findings, and to one diagnostic naming a
-FRAGMENT of the other file's name. The count and the fragment are what keep the
-probe clear of the doubled path, so `^b2kq9hy` stays free to pick either
-spelling.
+holds both halves, and it holds the whole row of each finding.
 
 ### Every answer in one run
 
@@ -432,10 +574,11 @@ carries `absent.py`; ruff's report writes an absolute path, so a measure line
 carries the whole path.
 
 Two gates stand beside all of it, and each one breaks the run rather than
-answering zero: a ruff status over 1, and a report `jq` could not read. Neither
-one reaches a ruff that REFUSED one argument and judged the rest, because that
-run keeps status 1 and writes a readable report. The stderr channel is what
-answers that shape, and it answers every head ruff writes there.
+answering zero: a ruff status over 1, and a report the filter could not read.
+Neither one reaches a ruff that REFUSED one argument and judged the rest,
+because that run keeps status 1 and writes a readable report. The stderr
+channel is what answers that shape, and it answers every head ruff writes
+there.
 
 ## A run answers for the files it is given, and for no other
 
@@ -452,13 +595,13 @@ the two files reports 5. The acceptance test
 `the_shipped_python_missing_docs_tool_rule_reads_only_the_files_it_is_given`
 holds both halves: the run with no argument, and the run over the two files.
 
-`mktemp -d` makes the working directory the script writes ruff's report and
-ruff's stderr into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
-every way the script leaves: a clean run, a finding, a declined item, and a
-broken tool. Measured by counting the directories directly under `TMPDIR`: five
-runs over one file leave the count unchanged, a run that declines four items at
-exit 0 leaves it unchanged, and a run that exits 1 on a ruff that refused its
-command line leaves it unchanged.
+`mktemp -d` makes the working directory the script writes the filter program,
+ruff's report and ruff's stderr into, and `trap 'rm -rf "$work"' EXIT` removes
+it. The trap covers every way the script leaves: a clean run, a finding, a
+declined item, and a broken tool. Measured by counting the directories directly
+under `TMPDIR`: five runs over one file leave the count at 0, a run that
+declines three items at exit 0 leaves it at 0, and a run that exits 1 on a
+report the filter cannot read leaves it at 0.
 
 ## How to exempt one item
 

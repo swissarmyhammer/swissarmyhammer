@@ -1371,95 +1371,157 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_directory_it_may_not_rea
     );
 }
 
-/// Where the file the definition-line scan cannot read stands inside the probe
+/// Where the file whose name holds a backslash stands inside the probe
 /// repository.
 ///
-/// The name holds a backslash, which is the one route to a failed scan that
-/// the shipped pipeline reaches by itself: `jq @tsv` escapes a backslash, so
-/// awk is handed `back\\slash.py` and opens no file of that name.
-const PYTHON_SCAN_UNREADABLE_PATH: &str = "back\\slash.py";
-
-/// The part of that name the diagnostic must carry.
-///
-/// A FRAGMENT rather than the whole name, because the name awk is handed holds
-/// a doubled backslash, and `^b2kq9hy` owns which of the two spellings the run
-/// should report. This probe measures the fail-open and pins neither.
-const PYTHON_SCAN_UNREADABLE_FRAGMENT: &str = "slash.py";
+/// A backslash is the character the earlier hand-off spelled wrong. The script
+/// flattened ruff's report to TSV with `jq ... | @tsv`, and `@tsv` escapes a
+/// backslash to `\\`, so every row of this file named a path that stands on no
+/// disk.
+const PYTHON_BACKSLASH_PATH: &str = "back\\slash.py";
 
 /// A Python file with no module docstring whose one function carries none
 /// either, so ruff reports `D100` and `D103` on it.
-const PYTHON_SCAN_UNREADABLE_SOURCE: &str = "def in_a_named_file() -> None:\n    return None\n";
+const PYTHON_BACKSLASH_SOURCE: &str = "def in_a_named_file() -> None:\n    return None\n";
 
-/// Every finding a run over the judged file and the file the scan cannot read
-/// must report: the `D103` of the judged file, and the `D100` and `D103` of
-/// the other one.
-const PYTHON_SCAN_DECLINED_FINDINGS: usize = 3;
+/// Each `path:line` row a run over the judged file and the backslash file must
+/// report.
+///
+/// ruff sorts its report by path, so `back\slash.py` stands above `judged.py`.
+/// Both of its rows stand at line 1: `D100` names the module, which has no
+/// definition line of its own, and the function it reports is the first line
+/// of the file.
+fn python_backslash_rows() -> Vec<String> {
+    vec![
+        format!("{PYTHON_BACKSLASH_PATH}:1"),
+        format!("{PYTHON_BACKSLASH_PATH}:1"),
+        python_missing_docs_judged_row(),
+    ]
+}
 
-/// Acceptance: the shipped Python missing-docs tool rule keeps every finding
-/// of a file its definition-line scan could not read, through the real ruff
-/// pipeline.
+/// Acceptance: the shipped Python missing-docs tool rule reports a path that
+/// holds a backslash as the path it really is, through the real ruff pipeline.
 ///
-/// The scan re-reads each file ruff reported, to read the definition line the
-/// test carve-out needs. That read can fail where ruff's own read did not, and
-/// a failed scan is one more declined item: the finding is real, and only the
-/// carve-out is unanswerable. So the scan states the file and reads no line
-/// for it, and every row of that file keeps its finding.
+/// The script used to hand its rows from `jq` to `awk` as TSV. `@tsv` escapes
+/// a backslash, a tab and a newline alike, so the text of every field reached
+/// awk changed. Measured with ruff 0.14.5 and jq 1.8.2 over this probe before
+/// the fix: three findings at exit 0, two of them naming
+/// `back\\slash.py` — a path the engine can attribute to no file — and one
+/// diagnostic saying the definition-line scan could not read that same doubled
+/// name.
 ///
-/// Measured with the shipped script before the fail-open, over this probe:
-/// nothing on stdout, one unmarked line on stderr, exit 1 — the `D103` of the
-/// judged file lost with the file the scan could not open.
-///
-/// The probe holds the COUNT of the surviving findings beside the row of the
-/// judged file, because the rows of the declined file carry the doubled
-/// backslash `^b2kq9hy` owns. A probe that wrote those rows out would pin one
-/// of two candidate spellings before that card picks one.
+/// The filter now reads ruff's JSON report itself, so no text hand-off stands
+/// between the report and the scan. The probe holds the whole row list rather
+/// than a count, because the ROW is what was wrong.
 #[test]
-fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve() {
+fn the_shipped_python_missing_docs_tool_rule_reports_a_path_holding_a_backslash() {
     let loader = builtin_loader();
     require_tool_installed(&loader, PYTHON_PROJECT_TYPES, PYTHON_MISSING_DOCS_RULE);
     let staged = [
         (PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE),
-        (PYTHON_SCAN_UNREADABLE_PATH, PYTHON_SCAN_UNREADABLE_SOURCE),
+        (PYTHON_BACKSLASH_PATH, PYTHON_BACKSLASH_SOURCE),
     ];
-    let named = [PYTHON_JUDGED_PATH, PYTHON_SCAN_UNREADABLE_PATH];
+    let named = [PYTHON_JUDGED_PATH, PYTHON_BACKSLASH_PATH];
     let staging = ShippedStaging::of(&staged);
     let drive = |read: fn(&ScriptOutcome, &Path) -> Vec<String>| {
         drive_shipped_script(&loader, PYTHON_MISSING_DOCS_RULE, &staging, &named, read)
-            .expect("a scan that cannot read one file must keep every finding and exit 0")
+            .expect("a run over a path holding a backslash must judge both files and exit 0")
     };
 
     let reported = drive(finding_rows);
     let stated = drive(script_diagnostics);
 
-    assert!(
-        reported.contains(&python_missing_docs_judged_row()),
-        "the finding of the file the scan DID read must stand; the run reported {reported:?}"
-    );
     assert_eq!(
-        reported.len(),
-        PYTHON_SCAN_DECLINED_FINDINGS,
-        "every finding of the file the scan could not read must stand as well; the run \
-         reported {reported:?}"
-    );
-    assert_eq!(
-        stated.len(),
-        1,
-        "the run must state the one file its scan could not read; it stated {stated:?}"
+        reported,
+        python_backslash_rows(),
+        "every finding must name the path ruff read, with the backslash it really holds"
     );
     assert!(
-        stated[0].contains(PYTHON_SCAN_UNREADABLE_FRAGMENT),
-        "the diagnostic must name the file the scan could not read; it said '{}'",
-        stated[0]
+        stated.is_empty(),
+        "the run reads every file ruff reported, so it must decline no item; it stated {stated:?}"
+    );
+}
+
+/// The path a stubbed ruff reports a finding of, and that the definition-line
+/// scan then cannot open.
+const PYTHON_VANISHED_PATH: &str = "vanished.py";
+
+/// A stubbed ruff that exits 1 and reports one `D103` of a path that holds no
+/// file, beside the `D103` of the judged file.
+///
+/// The shipped pipeline reaches no such row of its own any more: the filter
+/// opens each path ruff wrote on its report, exactly as ruff spelled it, and
+/// ruff declines on stderr every path it could not open itself. So the fail-
+/// open needs a ruff that reports a file no reader can follow it to.
+const PYTHON_VANISHED_REPORT_ANSWER: &str = concat!(
+    r#"  printf '[{"filename": "vanished.py", "location": {"row": 1}, "code": "D103", "#,
+    r#""message": "Missing docstring in public function"}, {"filename": "judged.py", "#,
+    r#""location": {"row": 4}, "code": "D103", "#,
+    r#""message": "Missing docstring in public function"}]'"#,
+    "\n  exit 1"
+);
+
+/// Acceptance: the shipped Python missing-docs tool rule keeps every finding
+/// of a file its definition-line scan could not read.
+///
+/// The scan re-reads each file ruff reported, to read the definition line the
+/// test carve-out needs. That read can fail where ruff's own read did not, and
+/// a failed scan is one more declined item: the finding is real, and only the
+/// carve-out is unanswerable. So the scan states the file under the marker and
+/// reads no line for it, and every row of that file keeps its finding.
+///
+/// Measured with the shipped script before the fail-open, over a file the scan
+/// could not open: nothing on stdout, one unmarked line on stderr, exit 1 —
+/// the finding of the file the scan DID read lost with it.
+///
+/// The probe leads `PATH` with a stub, which is process state, so it stands
+/// under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve() {
+    let run = drive_shipped_script_with_stub(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MISSING_DOCS_RULE,
+        &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
+        &[PYTHON_JUDGED_PATH],
+        PYTHON_TOOL_BINARY_NAME,
+        PYTHON_VANISHED_REPORT_ANSWER,
+    );
+    let outcome = run
+        .outcome
+        .expect("a scan that cannot read one file must keep every finding and exit 0");
+
+    assert_eq!(
+        run.placed,
+        vec![
+            format!("{PYTHON_VANISHED_PATH}:1"),
+            python_missing_docs_judged_row(),
+        ],
+        "the finding of the file the scan could not read must stand beside the one it read"
+    );
+    assert_eq!(
+        outcome.diagnostics,
+        vec![format!(
+            "missing-docs-python could not read {PYTHON_VANISHED_PATH}, so every finding of \
+             that file stands"
+        )],
+        "the run must state the one file its scan could not read"
     );
 }
 
 /// The name ruff calls the linter of Python code by.
 const PYTHON_TOOL_BINARY_NAME: &str = "ruff";
 
-/// What the run must say when `jq` could not read what ruff wrote.
-const PYTHON_FILTER_BROKEN_MESSAGE: &str = "missing-docs-python: jq could not read the ruff report";
+/// What the run must say when its filter could not read what ruff wrote.
+///
+/// A fragment of the line rather than the whole of it: the filter names the
+/// reason Python gave beside these words, and that reason moves with the
+/// Python release.
+const PYTHON_FILTER_BROKEN_MESSAGE: &str =
+    "missing-docs-python: the filter could not read the ruff report";
 
-/// Why a report `jq` cannot read must break the run rather than pass it.
+/// Why a report the filter cannot read must break the run rather than pass it.
 const PYTHON_FILTER_BROKEN_REASON: &str =
     "a report the filter could not read leaves the run with no measurement at all, so it \
      must break in the rule's own words rather than exit on the filter's status";
@@ -1478,15 +1540,15 @@ const PYTHON_TRUNCATED_REPORT_ANSWER: &str =
 ///
 /// The broken-run gate reads the STATUS, and ruff keeps status 1 for a file
 /// with findings, so a malformed report at status 1 passes the gate. The
-/// filter then fails, and a filter that runs bare under `set -e` takes the
-/// whole script down with its own status. Measured with a stubbed ruff before
-/// the gate: the script exited 5, wrote nothing to stdout, and wrote only
-/// `jq: parse error: Unfinished JSON term at EOF` — no marker, and no word
-/// about which rule broke or why.
+/// filter then fails, and a filter that reads the report with no guard takes
+/// the whole script down with its own status. Measured with a stubbed ruff
+/// over a filter with no guard: the script exited 1, wrote nothing to stdout,
+/// and wrote a Python traceback naming the temporary copy of the filter — no
+/// marker, and no word about which rule broke.
 ///
 /// `missing-docs-rust.md` and `function-length-rust.md` hold the worked
-/// answer, and this rule now holds it too: read the status of each filter
-/// step, and break in the rule's own words.
+/// answer, and this rule now holds it too: the filter catches the report it
+/// cannot read, and breaks in the rule's own words.
 ///
 /// The probe leads `PATH` with a stub, which is process state, so it stands
 /// under `#[serial_test::serial(env)]`.

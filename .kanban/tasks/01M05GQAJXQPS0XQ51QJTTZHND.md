@@ -58,8 +58,25 @@ comments:
     - `cargo nextest run --workspace`: 14136 tests run, 14136 passed, 0 failed, 0 skipped.
     - next: ready for review.
   timestamp: 2026-08-17T03:57:33.079911+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m06y5fnyj3r99phm8ey2f0mh
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (checkpoint 8fb77fd98). 9 validator-file pairs ran. 0 findings, 0 confirmed, 0 refuted, 0 failed. The engine read 2 files and kept out 42 `.kanban/` files by the `.reviewignore` rule.
+    - scope: the 4 changed source files are `builtin/validators/code-hygiene/rules/missing-docs-go.md`, `builtin/validators/code-hygiene/rules/stuttering-name-go.md`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs`, and `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/stuttering_name_go.rs`.
+    - next: no open findings. The card moves to `done`.
+  timestamp: 2026-08-17T04:02:38.910043+00:00
+- actor: claude-code
+  id: 01m06y64j7b2tjbg91jjn6zthk
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files (missing-docs-go.md, stuttering-name-go.md, missing_docs.rs, stuttering_name_go.rs)
+    - test: green — cargo nextest run --workspace, 14136 passed, 0 failed. Real revive 1.15.0 gave exit 0 and one marked stderr line for all 4 declined shapes on both rules. The 2 broken shapes stayed at exit 1. RED/GREEN proof done on the stuttering-name probe.
+    - commit: 8fb77fd98
+    - review: clean — 9 validator-file pairs, 0 findings
+  timestamp: 2026-08-17T04:03:00.295680+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa080
 title: missing-docs-go and stuttering-name-go fail the whole run for one revive record they cannot name
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-go.md` and
