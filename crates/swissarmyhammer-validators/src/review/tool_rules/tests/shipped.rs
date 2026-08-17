@@ -2185,6 +2185,141 @@ const SWIFT_HOLLOW_FILES: &[(&str, &str)] = &[("Sources/Hollow.swift/Notes.txt",
 /// What the work-list of a hollow-directory probe states the change is for.
 const SWIFT_HOLLOW_PURPOSE: &str = "a directory that holds no Swift file";
 
+/// Where the Swift file the project's `excluded:` list covers stands inside
+/// the probe repository.
+///
+/// The staged-position probes name the same directory, so one exclude list
+/// serves the whole Swift family.
+const SWIFT_EXCLUDED_PATH: &str = SWIFT_GENERATED_POSITION.path;
+
+/// How a project `.swiftlint.yml` makes a shipped swiftlint rule decline ONE
+/// item of a run it otherwise measures.
+///
+/// Each shape stages its own project files, declines its own item, and decides
+/// whether the run still reports the findings the staged source holds.
+enum SwiftProjectDecline {
+    /// The project's `excluded:` list covers every file the work-list names.
+    ///
+    /// Measured with swiftlint 0.65.0 over one file under `Generated/` beside
+    /// `excluded: [Generated]`: swiftlint writes 0 bytes to stdout, writes
+    /// `Error: No lintable files found at paths: 'Generated/Staged.swift'` to
+    /// stderr, and exits 1. The script exits 0 for that message, so a run that
+    /// read NO file answered the clean answer of a run that read every file.
+    ///
+    /// A sound run says nothing on stderr — measured over the same file with no
+    /// project configuration: entries on stdout and 0 bytes on stderr — so the
+    /// script states each path it still holds under the marker.
+    ExcludesTheWholeRun,
+
+    /// The project names a child configuration of its own, which swiftlint
+    /// cannot read.
+    ///
+    /// That file aborts swiftlint. The script then runs a second time with its
+    /// own configuration alone, and that second run drops the project's
+    /// `excluded:` list, so the file under the excluded directory reports.
+    ///
+    /// The run measured the code with settings the project did not ask for,
+    /// which is one item it could not judge as asked. A script that wrote that
+    /// on stderr with no marker lost it, because the report drops an unmarked
+    /// line.
+    NamesAConfigurationItCannotRead,
+}
+
+impl SwiftProjectDecline {
+    /// The project files this shape stages beside the judged file. The
+    /// work-list names none of them.
+    fn support(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::ExcludesTheWholeRun => SWIFT_EXCLUDING_SUPPORT_FILES,
+            Self::NamesAConfigurationItCannotRead => SWIFT_CHILD_CONFIG_SUPPORT_FILES,
+        }
+    }
+
+    /// The item this shape makes the run decline, which the one diagnostic must
+    /// name.
+    fn declined(&self) -> &'static str {
+        match self {
+            Self::ExcludesTheWholeRun => SWIFT_EXCLUDED_PATH,
+            Self::NamesAConfigurationItCannotRead => SWIFT_PROJECT_CONFIG_PATH,
+        }
+    }
+
+    /// Whether the run still reports every finding the staged source holds.
+    ///
+    /// A run the project excludes whole reads no file, so it reports nothing. A
+    /// run that dropped the project configuration reads the file the list
+    /// covered, so it reports each finding that file holds.
+    fn reports_the_findings(&self) -> bool {
+        match self {
+            Self::ExcludesTheWholeRun => false,
+            Self::NamesAConfigurationItCannotRead => true,
+        }
+    }
+}
+
+/// What one shipped swiftlint rule's probe of a project decline states, with
+/// the way the project declines the run left out.
+///
+/// The three shipped swiftlint rules — `missing-docs-swift`,
+/// `function-length-swift` and `magic-numbers-swift` — each hold the same two
+/// branches, and every value beside these three is the same for all of them:
+/// the project types, the staged path, and the project files each shape stages.
+/// The way the project declines the run is the ONE value that changes between
+/// the two tests of a rule, so it reaches
+/// [`verify_swift_project_decline_is_stated`] beside the probe rather than
+/// inside it.
+///
+/// `heads` owns its bytes. `function-length-swift` builds its head at run time
+/// from the name its staged function takes, so a probe that borrowed the head
+/// could not outlive the call that built it.
+struct SwiftProjectDeclineProbe {
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// The source the one judged file holds. Each rule stages the source its
+    /// own tool reports on.
+    source: &'static str,
+
+    /// The head of each line that source holds a finding on. The helper turns
+    /// each head into the `path:line` row the run must report.
+    heads: Vec<String>,
+}
+
+/// Drives the shipped swiftlint script `probe` names over ONE file under the
+/// directory the project excludes, beside the project files `decline` stages,
+/// and holds that run to reporting the rows the shape expects AND to stating
+/// one diagnostic that names the item it declined.
+///
+/// ONE function serves the three shipped swiftlint rules. A rule states its own
+/// bound values as a [`SwiftProjectDeclineProbe`], and each test of that rule
+/// hands the same probe here beside one shape of [`SwiftProjectDecline`].
+fn verify_swift_project_decline_is_stated(
+    probe: &SwiftProjectDeclineProbe,
+    decline: &SwiftProjectDecline,
+) {
+    let mut staged = vec![(SWIFT_EXCLUDED_PATH, probe.source)];
+    staged.extend_from_slice(decline.support());
+
+    let rows: Vec<String> = match decline.reports_the_findings() {
+        true => probe
+            .heads
+            .iter()
+            .map(|head| expected_row(SWIFT_EXCLUDED_PATH, probe.source, head))
+            .collect(),
+        false => Vec::new(),
+    };
+    let expected: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+    verify_declined_item_is_stated(
+        SWIFT_PROJECT_TYPES,
+        probe.rule,
+        &ShippedStaging::of(&staged),
+        &[SWIFT_EXCLUDED_PATH],
+        decline.declined(),
+        &expected,
+    );
+}
+
 /// What a run whose every file the project excludes must report: nothing.
 const NO_STAGED_REPORTS: &[&str] = &[];
 
