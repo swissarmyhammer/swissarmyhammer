@@ -73,8 +73,25 @@ comments:
     - evidence: 5 files — builtin/validators/code-hygiene/rules/missing-docs-swift.md, builtin/validators/code-hygiene/rules/magic-numbers-swift.md, builtin/validators/code-hygiene/rules/missing-docs-dart.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/magic_numbers.rs. RED 9/9 failed with the earlier guards; GREEN `cargo nextest run -p swissarmyhammer-validators` 803 passed 0 skipped, `cargo clippy` 0 warnings, `cargo nextest run -p mirdan` 503 passed.
     - next: /review
   timestamp: 2026-08-17T06:36:26.791181+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m077x1p466nvv44fd8tgx3wb
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 0b6901ee5). 9 rules ran. 0 findings, 0 confirmed, 0 refuted, 0 failed. 2 files reviewed. 6 `.kanban/` files not reviewed, because a `.reviewignore` rule holds them out.
+    - next: The card moves to `done`. No finding is open.
+  timestamp: 2026-08-17T06:52:48.196644+00:00
+- actor: claude-code
+  id: 01m077xmp180gfzcq4mvj6bkvw
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files. The three rules state a path they cannot read as a declined item at exit 0, and keep the findings of every file they could judge. Each answers all 3 refusing shapes. Measured: swiftlint writes its own message for 2 shapes and says nothing for the third; dart says nothing for any shape, so the script tests the path itself.
+    - test: green — cargo nextest run --workspace, 14145 passed, 0 failed. fmt and clippy clean. The test step proved with `od -c` that each marked line opens at byte 0, drove `dart analyze` directly to confirm it truly writes nothing, and held every rule to exit 0 when EVERY file is unreadable.
+    - commit: 0b6901ee5
+    - review: clean — 9 rules, 0 findings.
+    - note: `function-length-swift` carries the same guard and stands outside this card. It is filed as ^8491bb0.
+  timestamp: 2026-08-17T06:53:07.649659+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa380
 title: Three rules break the batch on a pre-flight readability guard that also misses the non-UTF-8 file
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-swift.md`,

@@ -160,9 +160,7 @@ fn swift_length_every_file_excluded_probe() -> ShippedStagedPositions {
 ///
 /// swiftlint exits 1 with `Error: No lintable files found at paths` when
 /// `--force-exclude` leaves it no file to read, and that status reads as a
-/// broken tool. The script tests each file it is given for readability first,
-/// so the message can carry one cause only, and it then exits 0 with no
-/// finding.
+/// broken tool. The script reads that message and exits 0 with no finding.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_answers_zero_when_the_project_excludes_every_file() {
     verify_shipped_staged_positions_report(&swift_length_every_file_excluded_probe());
@@ -294,45 +292,17 @@ fn the_shipped_swift_function_length_tool_rule_breaks_beside_a_project_version_m
     verify_shipped_run_breaks(&swift_length_version_mismatch_probe());
 }
 
-/// Where the Swift file that is never written stands inside the probe
+/// Where the Swift file the length run CAN judge stands, beside each refusing
+/// path.
+const SWIFT_LENGTH_JUDGED_PATH: &str = "Sources/Judged.swift";
+
+/// Where the path the length run cannot judge stands inside the probe
 /// repository.
-const SWIFT_LENGTH_ABSENT_PATH: &str = "Sources/Absent.swift";
-
-/// What the one error of an absent file must name.
-const SWIFT_LENGTH_ABSENT_ERROR: &[&str] = &[
-    "function-length-swift cannot read",
-    SWIFT_LENGTH_ABSENT_PATH,
-];
-
-/// The `function-length-swift` probe over a path that holds no file.
-const SWIFT_LENGTH_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_FUNCTION_LENGTH_RULE,
-        expected: SWIFT_LENGTH_ABSENT_ERROR,
-    },
-    prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
-    change_purpose: "a Swift file that is not there",
-    path: SWIFT_LENGTH_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Swift function-length tool rule BREAKS on a file it
-/// cannot read, through the real swiftlint pipeline.
 ///
-/// swiftlint exits 1 for a path that is not there and writes nothing to
-/// stdout. A pipeline takes the exit status of its LAST command, and that
-/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
-/// answering zero for a reason other than a clean file.
-#[test]
-fn the_shipped_swift_function_length_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&SWIFT_LENGTH_ABSENT_PROBE);
-}
-
-/// Where the Swift file swiftlint cannot decode stands inside the probe
-/// repository.
-const SWIFT_LENGTH_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const SWIFT_LENGTH_UNREADABLE_PATH: &str = "Sources/Unreadable.swift";
 
 /// The head of the file swiftlint cannot decode, written in Latin-1 rather
 /// than in UTF-8.
@@ -359,47 +329,159 @@ fn swift_undecodable_source() -> &'static [u8] {
     &SWIFT_UNDECODABLE_SOURCE
 }
 
-/// What the one error of a file swiftlint cannot decode must name: the rule's
-/// own line, and swiftlint's own message, which carries the path.
-const SWIFT_LENGTH_UNDECODABLE_ERROR: &[&str] = &[
-    "function-length-swift: swiftlint could not read the contents of a file this run names",
-    "Could not read contents of",
-    "Latin1.swift",
-];
+/// A Swift file swiftlint could measure if the mode let it.
+///
+/// The one function it holds runs 1 body line, which stands under the gate of
+/// 250, so a run that DID read this file would report no finding — which is
+/// the clean answer this rule must not give for a file it never read.
+const SWIFT_LENGTH_FORBIDDEN_SOURCE: &str = concat!("func hidden() {\n", "    let _ = 1\n", "}\n");
 
-/// The `function-length-swift` probe over a Swift file swiftlint cannot decode.
-fn swift_length_undecodable_probe() -> ShippedNamedPath {
-    ShippedNamedPath {
-        run: ShippedRun {
-            project_types: SWIFT_PROJECT_TYPES,
-            rule: SWIFT_FUNCTION_LENGTH_RULE,
-            expected: SWIFT_LENGTH_UNDECODABLE_ERROR,
-        },
-        prompt_rule: FUNCTION_LENGTH_PROMPT_RULE,
-        change_purpose: "a Swift file that is not UTF-8",
-        path: SWIFT_LENGTH_UNDECODABLE_PATH,
-        source: Some(swift_undecodable_source()),
-        support: NO_SUPPORT_FILES,
-    }
+/// Holds the shipped Swift function-length run to judging
+/// `Sources/Judged.swift` and to stating the one path it could not judge,
+/// through the real swiftlint pipeline.
+///
+/// The judged file carries one function over the length gate, so the run has a
+/// finding to lose. Losing it is what a nonzero exit over a declined item
+/// costs, and staying silent about the path is what reads that path as a clean
+/// file.
+fn verify_swift_length_declines(unreadable: &ShippedUnreadableFile) {
+    let head = format!("func {SWIFT_STAGED_FUNCTION_NAME}(");
+    let judged = expected_row(SWIFT_LENGTH_JUDGED_PATH, swift_staged_source(), &head);
+
+    verify_unreadable_file_is_declined(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_FUNCTION_LENGTH_RULE,
+        &[(SWIFT_LENGTH_JUDGED_PATH, swift_staged_source())],
+        SWIFT_LENGTH_UNREADABLE_PATH,
+        unreadable,
+        &[&judged],
+    );
 }
 
-/// Acceptance: the shipped Swift function-length tool rule BREAKS on a Swift
+/// Acceptance: the shipped Swift function-length tool rule DECLINES a path that
+/// holds no file, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a path beside one file that holds
+/// one finding: 1 entry on stdout, 0 bytes on stderr, and exit 2. The child
+/// states `error: 250` beside `warning: 250`, so a finding of this rule reaches
+/// error severity and swiftlint exits 2 for it; the script accepts that status
+/// beside a report of one entry or more. swiftlint says NOTHING about the path
+/// it dropped — measured again with `--quiet` taken off, it writes
+/// `Linting 'Judged.swift' (1/1)` and no word of the other path. So the script
+/// tests the path itself, and states it under the marker.
+#[test]
+fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_swift_length_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Swift function-length tool rule DECLINES a Swift
 /// file swiftlint cannot decode, through the real swiftlint pipeline.
 ///
-/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
-/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
-/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
-/// an empty JSON array to stdout, and exits 0 — the status and the report of a
-/// clean file. So the script read a file swiftlint never read as a clean file,
-/// and the one function over the gate reached the engine as a clean tree.
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds one
+/// finding: swiftlint writes ``Could not read contents of `<path>` `` to
+/// stderr, writes 1 entry to stdout, and exits 2 — the status and the report of
+/// a healthy run. So neither the status nor the report tells this file from a
+/// clean one, and the script reads swiftlint's own message instead.
 ///
-/// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes the report of the other file, and exits
-/// 2. So the shape reaches the script at status 0 and at status 2 alike, and
-/// the script tests stderr rather than the status.
+/// A readability test on the path admits this file — the mode lets swiftlint
+/// open it — so the answer has to come from what swiftlint itself said.
 #[test]
-fn the_shipped_swift_function_length_tool_rule_breaks_on_a_file_it_cannot_decode() {
-    verify_shipped_run_breaks(&swift_length_undecodable_probe());
+fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_swift_length_declines(&ShippedUnreadableFile::Undecodable(
+        swift_undecodable_source(),
+    ));
+}
+
+/// Acceptance: the shipped Swift function-length tool rule DECLINES a Swift
+/// file it may not read, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds one
+/// finding: swiftlint writes the same ``Could not read contents of `<path>` ``
+/// line, writes 1 entry, and exits 2. The mode and the decode reach swiftlint
+/// as one message, so one reading of stderr answers both.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_may_not_read() {
+    verify_swift_length_declines(&ShippedUnreadableFile::Forbidden(
+        SWIFT_LENGTH_FORBIDDEN_SOURCE,
+    ));
+}
+
+/// Holds the shipped Swift function-length run to reporting no finding, and to
+/// stating one diagnostic for the refusing path, when the run has no other
+/// file to judge.
+///
+/// This run takes a different branch of the script than
+/// [`verify_swift_length_declines`] does. With a healthy file beside the
+/// refusing path, swiftlint always has a body to measure, so `status` is 0 or
+/// 2 with a report, and the script never reaches its `measured -eq 0` check.
+/// Alone, the refusing path leaves swiftlint no file to lint at all: for
+/// `Absent`, swiftlint exits 1 and writes `Error: No lintable files found at
+/// paths: ...`, which only the `measured -eq 0` branch reads. For
+/// `Undecodable` and `Forbidden`, swiftlint still writes its decode line and
+/// exits 0 with an empty report, so the branch is not the one this proves —
+/// but the pre-flight diagnostic line still fires, and the run still must
+/// report nothing.
+fn verify_swift_length_declines_alone(unreadable: &ShippedUnreadableFile) {
+    verify_unreadable_file_is_declined(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_FUNCTION_LENGTH_RULE,
+        &[],
+        SWIFT_LENGTH_UNREADABLE_PATH,
+        unreadable,
+        &[],
+    );
+}
+
+/// Acceptance: the shipped Swift function-length tool rule reports no finding,
+/// and states one diagnostic, over a path that holds no file and no other
+/// file beside it, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a path alone: swiftlint writes 0
+/// bytes to stdout, writes `Error: No lintable files found at paths: '<path>'`
+/// to stderr, and exits 1. That status does not satisfy the script's
+/// `measured` gate, so the script falls to its `No lintable files found`
+/// check and exits 0 with no finding. This is the one probe that reaches that
+/// check by way of the pre-flight `[ ! -e "$file" ]` diagnostic, rather than
+/// by way of a project `excluded:` list or a hollow directory.
+#[test]
+fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_file_alone() {
+    verify_swift_length_declines_alone(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Swift function-length tool rule reports no finding,
+/// and states one diagnostic, over a Swift file swiftlint cannot decode and no
+/// other file beside it, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a file alone: swiftlint writes
+/// ``Could not read contents of `<path>` `` to stderr, writes an empty JSON
+/// array to stdout, and exits 0. The script reads that decode line and states
+/// it under the marker; it reports no finding because the report holds no
+/// entry.
+#[test]
+fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode_alone() {
+    verify_swift_length_declines_alone(&ShippedUnreadableFile::Undecodable(
+        swift_undecodable_source(),
+    ));
+}
+
+/// Acceptance: the shipped Swift function-length tool rule reports no finding,
+/// and states one diagnostic, over a Swift file it may not read and no other
+/// file beside it, through the real swiftlint pipeline.
+///
+/// The mode and the decode reach swiftlint as the same message, so this run
+/// answers the same way [`the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode_alone`]
+/// does. The probe takes every permission off the file, which is a mode, so
+/// it runs on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_may_not_read_alone() {
+    verify_swift_length_declines_alone(&ShippedUnreadableFile::Forbidden(
+        SWIFT_LENGTH_FORBIDDEN_SOURCE,
+    ));
 }
 
 /// The `function-length-swift` probe over a file whose name holds the words of
@@ -505,13 +587,14 @@ const SWIFT_LENGTH_HOLLOW_PROBE: ShippedNamedPath = ShippedNamedPath {
 /// Acceptance: the shipped Swift function-length tool rule answers CLEAN over
 /// a directory that holds no Swift file, through the real swiftlint pipeline.
 ///
-/// The `[ ! -r "$file" ]` guard tests each path for reading, and a directory
-/// is readable, so the guard admits it and swiftlint reads it. Measured with
-/// swiftlint 0.65.0 over such a directory: swiftlint writes 0 bytes to stdout,
-/// writes `Error: No lintable files found at paths: ...` to stderr, and
-/// exits 1. The script reads that stderr, reports no finding, and exits 0. A
-/// guard that tested for a FILE would stop the directory instead, and the run
-/// would answer one tool error over a path swiftlint reads without trouble.
+/// The `[ ! -e "$file" ]` test asks whether the path holds anything, and a
+/// directory does, so the test states nothing and swiftlint reads the path.
+/// Measured with swiftlint 0.65.0 over such a directory: swiftlint writes 0
+/// bytes to stdout, writes `Error: No lintable files found at paths: ...` to
+/// stderr, and exits 1. The script reads that stderr, reports no finding,
+/// states no diagnostic, and exits 0. A test that asked for a FILE would
+/// decline the directory instead, and the run would state a path swiftlint
+/// reads without trouble.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_stays_clean_over_a_hollow_directory() {
     verify_shipped_hollow_directory_answers_clean(&SWIFT_LENGTH_HOLLOW_PROBE);
