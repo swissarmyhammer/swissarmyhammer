@@ -1246,6 +1246,49 @@ fn the_shipped_go_missing_docs_tool_rule_declines_a_file_it_cannot_parse() {
     );
 }
 
+/// The `missing-docs-go` probe over a path no reader may open, beside the Go
+/// file the run judges.
+///
+/// The judged file is the one [`GO_JUDGED_SOURCE`] holds: one undocumented
+/// exported type, so the run has one row to lose. Losing it is what a nonzero
+/// exit over a declined item costs, and staying silent about the path is what
+/// reads that path as a clean file.
+fn go_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: GO_PROJECT_TYPES,
+        rule: GO_MISSING_DOCS_RULE,
+        judged: vec![(GO_JUDGED_PATH, GO_JUDGED_SOURCE.to_string())],
+        path: GO_FORBIDDEN_PATH,
+        expected: vec![go_missing_docs_judged_row()],
+    }
+}
+
+/// Acceptance: the shipped Go missing-docs tool rule DECLINES a Go file it may
+/// not read, through the real revive pipeline.
+///
+/// revive STATS each path before it lints. A path it can stat and cannot open
+/// is dropped in SILENCE: measured with revive 1.15.0, over a file at mode 000
+/// beside one undocumented exported type, revive reported the finding of the
+/// file it read, wrote NO record of the refusing path under any category, wrote
+/// 0 bytes on stderr and exited 0. The same file alone answered `null` on
+/// stdout at exit 0, which is the report and the status of a clean file.
+///
+/// So there is no line to forward and no record to select. The script tests
+/// each path BEFORE revive starts, which is the shape
+/// `builtin/validators/README.md` names for a tool that can exit 0 for a file
+/// it could not open.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_unreadable_file_is_declined(
+        &go_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(GO_FORBIDDEN_SOURCE),
+    );
+}
+
 /// The materialized name of the `missing-docs-python` fail fixture.
 const PYTHON_MISSING_DOCS_FAIL_FIXTURE: &str = concat!(missing_docs_rule!(python), ".fail.py");
 

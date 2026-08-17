@@ -2028,6 +2028,22 @@ const PYTHON_PROJECT_TYPES: &[&str] = &["python"];
 /// The project types a Go workspace carries, as the plan holds them.
 const GO_PROJECT_TYPES: &[&str] = &["go"];
 
+/// Where the Go path no reader may open stands inside the probe repository.
+///
+/// `missing-docs-go` and `stuttering-name-go` run the same revive `exported`
+/// rule and split its output between them, so ONE path and ONE source serve
+/// the refusing-path probe of both rules.
+const GO_FORBIDDEN_PATH: &str = "forbidden.go";
+
+/// A Go file revive could read if the mode let it.
+///
+/// The type is unexported, and Go carves an unexported name out of BOTH halves
+/// of the `exported` rule, so a run that DID read this file reports nothing of
+/// it under either category. That is the clean answer neither rule may give
+/// for a file it never read, and it leaves the diagnostic as the whole
+/// difference between the run that read the file and the run that did not.
+const GO_FORBIDDEN_SOURCE: &str = concat!("package staged\n", "\n", "type forbidden struct{}\n");
+
 /// The project types a Node.js workspace carries, as the plan holds them.
 const NODEJS_PROJECT_TYPES: &[&str] = &["nodejs"];
 

@@ -107,8 +107,24 @@ comments:
 
     task: ^am9b40g
   timestamp: 2026-08-17T09:42:00.547725+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m07j20f3bnsa7vt5tr2r72zt
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 3c9df4953). 9 rules ran. 0 findings, 0 confirmed, 1 refuted, 0 failed. 4 files reviewed. 4 `.kanban/` files not reviewed, because an ignore rule holds them out.
+    - next: card moves to done. No open finding stays on this card.
+  timestamp: 2026-08-17T09:50:16.547976+00:00
+- actor: claude-code
+  id: 01m07j2ehqpes07g066r9gk7fp
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 5 files. The rule writes the report to a file, holds the status to 0 and 1, breaks on a report row of any linter that is not `mnd`, and states every stderr line whole under the marker at exit 0. 5 acceptance tests over the real tool. The Go probe bytes both golangci-lint rules share moved to a new go_probe.rs.
+    - test: green — cargo nextest run --workspace, 14160 passed, 0 failed. fmt and clippy clean. The test step found the shared probe's module manifest had DRIFTED during the extraction (`function-length-probe` became `golangci-probe`), which would have changed what the other rule's tests measure, and restored the bytes. It also found `rm` missing from the doctor check.
+    - commit: 3c9df4953
+    - review: clean — 9 rules, 0 findings.
+  timestamp: 2026-08-17T09:50:30.967874+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa580
 title: 'magic-numbers-go is a bare pipe: one Go file that does not parse reads as a clean tree'
 ---
 `builtin/validators/code-hygiene/rules/magic-numbers-go.md` drives golangci-lint
