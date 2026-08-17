@@ -284,6 +284,98 @@ comments:
     - evidence: I checked the mirdan build output at `target/debug/build/mirdan-66497afbb02f504c/out/builtin_validators.rs`. I pulled the embedded `code-hygiene/rules/function-length-go.md` entry and compared it byte for byte against the file on disk. Both hold 33537 bytes and match exactly. The byte count changed from 33384, as expected, because the prose changed.
     - next: none. The step is green.
   timestamp: 2026-08-17T01:20:32.467585+00:00
+- actor: claude-code
+  id: 01m06njhkne2nk2xeh2ycgh8cj
+  text: |-
+    ### review — findings
+    - evidence: 3 findings, 3 confirmed — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs:839, :858, :900
+    - next: correct the three `rust/error-handling` findings in the full file, then run the review again.
+  timestamp: 2026-08-17T01:32:29.685817+00:00
+- actor: claude-code
+  id: 01m06nkakshp27p0vk7tjt4sy9
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 1 file, 1 hunk. The passage said `runner_loadingpackage.go` writes `analysis skipped: IllTypedError`. `(act *action) analyze` in `runner_checker.go:175` writes it. The correction found a second problem in the same sentence: BOTH files hold a method named `analyze`, so each is now named by its receiver. Every other path, symbol and line the passage names was re-read against golangci-lint v2.12.2 and all were correct.
+    - test: green — the corrected passage verified against the source again by the test step; fmt and clippy clean; `cargo nextest run --workspace` 14132 passed, 0 failed, 0 skipped; the mirdan embed matches the disk file at 33537 bytes.
+    - commit: 1e9978eb6
+    - review: findings — 3 confirmed of 9 validators attempted, all from `rust/error-handling` and all in `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs`: line 839 (`.unwrap()` on the temporary directory), line 858 (`.expect()` on `run_script`), line 900 (`.expect()` on `create_dir_all`). The two rule documents and the new `golangci_cache.rs` guard drew none.
+  timestamp: 2026-08-17T01:32:55.289206+00:00
+- actor: claude-code
+  id: 01m06p2xvcaxf36far6fnsndwa
+  text: |
+    ### implement (iteration 4) — changed
+
+    The three `rust/error-handling` findings are closed. I read the rule first. `builtin/validators/rust/rules/error-handling.md` says: "Panics are for bugs only — internal invariant violations. Never panic on expected failure modes (bad input, missing files, network errors)."
+
+    **The cause, removed from the WHOLE file.** The three lines the review named are three of EIGHT places in `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs` that panicked on an expected failure. I removed all eight:
+
+    | the line | what it panicked on | what it is now |
+    |---|---|---|
+    | `run.outcome` | `ScriptFailure` of the stubbed run | `?` |
+    | `workspace_names_one_checksum_merged` | a search that met no pair | `Err(...)` |
+    | `tempfile::tempdir()` | `std::io::Error` | `?` |
+    | `run_script(...)` | `ScriptFailure` | `?` |
+    | `duration_since(UNIX_EPOCH)` | `SystemTimeError` | `?` |
+    | `create_dir_all(...)` | `std::io::Error` | `?` |
+    | `File::open(...)` | `std::io::Error` | `?` |
+    | `set_times(...)` | `std::io::Error` | `?` |
+
+    `grep` over the file for `.unwrap()`, `.expect(` and `panic!(` now gives 0 matches.
+
+    **The shapes.**
+    - A new `ProbeResult<T> = Result<T, Box<dyn std::error::Error>>` alias, with a doc comment that states why the tests answer `Result`. The box keeps each failure's own `std::error::Error::source` reachable, which the same rule asks for ("`Error::source()` chains must exist for wrapped errors — don't flatten the chain"). A `map_err` to a string would have flattened it.
+    - Three tests now answer `ProbeResult<()>`: `..._declines_a_file_it_may_not_read`, `..._reads_the_workspace_one_checksum_merged`, `..._sweeps_a_stale_cache_directory`.
+    - `stage_cache_directory` answers `std::io::Result<PathBuf>`, which is the exact shape the finding at line 900 asks for.
+    - `unique_cache_name` answers `Result<String, SystemTimeError>`.
+    - `workspace_names_one_checksum_merged` answers `ProbeResult<(String, String)>`. The birthday search over a 32-bit checksum meets a pair long before the 1000000 limit, but no pigeonhole makes that certain, so exhaustion is an expected failure and not an invariant.
+
+    **Why NOT `.expect()`, which is the shape of the sibling files.** The finding at line 839 accepts `.expect()`, but the findings at 858 and 900 name `.expect()` itself as the defect. `.expect()` therefore closes one finding of the three and leaves two open. The review scope was `review sha HEAD~1..HEAD`, so the `.expect()` lines of the sibling files were never read by the review. They are unreviewed, not approved.
+
+    **The tests still MEASURE.** No assertion was removed, weakened or made conditional. I proved that a `Result` test fails on `Err` in THIS crate, with the two shapes this file carries: a bare `#[test]` and a `#[test] #[serial_test::serial(env)]`. Two temporary probes answering `Err("the temporary probe must fail")` both FAILED under `cargo nextest run -p swissarmyhammer-validators -E 'test(temporary_red_probe)'` — "2 tests run: 0 passed, 2 failed", each with `Error: "the temporary probe must fail"`. Both probes were then removed; `grep` for `temporary_red_probe` over `crates/` gives 0 matches.
+
+    **The two sentences that `.expect()` carried are kept as comments beside the `?`**, because each states what the run must do rather than what the probe must do. The `?` now shows the script's own stderr, which is more than the sentence gave.
+
+    **Verified.**
+    - `cargo nextest run -p swissarmyhammer-validators` — 790 run, 790 passed, 0 failed, 0 skipped.
+    - `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` — clean, 0 warnings.
+    - `cargo fmt --check` — clean.
+    - `git diff --stat` outside `.kanban` names ONE file.
+  timestamp: 2026-08-17T01:41:26.508458+00:00
+- actor: claude-code
+  id: 01m06p35e2bqncxf8b0cjne8zy
+  text: |
+    ### implement — changed
+    - evidence: 1 file — `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs`. 8 panics on expected failures removed (3 named by the review, 5 more of the same cause in the same file); each is now `?` or `Err(...)` through a new `ProbeResult` alias, `std::io::Result<PathBuf>` on `stage_cache_directory`, and `Result<String, SystemTimeError>` on `unique_cache_name`. 0 matches for `.unwrap()`, `.expect(` and `panic!(` remain. Two temporary `Err` probes proved a `Result` test still fails, plain and under `serial_test`. 790 of 790 tests pass; clippy and fmt clean.
+    - next: /review
+  timestamp: 2026-08-17T01:41:34.274768+00:00
+- actor: claude-code
+  id: 01m06ppjwpbh37ker4xpmm1rvg
+  text: |
+    ### test — green
+
+    I checked the one changed file: `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs`.
+
+    **I proved each RED-on-Err case myself.** I saved the exact original bytes first. Then, one at a time, I broke the real condition each test checks, and I ran `cargo nextest run` on that one test. Then I put the file back to the exact original bytes and checked the SHA-256 hash and a `diff` to prove the restore worked.
+
+    1. `the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read` — I broke the JSON text in `GO_DECLINED_ANSWER`. The script's own `jq` step could not read it. Result: FAILED, with `Error: Exit("jq: parse error... jq could not read the golangci-lint report")`. The `run.outcome?` line passed the error up. It did not pass quietly.
+    2. `the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_merged` — I set `CANDIDATE_NAME_LIMIT` to 5 for a moment. The search could not find a matching pair. Result: FAILED, with `Error: "the search met no pair of names one checksum merges..."`. The `workspace_names_one_checksum_merged(...)?` line passed the error up.
+    3. `the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory` — I put a NUL byte in the cache directory name for a moment. `create_dir_all` failed. Result: FAILED, with `Error: Error { kind: InvalidInput, message: "file name contained an unexpected NUL byte" }`. The `stage_cache_directory(...)?` line passed the error up.
+
+    After each break, I put the file back. The final SHA-256 hash matched the saved original hash, and `diff` showed no change.
+
+    **No check was dropped.** I read the full diff against `HEAD`. Every `assert_eq!` and `assert!` line stays the same. Only `.unwrap()`, `.expect()`, and `panic!()` calls changed to `?` or `Err(...)`.
+
+    **Zero matches for banned calls.** `grep -n '\.unwrap()\|\.expect(\|panic!('` on the file: 0 matches.
+
+    **Format and lint are clean.**
+    - `cargo fmt --check`: 0 diff.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: 0 warnings.
+
+    **Full test run is clean.**
+    - `cargo nextest run --workspace`, one run, default concurrency: 14132 tests run, 14132 passed, 0 failed, 0 skipped.
+
+    next: none. The step is green.
+  timestamp: 2026-08-17T01:52:10.646876+00:00
 position_column: doing
 position_ordinal: '8280'
 title: function-length-go golangci-lint cache key collides after thousands of accumulated runs
@@ -297,3 +389,14 @@ Reproduced: `cargo nextest run -p swissarmyhammer-validators -E 'test(shipped::f
 Found while probing an unrelated Go flake for #tool-validators card ^r73ddrr. Not caused by and not touched by that change — `function-length-go.md`'s `run:` block is untouched by that diff.
 
 Work: give the cache key real entropy (hash the full path content, not a checksum with a constant-length blind spot, or add a nonce) so accumulated stale directories cannot collide, and/or prune old cache directories on a TTL so they stop accumulating without bound. #test-failure
+
+## Review Findings (2026-08-16 20:21)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs:839` `rust/error-handling` — `.unwrap()` panics on I/O errors when creating a temporary directory; I/O failures (permission denied, disk full) are expected failure modes, not bugs. Use `.expect("message")` at minimum, or change the test signature to `fn(...) -> Result<(), Box<dyn std::error::Error>>` to propagate the error. Either use `.expect("failed to create temp directory")` to provide context, or refactor the test to return `Result` so errors can be propagated without panicking.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs:858` `rust/error-handling` — `.expect()` panics when `run_script()` fails; script execution is an I/O operation that can fail on expected conditions (subprocess errors, I/O errors). The error-handling rule forbids panicking on expected failure modes. Refactor to return `Result` or handle the error explicitly without panicking.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_go.rs:900` `rust/error-handling` — `.expect()` panics when `create_dir_all` fails; filesystem operations (permission denied, no space) are expected failure modes, not bugs. The rule states: 'Panics are for bugs only — internal invariant violations. Never panic on expected failure modes (bad input, missing files, network errors).'. Refactor `stage_cache_directory` to return `Result<PathBuf, std::io::Error>`, or change callers to use a test signature that returns `Result`.

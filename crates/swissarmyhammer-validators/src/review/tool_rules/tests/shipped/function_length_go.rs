@@ -14,9 +14,19 @@ use super::*;
 use std::collections::HashMap;
 use std::fs::FileTimes;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use super::golangci_cache::GOLANGCI_CACHE_DIRECTORY;
+
+/// What a probe of this file answers when it could not do its work.
+///
+/// A temporary directory, a subprocess and a file mode are each an expected
+/// failure of the machine rather than a bug in the probe, so the tests below
+/// answer `Result` and let the failure through. The box keeps each failure's
+/// own [`std::error::Error::source`] reachable rather than flattening it into
+/// a sentence, and a test that answers `Err` fails exactly as one that
+/// panicked did.
+type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// The statement gate the shipped rule states.
 ///
@@ -584,7 +594,7 @@ const GO_DECLINED_ANSWER: &str = concat!(
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]
-fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
+fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() -> ProbeResult<()> {
     let run = drive_shipped_script_with_stub(
         GO_PROJECT_TYPES,
         GO_FUNCTION_LENGTH_RULE,
@@ -593,9 +603,10 @@ fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
         GO_TOOL_BINARY_NAME,
         GO_DECLINED_ANSWER,
     );
-    let outcome = run
-        .outcome
-        .expect("a script handed an item it cannot judge must judge the rest and exit 0");
+    // A script handed an item it cannot judge must judge the rest and exit 0.
+    // A failure here is therefore the answer of the run, and the test fails on
+    // it with the script's own stderr rather than with a sentence of its own.
+    let outcome = run.outcome?;
 
     assert_eq!(
         sorted_names(&finding_rows(&outcome, &run.repo_root)),
@@ -614,6 +625,7 @@ fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
         "the diagnostic must name the file it declined; it said '{}'",
         stated[0]
     );
+    Ok(())
 }
 
 /// How many runs of the shipped script the lock probe starts together.
@@ -797,19 +809,27 @@ fn candidate_name(index: usize) -> String {
 
 /// Two names for sibling working directories under `root` whose paths the OLD
 /// cache key merged into one directory.
-fn workspace_names_one_checksum_merged(table: &CksumTable, root: &Path) -> (String, String) {
+///
+/// A birthday search over a 32-bit checksum meets a pair long before
+/// [`CANDIDATE_NAME_LIMIT`], and no pigeonhole makes that certain, so a search
+/// that reads the whole limit answers the failure rather than a pair it never
+/// found.
+fn workspace_names_one_checksum_merged(
+    table: &CksumTable,
+    root: &Path,
+) -> ProbeResult<(String, String)> {
     let mut seen: HashMap<String, String> = HashMap::new();
     for index in 0..CANDIDATE_NAME_LIMIT {
         let name = candidate_name(index);
         let key = old_cache_key(table, &root.join(&name).to_string_lossy());
         match seen.get(&key) {
-            Some(earlier) if *earlier != name => return (earlier.clone(), name),
+            Some(earlier) if *earlier != name => return Ok((earlier.clone(), name)),
             _ => {
                 seen.insert(key, name);
             }
         }
     }
-    panic!("the search must meet a pair of names one checksum merges under {root:?}")
+    Err(format!("the search met no pair of names one checksum merges under {root:?}").into())
 }
 
 /// Acceptance: the shipped Go function-length tool rule reads the workspace it
@@ -832,14 +852,15 @@ fn workspace_names_one_checksum_merged(table: &CksumTable, root: &Path) -> (Stri
 /// directory is a temporary path this run is given and no constant can name
 /// it.
 #[test]
-fn the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_merged() {
+fn the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_merged(
+) -> ProbeResult<()> {
     let loader = builtin_loader();
     require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
     let shipped = required_shipped_tool_rule(&loader, GO_FUNCTION_LENGTH_RULE);
-    let work = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir()?;
     let root = probe_repository_root(work.path());
     let table = cksum_table();
-    let (first, second) = workspace_names_one_checksum_merged(&table, &root);
+    let (first, second) = workspace_names_one_checksum_merged(&table, &root)?;
     assert_eq!(
         old_cache_key(&table, &root.join(&first).to_string_lossy()),
         old_cache_key(&table, &root.join(&second).to_string_lossy()),
@@ -854,8 +875,10 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_mer
         stage_probe_files(&repo, probe.files());
         let repo_root = probe_repository_root(&repo);
 
-        let reported = run_script(&shipped.script, &repo_root, &args)
-            .expect("each run must judge its own workspace and exit 0");
+        // Each run must judge its own workspace and exit 0. A failure here is
+        // therefore the answer of the run, and the test fails on it with the
+        // script's own stderr rather than with a sentence of its own.
+        let reported = run_script(&shipped.script, &repo_root, &args)?;
 
         assert_eq!(
             sorted_names(&finding_rows(&reported, &repo_root)),
@@ -865,6 +888,7 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_mer
              paths, which stand outside this one"
         );
     }
+    Ok(())
 }
 
 /// How old the stale cache directory of the sweep probe is, in days.
@@ -884,26 +908,32 @@ const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
 ///
 /// The sweep reads every directory under the one cache parent, whatever its
 /// name, so two probes running together must not stage the same one.
-fn unique_cache_name(role: &str) -> String {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("a clock past the epoch");
-    format!("probe-{role}-{}-{}", std::process::id(), stamp.as_nanos())
+///
+/// The name carries the clock, which a machine set before the epoch has none
+/// of, so the reading is answered rather than taken for granted.
+fn unique_cache_name(role: &str) -> Result<String, SystemTimeError> {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    Ok(format!(
+        "probe-{role}-{}-{}",
+        std::process::id(),
+        stamp.as_nanos()
+    ))
 }
 
 /// Makes a cache directory named `name` under the one cache parent, aged so
 /// that nothing has touched it for `age_days`, and answers its path.
-fn stage_cache_directory(name: &str, age_days: u64) -> PathBuf {
+///
+/// Each step is a filesystem call, and a full disk or a mode that stops it is
+/// a state of the machine rather than a bug in the probe, so the failure is
+/// answered and the test fails on it.
+fn stage_cache_directory(name: &str, age_days: u64) -> std::io::Result<PathBuf> {
     let directory = std::env::temp_dir()
         .join(GOLANGCI_CACHE_DIRECTORY)
         .join(name);
-    std::fs::create_dir_all(&directory).expect("stage a cache directory");
+    std::fs::create_dir_all(&directory)?;
     let touched = SystemTime::now() - Duration::from_secs(age_days * SECONDS_IN_A_DAY);
-    std::fs::File::open(&directory)
-        .expect("open the staged cache directory")
-        .set_times(FileTimes::new().set_modified(touched))
-        .expect("age the staged cache directory");
-    directory
+    std::fs::File::open(&directory)?.set_times(FileTimes::new().set_modified(touched))?;
+    Ok(directory)
 }
 
 /// Acceptance: the shipped Go function-length tool rule sweeps the cache
@@ -927,11 +957,11 @@ fn stage_cache_directory(name: &str, age_days: u64) -> PathBuf {
 /// one touched now, and holds the run to removing the first and keeping the
 /// second — so the sweep reads the age and not the name.
 #[test]
-fn the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory() {
+fn the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory() -> ProbeResult<()> {
     let loader = builtin_loader();
     require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
-    let stale = stage_cache_directory(&unique_cache_name("stale"), STALE_CACHE_AGE_DAYS);
-    let fresh = stage_cache_directory(&unique_cache_name("fresh"), FRESH_CACHE_AGE_DAYS);
+    let stale = stage_cache_directory(&unique_cache_name("stale")?, STALE_CACHE_AGE_DAYS)?;
+    let fresh = stage_cache_directory(&unique_cache_name("fresh")?, FRESH_CACHE_AGE_DAYS)?;
 
     verify_the_generated_position_stays_silent(
         "the run reports its own plain position while it sweeps the stale cache \
@@ -954,4 +984,5 @@ fn the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory() {
          gone, so the sweep reads the name rather than the age and takes the cache a \
          live workspace is using"
     );
+    Ok(())
 }
