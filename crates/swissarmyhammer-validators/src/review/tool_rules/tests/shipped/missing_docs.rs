@@ -9,6 +9,62 @@
 
 use super::*;
 
+/// The row the declaration that OPENS a probe source stands on: the first line
+/// of the file.
+///
+/// Every probe source of this file that its tool reports at the head writes
+/// that declaration on the first line of the staged bytes, so the number is a
+/// fact of the fixture and not a value the probe chose.
+///
+/// The row stands in a macro beside the probes that hold it because each probe
+/// keeps its rows in a `&'static [&'static str]` built with `concat!`, and
+/// `concat!` takes literals alone.
+macro_rules! opening_declaration_row {
+    () => {
+        "1"
+    };
+}
+
+/// The row the declaration NESTED under the opening declaration stands on: the
+/// second line of the file.
+///
+/// Each nested probe source writes its member on the line directly under the
+/// type head that opens the file, so the number is a fact of the staged bytes.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! nested_declaration_row {
+    () => {
+        "2"
+    };
+}
+
+/// The row ruff stands a whole-module finding on: the first line of the file.
+///
+/// `D100` names the module itself, which carries no declaration line of its
+/// own, so ruff reports it at the head of the file rather than under a
+/// definition. That is a different reason from
+/// [`opening_declaration_row`], although both name the same line.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! python_module_row {
+    () => {
+        "1"
+    };
+}
+
+/// The row the first declaration of a Go probe source stands on: the third
+/// line of the file.
+///
+/// A Go file opens with its `package` clause and carries a blank line under
+/// it, so the `func Exported` head revive reports takes the third line.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! go_declaration_row {
+    () => {
+        "3"
+    };
+}
+
 /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
 /// in doctor, and supersedes the `missing-docs` prompt rule.
 ///
@@ -424,7 +480,7 @@ fn the_shipped_dart_missing_docs_tool_rule_reads_one_package_config_for_each_pac
     );
 }
 
-/// The binary both runs of the shipped Dart script call.
+/// The binary every run of the shipped Dart script calls.
 const DART_BINARY_NAME: &str = "dart";
 
 /// The word `dart pub get` takes as its first argument.
@@ -464,10 +520,11 @@ const DART_BROKEN_RUN_SOURCE: &str = concat!("class BrokenRun {\n", "  void memb
 const DART_BROKEN_RUN_STAGED: &[(&str, &str)] = &[(DART_BROKEN_RUN_PATH, DART_BROKEN_RUN_SOURCE)];
 
 /// Each `path:line` entry the probe reports when both `dart` runs stand: the
-/// class on row 1 and the method on row 2 of [`DART_BROKEN_RUN_SOURCE`].
+/// class head that opens [`DART_BROKEN_RUN_SOURCE`], and the method head on the
+/// line under it.
 const DART_BROKEN_RUN_ROWS: &[&str] = &[
-    concat!(dart_broken_run_path!(), ":1"),
-    concat!(dart_broken_run_path!(), ":2"),
+    concat!(dart_broken_run_path!(), ":", opening_declaration_row!()),
+    concat!(dart_broken_run_path!(), ":", nested_declaration_row!()),
 ];
 
 /// The words the error of a `dart pub get` that could not run must carry.
@@ -527,9 +584,11 @@ const DART_WHOLE_RUN_PROBE: ShippedStagedTree = ShippedStagedTree {
 /// Measured on Dart SDK 3.11.0 over a probe package holding one undocumented
 /// class and one undocumented method: 2 rows after a `dart pub get` that
 /// succeeds, and 0 rows at exit 0 after one that fails and writes no
-/// `.dart_tool`. An SDK outside the `>=3.0.0 <5.0.0` constraint the script
-/// declares reaches that state — `dart pub get` then exits 1 and writes
-/// nothing.
+/// `.dart_tool`. A probe whose `environment: sdk:` window leaves the installed
+/// SDK outside it reaches that state — measured with `sdk: '>=3.5.0 <3.6.0'`
+/// on Dart SDK 3.11.0, `dart pub get` exits 1 offline and online alike, and
+/// writes nothing. The script derives its constraint from `dart --version`, so
+/// no installed SDK stands outside it.
 ///
 /// The stub breaks the `pub` run and hands the `analyze` run through, so this
 /// probe measures the pub-get status alone.
@@ -585,41 +644,266 @@ fn the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs()
     verify_shipped_tree_reports(&DART_WHOLE_RUN_PROBE);
 }
 
-/// Where the Dart file that is never written stands inside the probe
-/// repository.
-const DART_ABSENT_PATH: &str = "lib/absent.dart";
+/// Where the path the Dart missing-docs run cannot judge stands inside the
+/// probe repository.
+///
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const DART_MISSING_DOCS_UNREADABLE_PATH: &str = "lib/unreadable.dart";
 
-/// What the script writes for a file it cannot read.
-const DART_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(dart), " cannot read");
+/// A Dart library written in Latin-1 rather than in UTF-8.
+///
+/// The byte `0xE9` is `é` in Latin-1, and it is not a UTF-8 sequence. The
+/// members stand under the string, so a run that DID read the file reports
+/// them.
+const DART_MISSING_DOCS_UNDECODABLE_SOURCE: &[u8] = b"final name = 'caf\xe9';\n\
+class Undecodable {\n\
+  void member() {}\n\
+}\n";
 
-/// What the one error of an absent file must name.
-const DART_ABSENT_ERROR: &[&str] = &[DART_CANNOT_READ_MESSAGE, DART_ABSENT_PATH];
+/// A Dart library the analyzer could read if the mode let it.
+///
+/// Dart states privacy with the `_` prefix, so a run that DID read this file
+/// would report no member — which is the clean answer this rule must not give
+/// for a file it never read.
+const DART_MISSING_DOCS_FORBIDDEN_SOURCE: &str =
+    concat!("class _Forbidden {\n", "  void _member() {}\n", "}\n");
 
-/// The `missing-docs-dart` probe over a path that holds no file.
-const DART_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
+/// The `missing-docs-dart` probe over a refusing path beside the staged
+/// library.
+///
+/// The staged library is the one [`DART_BROKEN_RUN_STAGED`] holds: one
+/// undocumented public class and one undocumented method, so the run has two
+/// rows to lose. Losing them is what a nonzero exit over a declined item costs,
+/// and staying silent about the path is what reads that path as a clean file.
+fn dart_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        judged: DART_BROKEN_RUN_STAGED
+            .iter()
+            .map(|(path, source)| (*path, (*source).to_string()))
+            .collect(),
+        path: DART_MISSING_DOCS_UNREADABLE_PATH,
+        expected: DART_BROKEN_RUN_ROWS
+            .iter()
+            .map(|row| (*row).to_string())
+            .collect(),
+    }
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a path that
+/// holds no file, through the real `dart analyze` pipeline.
+///
+/// The script copies each file it is given into the probe package, and `cp`
+/// answers a path that holds no file with a nonzero status. `set -e` then took
+/// the whole run down, and the two rows of the library the run DID judge went
+/// away with it. Measured with the two tests taken out: `cp: lib/absent.dart:
+/// No such file or directory` and exit 1.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
+/// cannot decode, through the real `dart analyze` pipeline.
+///
+/// `[ ! -r "$file" ]` admits this file — the mode lets a reader open it — so
+/// `cp` copies it into the probe package and `dart analyze` reads it. Measured
+/// on Dart SDK 3.11.0 over a probe package that holds this file beside the
+/// judged library: the analyzer reports the two rows of the judged library, 0
+/// bytes on stderr, and exit 0, and it says NOTHING about the file it could not
+/// decode. So the engine read a file the analyzer never read as a clean file,
+/// and the `iconv` test is what answers it.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(DART_MISSING_DOCS_UNDECODABLE_SOURCE),
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
+/// may not read, through the real `dart analyze` pipeline.
+///
+/// `cp` answers a file whose mode refuses a read with a nonzero status, and
+/// `set -e` then took the whole run down. Measured with the two tests taken
+/// out: `cp: lib/forbidden.dart: Permission denied` and exit 1.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(DART_MISSING_DOCS_FORBIDDEN_SOURCE),
+    );
+}
+
+/// Where the Dart library that uses a declaration newer than the earlier probe
+/// floor stands inside the probe repository.
+///
+/// It stands under `lib/`, which is the one position `public_member_api_docs`
+/// reads.
+const DART_MISSING_DOCS_LANGUAGE_VERSION_PATH: &str = "lib/language_version.dart";
+
+/// A Dart library whose first declaration is an `extension type`, beside a
+/// plain class holding the same two undocumented member kinds.
+///
+/// `extension type` arrived in Dart 3.3. A probe package whose
+/// `environment: sdk:` states a LOWER floor gives the analyzer a language
+/// version that refuses the declaration, and every member inside it goes off
+/// the report.
+///
+/// The plain class is what makes the loss readable. A run that lost the
+/// extension type still answers three rows, so silence is never the signal —
+/// the missing rows are.
+const DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE: &str = concat!(
+    "extension type Meters(int value) {\n",
+    "  int get doubled => value + value;\n",
+    "\n",
+    "  void report() {}\n",
+    "}\n",
+    "\n",
+    "class OtherClass {\n",
+    "  String otherField = 'plain';\n",
+    "\n",
+    "  void otherMethod() {}\n",
+    "}\n",
+);
+
+/// The head of each member [`DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE`]
+/// leaves
+/// undocumented.
+///
+/// The first three stand inside the `extension type` and the last three inside
+/// the plain class. The lint reports the extension type itself, its getter and
+/// its method, and reports nothing for the representation field `value`.
+const DART_MISSING_DOCS_LANGUAGE_VERSION_HEADS: &[&str] = &[
+    "extension type Meters",
+    "int get doubled",
+    "void report()",
+    "class OtherClass",
+    "String otherField",
+    "void otherMethod()",
+];
+
+/// Acceptance: the shipped Dart missing-docs tool rule reports every member of
+/// a library that uses a declaration newer than the earlier probe floor,
+/// through the real `dart analyze` pipeline.
+///
+/// A Dart package's LANGUAGE VERSION is the lower bound of its
+/// `environment: sdk:` constraint, and the analyzer refuses syntax newer than
+/// that version. The script therefore reads the version out of `dart --version`
+/// and writes `sdk: '^<version>'`, so the probe parses with the language
+/// version of the installed SDK.
+///
+/// Measured on Dart SDK 3.11.0 over this source, with `public_member_api_docs`
+/// on:
+///
+/// | the probe constraint | what the run reports |
+/// |---|---|
+/// | `>=3.0.0 <5.0.0`, the earlier fixed floor | rows 7, 8 and 10, beside one `EXPERIMENT_NOT_ENABLED` SYNTACTIC_ERROR naming `inline-class` |
+/// | `^3.11.0`, derived from `dart --version` | rows 1, 2, 4, 7, 8 and 10 |
+///
+/// The earlier floor loses the three members of the extension type and exits 0,
+/// which reads exactly like a documented declaration. This test holds the run
+/// to all six, so a fixed floor can never come back unmeasured.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration() {
+    let expected: Vec<String> = DART_MISSING_DOCS_LANGUAGE_VERSION_HEADS
+        .iter()
+        .map(|head| {
+            expected_row(
+                DART_MISSING_DOCS_LANGUAGE_VERSION_PATH,
+                DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE,
+                head,
+            )
+        })
+        .collect();
+    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+
+    verify_staged_rows_report(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        &[(
+            DART_MISSING_DOCS_LANGUAGE_VERSION_PATH,
+            DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE,
+        )],
+        &expected,
+        "the probe package states the language version of the installed SDK, so the \
+         analyzer parses the extension type and reports its three members beside the \
+         three of the plain class",
+    );
+}
+
+/// The word `dart --version` takes as its first argument.
+///
+/// It tells the run that reads the language version from the two runs that
+/// build and judge the probe package, so a stub can break that one run and
+/// leave the other two standing.
+const DART_MISSING_DOCS_VERSION_SUBCOMMAND: &str = "--version";
+
+/// Where the one file the no-version probe stages stands, as the work-list
+/// holds it.
+///
+/// The script never reaches `dart analyze` over this file — the break happens
+/// before the probe package is built — so its content answers for nothing
+/// beyond giving the run one file to judge.
+const DART_MISSING_DOCS_NO_VERSION_PATH: &str = "lib/no_version.dart";
+
+/// [`DART_MISSING_DOCS_NO_VERSION_PATH`]'s source: one undocumented public
+/// class holding one undocumented method.
+const DART_MISSING_DOCS_NO_VERSION_SOURCE: &str =
+    concat!("class NoVersion {\n", "  void member() {}\n", "}\n");
+
+/// The one file the no-version probe stages.
+const DART_MISSING_DOCS_NO_VERSION_STAGED: &[(&str, &str)] = &[(
+    DART_MISSING_DOCS_NO_VERSION_PATH,
+    DART_MISSING_DOCS_NO_VERSION_SOURCE,
+)];
+
+/// The words the error of a `dart --version` that names no version must carry.
+const DART_MISSING_DOCS_NO_VERSION_ERROR: &[&str] =
+    &[DART_MISSING_DOCS_RULE, "dart --version names no version"];
+
+/// The probe of a `dart --version` that names no version, and the words its
+/// error must carry.
+const DART_MISSING_DOCS_NO_VERSION_PROBE: ShippedStagedTree = ShippedStagedTree {
     run: ShippedRun {
         project_types: FLUTTER_PROJECT_TYPES,
         rule: DART_MISSING_DOCS_RULE,
-        expected: DART_ABSENT_ERROR,
+        expected: DART_MISSING_DOCS_NO_VERSION_ERROR,
     },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Dart file that is not there",
-    path: DART_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
+    staged: DART_MISSING_DOCS_NO_VERSION_STAGED,
+    reason: "a `dart --version` that names no version leaves the probe package unable to \
+             state the language version it parses with, and the run must not guess one",
 };
 
-/// Acceptance: the shipped Dart missing-docs tool rule BREAKS on a file it
-/// cannot read, through the real `dart analyze` pipeline.
+/// Acceptance: the shipped Dart missing-docs tool rule BREAKS when
+/// `dart --version` names no version.
 ///
-/// The script copies each file it is given into the probe package, so a file
-/// that is not there is a file the analyzer never sees, and the run would
-/// report no member of it while reporting for every other file of the group.
-/// The script therefore tests each file it is given before it builds anything,
-/// and exits nonzero with the name of the file it cannot read.
+/// The script reads the installed SDK's language version out of
+/// `dart --version` because a fixed floor hides real code as the language
+/// moves. A `dart --version` this script cannot read a version out of leaves
+/// it with no constraint to derive, and the run must not guess one: it names
+/// the failure and exits, rather than writing a probe package whose
+/// `environment: sdk:` states a version nobody measured.
+#[cfg(unix)]
 #[test]
-fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&DART_ABSENT_PROBE);
+#[serial_test::serial(env)]
+fn the_shipped_dart_missing_docs_tool_rule_breaks_when_dart_version_names_no_version() {
+    verify_shipped_tree_breaks_with_stub(
+        &DART_MISSING_DOCS_NO_VERSION_PROBE,
+        DART_BINARY_NAME,
+        &format!(" && [ \"$1\" = \"{DART_MISSING_DOCS_VERSION_SUBCOMMAND}\" ]"),
+        "  printf '%s\\n' 'Dart CLI has no version line here'\n  exit 0",
+    );
 }
 
 /// The materialized name of the `missing-docs-go` fail fixture.
@@ -909,40 +1193,84 @@ const GO_UNPARSABLE_SOURCE: &str = concat!("package staged\n", "\n", "func Broke
 /// Where the unparsable file stands inside the probe repository.
 const GO_UNPARSABLE_PATH: &str = "broken.go";
 
-/// What revive puts at the front of the failure it writes for a file it could
-/// not parse. The run's error detail must carry it, so the agent reading the
-/// error learns which file broke.
-const GO_INVALID_FILE_PREFIX: &str = "invalid file";
+/// Where the Go file the run CAN judge stands, beside the file it cannot
+/// judge.
+const GO_JUDGED_PATH: &str = "judged.go";
 
-/// What the one error of an unparsable Go file must name.
-const GO_UNPARSABLE_ERROR: &[&str] = &[GO_INVALID_FILE_PREFIX, GO_UNPARSABLE_PATH];
+/// A Go file the run judges: one exported type that carries no doc comment.
+///
+/// The name does not open with the package name, so the `exported` rule of
+/// revive answers for it under the `comments` category alone and the count
+/// stays at one finding.
+const GO_JUDGED_SOURCE: &str = concat!("package staged\n", "\n", "type Plain struct{}\n");
 
-/// The `missing-docs-go` probe over a Go file revive cannot parse.
-const GO_UNPARSABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: GO_PROJECT_TYPES,
-        rule: GO_MISSING_DOCS_RULE,
-        expected: GO_UNPARSABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Go file the parser cannot read",
-    path: GO_UNPARSABLE_PATH,
-    source: Some(GO_UNPARSABLE_SOURCE.as_bytes()),
-    support: NO_SUPPORT_FILES,
-};
+/// The declaration line the one finding of the judged Go file stands on.
+const GO_JUDGED_DECLARATION: &str = "type Plain struct{}";
 
-/// Acceptance: the shipped Go missing-docs tool rule BREAKS on a Go file it
+/// The `path:line` row the run must report for the judged Go file.
+fn go_missing_docs_judged_row() -> String {
+    expected_row(GO_JUDGED_PATH, GO_JUDGED_SOURCE, GO_JUDGED_DECLARATION)
+}
+
+/// Acceptance: the shipped Go missing-docs tool rule DECLINES a Go file it
 /// cannot parse, through the real revive pipeline.
 ///
-/// revive exits 0 for such a file and reports the failure with an empty
-/// `RuleName`, under the `validity` category rather than under `exported`. A
-/// pipe that selected the `exported` findings alone therefore dropped it, and
-/// the file read as clean — a run answering zero for a reason other than a
-/// clean file. The script counts the failures that belong to no rule, writes
-/// each one to stderr, and exits nonzero.
+/// revive exits 0 for such a file and writes the failure onto the SAME report
+/// as a finding, with an empty `RuleName` and the `validity` category rather
+/// than the rule name `exported`. A filter that selected the `exported`
+/// findings alone dropped that record, and the file then read as clean.
+///
+/// An `exit 1` answers that no better. Measured with revive 1.15.0 under the
+/// config this rule ships, over `func Broken( {` beside one undocumented
+/// exported type: two records on the report — the unnamed record of the file
+/// it could not parse AND the `exported` finding of the file it read — at
+/// exit 0, with 0 bytes on stderr. revive judged the other file, so its
+/// finding is there to lose, and the shipped script before this fix threw it
+/// away: nothing on stdout, one unmarked line on stderr, exit 1.
+///
+/// The unparsable file is therefore one declined item of a sound run, and the
+/// script states it under the `sah-diagnostic:` marker at exit 0.
 #[test]
-fn the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_run_breaks(&GO_UNPARSABLE_PROBE);
+fn the_shipped_go_missing_docs_tool_rule_declines_a_file_it_cannot_parse() {
+    let expected = go_missing_docs_judged_row();
+
+    verify_unjudged_file_is_declined(
+        GO_PROJECT_TYPES,
+        GO_MISSING_DOCS_RULE,
+        &[
+            (GO_JUDGED_PATH, GO_JUDGED_SOURCE),
+            (GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE),
+        ],
+        GO_UNPARSABLE_PATH,
+        &[&expected],
+    );
+}
+
+/// Acceptance: the shipped Go missing-docs tool rule DECLINES a Go file it may
+/// not read, through the real revive pipeline.
+///
+/// revive STATS each path before it lints. A path it can stat and cannot open
+/// is dropped in SILENCE: measured with revive 1.15.0, over a file at mode 000
+/// beside one undocumented exported type, revive reported the finding of the
+/// file it read, wrote NO record of the refusing path under any category, wrote
+/// 0 bytes on stderr and exited 0. The same file alone answered `null` on
+/// stdout at exit 0, which is the report and the status of a clean file.
+///
+/// So there is no line to forward and no record to select. The script tests
+/// each path BEFORE revive starts, which is the shape
+/// `builtin/validators/README.md` names for a tool that can exit 0 for a file
+/// it could not open.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_go_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_go_rule_declines_a_forbidden_path(
+        GO_MISSING_DOCS_RULE,
+        (GO_JUDGED_PATH, GO_JUDGED_SOURCE),
+        go_missing_docs_judged_row(),
+    );
 }
 
 /// The materialized name of the `missing-docs-python` fail fixture.
@@ -1231,23 +1559,19 @@ const PYTHON_UNDECODABLE_SOURCE: &[u8] =
 /// not give for a file it never read.
 const PYTHON_FORBIDDEN_SOURCE: &str = "\"\"\"A documented module.\"\"\"\n";
 
-/// Holds the shipped Python missing-docs run to judging `judged.py` and to
-/// stating the one path it could not read, through the real ruff pipeline.
+/// The `missing-docs-python` probe over a refusing path beside `judged.py`.
 ///
 /// The judged file carries one undocumented function, so the run has a finding
 /// to lose. Losing it is what a nonzero exit over a declined item costs, and
 /// staying silent about the path is what reads that path as a clean file.
-fn verify_python_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
-    let expected = python_missing_docs_judged_row();
-
-    verify_unreadable_file_is_declined(
-        PYTHON_PROJECT_TYPES,
-        PYTHON_MISSING_DOCS_RULE,
-        &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
-        PYTHON_UNREADABLE_PATH,
-        unreadable,
-        &[&expected],
-    );
+fn python_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_MISSING_DOCS_RULE,
+        judged: vec![(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE.to_string())],
+        path: PYTHON_UNREADABLE_PATH,
+        expected: vec![python_missing_docs_judged_row()],
+    }
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a path that
@@ -1261,7 +1585,10 @@ fn verify_python_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
 /// what ruff itself said.
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a file whose
@@ -1280,9 +1607,10 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file(
 /// line as tool chatter. The file read as CLEAN.
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
-        PYTHON_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(PYTHON_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a file it may
@@ -1298,7 +1626,10 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_decode() 
 #[cfg(unix)]
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Forbidden(PYTHON_FORBIDDEN_SOURCE));
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(PYTHON_FORBIDDEN_SOURCE),
+    );
 }
 
 /// Where the directory nobody may read stands inside the probe repository.
@@ -1354,95 +1685,194 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_directory_it_may_not_rea
     );
 }
 
-/// Where the file the definition-line scan cannot read stands inside the probe
+/// Where the file whose name holds a backslash stands inside the probe
 /// repository.
 ///
-/// The name holds a backslash, which is the one route to a failed scan that
-/// the shipped pipeline reaches by itself: `jq @tsv` escapes a backslash, so
-/// awk is handed `back\\slash.py` and opens no file of that name.
-const PYTHON_SCAN_UNREADABLE_PATH: &str = "back\\slash.py";
-
-/// The part of that name the diagnostic must carry.
-///
-/// A FRAGMENT rather than the whole name, because the name awk is handed holds
-/// a doubled backslash, and `^b2kq9hy` owns which of the two spellings the run
-/// should report. This probe measures the fail-open and pins neither.
-const PYTHON_SCAN_UNREADABLE_FRAGMENT: &str = "slash.py";
+/// A backslash is the character the earlier hand-off spelled wrong. The script
+/// flattened ruff's report to TSV with `jq ... | @tsv`, and `@tsv` escapes a
+/// backslash to `\\`, so every row of this file named a path that stands on no
+/// disk.
+const PYTHON_BACKSLASH_PATH: &str = "back\\slash.py";
 
 /// A Python file with no module docstring whose one function carries none
 /// either, so ruff reports `D100` and `D103` on it.
-const PYTHON_SCAN_UNREADABLE_SOURCE: &str = "def in_a_named_file() -> None:\n    return None\n";
+const PYTHON_BACKSLASH_SOURCE: &str = "def in_a_named_file() -> None:\n    return None\n";
 
-/// Every finding a run over the judged file and the file the scan cannot read
-/// must report: the `D103` of the judged file, and the `D100` and `D103` of
-/// the other one.
-const PYTHON_SCAN_DECLINED_FINDINGS: usize = 3;
+/// The definition line the `D103` of the backslash file stands on. It opens
+/// [`PYTHON_BACKSLASH_SOURCE`], so the row is read out of the staged bytes.
+const PYTHON_BACKSLASH_DECLARATION: &str = "def in_a_named_file() -> None:";
 
-/// Acceptance: the shipped Python missing-docs tool rule keeps every finding
-/// of a file its definition-line scan could not read, through the real ruff
-/// pipeline.
+/// Each `path:line` row a run over the judged file and the backslash file must
+/// report.
 ///
-/// The scan re-reads each file ruff reported, to read the definition line the
-/// test carve-out needs. That read can fail where ruff's own read did not, and
-/// a failed scan is one more declined item: the finding is real, and only the
-/// carve-out is unanswerable. So the scan states the file and reads no line
-/// for it, and every row of that file keeps its finding.
+/// ruff sorts its report by path, so `back\slash.py` stands above `judged.py`.
+/// Both of its rows stand on the first line, for two different reasons: `D100`
+/// names the module, which carries no definition line of its own, and the
+/// function `D103` names opens the file.
+fn python_backslash_rows() -> Vec<String> {
+    vec![
+        format!("{PYTHON_BACKSLASH_PATH}:{}", python_module_row!()),
+        expected_row(
+            PYTHON_BACKSLASH_PATH,
+            PYTHON_BACKSLASH_SOURCE,
+            PYTHON_BACKSLASH_DECLARATION,
+        ),
+        python_missing_docs_judged_row(),
+    ]
+}
+
+/// Acceptance: the shipped Python missing-docs tool rule reports a path that
+/// holds a backslash as the path it really is, through the real ruff pipeline.
 ///
-/// Measured with the shipped script before the fail-open, over this probe:
-/// nothing on stdout, one unmarked line on stderr, exit 1 — the `D103` of the
-/// judged file lost with the file the scan could not open.
+/// The script used to hand its rows from `jq` to `awk` as TSV. `@tsv` escapes
+/// a backslash, a tab and a newline alike, so the text of every field reached
+/// awk changed. Measured with ruff 0.14.5 and jq 1.8.2 over this probe before
+/// the fix: three findings at exit 0, two of them naming
+/// `back\\slash.py` — a path the engine can attribute to no file — and one
+/// diagnostic saying the definition-line scan could not read that same doubled
+/// name.
 ///
-/// The probe holds the COUNT of the surviving findings beside the row of the
-/// judged file, because the rows of the declined file carry the doubled
-/// backslash `^b2kq9hy` owns. A probe that wrote those rows out would pin one
-/// of two candidate spellings before that card picks one.
+/// The filter now reads ruff's JSON report itself, so no text hand-off stands
+/// between the report and the scan. The probe holds the whole row list rather
+/// than a count, because the ROW is what was wrong.
 #[test]
-fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve() {
+fn the_shipped_python_missing_docs_tool_rule_reports_a_path_holding_a_backslash() {
     let loader = builtin_loader();
     require_tool_installed(&loader, PYTHON_PROJECT_TYPES, PYTHON_MISSING_DOCS_RULE);
     let staged = [
         (PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE),
-        (PYTHON_SCAN_UNREADABLE_PATH, PYTHON_SCAN_UNREADABLE_SOURCE),
+        (PYTHON_BACKSLASH_PATH, PYTHON_BACKSLASH_SOURCE),
     ];
-    let named = [PYTHON_JUDGED_PATH, PYTHON_SCAN_UNREADABLE_PATH];
+    let named = [PYTHON_JUDGED_PATH, PYTHON_BACKSLASH_PATH];
     let staging = ShippedStaging::of(&staged);
     let drive = |read: fn(&ScriptOutcome, &Path) -> Vec<String>| {
         drive_shipped_script(&loader, PYTHON_MISSING_DOCS_RULE, &staging, &named, read)
-            .expect("a scan that cannot read one file must keep every finding and exit 0")
+            .expect("a run over a path holding a backslash must judge both files and exit 0")
     };
 
     let reported = drive(finding_rows);
     let stated = drive(script_diagnostics);
 
-    assert!(
-        reported.contains(&python_missing_docs_judged_row()),
-        "the finding of the file the scan DID read must stand; the run reported {reported:?}"
-    );
     assert_eq!(
-        reported.len(),
-        PYTHON_SCAN_DECLINED_FINDINGS,
-        "every finding of the file the scan could not read must stand as well; the run \
-         reported {reported:?}"
-    );
-    assert_eq!(
-        stated.len(),
-        1,
-        "the run must state the one file its scan could not read; it stated {stated:?}"
+        reported,
+        python_backslash_rows(),
+        "every finding must name the path ruff read, with the backslash it really holds"
     );
     assert!(
-        stated[0].contains(PYTHON_SCAN_UNREADABLE_FRAGMENT),
-        "the diagnostic must name the file the scan could not read; it said '{}'",
-        stated[0]
+        stated.is_empty(),
+        "the run reads every file ruff reported, so it must decline no item; it stated {stated:?}"
+    );
+}
+
+/// The path a stubbed ruff reports a finding of, and that the definition-line
+/// scan then cannot open.
+const PYTHON_VANISHED_PATH: &str = "vanished.py";
+
+/// The row the stubbed ruff stands the finding of the vanished path on.
+///
+/// The path holds no file, so no staged source can carry the row. The stub
+/// therefore writes the head of a file, and
+/// [`the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve`]
+/// reads the same number back, so this constant is what holds the report the
+/// stub wrote and the row the run must place to one value.
+const PYTHON_VANISHED_FINDING_ROW: &str = opening_declaration_row!();
+
+/// The code ruff writes for a public function that carries no docstring.
+const PYTHON_UNDOCUMENTED_FUNCTION_CODE: &str = "D103";
+
+/// The message ruff writes under [`PYTHON_UNDOCUMENTED_FUNCTION_CODE`].
+const PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE: &str = "Missing docstring in public function";
+
+/// One entry of a stubbed ruff report: a `D103` of `path` on `row`.
+fn python_stub_report_entry(path: &str, row: &str) -> String {
+    format!(
+        "{{\"filename\": \"{path}\", \"location\": {{\"row\": {row}}}, \
+         \"code\": \"{PYTHON_UNDOCUMENTED_FUNCTION_CODE}\", \
+         \"message\": \"{PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE}\"}}"
+    )
+}
+
+/// A stubbed ruff that exits 1 and reports one `D103` of a path that holds no
+/// file, beside the `D103` of the judged file.
+///
+/// The shipped pipeline reaches no such row of its own any more: the filter
+/// opens each path ruff wrote on its report, exactly as ruff spelled it, and
+/// ruff declines on stderr every path it could not open itself. So the fail-
+/// open needs a ruff that reports a file no reader can follow it to.
+///
+/// The row of the judged entry is read out of [`PYTHON_JUDGED_SOURCE`] rather
+/// than written as a number, because the test holds the run to the row
+/// [`python_missing_docs_judged_row`] reads out of those same bytes, and the
+/// two must never drift apart.
+fn python_vanished_report_answer() -> String {
+    let judged_row = declaration_line(PYTHON_JUDGED_SOURCE, PYTHON_JUDGED_DECLARATION);
+    let vanished = python_stub_report_entry(PYTHON_VANISHED_PATH, PYTHON_VANISHED_FINDING_ROW);
+    let judged = python_stub_report_entry(PYTHON_JUDGED_PATH, &judged_row.to_string());
+
+    format!("  printf '[{vanished}, {judged}]'\n  exit 1")
+}
+
+/// Acceptance: the shipped Python missing-docs tool rule keeps every finding
+/// of a file its definition-line scan could not read.
+///
+/// The scan re-reads each file ruff reported, to read the definition line the
+/// test carve-out needs. That read can fail where ruff's own read did not, and
+/// a failed scan is one more declined item: the finding is real, and only the
+/// carve-out is unanswerable. So the scan states the file under the marker and
+/// reads no line for it, and every row of that file keeps its finding.
+///
+/// Measured with the shipped script before the fail-open, over a file the scan
+/// could not open: nothing on stdout, one unmarked line on stderr, exit 1 —
+/// the finding of the file the scan DID read lost with it.
+///
+/// The probe leads `PATH` with a stub, which is process state, so it stands
+/// under `#[serial_test::serial(env)]`.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve() {
+    let run = drive_shipped_script_with_stub(
+        PYTHON_PROJECT_TYPES,
+        PYTHON_MISSING_DOCS_RULE,
+        &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
+        &[PYTHON_JUDGED_PATH],
+        PYTHON_TOOL_BINARY_NAME,
+        &python_vanished_report_answer(),
+    );
+    let outcome = run
+        .outcome
+        .expect("a scan that cannot read one file must keep every finding and exit 0");
+
+    assert_eq!(
+        run.placed,
+        vec![
+            format!("{PYTHON_VANISHED_PATH}:{PYTHON_VANISHED_FINDING_ROW}"),
+            python_missing_docs_judged_row(),
+        ],
+        "the finding of the file the scan could not read must stand beside the one it read"
+    );
+    assert_eq!(
+        outcome.diagnostics,
+        vec![format!(
+            "missing-docs-python could not read {PYTHON_VANISHED_PATH}, so every finding of \
+             that file stands"
+        )],
+        "the run must state the one file its scan could not read"
     );
 }
 
 /// The name ruff calls the linter of Python code by.
 const PYTHON_TOOL_BINARY_NAME: &str = "ruff";
 
-/// What the run must say when `jq` could not read what ruff wrote.
-const PYTHON_FILTER_BROKEN_MESSAGE: &str = "missing-docs-python: jq could not read the ruff report";
+/// What the run must say when its filter could not read what ruff wrote.
+///
+/// A fragment of the line rather than the whole of it: the filter names the
+/// reason Python gave beside these words, and that reason moves with the
+/// Python release.
+const PYTHON_FILTER_BROKEN_MESSAGE: &str =
+    "missing-docs-python: the filter could not read the ruff report";
 
-/// Why a report `jq` cannot read must break the run rather than pass it.
+/// Why a report the filter cannot read must break the run rather than pass it.
 const PYTHON_FILTER_BROKEN_REASON: &str =
     "a report the filter could not read leaves the run with no measurement at all, so it \
      must break in the rule's own words rather than exit on the filter's status";
@@ -1461,15 +1891,15 @@ const PYTHON_TRUNCATED_REPORT_ANSWER: &str =
 ///
 /// The broken-run gate reads the STATUS, and ruff keeps status 1 for a file
 /// with findings, so a malformed report at status 1 passes the gate. The
-/// filter then fails, and a filter that runs bare under `set -e` takes the
-/// whole script down with its own status. Measured with a stubbed ruff before
-/// the gate: the script exited 5, wrote nothing to stdout, and wrote only
-/// `jq: parse error: Unfinished JSON term at EOF` — no marker, and no word
-/// about which rule broke or why.
+/// filter then fails, and a filter that reads the report with no guard takes
+/// the whole script down with its own status. Measured with a stubbed ruff
+/// over a filter with no guard: the script exited 1, wrote nothing to stdout,
+/// and wrote a Python traceback naming the temporary copy of the filter — no
+/// marker, and no word about which rule broke.
 ///
 /// `missing-docs-rust.md` and `function-length-rust.md` hold the worked
-/// answer, and this rule now holds it too: read the status of each filter
-/// step, and break in the rule's own words.
+/// answer, and this rule now holds it too: the filter catches the report it
+/// cannot read, and breaks in the rule's own words.
 ///
 /// The probe leads `PATH` with a stub, which is process state, so it stands
 /// under `#[serial_test::serial(env)]`.
@@ -1571,12 +2001,17 @@ const PYTHON_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Python missing-docs script reports over the two files it
 /// is given, as `path:line`.
+///
+/// The nested file answers three: `D100` for the module, `D101` for the class
+/// that opens it, and `D102` for the method on the line under the class head.
+/// The file at the root answers two: `D100` for the module, and `D103` for the
+/// function that opens it.
 const PYTHON_READ_FINDINGS: &[&str] = &[
-    "deep/nested/other.py:1",
-    "deep/nested/other.py:1",
-    "deep/nested/other.py:2",
-    "top.py:1",
-    "top.py:1",
+    concat!("deep/nested/other.py:", python_module_row!()),
+    concat!("deep/nested/other.py:", opening_declaration_row!()),
+    concat!("deep/nested/other.py:", nested_declaration_row!()),
+    concat!("top.py:", python_module_row!()),
+    concat!("top.py:", opening_declaration_row!()),
 ];
 
 /// The `missing-docs-python` probe over a run that is given no file.
@@ -1943,47 +2378,25 @@ fn the_shipped_swift_missing_docs_tool_rule_keeps_its_own_rule_options() {
     verify_shipped_staged_positions_report(&SWIFT_RULE_OPTIONS_PROBE);
 }
 
-/// Where the Swift file that is never written stands inside the probe
+/// Where the Swift file the missing-docs run CAN judge stands, beside each
+/// refusing path.
+const SWIFT_MISSING_DOCS_JUDGED_PATH: &str = "Sources/Judged.swift";
+
+/// Where the path the missing-docs run cannot judge stands inside the probe
 /// repository.
-const SWIFT_ABSENT_PATH: &str = "Sources/Absent.swift";
-
-/// What the script writes for a file it cannot read.
-const SWIFT_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(swift), " cannot read");
-
-/// What the one error of an absent file must name.
-const SWIFT_ABSENT_ERROR: &[&str] = &[SWIFT_CANNOT_READ_MESSAGE, SWIFT_ABSENT_PATH];
-
-/// The `missing-docs-swift` probe over a path that holds no file.
-const SWIFT_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_MISSING_DOCS_RULE,
-        expected: SWIFT_ABSENT_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not there",
-    path: SWIFT_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a file it
-/// cannot read, through the real swiftlint pipeline.
 ///
-/// swiftlint exits 1 for a path that is not there and writes nothing to
-/// stdout. A pipeline takes the exit status of its LAST command, and that
-/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
-/// answering zero for a reason other than a clean file. The script tests each
-/// file it is given before it starts, and exits 1 with the name of the file it
-/// cannot read.
-#[test]
-fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
-}
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const SWIFT_MISSING_DOCS_UNREADABLE_PATH: &str = "Sources/Unreadable.swift";
 
-/// Where the Swift file swiftlint cannot decode stands inside the probe
-/// repository.
-const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+/// The head of the undocumented public structure
+/// [`SWIFT_STAGED_DECLARATIONS`] declares.
+const SWIFT_STAGED_STRUCTURE_HEAD: &str = "public struct StagedThing";
+
+/// The head of the undocumented stored property
+/// [`SWIFT_STAGED_DECLARATIONS`] declares.
+const SWIFT_STAGED_PROPERTY_HEAD: &str = "public var value";
 
 /// A Swift file written in Latin-1 rather than in UTF-8.
 ///
@@ -1991,55 +2404,155 @@ const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
 /// swiftlint reads a file as UTF-8 and nothing else, so it cannot decode this
 /// one. The staged declarations stand under the string, so a run that DID read
 /// the file reports them.
-const SWIFT_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
+const SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
 public struct StagedThing {\n\
 public var value: Int = 0\n\
 }\n";
 
-/// What the one error of a file swiftlint cannot decode must name: the rule's
-/// own line, and swiftlint's own message, which carries the path.
-const SWIFT_UNDECODABLE_ERROR: &[&str] = &[
-    concat!(
-        missing_docs_rule!(swift),
-        ": swiftlint could not read the contents of a file this run names"
-    ),
-    "Could not read contents of",
-    "Latin1.swift",
-];
+/// A Swift file swiftlint could read if the mode let it.
+///
+/// Every declaration is internal, and the rule's own configuration states
+/// `warning: [open, public]`, so a run that DID read this file would report no
+/// finding — which is the clean answer this rule must not give for a file it
+/// never read.
+const SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE: &str = concat!(
+    "struct InternalThing {\n",
+    "    var value: Int = 0\n",
+    "}\n"
+);
 
-/// The `missing-docs-swift` probe over a Swift file swiftlint cannot decode.
-const SWIFT_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
+/// The `missing-docs-swift` probe over a refusing path beside
+/// `Sources/Judged.swift`.
+///
+/// The judged file carries one undocumented public structure and one
+/// undocumented stored property, so the run has two findings to lose. Losing
+/// them is what a nonzero exit over a declined item costs, and staying silent
+/// about the path is what reads that path as a clean file.
+fn swift_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    let structure = expected_row(
+        SWIFT_MISSING_DOCS_JUDGED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_STRUCTURE_HEAD,
+    );
+    let property = expected_row(
+        SWIFT_MISSING_DOCS_JUDGED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_PROPERTY_HEAD,
+    );
+
+    ShippedDeclineProbe {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_MISSING_DOCS_RULE,
-        expected: SWIFT_UNDECODABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not UTF-8",
-    path: SWIFT_UNDECODABLE_PATH,
-    source: Some(SWIFT_UNDECODABLE_SOURCE),
-    support: NO_SUPPORT_FILES,
-};
+        judged: vec![(
+            SWIFT_MISSING_DOCS_JUDGED_PATH,
+            SWIFT_STAGED_DECLARATIONS.to_string(),
+        )],
+        path: SWIFT_MISSING_DOCS_UNREADABLE_PATH,
+        expected: vec![structure, property],
+    }
+}
 
-/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a Swift file
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a path that
+/// holds no file, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a path beside one file that holds
+/// two findings: 2 entries on stdout, 0 bytes on stderr, and exit 0. swiftlint
+/// says NOTHING about the path it dropped — measured again with `--quiet` taken
+/// off, it writes `Linting 'Judged.swift' (1/1)` and no word of the other path.
+/// So the script tests the path itself, and states it under the marker.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
 /// swiftlint cannot decode, through the real swiftlint pipeline.
 ///
-/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
-/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
-/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
-/// an empty JSON array to stdout, and exits 0 — the status and the report of a
-/// clean file. So the script read a file swiftlint never read as a clean file,
-/// and the undocumented public declarations reached the engine as a clean tree.
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds two
+/// findings: swiftlint writes ``Could not read contents of `<path>` `` to
+/// stderr, writes 2 entries to stdout, and exits 0 — the status and the report
+/// of a healthy run. So neither the status nor the report tells this file from
+/// a clean one, and the script reads swiftlint's own message instead.
 ///
-/// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes 2 entries, and exits 0 as
-/// well. The child states `warning: [open, public]` and no `error:` list, so no
-/// finding of this rule reaches error severity and swiftlint never exits 2.
-/// Every row of the measurement is therefore the status and the report of a
-/// healthy run, and only stderr tells the two apart.
+/// A readability test on the path admits this file — the mode lets swiftlint
+/// open it — so the answer has to come from what swiftlint itself said.
 #[test]
-fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_decode() {
-    verify_shipped_run_breaks(&SWIFT_UNDECODABLE_PROBE);
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE),
+    );
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
+/// it may not read, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds two
+/// findings: swiftlint writes the same ``Could not read contents of `<path>` ``
+/// line, writes 2 entries, and exits 0. The mode and the decode reach swiftlint
+/// as one message, so one reading of stderr answers both.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE),
+    );
+}
+
+/// The `missing-docs-swift` probe of a run a project configuration declines.
+///
+/// The judged file holds the undocumented declarations under the directory the
+/// project excludes, so a run that still reads that file reports TWO rows: the
+/// structure and the stored property.
+fn swift_missing_docs_project_decline_probe() -> SwiftProjectDeclineProbe {
+    SwiftProjectDeclineProbe {
+        rule: SWIFT_MISSING_DOCS_RULE,
+        source: SWIFT_STAGED_DECLARATIONS,
+        heads: vec![
+            SWIFT_STAGED_STRUCTURE_HEAD.to_string(),
+            SWIFT_STAGED_PROPERTY_HEAD.to_string(),
+        ],
+    }
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a run whose
+/// every file the project's `excluded:` list covers, through the real
+/// swiftlint pipeline.
+///
+/// [`SwiftProjectDecline::ExcludesTheWholeRun`] states what swiftlint answers
+/// over that shape. Measured with swiftlint 0.65.0 over this probe with no
+/// project configuration: 2 entries on stdout and 0 bytes on stderr. So a
+/// silent stderr is what a sound run of THIS rule gives, and the marked line
+/// the script writes over the excluded run stands against that silence.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_run_the_project_excludes_whole() {
+    verify_swift_project_decline_is_stated(
+        &swift_missing_docs_project_decline_probe(),
+        &SwiftProjectDecline::ExcludesTheWholeRun,
+    );
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a project
+/// configuration swiftlint cannot read, through the real swiftlint pipeline.
+///
+/// [`SwiftProjectDecline::NamesAConfigurationItCannotRead`] states why the
+/// second run drops the project's `excluded:` list. The undocumented
+/// declarations under the excluded directory then report their two rows, so
+/// this rule measured the code with settings the project did not ask for and
+/// has to say so.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_project_configuration_it_cannot_read() {
+    verify_swift_project_decline_is_stated(
+        &swift_missing_docs_project_decline_probe(),
+        &SwiftProjectDecline::NamesAConfigurationItCannotRead,
+    );
 }
 
 /// The `missing-docs-swift` probe over a file whose name holds the words of
@@ -2169,11 +2682,14 @@ const SWIFT_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Swift missing-docs script reports over the two files it
 /// is given, as `path:line`.
+///
+/// Each file answers two: the type head that opens it, and the member on the
+/// line under that head.
 const SWIFT_READ_FINDINGS: &[&str] = &[
-    "deep/nested/Other.swift:1",
-    "deep/nested/Other.swift:2",
-    "Top.swift:1",
-    "Top.swift:2",
+    concat!("deep/nested/Other.swift:", opening_declaration_row!()),
+    concat!("deep/nested/Other.swift:", nested_declaration_row!()),
+    concat!("Top.swift:", opening_declaration_row!()),
+    concat!("Top.swift:", nested_declaration_row!()),
 ];
 
 /// The `missing-docs-swift` probe over a run that is given no file.
@@ -2225,7 +2741,13 @@ const TYPESCRIPT_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the TypeScript missing-docs script reports over the two files
 /// it is given, as `path:line`.
-const TYPESCRIPT_MISSING_DOCS_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
+///
+/// Both files hold the same bytes, and the exported function that opens them
+/// is the one declaration `jsdoc/require-jsdoc` reports.
+const TYPESCRIPT_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
+    concat!("deep/nested/other.ts:", opening_declaration_row!()),
+    concat!("top.ts:", opening_declaration_row!()),
+];
 
 /// The `missing-docs-typescript` probe over a run that is given no file.
 const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
@@ -2427,7 +2949,13 @@ const GO_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Go missing-docs script reports over the two files it is
 /// given, as `path:line`.
-const GO_MISSING_DOCS_READ_FINDINGS: &[&str] = &["top.go:3", "deep/nested/other.go:3"];
+///
+/// Both files hold the same bytes, and the exported function under the
+/// `package` clause is the one declaration revive reports.
+const GO_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
+    concat!("top.go:", go_declaration_row!()),
+    concat!("deep/nested/other.go:", go_declaration_row!()),
+];
 
 /// The `missing-docs-go` probe over a run that is given no file.
 const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
@@ -2474,11 +3002,14 @@ const DART_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Dart missing-docs script reports over the two files it is
 /// given, as `path:line`.
+///
+/// Both files hold the same bytes, and each answers two: the class head that
+/// opens the file, and the method on the line under it.
 const DART_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
-    "deep/nested/other.dart:1",
-    "deep/nested/other.dart:2",
-    "top.dart:1",
-    "top.dart:2",
+    concat!("deep/nested/other.dart:", opening_declaration_row!()),
+    concat!("deep/nested/other.dart:", nested_declaration_row!()),
+    concat!("top.dart:", opening_declaration_row!()),
+    concat!("top.dart:", nested_declaration_row!()),
 ];
 
 /// The `missing-docs-dart` probe over a run that is given no file.

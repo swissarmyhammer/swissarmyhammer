@@ -289,8 +289,25 @@ comments:
 
     No commit made. Task left in `doing`.
   timestamp: 2026-08-16T18:36:16.634920+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m05y2qh4bdvqfqqk5p95dsvt
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (21b9272dc). counts: 0 findings, 0 confirmed, 0 refuted, 9 validators attempted, 0 failed. All 5 findings of the 2026-08-16 12:58 section are checked.
+    - coverage: the engine states "2 file(s) reviewed, 2 not reviewed", and the 2 not reviewed are the `.kanban/` files of this card. The commit changes 4 files outside `.kanban/`, so the count of reviewed files is below the count of changed files. The 2026-08-16 12:58 section records the cause: no validator matches `*.md`, so `builtin/validators/code-hygiene/rules/missing-docs-python.md` and `builtin/validators/README.md` get no validator. The two Rust test files got the full fleet.
+    - next: none. Card moves to done.
+  timestamp: 2026-08-16T18:41:54.212612+00:00
+- actor: claude-code
+  id: 01m05y3dt84vjmmjr499tb56da
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 4 files; the script now forwards every ruff stderr line under the marker, both jq steps are status-gated, the stderr read holds a last line with no newline, and a new probe holds the findings a failed scan cannot carve
+    - test: green — cargo nextest run --workspace, 14114 passed, 0 failed, 0 skipped; fmt and clippy clean; a sound run writes 0 bytes to ruff stderr on all six probe shapes
+    - commit: 21b9272dc
+    - review: clean — 0 new findings on HEAD~1..HEAD; all 5 prior findings checked; card moved to done
+  timestamp: 2026-08-16T18:42:17.032432+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9980
 title: missing-docs-python fails the whole run for one file ruff cannot parse, and for one path it cannot read
 ---
 `builtin/validators/code-hygiene/rules/missing-docs-python.md` exits 1 three

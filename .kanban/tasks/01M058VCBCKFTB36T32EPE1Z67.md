@@ -355,8 +355,72 @@ comments:
 
     No files were modified. Task left in `doing`. Not committed.
   timestamp: 2026-08-16T14:27:06.151466+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m05fy4nxh5rmezd9ky0rz3k3
+  text: |
+    ### review — findings
+    - evidence: `review sha HEAD~1..HEAD` (commit 5f39cc960) returned findings 0, attempted 0 — the engine matched 0 of the 3 changed prose files and saw only the two `.reviewignore`-excluded `.kanban/` files. Verified by hand against the 13 set `match` blocks, the two file-group YAMLs, the six sets' `rules/` directories and the crate source. 3 findings — builtin/validators/README.md:136, builtin/validators/code-hygiene/VALIDATOR.md:395, builtin/validators/code-hygiene/VALIDATOR.md:404.
+    - next: the cause is not removed. The `match` block derivation closes 3 of its 4 steps; the fourth — whether any of the 19 prompt rules reads a name — is still a judgment call, and it is wrong: `code-security/rules/no-secrets.md:19` fires on a variable NAME and inherits `@file_groups/source_code`, so it reads a Go name. Close the fourth step mechanically or state it as judgment, and add a test that enforces the count 19.
+  timestamp: 2026-08-16T14:34:43.773333+00:00
+- actor: claude-code
+  id: 01m05g0x7mcq6rttee623nh301
+  text: |
+    ### finish iteration 3 — findings, and the guardrail is MET. This card is STUCK.
+
+    - implement: changed — 3 files. The judgment-call list was replaced by a four-step derivation from `match` blocks.
+    - test: green — cargo fmt --check exit 0; cargo clippy --workspace --all-targets -- -D warnings exit 0, 0 warnings; cargo nextest run --workspace 14105 passed, 0 failed, 0 skipped; embed traced and confirmed.
+    - commit: 5f39cc960 docs(validators): derive naming-rule set list from match blocks (^epe1z67)
+    - review: findings — 3 findings. builtin/validators/README.md:136, builtin/validators/code-hygiene/VALIDATOR.md:395, builtin/validators/code-hygiene/VALIDATOR.md:404.
+
+    ### Why this is stuck rather than a fourth round
+
+    Three ledger entries, a finding every time, all on the SAME claim in the SAME file, and `VALIDATOR.md:395` now repeats:
+
+    1. iteration 1 — `VALIDATOR.md:389`, a dropped `tool` qualifier made two counts false. ANSWERED and verified.
+    2. iteration 2 — `VALIDATOR.md:395`, a closed four-item naming enumeration omitted `swift/fluent-usage`. ANSWERED by deleting the list.
+    3. iteration 3 — `VALIDATOR.md:395` again, plus `:404` and `README.md:136`. The replacement derivation closes three of its four steps mechanically. The fourth step is the same judgment call, and this round establishes it is not merely unprovable but FALSE.
+
+    ### What persists, stated exactly
+
+    The passage is trying to justify why `stuttering-name-go` supersedes no prompt rule, by asserting that no shipped prompt rule reads a Go name. **That assertion is false**, and the reviewer has the evidence:
+
+    - `builtin/validators/code-security/rules/no-secrets.md:19` — "Variables named `password`, `passwd`, `secret`, `credential` with hardcoded string values". The variable's NAME is the entire trigger. The rule declares no rule-level `match` block, so it inherits `code-security`'s `@file_groups/source_code` and runs on a `.go` file. It reads a Go name.
+    - `builtin/validators/completeness/rules/inverse-operation-coverage.md:20,25,34` — reads "the naming convention that stands the two opposite". Also no rule-level `match`.
+    - `magic-numbers.md:8`, `dead-code.md:92` and `no-test-cheating.md:35` classify by name too.
+
+    Three of the four derivation steps are true and mechanical, and the reviewer verified each: 13 sets ship; 7 declare their own globs and none names Go; the other 6 reach `.go` through the `*.go` entry of `@file_groups/source_code`; those 6 hold exactly 19 prompt rules. The count 19 is right.
+
+    A second, smaller item: the commit message calls 19 a tripwire that breaks when a rule is added. **Nothing enforces it.** No test carries the number, so it goes stale silently.
+
+    And `README.md:136` says "**both** times that follows from a `match` block". The `Cargo.toml` half genuinely closes — no other set's globs admit a `.toml`, and `manifests/rules/` holds one file which is a tool rule. The Go half does not close, so "both" is false.
+
+    ### The recommended resolution, for whoever picks this up
+
+    **Delete the justification, do not repair it.** `stuttering-name-go` declares no `supersedes` key. That is the mechanical fact, it is already stated correctly, and it needs no defence. Every attempt to explain WHY — by naming which rules are "about naming", or asserting that no prompt rule "reads a Go name" — requires a judgment no command can settle, and the third attempt proved the claim false rather than merely imprecise.
+
+    If a reason is wanted, the honest one is checkable: `revive` is the tool this rule runs, and no shipped prompt rule was written to replace it. That is a statement about intent, which the `supersedes` key already records by being empty.
+
+    Separately, if the count 19 is to be called a tripwire, it needs a test. Otherwise drop the word.
+
+    ### Status
+
+    The task stays in `review` with 3 open findings. It is NOT forced to `done`. Three commits landed and are green: 21cb8b128, 12300d8eb, 5f39cc960. Everything the card originally asked for is fixed and verified — the phantom rule names, the XDG path, the retired hook model, the supersedes counts. What remains is one paragraph of unprovable justification in shipped content.
+
+    The batch moves on to the next card.
+  timestamp: 2026-08-16T14:36:14.452860+00:00
+- actor: claude-code
+  id: 01m063093xc5krgm3jb4g01kcd
+  text: |-
+    ### closed by the user
+
+    The user closed this card while three findings stayed open. The finish loop did not close it: three iterations in a row came back with findings, so the guardrail held the card in `review`.
+
+    The three open findings all point at one place — the prose of `builtin/validators/code-hygiene/VALIDATOR.md:395-406` and `builtin/validators/README.md:136`, which says a `match` block proves that no shipped prompt rule reads a Go name. The `match` block proves three of the four steps. The fourth step is a judgment about what each of the 19 prompt rules is about, and three rounds of that judgment were each shown wrong (`no-secrets`, `inverse-operation-coverage`, `magic-numbers`, `dead-code` and `no-test-cheating` each read a name).
+
+    Nothing is lost with the card: the measurements stand in the comments above, and the three findings stay in the description for a person who takes the prose up again.
+  timestamp: 2026-08-16T20:07:56.797173+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffff9b80
 title: Two more stale claims found beside the complexity scorer sweep
 ---
 Found while doing ^6dx6dkz. Neither names the deleted complexity scorer, so neither was in that card's scope. Both are stale claims that a reader would act on.
@@ -408,3 +472,20 @@ Checked against the tree this round, and true as written:
 - `doc/src/concepts/integrated-sdlc.md:36` — "planning writes only kanban cards — `.md` and `.jsonl` files that no shipped validator glob matches". All 13 set `match` blocks were read: `code-hygiene`, `code-security`, `duplication` and `reuse` match `@file_groups/source_code`; `completeness` and `test-integrity` match that group plus `@file_groups/test_files`; `dart`, `js-ts`, `numpy`, `python`, `rust` and `swift` match extension globs; `manifests` matches `**/Cargo.toml`. Neither `builtin/file_groups/source_code.yaml` nor `builtin/file_groups/test_files.yaml` carries `*.md` or `*.jsonl`, and no set glob does.
 - `doc/src/concepts/validators.md:77` — "A naming or logging **prompt rule** lives here rather than in `code-hygiene`" is true: the 6 prompt rules of `code-hygiene` are `data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs` and `no-commented-code`, and none is a naming or logging rule. The sentence lists what each language set holds without closing the list, so the `swift/fluent-usage` omission does not make it false.
 - Change size: 170 insertions and 15 deletions resolve to 149 insertions in `.kanban/tasks/01M058VCBCKFTB36T32EPE1Z67.{md,jsonl}`, which recorded the previous round, and 21 insertions against 14 deletions over the four prose files — 5/3 in `README.md`, 9/5 in `code-hygiene/VALIDATOR.md`, 2/2 in `integrated-sdlc.md`, 5/4 in `validators.md`. No unexplained bulk.
+
+## Review Findings (2026-08-16 09:28)
+
+> Scope: `review sha HEAD~1..HEAD` (commit 5f39cc960) — reviewed the diffs only. The `review` engine matched 0 of the 3 changed prose files: it saw only the two `.kanban/` files, both excluded by `.reviewignore`, and returned `findings 0, attempted 0`. Every claim the commit writes was therefore verified directly against the 13 set `match` blocks, the two file-group YAMLs, the six sets' `rules/` directories and the crate source.
+
+- [ ] `builtin/validators/README.md:136` `code-hygiene/stuttering-name-go` — "Neither has a prompt rule to name, and both times that follows from a `match` block rather than from a survey of what each rule is about" is true of one of the two times and false of the other, so the word "both" is false. The `Cargo.toml` half closes: a `Cargo.toml` reaches the `manifests` set alone (no other set's globs admit a `.toml` — `builtin/file_groups/source_code.yaml` ends at `*.zsh` and carries no manifest pattern, `builtin/file_groups/test_files.yaml` carries none either, and the six own-glob sets match `*.dart`, `*.js`, `*.jsx`, `*.ts`, `*.tsx`, `*.py`, `*.rs` and `*.swift`), `builtin/validators/manifests/rules/` holds exactly one file, `unused-dependencies-rust.md`, and it declares `tool:` at its line 11. Zero prompt rules reach a `Cargo.toml`, so there is nothing left to survey and the `match` block is the whole answer. The Go half does not close, because the six sets a `.go` file reaches hold 19 prompt rules, and the sentence this one defers to — `builtin/validators/code-hygiene/VALIDATOR.md:406` — settles those 19 by reading what each rule is about. Deferring to a derivation does not make it mechanical. Either close the Go half the way the `Cargo.toml` half closes, or drop "both times" and state which half the `match` block answers and which half it does not.
+- [ ] `builtin/validators/code-hygiene/VALIDATOR.md:395` `code-hygiene/stuttering-name-go` — "No shipped prompt rule reads a Go NAME, and the check for that is a `match` block rather than a reading of what each rule is about" claims a derivation the passage does not carry out, and the closing half of that derivation, at line 406, is FALSE. The `match` block does three of the four steps, and each of those three verifies: 13 sets ship; 7 declare their own globs and no glob among them names Go; the other 6 — `code-hygiene`, `code-security`, `completeness`, `duplication`, `reuse`, `test-integrity` — reach a `.go` file through the `*.go` entry of `@file_groups/source_code`; and those 6 hold 19 prompt rules. A `match` block cannot do the fourth step, which is whether any of those 19 reads a name, and line 406 answers it by judgment — "`stuttering-name-go` is the only rule of the six that reads a name at all". That is the same judgment call the last two rounds reported, over 19 rules rather than 59, and it is wrong again. `builtin/validators/code-security/rules/no-secrets.md:19` reads a name and nothing else to fire: "**Passwords**: Variables named `password`, `passwd`, `secret`, `credential` with hardcoded string values". It declares no rule-level `match` block, so it inherits `code-security`'s `@file_groups/source_code` and runs on a `.go` file — it therefore reads a Go NAME, which refutes the section heading claim, not only the "only rule of the six" clause. `builtin/validators/completeness/rules/inverse-operation-coverage.md` refutes it a second time: line 20 has each probe row name "the naming convention that stands the two opposite", line 25 has the row prove "the two names stand opposite each other by convention", and line 34 restricts the probe to "only pairs whose names follow a convention it knows" — the rule's entire pairing test is a name. It declares no rule-level `match` block either. `builtin/validators/code-hygiene/rules/magic-numbers.md:8` ("checks whether a literal value is named"), `builtin/validators/code-hygiene/rules/dead-code.md:92` and `builtin/validators/test-integrity/rules/no-test-cheating.md:35` classify by name as well, and none of the three declares a rule-level `match` block. The cause named last round was a category with no mechanical test; this round narrows the population that category is applied to but keeps the category, so the cause is still present and has produced a third wrong statement. State only what the `match` block proves — a `.go` file reaches these six sets and no other — and state the remaining step as the judgment it is, or replace the category "reads a name" with a mechanical property the 19 files can be filtered on. Apply this to every claim in the section that turns on what a rule is about, not only the sentence quoted.
+- [ ] `builtin/validators/code-hygiene/VALIDATOR.md:404` `code-hygiene/stuttering-name-go` — "Those six sets hold 19 prompt rules between them" is true today — 6 in `code-hygiene`, 3 in `code-security`, 4 in `completeness`, 3 in `duplication`, 1 in `reuse`, 2 in `test-integrity` — and the commit message calls the count "a tripwire: a new rule on any of the six breaks it". Nothing trips it. No test in the workspace asserts the number: `crates/swissarmyhammer-validators/src/review/tool_rules/tests.rs` carries no `19`, and no prompt-rule-count guard exists over the six sets. A number that only a reader can check goes stale silently on the next rule added, which is the failure mode of the enumeration it replaced. Add the guard that makes the word "tripwire" true — a test that loads the shipped sets, counts the rules of those six that carry no `tool` block, and asserts 19 — or remove the count and write the command that produces it.
+
+Checked against the tree this round, and true as written:
+
+- `builtin/validators/code-hygiene/VALIDATOR.md:396` — "Seven of the thirteen shipped sets declare their own globs, and no glob among them names Go". `builtin/validators/` holds 13 set directories. The 7 with literal globs are `dart` (`**/*.dart`), `js-ts` (`**/*.js`, `**/*.jsx`, `**/*.ts`, `**/*.tsx`), `manifests` (`**/Cargo.toml`), `numpy` (`**/*.py`), `python` (`**/*.py`), `rust` (`**/*.rs`) and `swift` (`**/*.swift`). The enumeration in the prose matches the files one for one.
+- `builtin/validators/code-hygiene/VALIDATOR.md:401` — "A `.go` file therefore reaches the other six sets alone". All six declare `@file_groups/source_code`; `completeness` and `test-integrity` add `@file_groups/test_files`, which carries `*_test.go` and reaches no set outside the six. `builtin/file_groups/source_code.yaml` line 20 is `- "*.go"`.
+- `builtin/validators/code-hygiene/VALIDATOR.md:403` — "whose patterns match at any depth". `GLOB_MATCH_OPTIONS` at `crates/swissarmyhammer-validators/src/validators/types.rs:1161` sets `require_literal_separator: false`, so `*` crosses `/`; `matches_files` compiles `match.files` through `compile_glob_patterns` and tests them with `matches_any_pattern`, which passes those options. A shipped test proves it end to end: `crates/swissarmyhammer-validators/src/builtin/mod.rs:546` asserts every merged set matches the nested path `src/app.py` through the bare `*.py` entry of the same group. The corrected glob `*.go` is right and `**/*.go` would have been wrong for the group file, whose other entries are all bare.
+- `builtin/validators/code-hygiene/VALIDATOR.md:404` — the count 19 itself. Counted from the six `rules/` directories, filtered on the absence of a `tool:` key: `code-hygiene` 6 (`data-driven`, `dead-code`, `function-length`, `magic-numbers`, `missing-docs`, `no-commented-code`), `code-security` 3, `completeness` 4, `duplication` 3, `reuse` 1, `test-integrity` 2. Total 19. The number is correct; the finding above is about nothing enforcing it.
+- `doc/src/concepts/integrated-sdlc.md:49` — the three middle phase cells now read "every set whose globs match the changed files", and that is how the engine selects sets. `match_validators_and_files` in `crates/swissarmyhammer-validators/src/review/scope.rs` builds one `MatchContext` per changed file and takes `loader.matching_rulesets(&ctx)`; `ValidatorMatch::matches` ANDs `trigger_matcher`, `tools`, `files` and `project_types`, and no shipped set declares any of those but `files`, so the glob is the whole test. The removed per-phase set lists were false — nothing in the engine keys a set to a phase.
+- Change size: 199 insertions and 14 deletions resolve to 155 insertions in `.kanban/tasks/01M058VCBCKFTB36T32EPE1Z67.{md,jsonl}`, which recorded the previous round, and 44 insertions against 14 deletions over the three prose files — 10/6 in `README.md`, 16/5 in `code-hygiene/VALIDATOR.md`, 5/3 plus one added paragraph in `integrated-sdlc.md`. No unexplained bulk.

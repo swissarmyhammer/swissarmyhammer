@@ -13,8 +13,8 @@
 //! cargo report, and the Swift one builds the package's test targets; the
 //! function-length family stands one module for each language it drives.
 //! Each module then stays small enough for a reviewer, and for the review
-//! engine, to read whole. `scope_roster`, `temp_directory` and `zero_argument`
-//! are the three
+//! engine, to read whole. `golangci_cache`, `scope_roster`, `temp_directory`
+//! and `zero_argument` are the four
 //! modules that are not a rule family: each reads the shipped script of EVERY
 //! rule, because the contract it holds is about the set and not about one
 //! language. `scope_roster` states which of those set-wide guards reads which
@@ -32,7 +32,10 @@ mod function_length_python;
 mod function_length_rust;
 mod function_length_swift;
 mod function_length_typescript;
+mod go_probe;
+mod golangci_cache;
 mod magic_numbers;
+mod magic_numbers_go;
 mod missing_docs;
 mod missing_docs_rust;
 mod scope_roster;
@@ -782,6 +785,16 @@ fn required_shipped_tool_rule(loader: &ValidatorLoader, rule: &str) -> ShippedTo
 
 /// The argument list a `workspace`-scope script receives: none.
 const NO_SCRIPT_FILES: &[&str] = &[];
+
+/// What a probe answers when it could not do its work.
+///
+/// A temporary directory, a subprocess and a file mode are each an expected
+/// failure of the machine rather than a bug in the probe, so a probe that
+/// meets one answers `Result` and lets the failure through. The box keeps each
+/// failure's own [`std::error::Error::source`] reachable rather than
+/// flattening it into a sentence, and a test that answers `Err` fails exactly
+/// as one that panicked did.
+type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// Each finding of `outcome` as the `path:line` row a probe states, with the
 /// path of the probe repository taken off.
@@ -1898,34 +1911,80 @@ fn verify_declined_item_reads(
     );
 }
 
-/// Drives the shipped script of `rule` over every file of `judged` and the
-/// path `path`, which refuses a reader the way `unreadable` states, and holds
-/// that run to reporting the rows `expected` names AND to stating one
-/// diagnostic that names `path`.
+/// What one rule's probe of a refusing path states, with the way the path
+/// refuses left out.
+///
+/// Every language states the same five things and nothing else: which project
+/// types put the rule in the plan, which rule the run belongs to, which files
+/// the run CAN judge, which path refuses the reader, and which rows the judged
+/// files hold. The way the path refuses is the ONE value that changes between
+/// the tests of a rule, so it reaches [`verify_unreadable_file_is_declined`]
+/// beside the probe rather than inside it.
+///
+/// The text fields own their bytes. A language builds its judged source and
+/// its expected rows at run time — `python_procedure`, `dart_procedure` and
+/// `expected_row` each hand back a `String` — so a probe that borrowed them
+/// could not outlive the call that built it.
+struct ShippedDeclineProbe {
+    /// The project types the rule is planned for.
+    project_types: &'static [&'static str],
+
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// Each file the run CAN judge, as a `(path, source)` pair. A probe of a
+    /// run that has no file beside the refusing path holds none.
+    judged: Vec<(&'static str, String)>,
+
+    /// Where the refusing path stands inside the probe repository.
+    path: &'static str,
+
+    /// One `path:line` row for each finding the judged files hold, which the
+    /// run must still report. A probe with no judged file holds none.
+    expected: Vec<String>,
+}
+
+/// Drives the shipped script `probe` names over every file of `probe.judged`
+/// and over `probe.path`, which refuses a reader the way `unreadable` states,
+/// and holds that run to reporting the rows `probe.expected` names AND to
+/// stating one diagnostic that names `probe.path`.
 ///
 /// The refusing path takes staging no `(path, text)` pair can state, because
 /// the probe writes bytes that are not UTF-8, takes every permission off the
 /// file, or writes no file at all.
+///
+/// ONE function serves every language. A rule states its own bound values as a
+/// [`ShippedDeclineProbe`], and each test of that rule hands the same probe
+/// here beside one shape of [`ShippedUnreadableFile`].
 fn verify_unreadable_file_is_declined(
-    project_types: &[&str],
-    rule: &str,
-    judged: &[(&str, &str)],
-    path: &str,
+    probe: &ShippedDeclineProbe,
     unreadable: &ShippedUnreadableFile,
-    expected: &[&str],
 ) {
+    let judged: Vec<(&str, &str)> = probe
+        .judged
+        .iter()
+        .map(|(file, source)| (*file, source.as_str()))
+        .collect();
+    let expected: Vec<&str> = probe.expected.iter().map(String::as_str).collect();
     let named: Vec<&str> = judged
         .iter()
         .map(|(file, _)| *file)
-        .chain(std::iter::once(path))
+        .chain(std::iter::once(probe.path))
         .collect();
-    let prepare = |repo: &Path| stage_probe_unreadable(repo, path, unreadable);
+    let prepare = |repo: &Path| stage_probe_unreadable(repo, probe.path, unreadable);
     let staging = ShippedStaging {
         prepare: &prepare,
-        ..ShippedStaging::of(judged)
+        ..ShippedStaging::of(&judged)
     };
 
-    verify_declined_item_is_stated(project_types, rule, &staging, &named, path, expected);
+    verify_declined_item_is_stated(
+        probe.project_types,
+        probe.rule,
+        &staging,
+        &named,
+        probe.path,
+        &expected,
+    );
 }
 
 /// Drives the shipped script of `rule` over every file of `staged`, and holds
@@ -1968,6 +2027,61 @@ const PYTHON_PROJECT_TYPES: &[&str] = &["python"];
 
 /// The project types a Go workspace carries, as the plan holds them.
 const GO_PROJECT_TYPES: &[&str] = &["go"];
+
+/// Where the Go path no reader may open stands inside the probe repository.
+///
+/// `missing-docs-go` and `stuttering-name-go` run the same revive `exported`
+/// rule and split its output between them, so ONE path and ONE source serve
+/// the refusing-path probe of both rules.
+const GO_FORBIDDEN_PATH: &str = "forbidden.go";
+
+/// A Go file revive could read if the mode let it.
+///
+/// The type is unexported, and Go carves an unexported name out of BOTH halves
+/// of the `exported` rule, so a run that DID read this file reports nothing of
+/// it under either category. That is the clean answer neither rule may give
+/// for a file it never read, and it leaves the diagnostic as the whole
+/// difference between the run that read the file and the run that did not.
+const GO_FORBIDDEN_SOURCE: &str = concat!("package staged\n", "\n", "type forbidden struct{}\n");
+
+/// Drives the shipped script of the Go tool rule `rule` over the `(path,
+/// source)` pair `judged` beside [`GO_FORBIDDEN_PATH`], which no reader may
+/// open, and holds that run to reporting `judged_row` AND to stating one
+/// diagnostic that names the refusing path.
+///
+/// `missing-docs-go` and `stuttering-name-go` run the same revive `exported`
+/// rule over the same shape, so the probe of the two rules differs in the rule
+/// and in the judged file alone. Each rule owns a finding of its OWN judged
+/// source — an undocumented exported type for one, an exported name that
+/// repeats its package name for the other — and `judged_row` is the row that
+/// finding stands on. The project types, the refusing path and the source
+/// behind it are ONE value for both rules, so this function holds them.
+///
+/// The judged row is what a nonzero exit over a declined item costs, and
+/// staying silent about the refusing path is what reads that path as a clean
+/// file. The run must therefore keep the row AND state the path.
+///
+/// The probe takes every permission off the refusing file, which is a mode, so
+/// it runs on unix alone.
+#[cfg(unix)]
+fn verify_go_rule_declines_a_forbidden_path(
+    rule: &'static str,
+    judged: (&'static str, &'static str),
+    judged_row: String,
+) {
+    let (judged_path, judged_source) = judged;
+
+    verify_unreadable_file_is_declined(
+        &ShippedDeclineProbe {
+            project_types: GO_PROJECT_TYPES,
+            rule,
+            judged: vec![(judged_path, judged_source.to_string())],
+            path: GO_FORBIDDEN_PATH,
+            expected: vec![judged_row],
+        },
+        &ShippedUnreadableFile::Forbidden(GO_FORBIDDEN_SOURCE),
+    );
+}
 
 /// The project types a Node.js workspace carries, as the plan holds them.
 const NODEJS_PROJECT_TYPES: &[&str] = &["nodejs"];
@@ -2137,6 +2251,141 @@ const SWIFT_HOLLOW_FILES: &[(&str, &str)] = &[("Sources/Hollow.swift/Notes.txt",
 
 /// What the work-list of a hollow-directory probe states the change is for.
 const SWIFT_HOLLOW_PURPOSE: &str = "a directory that holds no Swift file";
+
+/// Where the Swift file the project's `excluded:` list covers stands inside
+/// the probe repository.
+///
+/// The staged-position probes name the same directory, so one exclude list
+/// serves the whole Swift family.
+const SWIFT_EXCLUDED_PATH: &str = SWIFT_GENERATED_POSITION.path;
+
+/// How a project `.swiftlint.yml` makes a shipped swiftlint rule decline ONE
+/// item of a run it otherwise measures.
+///
+/// Each shape stages its own project files, declines its own item, and decides
+/// whether the run still reports the findings the staged source holds.
+enum SwiftProjectDecline {
+    /// The project's `excluded:` list covers every file the work-list names.
+    ///
+    /// Measured with swiftlint 0.65.0 over one file under `Generated/` beside
+    /// `excluded: [Generated]`: swiftlint writes 0 bytes to stdout, writes
+    /// `Error: No lintable files found at paths: 'Generated/Staged.swift'` to
+    /// stderr, and exits 1. The script exits 0 for that message, so a run that
+    /// read NO file answered the clean answer of a run that read every file.
+    ///
+    /// A sound run says nothing on stderr — measured over the same file with no
+    /// project configuration: entries on stdout and 0 bytes on stderr — so the
+    /// script states each path it still holds under the marker.
+    ExcludesTheWholeRun,
+
+    /// The project names a child configuration of its own, which swiftlint
+    /// cannot read.
+    ///
+    /// That file aborts swiftlint. The script then runs a second time with its
+    /// own configuration alone, and that second run drops the project's
+    /// `excluded:` list, so the file under the excluded directory reports.
+    ///
+    /// The run measured the code with settings the project did not ask for,
+    /// which is one item it could not judge as asked. A script that wrote that
+    /// on stderr with no marker lost it, because the report drops an unmarked
+    /// line.
+    NamesAConfigurationItCannotRead,
+}
+
+impl SwiftProjectDecline {
+    /// The project files this shape stages beside the judged file. The
+    /// work-list names none of them.
+    fn support(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::ExcludesTheWholeRun => SWIFT_EXCLUDING_SUPPORT_FILES,
+            Self::NamesAConfigurationItCannotRead => SWIFT_CHILD_CONFIG_SUPPORT_FILES,
+        }
+    }
+
+    /// The item this shape makes the run decline, which the one diagnostic must
+    /// name.
+    fn declined(&self) -> &'static str {
+        match self {
+            Self::ExcludesTheWholeRun => SWIFT_EXCLUDED_PATH,
+            Self::NamesAConfigurationItCannotRead => SWIFT_PROJECT_CONFIG_PATH,
+        }
+    }
+
+    /// Whether the run still reports every finding the staged source holds.
+    ///
+    /// A run the project excludes whole reads no file, so it reports nothing. A
+    /// run that dropped the project configuration reads the file the list
+    /// covered, so it reports each finding that file holds.
+    fn reports_the_findings(&self) -> bool {
+        match self {
+            Self::ExcludesTheWholeRun => false,
+            Self::NamesAConfigurationItCannotRead => true,
+        }
+    }
+}
+
+/// What one shipped swiftlint rule's probe of a project decline states, with
+/// the way the project declines the run left out.
+///
+/// The three shipped swiftlint rules — `missing-docs-swift`,
+/// `function-length-swift` and `magic-numbers-swift` — each hold the same two
+/// branches, and every value beside these three is the same for all of them:
+/// the project types, the staged path, and the project files each shape stages.
+/// The way the project declines the run is the ONE value that changes between
+/// the two tests of a rule, so it reaches
+/// [`verify_swift_project_decline_is_stated`] beside the probe rather than
+/// inside it.
+///
+/// `heads` owns its bytes. `function-length-swift` builds its head at run time
+/// from the name its staged function takes, so a probe that borrowed the head
+/// could not outlive the call that built it.
+struct SwiftProjectDeclineProbe {
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// The source the one judged file holds. Each rule stages the source its
+    /// own tool reports on.
+    source: &'static str,
+
+    /// The head of each line that source holds a finding on. The helper turns
+    /// each head into the `path:line` row the run must report.
+    heads: Vec<String>,
+}
+
+/// Drives the shipped swiftlint script `probe` names over ONE file under the
+/// directory the project excludes, beside the project files `decline` stages,
+/// and holds that run to reporting the rows the shape expects AND to stating
+/// one diagnostic that names the item it declined.
+///
+/// ONE function serves the three shipped swiftlint rules. A rule states its own
+/// bound values as a [`SwiftProjectDeclineProbe`], and each test of that rule
+/// hands the same probe here beside one shape of [`SwiftProjectDecline`].
+fn verify_swift_project_decline_is_stated(
+    probe: &SwiftProjectDeclineProbe,
+    decline: &SwiftProjectDecline,
+) {
+    let mut staged = vec![(SWIFT_EXCLUDED_PATH, probe.source)];
+    staged.extend_from_slice(decline.support());
+
+    let rows: Vec<String> = match decline.reports_the_findings() {
+        true => probe
+            .heads
+            .iter()
+            .map(|head| expected_row(SWIFT_EXCLUDED_PATH, probe.source, head))
+            .collect(),
+        false => Vec::new(),
+    };
+    let expected: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+    verify_declined_item_is_stated(
+        SWIFT_PROJECT_TYPES,
+        probe.rule,
+        &ShippedStaging::of(&staged),
+        &[SWIFT_EXCLUDED_PATH],
+        decline.declined(),
+        &expected,
+    );
+}
 
 /// What a run whose every file the project excludes must report: nothing.
 const NO_STAGED_REPORTS: &[&str] = &[];

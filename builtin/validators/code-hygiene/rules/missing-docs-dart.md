@@ -17,13 +17,14 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     work="$(cd "$work" && pwd -P)"
-    for file in "$@"; do
-      if [ ! -r "$file" ]; then
-        printf 'missing-docs-dart cannot read %s\n' "$file" >&2
-        exit 1
-      fi
-    done
-    printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '>=3.0.0 <5.0.0'" > "$work/probe-pubspec.yaml"
+    version_report="$(dart --version 2>&1)"
+    sdk_version="$(printf '%s\n' "$version_report" | sed -n 's/.*Dart SDK version: \([0-9][0-9.]*\).*/\1/p')"
+    if [ -z "$sdk_version" ]; then
+      printf '%s\n' "$version_report" >&2
+      printf 'missing-docs-dart: dart --version names no version, so the probe package cannot state the language version this SDK parses with\n' >&2
+      exit 1
+    fi
+    printf '%s\n' 'name: sah_missing_docs_probe' 'environment:' "  sdk: '^$sdk_version'" > "$work/probe-pubspec.yaml"
     cat > "$work/probe-options.yaml" <<'ANALYSIS_OPTIONS'
     analyzer:
       exclude:
@@ -51,6 +52,14 @@ tool:
     ANALYSIS_OPTIONS
     : > "$work/files"
     for file in "$@"; do
+      if [ ! -r "$file" ]; then
+        printf 'sah-diagnostic: missing-docs-dart cannot read %s, so its members are unread\n' "$file" >&2
+        continue
+      fi
+      if ! iconv -f UTF-8 -t UTF-8 "$file" > /dev/null 2>&1; then
+        printf 'sah-diagnostic: missing-docs-dart cannot decode %s as UTF-8, so its members are unread\n' "$file" >&2
+        continue
+      fi
       dir="$(cd "$(dirname "$file")" && pwd -P)"
       config="-"
       while [ -n "$dir" ]; do
@@ -106,7 +115,7 @@ tool:
         }' "$work/analysis"
     done < "$work/configs"
   doctor:
-    check_command: "which dart awk mktemp"
+    check_command: "which dart awk sed sort iconv cp mkdir dirname cat mktemp"
     check_version_command: "dart --version"
     fix_hint: "brew install dart-sdk"
 ---
@@ -354,9 +363,14 @@ a probe package holding one undocumented class and one undocumented method:
 | the same package with its `.dart_tool` taken away | 0 | 0 |
 | `sdk: '>=9.0.0 <10.0.0'`, so `pub get` exits 1 and writes no `.dart_tool` | 0 | 0 |
 
-An SDK outside the `>=3.0.0 <5.0.0` window the script declares reaches the third
-row. That silence defeats EVERY path of this rule, the `--packages` path and the
-fallback alike, so it is not a shape of the missing-config fallback below.
+A probe whose `environment: sdk:` window leaves the installed SDK outside it
+reaches the third row. Measured with `sdk: '>=3.5.0 <3.6.0'` on Dart SDK 3.11.0:
+`dart pub get --offline` and `dart pub get` each exit 1, each writes
+`Because sah_probe requires SDK version >=3.5.0 <3.6.0, version solving failed.`,
+and neither writes `.dart_tool`. That silence defeats EVERY path of this rule,
+the `--packages` path and the fallback alike, so it is not a shape of the
+missing-config fallback below. The script reads its constraint out of
+`dart --version`, so no installed SDK stands outside it.
 
 The run therefore reads the status of `dart pub get` AND tests that the package
 config stands, and it names the failure rather than analyzing a package the
@@ -427,13 +441,84 @@ takes the status of its last command alone and the script writes no `pipefail`.
 `(cd "$package" && ...)`, so every command of the script runs at the repository
 root and no subshell stands between a failure and the script.
 
-The run tests each file it is given before it builds anything, and names the
-file it cannot read. `set -e` alone answers such a run too, but it answers with
-`cd: lib: No such file or directory` — a temporary path of the probe, and not
-the file the review handed over. Measured with the test taken out: that line and
-exit 1. The acceptance test
-`the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read` holds
-the named line.
+The run tests each file it is given before it copies it, and it takes a file it
+cannot read OUT of the work list rather than breaking the run. `set -e` alone
+answers such a run too, and it answers with a nonzero status that throws away
+every finding the run did make. Measured with the two tests taken out, over
+`lib/judged.dart` beside each refusing path: `cp: lib/absent.dart: No such file
+or directory` and exit 1, and `cp: lib/forbidden.dart: Permission denied` and
+exit 1. The section "A path the run cannot judge" below states each shape.
+
+## A path the run cannot judge
+
+A `files`-scope run is handed paths, and the engine reads the work-list rather
+than the disk, so a path can reach the run and refuse it. Each way it refuses is
+ONE item of a run that judged the other files, and
+`builtin/validators/README.md` states the channel: a line opening
+`sah-diagnostic:` on stderr, at exit 0.
+
+`dart analyze` states NOTHING for a file it cannot read. Measured on Dart SDK
+3.11.0 over one probe package whose `lib/` holds `judged.dart` — one
+undocumented class and one undocumented method — beside a file whose bytes are
+not UTF-8 and a file with no read permission, each holding two undocumented
+members of its own:
+
+| the run | status | stdout | stderr |
+|---|---|---|---|
+| the whole package | 0 | the 2 rows of `judged.dart` | 0 bytes |
+| the file whose bytes are not UTF-8, named alone | 0 | 0 rows | 0 bytes |
+| the file with no read permission, named alone | 0 | 0 rows | 0 bytes |
+| a path that holds no file, named alone | 64 | 0 rows | `Directory or file doesn't exist: lib/absent.dart` and the usage text |
+
+The analyzer drops a file it cannot read and says nothing at all, so rows 2 and
+3 read exactly like a documented file. `dart analyze --help` names 3 options —
+`--fatal-infos`, `--[no-]fatal-warnings` and `--help` — and none of them names a
+decode failure; `dart --verbose analyze` over the file whose bytes are not UTF-8
+writes 0 bytes on both channels. There is no message of the tool to read, so the
+script tests each path itself. `function-length-dart` makes the same two tests
+for the same reason:
+
+- `[ ! -r "$file" ]` answers a path that holds no file and a file whose mode
+  refuses a read, and it writes
+  `sah-diagnostic: missing-docs-dart cannot read <path>, so its members are
+  unread`.
+- `iconv -f UTF-8 -t UTF-8 "$file"` answers a file whose bytes are not UTF-8,
+  and it writes `sah-diagnostic: missing-docs-dart cannot decode <path> as
+  UTF-8, so its members are unread`. Measured against the three staged paths and
+  against a directory nobody may read: `iconv` exits 1 for each of the four, and
+  it exits 0 for a healthy file.
+
+Each test writes its line and takes the file out of the work list with
+`continue`, so no `cp` of that file is made. A run whose every path refuses
+writes an empty file list, `sort -u` names no package config, the loop that
+builds a probe package runs no time, and the run exits 0 with its marked lines.
+
+Measured with the shipped script over `lib/judged.dart` beside each refusing
+path, in a repository that holds no package config:
+
+| the refusing path | the earlier shape | the shipped script |
+|---|---|---|
+| a path that holds no file | 0 rows, exit 1, `missing-docs-dart cannot read lib/absent.dart` | 2 rows, exit 0, 1 diagnostic |
+| a file whose bytes are not UTF-8 | 2 rows, exit 0, 0 bytes on stderr | 2 rows, exit 0, 1 diagnostic |
+| a file with no read permission | 0 rows, exit 1, `missing-docs-dart cannot read lib/forbidden.dart` | 2 rows, exit 0, 1 diagnostic |
+
+Rows 1 and 3 of the earlier shape threw the 2 rows away, which is what
+`builtin/validators/README.md` refuses: a nonzero exit fails the WHOLE run, so
+one unjudged path throws away every finding the run did make. Row 2 is the
+opposite defect: `[ ! -r "$file" ]` is FALSE for a file whose bytes are not
+UTF-8 — the mode lets a reader open that one — so the file passed the guard,
+`cp` copied it, the analyzer dropped it in silence, and the engine read it as a
+clean file.
+
+Measured with the shipped script over `lib/judged.dart` beside all three paths:
+2 rows on stdout, 3 marked lines on stderr, exit 0.
+
+Three acceptance tests hold the three rows, one for each —
+`the_shipped_dart_missing_docs_tool_rule_declines_a_path_that_holds_no_file`,
+`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
+Each stages `lib/judged.dart` beside the path, and holds the run to reporting
+its 2 rows AND to stating one diagnostic that names the path. A run that lost
+either half fails them.
 
 ## How the run is shaped
 
@@ -467,6 +552,40 @@ write `// ignore: public_member_api_docs` above it in the code. Measured: the
 marker on the line above silences the finding, and
 `// ignore_for_file: public_member_api_docs` at the top of a file silences the
 whole file.
+
+### The probe package states the language version of the installed SDK
+
+A package's language version is the LOWER bound of its `environment: sdk:`
+constraint, and the analyzer refuses syntax newer than that version. A fixed
+floor therefore hides real code as the language moves. A declaration the floor
+does not know is a syntax error, every member inside it goes off the report, and
+the run still exits 0.
+
+Measured on Dart SDK 3.11.0 over one library. Its first declaration is an
+`extension type`, which arrived in Dart 3.3, and it holds a getter and a method.
+A plain class stands under it and holds a field and a method.
+
+| the probe constraint | what the run reports |
+|---|---|
+| `>=3.0.0 <5.0.0`, the earlier fixed floor | rows 7, 8 and 10, and `dart analyze` writes `This requires the 'inline-class' language feature to be enabled` as a SYNTACTIC_ERROR |
+| `^3.11.0`, read out of `dart --version` | rows 1, 2, 4, 7, 8 and 10 |
+
+The earlier floor loses the three members of the extension type and exits 0,
+which reads exactly like a documented declaration. That is the shape
+`builtin/validators/README.md` names as a tool that reads a dirty file as clean.
+The acceptance test
+`the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration`
+holds the run to all six rows.
+
+The script therefore reads the version out of `dart --version` with `sed` and
+writes `sdk: '^<version>'`. The caret keeps the constraint correct across a
+major version as well, because the version comes from the SDK that runs.
+`function-length-dart` states the same measurement for its own probe.
+
+A `dart` that answers no version takes the run to exit 1 with the line
+`missing-docs-dart: dart --version names no version, so the probe package cannot
+state the language version this SDK parses with`. The run must not guess a
+version, because a guessed floor is the defect this section removes.
 
 ## The run answers for its own arguments
 

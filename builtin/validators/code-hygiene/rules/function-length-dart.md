@@ -23,12 +23,12 @@ tool:
     index=0
     for file in "$@"; do
       if [ ! -r "$file" ]; then
-        printf 'function-length-dart cannot read %s\n' "$file" >&2
-        exit 1
+        printf 'sah-diagnostic: function-length-dart cannot read %s, so its length is unread\n' "$file" >&2
+        continue
       fi
       if ! iconv -f UTF-8 -t UTF-8 "$file" > /dev/null 2>&1; then
-        printf 'function-length-dart cannot decode %s as UTF-8\n' "$file" >&2
-        exit 1
+        printf 'sah-diagnostic: function-length-dart cannot decode %s as UTF-8, so its length is unread\n' "$file" >&2
+        continue
       fi
       case "$file" in
         */test/*|test/*|*/integration_test/*|integration_test/*|*/test_driver/*|test_driver/*|*/benchmark/*|benchmark/*|*_test.dart|*.g.dart|*.freezed.dart|*.mocks.dart|*.gr.dart|*.config.dart|*.gen.dart|*.pb.dart|*.pbenum.dart|*.pbjson.dart|*.pbserver.dart)
@@ -81,10 +81,9 @@ tool:
     cut -f1 "$work/copied" | sort > "$work/wanted"
     comm -23 "$work/wanted" "$work/measured" > "$work/unmeasured"
     if [ -s "$work/unmeasured" ]; then
-      awk -F'\t' 'NR == FNR { source[$1] = $2; next } { print source[$1] }' \
+      awk -F'\t' 'NR == FNR { source[$1] = $2; next }
+                  { printf "sah-diagnostic: dart_code_linter wrote no record for %s, so its length is unread\n", source[$1] }' \
         "$work/copied" "$work/unmeasured" >&2
-      printf 'function-length-dart: dart_code_linter wrote no record for the file above, so it measured no function of it\n' >&2
-      exit 1
     fi
     jq -r '.records[] | select((.functions // {}) | length == 0) | .path' "$work/metrics.json" \
       | sort > "$work/silent"
@@ -101,10 +100,9 @@ tool:
         "$work/analysis" | sort -u > "$work/unparsed"
       comm -12 "$work/silent" "$work/unparsed" > "$work/broken"
       if [ -s "$work/broken" ]; then
-        awk -F'\t' 'NR == FNR { source[$1] = $2; next } { print source[$1] }' \
+        awk -F'\t' 'NR == FNR { source[$1] = $2; next }
+                    { printf "sah-diagnostic: %s does not parse and dart_code_linter measured no function of it, so its length is unread\n", source[$1] }' \
           "$work/copied" "$work/broken" >&2
-        printf 'function-length-dart: the file above does not parse and measured no function, so its length is unread\n' >&2
-        exit 1
       fi
     fi
     jq -r '.records[] | .path as $path | .functions // {} | to_entries[]
@@ -398,24 +396,80 @@ pair into a table it maps the findings back through. The names are flat because
 `lib/.agents/x/a.dart` gets no record at all while `lib/plain/b.dart` gets one,
 and `flutter/packages` really does carry Dart files under
 `camera_android_camerax/.agents/skills/`. Under the earlier scheme, which
-mirrored the source path, those two files reached the "no record" test below and
-broke a run that was otherwise clean.
+mirrored the source path, those two files reached the "no record" test below.
+The flat name keeps them measured, and no shipped copy target stands under a dot
+directory, so that test is now a guard no input of the shipped script reaches.
 
-## A run cannot answer zero for a broken tool
+## A run cannot answer zero for an item it never measured
 
-Five shapes make this tool report nothing while exiting 0, and each of the five
+These five shapes make this tool report nothing while exiting 0, and each one
 reads exactly like a clean file. The script tests for all five.
 
-Measured with `dart_code_linter` 4.2.0 over one file holding one function of 302
-code lines:
+`builtin/validators/README.md` splits the answer in two. A script that judged
+the code and could not judge ONE item writes a line opening `sah-diagnostic:` on
+stderr and exits 0, and "a nonzero exit fails the WHOLE run, so one unjudged
+path throws away every finding the run did make". So the measurement that
+decides each shape is what `dart_code_linter` reported for the OTHER files of
+the same run.
 
-| the run | what the tool does | what the script does |
-|---|---|---|
-| a file the path names but that is not there | — | exits 1, `cannot read` |
-| a file that is not valid UTF-8 | one record, 0 functions, exit 0 | exits 1, `cannot decode` |
-| a file that does not parse at all | one record, 0 functions, exit 0 | exits 1, `does not parse` |
-| a file under a dot directory | NO record, exit 0 | exits 1, `wrote no record` |
-| a directory holding no Dart file | a report of 0 bytes, exit 0 | exits 1, `wrote no report` |
+Measured with `dart_code_linter` 4.2.0, each shape staged BESIDE one file
+holding one function of 302 code lines:
+
+| the run | what the tool does with it | what the other file gets | what the script does |
+|---|---|---|---|
+| a file the path names but that is not there | reads no byte of it | its finding | states it, exit 0 |
+| a file that is not valid UTF-8 | one record, 0 functions, exit 0 | its finding | states it, exit 0 |
+| a file that does not parse at all | one record, 0 functions, exit 0 | its finding | states it, exit 0 |
+| a file under a dot directory | NO record, exit 0 | its finding | states it, exit 0 |
+| a directory holding no Dart file | a report of 0 bytes, exit 0 | there is no other file | exits 1, `wrote no report` |
+
+The first four rows are one DECLINED ITEM of a run that stayed sound. The tool
+measured every other file, and the finding of the file it measured stands on the
+report, so an `exit 1` would throw that finding away. Each of the four therefore
+writes one line that OPENS with `sah-diagnostic:`, and the run exits 0. The
+marker opens the line because the engine reads a marked line with
+`strip_prefix`. Measured with the shipped script over one file of 302 code lines
+beside each shape: one finding on stdout, one marked line on stderr, and exit 0,
+four times over.
+
+    sah-diagnostic: function-length-dart cannot read lib/absent.dart, so its length is unread
+    sah-diagnostic: function-length-dart cannot decode lib/undecodable.dart as UTF-8, so its length is unread
+    sah-diagnostic: lib/unparsable.dart does not parse and dart_code_linter measured no function of it, so its length is unread
+    sah-diagnostic: dart_code_linter wrote no record for lib/second.dart, so its length is unread
+
+The engine states each marked line in the report, and no file filter drops it,
+because a diagnostic is about the RUN rather than about a reviewed line.
+
+Four acceptance tests hold the first three rows. Each one stages a file OVER the
+gate beside the declined item, so a run that lost that finding fails the test:
+`the_shipped_dart_function_length_tool_rule_declines_a_path_that_holds_no_file`,
+`the_shipped_dart_function_length_tool_rule_declines_a_file_it_may_not_read`,
+`the_shipped_dart_function_length_tool_rule_declines_a_file_it_cannot_decode`,
+and `the_shipped_dart_function_length_tool_rule_declines_a_file_it_cannot_parse`.
+
+A run that declines EVERY file it is given copies nothing, so the copied-count
+guard below exits it 0 before the probe package is built. Measured over one path
+that holds no file beside one file that is not UTF-8: no finding, two marked
+lines, and exit 0.
+
+The fourth row takes no acceptance test, because no input of the shipped script
+reaches it: the copy target is always `lib/probe_N.dart`, which stands under no
+dot directory and carries no generator suffix. The row was measured with the
+copy target of the second of two files of 302 code lines moved under
+`lib/.hidden/`: the run reported the other file's finding, stated the marked
+line above, and exited 0.
+
+The fifth row is a BROKEN run rather than a declined item, and its `exit 1`
+stays. A report of 0 bytes holds a record of no file at all, so the run measured
+nothing and holds no finding to lose. `function-length-go` splits the same way
+for its own tool, and it records the mirror of this row: one Go file that does
+not parse drops every `funlen` row of the same run, so that rule BREAKS where
+this one declines.
+
+The two read tests run BEFORE the copy rather than off the report. A file the
+script copies and the analyzer cannot read gets one record with 0 functions —
+measured over a copy with mode 000 — and 0 functions is also what an empty Dart
+file answers, so the report cannot tell the two apart.
 
 The UTF-8 test is `iconv -f UTF-8 -t UTF-8`, and it is exact: measured over four
 probe files, the Latin-1 one fails it and the healthy one, the unparseable one
@@ -435,15 +489,16 @@ measured no function AND carries a `SYNTACTIC_ERROR`. Measured:
 
 | the file | measured functions | SYNTACTIC_ERROR | the script |
 |---|---|---|---|
-| `this is @@@ not (((  dart ]]]` | 0 | yes | exits 1 |
+| `this is @@@ not (((  dart ]]]` | 0 | yes | states it, exit 0 |
 | `cupertino_ui/lib/src/context_menu.dart` | 72 | yes | measures it |
 | an empty `.dart` file | 0 | no | reports nothing, exit 0 |
 | a healthy file over the gate | 1 | no | reports it |
 
 Row 2 is why the test is an intersection rather than a plain search for a
-syntactic error: an earlier shape that broke on any SYNTACTIC_ERROR reported 0
-findings and exited 1 over the whole of `flutter/packages`, because that
-repository turns on an experimental language feature the probe package does not.
+syntactic error. `flutter/packages` turns on an experimental language feature
+the probe package does not, so a plain search declines a file whose every
+function the tool measured. Measured with the earlier shape, which broke on any
+SYNTACTIC_ERROR: 0 findings and exit 1 over the whole of `flutter/packages`.
 
 The machine format is what separates the two causes. A syntax failure writes
 `ERROR|SYNTACTIC_ERROR|<code>` and an import the probe cannot resolve writes

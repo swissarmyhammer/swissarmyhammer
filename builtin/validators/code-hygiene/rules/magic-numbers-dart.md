@@ -16,7 +16,14 @@ tool:
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     package="$(cd "$work" && pwd -P)"
-    printf '%s\n' 'name: sah_magic_numbers_probe' 'environment:' "  sdk: '>=3.5.0 <4.0.0'" \
+    version_report="$(dart --version 2>&1)"
+    sdk_version="$(printf '%s\n' "$version_report" | sed -n 's/.*Dart SDK version: \([0-9][0-9.]*\).*/\1/p')"
+    if [ -z "$sdk_version" ]; then
+      printf '%s\n' "$version_report" >&2
+      printf 'magic-numbers-dart: dart --version names no version, so the probe package cannot state the language version this SDK parses with\n' >&2
+      exit 1
+    fi
+    printf '%s\n' 'name: sah_magic_numbers_probe' 'environment:' "  sdk: '^$sdk_version'" \
       'dev_dependencies:' '  custom_lint: 0.8.1' '  solid_lints: 0.3.3' > "$package/pubspec.yaml"
     printf '%s\n' 'analyzer:' '  plugins:' '    - custom_lint' 'custom_lint:' '  rules:' \
       '    - no_magic_number' > "$package/analysis_options.yaml"
@@ -36,7 +43,7 @@ tool:
            line: .location.range.start.line,
            message: .problemMessage}'
   doctor:
-    check_command: "which dart jq mktemp"
+    check_command: "which dart jq sed mktemp"
     check_version_command: "dart --version"
     fix_hint: "brew install dart-sdk"
 ---
@@ -208,6 +215,54 @@ it. Measured: the marker on the line above silences the finding, and the same
 marker at the end of the line does NOT — `custom_lint` reads the preceding line
 only. `// ignore_for_file: no_magic_number` at the top of a file exempts the
 whole file.
+
+### The probe package states the language version of the installed SDK
+
+A package's language version is the LOWER bound of its `environment: sdk:`
+constraint, and the analyzer refuses syntax newer than that version. A fixed
+floor therefore hides real code as the language moves.
+
+The earlier floor was `>=3.5.0 <4.0.0`, and Dart SDK 3.11.0 is installed.
+Measured under that floor, `dart analyze` writes
+`This requires the 'dot-shorthands' language feature to be enabled` for a Dart
+3.10 dot shorthand, and
+`This requires the 'null-aware-elements' language feature to be enabled` for a
+Dart 3.8 null-aware element. Each is a SYNTACTIC_ERROR of a file the project's
+own analyzer reads with no error at all.
+
+What a stale floor costs is measured over a declaration the floor does not know.
+One library holds an `extension type`, which arrived in Dart 3.3, with two
+unnamed literals inside it, beside one plain function holding a third:
+
+| the probe constraint | findings |
+|---|---|
+| `>=3.0.0 <5.0.0`, a floor three versions under the declaration | 1 of 3 — the literal of the plain function alone |
+| `>=3.5.0 <4.0.0`, the earlier floor of this rule | 3 of 3 |
+| `^3.11.0`, read out of `dart --version` | 3 of 3 |
+
+Row 1 exits 0 and reads exactly like a clean file. Row 2 is what the earlier
+floor answers TODAY, and row 3 is what a derived constraint answers on this SDK
+and on each later one. `missing-docs-dart` measured the same mechanism at its
+own floor, where the loss is live, and its acceptance test
+`the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration`
+holds it.
+
+The `<4.0.0` upper bound is the second cost, and it is loud rather than silent.
+A probe whose window leaves the installed SDK outside it takes `dart pub get` to
+exit 1 offline and online alike. Measured with `sdk: '>=3.5.0 <3.6.0'` on Dart
+SDK 3.11.0: each run writes
+`Because sah_probe requires SDK version >=3.5.0 <3.6.0, version solving failed.`
+Dart 4.0 reaches that state for a `<4.0.0` bound.
+
+The script therefore reads the version out of `dart --version` with `sed` and
+writes `sdk: '^<version>'`. The caret keeps the constraint correct across a
+major version as well, because the version comes from the SDK that runs.
+`function-length-dart` states the same measurement for its own probe.
+
+A `dart` that answers no version takes the run to exit 1 with the line
+`magic-numbers-dart: dart --version names no version, so the probe package
+cannot state the language version this SDK parses with`. The run must not guess
+a version, because a guessed floor is the defect this section removes.
 
 ## The run answers for its own arguments
 

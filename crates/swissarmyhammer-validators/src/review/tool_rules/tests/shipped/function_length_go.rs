@@ -11,6 +11,18 @@
 
 use super::*;
 
+use std::collections::HashMap;
+use std::fs::FileTimes;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
+
+use super::go_probe::{
+    GO_ANOTHER_LINTER_ERROR, GO_BROKEN_STATUS_ERROR, GO_MODULE_MANIFEST, GO_MODULE_MANIFEST_PATH,
+    GO_PACKAGE_CLAUSE, GO_TOOL_BINARY_NAME, GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE,
+    GO_UNREADABLE_PATH, GO_UNREADABLE_SOURCE,
+};
+use super::golangci_cache::GOLANGCI_CACHE_DIRECTORY;
+
 /// The statement gate the shipped rule states.
 ///
 /// 250 code lines times 0.633, the measured median statements-per-line of the
@@ -32,21 +44,6 @@ const PROCEDURE_FRAME_STATEMENTS: usize = 2;
 /// rule states, or it could not tell a line gate from a statement gate. Each
 /// row is one line, and the shape carries a few lines of its own around them.
 const DATA_SHAPE_ROWS: usize = 300;
-
-/// The module manifest of a probe repository, as the work-list holds the path.
-const GO_MODULE_MANIFEST_PATH: &str = "go.mod";
-
-/// The module manifest of a probe repository.
-///
-/// golangci-lint loads packages rather than files, so a probe repository with
-/// no manifest loads nothing. The `go` directive names an old release for the
-/// reason the shipped `go.mod` fixture states: it is the lowest version the
-/// probe needs, so the installed toolchain always satisfies it and never
-/// downloads another one.
-const GO_MODULE_MANIFEST: &str = "module function-length-probe\n\ngo 1.21\n";
-
-/// The package clause every probe file opens with.
-const GO_PACKAGE_CLAUSE: &str = "package probe\n\n";
 
 /// The header `go generate` states above a generated file, and the blank line
 /// under it.
@@ -248,6 +245,51 @@ const GO_PLAIN_POSITION_PATH: &str = "plain/staged.go";
 /// decide nothing and the header is the one difference between the two.
 const GO_GENERATED_POSITION_PATH: &str = "marked/staged.go";
 
+/// One function over the statement gate staged at two positions, and the one
+/// row a run over them must report.
+///
+/// The function runs to 170 lines, so no `&'static str` holds it and the
+/// probe is built at run time. This shape owns the text it built, and a
+/// caller that needs `(&str, &str)` pairs borrows it through
+/// [`Self::files`].
+struct GoGeneratedPositions {
+    /// Each file of the probe repository, with the text it holds.
+    staged: Vec<(&'static str, String)>,
+
+    /// The `path:line` row a run over the repository must report, and no
+    /// other.
+    expected: String,
+}
+
+impl GoGeneratedPositions {
+    /// Builds the probe: the function over the gate in a plain file, and the
+    /// same function in a file whose head carries the header `go generate`
+    /// states.
+    fn build() -> Self {
+        let declarations = go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS);
+        let plain = format!("{GO_PACKAGE_CLAUSE}{declarations}");
+        let generated = format!("{GO_GENERATED_HEADER}{GO_PACKAGE_CLAUSE}{declarations}");
+        let expected = go_expected_row(GO_PLAIN_POSITION_PATH, &plain, "LongProcedure");
+
+        Self {
+            staged: vec![
+                (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST.to_string()),
+                (GO_PLAIN_POSITION_PATH, plain),
+                (GO_GENERATED_POSITION_PATH, generated),
+            ],
+            expected,
+        }
+    }
+
+    /// Each staged file as the `(path, text)` pair a stager takes.
+    fn files(&self) -> Vec<(&str, &str)> {
+        self.staged
+            .iter()
+            .map(|(path, text)| (*path, text.as_str()))
+            .collect()
+    }
+}
+
 /// Drives the shipped script over a NEW probe repository holding one function
 /// over the statement gate two times — in a plain file, and in a file whose
 /// head carries the generated header — and holds the run to reporting the
@@ -256,20 +298,13 @@ const GO_GENERATED_POSITION_PATH: &str = "marked/staged.go";
 /// Each call stages a repository of its own and removes it when it returns, so
 /// a caller that calls twice measures two workspaces holding the same bytes.
 fn verify_the_generated_position_stays_silent(reason: &str) {
-    let declarations = go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS);
-    let plain = format!("{GO_PACKAGE_CLAUSE}{declarations}");
-    let generated = format!("{GO_GENERATED_HEADER}{GO_PACKAGE_CLAUSE}{declarations}");
-    let expected = go_expected_row(GO_PLAIN_POSITION_PATH, &plain, "LongProcedure");
+    let probe = GoGeneratedPositions::build();
 
     verify_staged_rows_report(
         GO_PROJECT_TYPES,
         GO_FUNCTION_LENGTH_RULE,
-        &[
-            (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
-            (GO_PLAIN_POSITION_PATH, &plain),
-            (GO_GENERATED_POSITION_PATH, &generated),
-        ],
-        &[&expected],
+        &probe.files(),
+        &[&probe.expected],
         reason,
     );
 }
@@ -328,21 +363,9 @@ fn the_shipped_go_function_length_tool_rule_reads_the_workspace_it_ran_in() {
     }
 }
 
-/// Where the package holding the file golangci-lint cannot parse stands.
-const GO_UNPARSABLE_PATH: &str = "broken/broken.go";
-
-/// A Go file golangci-lint cannot parse: the call in the return never closes.
-const GO_UNPARSABLE_SOURCE: &str = concat!(
-    "package broken\n\n",
-    "func Broken() int {\n\treturn undefinedSymbol(\n}\n",
-);
-
 /// What the run must say for a file golangci-lint could not parse: the row the
 /// tool wrote, and the rule's own sentence.
-const GO_UNPARSABLE_ERRORS: &[&str] = &[
-    GO_UNPARSABLE_PATH,
-    "golangci-lint reported a row of another linter",
-];
+const GO_UNPARSABLE_ERRORS: &[&str] = &[GO_UNPARSABLE_PATH, GO_ANOTHER_LINTER_ERROR];
 
 /// Why a file golangci-lint cannot parse breaks the run.
 const GO_UNPARSABLE_REASON: &str =
@@ -383,7 +406,7 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_cannot_parse() {
 
 /// What the run must say for a workspace holding no module: the status
 /// golangci-lint answered with, and the rule's own words for it.
-const GO_NO_MODULE_ERRORS: &[&str] = &["golangci-lint exited", "measured no function"];
+const GO_NO_MODULE_ERRORS: &[&str] = &[GO_BROKEN_STATUS_ERROR, "measured no function"];
 
 /// Why a workspace holding no module breaks the run.
 const GO_NO_MODULE_REASON: &str =
@@ -415,43 +438,39 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_workspace_holding_no_mod
     );
 }
 
-/// Where the file nobody may read stands inside the probe module.
-///
-/// It holds a package of its own, because a file the tool cannot open is a
-/// package golangci-lint cannot load.
-const GO_UNREADABLE_PATH: &str = "noread/unreadable.go";
-
-/// What the file nobody may read holds.
-///
-/// The source is ordinary and stands under the gate, so a run that DID read it
-/// would report no finding — which is the clean answer this rule must not give
-/// for a file it never read.
-const GO_UNREADABLE_SOURCE: &str = "package noread\n\nfunc Short() int {\n\treturn 1\n}\n";
-
-/// What the run must say for a Go file golangci-lint could not read on a cold
-/// cache: the path the tool named, and the rule's own words for the status.
+/// What the run must say for a workspace whose one Go package golangci-lint
+/// could not read: the path the tool named, and the rule's own words for the
+/// status.
 const GO_UNREADABLE_ERRORS: &[&str] = &[
     GO_UNREADABLE_PATH,
-    "golangci-lint exited",
+    GO_BROKEN_STATUS_ERROR,
     "measured no function",
 ];
 
-/// Why a file golangci-lint cannot read breaks a run that measured nothing
-/// else.
+/// Why a workspace whose one package golangci-lint cannot read breaks the run.
 const GO_UNREADABLE_REASON: &str =
-    "a package golangci-lint cannot load costs the run every finding it measured fresh, \
-     so a run holding no cached answer measured nothing and must say so";
+    "the one package of the workspace is the package golangci-lint cannot load, so the \
+     run measured no function at all and must say so";
 
 /// Acceptance: the shipped Go function-length tool rule BREAKS on a Go file it
 /// may not read, through the real funlen pipeline.
 ///
 /// golangci-lint refuses such a file with
 /// `level=error msg="[linters_context] typechecking error: open <path>:
-/// permission denied"` on stderr, and a package it cannot load costs the run
-/// every finding it measured fresh. Measured with golangci-lint 2.12.2 over one
-/// workspace holding one function of 170 statements beside such a file, the
-/// cache cold: `Issues: []` on the report at exit 7, so the run measured
-/// nothing at all.
+/// permission denied"` on stderr, and it writes no row for that package. The
+/// probe workspace holds that package and NO OTHER, so the run measured no
+/// function at all. Measured with golangci-lint 2.12.2 over this workspace,
+/// the cache directory made empty for every round and removed after it:
+/// `Issues: []` on the report at exit 7, in 20 rounds at `GOMAXPROCS=1` and 20
+/// rounds at `GOMAXPROCS=18`.
+///
+/// The workspace holds no second package on purpose. What a run reports for
+/// the OTHER packages of such a workspace is a race inside golangci-lint
+/// rather than a fact about the tool, and the rule body states that
+/// measurement under "A file it cannot read, which costs the run the package
+/// it never read". A probe that stages a readable function beside this file
+/// therefore holds the run to one branch of a race no test can own: measured,
+/// that shape failed 5 of 6 rounds under `GOMAXPROCS=1`.
 ///
 /// The earlier shape of this run dropped stderr and ended in `jq`, so that run
 /// read as a clean tree. The probe takes every permission off the file, which
@@ -459,14 +478,7 @@ const GO_UNREADABLE_REASON: &str =
 #[cfg(unix)]
 #[test]
 fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read() {
-    let source = format!(
-        "{GO_PACKAGE_CLAUSE}{}",
-        go_procedure("LongProcedure", OVER_THE_GATE_STATEMENTS)
-    );
-    let staged = [
-        (GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST),
-        (GO_SHAPES_PATH, source.as_str()),
-    ];
+    let staged = [(GO_MODULE_MANIFEST_PATH, GO_MODULE_MANIFEST)];
     let named: Vec<&str> = staged
         .iter()
         .map(|(path, _)| *path)
@@ -489,9 +501,6 @@ fn the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read() {
     );
 }
 
-/// The name the shipped script calls the linter by.
-const GO_TOOL_BINARY_NAME: &str = "golangci-lint";
-
 /// The line a stubbed golangci-lint answers a run whose cache already holds the
 /// finding, and which met one file it could not read.
 ///
@@ -501,9 +510,14 @@ const GO_TOOL_BINARY_NAME: &str = "golangci-lint";
 /// `funlen` row out of the cache the second run filled, wrote the
 /// `[linters_context]` line to stderr, and exited 1.
 ///
-/// The stub stands in for the CACHE, which no probe can stage: a run over a
-/// fresh workspace always reads a cold cache, and a run over a warm one answers
-/// out of what another run put there.
+/// The stub is what makes that answer DETERMINISTIC. A warm cache gives it
+/// every time — measured over one workspace linted with the file readable and
+/// then unreadable, 20 rounds at `GOMAXPROCS=1` and 20 at `GOMAXPROCS=18`, all
+/// 40 reporting the row at exit 1. A workspace whose cache is cold gives it
+/// too, but only when the sound package wins a race inside golangci-lint: 18
+/// of 24 fresh workspaces at `GOMAXPROCS=1`, and 0 of 40 at the default. The
+/// stub therefore stands in for the cache rather than for a shape no probe
+/// could stage.
 const GO_DECLINED_ANSWER: &str = concat!(
     "  printf '{\"Issues\":[{\"FromLinter\":\"funlen\",\"Text\":\"Function %s has too many ",
     "statements (170 > 160)\",\"Pos\":{\"Filename\":\"%s/shapes/shapes.go\",\"Line\":3}}]}\\n' ",
@@ -524,13 +538,14 @@ const GO_DECLINED_ANSWER: &str = concat!(
 /// make.
 ///
 /// The stub answers with the bytes the real golangci-lint 2.12.2 wrote for that
-/// run, because the cache state that produces it is not something a probe over
-/// a fresh workspace can stage. The probe leads `PATH` with the stub, which is
-/// process state, so it stands under `#[serial_test::serial(env)]`.
+/// run, because a probe that staged the workspace would read that answer only
+/// when a race inside golangci-lint fell its way. The probe leads `PATH` with
+/// the stub, which is process state, so it stands under
+/// `#[serial_test::serial(env)]`.
 #[cfg(unix)]
 #[test]
 #[serial_test::serial(env)]
-fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
+fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() -> ProbeResult<()> {
     let run = drive_shipped_script_with_stub(
         GO_PROJECT_TYPES,
         GO_FUNCTION_LENGTH_RULE,
@@ -539,9 +554,10 @@ fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
         GO_TOOL_BINARY_NAME,
         GO_DECLINED_ANSWER,
     );
-    let outcome = run
-        .outcome
-        .expect("a script handed an item it cannot judge must judge the rest and exit 0");
+    // A script handed an item it cannot judge must judge the rest and exit 0.
+    // A failure here is therefore the answer of the run, and the test fails on
+    // it with the script's own stderr rather than with a sentence of its own.
+    let outcome = run.outcome?;
 
     assert_eq!(
         sorted_names(&finding_rows(&outcome, &run.repo_root)),
@@ -560,6 +576,7 @@ fn the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read() {
         "the diagnostic must name the file it declined; it said '{}'",
         stated[0]
     );
+    Ok(())
 }
 
 /// How many runs of the shipped script the lock probe starts together.
@@ -625,4 +642,298 @@ fn the_shipped_go_function_length_tool_rule_reports_while_another_run_holds_the_
          waits for the lock rather than stopping; a run that stopped judged nothing at \
          all: {reported:?}"
     );
+}
+
+/// The polynomial POSIX `cksum` reduces its input with.
+///
+/// The shipped rule keyed its cache with `cksum` before this test, and the
+/// probe below stages the pair of working directories that key merged. Only
+/// `cksum` names such a pair, so the probe computes it.
+const CKSUM_POLYNOMIAL: u32 = 0x04C1_1DB7;
+
+/// How many entries the `cksum` table holds: one for each byte value.
+const CKSUM_TABLE_ENTRIES: usize = 256;
+
+/// How many bits one byte holds, as the reduction steps over its input.
+const BITS_IN_A_BYTE: u32 = 8;
+
+/// Which bit of the running state the reduction reads its table index from:
+/// the top byte of a 32-bit word.
+const CKSUM_HIGH_BYTE_SHIFT: u32 = 24;
+
+/// The bit the reduction tests before each shift.
+const CKSUM_TOP_BIT: u32 = 0x8000_0000;
+
+/// The `cksum` table for [`CKSUM_POLYNOMIAL`].
+type CksumTable = [u32; CKSUM_TABLE_ENTRIES];
+
+/// Builds the `cksum` table for [`CKSUM_POLYNOMIAL`].
+fn cksum_table() -> CksumTable {
+    let mut table = [0_u32; CKSUM_TABLE_ENTRIES];
+    for (byte, entry) in table.iter_mut().enumerate() {
+        let mut state = (byte as u32) << CKSUM_HIGH_BYTE_SHIFT;
+        for _ in 0..BITS_IN_A_BYTE {
+            state = match state & CKSUM_TOP_BIT {
+                0 => state << 1,
+                _ => (state << 1) ^ CKSUM_POLYNOMIAL,
+            };
+        }
+        *entry = state;
+    }
+    table
+}
+
+/// The bytes `cksum` folds the byte COUNT in as: the count little end first,
+/// and no byte at all for a count of zero.
+fn cksum_length_bytes(mut count: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while count > 0 {
+        bytes.push(count as u8);
+        count >>= BITS_IN_A_BYTE;
+    }
+    bytes
+}
+
+/// The checksum POSIX `cksum` writes for `bytes`.
+fn posix_cksum(table: &CksumTable, bytes: &[u8]) -> u32 {
+    let mut state = 0_u32;
+    for byte in bytes.iter().copied().chain(cksum_length_bytes(bytes.len())) {
+        let index = ((state >> CKSUM_HIGH_BYTE_SHIFT) as u8) ^ byte;
+        state = (state << BITS_IN_A_BYTE) ^ table[index as usize];
+    }
+    !state
+}
+
+/// The cache-directory name the rule wrote for `path` before this change:
+/// `printf '%s' "$PWD" | cksum | tr -dc '0-9'`.
+///
+/// `cksum` writes the checksum and the byte COUNT, and `tr` glues the digits
+/// of both together. Two paths of the same length therefore share this name
+/// exactly when they share the 32-bit checksum.
+fn old_cache_key(table: &CksumTable, path: &str) -> String {
+    format!("{} {}", posix_cksum(table, path.as_bytes()), path.len())
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect()
+}
+
+/// The alphabet a candidate working-directory name is written in.
+const CANDIDATE_NAME_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
+/// How many characters a candidate working-directory name holds.
+///
+/// Both names take this one width, so both paths hold the same number of
+/// bytes and the byte-count half of the old key matches whenever the checksum
+/// half does.
+///
+/// The width stands past four characters on purpose. Measured: a search that
+/// varied four characters of a name met no pair in 4000000 candidates,
+/// because the reduction is one to one over any four bytes; a search that
+/// varies twelve meets one in about 225000.
+const CANDIDATE_NAME_WIDTH: usize = 12;
+
+/// How many candidate names the search reads before it gives up.
+///
+/// The checksum is 32 bits wide, so a birthday search over it meets a pair
+/// after about 82000 candidates. The limit stands far past that, and a search
+/// that reaches it states so rather than answering a pair it never found.
+const CANDIDATE_NAME_LIMIT: usize = 1_000_000;
+
+/// The candidate working-directory name for `index`.
+///
+/// The index is hashed first, so consecutive candidates differ across the
+/// whole width of the name rather than in their first characters alone.
+/// `DefaultHasher` carries fixed keys, so the walk is the same on every run.
+fn candidate_name(index: usize) -> String {
+    let mut hasher = DefaultHasher::new();
+    index.hash(&mut hasher);
+    let mut draw = hasher.finish();
+    let alphabet_width = CANDIDATE_NAME_ALPHABET.len() as u64;
+    (0..CANDIDATE_NAME_WIDTH)
+        .map(|_| {
+            let letter = CANDIDATE_NAME_ALPHABET[(draw % alphabet_width) as usize];
+            draw /= alphabet_width;
+            char::from(letter)
+        })
+        .collect()
+}
+
+/// Two names for sibling working directories under `root` whose paths the OLD
+/// cache key merged into one directory.
+///
+/// A birthday search over a 32-bit checksum meets a pair long before
+/// [`CANDIDATE_NAME_LIMIT`], and no pigeonhole makes that certain, so a search
+/// that reads the whole limit answers the failure rather than a pair it never
+/// found.
+fn workspace_names_one_checksum_merged(
+    table: &CksumTable,
+    root: &Path,
+) -> ProbeResult<(String, String)> {
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for index in 0..CANDIDATE_NAME_LIMIT {
+        let name = candidate_name(index);
+        let key = old_cache_key(table, &root.join(&name).to_string_lossy());
+        match seen.get(&key) {
+            Some(earlier) if *earlier != name => return Ok((earlier.clone(), name)),
+            _ => {
+                seen.insert(key, name);
+            }
+        }
+    }
+    Err(format!("the search met no pair of names one checksum merges under {root:?}").into())
+}
+
+/// Acceptance: the shipped Go function-length tool rule reads the workspace it
+/// ran in, over two workspaces one CHECKSUM merged.
+///
+/// The sibling test above stages two workspaces that differ in every way, so
+/// it holds the rule only where the key already separates them. This one
+/// stages the pair the key must separate and could not: two directories whose
+/// paths carry the same `cksum` checksum over the same number of bytes.
+///
+/// Under a checksum key the two runs share one cache directory, and
+/// golangci-lint answers by package CONTENT with the ABSOLUTE path of the run
+/// that first cached it. Measured with golangci-lint 2.12.2 over this exact
+/// pair: the second run reported the FIRST workspace's `plain/staged.go`,
+/// which stands outside the second workspace, so the engine drops it and the
+/// rule reports nothing. A 256-bit digest of the path separates the pair, and
+/// each run then reports its own plain position.
+///
+/// The pair is searched for rather than written down, because the working
+/// directory is a temporary path this run is given and no constant can name
+/// it.
+#[test]
+fn the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_merged(
+) -> ProbeResult<()> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
+    let shipped = required_shipped_tool_rule(&loader, GO_FUNCTION_LENGTH_RULE);
+    let work = tempfile::tempdir()?;
+    let root = probe_repository_root(work.path());
+    let table = cksum_table();
+    let (first, second) = workspace_names_one_checksum_merged(&table, &root)?;
+    assert_eq!(
+        old_cache_key(&table, &root.join(&first).to_string_lossy()),
+        old_cache_key(&table, &root.join(&second).to_string_lossy()),
+        "the probe must stage two working directories one checksum merged, or it holds \
+         the rule over a pair the old key already separated"
+    );
+
+    let probe = GoGeneratedPositions::build();
+    let args = script_args(shipped.scope, NO_SCRIPT_FILES);
+    for name in [&first, &second] {
+        let repo = root.join(name);
+        stage_probe_files(&repo, probe.files());
+        let repo_root = probe_repository_root(&repo);
+
+        // Each run must judge its own workspace and exit 0. A failure here is
+        // therefore the answer of the run, and the test fails on it with the
+        // script's own stderr rather than with a sentence of its own.
+        let reported = run_script(&shipped.script, &repo_root, &args)?;
+
+        assert_eq!(
+            sorted_names(&finding_rows(&reported, &repo_root)),
+            vec![probe.expected.clone()],
+            "each of the two workspaces must report its OWN plain position; a run \
+             answering out of a cache the other one filled reports that workspace's \
+             paths, which stand outside this one"
+        );
+    }
+    Ok(())
+}
+
+/// How old the stale cache directory of the sweep probe is, in days.
+///
+/// The shipped sweep removes a directory nothing has touched for six days or
+/// more, so thirty stands well past the cut and the probe measures the sweep
+/// rather than the boundary.
+const STALE_CACHE_AGE_DAYS: u64 = 30;
+
+/// How old the fresh cache directory of the sweep probe is: nothing at all.
+const FRESH_CACHE_AGE_DAYS: u64 = 0;
+
+/// How many seconds one day holds.
+const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
+
+/// A cache-directory name no other run of this probe writes.
+///
+/// The sweep reads every directory under the one cache parent, whatever its
+/// name, so two probes running together must not stage the same one.
+///
+/// The name carries the clock, which a machine set before the epoch has none
+/// of, so the reading is answered rather than taken for granted.
+fn unique_cache_name(role: &str) -> Result<String, SystemTimeError> {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    Ok(format!(
+        "probe-{role}-{}-{}",
+        std::process::id(),
+        stamp.as_nanos()
+    ))
+}
+
+/// Makes a cache directory named `name` under the one cache parent, aged so
+/// that nothing has touched it for `age_days`, and answers its path.
+///
+/// Each step is a filesystem call, and a full disk or a mode that stops it is
+/// a state of the machine rather than a bug in the probe, so the failure is
+/// answered and the test fails on it.
+fn stage_cache_directory(name: &str, age_days: u64) -> std::io::Result<PathBuf> {
+    let directory = std::env::temp_dir()
+        .join(GOLANGCI_CACHE_DIRECTORY)
+        .join(name);
+    std::fs::create_dir_all(&directory)?;
+    let touched = SystemTime::now() - Duration::from_secs(age_days * SECONDS_IN_A_DAY);
+    std::fs::File::open(&directory)?.set_times(FileTimes::new().set_modified(touched))?;
+    Ok(directory)
+}
+
+/// Acceptance: the shipped Go function-length tool rule sweeps the cache
+/// directories nothing names any more.
+///
+/// The cache stands between runs on purpose — the lock golangci-lint takes
+/// stands inside it, and a warm cache is what lets a run that met one file it
+/// could not read still report the findings it made. So the rule cannot
+/// remove the directory it just used, and a run over a temporary workspace
+/// therefore leaves one behind for ever. Measured on one machine: 6609 such
+/// directories, 422804 KiB, and nothing older than three days only because
+/// the platform swept them.
+///
+/// golangci-lint states the lifetime itself: `internal/go/cache/cache.go`
+/// sets `trimLimit = 5 * 24 * time.Hour` and drops every entry older than
+/// that from a cache it is GIVEN. It never removes a directory nobody names
+/// again, which is the whole pile-up, and a directory past that limit holds
+/// nothing golangci-lint would have kept.
+///
+/// The probe stages one directory nothing has touched for thirty days beside
+/// one touched now, and holds the run to removing the first and keeping the
+/// second — so the sweep reads the age and not the name.
+#[test]
+fn the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory() -> ProbeResult<()> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, GO_PROJECT_TYPES, GO_FUNCTION_LENGTH_RULE);
+    let stale = stage_cache_directory(&unique_cache_name("stale")?, STALE_CACHE_AGE_DAYS)?;
+    let fresh = stage_cache_directory(&unique_cache_name("fresh")?, FRESH_CACHE_AGE_DAYS)?;
+
+    verify_the_generated_position_stays_silent(
+        "the run reports its own plain position while it sweeps the stale cache \
+         directories beside it",
+    );
+
+    let swept = !stale.exists();
+    let kept = fresh.exists();
+    std::fs::remove_dir_all(&stale).ok();
+    std::fs::remove_dir_all(&fresh).ok();
+    assert!(
+        swept,
+        "the run must remove a cache directory nothing has touched for \
+         {STALE_CACHE_AGE_DAYS} days; {stale:?} is still there, so every run over a \
+         temporary workspace leaves one behind for ever"
+    );
+    assert!(
+        kept,
+        "the run must keep a cache directory another run just touched; {fresh:?} is \
+         gone, so the sweep reads the name rather than the age and takes the cache a \
+         live workspace is using"
+    );
+    Ok(())
 }

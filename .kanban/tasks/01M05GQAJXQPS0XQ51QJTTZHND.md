@@ -1,0 +1,109 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01m06x5t5az5pntkv80kf6hzgs
+  text: |-
+    THE DECIDING MEASUREMENT, taken with real revive 1.15.0 on this machine. Both rules answer the SAME way: this is a DECLINED ITEM, not a broken run.
+
+    revive writes the unnamed record onto the same JSON report as a finding, and it JUDGES every other file of the run. Measured with each shipped config, over `func Broken( {` beside one file that reports:
+
+    - `missing-docs-go` config (`arguments = ["disableStutteringCheck"]`): 2 records — the unnamed `validity` record of `broken.go`, and `exported`/`comments` on `judged.go:3`. exit 0, 0 bytes stderr.
+    - `stuttering-name-go` config (no argument): 3 records — the unnamed record, `comments` and `naming`, both on `staged.go:3`. exit 0, 0 bytes stderr.
+
+    The mechanism, read in `lint/linter.go` of revive 1.15.0: a file `NewFile` refuses gets `addInvalidFileFailure` and a `continue`, so the file is dropped from its package and every other file of that package is still linted. Measured both ways: both files in one package, and each file in a package of its own. The other file reported its finding both times.
+
+    FOUR shapes make the unnamed record, all measured beside a reporting file, all declined at exit 0: a Go file that does not parse, a file of 0 bytes, a file that is not Go source (`.txt`), and a file whose bytes are not UTF-8.
+
+    TWO shapes stay BROKEN and keep exit 1, both by `set -e` on revive's own status: a path that holds no file (`cannot find package "absent.go"`, 0 bytes stdout, exit 1, and the reporting file got NO finding), and a config revive cannot parse (`cannot parse the config file`, 0 bytes stdout, exit 1).
+
+    A run that declines EVERY file states each one and still exits 0: measured over two files that do not parse and no other — no finding, two marked lines, exit 0.
+
+    NO CLOSED ENUMERATION IN PROSE. Every unnamed record this survey met carried the `validity` category and a sentence opening `invalid file`, and the filter reads NEITHER: it selects `RuleName == ""` and forwards the whole `Failure`. That is the `missing-docs-python` lesson — a head written into a rule answers for the one shape it was written for.
+  timestamp: 2026-08-17T03:45:21.066613+00:00
+- actor: claude-code
+  id: 01m06x67e9y07atpm6dm01mkyf
+  text: |-
+    DISCOVERY, recorded as a new card `^bkv0ptm`. revive DROPS a `.go` file it cannot OPEN, in silence. Measured over `noread.go` at mode 000 beside one sound file: exit 0, NO record about `noread.go` of any category, and the sound file still reports. So both rules read a file nobody may read as a clean file. That is a different defect from the one this card names, and it survives this fix, so it takes its own card rather than a widened scope here.
+
+    TDD record. RED first: both new tests failed for the right reason — `a script handed an item it cannot judge must judge the rest and exit 0: Exit("invalid file broken.go: broken.go:3:14: expected ')', found '{'")`. Then the two scripts changed, then GREEN.
+
+    WHAT THE SCRIPTS NOW DO. The count-and-`exit 1` block is gone from both. One `jq` writes one marked line for each record that belongs to no rule:
+
+        jq -r '(. // [])[] | select(.RuleName == "")
+               | "sah-diagnostic: revive declined an item and said: \(.Failure)"' "$work/revive.json" >&2
+
+    The marker OPENS the line, because `marked_diagnostics` reads it with `strip_prefix`.
+
+    THE TESTS. `the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse` became `..._declines_a_file_it_cannot_parse`, and the same for the stuttering rule. Each now calls `verify_unjudged_file_is_declined`, which holds BOTH halves at one time: the run reports the row of the file it judged, AND it states the one item it declined. The old stuttering probe staged `type Plain struct{}` beside the broken file, which reports NOTHING for the naming rule — so that probe could never have proved a lost finding. It now stages `type StagedType struct{}`, which reports.
+
+    VERIFIED: `cargo nextest run -p swissarmyhammer-validators` — 794 passed, 0 failed. `cargo fmt --check` clean. `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` clean.
+  timestamp: 2026-08-17T03:45:34.665733+00:00
+- actor: claude-code
+  id: 01m06x6f84tmva8dfh91x69j34
+  text: |-
+    ### implement — changed
+    - evidence: 4 files — builtin/validators/code-hygiene/rules/missing-docs-go.md, builtin/validators/code-hygiene/rules/stuttering-name-go.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/stuttering_name_go.rs. Measured with real revive 1.15.0: BOTH rules answer the same way, the unnamed record is a DECLINED ITEM, and 4 shapes make it (a file that does not parse, a file of 0 bytes, a file that is not Go source, a file that is not UTF-8), each at exit 0 beside a file that reports. 2 shapes stay BROKEN (a path that holds no file, a config revive cannot parse), both exited by `set -e`. cargo nextest run -p swissarmyhammer-validators: 794 passed, 0 failed. cargo fmt --check clean. cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings clean.
+    - next: /review
+  timestamp: 2026-08-17T03:45:42.660529+00:00
+- actor: claude-code
+  id: 01m06xw50qphk7bnkv8pc0zqc4
+  text: |-
+    ### test — green
+    - evidence: Measured against real revive 1.15.0, both rule scripts. Four declined shapes (does not parse, 0 bytes, not Go source, non-UTF-8 bytes) drove the shipped `missing-docs-go` and `stuttering-name-go` scripts each: the good file's finding stayed on stdout, one `sah-diagnostic:` line opened stderr at column 0, exit 0, for BOTH rules, all four shapes. Two broken shapes stayed broken: a path with no file exits 1 with 0 stdout bytes for both scripts; a config revive cannot parse exits 1 with 0 stdout bytes (verified directly against revive, since the shipped script always writes valid TOML itself). `marked_diagnostics` in `tool_rules.rs` uses `line.trim().strip_prefix(TOOL_DIAGNOSTIC_MARKER)`, confirmed the marker opens the line in all four measured cases. Confirmed the load-bearing claim: the old `stuttering_name_go.rs` test staged `type Plain struct{}` (GO_CLEAN_SOURCE) beside the unparsable file — "Plain" reports nothing under the naming filter, so that test could never have proven a lost finding. The rewritten test now stages `type StagedType struct{}` (GO_JUDGED_SOURCE), which DOES report under `stuttering-name-go`. Proved this is load-bearing: reverted the script to the old `exit 1` shape, ran `the_shipped_go_stuttering_name_tool_rule_declines_a_file_it_cannot_parse` — FAILED (panicked: "a script handed an item it cannot judge must judge the rest and exit 0: Exit(...)"). Restored the file byte-identical (diffed against backup), re-ran — PASSED. Sound runs write 0 bytes to stderr for both scripts, checked over 3 clean/documented/undocumented fixture shapes. Confirmed the mirdan build (`cargo build -p mirdan`) embeds both `missing-docs-go.md` and `stuttering-name-go.md` byte-identically in `builtin_validators.rs` (Python byte comparison, both `identical: True`). Checked the diff for `.unwrap()`, `.expect(`, `panic!(`, and unnamed literals — none added; all new paths/sources/declarations are named consts.
+    - `cargo nextest run -p swissarmyhammer-validators shipped::missing_docs shipped::stuttering_name_go`: 62 passed, 0 failed, 732 skipped (filtered).
+    - `cargo fmt --check`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo nextest run --workspace`: 14136 tests run, 14136 passed, 0 failed, 0 skipped.
+    - next: ready for review.
+  timestamp: 2026-08-17T03:57:33.079911+00:00
+- actor: claude-code
+  id: 01m06y5fnyj3r99phm8ey2f0mh
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (checkpoint 8fb77fd98). 9 validator-file pairs ran. 0 findings, 0 confirmed, 0 refuted, 0 failed. The engine read 2 files and kept out 42 `.kanban/` files by the `.reviewignore` rule.
+    - scope: the 4 changed source files are `builtin/validators/code-hygiene/rules/missing-docs-go.md`, `builtin/validators/code-hygiene/rules/stuttering-name-go.md`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs`, and `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/stuttering_name_go.rs`.
+    - next: no open findings. The card moves to `done`.
+  timestamp: 2026-08-17T04:02:38.910043+00:00
+- actor: claude-code
+  id: 01m06y64j7b2tjbg91jjn6zthk
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files (missing-docs-go.md, stuttering-name-go.md, missing_docs.rs, stuttering_name_go.rs)
+    - test: green — cargo nextest run --workspace, 14136 passed, 0 failed. Real revive 1.15.0 gave exit 0 and one marked stderr line for all 4 declined shapes on both rules. The 2 broken shapes stayed at exit 1. RED/GREEN proof done on the stuttering-name probe.
+    - commit: 8fb77fd98
+    - review: clean — 9 validator-file pairs, 0 findings
+  timestamp: 2026-08-17T04:03:00.295680+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa080
+title: missing-docs-go and stuttering-name-go fail the whole run for one revive record they cannot name
+---
+`builtin/validators/code-hygiene/rules/missing-docs-go.md` and
+`builtin/validators/code-hygiene/rules/stuttering-name-go.md` carry the same
+block. One revive record whose `RuleName` is empty throws away every finding the
+run did make:
+
+    unread="$(jq -r '(. // []) | map(select(.RuleName == "")) | length' "$work/revive.json")"
+    if [ "$unread" -ne 0 ]; then
+      jq -r '(. // [])[] | select(.RuleName == "") | .Failure' "$work/revive.json" >&2
+      exit 1
+    fi
+
+revive judged every other file of the same run, so this is the declined-item
+shape `builtin/validators/README.md` names: "A script that judged the code and
+could not judge ONE item says so on stderr, on a line that opens
+`sah-diagnostic:`, and it still exits 0... Do not exit nonzero for a declined
+item."
+
+The work:
+
+- Measure what revive reports for the OTHER files of a run that carries one
+  unnamed record, so the shape is settled by evidence rather than by reading.
+- Replace the exit with a marked line at exit 0 in BOTH rules — one cause, two
+  files. The marker must OPEN the line, or the engine drops it as tool chatter.
+- Rewrite whichever acceptance tests lock the current break, staging a file that
+  reports beside the unnamed record so each test proves the findings survive.
+- State the measurement in both rule bodies.
+
+Found while implementing `^s8d7fva`. #tool-validators #objectivity

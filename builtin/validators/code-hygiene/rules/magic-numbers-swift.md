@@ -15,9 +15,8 @@ tool:
       exit 0
     fi
     for file in "$@"; do
-      if [ ! -r "$file" ]; then
-        printf 'magic-numbers-swift cannot read %s\n' "$file" >&2
-        exit 1
+      if [ ! -e "$file" ]; then
+        printf 'sah-diagnostic: magic-numbers-swift found no file at %s, so its literals are unread\n' "$file" >&2
       fi
     done
     work="$(mktemp -d)"
@@ -47,14 +46,11 @@ tool:
     fi
     lint "$project" "$@"
     if [ -n "$project" ] && grep -qE '^Could not read configuration:' "$work/lint.err"; then
-      printf '%s\n' 'magic-numbers-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
+      printf '%s\n' 'sah-diagnostic: magic-numbers-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
-    if grep -qE '^Could not read contents of `' "$work/lint.err"; then
-      printf '%s\n' 'magic-numbers-swift: swiftlint could not read the contents of a file this run names' >&2
-      exit 1
-    fi
+    sed -n 's/^Could not read contents of `\(.*\)`$/sah-diagnostic: swiftlint could not read the contents of \1, so its literals are unread/p' "$work/lint.err" >&2
     measured=0
     if [ "$status" -eq 0 ]; then
       measured=1
@@ -65,6 +61,11 @@ tool:
     fi
     if [ "$measured" -eq 0 ]; then
       if grep -qE '^Error: No lintable files found at paths:' "$work/lint.err"; then
+        for file in "$@"; do
+          if [ -e "$file" ]; then
+            printf 'sah-diagnostic: magic-numbers-swift judged no file at %s, so its literals are unread\n' "$file" >&2
+          fi
+        done
         exit 0
       fi
       exit 1
@@ -72,7 +73,7 @@ tool:
     jq -c '.[] | select(.rule_id == "no_magic_numbers")
            | {file: .file, line: .line, message: .reason}' "$work/report.json"
   doctor:
-    check_command: "which swiftlint jq grep mktemp"
+    check_command: "which swiftlint jq grep sed cat mktemp"
     check_version_command: "swiftlint version"
     fix_hint: "brew install swiftlint"
 ---
@@ -206,65 +207,89 @@ and writes `Error: No lintable files found at paths: ...` to stderr, which reads
 as a broken tool. A change that touched generated code alone would then answer
 with a tool error rather than with a clean list.
 
-The script tests each file it is given for readability before it starts, so that
-message can carry one cause only: the exclude list took every file. Measured
+The script reports nothing and exits 0 for that message. Measured
 over one file under `Generated/` beside `excluded: [Generated]`: the run reports
-no finding, exits 0, and writes swiftlint's own message to stderr. The
-acceptance test
+no finding, exits 0, and writes swiftlint's own message to stderr.
+
+A run that reports nothing and exits 0 over a file swiftlint never read is the
+clean answer of a run that read every file. So the script states each path of
+the run under the `sah-diagnostic:` marker before it exits, and the marked
+line reads `magic-numbers-swift judged no file at <path>, so its
+literals are unread`. Measured over the same file: no finding, ONE marked
+line that names the path, exit 0.
+
+A sound run says nothing on stderr, which is what lets the whole channel carry
+the statement. Measured over the same file with no project configuration:
+1 entry on stdout and 0 bytes on stderr.
+
+The loop states a path that IS there, because the `[ ! -e "$file" ]` test above
+already states a path that holds no file. Measured over `Sources/Absent.swift`
+beside the excluded file: 2 marked lines, one for each path, and neither path
+stated twice.
+
+The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_answers_zero_when_the_project_excludes_every_file`
-holds that behaviour.
+holds the run to no finding, and
+`the_shipped_swift_magic_numbers_tool_rule_declines_a_run_the_project_excludes_whole`
+holds the marked line.
 
-## Each stderr test reads swiftlint's own message, and not a file name
+The message names the path and it does not name the cause, so more than one
+shape reaches it. The section "A path the run cannot judge" below states each
+shape, and states what the script says for a path that holds no file.
 
-The script makes three tests on stderr: one for a project configuration
-swiftlint cannot read, one for a file swiftlint cannot decode, and one for a run
-that found no file to lint. swiftlint writes the PATH of a file into stderr as
-well, so a test that reads ALL of stderr answers the file NAME.
+## Each stderr reading takes swiftlint's own message, and not a file name
+
+The script reads stderr three times: a test for a project configuration
+swiftlint cannot read, a substitution that states each file swiftlint could not
+decode, and a test for a run that found no file to lint. swiftlint writes the
+PATH of a file into stderr as well, so a reading that takes ALL of stderr
+answers the file NAME.
 
 swiftlint writes each message of its own at the START of a line, and it writes
-the path echo after `Error: `. Each of the three tests is therefore anchored on
-the start of a line:
+the path echo after `Error: `. Each of the three readings is therefore anchored
+on the start of a line, and the decode substitution carries the backtick pair
+swiftlint writes around the path as well:
 
-| what the script tests | the line swiftlint writes |
+| what the script reads | the line swiftlint writes |
 |---|---|
 | `^Could not read configuration:` | `Could not read configuration: file Configuration.swift, line 278` |
-| ``^Could not read contents of ` `` | ``Could not read contents of `<path>` `` |
+| ``^Could not read contents of `<path>`$`` | ``Could not read contents of `<path>` `` |
 | `^Error: No lintable files found at paths:` | `Error: No lintable files found at paths: '<path>'` |
 
 Measured with swiftlint 0.65.0, over one file that holds
 `return status == 404` under `Generated/`, beside a project
 `.swiftlint.yml` that states
-`excluded: [Generated]`. The file NAME is the one difference between the rows,
-and the unanchored script is the same script with each of the three tests
-written as a plain `grep -qF`:
+`excluded: [Generated]`. The file NAME is the one difference between the rows.
+The loose script is the earlier shape of this run with each of its three tests
+written as a plain `grep -qF` that carries no anchor and no closing punctuation:
 
-| the file name | the unanchored script | the anchored script |
+| the file name | the loose script | the shipped script |
 |---|---|---|
-| `Plain.swift` | 0 findings, exit 0 | 0 findings, exit 0 |
-| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0 |
-| `Could not read configuration.swift` | 1 finding on a file the project excludes | 0 findings, exit 0 |
-| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0 |
+| `Plain.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
+| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0, 1 diagnostic |
+| `Could not read configuration.swift` | 1 finding on a file the project excludes | 0 findings, exit 0, 1 diagnostic |
+| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
 
 Row 2 broke a run that measured correctly. Row 3 made a WRONG FINDING: the
 script dropped the project configuration, ran swiftlint a second time without
 it, and reported a file the project excludes. Row 4 moved nothing, because the
-decode test stands above that test, and each other broken shape this rule
+decode reading stands above that test, and each other broken shape this rule
 measures — a version mismatch and a configuration abort — writes no path into
-stderr. The anchor holds that test on swiftlint's own message as well.
+stderr. The anchor holds each reading on swiftlint's own message as well.
 
-Each anchored test was measured in both directions. These runs still make a
-test fire:
+Each anchored reading was measured in both directions. These runs still make a
+reading answer:
 
-| the run | findings | exit | the rule's own line |
+| the run | findings | exit | what the run stated |
 |---|---|---|---|
-| the Latin-1 file alone | 0 | 1 | the decode line |
-| the Latin-1 file beside one healthy file | 0 | 1 | the decode line |
-| a project file that states `child_config: other.yml` | 1 finding | 0 | the configuration line |
-| a project file of bytes that are not YAML | 1 finding | 0 | the configuration line |
-| one file under `Generated/` beside `excluded: [Generated]` | 0 | 0 | none |
+| the Latin-1 file alone | 0 | 0 | the decode diagnostic |
+| the Latin-1 file beside one healthy file | 1 | 0 | the decode diagnostic |
+| a project file that states `child_config: other.yml` | 1 | 0 | the configuration line |
+| a project file of bytes that are not YAML | 1 | 0 | the configuration line |
+| one file under `Generated/` beside `excluded: [Generated]` | 0 | 0 | the whole-run decline diagnostic |
 
-One healthy file that holds a finding makes no test fire: the run reports
-1 finding and exits 0.
+One healthy file that holds a finding makes no reading answer: the run reports
+1 finding, exits 0, and states nothing.
 
 The acceptance tests
 `the_shipped_swift_magic_numbers_tool_rule_measures_a_file_named_for_the_decode_message`
@@ -290,9 +315,12 @@ project switched the gate off without meaning to.
 
 The script tests stderr for `Could not read configuration:` at the start of a
 line, and it then runs a second time with its own configuration alone. The
-section "Each stderr test reads swiftlint's own message, and not a file name"
+section "Each stderr reading takes swiftlint's own message, and not a file name"
 above states why the test is anchored. The script writes one line to stderr that
-names what it dropped. The project's `excluded:` list is not read
+names what it dropped, under the `sah-diagnostic:` marker. The run then
+measured with settings the project did not ask for, which is one item it could
+not judge as the project asked, and `builtin/validators/README.md` states that
+channel. The project's `excluded:` list is not read
 for that second run. Measured over one file under `Generated/` that holds
 `return status == 404`, beside a project file that states
 `child_config: other.yml` and `excluded: [Generated]`: the run reports 1
@@ -304,7 +332,9 @@ configurations and exits 0.
 
 The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_measures_beside_a_project_child_config`
-holds that behaviour.
+holds that behaviour, and
+`the_shipped_swift_magic_numbers_tool_rule_declines_a_project_configuration_it_cannot_read`
+holds the marked line.
 
 ## A project warning threshold, and what the script accepts at status 2
 
@@ -377,7 +407,7 @@ holds a JSON array of one entry or more. At each other status, and at status 2
 with a report of 0 bytes, the script makes one more test, on stderr. Stderr
 that holds `Error: No lintable files found at paths:` at the start of a line
 exits 0 with no finding, and each other shape exits 1. The section "Each stderr
-test reads swiftlint's own message, and not a file name" above states why the
+reading takes swiftlint's own message, and not a file name" above states why the
 test is anchored. That branch is how the project's `excluded:` list reaches a
 clean answer, and the section "A run whose every file the project excludes"
 above states it. Measured with a project `.swiftlint.yml` that states
@@ -393,11 +423,12 @@ project
 `excluded: [src]` list over `src/Magic.swift`; the directory `hollow`, which
 holds no Swift file; the path `src/Absent.swift`, which holds no file; the
 file `src/Notes.txt`, whose name does not end in `.swift`. The script reports
-0 findings and exits 0 for 3 of the 4 shapes. The `[ ! -r "$file" ]` guard
-runs before swiftlint, and it reports 0 findings and exits 1 with
-`magic-numbers-swift cannot read src/Absent.swift` for the path that holds no
-file. That guard makes that one distinction, and no test separates the other
-3 shapes.
+0 findings and exits 0 for each of the 4 shapes, and it states one marked line
+for each path of the run. The `[ ! -e "$file" ]` test runs before swiftlint, and
+it states the path that holds no file; the branch that reads the stderr message
+states each path that IS there. So no path of a run that judged nothing goes
+unstated, and no path is stated twice. No reading separates the other 3 shapes
+from one another, and the marked line names the path rather than the cause.
 
 The acceptance test
 `the_shipped_swift_magic_numbers_tool_rule_stays_clean_over_a_hollow_directory`
@@ -460,64 +491,102 @@ A shell pipeline takes the exit status of its LAST command, and that command was
 `jq`, so the earlier pipe exited 0 and reported nothing. That reads exactly like
 a clean file.
 
-The script tests each file it is given before it starts, and it writes
-swiftlint's report to a file rather than into a pipe. Measured over one path that
-holds no file: the earlier pipe reported no finding and exited 0; the script
-reports no finding and exits 1, with `magic-numbers-swift cannot read
-Sources/Absent.swift` on stderr. The acceptance test
-`the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_read`
-holds that behaviour.
+The script writes swiftlint's report to a file rather than into a pipe, so the
+status of swiftlint reaches the gate above. A path the run cannot judge is
+another shape, and it is not a broken tool: the section "A path the run cannot
+judge" below states each shape, and states the marked line the script writes for
+it at exit 0.
 
 `mktemp -d` makes the working directory the script writes the configuration and
 the report into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
 every way the script leaves: a clean run, a finding, and a failure.
 
-## A file swiftlint cannot decode
+## A path the run cannot judge
 
-swiftlint reads a source file as UTF-8 and as nothing else. A file that holds
-other bytes — a Swift file a person saved in Latin-1, or a binary file under a
-`.swift` name — makes swiftlint write ``Could not read contents of `<path>` ``
-to stderr. swiftlint then lints no line of that file.
+A `files`-scope run is handed paths, and the engine reads the work-list rather
+than the disk, so a path can reach the run and refuse it. Each way it refuses is
+ONE item of a run that judged the other files, and
+`builtin/validators/README.md` states the channel: a line opening
+`sah-diagnostic:` on stderr, at exit 0.
 
-The `[ ! -r "$file" ]` guard admits the file, because the file IS readable. The
-DECODE is what fails, and the status does not state it. Measured with swiftlint
-0.65.0 over one file that holds `let name = "café"` in Latin-1, above
-`return status == 404`:
+Measured with swiftlint 0.65.0 against the child configuration this script
+writes, over `Sources/Magic.swift`, which holds `return status == 404`, beside
+each refusing path:
 
-| the run | status | stdout | stderr |
+| the refusing path | status | stdout | stderr |
 |---|---|---|---|
-| the Latin-1 file alone | 0 | an empty array, 5 bytes | `Could not read contents of` |
-| the Latin-1 file beside one file that holds a finding | 0 | 1 entry | `Could not read contents of` |
+| a path that holds no file | 0 | 1 entry | 0 bytes |
+| a file whose bytes are not UTF-8 | 0 | 1 entry | ``Could not read contents of `<path>` `` |
+| a file with no read permission | 0 | 1 entry | the same decode line |
 
-Each row states the number of entries and no number of bytes, for the reason
-the section "A project warning threshold, and what the script accepts at status
-2" above states. Each row carries the status and the report of a healthy run.
-The child states
-`severity: warning`, so no finding of this rule reaches error severity and
-swiftlint exits 0 for a file that holds one, which is the row of the status
-table above. So neither the status nor the report tells a file swiftlint never
-read from a clean file, and
-the earlier script reported 0 findings and exited 0 for row 1: the engine read
-a file swiftlint never read as a clean tree.
+Each row carries the status and the report of a healthy run, and swiftlint
+judged `Magic.swift` in every one of them. The child states `severity: warning`,
+so no finding of this rule reaches error severity and swiftlint exits 0 for a
+file that holds one. So neither the status nor the report states a refusing
+path, and the run holds 1 finding that a nonzero exit would throw away.
 
-The script therefore tests STDERR, before it reads the status. It writes
-`magic-numbers-swift: swiftlint could not read the contents of a file this run
-names` and exits 1. swiftlint's own message stands above that line, and it
-names the path. The acceptance test
-`the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_decode`
-holds that behaviour.
+swiftlint names the file for rows 2 and 3, and it says NOTHING for row 1.
+Measured over the same run with `--quiet` taken off: swiftlint writes
+`Linting Swift files at paths Sources/Magic.swift, Sources/Absent.swift`, then
+`Linting 'Magic.swift' (1/1)`, and no word of the path it dropped. Row 1
+therefore takes a test of the path, and rows 2 and 3 take a reading of
+swiftlint's own message:
 
-The test is anchored on the start of a line, because swiftlint writes a path
-into stderr as well. Measured with swiftlint 0.65.0 over one file named
-`Could not read contents of.swift` under `Generated/`, beside a project
+- `[ ! -e "$file" ]` runs before swiftlint, and it writes
+  `sah-diagnostic: magic-numbers-swift found no file at <path>, so its literals
+  are unread`.
+- The `sed` substitution takes swiftlint's own decode line and writes
+  `sah-diagnostic: swiftlint could not read the contents of <path>, so its
+  literals are unread`. swiftlint writes the ABSOLUTE path into that line, so
+  the marked line carries one.
+
+Measured with the shipped script, each refusing path beside `Magic.swift`: 1
+finding on stdout, ONE marked line on stderr, exit 0. Measured over each
+refusing path alone: no finding, the same one marked line, exit 0.
+
+`exit 1` is the answer this rule used to give, and it was wrong twice over.
+Measured over `Magic.swift` beside each path:
+
+| the refusing path | the earlier shape | the shipped script |
+|---|---|---|
+| a path that holds no file | 0 findings, exit 1, `magic-numbers-swift cannot read Sources/Absent.swift` | 1 finding, exit 0, 1 diagnostic |
+| a file whose bytes are not UTF-8 | 0 findings, exit 1, the rule's tool-error line | 1 finding, exit 0, 1 diagnostic |
+| a file with no read permission | 0 findings, exit 1, `magic-numbers-swift cannot read Sources/Forbidden.swift` | 1 finding, exit 0, 1 diagnostic |
+
+Every row of the earlier shape threw the finding away, which is what
+`builtin/validators/README.md` refuses: a nonzero exit fails the WHOLE run, so
+one unjudged path throws away every finding the run did make.
+
+`[ ! -r "$file" ]` was the earlier test, and it cannot answer all three rows.
+Measured against the three staged paths: the test is true for the path that
+holds no file and for the file with no read permission, and FALSE for the file
+whose bytes are not UTF-8 — the mode lets a reader open that one. So a run gated
+on that test alone reads the third file as clean.
+
+swiftlint reads a source file as UTF-8 and as nothing else, which is what makes
+rows 2 and 3 one message. A Swift file a person saved in Latin-1, a binary file
+under a `.swift` name, and a file whose mode refuses a read each make swiftlint
+write ``Could not read contents of `<path>` ``, and swiftlint then lints no line
+of that file.
+
+Three acceptance tests hold the three rows, one for each —
+`the_shipped_swift_magic_numbers_tool_rule_declines_a_path_that_holds_no_file`,
+`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
+Each stages `Sources/Magic.swift` beside the path, and holds the run to
+reporting its 1 finding AND to stating one diagnostic that names the path. A run
+that lost either half fails them.
+
+The decode substitution is anchored on the start of a line, because swiftlint
+writes a path into stderr as well. Measured with swiftlint 0.65.0 over one file
+named `Could not read contents of.swift` under `Generated/`, beside a project
 `.swiftlint.yml` that states `excluded: [Generated]`: swiftlint writes
 `Error: No lintable files found at paths: 'Generated/Could not read contents
-of.swift'`, and a test spelled `grep -qF 'Could not read contents of'` matched
-that path echo. The script then wrote its tool-error line and exited 1 over a
-run that measured correctly. Measured, ``^Could not read contents of ` ``
-matches the decode message and does not match the path echo, and the same run
-reports no finding and exits 0. The section "Each stderr test reads swiftlint's
-own message, and not a file name" above states each row of that measurement.
+of.swift'`, and an earlier test spelled `grep -qF 'Could not read contents of'`
+matched that path echo and exited 1 over a run that measured correctly. Measured
+with the shipped script over the same run: no finding, 1 diagnostic that names
+the file, exit 0.
+The section "Each stderr reading takes swiftlint's own message, and not a file
+name" above states each row of that measurement.
 
 ## A run answers for the files it is given, and for no other
 

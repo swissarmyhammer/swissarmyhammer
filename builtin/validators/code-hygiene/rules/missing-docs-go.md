@@ -14,15 +14,26 @@ tool:
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
+    pending="$#"
+    while [ "$pending" -gt 0 ]; do
+      file="$1"
+      shift
+      pending=$((pending - 1))
+      if [ -e "$file" ] && [ ! -r "$file" ]; then
+        printf 'sah-diagnostic: missing-docs-go cannot read %s, so its exported items are unread\n' "$file" >&2
+        continue
+      fi
+      set -- "$@" "$file"
+    done
+    if [ "$#" -eq 0 ]; then
+      exit 0
+    fi
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     printf '%s\n' '[rule.exported]' '  arguments = ["disableStutteringCheck"]' > "$work/revive.toml"
     revive -config "$work/revive.toml" -formatter json "$@" > "$work/revive.json"
-    unread="$(jq -r '(. // []) | map(select(.RuleName == "")) | length' "$work/revive.json")"
-    if [ "$unread" -ne 0 ]; then
-      jq -r '(. // [])[] | select(.RuleName == "") | .Failure' "$work/revive.json" >&2
-      exit 1
-    fi
+    jq -r '(. // [])[] | select(.RuleName == "")
+           | "sah-diagnostic: revive declined an item and said: \(.Failure)"' "$work/revive.json" >&2
     jq -c '(. // [])[] | select(.RuleName == "exported")
            | {file: .Position.Start.Filename, line: .Position.Start.Line, message: .Failure}' "$work/revive.json"
   doctor:
@@ -220,26 +231,157 @@ unexported function and an unexported constant each report nothing. An exported
 method on an UNEXPORTED receiver reports nothing as well, because
 `checkPrivateReceivers` is off by default and the config leaves it off.
 
-## A run cannot answer zero for a broken tool
+## A run cannot answer zero for an item it never measured
 
-revive states a failure in two ways, and the earlier pipe read neither.
+revive states a failure in two ways and stays silent for a third, and the
+earlier pipe answered none of the three.
 
-- **revive exits nonzero** for a file that is not there, and for a config it
+`builtin/validators/README.md` splits the answer in two. A script that judged
+the code and could not judge ONE item writes a line opening `sah-diagnostic:`
+on stderr and exits 0, and "a nonzero exit fails the WHOLE run, so one unjudged
+path throws away every finding the run did make". So the measurement that
+decides each shape is what revive reported for the OTHER files of the same run.
+
+- **revive exits nonzero** for a path that holds no file, and for a config it
   cannot parse. A pipeline takes the exit status of its LAST command, and that
-  command was `jq`, so the run exited 0 with no output. The script now writes
+  command was `jq`, so the run exited 0 with no output. The script writes
   revive's report to a file rather than into a pipe, and `set -e` makes revive's
   own failure the exit status of the script.
-- **revive exits 0 for a Go file it cannot PARSE.** It states the failure with
-  an empty `RuleName`, under the `validity` category. A filter that selects the
-  `exported` findings drops that record, so the file read as clean. The script
-  counts the failures that belong to no rule, writes each one to stderr, and
-  exits 1.
+- **revive exits 0 for a file it cannot read as Go source.** It writes the
+  failure onto the SAME report as a finding, with an EMPTY `RuleName`. A filter
+  that selects the `exported` findings drops that record, so the file read as
+  clean.
+- **revive exits 0 and stays SILENT for a path it can stat and cannot open.**
+  It writes no record of that path on the report and 0 bytes on stderr, so
+  neither channel names it. The subsection "A path revive drops before it
+  lints" holds that shape.
 
-Measured over a file that does not parse and a clean file together: the earlier
-pipe reported one finding and exited 0; the script reports no finding and exits
-1, with `invalid file broken.go: ...` on stderr. The acceptance test
-`the_shipped_go_missing_docs_tool_rule_breaks_on_a_file_it_cannot_parse` holds
-that behaviour.
+Measured with revive 1.15.0, each shape staged BESIDE one file holding an
+undocumented exported type:
+
+| the run | what revive does with it | what the other file gets | what the script does |
+|---|---|---|---|
+| a Go file that does not parse | one unnamed record, exit 0 | its finding | states it, exit 0 |
+| a file of 0 bytes | one unnamed record, exit 0 | its finding | states it, exit 0 |
+| a file that is not Go source | one unnamed record, exit 0 | its finding | states it, exit 0 |
+| a file whose bytes are not UTF-8 | one unnamed record, exit 0 | its finding | states it, exit 0 |
+| a path that holds no file | 0 bytes on stdout, exit 1 | nothing | exits 1 |
+| a config it cannot parse | 0 bytes on stdout, exit 1 | nothing | exits 1 |
+
+The first four rows are one DECLINED ITEM of a run that stayed sound. revive
+read every other file, and the finding of the file it read stands on the
+report, so an `exit 1` would throw that finding away. The file it refused is
+dropped from its package and every other file of that package is still linted,
+so the two files need not stand apart: measured with both files in one package
+and with each file in a package of its own, the other file reported its finding
+both times.
+
+Each of the four therefore writes one line that OPENS with `sah-diagnostic:`,
+and the run exits 0. The marker opens the line because the engine reads a
+marked line with `strip_prefix`.
+
+    sah-diagnostic: revive declined an item and said: invalid file broken.go: broken.go:3:14: expected ')', found '{'
+    sah-diagnostic: revive declined an item and said: invalid file empty.go: empty.go:1:1: expected 'package', found 'EOF'
+    sah-diagnostic: revive declined an item and said: invalid file notgo.txt: notgo.txt:1:1: expected 'package', found plain
+    sah-diagnostic: revive declined an item and said: invalid file nonutf8.go: nonutf8.go:3:9: illegal UTF-8 encoding (and 3 more errors)
+
+The whole `Failure` is forwarded, and no head is read or stripped. Every
+unnamed record this survey met carried the `validity` category and a sentence
+opening `invalid file`, and the filter reads NEITHER of those: it selects the
+record that belongs to no rule, so a record revive writes under another
+category, or under another sentence, still reaches the marker.
+`missing-docs-python` records the same lesson for ruff's own channel: a head
+written into a rule answers for the one shape it was written for and stays
+silent for every other.
+
+A run that declines EVERY file it is given states each one and still exits 0.
+Measured over two files that do not parse and no other: no finding, two marked
+lines, exit 0. No item of that run reads as a clean pass, because the run
+states each one.
+
+The last two rows are a BROKEN run rather than a declined item. revive resolves
+its paths and reads its config before it reads any file, so either shape costs
+the whole run and leaves no finding to lose. Measured beside the same reporting
+file: a path that holds no file writes 0 bytes to stdout, `cannot find package
+"absent.go"` to stderr and exits 1, and the reporting file got no finding; a
+config of `this is not toml [[[` writes 0 bytes to stdout, `cannot parse the
+config file` to stderr and exits 1. `set -e` exits the script for both, so the
+script states nothing of its own.
+
+A sound run writes 0 bytes on stderr. Measured over the reporting file alone:
+one finding on stdout, 0 bytes on stderr, exit 0.
+
+### A path revive drops before it lints
+
+Every row above reaches revive and comes back on its report. A path can refuse
+the READER instead, and revive then answers for it in one of two ways. The line
+between the two is the STAT: revive stats each path before it opens it.
+
+Measured with revive 1.15.0, each shape staged beside the same reporting file:
+
+| the path | `[ -e ]` | `[ -r ]` | revive | its stderr | the reporting file |
+|---|---|---|---|---|---|
+| a file at mode 000 | yes | no | no record of it, exit 0 | 0 bytes | its finding |
+| a file at mode 200 | yes | no | no record of it, exit 0 | 0 bytes | its finding |
+| a symlink to a file at mode 000 | yes | no | no record of it, exit 0 | 0 bytes | its finding |
+| a directory nobody may read | yes | no | exit 1 | 106 bytes | nothing |
+| a file under a directory nobody may read | no | no | exit 1 | 198 bytes | nothing |
+| a dangling symlink | no | no | exit 1 | 190 bytes | nothing |
+| a symlink loop | no | no | exit 1 | 182 bytes | nothing |
+| a path that holds no file | no | no | exit 1 | 186 bytes | nothing |
+
+The first three rows are the defect this subsection answers. revive drops the
+path in SILENCE: no record of any category on the report, 0 bytes on stderr,
+exit 0, and the file it read still reports its finding. The same path ALONE
+writes `null` to stdout at exit 0, which is the report and the status of a
+clean file. So neither the report nor the channel holds a thing to forward, and
+the script tests each path ITSELF. That is the answer
+`builtin/validators/README.md` names: "A tool can exit 0 for a file it could
+not open, and print an empty report. Test each file the script is given before
+the tool starts."
+
+`[ -e "$file" ]` is the stat and `[ ! -r "$file" ]` is the open, so the two
+tests together name the silent shape and no other. The script writes one marked
+line for each such path, and it drops that path from the list it hands revive:
+
+    sah-diagnostic: missing-docs-go cannot read forbidden.go, so its exported items are unread
+
+Measured over the SHIPPED script, one file at mode 000 beside the file that
+reports: the finding of that file on stdout, the one marked line above on
+stderr, exit 0.
+
+The five loud rows keep the answer the last two rows of the table above state.
+Each one costs the whole run at exit 1, and `set -e` exits the script for it. A
+directory nobody may read is a loud row that the two tests reach all the same,
+because `[ -e ]` stats it and `[ -r ]` refuses it. The run then declines that
+one path and judges every other, which is the better of the two answers.
+
+A READABLE directory reaches revive as a package rather than as a file. revive
+lints the Go files it holds, and an empty one holds nothing to judge, so it is
+no unjudged item and `[ -r ]` admits it for that reason. Measured: an empty
+directory beside the reporting file leaves that file's finding standing, makes
+no record of the directory, and exits 0.
+
+The count guard of the section below stands ABOVE this filter, so a run that
+is given no file answers before the filter reads a path. The script counts its
+arguments a SECOND time under the filter, because a run whose every path
+refuses the reader has no file left to hand revive. Such a run writes one
+marked line for each path and still exits 0 with no finding. Measured over the
+shipped script with the file at mode 000 alone: no finding, one marked line,
+exit 0.
+
+The acceptance test
+`the_shipped_go_missing_docs_tool_rule_declines_a_file_it_may_not_read` stages
+the file that reports beside a file at mode 000, and holds the run to reporting
+that finding AND to stating the one item it declined.
+
+The acceptance test
+`the_shipped_go_missing_docs_tool_rule_declines_a_file_it_cannot_parse` stages
+the undocumented exported type beside the file that does not parse, and holds
+the run to reporting that finding AND to stating the one item it declined. Both
+halves are the test: a run that reported the finding and said nothing about the
+file it refused reads that file as clean, and a run that stated the item and
+lost the finding is the `exit 1` this section replaced.
 
 `-formatter json` prints `null`, not an empty array, for a file with no
 findings, so each `jq` filter starts with `(. // [])`.
@@ -256,8 +398,11 @@ file silences the whole file.
 revive reads the package standing in the working directory when it takes
 no path. A run with no file therefore reports an undocumented exported
 item of the workspace root package, at exit 0, and it says nothing about a
-package deeper in the tree. The script counts its arguments first, and a
-count of zero exits 0 with no finding.
+package deeper in the tree. The script counts its arguments first, and a count
+of zero exits 0 with no finding. That guard stands above every line that runs,
+so it is the first answer the script gives. The script counts its arguments a
+second time under the read-path filter above, because a run whose every path
+refuses the reader has no file left to hand revive.
 
 Measured over two Go files, each exporting one undocumented function, one
 at the root and one three directories down, with no argument: 1 finding
@@ -271,7 +416,11 @@ files.
 
 `mktemp -d` makes the directory that holds the `revive.toml` this rule
 writes and the JSON report revive answers with. `trap 'rm -rf "$work"'
-EXIT` removes it, and the trap covers the `exit 1` this script takes for a
-file revive cannot parse. Measured over one file: one run raised the count
-of entries under `TMPDIR` by 1 before the trap, and leaves that count
-unchanged after it.
+EXIT` removes it, and the trap covers a clean run, a run with findings, a
+run that declines an item and a broken run alike. A run that declines EVERY
+path it is given exits before `mktemp -d` runs, so it makes no directory to
+remove. Measured over a
+`TMPDIR` of its own for each shape, with the count of entries taken before
+the run and after it: the clean run, the run that declines a file revive
+cannot parse, and the broken run over a path that holds no file each left
+that count unchanged.

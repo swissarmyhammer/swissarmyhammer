@@ -68,7 +68,7 @@ business; widening past the op's subject is not.
 
 A tool rule binds one tool to one language. Example:
 
-    # rules/magic-numbers-python.md
+    # rules/magic-numbers-python.md — the keys, with the `run` script left out
     ---
     name: magic-numbers-python
     description: Unnamed Python literals need constants — checked by ruff, not by prompt.
@@ -81,13 +81,9 @@ A tool rule binds one tool to one language. Example:
     tool:
       scope: files
       run: |
-        if [ "$#" -eq 0 ]; then
-          exit 0
-        fi
-        ruff check --isolated --no-cache --select PLR2004 --output-format json "$@" |
-          jq -c '.[] | {file: .filename, line: .location.row, message: "\(.code) \(.message)"}'
+        ...
       doctor:
-        check_command: "which ruff jq"
+        check_command: "which ruff jq mktemp"
         check_version_command: "ruff --version"
       install:
         commands:
@@ -95,11 +91,12 @@ A tool rule binds one tool to one language. Example:
           - "pipx install ruff==0.14.5"
     ---
 
-That is the frontmatter of `rules/magic-numbers-python.md`, all 25 lines of
-it, and its `run` is the zero-argument guard this contract states plus one
-pipe. A rule whose tool needs several steps writes a script rather than one
-pipe; `rules/missing-docs-python.md` is one of those, and its script is 52
-lines.
+Those are the keys of `rules/magic-numbers-python.md`. Its own frontmatter is
+50 lines, because the `run` this example leaves out is a script of 30: the
+zero-argument guard this contract states, ruff run into a file of its own, the
+status gate, the filter that selects the findings, and the channel that states
+each item ruff declined. `rules/missing-docs-python.md` holds the same shape
+for the same tool, and its script is 52 lines.
 
 The `match` block is the same block the set manifest uses — the same struct,
 the same file patterns, the same `@file_groups` references. Two additions:
@@ -317,6 +314,13 @@ the status gate, and each exits 0 with no finding for that shape. Measured over
 three dirty fixtures beside that project file: each of the three reported 0
 findings at exit 0. A script without the stderr test answers a tool error for
 each project `excluded:` list.
+
+That answer judged NO file, so each of the three states every path of the run
+under the marker before it exits. A sound run writes 0 bytes to stderr —
+measured with swiftlint 0.65.0 over one dirty file with no project
+configuration — so the whole channel is free to carry the statement. Measured
+over one dirty file beside `excluded: [Generated]`: 0 findings, exit 0, and one
+marked line that names the path.
 
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.

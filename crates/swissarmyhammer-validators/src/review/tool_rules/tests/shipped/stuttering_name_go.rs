@@ -213,47 +213,96 @@ const GO_UNPARSABLE_SOURCE: &str = concat!("package staged\n", "\n", "func Broke
 /// Where the unparsable file stands inside the probe repository.
 const GO_UNPARSABLE_PATH: &str = "broken.go";
 
-/// A clean Go file staged beside the unparsable one, so the run holds a file
-/// revive CAN read and still breaks.
-const GO_CLEAN_SOURCE: &str = concat!("package staged\n", "\n", "type Plain struct{}\n");
+/// Where the Go file the run CAN judge stands, beside the file it cannot
+/// judge.
+const GO_JUDGED_PATH: &str = "judged.go";
 
-/// Where the clean file stands inside the probe repository.
-const GO_CLEAN_PATH: &str = "clean.go";
+/// A Go file the run judges: one exported type that opens with the name of its
+/// own package, so this rule owns exactly one finding of it.
+///
+/// The type carries no doc comment as well, so the same run also makes a
+/// `comments` finding that `missing-docs-go` owns. This rule must report the
+/// `naming` one alone, which is what holds the expected row at a single entry.
+const GO_JUDGED_SOURCE: &str = concat!("package staged\n", "\n", "type StagedType struct{}\n");
 
-/// What the error of an unparsable Go file must name: revive's own words, and
-/// the file that broke.
-const GO_UNPARSABLE_ERROR: &[&str] = &["invalid file", GO_UNPARSABLE_PATH];
+/// The declaration line the one finding of the judged Go file stands on.
+const GO_JUDGED_DECLARATION: &str = "type StagedType struct{}";
 
-/// The `stuttering-name-go` probe over a Go file revive cannot parse.
-const GO_UNPARSABLE_PROBE: ShippedStagedTree = ShippedStagedTree {
-    run: ShippedRun {
-        project_types: GO_PROJECT_TYPES,
-        rule: GO_STUTTERING_NAME_RULE,
-        expected: GO_UNPARSABLE_ERROR,
-    },
-    staged: &[
-        (GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE),
-        (GO_CLEAN_PATH, GO_CLEAN_SOURCE),
-    ],
-    reason: "a file revive could not parse must break the run, or it reads as a clean file",
-};
+/// The `path:line` row the run must report for the judged Go file.
+fn go_stuttering_name_judged_row() -> String {
+    expected_row(GO_JUDGED_PATH, GO_JUDGED_SOURCE, GO_JUDGED_DECLARATION)
+}
 
-/// Acceptance: the shipped Go stuttering-name tool rule BREAKS on a Go file it
+/// Acceptance: the shipped Go stuttering-name tool rule DECLINES a Go file it
 /// cannot parse, through the real revive pipeline.
 ///
-/// revive exits 0 for such a file and reports the failure with an EMPTY
-/// `RuleName`, under the `validity` category rather than under `exported`. The
-/// category filter of this rule drops that record twice over, so the file
-/// would read as clean. The script counts the failures that belong to no rule,
-/// writes each one to stderr, and exits nonzero.
+/// revive exits 0 for such a file and writes the failure onto the SAME report
+/// as a finding, with an EMPTY `RuleName` and the `validity` category rather
+/// than the rule name `exported`. The category filter of this rule drops that
+/// record twice over, so the file would read as clean.
+///
+/// An `exit 1` answers that no better. Measured with revive 1.15.0 under the
+/// config this rule ships, over `func Broken( {` beside one exported type that
+/// repeats its package name: three records on the report — the unnamed record
+/// of the file it could not parse, the `naming` finding this rule owns and the
+/// `comments` finding `missing-docs-go` owns, both of the file it read — at
+/// exit 0, with 0 bytes on stderr. revive judged the other file, so its
+/// finding is there to lose, and the shipped script before this fix threw it
+/// away: nothing on stdout, one unmarked line on stderr, exit 1.
+///
+/// The unparsable file is therefore one declined item of a sound run, and the
+/// script states it under the `sah-diagnostic:` marker at exit 0.
 #[test]
-fn the_shipped_go_stuttering_name_tool_rule_breaks_on_a_file_it_cannot_parse() {
-    verify_shipped_tree_breaks(&GO_UNPARSABLE_PROBE);
+fn the_shipped_go_stuttering_name_tool_rule_declines_a_file_it_cannot_parse() {
+    let expected = go_stuttering_name_judged_row();
+
+    verify_unjudged_file_is_declined(
+        GO_PROJECT_TYPES,
+        GO_STUTTERING_NAME_RULE,
+        &[
+            (GO_JUDGED_PATH, GO_JUDGED_SOURCE),
+            (GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE),
+        ],
+        GO_UNPARSABLE_PATH,
+        &[&expected],
+    );
+}
+
+/// Acceptance: the shipped Go stuttering-name tool rule DECLINES a Go file it
+/// may not read, through the real revive pipeline.
+///
+/// revive STATS each path before it lints. A path it can stat and cannot open
+/// is dropped in SILENCE: measured with revive 1.15.0 under the config this
+/// rule ships, over a file at mode 000 beside one exported type that repeats
+/// its package name, revive reported the finding of the file it read, wrote NO
+/// record of the refusing path under any category, wrote 0 bytes on stderr and
+/// exited 0. The same file alone answered `null` on stdout at exit 0, which is
+/// the report and the status of a clean file.
+///
+/// So there is no line to forward and no record to select. The script tests
+/// each path BEFORE revive starts, which is the shape
+/// `builtin/validators/README.md` names for a tool that can exit 0 for a file
+/// it could not open.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_go_stuttering_name_tool_rule_declines_a_file_it_may_not_read() {
+    verify_go_rule_declines_a_forbidden_path(
+        GO_STUTTERING_NAME_RULE,
+        (GO_JUDGED_PATH, GO_JUDGED_SOURCE),
+        go_stuttering_name_judged_row(),
+    );
 }
 
 /// An exported Go type that opens with the name of its package. revive reports
 /// the declaration, so each file holds one finding.
-const GO_UNREAD_SOURCE: &str = concat!("package staged\n", "\n", "type StagedType struct{}\n");
+///
+/// This is the same source [`GO_JUDGED_SOURCE`] stages, under the name the
+/// probes below read it by. One literal serves both, so a change to the shape
+/// cannot leave one probe measuring another one.
+const GO_UNREAD_SOURCE: &str = GO_JUDGED_SOURCE;
 
 /// Every Go file staged in the probe repository the script is given none of.
 ///
