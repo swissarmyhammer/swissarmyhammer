@@ -40,3 +40,12 @@ Using those candidates and your reading of the diff, flag:
   never flag toward inlining it; inlining would recreate the over-long function,
   and flip-flopping between extract and inline across review rounds is always a
   validator error.
+- **Per-case data is not a reuse miss.** A shared helper, beside one small
+  constructor for each case, IS the parameterized shape. The constructors are the
+  parameters. Constructors of one struct all carry that struct's shape, because
+  the type gives it to them, and shape alone is not repeated behavior. Read the
+  body. A struct literal of per-case constants, which holds no behavior, has
+  nothing to reuse. Do not ask the constructors to merge behind a lookup on a
+  name: that moves each case's data out of the file that owns it, and it puts a
+  dispatch on a string in place of a literal the compiler reads. When the shared
+  helper stands, the parameterization is done and the finding is answered.
