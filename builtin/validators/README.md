@@ -490,6 +490,21 @@ rules and tool rules override the same way — a rule is a rule.
 own files in place, so keep your changes as your own named set or rule so they
 always persist.
 
+## What `sah deinit` removes
+
+`sah deinit` clears this store. It removes every validator set the directory
+holds — the built-in sets, a set an older version of `sah` wrote, and a set you
+wrote yourself. The store serves `sah` alone, so the validators go when `sah`
+goes. A set is a subdirectory with a `VALIDATOR.md`, and `sah deinit` removes
+each such subdirectory whole, so a rule you added inside a built-in set goes
+with that set.
+
+Anything in this directory that is not a validator set stays: a loose file
+beside the set directories, and a directory with no `VALIDATOR.md`. Each such
+file keeps this directory itself in place.
+
+Copy a set you want to keep to another directory before you run `sah deinit`.
+
 ## Learn more
 
 Run `sah --help`.

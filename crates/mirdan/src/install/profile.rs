@@ -21,6 +21,7 @@ use swissarmyhammer_templating::TemplateLibrary;
 
 use crate::agents::{self, AgentDef};
 use crate::mcp_config::{self, string_newtype, McpServerEntry, ServersKey, ToolName};
+use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
@@ -34,9 +35,7 @@ use super::applier::{
 };
 use super::deploy::{deploy_agent_to_agents_at, deploy_skill_to_agents_at};
 use super::uninstall::{uninstall_agent_at, uninstall_skill_at};
-use super::{
-    copy_dir_recursive, remove_empty_dirs_up_to, rooted, temp_dir_error, temp_subdir_error,
-};
+use super::{copy_dir_recursive, rooted, temp_dir_error, temp_subdir_error};
 
 // ── Parameter newtypes ───────────────────────────────────────────────────────
 //
@@ -121,6 +120,12 @@ const AGENT_ITEM_LABEL: &str = "agent";
 /// The file name of the discovery README at each builtin store root. The
 /// install writes this file and the deinit removes it, so the two must agree.
 const STORE_README_FILE_NAME: &str = "README.md";
+
+/// The name prefix the validator loader reserves for a directory of shared
+/// partials. Such a directory is never a validator set, however it is spelled
+/// inside, so [`validator_set_names_in`] passes over it exactly as the loader
+/// does.
+const PARTIALS_DIR_NAME_PREFIX: &str = "_";
 
 /// The reporter verb for content this installer wrote.
 const VERB_DEPLOYED: &str = "Deployed";
@@ -637,70 +642,82 @@ fn stage_validator_set(
     Ok(staged)
 }
 
-/// Remove the builtin-owned validator files the selector resolves to, mirroring
-/// [`install_profile_validators`].
+/// Remove the validator sets the selector resolves to from the STORE,
+/// mirroring [`install_profile_validators`].
 ///
-/// Only the specific embedded file paths are removed via [`store::remove_if_exists`]
-/// — never a set directory wholesale — so user-authored validators added inside
-/// a builtin set, and entirely user-created sets, survive. A set directory (and
-/// its `rules/` subdir) is removed only when it is left empty after the builtin
-/// files are gone, so a set that still holds user files is preserved.
+/// # Why this reads the store and not the embed
 ///
-/// Returns the set names whose builtin files were removed. A file that fails
-/// to remove is reported as a Warning through `reporter` and does not count
-/// toward a removed set.
+/// The embedded roster names the sets THIS binary installs. A deinit that
+/// walked that roster removed only those sets, so a set an older binary wrote
+/// — a name the current roster no longer holds — was named by no embedded path
+/// and stayed in the store forever. The user then kept running every rule that
+/// set carries. Nothing on disk marks which binary wrote a set, and there is no
+/// per-install record to consult, so "is this directory a validator set" is the
+/// whole of what deinit can measure. [`validator_set_names_in`] makes that
+/// measurement.
+///
+/// # What happens to a file a user wrote
+///
+/// A set is removed whole, so a rule a user added inside a builtin set, and a
+/// set a user wrote by hand, both go with the set. The store serves the review
+/// engine alone, and deinit removes the review engine, so the validators it
+/// served go too. Store content that is NOT a set stays: a loose file at the
+/// store root, and a directory that carries no manifest. Each survivor keeps
+/// the store directory itself alive, because [`prune_store_readme`] removes
+/// that directory only when nothing is left in it.
+///
+/// Returns the names of the sets that were removed. A set that fails to remove
+/// is reported as a Warning through `reporter` and is not counted.
 fn deinit_profile_validators(
     selector: &Selector,
     scope: InitScope,
     root: Option<&Path>,
     reporter: &dyn InitReporter,
 ) -> Vec<String> {
-    let sets = crate::builtin_validators::builtin_validators_by_set();
-
     let global = scope_is_global(scope);
     let target_root = rooted(root, global, store::validators_store_dir(global));
 
-    let selected = selected_names(selector, sets.keys().map(|name| name.to_string()));
+    let selected = selected_names(selector, validator_set_names_in(&target_root));
     let mut removed: Vec<String> = Vec::new();
-    for set in &selected {
-        let files = &sets[set.as_str()];
-        let mut any_removed = false;
-        for (embedded_name, _) in files {
-            any_removed |= remove_builtin_file_and_cleanup(&target_root, embedded_name, reporter);
-        }
-        if any_removed {
-            removed.push(set.clone());
+    for set in selected {
+        let set_dir = target_root.join(&set);
+        match std::fs::remove_dir_all(&set_dir) {
+            Ok(()) => removed.push(set),
+            Err(e) => reporter.emit(&InitEvent::Warning {
+                message: format!("failed to remove {}: {e}", set_dir.display()),
+            }),
         }
     }
     removed
 }
 
-/// Remove one builtin-owned file under `target_root`, then prune the
-/// now-empty directories it lived in — climbing from the file's parent up
-/// toward `target_root` (exclusive) so a directory that still holds user
-/// files is preserved.
+/// The name of every validator set the store rooted at `store_root` holds.
 ///
-/// Returns `true` when the file was removed. A removal failure is reported
-/// as a Warning through `reporter` and returns `false`.
-fn remove_builtin_file_and_cleanup(
-    target_root: &Path,
-    embedded_name: &str,
-    reporter: &dyn InitReporter,
-) -> bool {
-    let dest = target_root.join(embedded_name);
-    let mut removed = false;
-    if dest.exists() {
-        match store::remove_if_exists(&dest) {
-            Ok(()) => removed = true,
-            Err(e) => reporter.emit(&InitEvent::Warning {
-                message: format!("failed to remove {}: {e}", dest.display()),
-            }),
+/// A set is a subdirectory that carries a [`PackageType::Validator`] manifest
+/// and whose name does not open with [`PARTIALS_DIR_NAME_PREFIX`]. That is the
+/// rule the validator loader reads the store by, so deinit and the loader agree
+/// on what a set is. A store directory that is not there holds no set.
+fn validator_set_names_in(store_root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(store_root) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with(PARTIALS_DIR_NAME_PREFIX) {
+            continue;
+        }
+        if entry
+            .path()
+            .join(PackageType::Validator.manifest_file())
+            .is_file()
+        {
+            names.push(name);
         }
     }
-    if let Some(parent) = dest.parent() {
-        remove_empty_dirs_up_to(parent, target_root);
-    }
-    removed
+    names
 }
 
 /// Stage `content` as `<tmp>/<name>/<file_name>` and deploy it via the store +
@@ -1239,6 +1256,11 @@ pub fn init_profile(
 /// symlink + store entry. This is inherent to the data-driven design (there is
 /// no per-install manifest to consult); callers that must deinit across such a
 /// drift should run deinit with the same binary version that installed.
+///
+/// Validators do not carry that drift. [`deinit_profile_validators`] reads the
+/// STORE rather than the embedded roster, so a set an older binary wrote is
+/// cleared with the rest. That doc states what the store is and what it costs a
+/// user who wrote a set of their own.
 pub fn deinit_profile(
     profile: &Profile,
     scope: InitScope,

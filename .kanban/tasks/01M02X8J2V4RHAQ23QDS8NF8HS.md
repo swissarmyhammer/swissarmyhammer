@@ -60,8 +60,26 @@ comments:
     - Claim 4 (duplication.md prose matches code): found and FIXED a real mismatch. The new "Where the Fix Goes" section said "Each `duplicates` evidence row ... names the side the change edited" as a blanket claim, but the `duplicates` probe also emits **changed-set** rows (`changed_set_duplicates`, untouched by this diff) whose detail reads `"changed-set duplicate of {a.entity_name} in {a.file_path}"` — no "the change edited X" clause, because in the paste-into-two-new-files case (case 3) BOTH halves are new and inside the change, so "one half was there before" is false for that row type. Edited `builtin/validators/duplication/rules/duplication.md` to scope the index-backed guidance to index-backed rows and add a distinct paragraph for changed-set rows: both copies are under review, extract one shared function and update both sites. The example row (`src/existing.rs:41 ...`) itself was confirmed correct — verified byte-for-byte against `index_duplicate_row`'s actual output (mod the same intentional markdown line-wrap as claim 1).
     - Claim 5 (no new `.unwrap()`/`.expect(`/`panic!(`/unnamed numeric literal): verified by grepping every added line in the probes.rs diff — none present. The only new raw numeric literals (`42`, `0.94`) are the definitions of named test constants (`RENDERED_COUNTERPART_LINE`, `RENDERED_COUNTERPART_SIMILARITY`), which is the named form, not a magic number; all other digits appear only inside string-literal expected-output text.
   timestamp: 2026-08-17T12:00:12.311175+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m07stmbk4bqwtr1tavgst7wq
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (3c176660b). 9 validators ran, 0 failed, 0 skipped. 0 findings. 1 file reviewed, 4 `.kanban/` files excluded by `.reviewignore`.
+    - note: `builtin/validators/duplication/rules/duplication.md` changed in this commit but shows in neither the reviewed count nor the excluded list. No validator matches `.md`, so the rule text got no review.
+    - next: card moved to done.
+  timestamp: 2026-08-17T12:06:03.379242+00:00
+- actor: claude-code
+  id: 01m07sv6v3xmv1b1de21zbqdap
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 2 files. Each index-backed row carries a direction clause from one shared `pair_direction` helper. The rule body gained a `## Where the Fix Goes` section. The card's premise that the row carried `detail: None` was wrong, and the correction is on the card.
+    - test: green — cargo nextest run --workspace, 14163 passed, 0 failed. fmt and clippy clean. The test step found the new section made a BLANKET claim that is false for a changed-set row, where the change wrote both halves, and split the section in two.
+    - commit: 3c176660b
+    - review: clean — 9 validators, 0 findings.
+    - note: the review engine reviewed 1 of the 6 changed files. The rule prose this card rewrote was neither reviewed nor counted as excluded, because no validator matches a `*.md` file. That gap is not this card's work.
+  timestamp: 2026-08-17T12:06:22.307074+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa780
 title: A duplication finding must be fixed on the changed side, not the counterpart
 ---
 Under a diff op the engine enforces where a finding LANDS, but nothing states where its REMEDY may land. For duplication that gap is load-bearing, because a duplication finding is inherently a PAIR: the change on one side, a pre-existing block on the other. A finding correctly landing on a changed line still carries a remedy that points at the unchanged counterpart, and the fix edits a file the change never touched.
