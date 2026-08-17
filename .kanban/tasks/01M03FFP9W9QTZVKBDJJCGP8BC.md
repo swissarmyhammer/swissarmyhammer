@@ -47,8 +47,26 @@ comments:
     - tests: `cargo nextest run -p swissarmyhammer-validators --no-fail-fast` — 821 tests run, 821 passed, 0 failed.
     - next: /review
   timestamp: 2026-08-17T12:57:06.824993+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m07xnesc2wdtz21y1wxwbqpe
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (126c08c07). counts: 0 findings, 0 confirmed, 0 refuted, 0 attempted. 0 files reviewed. The 4 `.kanban/` files of the commit are dropped by `.reviewignore`. The fifth file, `builtin/validators/code-hygiene/rules/dead-code-typescript.md`, matches no validator: every one of the 15 validators lists source-code globs alone, and not one lists `*.md`. So no rule can make a finding on a prose change to a rule file.
+    - The card carries no earlier `## Review Findings` section, so no item stays open.
+    - next: card moved to done.
+  timestamp: 2026-08-17T13:13:08.140531+00:00
+- actor: claude-code
+  id: 01m07xp40wg1rtyjx5zzjfrpbf
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 1 file, prose alone. The timing passage is rewritten from a fresh measurement of 45 runs: 15 cycles of 3 placements after one dropped warm-up cycle. The real delta is 0.65 s, not 0.55 s. Each placement states its lowest, highest and spread, with the machine and the tool versions.
+    - test: green — cargo nextest run --workspace, 14164 passed, 0 failed. fmt and clippy clean. The test step proved the `tool.run` block byte-identical to HEAD, and re-measured with 36 runs of its own: the delta stands above every spread and the two sets of readings do not meet.
+    - commit: 126c08c07
+    - review: clean — 0 findings. The engine reviewed 0 files, because no validator of the 15 declares a `*.md` glob.
+    - note: nothing holds this claim true over time. A wall-clock number is not a test this repo can keep green. What stands instead is the evidence in the file: the run count, the lowest, the highest, the spread, the machine and the tool versions.
+  timestamp: 2026-08-17T13:13:29.884674+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa980
 title: dead-code-typescript states the 0.55 s placement cost without saying it is under a measured spread
 ---
 `builtin/validators/code-hygiene/rules/dead-code-typescript.md` holds a timing table with three placements, three readings each, a lowest and a spread:
