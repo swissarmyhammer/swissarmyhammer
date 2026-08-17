@@ -93,8 +93,25 @@ comments:
 
     No failures found. Nothing to fix.
   timestamp: 2026-08-17T12:33:37.900214+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m07vm6fjef7dtw6nqndq40cc
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (2325e73ae); 9 validators ran, 0 findings, 0 confirmed, 0 refuted, 0 failed; 2 files reviewed, 4 `.kanban/` files excluded by `.reviewignore`
+    - next: card moved to done
+  timestamp: 2026-08-17T12:37:29.714621+00:00
+- actor: claude-code
+  id: 01m07vmqj3jc2qyy1jh0hxwbc5
+  text: |
+    ### finish iteration 1 — clean
+    - implement: changed — 3 files. `deinit_profile_validators` reads the STORE, not the roster, and removes each validator SET whole. Content that is not a set stays. Measured with the real binary on a throwaway HOME.
+    - test: green — cargo nextest run --workspace, 14164 passed, 0 failed. fmt and clippy clean. The test step confirmed there is truly NO on-disk marker that tells a set the installer wrote from a set the user wrote, so the code cannot keep one and remove the other.
+    - commit: 2325e73ae
+    - review: clean — 9 validators, 0 findings.
+    - OPEN RISK for a person to decide: `sah deinit` removes a validator set the USER wrote, with no prompt. The warning stands in the store README, which the install writes, but nothing asks the user at the moment of the delete. A confirmation prompt is a separate card if you want one.
+  timestamp: 2026-08-17T12:37:47.203743+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa880
 title: deinit leaves validator content that an older binary wrote
 ---
 `deinit_profile_validators` in `crates/mirdan/src/install/profile.rs` walks the CURRENT embedded roster to decide what to remove. So it clears every set the current binary installs, and it leaves behind any content that only an OLDER binary wrote.

@@ -1011,38 +1011,47 @@ each reason is a fact rather than a judgment:
 The entry job writes on the same channel, and "Entry resolution fails OPEN"
 below states what its lines carry.
 
-Measured over this workspace, three shipped scripts run one after another and
-that cycle repeated three times, warm, on a machine running other work beside
-them:
+Measured over this workspace with ts-prune 0.10.3, TypeScript 5.9.3 and Node
+25.2.1, on an Apple M5 Max running macOS 27.0, warm, with whatever else the
+machine was doing beside them. One cycle ran the three scripts one after
+another, so that all three met the same machine, and that cycle repeated 15
+times after one warm-up cycle whose readings were dropped. So each row below
+holds 15 readings:
 
-| placement | the three readings | lowest | spread |
+| placement | lowest | highest | spread |
 |---|---|---|---|
-| the shell placement this replaced | 6.31 s, 6.72 s, 6.76 s | 6.31 s | 0.45 s |
-| the file-list placement | 6.86 s, 6.96 s, 8.18 s | 6.86 s | 1.32 s |
-| the same, reading the real path of each listed file as well | 7.17 s, 7.37 s, 7.85 s | 7.17 s | 0.68 s |
+| the shell placement this replaced | 6.03 s | 6.19 s | 0.16 s |
+| the file-list placement | 6.68 s | 7.00 s | 0.32 s |
+| the same, reading the real path of each listed file as well | 6.70 s | 7.29 s | 0.59 s |
 
-All three answered 58 findings, the same bytes on stdout, 0 items declined and 0
-bytes on stderr.
+All 45 runs answered 58 findings, the same bytes on stdout, 0 items declined and
+0 bytes on stderr.
 
-The 0.55 s between the first two lowest readings is what the WHOLE placement
+The 0.65 s between the first two lowest readings is what the WHOLE placement
 costs over the shell loop it replaced — a `tsc -p tsconfig.json --listFilesOnly`
 and a `node "$work/prune.js" place` for each of this workspace's two projects,
-against the per-finding shell loop that went. This measurement does not divide
-that 0.55 s between them, and it does not say which of them carries it. Reading
-the real path of each listed file beside them adds a further 0.31 s at the
-lowest reading, under each of the three spreads above, so this measurement does
-not tell that cost from noise either.
+against the per-finding shell loop that went. That 0.65 s stands ABOVE each of
+the three spreads above, and the two sets of readings do not meet at all: the
+highest reading of the shell placement, 6.19 s, is under the lowest reading of
+the file-list placement, 6.68 s. So this measurement tells that cost from noise.
+It does not divide the 0.65 s between the two added calls, and it does not say
+which of them carries it. Reading the real path of each listed file beside them
+adds a further 0.02 s at the lowest reading, under each of the three spreads
+above, and those two sets of readings lie over each other, so this measurement
+does not tell that cost from noise.
 
 A reading moves between sessions. The table under "The exported public API,
 which the manifests answer" reads 6.2 s for this workspace, taken in an earlier
-one. The three readings above are therefore compared with each other, never with
-a reading of another session.
+one. The readings above are therefore compared with each other, never with a
+reading of another session. The three readings of each placement that this table
+held before were taken in an earlier session as well, and no number of them is
+carried forward here.
 
 **The three library rows below were measured under the SHELL placement**, the
 first row of the timing table above, and those checkouts no longer stand on the
-machine that measured them, so this change re-measured this workspace alone. The
-`declined` column is what the shipped run answers, and it is stated for the row
-that was re-measured:
+machine that measured them, so each re-measurement reads this workspace alone.
+The `declined` column is what the shipped run answers, and it is stated for the
+row that was re-measured:
 
 | workspace | findings | naming a file that is nowhere | declined |
 |---|---|---|---|
